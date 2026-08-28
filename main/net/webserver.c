@@ -17,6 +17,12 @@
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
+#include "wspr_tx.h"          // the dev "wspr_tx_test" action
+#include "wspr_selftest.h"    // the dev "wspr_selftest" action
+#include "wspr_spots.h"       // GET /api/wspr
+#include "wspr_rx.h"         // the RX slot loop
+#include "net/wsprnet.h"    // spot publishing (OFF by default)
+#include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -390,7 +396,18 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
-    cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    /* Three pages now. Asked of ui_mode rather than of the FT8 view, so a new
+     * page cannot be reported as "panadapter" just because FT8 is not up. */
+    cJSON_AddStringToObject(root, "screen",
+        ui_mode_get() == UI_MODE_FT8  ? "ft8"  :
+        ui_mode_get() == UI_MODE_WSPR ? "wspr" : "panadapter");
+    /* ⚠ ALSO IN /api/settings, AND BOTH ARE NEEDED. The web UI shows or hides
+     * the whole WSPR card from THIS field, on the 1 Hz status poll - it never
+     * reads /api/settings. Adding it only there (which is what shipped first)
+     * left the card permanently hidden even with the feature enabled, and no
+     * host test could see it: the bug is which endpoint serves the field, not
+     * what the field contains. */
+    cJSON_AddBoolToObject(root, "wspr_en", wspr_feature_enabled());
     // #218: firmware version + whether a newer release exists. The update check
     // has run since v1.1 but announced itself ONLY inside the on-device Reader,
     // so anyone who never opened the manual was never told - which is how people
@@ -862,7 +879,27 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // Deferred to the LVGL task (see ui_request_base_mode) - the switch
         // spawns/stops ft8_task and moves widgets.
         const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
-        if (scr) ui_request_base_mode(strcmp(scr, "ft8") == 0);
+        if (scr) {
+            /* Three pages now, so the bool form cannot express it. */
+            if      (!strcmp(scr, "ft8"))  ui_request_base_mode_m(UI_MODE_FT8);
+            else if (!strcmp(scr, "wspr")) {
+                /* Refused, and SAID SO. /api/cmd answers an action it does not
+                 * know with "unknown action" and HTTP 200, and CLAUDE.md
+                 * records a whole evening lost to a silent no-op read as a
+                 * result - so a gate that declines has to be louder than the
+                 * typo it resembles. */
+                if (!wspr_feature_enabled()) {
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_sendstr(req,
+                        "{\"ok\":false,\"error\":\"wspr disabled\","
+                        "\"hint\":\"send the wspr_enable action first\"}");
+                    cJSON_Delete(root);
+                    return ESP_OK;
+                }
+                ui_request_base_mode_m(UI_MODE_WSPR);
+            }
+            else                            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+        }
     } else if (action && strcmp(action, "reply") == 0) {
         // Reply to a decoded station from the browser - Phase 6 of web parity,
         // TX explicitly blessed by the operator. Deferred to the LVGL task like
@@ -1135,11 +1172,186 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         vTaskDelay(pdMS_TO_TICKS(150));
         ui_power_off_safely();
         return ESP_OK;
+    } else if (action && strcmp(action, "wspr_dump") == 0) {
+        /* Dev action: write the next N captured windows to the SD card as WAV,
+         * so the same audio can be run through real wsprd on a PC. That is the
+         * ONLY way to tell a short sensitivity floor from a trace that was
+         * never WSPR - the waterfall saturates anything 16 dB over the median
+         * and draws QRM and a strong signal identically.
+         * {"action":"wspr_dump","cycles":3}
+         * Replies with what was actually armed, because 0 means "no card" and
+         * that must not look like success. */
+        cJSON *jc = cJSON_GetObjectItem(root, "cycles");
+        int want = cJSON_IsNumber(jc) ? jc->valueint : 1;
+        int armed = wspr_rx_request_dump(want);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        /* The armed count is IN THE BODY and 0 is reported as ok:false. This
+         * endpoint answers "unknown action" with HTTP 200 (see CLAUDE.md), so
+         * a status code proves nothing - and "no SD card" must not read as a
+         * successful arm, or an hour later the card is simply empty. */
+        char body[96];
+        snprintf(body, sizeof(body),
+                 armed > 0 ? "{\"ok\":true,\"dump_armed\":%d}"
+                           : "{\"ok\":false,\"dump_armed\":%d,"
+                             "\"error\":\"no SD card mounted\"}", armed);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "wspr_guards") == 0) {
+        /* Dev action: choose which false-decode guard ACTS. Both are measured
+         * regardless, so this exists to compare them on real signals without
+         * a reflash. {"action":"wspr_guards","near":1,"slow":0,
+         *             "near_hz":10,"slow_cycles":250} */
+        cJSON *jn = cJSON_GetObjectItem(root, "near");
+        cJSON *js = cJSON_GetObjectItem(root, "slow");
+        cJSON *jnh = cJSON_GetObjectItem(root, "near_hz");
+        cJSON *jsc = cJSON_GetObjectItem(root, "slow_cycles");
+        wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
+                           jnh ? jnh->valuedouble : 0.0,
+                           js ? (cJSON_IsTrue(js) || js->valueint) : 0,
+                           jsc ? (unsigned)jsc->valueint : 0u);
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wspr_enable") == 0) {
+        /* The master switch. Deliberately an /api/cmd action and NOT a drawer
+         * control: WSPR ships on the main track before it is finished so that
+         * the release carries it and the OTA path can be exercised, and a
+         * half-built mode should be reachable by someone who went looking for
+         * it rather than offered in a list of settings.
+         *
+         * {"action":"wspr_enable","on":true}   - and it persists in NVS.
+         *
+         * Turning it OFF while the page is up also leaves it: otherwise the
+         * operator is left standing on a screen the swipe cycle can no longer
+         * reach, which is a trap rather than a setting. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        settings_set_wspr_en(want);
+        if (!want && ui_mode_get() == UI_MODE_WSPR) {
+            wspr_rx_stop();
+            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+        }
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_en\":%s}",
+                 want ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        cJSON_Delete(root);
+        return ESP_OK;
+
+    } else if (action && strcmp(action, "wspr_net") == 0) {
+        /* ⛔ TURNS ON PUBLISHING TO A PUBLIC DATABASE UNDER THE OPERATOR'S
+         * CALLSIGN. Off by default and only ever switched here or in an
+         * imported config - never as a side effect of anything else.
+         *   {"action":"wspr_net","on":true}
+         *   {"action":"wspr_net","dry":true}   compose one and LOG it, send nothing
+         */
+        cJSON *dry = cJSON_GetObjectItem(root, "dry");
+        if (dry && (cJSON_IsTrue(dry) || dry->valueint)) {
+            const bool got = wsprnet_dry_run();
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, got
+                ? "{\"ok\":true,\"note\":\"composed and logged - nothing sent\"}"
+                : "{\"ok\":false,\"error\":\"nothing publishable yet\"}");
+            cJSON_Delete(root);
+            return ESP_OK;
+        }
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        const bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        settings_set_wspr_net_en(want);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_net_en\":%s,\"status\":\"%s\"}",
+                 want ? "true" : "false", wsprnet_status());
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        cJSON_Delete(root);
+        return ESP_OK;
+
+    } else if (action && strcmp(action, "wspr_rx") == 0) {
+        // Start/stop the WSPR receive slot loop. Entering it sets UI_MODE_WSPR,
+        // which diverts the DSP's IQ chain into the capture pre-ring - so the
+        // panadapter's spectrum and waterfall freeze while it runs. There is no
+        // Tab5 WSPR screen yet; this is the way in.
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool want = !cJSON_IsBool(on) || cJSON_IsTrue(on);
+        if (want) wspr_rx_start(); else wspr_rx_stop();
+        char out[128];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"running\":%s,\"status\":\"%s\"}",
+                 wspr_rx_running() ? "true" : "false", wspr_rx_status());
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
+    } else if (action && strcmp(action, "wspr_selftest") == 0) {
+        // Developer probe: synthesize a known WSPR transmission, decode it with
+        // the real decoder, and report per-stage milliseconds. Needs no radio,
+        // no antenna and no CAT link. This is the feasibility gate in front of
+        // the Phase 3 RX slot loop - see wspr_selftest.h. Results are logged,
+        // not returned, because the run takes far longer than an HTTP response
+        // should wait for.
+        bool already = wspr_selftest_running();
+        if (!already) wspr_selftest_start();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, already ? "{\"ok\":false,\"error\":\"already running\"}"
+                                        : "{\"ok\":true,\"note\":\"running - see the log, tag wspr_st\"}");
+        cJSON_Delete(root);
+        return ESP_OK;
+    } else if (action && strcmp(action, "wspr_tx_test") == 0) {
+        // Developer escape hatch, mirroring panic_test's "prove the mechanism
+        // actually runs" reasoning: WSPR TX (main/wspr_tx.c) has no UI trigger
+        // yet (Phase 3 in docs/wspr-scope.md), and WSPR_TX_SEND_LIVE defaults
+        // to 0 (dry run - see wspr_tx.c's own header), so this is currently
+        // the ONLY way to exercise the ~110 s CAT-burst timing/sequencing
+        // against real hardware scheduling instead of just trusting the code
+        // reading correct. Even with this trigger reachable, nothing is
+        // actually transmitted unless WSPR_TX_SEND_LIVE is deliberately
+        // flipped to 1 in a rebuild - this endpoint cannot key the radio on
+        // its own. No web UI element references it.
+        //
+        // Optional JSON body fields override the defaults (from settings'
+        // my_callsign/my_grid, and a fixed placeholder power/freq): "call",
+        // "grid", "power_dbm", "freq_hz".
+        qmx_settings_t wt_s;
+        settings_load_all(&wt_s);
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        const char *grid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "grid"));
+        cJSON *power_j = cJSON_GetObjectItem(root, "power_dbm");
+        cJSON *freq_j  = cJSON_GetObjectItem(root, "freq_hz");
+        if (!call || !call[0]) call = wt_s.my_callsign;
+        if (!grid || !grid[0]) grid = wt_s.my_grid;
+        int power_dbm  = cJSON_IsNumber(power_j) ? power_j->valueint : 23;
+        int freq_hz    = cJSON_IsNumber(freq_j) ? freq_j->valueint : WSPR_TX_DEFAULT_FREQ_HZ;
+
+        wspr_tx_request_t wt_req;
+        char wt_err[80] = "";
+        char out[192];
+        if (!wspr_tx_build_request(call, grid, power_dbm, freq_hz, &wt_req, wt_err, sizeof(wt_err))) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", wt_err);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, out);
+            return ESP_OK;
+        }
+        bool armed = wspr_tx_arm(&wt_req, wt_err, sizeof(wt_err));
+        cJSON_Delete(root);
+        if (!armed) {
+            httpd_resp_set_status(req, "409 Conflict");
+            snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", wt_err);
+        } else {
+            int secs = wspr_tx_seconds_until_next_slot();
+            snprintf(out, sizeof(out),
+                     "{\"ok\":true,\"call\":\"%s\",\"grid\":\"%s\",\"power_dbm\":%d,"
+                     "\"freq_hz\":%d,\"fires_in_s\":%d,\"live\":%s}",
+                     wt_req.callsign, wt_req.grid, wt_req.power_dbm, wt_req.audio_freq_hz, secs,
+                     wspr_tx_send_live_build() ? "true" : "false");
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "reset_settings") == 0) {
         // Clear all app settings + memory channels (erases user_nvs on the next
         // boot), keeping the ADIF QSO log and WiFi. Replaces the esptool
@@ -1173,6 +1385,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
 // Minimal 16bpp BMP (BITMAPFILEHEADER + BITMAPINFOHEADER + BI_BITFIELDS masks)
 // wrapping the raw RGB565 framebuffer snapshot. Top-down (negative height) so
 // the LVGL row order can be sent as-is.
+/* GET /ss.bmp[?x=&y=&w=&h=]
+ *
+ * The optional crop is there because the full frame is 1280x720 RGB565 = 1.84
+ * MB, and on a weak link that does not arrive: measured at -83 dBm RSSI, every
+ * fetch truncated between 365 and 632 KB. Small JSON requests were fine
+ * throughout, so this is a payload-size problem, not a connectivity one.
+ *
+ * ⛔ The crop deliberately does NOT scale. Downscaling was the obvious way to
+ * shrink it, and it is the wrong tool HERE: the thing most often being checked
+ * in a screenshot is a one-pixel-wide WSPR trace or a hairline in the
+ * spectrum, and nearest-neighbour can drop such a feature entirely while box
+ * averaging dims it. Either would quietly misreport the very thing the
+ * screenshot was taken to judge. A crop returns real pixels or nothing.
+ *
+ * The body is also sent in bounded chunks rather than one 1.84 MB write. That
+ * does not make a stalled link succeed, but it stops a single timeout from
+ * discarding an entire transfer that was nearly complete. */
+#define SS_CHUNK_BYTES 32768
+
 static esp_err_t ss_bmp_handler(httpd_req_t *req)
 {
     uint8_t *buf;
@@ -1182,6 +1413,25 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
 
+    /* Crop window, defaulting to the whole frame. Clamped to the image rather
+     * than rejected: a caller asking for more than exists wants what exists. */
+    uint32_t cx = 0, cy = 0, cw = w, ch = h;
+    char q[128];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[16];
+        if (httpd_query_key_value(q, "x", v, sizeof(v)) == ESP_OK) cx = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "y", v, sizeof(v)) == ESP_OK) cy = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "w", v, sizeof(v)) == ESP_OK) cw = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "h", v, sizeof(v)) == ESP_OK) ch = (uint32_t)strtoul(v, NULL, 10);
+    }
+    if (cx >= w) cx = w - 1;
+    if (cy >= h) cy = h - 1;
+    if (cw == 0 || cw > w - cx) cw = w - cx;
+    if (ch == 0 || ch > h - cy) ch = h - cy;
+
+    const bool cropped = (cx || cy || cw != w || ch != h);
+    size = (size_t)cw * ch * 2;
+
     uint8_t header[66] = {0};
     header[0] = 'B';
     header[1] = 'M';
@@ -1189,8 +1439,8 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     uint32_t file_size = (uint32_t)(sizeof(header) + size);
     uint32_t off_bits  = sizeof(header);
     uint32_t info_size = 40;
-    int32_t  width     = (int32_t)w;
-    int32_t  height    = -(int32_t)h;  // negative = top-down DIB
+    int32_t  width     = (int32_t)cw;
+    int32_t  height    = -(int32_t)ch;  // negative = top-down DIB
     uint16_t planes    = 1;
     uint16_t bpp       = 16;
     uint32_t comp      = 3;  // BI_BITFIELDS
@@ -1217,9 +1467,22 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=ss.bmp");
 
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
-    if (err == ESP_OK) {
-        err = httpd_resp_send_chunk(req, (const char *)buf, size);
+
+    if (cropped) {
+        /* Row by row: the crop is not contiguous in the source buffer. */
+        const uint32_t row_bytes = cw * 2;
+        for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
+            const uint8_t *src = buf + (size_t)(cy + r) * w * 2 + (size_t)cx * 2;
+            err = httpd_resp_send_chunk(req, (const char *)src, row_bytes);
+        }
+    } else {
+        for (size_t off = 0; off < size && err == ESP_OK; off += SS_CHUNK_BYTES) {
+            size_t n = size - off;
+            if (n > SS_CHUNK_BYTES) n = SS_CHUNK_BYTES;
+            err = httpd_resp_send_chunk(req, (const char *)(buf + off), n);
+        }
     }
+
     if (err == ESP_OK) {
         err = httpd_resp_send_chunk(req, NULL, 0);
     }
@@ -2353,6 +2616,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
+    cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
+    cJSON_AddBoolToObject(root, "wspr_net_en",       c.wspr_net_en);
     cJSON_AddBoolToObject(root, "ota_autodl",        c.ota_autodl);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     // The last of the drawer's controls that had no remote equivalent. CW pitch and
@@ -2387,6 +2652,16 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ft8_freq_hz",      (double)c.ft8_freq_hz);
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
+    cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
+    cJSON_AddBoolToObject(root,   "wspr_tx_en",    c.wspr_tx_en);
+    /* Cycles still to be dumped. Exposed because otherwise "is a dump armed?"
+     * is only answerable from the serial log - and the arm reply tells you what
+     * happened at the time, not what the state is now. A persisted request that
+     * cannot be read back is the same silent-state trap as the rest of this
+     * file's warnings. */
+    cJSON_AddNumberToObject(root, "wspr_dump_cycles", c.wspr_dump_cycles);
+    cJSON_AddNumberToObject(root, "wspr_duty_pct", c.wspr_duty_pct);
+    cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -2529,6 +2804,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // leaving it on is what produces phantom contacts in a real log.
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sim_mode_en")))
         settings_set_sim_mode_en(cJSON_IsTrue(it));
+    /* WSPR. wspr_tx_en is the one that can put a signal on the air, so it gets
+     * the same deliberate treatment as sim_mode_en above. wspr_tx_dbm is a
+     * DECLARED power published with every spot - a wrong value here is
+     * misinformation about the operator's station, not a display bug. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_dial_hz")))
+        settings_set_wspr_dial_hz((uint32_t)it->valuedouble);
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
+        settings_set_wspr_tx_en(cJSON_IsTrue(it));
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
+        int v = it->valueint;
+        if (v >= 0 && v <= 50) settings_set_wspr_duty_pct((uint8_t)v);
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
+        int v = it->valueint;
+        if (v >= 0 && v <= 60) settings_set_wspr_tx_dbm((int8_t)v);
+    }
 
     cJSON *cq = cJSON_GetObjectItem(root, "cq");
     if (cJSON_IsObject(cq)) {
@@ -2854,6 +3145,85 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     esp_err_t e = httpd_resp_sendstr(req, txt);
     cJSON_free(txt);
     return e;
+}
+
+
+/* GET /api/wspr - the spot list and the cycle state, mirroring /api/decodes'
+ * shape so the browser side needs no new idioms.
+ *
+ * Distance and bearing are computed HERE, from the same util/maidenhead.c the
+ * Tab5 list uses, for the reason /api/decodes already gives: one implementation
+ * means the two screens cannot disagree, and it picks up the miles setting for
+ * free. */
+static esp_err_t wspr_handler(httpd_req_t *req)
+{
+    /* Answer honestly rather than with an empty spot list: "disabled" and
+     * "enabled but nothing heard yet" look identical otherwise, and a browser
+     * cannot tell which it is looking at. */
+    if (!wspr_feature_enabled()) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"enabled\":false,\"spots_held\":0,"
+                                "\"unique_calls\":0,\"rx_live\":false,"
+                                "\"rx_status\":\"WSPR is not enabled\","
+                                "\"spots\":[]}");
+        return ESP_OK;
+    }
+
+    int total = wspr_spots_count();
+    int want  = total < 128 ? total : 128;
+
+    wspr_spot_t *snap = NULL;
+    int n = 0;
+    if (want > 0) {
+        /* PSRAM, never the httpd task's stack - same rule as decodes_handler. */
+        snap = heap_caps_malloc(sizeof(wspr_spot_t) * want,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!snap) return httpd_resp_send_500(req);
+        n = wspr_spots_get(snap, want);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "spots_held",   total);
+    cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
+    cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
+    cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
+
+    cJSON *arr = cJSON_AddArrayToObject(root, "spots");
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "call", snap[i].call);
+        cJSON_AddStringToObject(o, "grid", snap[i].grid);
+        cJSON_AddStringToObject(o, "cty",  snap[i].cty);
+        /* Spelled out for the browser, which has the width. The Tab5's own pane
+         * keeps the 3-letter form because it genuinely does not - same split the
+         * FT8 list already makes. Looked up from the callsign here rather than
+         * stored, so the spot struct stays small. */
+        {
+            const char *full = dxcc_lookup(snap[i].call);
+            cJSON_AddStringToObject(o, "country", full ? full : "");
+        }
+        cJSON_AddNumberToObject(o, "utc",   (double)snap[i].cycle_utc);
+        cJSON_AddNumberToObject(o, "hz",    snap[i].freq_hz);
+        /* null, not a number, when nothing measured it - the browser renders
+         * "--" rather than inventing a value. */
+        if (snap[i].snr_db == WSPR_SNR_UNKNOWN) cJSON_AddNullToObject(o, "snr");
+        else cJSON_AddNumberToObject(o, "snr", snap[i].snr_db);
+        if (snap[i].drift_hz == WSPR_DRIFT_UNKNOWN) cJSON_AddNullToObject(o, "drift");
+        else cJSON_AddNumberToObject(o, "drift", snap[i].drift_hz);
+        cJSON_AddNumberToObject(o, "pwr",   snap[i].power_dbm);
+        cJSON_AddNumberToObject(o, "km",    snap[i].km);
+        cJSON_AddNumberToObject(o, "brg",   snap[i].bearing_deg);
+        cJSON_AddItemToArray(arr, o);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    free(snap);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out);
+    free(out);
+    return ESP_OK;
 }
 
 static esp_err_t decodes_handler(httpd_req_t *req)
@@ -3276,6 +3646,10 @@ static const httpd_uri_t uri_settings_post = {
     .uri = "/api/settings", .method = HTTP_POST, .handler = settings_post_handler,
 };
 
+static const httpd_uri_t uri_wspr = {
+    .uri = "/api/wspr", .method = HTTP_GET, .handler = wspr_handler,
+};
+
 static const httpd_uri_t uri_decodes = {
     .uri = "/api/decodes", .method = HTTP_GET, .handler = decodes_handler,
 };
@@ -3581,7 +3955,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 48;   // 38 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 49;   // 39 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -3627,6 +4001,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_shortcuts_get);
     httpd_register_uri_handler(s_server, &uri_shortcuts_post);
+    httpd_register_uri_handler(s_server, &uri_wspr);
     httpd_register_uri_handler(s_server, &uri_decodes);
     httpd_register_uri_handler(s_server, &uri_psk_rx);
     httpd_register_uri_handler(s_server, &uri_help);

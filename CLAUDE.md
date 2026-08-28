@@ -13,6 +13,42 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+### ⛔⛔ THE QMX NEVER SURVIVES A FLASH. NOT ONCE. STOP RE-DISCOVERING THIS.
+
+**Every flash of a Tab5 with the radio attached wedges the QMX** (#74 — a flash
+is a warm reset, which is the documented trigger). It needs a **manual power
+cycle by the operator, every single time.** The operator's own words, said
+repeatedly: *"qmx can NOT survive any flash"* and *"it will never survive on
+its own"*.
+
+⛔ **NEVER report that the radio survived.** On 2026-08-24 I told him it had,
+on the strength of `audio: RX 48561 pairs/s` and a live `qmx_fw` about 40 s
+after boot — and offered it as "the first counter-example" to his own account
+of his own bench. What had actually happened, almost certainly, is that he was
+sitting at the shack and power-cycled it himself. **I credited the firmware for
+his hand, and argued with him about his own hardware.**
+
+**Why that evidence is worthless, and this file already said so:** the identical
+mistake is recorded under the `MU;` note — *"that figure proves the stream is
+flowing and says nothing about its content"*. A pairs/s reading cannot
+distinguish "re-enumerated on its own" from "the operator reached over and
+switched it off and on". Neither can `/api/status`, since it reports whatever
+the link currently is, not how it got there.
+
+**So the standing behaviour is:**
+1. Before flashing with the radio attached, say plainly that the QMX will need
+   a power cycle afterwards.
+2. After flashing, **ask** whether he has power-cycled it — never infer it.
+3. If audio is flowing, that means *someone* fixed it. Assume it was him.
+4. A survival claim would need the port watched across the whole reset with
+   nobody touching the radio. Absent that, there is no counter-example.
+
+⚠ **This lived only in a memory file until now, which is exactly why it kept
+happening** — memory is consulted when something feels relevant, and a routine
+flash never does. Same reasoning as the serial-capture rules below. It belongs
+here, in the file that is read in full every session.
+
+
 ### ⛔ FOUR boards share this machine — resolve every port by BENCH NAME
 
 `docs/bench-setup.md` is the standing reference and `tools/bench.json` is the
@@ -62,6 +98,21 @@ capture, not after a result looks strange.**
    because `scratchpad/` is gitignored — the most load-bearing diagnostic tool
    in the project was untracked, existed on exactly one disk, and would have
    been lost by a clone onto a new machine. Only pass `-Reset` when the boot itself is the thing under study.
+   ⛔ **AND "NO `-Reset`" IS NOT A GUARANTEE OF PASSIVITY. Opening the port
+   can reset the Tab5 anyway.** Caught 2026-08-27: a standing capture was
+   restarted with no `-Reset` and the device came up with
+   `rst:0x17 (CHIP_USB_UART_RESET)` - the USB-serial peripheral resetting the
+   chip, not a crash, and no panic record. The script never touches DTR/RTS
+   without the switch; .NET's `SerialPort.Open()` evidently drives the lines
+   enough for the P4's auto-reset circuit. **It is NOT deterministic** - an
+   identical restart four hours earlier on the same day left a 41-minute
+   uptime untouched, so it cannot be predicted either way.
+   The cost is never just the reboot: a warm reset with the radio attached is
+   the documented **#74** trigger, so that restart wedged the QMX and threw
+   away 4 h 17 m of accumulated in-RAM WSPR spots. **Treat restarting a
+   capture as an action that may reboot the device and wedge the radio.** Do
+   it when the operator can reach the power switch, not while they are out,
+   and never mid-run on a device that is accumulating something.
 2. **NEVER put `Stop-Process` in the same PowerShell call as the capture.** It
    exits non-zero, PowerShell aborts the rest of the chain, the capture never
    starts, and a zero-byte file gets read as "no crash in the log". This single
@@ -105,6 +156,13 @@ capture, not after a result looks strange.**
    capture, check the process is alive AND that the file's `LastWriteTime` is
    within the last few seconds.** Note the parameter is `-Seconds`, not
    `-Minutes`; pass something long for a standing monitor.
+   ⛔ **Re-check DURING a long session, not only at the start.** A CONCURRENT
+   SESSION taking COM3 produces this exact state with the victim process still
+   running and reporting nothing wrong — 2026-08-24, a capture went deaf at
+   18:20 and read like a quiet, healthy device for two hours while the Tab5 was
+   fine. The PORT dies, not the process, so the file's timestamp is the only
+   honest liveness test. Running several sessions at once is the operator's
+   normal daily practice, so treat this as expected, not exotic.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when

@@ -31,7 +31,7 @@
   }
   body {
     display: grid;
-    grid-template-rows: auto 1fr auto 8px 3fr auto auto;
+    grid-template-rows: auto 1fr auto 8px 3fr auto auto auto;
     gap: 0; padding: 0.3rem;
   }
   /* Explicit row assignment (not document-order auto-placement): the
@@ -45,7 +45,11 @@
   #split-handle { grid-row: 4; }
   #wf-wrap      { grid-row: 5; }
   #bandplan-wrap{ grid-row: 6; }
-  #bot          { grid-row: 7; }
+  /* Pinned like every other grid child - see the note above. The first version
+     of this card had no grid-row at all and the grid auto-placed it AFTER the
+     bottom bar, which is exactly the fragility that note warns about. */
+  #wspr-card    { grid-row: 7; }
+  #bot          { grid-row: 8; }
   /* Replaces the spec/freqaxis/handle/wf block (rows 2-5) when in FT8 mode. */
   #ft8-notice   { grid-row: 2 / 6; }
 
@@ -705,6 +709,37 @@
       <div id="dec-pileup" style="margin-top:8px; font-size:13px;"></div>
       <div id="dec-grey" style="margin-top:4px; font-size:13px; color:var(--dim);"></div>
     </div></div>
+
+  <!-- =====================================================================
+       WSPR spots
+
+       A LOG, not a live picture - which is why it looks different from the FT8
+       table above rather than the same. WSPR spots arrive in a burst every two
+       minutes and then nothing at all for 110 seconds, so rows are grouped
+       under the cycle they were heard in; a flat live list would look broken
+       for most of every cycle.
+
+       No MESSAGE column, because there is no message: a WSPR transmission is
+       exactly callsign + 4-character grid + power. Dropping the FT8 table's
+       widest column is what makes room for DRIFT and PWR without crowding.
+
+       KM/BRG/COUNTRY are computed ON THE DEVICE (/api/wspr) from the same
+       util/maidenhead.c and util/dxcc.c the Tab5 reads - one implementation, so
+       the two screens cannot disagree. Same rule the decode list follows.
+       ===================================================================== -->
+  <div class="card" id="wspr-card" style="display:none"><div class="card-in">
+      <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
+        <strong style="color:#ffa040">WSPR spots</strong>
+        <span id="wspr-count" style="color:var(--dim); font-size:13px"></span>
+        <span id="wspr-note" style="color:var(--dim); font-size:12px"></span>
+      </div>
+      <div style="max-height:40vh; overflow:auto; border:1px solid #333; border-radius:6px;">
+        <table id="wspr-table" style="width:100%; border-collapse:collapse; font-size:13px; font-family:ui-monospace,'DejaVu Sans Mono',Consolas,monospace;">
+          <thead><tr id="wspr-head"></tr></thead>
+          <tbody id="wspr-body"></tbody>
+        </table>
+      </div>
+  </div></div>
 
   <div id="bot">
     <span id="batt">🔋 --</span>
@@ -2982,6 +3017,115 @@ const DEC_SORT = {
   brg:  { get: r => r.brg === undefined ? null : r.brg, type: "num", def: "asc"  },
   age:  { get: r => r.age === undefined ? null : r.age, type: "num", def: "asc"  },
 };
+/* ---------------------------------------------------------------------------
+   WSPR spot table. Deliberately simpler than the decode table above: no sort
+   comparators and no reset link, because the device hands these back in the one
+   order that means anything for a beacon mode - newest cycle first. Sorting a
+   propagation log by SNR would scramble the time sequence that IS the
+   measurement.
+   --------------------------------------------------------------------------- */
+const WSPR_COLS = [
+  ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
+  ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"], ["km", "KM"], ["brg", "BRG"],
+];
+
+/* The device sends null for anything it did not actually measure - see
+   WSPR_SNR_UNKNOWN / WSPR_DRIFT_UNKNOWN. Render that as an em dash and never as
+   a number: 0 Hz of drift is a REAL and common reading (fifty stations reported
+   exactly that for our own transmission), so a default of 0 would be
+   indistinguishable from a genuine clean measurement. */
+function wsprFmt(k, r) {
+  const v = r[k];
+  if (v === null || v === undefined) return "—";
+  if (k === "snr")   return (v > 0 ? "+" : "") + v;
+  if (k === "drift") return (v > 0 ? "+" : "") + v;
+  if (k === "hz")    return Number(v).toFixed(1);
+  if (k === "pwr") {
+    /* Both units. dBm is what the protocol carries and what other WSPR tools
+       show, but watts is what an operator actually pictures - "37 dBm" and
+       "5 W" are the same fact and only one of them is intuitive. */
+    const w = Math.pow(10, (v - 30) / 10);
+    const ws = w >= 1 ? (Math.round(w * 10) / 10) + " W"
+             : w >= 0.001 ? Math.round(w * 1000) + " mW"
+             : (w * 1e6).toFixed(0) + " µW";
+    return v + " dBm (" + ws + ")";
+  }
+  if (k === "brg")   return v + "°";
+  return v;
+}
+
+function wsprCycleLabel(utc) {
+  const d = new Date(utc * 1000);
+  const p = n => String(n).padStart(2, "0");
+  return p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + " UTC";
+}
+
+/* WSPR ships on the main track switched OFF (settings wspr_en), so this whole
+   card has to disappear rather than show an empty table - an empty table reads
+   as "the band is dead", not as "this feature is not enabled". Driven from
+   /api/status so the browser and the device gate on the SAME flag; a second
+   copy of the rule here is how the two surfaces end up disagreeing.
+
+   Skipping the poll matters on its own: this board's httpd has a single
+   worker, and a request every 5 s for a feature nobody enabled is pure
+   contention on the link the spectrum stream shares. */
+let wsprEnabled = false;
+let wsprPollInFlight = false;
+async function pollWspr() {
+  if (!wsprEnabled) return;
+  if (wsprPollInFlight) return;          /* in-flight guard: this board's httpd
+                                            is single-worker, and overlapping
+                                            polls are how it gets wedged */
+  wsprPollInFlight = true;
+  try {
+    const r = await fetch("/api/wspr", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+
+    document.getElementById("wspr-count").textContent =
+      j.spots_held + " spot" + (j.spots_held === 1 ? "" : "s") +
+      " · " + j.unique_calls + " station" + (j.unique_calls === 1 ? "" : "s");
+    /* Say plainly when nothing is receiving, rather than letting an empty table
+       look like a dead band. */
+    document.getElementById("wspr-note").textContent =
+      j.rx_live ? "" : "RX slot loop not running - these are self-test decodes";
+
+    const head = document.getElementById("wspr-head");
+    if (!head.children.length) {
+      head.innerHTML = WSPR_COLS.map(c =>
+        "<th style='text-align:left; padding:3px 6px; border-bottom:1px solid #333; color:var(--dim)'>" +
+        c[1] + "</th>").join("");
+    }
+
+    const body = document.getElementById("wspr-body");
+    if (!j.spots.length) {
+      body.innerHTML = "<tr><td colspan='" + WSPR_COLS.length +
+        "' style='padding:8px; color:var(--dim)'>No spots yet.</td></tr>";
+      return;
+    }
+
+    let html = "", lastCycle = null;
+    for (const sp of j.spots) {
+      if (sp.utc !== lastCycle) {
+        lastCycle = sp.utc;
+        html += "<tr><td colspan='" + WSPR_COLS.length +
+          "' style='padding:4px 6px; color:#ffa040; background:#1c2128; " +
+          "border-top:1px solid #333'>" + wsprCycleLabel(sp.utc) + "</td></tr>";
+      }
+      html += "<tr>" + WSPR_COLS.map(c =>
+        "<td style='padding:2px 6px; border-bottom:1px solid #222'>" +
+        wsprFmt(c[0], sp) + "</td>").join("") + "</tr>";
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    /* transient - the next tick retries */
+  } finally {
+    wsprPollInFlight = false;
+  }
+}
+setInterval(pollWspr, 5000);
+pollWspr();
+
 const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc" };
 let decPollInFlight = false;
 
@@ -3693,6 +3837,13 @@ async function tick() {
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
     lastAct        = s.activation || {type:0, ref:'', qsos:0};
     updateActPill();
+    /* Show or hide the WSPR card from the device's own flag. */
+    if (!!s.wspr_en !== wsprEnabled) {
+      wsprEnabled = !!s.wspr_en;
+      const wc = document.getElementById("wspr-card");
+      if (wc) wc.style.display = wsprEnabled ? "" : "none";
+      if (wsprEnabled) pollWspr();
+    }
     /* Waterfall colourisation, live from the Tab5 so a slider dragged there shows
        up here. The palette is only rebuilt when the index actually changes - it is
        a 1 KB loop and this runs every second. */

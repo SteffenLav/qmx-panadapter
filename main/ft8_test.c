@@ -328,6 +328,11 @@ static volatile uint32_t s_decode_jobs_done   = 0;
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
 // first finished tearing down; the two clobber the shared s_decode_queue and
 // one decode task ends up calling xQueueReceive(NULL) -> assert/reboot.
+/* Up to ~15 s: wspr_rx frees on its next loop pass, measured at ~2.6 s, and a
+ * WSPR cycle is 120 s so a pathological case wants room. */
+#define FT8_ALLOC_TRIES    16
+#define FT8_ALLOC_WAIT_MS 1000
+
 static volatile bool  s_ft8_task_alive = false;
 
 // Timing error from the last decoded slot: positive = system clock is fast.
@@ -675,7 +680,7 @@ typedef struct {
 // live worker. With the handles owned per-instance (worker gets its context as
 // its task arg; decode_slot gets it as a parameter), overlapping instances
 // cannot touch each other's comms. exited: worker gives it just before
-// vTaskDelete; the owning decode task JOINS on it before deleting the handles
+// parks; the owning decode task JOINS on it, then reaps it and deletes the handles
 // (and, on join timeout, deliberately LEAKS the context - a zombie worker may
 // still hold it, and a small leak beats a crash).
 typedef struct {
@@ -684,7 +689,7 @@ typedef struct {
     SemaphoreHandle_t exited;
 } worker_ctx_t;
 
-// True from ft8_decode_task entry until just before its vTaskDelete. The
+// True from ft8_decode_task entry until just before it parks. The
 // ft8_task single-instance guard must cover the DECODE task too - ft8_task's
 // bounded teardown wait can expire with the decode task still finishing, and
 // spawning a new session in that window is what crossed the worker handles.
@@ -1057,6 +1062,82 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
 // Persistent core-0 decode helper: waits for one sub-range job, decodes it,
 // signals completion. Only one job is ever in flight (the decode task blocks on
 // ctx->done before issuing the next).
+/* ---------------------------------------------------------------------------
+ * Reaping a WithCaps task (#269)
+ *
+ * Every task in this file is created with xTaskCreatePinnedToCoreWithCaps() so
+ * its 32-64 KB stack comes from PSRAM. Such a task MUST be freed with
+ * vTaskDeleteWithCaps(); a plain vTaskDelete() leaves the stack and TCB
+ * allocated for ever, which IDF says outright in idf_additions.c: "the idle
+ * task will not free the task TCB and stack memories we created statically
+ * during xTaskCreateWithCaps() ... Therefore, it will leak memory."
+ *
+ * That was measured here, not inferred: three Panadapter/WSPR round trips took
+ * PSRAM 15153 -> 14946 -> 14540 -> 14498 KB, about 218 KB per FT8 exit - the
+ * 160 KB of stacks plus the shared FFT scratch. Roughly 70 mode toggles would
+ * exhaust free PSRAM, and the symptom would be FT8 quietly refusing to start.
+ *
+ * ⛔ THE OBVIOUS FIX IS WORSE THAN THE BUG. Calling vTaskDeleteWithCaps(NULL)
+ * on yourself makes IDF spawn a temporary cleanup task to do the freeing, from
+ * INTERNAL RAM, and abort() if it cannot get it. A task-create failure from
+ * internal RAM is not hypothetical on this board - it is what we had just
+ * finished watching happen 390 times - and an abort() is a warm reset, which
+ * with the radio attached is the documented #74 QMX wedge. That trades a slow
+ * leak for a reboot that kills the operator's radio.
+ *
+ * So a finished task PARKS itself and registers its handle here, and an owner
+ * reaps it from an ordinary context. vTaskDeleteWithCaps() called on ANOTHER
+ * task suspends the target, spins until it is provably not eRunning, deletes
+ * it and frees the buffers - no temporary task, no abort, nothing to fail.
+ * ------------------------------------------------------------------------- */
+#define REAP_MAX 4
+static TaskHandle_t  s_reap[REAP_MAX];
+static portMUX_TYPE  s_reap_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* Register, then stop. Registering first is deliberate: if we are preempted
+ * between the two, an owner may reap us here rather than after the suspend -
+ * which is equally safe, because vTaskDeleteWithCaps waits for us to stop
+ * running and we hold nothing at this point. */
+static void task_park_and_reap(void)
+{
+    TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    portENTER_CRITICAL(&s_reap_lock);
+    for (int i = 0; i < REAP_MAX; i++) {
+        if (!s_reap[i]) { s_reap[i] = me; me = NULL; break; }
+    }
+    portEXIT_CRITICAL(&s_reap_lock);
+    /* Full list: fall back to the old behaviour rather than run on. A leak is
+     * survivable; returning from a task function is not. */
+    if (me) vTaskDelete(NULL);
+
+    vTaskSuspend(NULL);
+    for (;;) vTaskDelay(portMAX_DELAY);   /* never return, even if resumed */
+}
+
+/* Safe from any ordinary task context. Never call this from a parked task. */
+static void reap_pending_tasks(void)
+{
+    for (;;) {
+        TaskHandle_t h = NULL;
+        portENTER_CRITICAL(&s_reap_lock);
+        for (int i = 0; i < REAP_MAX; i++) {
+            if (s_reap[i]) { h = s_reap[i]; s_reap[i] = NULL; break; }
+        }
+        portEXIT_CRITICAL(&s_reap_lock);
+        if (!h) break;
+        /* Outside the critical section - this suspends, spins and frees. */
+        size_t before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        vTaskDeleteWithCaps(h);
+        /* SAID OUT LOUD on purpose. A silent leak fix is indistinguishable
+         * from no fix at all - the trap #189 records for the two USB patches -
+         * and the number is the whole claim being made here. */
+        ESP_LOGI(TAG, "reaped a parked task: PSRAM %u -> %u KB (+%u KB)",
+                 (unsigned)(before / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)((heap_caps_get_free_size(MALLOC_CAP_SPIRAM) - before) / 1024));
+    }
+}
+
 static void ft8_decode_worker_task(void *arg)
 {
     // Comms context owned by OUR decode-task instance (task arg, never a
@@ -1077,7 +1158,7 @@ static void ft8_decode_worker_task(void *arg)
     // nothing shared (context/job), so the decode task can safely free them
     // once it sees this.
     xSemaphoreGive(ctx->exited);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
@@ -1394,7 +1475,7 @@ static void ft8_decode_task(void *arg)
     }
 
     // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
-    // JOIN — wait for the worker to actually reach vTaskDelete (it gives
+    // JOIN — wait for the worker to actually reach its park (it gives
     // ctx->exited first) before deleting the queue/semaphore and returning.
     // The old code waited a FIXED 50 ms, which was not enough if the worker was
     // still holding a job pointer into this task's stack: freeing the stack out
@@ -1406,6 +1487,12 @@ static void ft8_decode_task(void *arg)
         worker_job_t *sentinel = NULL;
         xQueueSend(wctx->jobs, &sentinel, pdMS_TO_TICKS(1000));
         if (xSemaphoreTake(wctx->exited, pdMS_TO_TICKS(12000)) == pdTRUE) {
+            /* The worker has finished and parked, so free its PSRAM stack
+             * before the context it was reading from (#269). On a TIMEOUT we
+             * deliberately do NOT reap - the same reasoning as the ctx leak
+             * below, and vTaskDeleteWithCaps on a task that is still working
+             * would be the use-after-free we are avoiding. */
+            reap_pending_tasks();
             vQueueDelete(wctx->jobs);
             vSemaphoreDelete(wctx->done);
             vSemaphoreDelete(wctx->exited);
@@ -1423,7 +1510,7 @@ static void ft8_decode_task(void *arg)
     ESP_LOGI(TAG, "decode task exiting");
     s_decode_task_alive = false;
     if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // ---------------------------------------------------------------------------
@@ -1466,7 +1553,12 @@ static void ft8_task(void *arg)
         if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
             ESP_LOGE(TAG, "No time source (no QMX GPS/RTC, no SNTP) - check WiFi/QMX");
             ft8_status_set("No time source - check WiFi/QMX");
-            vTaskDelete(NULL);
+            /* Every other exit clears this; this one did not, so a boot with no
+             * time source left the flag true for ever with no task behind it -
+             * FT8 dead for the session AND the respawn watchdog refusing to
+             * retry, which is precisely what the spawner's comment warns of. */
+            s_ft8_task_alive = false;
+            task_park_and_reap();
             return;
         }
     }
@@ -1476,18 +1568,44 @@ static void ft8_task(void *arg)
     // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
     // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
     // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
-    s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    /* ⛔ RETRIED, BECAUSE THE PAGE WE JUST LEFT MAY STILL HOLD THE MEMORY.
+     *
+     * Switching WSPR -> FT8 asks for this scratch while wspr_rx is still
+     * holding 11.25 MB: wspr_rx_stop() only sets a flag, and its loop frees on
+     * its next pass - about 2.6 s later, measured. FT8 asked 147 ms after the
+     * mode changed, failed, and deleted itself.
+     *
+     * ⛔ AND THE RECOVERY WAS WORSE THAN THE FAULT. The respawn watchdog then
+     * retried once a SECOND for ever, and by then FT8's own entry had taken
+     * ~34 KB of internal heap it never gave back - so every retry failed on
+     * the TCB (`failed to spawn ft8_task (rc=0)`) with internal free at 4 KB
+     * and a 0 KB largest block. The device was left degraded, which on this
+     * board is the state that also breaks TLS, USB endpoint allocation and SD.
+     *
+     * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
+     * fixing one direction and not asking about the other is what let this
+     * through. The memory genuinely arrives - wait for it. */
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
+        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch) break;
+        if (attempt == 0)
+            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+                          "waiting for the previous page to release",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
+        vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
+    }
     if (!s_cap_scratch) {
         ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     if (!build_monitor_pool(proto_for_mode())) {
         ESP_LOGE(TAG, "initial monitor pool build failed");
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1496,7 +1614,7 @@ static void ft8_task(void *arg)
         ESP_LOGE(TAG, "failed to create decode queue");
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1527,7 +1645,7 @@ static void ft8_task(void *arg)
         s_decode_queue = NULL;
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1894,13 +2012,18 @@ static void ft8_task(void *arg)
     // the join bound it was waiting on).
     xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000));
 
+    /* The decode task has notified us and parked; free its 64 KB stack (#269).
+     * If the wait TIMED OUT it has not parked and is not on the list, so this
+     * reaps nothing - which is the safe outcome, not a missed one. */
+    reap_pending_tasks();
+
     vQueueDelete(s_decode_queue);
     s_decode_queue = NULL;
     free_capture_pool();
 
     ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
     s_ft8_task_alive = false;
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // ---------------------------------------------------------------------------
@@ -1991,7 +2114,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     ftx_message_t msg;
     if (ftx_message_encode_arrl_fd(&msg, NULL, call_to, call_de, extra) != FTX_MESSAGE_RC_OK) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (encode)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -2004,7 +2127,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!signal) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (signal alloc)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     memset(signal, 0, SLOT_SAMPLES * sizeof(float));
@@ -2017,7 +2140,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     if (!synth_ok) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (synth alloc)");
         heap_caps_free(signal);
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -2029,7 +2152,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     if (!mon) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor alloc)");
         heap_caps_free(signal);
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     monitor_init(mon, &cfg);
@@ -2071,7 +2194,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     monitor_free(mon);
     heap_caps_free(mon);
     heap_caps_free(signal);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
@@ -2214,7 +2337,7 @@ static void ft8_sim_synth_selftest_task(void *arg)
     ftx_message_t msg;
     if (ftx_message_encode_std(&msg, NULL, "CQ", "W1AW", "FN31") != FTX_MESSAGE_RC_OK) {
         ESP_LOGE(TAG, "sim synth selftest: FAIL (encode)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     char text[FTX_MAX_MESSAGE_LENGTH];
@@ -2226,11 +2349,12 @@ static void ft8_sim_synth_selftest_task(void *arg)
     } else {
         ESP_LOGE(TAG, "sim synth selftest: FAIL (no candidate decoded)");
     }
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 void ft8_sim_synth_selftest(void)
 {
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#269) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_sim_synth_selftest_task, "sim_synth_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2242,6 +2366,7 @@ void ft8_sim_synth_selftest(void)
 
 void ft8_arrl_fd_e2e_selftest(void)
 {
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#269) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_arrl_fd_e2e_selftest_task, "fd_e2e_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2355,6 +2480,13 @@ void ft8_self_test(void)
     // timing: a grace period in the watchdog would only have made the race
     // rarer, and this file's history is emphatic that timing changes the odds
     // of a race, not the race.
+    /* NOTHING JOINS ft8_task, so its spawner is the owner. The previous
+     * instance parked on its way out and is still holding 64 KB of PSRAM;
+     * free it here, before asking for another 64 KB (#269). Doing it at the
+     * spawn rather than at the exit is what makes it safe - we are on the
+     * LVGL task, an ordinary context, and the target is provably parked. */
+    reap_pending_tasks();
+
     s_ft8_task_alive = true;
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_task, "ft8", 65536, NULL,

@@ -78,6 +78,20 @@ static void render_task(void *arg)
         // the FT8 top bar — the v0.15.7 fix exists precisely to keep it
         // running there). The web UI is unaffected: ws_push_task reads
         // dsp_get_spectrum() itself, not this pipeline.
+        // WSPR is NOT excluded here, and that is a decision backed by numbers.
+        //
+        // It was excluded at first, on the theory that a 66 s decode inside a
+        // 120 s cycle needs core 0 the way FT8 does. Measured, it buys nothing:
+        // the decode takes 64.1-65.5 s with the panadapter rendering (the
+        // self-test, in panadapter mode) and 65.7-66.1 s with it gated off (the
+        // live loop, in WSPR mode). What it DID buy was a Tab5 frozen for as
+        // long as the loop ran - reported by the operator within minutes - while
+        // the web kept moving, because ws_push_task reads dsp_get_spectrum() on
+        // its own path.
+        //
+        // The panadapter still freezes for the 120 s of each CAPTURE, because
+        // dsp.c skips the FFT while one is armed. That is inherent to capturing
+        // and not this gate's business.
         bool pan_visible = (ui_mode_get() != UI_MODE_FT8);
         bool have_spectrum = false;
 

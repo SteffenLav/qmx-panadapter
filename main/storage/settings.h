@@ -99,7 +99,12 @@ typedef struct {
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
-    uint8_t  last_ui_mode;     // last UI mode: 0=Panadapter, 1=FT8 (default 0)
+    /* Last UI mode: 0=Panadapter, 1=FT8, 3=WSPR (default 0). ⚠ ui_apply_saved_mode()
+     * restores ONLY FT8 - every other value falls through to Panadapter, which
+     * is what makes it impossible to boot into WSPR with the feature disabled.
+     * Deliberate, not an oversight: a mode that ships dark should not be sticky
+     * across a reboot. This comment said "0 or 1" after 3 became storable. */
+    uint8_t  last_ui_mode;
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
@@ -242,6 +247,73 @@ typedef struct {
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
     char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
     bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
+
+    /* ---- WSPR ---------------------------------------------------------
+     * wspr_dial_hz is one of the standard per-band WSPR dial frequencies -
+     * NOT free entry. A station outside the 200 Hz sub-band is heard by
+     * nobody, so an arbitrary number is only a way to be silently wrong
+     * (docs/wspr-ui-design.md).
+     * wspr_tx_dbm is a DECLARED power, published worldwide with every spot.
+     * It was a hardcoded 23 before this existed, so every spot claimed
+     * 0.2 W whatever the operator was actually running. */
+    uint32_t wspr_dial_hz;    // standard WSPR dial for the chosen band (default 20 m)
+    bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
+    uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
+    int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
+    /* Captured windows still to be written to the SD card as WAV.
+     *
+     * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
+     * while WiFi is up on this board - it unmounts within ~100 s as the
+     * MALLOC_CAP_DMA pool collapses, and sd_archive.c's own comment records
+     * that a remount then cannot succeed and that "a reboot with WiFi off
+     * gives the verified continuous-mirroring behaviour". So the request has
+     * to survive the reboot that makes it possible: arm it from the web while
+     * WiFi is still up, switch WiFi off, reboot, and the dumps land.
+     *
+     * Decremented as each file is written, so an interrupted run resumes
+     * rather than starting over, and a finished run cannot re-arm itself on
+     * the next boot and quietly fill the card. */
+    /* ---- BAND HOPPING ------------------------------------------------
+     * A BITMASK over the standard WSPR band table (ui/wspr_screen_view.c's
+     * kBands), one bit per band the operator ticked. A mask rather than a list
+     * because the order is the table's, and because "which bands" is exactly a
+     * set - the operator ticks them off and the loop visits whichever are on.
+     *
+     * ⚠ The mask can name a band the RADIO does not have. That is deliberate:
+     * the tick list only ever OFFERS bands the QMX reports (cat_get_band_list),
+     * but a stored mask outlives a change of radio, and silently dropping bits
+     * would lose the operator's choice the moment CAT was slow to answer. The
+     * hop skips what the radio cannot reach; it does not forget it.
+     *
+     * 0 bands ticked, or hopping off, means stay on wspr_dial_hz. */
+    uint16_t wspr_hop_mask;
+    bool     wspr_hop_en;
+
+    /* ⭐ THE MASTER SWITCH FOR THE WHOLE WSPR PAGE, DEFAULT OFF.
+     *
+     * WSPR ships on the main track before it is finished, so that the update
+     * path carries it and can be exercised, while nobody meets it by accident:
+     * off, the page is not in the swipe cycle, /api/wspr says so rather than
+     * answering, and the RX loop cannot be started.
+     *
+     * ⚠ WHAT THIS DOES NOT BUY. Being off does NOT make the feature free -
+     * .bss is allocated whether code runs or not, and WSPR's share of internal
+     * RAM had to be dealt with separately (see the EXT_RAM_BSS_ATTR note in
+     * wspr_rx.c). Never reason from "the flag is off" to "it costs nothing".
+     *
+     * Deliberately has no drawer control: a half-finished mode should be
+     * reachable by someone who went looking for it, not offered in a list of
+     * settings. Turned on with /api/cmd {"action":"wspr_enable","on":true},
+     * or wspr_enabled = yes in an imported config file. */
+    bool     wspr_en;
+
+    /* ⛔ PUBLISHES TO A PUBLIC DATABASE UNDER THE OPERATOR'S CALLSIGN, so it
+     * starts OFF and only the operator turns it on. wsprnet is a scientific
+     * dataset other people draw propagation conclusions from - an upload is
+     * not a private action, and it cannot be taken back once indexed. */
+    bool     wspr_net_en;
+
+    uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
@@ -441,6 +513,15 @@ void settings_set_fd_section(const char *section);
 // FT8 simulation mode (debounced flush): phantom-station practice mode -
 // see ft8_sim.h. The real QMX is never keyed while this is on.
 void settings_set_sim_mode_en(bool v);
+void settings_set_wspr_dial_hz(uint32_t v);
+void settings_set_wspr_tx_en(bool v);
+void settings_set_wspr_duty_pct(uint8_t v);
+void settings_set_wspr_tx_dbm(int8_t v);
+void settings_set_wspr_hop_mask(uint16_t v);
+void settings_set_wspr_hop_en(bool v);
+void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
+void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default OFF
+void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 
 // Last CAT-reported filter width in Hz (debounced flush). Restored at boot

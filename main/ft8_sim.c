@@ -38,6 +38,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "ui/ui_mode.h"
+
 static const char *TAG = "ft8_sim";
 
 static void fmt_report(int snr_db, char *out, size_t len);   // defined below
@@ -538,9 +540,20 @@ static void ft8_sim_task(void *arg)
         // It matters because the simulator is how an FT4 change gets tested at
         // all: nobody has an FT4 partner on the bench, and the last FT4 fix had
         // to ship host-tested only.
-        if (!s.sim_mode_en) {
+        /* AND the FT8 PAGE must actually be up - a separate condition from the
+         * protocol one above, kept when the WSPR page landed.
+         *
+         * sim_mode_en is ONE switch shared with the WSPR sim, so turning it on
+         * to work on WSPR without a radio also turned this on - and this task
+         * does a full GFSK synthesis plus a REAL decode per phantom, whose
+         * decode half runs on the core-0 helper. Measured on the WSPR page with
+         * the radio wedged: core 0 sat at 0.0% idle and the WSPR sim's own
+         * window synthesis was starved for minutes, against ~73% idle on the
+         * same page in live RX. Injecting phantoms into a decode list nobody is
+         * looking at is pure cost, so gate on the page as well as the setting. */
+        if (!s.sim_mode_en || ui_mode_get() != UI_MODE_FT8) {
             if (was_active) {
-                ESP_LOGI(TAG, "sim mode OFF");
+                ESP_LOGI(TAG, "sim mode idle (off, or not on the FT8 page)");
                 was_active = false;
                 // Fresh session next time: worked phantoms answer CQs again,
                 // and nothing pending survives the toggle.

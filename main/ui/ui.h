@@ -1,4 +1,5 @@
 #pragma once
+#include "ui_mode.h"
 
 #include "lvgl.h"
 #include <stdbool.h>
@@ -204,6 +205,12 @@ void ui_rit_notify_retune(void);
 // and moves widgets, so it cannot run on the caller's task). Used by the web
 // UI's view buttons.
 void ui_request_base_mode(bool ft8);
+void ui_request_base_mode_m(ui_mode_t m);   // names any of the three pages
+
+/* Re-raise the edge-swipe strips. ⛔ ANY PAGE THAT FOREGROUNDS ITS OWN
+ * near-full-screen container must call this afterwards, or it buries the
+ * strips and the operator cannot swipe off that page. */
+void ui_raise_edge_strips(void);
 
 // Full-screen breathing red bezel shown while FT8 simulation mode is on
 // (see ft8_sim.h) - an unmissable reminder that nothing transmitted right

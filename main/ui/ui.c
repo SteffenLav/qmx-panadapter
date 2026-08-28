@@ -55,6 +55,8 @@
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
+#include "wspr_screen_view.h"
+#include "wspr_rx.h"
 #include "net/reader_net.h"
 #include "../ft8_pileup.h"
 #include "reader_view.h"
@@ -1911,20 +1913,32 @@ static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 static bool      s_drawer_expert = false;
 
-// Is this section allowed on the screen we are on at all?
-static bool drawer_sec_visible(int id, bool ft8, bool tune_ok)
+/* Is this section allowed on the screen we are on at all?
+ *
+ * Asks WHICH MODE, not "is it FT8". It took a bool until the WSPR page arrived
+ * and the two branches immediately meant the wrong thing: the simulation toggle
+ * (`return ft8`) vanished on the one page that most needs it, and every
+ * spectrum/waterfall control (`return !ft8`) appeared on a page that shows
+ * neither. Same trap ui_set_base_mode() had - a two-valued question with three
+ * answers. */
+static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
 {
+    const bool ft8  = (mode == UI_MODE_FT8);
+    const bool wspr = (mode == UI_MODE_WSPR);
+
     if (id == DRAWER_SEC_CWAUDIO) return false;   // shelved - see cw_audio.c
     if (id == DRAWER_SEC_RESMON)  return false;   // dev-only, driven by /api/cmd
     if (id == DRAWER_SEC_TUNE2)   return tune_ok;
-    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_SIMMODE ||
-        id == DRAWER_SEC_FT8SYNC) return ft8;
-    // The spectrum/waterfall controls describe a view FT8 mode does not show.
+    /* Simulation belongs to BOTH decode pages - one setting drives the FT8
+     * phantoms and the WSPR ones (see wspr_sim.h). */
+    if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
+    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_FT8SYNC) return ft8;
+    // The spectrum/waterfall controls describe a view neither decode page shows.
     if (id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
         id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
         id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
-        id == DRAWER_SEC_CMAP) return !ft8;
+        id == DRAWER_SEC_CMAP) return !ft8 && !wspr;
     return true;
 }
 
@@ -1990,6 +2004,21 @@ static void drawer_preset_noise_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_identity_btn_cb(lv_event_t *e);
 static void ui_show_memories(void);
+
+/* Put the edge-swipe strips back on top of everything built after them.
+ *
+ * ⛔ A PAGE THAT FOREGROUNDS ITS OWN CONTAINER MUST CALL THIS. The FT8 and
+ * WSPR views are near-full-screen opaque panes, so raising one buries the
+ * strips underneath it and the operator simply cannot swipe off that page -
+ * which is how the WSPR page ended up with no way out. CLAUDE.md already
+ * carried the warning for FT8; this makes it one call instead of a rule each
+ * page is expected to remember. */
+void ui_raise_edge_strips(void)
+{
+    if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
+    if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
+    if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
+}
 static void ui_advance_page(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
@@ -2088,7 +2117,7 @@ static void user_manual_cb(lv_event_t *e)
     }
     ui_open_user_manual();
 }
-static void drawer_set_ft8_mode(bool ft8);
+static void drawer_set_mode(ui_mode_t mode);
 static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
@@ -2499,6 +2528,8 @@ static bool any_modal_open(void)
     return false;
 }
 
+static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
@@ -2796,7 +2827,7 @@ void ui_rit_notify_retune(void)
 void ui_notify_qmx_fw_known(void)
 {
     if (!s_drawer) return;  // not built yet - drawer_build() will see the current firmware string
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
 }
 
 // Same breathing technique as the edge grips, applied to the bottom-bar
@@ -4578,6 +4609,7 @@ void ui_init(lv_display_t *disp)
     drawer_build();
 
     ft8_screen_view_init(scr);
+    wspr_screen_view_init(scr);   // WSPR page overlay (hidden until UI_MODE_WSPR)
 
     // Docs Reader page (third page of the left-swipe cycle). Built here, BEFORE
     // the edge-swipe strips are re-foregrounded (below), so its full-screen
@@ -4696,9 +4728,7 @@ void ui_init(lv_display_t *disp)
     // called at the very top of ui_init) and re-foregrounded here, now that
     // every other widget - top-bar hit zones, modals, drawer, FT8 view,
     // signature - has been built after them.
-    if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
-    if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
-    if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
+    ui_raise_edge_strips();
     // Same reasoning for the resource-monitor overlay - it needs to stay
     // draggable/hit-testable regardless of what's built after it.
     if (s_resmon_panel)      lv_obj_move_foreground(s_resmon_panel);
@@ -4859,6 +4889,11 @@ void ui_init(lv_display_t *disp)
     }
     qmx_wait_poll_cb(NULL);
     lv_timer_create(qmx_wait_poll_cb, 1000, NULL);
+    /* WSPR page refresh. Its own 1 Hz timer rather than a call inside
+     * qmx_wait_poll_cb: the page must keep counting down its 120 s cycle
+     * whether or not the radio is answering, and the tick returns immediately
+     * when the page is hidden. */
+    lv_timer_create(wspr_tick_cb, 1000, NULL);
     // Re-assert a top-bar label whose write lost the display lock (see
     // topbar_reconcile_cb). 500 ms so a stale label is corrected before the
     // operator can read it and act on it.
@@ -7568,7 +7603,13 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             cat_set_frequency_forced(tgt);   // deliberate user action - bypass the 200ms rate-limiter
             ui_update_frequency(tgt);
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
-                   s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
+                   s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY &&
+                   ui_mode_get() != UI_MODE_WSPR) {
+            /* Memory channels recall a frequency AND a mode, which on the WSPR
+             * page would silently take the radio off its WSPR dial mid-cycle -
+             * and the capture would be half one band and half another. The
+             * page has its own band control for the only move that makes sense
+             * here. */
             ui_show_memories();
         } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb) {
             // #239: a SHORT TAP now acts, and that is the whole point of the
@@ -9464,7 +9505,7 @@ static void drawer_build(void)
 
     // Apply current UI mode's section visibility (drawer is pre-built at
     // boot before ui_apply_saved_mode() runs).
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
 }
 
 static void drawer_open(void)
@@ -9524,7 +9565,7 @@ void ui_set_drawer_expert(bool expert)
     // ignores an unchanged value, so the boot-time restore writes nothing.
     settings_set_drawer_expert(expert);
     drawer_expert_paint();
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
@@ -9565,8 +9606,9 @@ static void drawer_close(void)
 // map) is irrelevant there. Hide the rest and restack the kept sections near
 // the top of the drawer. Called on every mode switch (and once at boot via
 // drawer_build()).
-static void drawer_set_ft8_mode(bool ft8)
+static void drawer_set_mode(ui_mode_t mode)
 {
+    const bool ft8 = (mode == UI_MODE_FT8);   /* legacy local, still used below */
     if (!s_drawer) return;
     static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
@@ -9622,7 +9664,7 @@ static void drawer_set_ft8_mode(bool ft8)
         if (show_group) {
             for (int k = 0; k < grp->n; k++)
                 if (s_drawer_sections[grp->ids[k]] &&
-                    drawer_sec_visible(grp->ids[k], ft8, tune_ok)) n_vis++;
+                    drawer_sec_visible(grp->ids[k], mode, tune_ok)) n_vis++;
         }
 
         if (s_grp_hdr[g]) {
@@ -9638,7 +9680,7 @@ static void drawer_set_ft8_mode(bool ft8)
 
         for (int k = 0; k < grp->n; k++) {
             int id = grp->ids[k];
-            if (!s_drawer_sections[id] || !drawer_sec_visible(id, ft8, tune_ok)) continue;
+            if (!s_drawer_sections[id] || !drawer_sec_visible(id, mode, tune_ok)) continue;
             lv_obj_clear_flag(s_drawer_sections[id], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_pos(s_drawer_sections[id], 0, y);
             y += s_drawer_section_h[id];
@@ -10389,7 +10431,7 @@ void ui_apply_saved_mode(void)
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
     if (s_saved_ui_mode != UI_MODE_FT8) {
         ui_mode_set(UI_MODE_PANADAPTER);
-        drawer_set_ft8_mode(false);
+        drawer_set_mode(UI_MODE_PANADAPTER);
         ESP_LOGI(TAG, "UI mode restored from NVS: Panadapter");
         return;
     }
@@ -10401,7 +10443,7 @@ void ui_apply_saved_mode(void)
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     spots_lane_set_visible(false);
     top_bar_set_ft8_dim(true);
-    drawer_set_ft8_mode(true);
+    drawer_set_mode(UI_MODE_FT8);
     // FT8 is a digital mode - force the radio into DiGi regardless of
     // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll task
     // (reliable, retried) rather than a rate-limit-droppable direct write.
@@ -10415,20 +10457,71 @@ void ui_apply_saved_mode(void)
 // the widgets across; when false the swap is instant (used when the change will
 // immediately be covered by the Reader overlay, so an animation would be
 // invisible). No-op if already in `next`. Top/bottom bars stay visible in both.
+/* Put the panadapter's widgets away with no animation. Factored out of the FT8
+ * branch's instant path so the WSPR page uses exactly the same list - if a new
+ * widget is ever added to one, the other cannot silently keep showing it. */
+static void hide_panadapter_widgets_instant(void)
+{
+    if (s_spectrum_obj)  { lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_spectrum_obj,  0); }
+    if (s_label_bar)     { lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_label_bar,     0); }
+    if (s_bandplan_obj)  { lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_bandplan_obj,  0); }
+    if (s_bp_catch)      lv_obj_add_flag(s_bp_catch, LV_OBJ_FLAG_HIDDEN);
+    if (s_waterfall_obj) { lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_waterfall_obj, 0); }
+    if (spots_lane_obj()) lv_obj_set_x(spots_lane_obj(), 0);
+}
+
+static const char *mode_name(ui_mode_t m)
+{
+    return m == UI_MODE_FT8  ? "FT8"
+         : m == UI_MODE_WSPR ? "WSPR"
+                             : "Panadapter";
+}
+
 static void ui_set_base_mode(ui_mode_t next, bool animate)
 {
     ui_mode_t cur = ui_mode_get();
     if (next == cur) return;
     ESP_LOGI(TAG, "Base mode: %s -> %s%s",
-             cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
-             next == UI_MODE_FT8 ? "FT8" : "Panadapter",
-             animate ? "" : " (instant)");
+             mode_name(cur), mode_name(next), animate ? "" : " (instant)");
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
-    top_bar_set_ft8_dim(next == UI_MODE_FT8);
-    drawer_set_ft8_mode(next == UI_MODE_FT8);
+    /* Both overlay pages dim the panadapter's top-bar controls; only FT8 wants
+     * the drawer's FT8 sections. */
+    top_bar_set_ft8_dim(next != UI_MODE_PANADAPTER);
+    drawer_set_mode(next);
+
+    /* STAND DOWN WHAT WE ARE LEAVING, before anything is shown.
+     *
+     * This used to live inside the two entry branches, which was fine while
+     * there were exactly two modes: "not FT8" meant Panadapter. With a third it
+     * is a trap - leaving WSPR would have run the Panadapter branch and saved
+     * the WSPR page's state into s_ft8_snapshot, corrupting where FT8 resumes.
+     * Doing it by the mode we are actually leaving cannot make that mistake. */
+    if (cur == UI_MODE_WSPR) {
+        wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
+        wspr_screen_view_hide();
+    } else if (cur == UI_MODE_FT8) {
+        ui_save_snapshot(&s_ft8_snapshot);
+        /* FT8 is always DiGi - never carry a drifted radio mode back in. */
+        strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
+        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+    } else {
+        ui_save_snapshot(&s_pan_snapshot);
+    }
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
+
+    if (next == UI_MODE_WSPR) {
+        /* Instant, not animated. At ~13 fps a 220 ms slide is three frames -
+         * two discrete snapshots, which reads as a flicker rather than motion.
+         * That is this project's own finding (see the Reader's transitions). */
+        hide_panadapter_widgets_instant();
+        if (ft8) { ft8_screen_view_hide(); lv_obj_set_x(ft8, 0); }
+        wspr_screen_view_show();
+        wspr_rx_start();              /* sets nothing else - the mode is already WSPR */
+        spots_lane_set_visible(false);
+        return;
+    }
 
     if (next == UI_MODE_FT8) {
         if (ft8) {
@@ -10444,9 +10537,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             ft8_pileup_clear();
             ft8_screen_view_request_refresh();
         }
-        // Sticky settings: remember where Panadapter was left, restore
-        // where FT8 was left (or just force DiGi on the very first entry).
-        ui_save_snapshot(&s_pan_snapshot);
+        // Sticky settings: restore where FT8 was left (or force DiGi on the
+        // very first entry). The Panadapter snapshot was taken above, by the
+        // stand-down block, which knows which mode we actually came from.
         if (s_ft8_snapshot.valid) {
             ui_restore_snapshot(&s_ft8_snapshot);   // restores FT8's freq/zoom
         } else {
@@ -10536,6 +10629,13 @@ void ui_request_base_mode(bool ft8)
     s_web_base_mode_req = ft8 ? (int)UI_MODE_FT8 : (int)UI_MODE_PANADAPTER;
 }
 
+// Same deferral, but able to name any of the three pages - the bool form
+// predates WSPR and cannot express it.
+void ui_request_base_mode_m(ui_mode_t m)
+{
+    s_web_base_mode_req = (int)m;
+}
+
 // Left-edge swipe (drag right): the normal Panadapter <-> FT8 toggle. If the
 // docs Reader overlay is open (launched from the Settings drawer, NOT part of
 // this swipe stack), the same swipe closes it instead — a convenient exit
@@ -10545,8 +10645,21 @@ static void ui_advance_page(void)
     if (reader_view_is_active()) {
         reader_view_hide();
     } else {
-        ui_set_base_mode(ui_mode_get() == UI_MODE_PANADAPTER ? UI_MODE_FT8
-                                                             : UI_MODE_PANADAPTER, true);
+        /* Panadapter -> FT8 -> WSPR -> Panadapter. WSPR joins the cycle rather
+         * than hiding in the drawer because it is a peer operating mode, not a
+         * setting - the same reasoning that gave FT8 its own page. */
+        /* WSPR is in the cycle only when it has been enabled. It ships on the
+         * main track unfinished so the update path carries it, and this is
+         * what keeps an operator who never asked for it from swiping into a
+         * half-built page. With it off the cycle is the old Panadapter <-> FT8
+         * toggle exactly as before, which is the point: nothing about an
+         * existing user's device changes. */
+        ui_mode_t m = ui_mode_get();
+        const bool wspr_ok = wspr_feature_enabled();
+        ui_set_base_mode(m == UI_MODE_PANADAPTER ? UI_MODE_FT8
+                       : m == UI_MODE_FT8        ? (wspr_ok ? UI_MODE_WSPR
+                                                            : UI_MODE_PANADAPTER)
+                                                 : UI_MODE_PANADAPTER, true);
     }
     // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
     // an open drawer keeps LVGL busy enough to starve audio/fft tasks.

@@ -18,6 +18,7 @@ idf_component_register(
         "ui/ui_mode.c"
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
+        "ui/wspr_screen_view.c"
         "ui/ft8_tx_modal.c"
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
@@ -82,6 +83,7 @@ idf_component_register(
         "ft8_pileup.c"
         "ft8_greylist.c"
         "net/pskreporter.c"
+        "net/wsprnet.c"
         "net/spots.c"
         "net/spot_sig.c"
         "ft8_hound.c"
@@ -93,6 +95,16 @@ idf_component_register(
         "net/dxcluster.c"
         "ft8_robot.c"
         "ft8_sim.c"
+        "wspr_proto.c"
+        "wspr_fano.c"
+        "wspr_decode.c"
+        "wspr_subtract.c"
+        "wspr_tx.c"
+        "wspr_selftest.c"
+        "wspr_spots.c"
+        "wspr_rx.c"
+        "wspr_wav.c"
+        "wspr_sim.c"
         "adif/adif_log.c"
         "adif/qrz_upload.c"
         "adif/eqsl_upload.c"
@@ -222,6 +234,23 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E env "IDF_PATH=$ENV{IDF_PATH}"
             ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_patches.py"
     COMMENT "Checking standing patches (managed_components + IDF tree)"
+    VERBATIM
+)
+
+# Refuse to build settings.c with two settings sharing one dirty bit.
+#
+# The indices are hand-written #defines, so two features developed on separate
+# branches WILL eventually pick the same free number - and the merge is silent:
+# both defines survive, the compiler is happy, nothing complains at runtime.
+# That already happened once (DIRTY_WSPR_DIAL and DIRTY_DRAWER_EXPERT both at
+# 97 after merging feat/wspr-page with main). A collision is mostly a wasted
+# NVS write until one of the bits joins s_config_export_bits, at which point an
+# unrelated setting starts triggering the microSD config mirror - which is the
+# failure CLAUDE.md documents as killing WiFi. Latent, therefore build-checked.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_dirty_bits.py"
+    COMMENT "Checking settings dirty-bit indices are unique"
     VERBATIM
 )
 

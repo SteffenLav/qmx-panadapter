@@ -58,6 +58,13 @@ PATCHES = [
      "an oversized SDIO pending-byte delta livelocks the link: WiFi dies within "
      "minutes and every RPC times out forever (reboot is the only way out)"),
 
+    ("apply_esp_hosted_assert_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
+     "QMX_PANADAPTER_ASSERT_TOLERANT_PATCH_MARKER",
+     "esp_hosted abort()s the device when handed a NULL semaphore - the correct "
+     "return was already beside the assert. Field-captured 2026-08-25 from the "
+     "1 Hz WiFi poll, and the warm reset wedged the QMX with it (#74)"),
+
     ("apply_cdc_acm_close_tolerant.ps1", "repo",
      "managed_components/espressif__usb_host_cdc_acm/cdc_acm_host.c",
      "PATCHED (qmx-panadapter, 2026-08-16)",
