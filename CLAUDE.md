@@ -658,7 +658,97 @@ The display panel is natively portrait; landscape is achieved via `lv_display_se
 
 **Do not enable `CONFIG_LVGL_PORT_ENABLE_PPA=y`.** The PPA driver and the USB host stack (UAC + CDC-ACM) compete for DW-GDMA channels. Enabling PPA silently kills QMX connectivity — audio and CAT both stop. Tested and confirmed broken.
 
-Phase 6.3 (FPS recovery) requires a full native-portrait UI rewrite: LVGL configured as 720×1280, all widget positions transposed (landscape x↔y swap), all canvas drawing code rewritten for portrait orientation. Significant work; not yet done.
+### ⛔ PHASE 6.3 (the "native-portrait rewrite") IS DEAD. Do not start it.
+
+This section used to say FPS recovery "requires a full native-portrait UI
+rewrite: LVGL configured as 720×1280, all widget positions transposed". That
+plan is **wrong twice over**, both established on 2026-08-28. It would have cost
+weeks to arrive at either discovery, so it is recorded here rather than in a
+TODO row.
+
+**1. Transposing coordinates cannot work, because TEXT cannot be transposed.**
+`lv_draw_label.c:339` advances the pen with `pos.x += letter_w + letter_space`
+— along **x only**; y moves solely on a line break. `LV_TEXT_FLAG_*` has no
+vertical mode and LVGL 9.2 has no vertical-text support at all. With the display
+declared 720×1280 and the panel physically landscape on the desk, LVGL's x-axis
+runs *vertically* in front of the operator, so every label — the frequency
+readout, every decode row, the whole UI — would render **sideways**. Positions
+and sizes are a coordinate swap; glyph layout is not. (Pre-rotated glyph
+bitmaps do not help: the pen still advances along x. Per-label
+`transform_rotation` is the thing that already hung taskLVGL once.)
+
+⚠ **"Native portrait" was also a bad name** and confused the operator, fairly:
+nothing turns. The screen stays landscape on the desk. It referred only to the
+panel's scan order (720 wide × 1280 tall, mounted with its long axis across the
+desk). Call it "native scan order" or "no-rotate UI" if it ever comes up again.
+
+**2. The prize is only ~7 points of core 0, which would not have justified it.**
+Measured by neutering `rotate90_rgb565` in `managed_components` so the screen
+showed garbage while widget drawing, invalidation, flush count and DSI transfer
+sizes stayed byte-identical — i.e. isolating exactly what 6.3 deletes:
+
+| panadapter, radio streaming | core-0 idle |
+|---|---|
+| with software rotation | 6.9–7.6 % |
+| **rotation removed entirely** | **14.3–15.4 %** |
+
+Scope for comparison: `main/ui/` is 32,350 lines, `ui.c` alone 11,458, with 883
+coordinate call sites. Seven points of one core is not worth that.
+
+### ⭐ What core 0 is ACTUALLY doing: taskLVGL is 73.9 % of it, and only ~7 of
+### those points are the rotation
+
+The panadapter has sat at 0–7 % core-0 idle for months, and this file called it
+"unexplained" (v1.8.3 note). Measured on demand with
+`/api/cmd {"action":"cpu_owners"}` (per-task `ulRunTimeCounter` over 1 s;
+`CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` was already on):
+
+```
+taskLVGL  73.9%  core 0      render      8.6%  core 0
+IDLE1     89.6%  core 1      audio_task  6.9%  core 0
+fft_task   8.4%  core 1      IDLE0       6.7%  core 0
+```
+Core 0 accounts to 99.2 %, core 1 to 98.6 % — the columns close, so the figures
+are trustworthy. Each number is a share of ONE core; the whole table sums to
+~200 % because there are two.
+
+**So ~66 points of core 0 is LVGL DRAWING, not rotating**, and everything else
+on that core is small change (all USB together is 2.4 %). Generalise the
+consequence, because it reframes every "we are out of resources" question on
+this board: **PSRAM has ~15 MB free, flash 758 KB, MALLOC_CAP_DMA is
+reclaimable, and CORE 1 IS 90 % IDLE.** Nothing is blocked by resources. New
+work — a CW page, CW audio, a decoder — belongs on **core 1, at a priority
+BELOW `fft_task`**, and nothing new may be put on core 0.
+
+⚠ **Unconfirmed hypothesis for the 66 points, flagged as such:** the waterfall
+is a 1280×824 canvas in PSRAM whose *view offset* moves every tick (the
+double-height scroll trick), so LVGL may be re-blitting the whole visible
+1280×370 into the draw buffer every frame — 947 KB/frame, ~12 MB/s at 13 fps —
+with the spectrum canvas on top. If so the fix is not redrawing 947 KB to add
+one row, and it is not a rewrite. **Settle it by measurement** (hide each canvas
+independently and re-sample `cpu_owners`) before acting on it.
+
+⛔ **Three fixes for core 0 were tried on hardware the same day and ALL FAILED.
+Do not re-take them** — each cost a QMX power cycle:
+- **Shrinking the rotation working set** (`display.c` `buffer_size` 36 → 12
+  lines) made it **worse**, 0.4–1.5 % → 0.0 %. Tripling the flush count cost
+  more than the cache residency bought.
+- **Moving taskLVGL to core 1** (`.task_affinity` 0 → 1) **broke the device**:
+  `fft_task` shares core 1 at the same base priority and is the audio ring's
+  only consumer, so within seconds the log read `RX 47766 pairs/s ...
+  DROPPED=48000 (ring full)` every second — USB perfect, 0 badpkt, every sample
+  discarded. WiFi went too. That is #51 by another route. Any retry must fix
+  `fft_task`'s scheduling first, or move the rotation off the LVGL task rather
+  than the task off the core.
+- **Halving the L2 cache** — see the DMA-pool section; it buys 128 KB of
+  DMA-capable RAM and costs core 0 its remaining headroom.
+The reasoning for each is in the comments at the relevant lines in
+`main/display/display.c` and `sdkconfig.defaults`.
+
+⚠ **PPA is the only untried hardware path left** and it was ruled out for a
+GDMA *channel-allocation* conflict with the USB host, not for an inability. If
+core-0 headroom is ever needed badly, re-examine it on the channel counts
+rather than treating the old verdict as final.
 
 ### Hardware revision detection — ST7121 vs ST7123 touch controller
 Newer Tab5 units ship with an **ST7121** touch controller (I2C 0x55, FW version = 1) instead of the original **ST7123** (same address, FW version = 3). Both also differ from the older ST7703/GT911 hardware.
@@ -693,6 +783,79 @@ Measured on hardware, four boots, SD-enabled vs `SD_ARCHIVE_DISABLED` A/B, 230 s
 **This is why every previous "internal heap starvation" theory in this file was correctly rejected**: internal free/largest-block genuinely is fine. The exhausted pool is `MALLOC_CAP_DMA`, which nothing was measuring. With ~400 B left, **any runtime DMA allocation should be expected to fail** — the SD remount failures (`0x101 ESP_ERR_NO_MEM`) are one symptom, and the long-documented USB endpoint-alloc failure on a QMX reconnect once WiFi is up is very likely the same root constraint rather than a separate bug. Both standing esp_hosted patches (PSRAM transport, SDIO recovery) were verified applied, so they are **not** the consumer; the ~111 KB is something else and is NOT yet identified.
 
 **⚠ ROOT-CAUSED 2026-08-05 — the missing consumer was OUR OWN `.bss`, not WiFi.** The "~111 KB consumed by WiFi ... NOT yet identified" conclusion above was wrong. `idf.py size` showed `.bss` at 201 KB (45% of DIRAM), `idf.py size-components` put **186,986 B of it in `libmain.a`**, and `nm --size-sort -S` named the arrays: `s_worked` (22.5 KB ADIF worked-call cache), two `static ft8_call_t snap[]` heard-table snapshots (11.25 KB each), `s_rows` (8 KB row-widget pool). Moving those three to PSRAM recovered **52 KB** and took `MALLOC_CAP_DMA` from ~311 B to **40–41 KB with WiFi fully up** — measured, IP acquired, POTA fetching. So our static arrays occupied the DMA-capable region and WiFi's (real) share was merely the last straw. Steady internal free went 22–24 KB → 78 KB and the **watermark 0 KB → 32 KB**; the watermark reaching zero is why any runtime allocation was a coin toss. This reframes the whole #65 family — SD remount `0x101`, USB EP alloc on QMX reconnect, and the device-wide TLS failure (hardware AES could not get DMA descriptors) — as ONE root cause. **Deliberately still internal:** `audio.c`'s `raw[]`/`decoded[]` and the `dsp.c` FFT buffers (~53 KB) — hot paths, and v0.19.4 already proved a PSRAM spill makes the STFT ~10x slower. **Method lesson: `size` → `size-components` → `nm` is the three-command answer to "who owns internal RAM"; it took minutes and had never been run.**
+
+### ⭐ Why "internal free 35–40 KB" and "DMA free 400 B" were both true (2026-08-28)
+This file has carried that contradiction for a year. `heap/port/esp32p4/memory_layout.c`
+resolves it: the internal heap is **not one pool**. Two L2MEM regions carry
+`MALLOC_CAP_DMA` (`RETENT_RAM` + the startup-data region), and two more do
+**not** — **TCM, 8 KB @0x30100000** and **LPRAM, 32 KB @0x50108000**, which match
+`MALLOC_CAP_INTERNAL` only at medium/low priority. So a plain
+`MALLOC_CAP_INTERNAL|8BIT` request goes to L2MEM first and **spills into
+TCM/LPRAM once L2MEM is full** — which is exactly what "35–40 KB internal free"
+was: ~40 KB of non-DMA memory that cannot serve FatFs, USB endpoints or SDIO.
+Caught directly: `nimble_host`'s stack sat at `0x5010c4d4` (LPRAM) on one boot
+and moved back into the DMA region on the next once space existed.
+
+⚠ **Consequence for any reclamation pass:** freeing DMA-capable bytes does not
+raise `dma free` one-for-one, because allocations that had spilled to LPRAM move
+back in. Judge a reclamation by **total demand**, never by the free figure alone.
+
+### ⭐ The DMA pool is mostly TASK STACKS — and the way to prove it is pxStackBase
+`util/dma_owners.c` (#283/#284) matches every block address against each live
+task's `TaskStatus_t.pxStackBase` and `xHandle`, so a block is named "STACK of
+X" or "TCB of X" instead of merely "allocated by whoever called xTaskCreate".
+That distinction is the whole point: `xTaskCreate()` takes the stack from the
+**caller's** context, so every stack created during `app_main()` is filed under a
+handle that no longer resolves. Measured: **24 of the top 34 blocks, 115 KB, are
+task stacks.**
+
+⚠ **Match by CONTAINMENT, not equality.** `CONFIG_HEAP_TASK_TRACKING` stores the
+owning-task handle in the block's first word and hands the caller back
+`address+4`, so a stack pointer can never *equal* a block address on a tracking
+build. The first version compared for equality, reported no stacks at all, and
+read exactly like "none of these are stacks" — which would have sent the whole
+pass down a blind alley. Bound the offset too (≤256 B): plain containment let one
+32,772 B block claim to be the stack of every task at a higher address.
+
+⛔ **`esp_hosted` hardcodes its task stacks and IGNORES its own Kconfig.**
+`host/port/include/os_wrapper.h` sets `DFLT_TASK_STACK_SIZE` and
+`RPC_TASK_STACK_SIZE` to `(5*1024)` literally, while `sdkconfig` carries
+`CONFIG_ESP_HOSTED_DFLT_TASK_STACK=3072` doing nothing. That is the 6 × 5,376 B
+of DMA pool held by `sdio_rx_buf`/`sdio_read`/`sdio_process_rx`/`sdio_write`/
+`rpc_rx`/`rpc_tx`, whose measured peaks are 716–3,044 B. **32 KB is reclaimable
+there** — but it edits the SDIO/WiFi link, this board's most fragile subsystem,
+and would become a 7th standing patch to re-apply after every `fullclean`.
+
+### ⭐ The L2 CACHE is carved out of the DMA-capable heap — 128 KB is one Kconfig line
+`CONFIG_CACHE_L2_CACHE_256KB` vs `_128KB`. `memory_layout.c` sizes the heap
+region as `SOC_DRAM_HIGH - CONFIG_CACHE_L2_CACHE_SIZE - ...`, and the observed
+heap top was exactly `0x4ffc0000 - 256 KB = 0x4ff80000`. Switching to 128 KB
+returns **exactly 128 KB** to `MALLOC_CAP_DMA` — measured: `dma free` 10,071 B →
+~101,000 B, internal free 39 KB (min **2 KB**) → 144 KB (min 68 KB).
+
+⛔ **And it was reverted, because it is not free.** `SPIRAM_FETCH_INSTRUCTIONS`,
+`SPIRAM_RODATA` and `SPIRAM_XIP_FROM_PSRAM` are all on, so code and rodata are
+fetched through that cache. Panadapter core-0 idle collapsed 6.9–7.6 % → 0.1–1.5 %
+with a visibly jerky waterfall; FT8 `dec` went 3018 → 3149 ms (+4.3 %), which does
+not matter, but the waterfall does. Two attempts to buy the headroom back were
+falsified the same day — see the Phase 6.3 section. **Revisit only if core 0 ever
+gets headroom.**
+
+⚠ **Size a stack from the path that runs when the hardware is ABSENT.**
+`tab5_kb` was cut 4096 → 2048 on a measured 1,008 B peak and the next reading came
+back at **52 bytes** of high-water, then crashed the device at 18 minutes
+(`Stack protection fault`, task `tab5_kb`, caught by #117's crash record). The
+1,008 B was measured with a keyboard attached; the deep path is the ABSENT one —
+the 2 s retry loop plus the I2C bus scan, ~2,124 B — and that is what runs on a
+bench with no keyboard. Generalise it: a high-water mark is only evidence about
+the paths that actually ran.
+
+⚠ **The SD symptom is NOT this pool.** Corrected on the day: with the card
+mounted and then failing, the log reads `SDFAIL[slowopen] err=0x5` — **errno 5,
+EIO** — with **135 KB of DMA free and a 65 KB largest block**. That is the
+documented WiFi/GDMA contention in the SD section, where the EIO is recorded as
+permanent, not a memory failure. Do not credit a successful mount to memory
+headroom either; `0x108` at mount time is intermittent.
 
 **Rule:** when a runtime allocation fails on this board, measure `heap_caps_get_free_size(MALLOC_CAP_DMA)` and `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)`, not the INTERNAL pool. `get_free_size` is O(1) and safe on a periodic path (a `dma free=` field is now in the periodic `audio: HEAP` line); `largest_free_block` walks the heap with interrupts off and must stay off periodic paths (cyan-flash rule below) — it appears only on the rare SD failure path, capped at 3 calls (`SDFAIL[...]` lines in `sd_archive.c`).
 

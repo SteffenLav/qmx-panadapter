@@ -104,11 +104,39 @@ esp_err_t display_init(lv_display_t **out_disp)
         .lvgl_port_cfg = {
             .task_priority    = 4,
             .task_stack       = 8192,
+            // ⛔ CORE 0, and moving it is FALSIFIED ON HARDWARE (#284,
+            // 2026-08-28). Everything LVGL does ends in the software 90-degree
+            // rotation, which saturates this core (panadapter idle0 measured
+            // 6.9-7.6% at a 256 KB L2 cache, 0.1-1.5% at 128 KB) while core 1
+            // sat at 86-90% idle - so moving the task to core 1 looked free.
+            //
+            // It is not. fft_task also runs on core 1 at priority 4, the SAME
+            // base priority as this task, and fft_task is the audio ring's ONLY
+            // consumer for both the panadapter and FT8 capture. Within seconds
+            // of booting with .task_affinity = 1 the log read
+            //     audio: RX 47766 pairs/s ... DROPPED=48000 (ring full)
+            // every second - USB delivering perfectly, 0 badpkt, and EVERY
+            // sample discarded because nothing was draining the ring. The
+            // spectrum died and it presented as "the Tab5 cannot see the radio".
+            // That is #51 by another route.
+            //
+            // Any retry MUST also solve fft_task's scheduling (a higher
+            // priority for it, or the rotation moved off the LVGL task entirely
+            // rather than the task moved off the core). Do not just flip this.
             .task_affinity    = 0,
             .task_max_sleep_ms = 500,
             .timer_period_ms  = 5,
         },
-        .buffer_size   = DISPLAY_H_RES * 36,  // Phase 6.2: smaller flushes to keep LVGL rotate task under watchdog
+        // 36 lines. ⛔ FALSIFIED ON HARDWARE 2026-08-28: cutting this to 12 to
+        // shrink the rotation working set made core-0 idle WORSE, not better
+        // (0.4-1.5% -> 0.0%, six samples, radio streaming). The theory was that
+        // LVGL's rotate90_rgb565 re-traverses this whole buffer column by column
+        // (1,280 times per flush, buff_spiram=1 so from PSRAM) and that 1280 x 36
+        // x 2 = 92,160 B had stopped fitting in the 128 KB L2 cache. The strip's
+        // residency is evidently NOT the binding cost - tripling the flush count
+        // (20 -> 60 per frame) cost more than any cache benefit bought.
+        // Recorded so nobody spends another power cycle on it.
+        .buffer_size   = DISPLAY_H_RES * 36,
         .double_buffer = true,
         .flags = {
             .buff_dma    = 0,

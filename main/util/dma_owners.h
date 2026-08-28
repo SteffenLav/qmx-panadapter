@@ -14,3 +14,7 @@
 // block header. Absolute free figures on such a build are therefore lower than
 // on a shipping build: read the ATTRIBUTION, not the totals.
 void dma_owners_report(void);
+
+// TEMP (#284): per-task CPU share over 1 s. On demand only - see the header
+// comment in dma_owners.c. Delete with the rest of this instrument.
+void cpu_owners_report(void);

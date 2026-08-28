@@ -532,7 +532,10 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // capture. At priority 5 this task could preempt it every 100 ms
         // whenever a browser tab is open, the same hazard class that
         // regressed FT8 decode yield via cw_audio_task (see CLAUDE.md).
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
+        // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
+        // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
+        // names ws_push_task as latency-critical.
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 3072, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;

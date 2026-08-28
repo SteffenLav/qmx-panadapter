@@ -459,7 +459,11 @@ err = cdc_acm_host_install(NULL);
     ESP_LOGI(TAG, "CDC-ACM host driver installed");
 
     BaseType_t ok = xTaskCreatePinnedToCore(
-        link_task, "cat_link", 8192, NULL, 5, NULL, 1);
+        // 5120, not 8192: measured peak use 2,696 B (hwm 6,008 B free of an
+        // 8,704 B block, 2026-08-28, util/dma_owners #284). Leaves ~2.4 KB
+        // spare. ⛔ Stays in INTERNAL RAM on purpose - psram_task.h names cat's
+        // link and poll tasks as ones that must not take a PSRAM stack.
+        link_task, "cat_link", 5120, NULL, 5, NULL, 1);
     if (ok != pdPASS) return ESP_FAIL;
 
     ESP_LOGI(TAG, "CAT link task started, waiting for QMX (VID=0x%04X PID=0x%04X)",

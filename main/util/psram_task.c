@@ -28,7 +28,14 @@ static const char *TAG = "psram_task";
  * registered too they filled the table on the way up - so the handful of tasks
  * that actually park found no slot, silently fell back to vTaskDelete(), and
  * went on leaking exactly as before. Opt-in is what makes the size knowable. */
-#define PSRAM_TASK_MAX 8
+// 16, raised from 8 on 2026-08-28: rigctld can hold five of these at once (a
+// listener plus RIGCTLD_MAX_CLIENTS=4 per-connection tasks, moved to PSRAM
+// stacks for #284) and wspr_rx holds three, which is the table full exactly.
+// The header already warns what happens then - the tasks that park find no
+// slot and leak silently while the code looks fixed - so the bound moves in
+// the same change as the new members, per CLAUDE.md's rule about arrays
+// indexed by a growing set. Costs 8 x sizeof(rec) of .bss.
+#define PSRAM_TASK_MAX 16
 
 typedef struct {
     TaskHandle_t   h;

@@ -261,6 +261,13 @@ esp_err_t tab5_keyboard_init(void)
      * both "not attached at boot" and "was detached, now reattached") and
      * polls normally while present. See its own comment for why this
      * replaced a one-shot boot-time claim. */
+    // ⛔ 4096 - and do NOT trim it again. On 2026-08-28 this was cut to 2048 on
+    // the strength of a measured 1,008 B peak (#284); the very next reading came
+    // back with a high-water mark of FIFTY-TWO BYTES free. The first figure was
+    // taken on a boot where the keyboard was PRESENT, and the deep path is the
+    // ABSENT one - the 2 s retry loop plus the I2C bus scan, which is what runs
+    // on a bench with no keyboard attached and costs ~2,124 B. Stays internal:
+    // this task drives I2C reads from buffers on its own stack.
     xTaskCreate(kb_task, "tab5_kb", 4096, NULL, 4, NULL);
     return found ? ESP_OK : ESP_ERR_NOT_FOUND;
 }

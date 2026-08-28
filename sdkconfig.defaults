@@ -31,6 +31,20 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 # Cache
+# 256 KB - the hardware default for pre-V3 P4 silicon, and RESTORED here after
+# a measured A/B on 2026-08-28 (#284). The L2 cache is carved out of the SAME
+# L2MEM the DMA-capable heap lives in (heap/port/esp32p4/memory_layout.c sizes
+# the region as SOC_DRAM_HIGH - CONFIG_CACHE_L2_CACHE_SIZE - ...), so 128 KB
+# returns exactly 128 KB to MALLOC_CAP_DMA: measured dma free went 10,071 B ->
+# ~101,000 B, internal free 39 KB (min 2 KB) -> 144 KB (min 68 KB).
+# ⛔ But it was NOT worth it on this board. SPIRAM_FETCH_INSTRUCTIONS,
+# SPIRAM_RODATA and SPIRAM_XIP_FROM_PSRAM are all on, so code and rodata are
+# fetched through this cache, and panadapter core-0 idle collapsed from 6.9-7.6%
+# to 0.1-1.5% with a visibly jerky waterfall. Two attempts to buy that back were
+# both falsified on hardware the same day - shrinking the rotation working set
+# (display.c buffer_size 36 -> 12 made it WORSE) and moving the LVGL task to
+# core 1 (starved fft_task and dropped every audio sample). The real fix is to
+# stop rotating in software at all - see the notes in display.c.
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y
 

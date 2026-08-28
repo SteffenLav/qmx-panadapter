@@ -13,6 +13,7 @@
 
 #include "cat.h"
 #include "ui.h"
+#include "util/psram_task.h"
 
 static const char *TAG = "rigctld";
 
@@ -261,7 +262,10 @@ static void client_task(void *arg)
     close(fd);
     s_client_count--;
     ESP_LOGI(TAG, "fd=%d client disconnected (count=%d)", fd, s_client_count);
-    vTaskDelete(NULL);
+    // ⛔ park, never vTaskDelete: this task's stack and TCB are OURS (static
+    // allocation inside psram_task_create_reapable), so a plain delete leaks
+    // the whole 8 KB stack on every disconnect - that is #279's bug exactly.
+    psram_task_park();
 }
 
 /* ---- Listener task ---------------------------------------------------- */
@@ -279,7 +283,7 @@ static void listener_task(void *arg)
     if (s_listen_fd < 0) {
         ESP_LOGE(TAG, "socket() failed: errno=%d", errno);
         s_listen_task = NULL;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
     int one = 1;
@@ -289,14 +293,14 @@ static void listener_task(void *arg)
         ESP_LOGE(TAG, "bind() failed: errno=%d", errno);
         close(s_listen_fd); s_listen_fd = -1;
         s_listen_task = NULL;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
     if (listen(s_listen_fd, 4) < 0) {
         ESP_LOGE(TAG, "listen() failed: errno=%d", errno);
         close(s_listen_fd); s_listen_fd = -1;
         s_listen_task = NULL;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
     ESP_LOGI(TAG, "rigctld listening on tcp/%d", RIGCTLD_PORT);
@@ -321,11 +325,24 @@ static void listener_task(void *arg)
             continue;
         }
 
+        // Free the stacks of clients that have already disconnected. Doing it
+        // here rather than in client_task is the rule the reap API sets out: a
+        // task cannot delete itself and free its own stack, so an owner does it
+        // later, and the next accept() is the natural later.
+        psram_task_reap();
+
         s_client_count++;
         char name[24];
         snprintf(name, sizeof(name), "rig_cli_%d", cfd);
-        BaseType_t ok = xTaskCreate(client_task, name, 8192,
-                                    (void *)(intptr_t)cfd, 4, NULL);
+        // ⭐ PSRAM stack. RIGCTLD_RESP_BUF is a 4 KB frame in handle_line(), so
+        // 8 KB is genuinely needed and must NOT be trimmed - but nothing here
+        // touches DMA (plain socket recv/send and CAT accessors), so it has no
+        // business in internal RAM. Four clients x 8,704 B was 34.8 KB of the
+        // MALLOC_CAP_DMA pool, measured at 1.9 KB free on 2026-08-28 (#284) -
+        // i.e. connecting a single rigctld client could not have succeeded.
+        TaskHandle_t th = psram_task_create_reapable(client_task, name, 8192,
+                                    (void *)(intptr_t)cfd, 4, tskNO_AFFINITY);
+        BaseType_t ok = th ? pdPASS : pdFAIL;
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate %s failed", name);
             close(cfd);
@@ -336,7 +353,7 @@ static void listener_task(void *arg)
     if (s_listen_fd >= 0) close(s_listen_fd);
     s_listen_fd = -1;
     s_listen_task = NULL;
-    vTaskDelete(NULL);
+    psram_task_park();
 }
 
 /* ---- Public API ------------------------------------------------------- */
@@ -345,8 +362,11 @@ esp_err_t rigctld_server_start(void)
 {
     if (s_listen_task != NULL) return ESP_OK;
 
-    BaseType_t ok = xTaskCreate(listener_task, "rigctld_lsn", 4096,
-                                NULL, 4, &s_listen_task);
+    psram_task_reap();   /* a previous run's parked listener, if any (#279) */
+
+    s_listen_task = psram_task_create_reapable(listener_task, "rigctld_lsn",
+                                               4096, NULL, 4, tskNO_AFFINITY);
+    BaseType_t ok = s_listen_task ? pdPASS : pdFAIL;
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate rigctld_lsn failed");
         s_listen_task = NULL;

@@ -1108,6 +1108,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
         dma_owners_report();
         return ESP_OK;
+    } else if (action && strcmp(action, "cpu_owners") == 0) {
+        // TEMP INSTRUMENT (#284) - dev only. Names the task eating a core.
+        // The rotation was measured OUT as the panadapter's core-0 hog (7% ->
+        // 15% idle with it removed entirely), so ~85% of that core belongs to
+        // something nobody has ever measured. ⛔ Same on-demand-only rule as
+        // dma_owners: it walks every task's stack inside a critical section,
+        // twice, and may cost a one-frame cyan blink.
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"1 s sample - see the serial log\"}");
+        cpu_owners_report();
+        return ESP_OK;
     } else if (action && strcmp(action, "ota_reset") == 0) {
         // Dev only - clear a staged update in place so the next test run does
         // not need a reflash (and therefore a radio-wedging warm reset).
@@ -3987,7 +3999,17 @@ esp_err_t webserver_start(void)
 
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
-    config.stack_size      = 12288;
+    // 10240, not 12288: measured on hardware 2026-08-28 with util/dma_owners
+    // (#283/#284) the httpd task's stack high-water mark was 8,056 B FREE of a
+    // 12,800 B block - a peak use of ~4.7 KB - while the whole MALLOC_CAP_DMA
+    // pool had 1.9 KB left and the SD card could no longer be mounted. This
+    // still leaves ~5.5 KB spare.
+    // ⛔ Do NOT move this stack to PSRAM via config.task_caps. Several handlers
+    // write SPIFFS on the httpd task itself (/api/lotw_cert, the ADIF clear and
+    // delete paths), flash writes run with the cache off, and a task whose
+    // stack is in PSRAM cannot run in that state - see the warning at the top
+    // of util/psram_task.h, hardware-confirmed by the #218 OTA panic.
+    config.stack_size      = 10240;
     // 38 registered here + 5 in filebrowser.c = 43, so 42 was ALREADY ONE SHORT
     // the moment /api/shortcuts was added - and httpd fails the registration
     // silently from the endpoint's point of view, so the symptom would have been
