@@ -1009,7 +1009,7 @@
         the drawer's own.
       </p>
       <div style="display:flex; gap:8px; margin-bottom:8px;">
-        <button type="button" class="btn-neutral" id="t5-all-basic">All to Basic</button>
+        <button type="button" class="btn-neutral" id="t5-all-adv">All in Advanced</button>
         <button type="button" class="btn-neutral" id="t5-none-basic">None in Basic</button>
         <button type="button" class="btn-neutral" id="t5-defaults">Restore defaults</button>
       </div>
@@ -3083,8 +3083,8 @@ document.getElementById("t5-save").addEventListener("click", () => {
   t5Post({ items: t5Rows.map(r => ({ id: r.id, basic: !!r.basic, adv: !!r.adv })) },
          "Saved - the Tab5 drawer is already re-laid out");
 });
-document.getElementById("t5-all-basic").addEventListener("click", () => {
-  t5Rows.forEach(r => { r.basic = true; }); t5Render();
+document.getElementById("t5-all-adv").addEventListener("click", () => {
+  t5Rows.forEach(r => { r.adv = true; }); t5Render();
 });
 document.getElementById("t5-none-basic").addEventListener("click", () => {
   t5Rows.forEach(r => { r.basic = false; }); t5Render();

@@ -1880,23 +1880,27 @@ static int       s_drawer_section_h[N_DRAWER_SECTIONS];
 // names kept in step by hand - CLAUDE.md records that shape going wrong twice.
 // The label is what the web 'Tab5 config' table shows, so the table can never
 // name a section the firmware does not have.
-typedef struct { int id; const char *label; } drawer_item_t;
-typedef struct { const char *title; const drawer_item_t *items; int n; bool expert; } drawer_group_t;
+// `basic` is the DEFAULT membership of the Basic view for this section - the
+// operator's own choice, set on the bench 2026-08-28 and read straight back
+// out of the device. Advanced always holds everything. A unit that has never
+// been near the web 'Tab5 config' table gets exactly this.
+typedef struct { int id; const char *label; bool basic; } drawer_item_t;
+typedef struct { const char *title; const drawer_item_t *items; int n; } drawer_group_t;
 
 static const drawer_item_t GRP_STATION[] = {
-    { DRAWER_SEC_IDENTITY, "Callsign & Grid square" },
-    { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)" },
-    { DRAWER_SEC_BPREGION, "Band-plan region" },
+    { DRAWER_SEC_IDENTITY, "Callsign & Grid square", false },
+    { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)", true },
+    { DRAWER_SEC_BPREGION, "Band-plan region", false },
 };
 static const drawer_item_t GRP_RADIO[] = {
-    { DRAWER_SEC_QMXVOL, "QMX volume" },
-    { DRAWER_SEC_QMXRF, "RF gain" },
-    { DRAWER_SEC_CW, "CW centre & transmit offset" },
-    { DRAWER_SEC_RITPILL, "Show RIT button" },
-    { DRAWER_SEC_SWRLIM, "SWR protection" },
-    { DRAWER_SEC_TUNE2, "Antenna Tune" },
-    { DRAWER_SEC_PAUSE, "Release radio" },
-    { DRAWER_SEC_TERM, "Radio menus" },
+    { DRAWER_SEC_QMXVOL, "QMX volume", true },
+    { DRAWER_SEC_QMXRF, "RF gain", true },
+    { DRAWER_SEC_CW, "CW centre & transmit offset", false },
+    { DRAWER_SEC_RITPILL, "Show RIT button", false },
+    { DRAWER_SEC_SWRLIM, "SWR protection", true },
+    { DRAWER_SEC_TUNE2, "Antenna Tune", true },
+    { DRAWER_SEC_PAUSE, "Release radio", false },
+    { DRAWER_SEC_TERM, "Radio menus", false },
 };
 // DRAWER_SEC_OTADL sits here, not in Device, and that placement is the point:
 // Device is an EXPERT-only group, and "should this thing download 3.3 MB on my
@@ -1904,46 +1908,47 @@ static const drawer_item_t GRP_RADIO[] = {
 // for the switch would not have found it behind Expert. It is a question about
 // what the network connection does unasked, so it belongs beside WiFi.
 static const drawer_item_t GRP_NETWORK[] = {
-    { DRAWER_SEC_WIFI, "WiFi setup" },
-    { DRAWER_SEC_OTADL, "Download updates in the background" },
-    { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)" },
-    { DRAWER_SEC_BT, "Bluetooth mouse" },
+    { DRAWER_SEC_WIFI, "WiFi setup", false },
+    { DRAWER_SEC_OTADL, "Download updates in the background", false },
+    { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
+    { DRAWER_SEC_BT, "Bluetooth mouse", false },
 };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const drawer_item_t GRP_DISPLAY[] = {
-    { DRAWER_SEC_BRIGHTNESS, "Display brightness" },
-    { DRAWER_SEC_SLEEP, "Display sleep" },
-    { DRAWER_SEC_CMAP, "Waterfall colour map" },
-    { DRAWER_SEC_FLIP, "Flip 180 degrees" },
+    { DRAWER_SEC_BRIGHTNESS, "Display brightness", false },
+    { DRAWER_SEC_SLEEP, "Display sleep", false },
+    { DRAWER_SEC_CMAP, "Waterfall colour map", false },
+    { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
 };
 static const drawer_item_t GRP_FT8[] = {
-    { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter" },
-    { DRAWER_SEC_SIMMODE, "Simulation mode" },
+    { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter", true },
+    { DRAWER_SEC_SIMMODE, "Simulation mode", false },
 };
 static const drawer_item_t GRP_SPECTRUM[] = {
-    { DRAWER_SEC_PRESETS, "Presets" },
-    { DRAWER_SEC_DBRANGE, "dB Range" },
-    { DRAWER_SEC_SMOOTHING, "Smoothing" },
-    { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window" },
-    { DRAWER_SEC_FLAT, "Flat Spectrum" },
-    { DRAWER_SEC_IQ, "IQ Balance" },
-    { DRAWER_SEC_IFCAL, "IF calibration" },
+    { DRAWER_SEC_PRESETS, "Presets", false },
+    { DRAWER_SEC_DBRANGE, "dB Range", false },
+    { DRAWER_SEC_SMOOTHING, "Smoothing", false },
+    { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window", false },
+    { DRAWER_SEC_FLAT, "Flat Spectrum", false },
+    { DRAWER_SEC_IQ, "IQ Balance", false },
+    { DRAWER_SEC_IFCAL, "IF calibration", false },
 };
 static const drawer_item_t GRP_DEVICE[] = {
-    { DRAWER_SEC_CHARGE, "Battery care" },
+    { DRAWER_SEC_CHARGE, "Battery care", false },
 };
 
-#define GRP_DEF(name, arr, exp) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])), exp }
-// A group marked `expert` is hidden in Basic. Everything reached in a normal
-// session is in a non-expert group; the tuning and calibration controls are not.
+#define GRP_DEF(name, arr) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])) }
+// Basic/Advanced membership is per SECTION now (see drawer_item_t.basic), not
+// per group - a group-level flag could not express "most of Radio, but not the
+// CW offset", which is what the operator actually wanted.
 static const drawer_group_t s_drawer_groups[] = {
-    GRP_DEF("Station",  GRP_STATION,  false),
-    GRP_DEF("Device",   GRP_DEVICE,   true),
-    GRP_DEF("Radio",    GRP_RADIO,    false),
-    GRP_DEF("Network",  GRP_NETWORK,  false),
-    GRP_DEF("Display",  GRP_DISPLAY,  false),
-    GRP_DEF("FT8",      GRP_FT8,      false),
-    GRP_DEF("Spectrum", GRP_SPECTRUM, true),
+    GRP_DEF("Station",  GRP_STATION),
+    GRP_DEF("Device",   GRP_DEVICE),
+    GRP_DEF("Radio",    GRP_RADIO),
+    GRP_DEF("Network",  GRP_NETWORK),
+    GRP_DEF("Display",  GRP_DISPLAY),
+    GRP_DEF("FT8",      GRP_FT8),
+    GRP_DEF("Spectrum", GRP_SPECTRUM),
 };
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
 
@@ -1962,11 +1967,11 @@ static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
 // normal case for anything an ordinary session needs), in one, or in neither -
 // "neither" is a legitimate answer meaning "I never want to see this".
 //
-// ⭐ THE DEFAULTS REPRODUCE THE OLD BEHAVIOUR EXACTLY: Advanced holds every
-// section, Basic holds every section whose group was not marked expert. So a
-// unit that has never been configured behaves precisely as it did before, and
-// drawer_group_t.expert becomes the seed for the default rather than a runtime
-// test. That is why the reflow no longer consults it - see the note there.
+// ⭐ THE DEFAULTS ARE THE OPERATOR'S OWN LAYOUT, chosen on the bench and read
+// back out of the device (drawer_item_t.basic). Advanced holds everything;
+// Basic holds the six sections an operating session actually reaches. That is
+// the answer to "what is Basic FOR?" that TODO #268 and #272 were stuck on: it
+// is not a beginner mode, it is the operating set.
 //
 // Stored in its own tiny NVS namespace rather than in settings.c: it is a
 // layout preference, not a station or radio setting, and keeping it out of
@@ -1987,8 +1992,10 @@ static uint64_t drawer_default_mask(bool basic)
     uint64_t m = 0;
     for (int g = 0; g < N_DRAWER_GROUPS; g++) {
         const drawer_group_t *grp = &s_drawer_groups[g];
-        if (basic && grp->expert) continue;
-        for (int k = 0; k < grp->n; k++) m |= 1ULL << grp->items[k].id;
+        for (int k = 0; k < grp->n; k++) {
+            if (basic && !grp->items[k].basic) continue;
+            m |= 1ULL << grp->items[k].id;
+        }
     }
     return m;
 }
@@ -2067,11 +2074,7 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask)
 
 static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
-// The hint is a SEPARATE label, not a second line of s_expert_lbl: an LVGL
-// label carries one font, and the state name wants to be read at a glance
-// while '(tap for ...)' is a footnote. Two labels is the cheap way to get
-// two sizes - lv_span would pull in the span renderer for one button.
-static lv_obj_t *s_expert_sub = NULL;
+
 static bool      s_drawer_expert = false;
 
 /* Is this section allowed on the screen we are on at all?
@@ -8449,13 +8452,13 @@ static void drawer_build(void)
     lv_obj_add_event_cb(s_expert_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, NULL);
     s_expert_lbl = lv_label_create(s_expert_btn);
     lv_obj_set_style_text_align(s_expert_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_expert_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_expert_lbl, LV_ALIGN_TOP_MID, 0, 4);
-    s_expert_sub = lv_label_create(s_expert_btn);
-    lv_obj_set_style_text_align(s_expert_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_expert_sub, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_opa(s_expert_sub, LV_OPA_70, 0);
-    lv_obj_align(s_expert_sub, LV_ALIGN_BOTTOM_MID, 0, -4);
+    // ⛔ ONE centred word, and no "(tap for ...)" hint underneath. The hint was
+    // tried on 2026-08-28 as a second, smaller label and came out overlapping
+    // the state word and unreadable at 14 px - the operator photographed it. A
+    // two-state button whose face reads BASIC or ADVANCED explains itself; the
+    // footnote was costing legibility to say what a tap already demonstrates.
+    lv_obj_set_style_text_font(s_expert_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(s_expert_lbl);
     drawer_expert_paint();
     // Load the Basic/Advanced membership before the first reflow, so a
     // configured unit lays out correctly on the very first drawer open
@@ -9885,9 +9888,8 @@ static void drawer_set_mode(ui_mode_t mode)
     int y = s_drawer_sec_y0;
     for (int g = 0; g < N_DRAWER_GROUPS; g++) {
         const drawer_group_t *grp = &s_drawer_groups[g];
-        // grp->expert is now only the SEED for the default masks (see
-        // drawer_default_mask). Consulting it here as well would override a
-        // section the operator has deliberately moved into Basic.
+        // Membership is per section (drawer_sec_visible consults the masks), so
+        // there is nothing group-wide left to test here.
         bool show_group = true;
 
         // Count what would actually appear, so an empty group never leaves a
@@ -10395,13 +10397,11 @@ static void drawer_cwtxoff_nudge_cb(lv_event_t *e)
 // Paint the view toggle: current mode on top, what a tap does underneath.
 static void drawer_expert_paint(void)
 {
-    if (!s_expert_btn || !s_expert_lbl || !s_expert_sub) return;
+    if (!s_expert_btn || !s_expert_lbl) return;
     // "Advanced", not "EXPERT" (operator, 2026-08-28). Expert names a PERSON
     // and invites the wrong question - am I one? - where Advanced names the
     // CONTENTS, which is what is actually being chosen between.
     lv_label_set_text(s_expert_lbl, s_drawer_expert ? "ADVANCED" : "BASIC");
-    lv_label_set_text(s_expert_sub, s_drawer_expert ? "(tap for Basic)"
-                                                    : "(tap for Advanced)");
     lv_obj_set_style_bg_color(s_expert_btn,
         lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
 }
