@@ -2012,16 +2012,54 @@ static uint64_t drawer_default_mask(bool basic)
     return m;
 }
 
+/* Every section id that exists in THIS firmware. */
+static uint64_t drawer_all_mask(void)
+{
+    uint64_t m = 0;
+    for (int g = 0; g < N_DRAWER_GROUPS; g++)
+        for (int k = 0; k < s_drawer_groups[g].n; k++)
+            m |= 1ULL << s_drawer_groups[g].items[k].id;
+    return m;
+}
+
+/* ⛔ A STORED MASK CANNOT EXPRESS A SECTION THAT DID NOT EXIST WHEN IT WAS
+ * SAVED, and the first version of this ignored that. The four WSPR sections
+ * were added after the operator had already saved a layout, so their bits were
+ * absent from the stored masks - and absent reads identically to "unticked".
+ * They came back in NEITHER view, i.e. invisible in the drawer entirely.
+ *
+ * Generalise the damage: every setting added by any future firmware update
+ * would have been hidden from every operator who had ever opened the Tab5
+ * config table, silently, with no way to discover it existed.
+ *
+ * So a third mask records WHICH SECTIONS WERE KNOWN when the layout was saved.
+ * A section inside it obeys the stored choice; a section outside it is new
+ * since, and takes the compiled default. That distinguishes "the operator
+ * unticked this" from "this did not exist yet", which one bit per section
+ * cannot do on its own. */
 static void drawer_masks_load(void)
 {
-    s_drawer_basic_mask = drawer_default_mask(true);
-    s_drawer_adv_mask   = drawer_default_mask(false);
+    const uint64_t def_basic = drawer_default_mask(true);
+    const uint64_t def_adv   = drawer_default_mask(false);
+    s_drawer_basic_mask = def_basic;
+    s_drawer_adv_mask   = def_adv;
+
     nvs_handle_t h;
     if (nvs_open(DRAWER_CFG_NS, NVS_READONLY, &h) != ESP_OK) return;
-    uint64_t v;
-    if (nvs_get_u64(h, "basic", &v) == ESP_OK) s_drawer_basic_mask = v;
-    if (nvs_get_u64(h, "adv",   &v) == ESP_OK) s_drawer_adv_mask   = v;
+    uint64_t sb = 0, sa = 0, known = 0;
+    bool have_b = (nvs_get_u64(h, "basic", &sb)  == ESP_OK);
+    bool have_a = (nvs_get_u64(h, "adv",   &sa)  == ESP_OK);
+    bool have_k = (nvs_get_u64(h, "known", &known) == ESP_OK);
     nvs_close(h);
+    if (!have_b && !have_a) return;              /* never configured */
+
+    /* An older save has no "known" mask. Treat what it stored as the sections
+     * it knew about: the union of both masks is exactly the set it could have
+     * had an opinion on, and anything outside that is new. */
+    if (!have_k) known = sb | sa;
+
+    if (have_b) s_drawer_basic_mask = (sb & known) | (def_basic & ~known);
+    if (have_a) s_drawer_adv_mask   = (sa & known) | (def_adv   & ~known);
 }
 
 // Read the map out for the web table: one call per section, in DRAWER ORDER, so
@@ -2072,6 +2110,9 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask)
     if (nvs_open(DRAWER_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
         nvs_set_u64(h, "basic", basic_mask);
         nvs_set_u64(h, "adv",   adv_mask);
+        /* Record what this firmware knew about, so a later update can tell a
+         * deliberate untick from a section that did not exist yet. */
+        nvs_set_u64(h, "known", drawer_all_mask());
         nvs_commit(h);
         nvs_close(h);
     }
