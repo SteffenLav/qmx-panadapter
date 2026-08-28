@@ -28,6 +28,7 @@ typedef enum {
     HELP_SPOTS,
     HELP_WEB_UI,
     HELP_TIME_SYNC,
+    HELP_WSPR,
 
     // --- What you are looking at (Layer 2: specific controls) ---
     HELP_TAP_TO_TUNE,

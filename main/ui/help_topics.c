@@ -29,6 +29,7 @@ static const help_entry_t s_topics[] = {
     { HELP_SPOTS,               "guide/spots.md",               "What you see",              "Live spots"           },
     { HELP_WEB_UI,              "guide/web-ui.md",              "Quick Start",               "Web interface"        },
     { HELP_TIME_SYNC,           "guide/time-sync.md",           "Time Sources",              "Time sync"            },
+    { HELP_WSPR,                "guide/wspr.md",                "Reading the page",          "WSPR"                 },
 
     // Specific controls (Layer 2).
     { HELP_TAP_TO_TUNE,         "guide/panadapter.md",          "Tap to Tune",               "Tap to tune"          },
@@ -185,5 +186,9 @@ help_topic_t help_topic_for_current_context(void)
         if (st == FT8_TX_ARMED || st == FT8_TX_ACTIVE) return HELP_FT8_TX;
         return HELP_FT8_RX;
     }
+    /* The WSPR page asks its own questions - the two-minute rhythm, what the
+     * columns mean, why nothing decoded - and none of them are answered by the
+     * panadapter chapter. */
+    if (ui_mode_get() == UI_MODE_WSPR) return HELP_WSPR;
     return HELP_PANADAPTER;
 }

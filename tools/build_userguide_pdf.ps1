@@ -101,8 +101,9 @@ $chapters = @(
     @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 6; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
     @{ Id = "time-sync";     Title = "Time sync";      Num = 7; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
     @{ Id = "settings";      Title = "Settings";       Num = 8; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 9; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 10; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "wspr";          Title = "WSPR";           Num = 9; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 10; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "reference";     Title = "Reference";      Num = 11; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(

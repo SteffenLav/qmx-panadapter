@@ -24,20 +24,20 @@ bool wspr_feature_enabled(void);
  * decoder proven in docs/wspr-phase1-status.md, and files what it finds in
  * wspr_spots.
  *
- * ⚠ IT DECODES EVERY OTHER CYCLE, BY CONSTRUCTION - and that is a real
- * limitation, not a rough edge to be polished later without thought. A cycle is
- * 120 s; the capture fills all of it and the decode measured 64 s on this
- * silicon, so a single sequential task is still decoding when the next window
- * opens and cannot arm it. The fix is a second buffer so the decode runs
- * against the previous window while the next one fills - the same ping-pong
- * ft8_test.c already uses - and it is deliberately NOT done in this first cut,
- * because a receiver that works at half rate is worth more than a concurrent
- * one that is wrong. See wspr_rx.c's own note for the memory arithmetic.
+ * ⭐ IT DECODES EVERY CYCLE. It did not always: the first cut captured for the
+ * whole 120 s and then decoded sequentially, and the decode measured 64 s on
+ * this silicon, so the task was still working when the next window opened and
+ * could not arm it - half rate, by construction, and documented here as a real
+ * limitation rather than a rough edge. The decoder has since been made several
+ * times faster and the capture now runs against the next window while the
+ * previous one is decoded. Confirmed on the bench 2026-08-28, where /api/wspr
+ * reported "captur. 35/120 s | dec 20/20" - capturing and decoding at once -
+ * and the operator had already tested both cycles independently.
  *
  * Entering this mode sets ui_mode to UI_MODE_WSPR, which diverts the DSP's IQ
- * chain into the capture pre-ring exactly as FT8 mode does. On this branch
- * there is no Tab5 WSPR screen yet, so the panadapter's spectrum and waterfall
- * FREEZE while it runs - expected, and the reason /api/wspr reports the loop's
+ * chain into the capture pre-ring exactly as FT8 mode does. The panadapter's
+ * spectrum and waterfall are unavailable while it runs - the receiver has the
+ * IQ stream for the whole cycle - which is why /api/wspr reports the loop's
  * state so the browser can say so out loud.
  */
 

@@ -2889,3 +2889,59 @@ three separate places that assumed FT8's 15-second slots - and its practice
 stations now have signal levels that vary instead of every one reading the same.
 That is bench equipment rather than a feature, but it is how FT4 and
 signal-report behaviour get tested without putting a real station on the air.
+
+### Shipped in v1.10.0 — 2026-08-28
+
+**WSPR.** The Tab5 gains a third page, alongside the panadapter and FT8/FT4.
+WSPR is a propagation beacon rather than a contact mode: you transmit a very
+slow, very weak signal carrying only your callsign, grid and power, and stations
+worldwide report hearing it. Over an evening you get a picture of where your
+antenna and your band actually reach, at power levels where nothing else would
+be heard at all. Nobody replies, and nothing goes in your log.
+
+Swipe → now cycles **Panadapter → FT8/FT4 → WSPR**. The page shows the stations
+heard in each two-minute cycle with distance and bearing, the furthest of the
+session, a per-cycle history so an opening band looks different from a closing
+one, and the captured 200 Hz window. Receiving is the default and is worth doing
+on its own; transmitting is opt-in and, like FT8, refuses to key without your
+callsign and grid.
+
+**Its settings live in the drawer**, under WSPR, and appear only on that page:
+allow transmitting, declared power, duty cycle, band hopping and whether to
+publish what you hear to wsprnet.org. Duty cycle and band hopping used to be
+buttons on the page itself; both are decisions made once for a session rather
+than controls reached while watching spots arrive, so the page keeps only the TX
+switch. Ticking two or more bands in the picker is what turns hopping on.
+
+**Declared power is a claim, not a measurement** — the Tab5 cannot know what
+your radio delivers, and every spot publishes that number worldwide into a
+database other operators reason from. Set it to what your transmitter really
+produces.
+
+**The Tab5 now wakes up on the page you left it on**, including after a firmware
+update. If that page is WSPR with transmitting enabled, the station resumes
+beaconing on power-up — which is what a beacon is for, but worth knowing before
+you leave the shack.
+
+**Basic and Advanced.** The settings drawer's EXPERT button is now **ADVANCED**,
+which names the contents rather than the reader. More usefully, which settings
+appear in which view is no longer fixed: the web UI's Settings window has a
+**Tab5 config** button opening a table of every setting with Basic and Advanced
+ticks. Basic now holds the eight things an operating session actually reaches;
+everything remains in Advanced. A firmware update that adds a setting will show
+it rather than hiding it behind a layout saved before it existed.
+
+**Two field reports from Gyula HA3HZ**, both fixed. A station you had just
+worked could be called again within minutes — the decode list greyed the
+callsign while the engine ignored it unless a filter was ticked, so the screen
+and the machine disagreed. The automatic pickers now leave a station alone for
+30 minutes after working it, whatever the filter says. And the red **FREQ BUSY**
+warning had no signal-strength test at all, so a barely-audible station on the
+other side of the world raised the same alarm as a loud neighbour; it is now
+graded by strength, and hidden entirely during an exchange, where your transmit
+tone is deliberately locked to your partner and moving is the wrong thing to do.
+
+**Also:** the Tab5's frame rate and redraw load are now in the diagnostic log,
+Bluetooth's host task moved off the display core, several task stacks were
+returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to
+the WSPR frequency.
