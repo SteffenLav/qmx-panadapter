@@ -136,7 +136,7 @@ static void wspr_selftest_task(void *arg)
         ESP_LOGE(TAG, "could not allocate %ld KB for the capture buffer",
                  (long)(CAP_SAMPLES * sizeof(int16_t) / 1024));
         s_running = false;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
 
@@ -159,7 +159,7 @@ static void wspr_selftest_task(void *arg)
     if (!ok) {
         free(buf);
         s_running = false;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
     ESP_LOGI(TAG, "synthesized %ld samples (%.0f s), %d stations, in %lld ms",
@@ -235,7 +235,7 @@ static void wspr_selftest_task(void *arg)
     ESP_LOGI(TAG, "self-test task stack: %u bytes still free",
              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
     s_running = false;
-    vTaskDelete(NULL);
+    psram_task_park();
 }
 
 bool wspr_selftest_running(void) { return s_running; }
@@ -269,7 +269,8 @@ void wspr_selftest_start(void)
     // Decoding is background work on a 2-minute cadence, which is precisely
     // what psram_task_create() is for. Measuring WITH the PSRAM stack is
     // therefore measuring the real thing, not a laboratory best case.
-    if (!psram_task_create(wspr_selftest_task, "wspr_st", 32768, NULL,
+    psram_task_reap();   /* a previous run's parked task, if any (#269) */
+    if (!psram_task_create_reapable(wspr_selftest_task, "wspr_st", 32768, NULL,
                            tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
         ESP_LOGE(TAG, "could not create the self-test task");
         s_running = false;

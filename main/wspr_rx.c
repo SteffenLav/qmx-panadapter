@@ -908,7 +908,7 @@ static void wspr_dec_task(void *arg)
     set_dec_status("%s", "");
     ESP_LOGI(TAG, "decode task stopped");
     s_dec_exited = true;
-    vTaskDelete(NULL);
+    psram_task_park();
 }
 
 static void wspr_rx_task(void *arg)
@@ -978,7 +978,7 @@ static void wspr_rx_task(void *arg)
         wspr_decode_capture_changed();
         set_status("out of memory");
         s_run = false; s_task = NULL;
-        vTaskDelete(NULL);
+        psram_task_park();
         return;
     }
     ESP_LOGI(TAG, "guards: near=%s (%.1f Hz)  slow=%s (%u cycles) - both always measured",
@@ -1358,7 +1358,7 @@ static void wspr_rx_task(void *arg)
     set_dec_status("%s", "");
     ESP_LOGI(TAG, "slot loop stopped");
     s_task = NULL;
-    vTaskDelete(NULL);
+    psram_task_park();
 }
 
 /* The single answer to "is WSPR reachable" - see wspr_rx.h for why every gate
@@ -1413,7 +1413,15 @@ bool wspr_rx_start(void)
         ui_mode_set(UI_MODE_PANADAPTER);
         return false;
     }
-    s_dec_task = psram_task_create(wspr_dec_task, "wspr_dec", 32768, NULL,
+    /* Reap the pair from the PREVIOUS WSPR visit before creating another.
+     * They parked on their way out and are still holding 32 KB of PSRAM each;
+     * without this every Panadapter/WSPR round trip lost a clean 64 KB (#269),
+     * which is what the measurement showed. Here is the safe place: we are on
+     * the LVGL task and last time's tasks are provably parked. */
+    int reaped = psram_task_reap();
+    if (reaped) ESP_LOGI(TAG, "reaped %d parked task(s) from the last visit", reaped);
+
+    s_dec_task = psram_task_create_reapable(wspr_dec_task, "wspr_dec", 32768, NULL,
                                    tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
     if (!s_dec_task) {
         ESP_LOGE(TAG, "could not create the decode task");
@@ -1423,7 +1431,7 @@ bool wspr_rx_start(void)
         return false;
     }
 
-    s_task = psram_task_create(wspr_rx_task, "wspr_rx", 32768, NULL,
+    s_task = psram_task_create_reapable(wspr_rx_task, "wspr_rx", 32768, NULL,
                                tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
     if (!s_task) {
         ESP_LOGE(TAG, "could not create the slot-loop task");

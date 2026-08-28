@@ -260,7 +260,7 @@ static void wspr_tx_worker_task(void *arg)
             s_state = WSPR_TX_IDLE;
             s_disarm_requested = false;
             unlock();
-            vTaskDelete(NULL);
+            psram_task_park();
             return;
         }
         int secs = wspr_tx_seconds_until_next_slot();
@@ -292,7 +292,7 @@ static void wspr_tx_worker_task(void *arg)
     lock();
     s_state = WSPR_TX_IDLE;
     unlock();
-    vTaskDelete(NULL);
+    psram_task_park();
 }
 
 bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len)
@@ -389,7 +389,11 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     // strictly BELOW audio_task (6) so the USB isochronous pump keeps its
     // margin: see #51, where losing that margin cost 170-350 ms of audio a
     // slot, silently, at the wire.
-    TaskHandle_t h = psram_task_create(wspr_tx_worker_task, "wspr_tx", 4096, NULL,
+    /* The previous transmission's worker parked; free its stack before we ask
+     * for another (#269). Small - 4 KB - but it is once per transmission, and
+     * WSPR transmits all day. */
+    psram_task_reap();
+    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 4096, NULL,
                                         5, tskNO_AFFINITY);
     if (!h) {
         lock();

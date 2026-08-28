@@ -107,3 +107,6 @@ wspr_wisdom.dat
 wspr_cap_sweep.exe
 wspr_decode_harness.exe
 wspr_subtract_sweep.exe
+
+# Serial capture output (cap_serial_reboot.ps1 default -Out)
+reboot.txt
