@@ -91,6 +91,12 @@ static const char *TAG = "ft8_test";
 // active sample count (period_ms × 12 samples/ms) and the UTC boundary grid
 // from these at runtime, keyed off the FT8/FT4 sub-mode (ft8_op_mode_get()).
 #define FT8_SLOT_MS           15000
+
+// Below this much free internal RAM the per-slot line pays for a
+// largest-free-block walk; above it, never. See the comment at the call site -
+// that walk runs with interrupts off and is the documented cause of the
+// full-screen cyan flash on this panel.
+#define FT8_SLOT_LBLK_EMERGENCY_KB  24
 #define FT4_SLOT_MS           7500
 #define SNTP_WAIT_TIMEOUT_MS  30000
 #define CAT_STATUS_UPDATE_MS  5000
@@ -1323,8 +1329,30 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // Low-water mark + largest contiguous block: the SDIO TX path needs an
     // internal DMA buffer, so what matters for the transport_drv crash is the
     // worst-case internal free and whether a single contiguous chunk survives.
+    //
+    // ⛔ BUT largest_free_block WALKS THE HEAP WITH INTERRUPTS OFF, and this is
+    // a PERIODIC path - once per slot, so every 15 s in FT8 and every 7.5 s in
+    // FT4. That is exactly what the 2026-07-13 investigation removed from
+    // cpu_stats.c and audio.c to stop the full-screen cyan flash: the ints-off
+    // window delays the core-0 MIPI-DSI frame-restart ISR past the vertical
+    // blanking window and the panel blanks for a frame. audio.c's heap watchdog
+    // even carries the rule in a comment - "must NEVER go on this periodic path
+    // (that caused the FT4 cyan flash)" - while this call sat two files away
+    // doing it unconditionally, at TWICE the rate in FT4. It was simply missed
+    // when the others were fixed.
+    //
+    // Observed by the operator on 2026-08-28 during an FT4 simulation run, with
+    // internal free at 17-18 KB: below audio.c's 24 KB emergency threshold, so
+    // BOTH walkers were running - its 10 s one and this 7.5 s one.
+    //
+    // Same treatment as audio.c: the walk is fragmentation forensics, worth a
+    // one-frame blink only when the heap is nearly exhausted. Above the
+    // threshold report the O(1) counters and print lblk as 0, which the log
+    // format already distinguishes by the LOW! marker on the emergency line.
     size_t heap_i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024;
-    size_t heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
+    size_t heap_i_lblk = 0;
+    if (heap_i < FT8_SLOT_LBLK_EMERGENCY_KB)
+        heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
