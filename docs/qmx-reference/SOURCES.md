@@ -17,6 +17,15 @@ Manual FT8 TX work in particular):
   ⚠ Its page footers still say "firmware 1_04_003"; the document revision history is the
   authority. Extract: `cat_104_004.txt`.
 
+- `QDX_operation_manual_1_10.pdf` — **QDX** Operating Manual, firmware 1_10 (includes its
+  full CAT command list). Added 2026-08-29 to answer whether the panadapter could support
+  a QDX (Travis AK6TB). Extract: `qdx_op_110.txt`. Findings, so nobody re-derives them:
+  QDX has the **same `Q9` IQ mode** (same session-only caveat), the **same 48 ksps 24-bit
+  stereo I/Q**, and the **same 12 kHz IF** — so the receive DSP would carry across. It has
+  **no `TA`**, which is how every Tab5 transmission is generated, and no `PC`, `SW`, `MM`,
+  `TM` or `RG`. `MD` is USB/LSB only. `VN;` returns `VN1_05;` with no "QMX" suffix, which
+  is a reliable way to tell the radios apart.
+
 **Not yet cached** (newer than the above, noted 2026-08-29): operating manual for
 1_04_004 and above (23-Jul-2026), and the Virtual U3S manual for **1_04_008a** and above
 (28-Aug-2026) — the "008a" implies a firmware revision past 1_04_008.
