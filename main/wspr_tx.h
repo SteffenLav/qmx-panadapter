@@ -119,6 +119,10 @@ wspr_tx_state_t wspr_tx_get_status(char *text, size_t text_len, int *secs_until)
 // is unaffected.
 int wspr_tx_seconds_until_next_slot(void);
 
+/* Last MEASURED burst output (PC;/SW; read while keyed), not the declared
+ * figure. false until a burst has reported one. */
+bool wspr_tx_get_last_power_swr(float *power_w, float *swr);
+
 // True if this build has WSPR_TX_SEND_LIVE=1 (radio actually keyed on a
 // burst), false if it's still the dry-run default. Exposed so callers
 // (e.g. the "wspr_tx_test" dev API action) can report the real state

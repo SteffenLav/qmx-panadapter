@@ -80,6 +80,12 @@ static volatile bool     s_abort_requested  = false;
  * inside 110 seconds. */
 static bool              s_burst_sim = false;
 
+/* Last MEASURED output of a WSPR burst - the radio's own PC;/SW; answer, not
+ * the declared figure. The Tab5 cannot know what the radio delivers, so it
+ * asks while keyed. -1 until a burst has reported one. */
+static float             s_last_power_w = -1.0f;
+static float             s_last_swr     = -1.0f;
+
 void wspr_tx_init(void)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
@@ -206,14 +212,33 @@ static void sleep_until(int64_t t0, int64_t offset_us)
 
 // Runs the actual ~110.6 s CAT burst. Called from the worker task once the
 // even-minute boundary has arrived and the state is already ACTIVE.
+/* Last measured burst output. Returns false until a burst has reported one. */
+bool wspr_tx_get_last_power_swr(float *power_w, float *swr)
+{
+    if (s_last_power_w < 0.0f) return false;
+    if (power_w) *power_w = s_last_power_w;
+    if (swr)     *swr     = s_last_swr;
+    return true;
+}
+
 static void run_burst(const wspr_tx_request_t *req)
 {
     s_abort_requested = false;
     s_burst_sim = sim_active();
-    ESP_LOGI(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm, base=%d Hz%s",
+    /* ⭐ SELF-LABELLING. The PA voltage in force goes in the burst's OWN start
+     * line, because attributing a burst to a voltage AFTERWARDS from separate
+     * log lines is exactly what went wrong on 2026-08-29: three bursts, two
+     * firmwares and one supply-current reading that got filed against the wrong
+     * one. A measurement that cannot be attributed with certainty is not a
+     * measurement. -1 means the radio has not told us yet. */
+    int16_t pa_x10 = cat_get_pa_voltage_x10();
+    ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz, "
+                  "PA=%d.%d V%s",
              req->callsign, req->grid, req->power_dbm, req->audio_freq_hz,
+             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
              s_burst_sim      ? "  [SIMULATION - radio not keyed]"
              : WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
+    if (pa_x10 <= 0) ESP_LOGW(TAG, "  ...PA voltage UNKNOWN - this burst cannot be attributed");
 
     // Exclusive use of the CDC-ACM link for the whole burst - see
     // ft8_tx.c's identical reasoning. Cooperative flag only, never
@@ -239,6 +264,34 @@ static void run_burst(const wspr_tx_request_t *req)
         char buf[32];
         snprintf(buf, sizeof(buf), "TA%.2f;", (double)freq);
         tx_cmd(t0, buf);
+
+        /* MEASURE what actually goes out, mid-burst while the radio is keyed -
+         * SW; reads nothing once back in Receive. The async pair is used, not
+         * cat_query_power_swr(), whose ~600 ms blocking wait would overrun the
+         * symbol clock; a WSPR symbol is 683 ms, so send and read are placed
+         * several symbols apart with room to spare.
+         *
+         * This is the ground truth the declared-power dropdown can never be:
+         * the Tab5 cannot know what the radio delivers, so it asks. */
+        if (!s_burst_sim && WSPR_TX_SEND_LIVE) {
+            if (i == 12) {
+                cat_pwr_swr_async_send();
+            } else if (i == 16) {
+                float pw = -1.0f, sw = -1.0f;
+                if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK &&
+                    pw >= 0.0f && sw >= 0.0f) {
+                    s_last_power_w = pw;
+                    s_last_swr     = sw;
+                    ESP_LOGW(TAG, "WSPR TX MEASURED: %.1f W, SWR %.2f  (PA=%d.%d V, "
+                                  "declared %d dBm)",
+                             (double)pw, (double)sw,
+                             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
+                             req->power_dbm);
+                } else {
+                    ESP_LOGW(TAG, "WSPR TX: no PC/SW reading this burst");
+                }
+            }
+        }
     }
 
     if (!aborted) {

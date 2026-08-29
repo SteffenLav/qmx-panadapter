@@ -3317,6 +3317,16 @@ static esp_err_t wspr_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
     cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
     cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
+    /* The radio's OWN measurement of the last burst, and the PA voltage in
+     * force - so an A/B can be read off one endpoint instead of correlated
+     * from separate log lines afterwards, which is how a measurement got
+     * attributed to the wrong burst on 2026-08-29. */
+    { float pw, sw;
+      if (wspr_tx_get_last_power_swr(&pw, &sw)) {
+          cJSON_AddNumberToObject(root, "last_tx_watts", pw);
+          cJSON_AddNumberToObject(root, "last_tx_swr",   sw);
+      } }
+    cJSON_AddNumberToObject(root, "pa_voltage_x10", cat_get_pa_voltage_x10());
 
     cJSON *arr = cJSON_AddArrayToObject(root, "spots");
     for (int i = 0; i < n; i++) {
