@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.10.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.10.1 — WSPR now protects your radio's finals.** A WSPR transmission keys the radio for about **110 seconds out of every 120** — an FT8 burst is about 12 — and running a QMX flat out on that cycle puts sustained heat through the PA transistors. QRP Labs warn about exactly this case, and the radio's own built-in WSPR beacon turns its PA down for the same reason. **Protect finals**, on by default, now does the same from the Tab5: it sets the QMX's *Max. PA voltage* to about 6 V for as long as WSPR transmit is enabled, and restores your setting afterwards. **Measured on a QMX at 12 V: 5.4 W → 1.6 W out, and 76% less heat in the finals.** The control is a full-width button saying which state you are in, turning protection off takes two deliberate taps, and while it is off the TX block reads **FULL PWR** in red. ⚠ It reduces the heat in the finals but does not remove it from the radio — total heat fell only 18% — so **if you intend to beacon for hours, feed the QMX from a lower supply** (it accepts 6.0–12.0 V; around 9 V leaves far less to throw away as heat). **Declared power is now advised by measurement**: the Tab5 asks the radio what it actually produced and shows the answer under the setting. And the **FT8 Options checkboxes are easy to hit** *(Don WB0LQW)* — the word beside each box now toggles it. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.10.0 — WSPR, and a settings drawer you decide the shape of.** **The Tab5 gains a third page**: swipe now cycles **Panadapter → FT8/FT4 → WSPR**. WSPR is a propagation beacon rather than a contact mode — you send a very slow, very weak signal carrying only your callsign, grid and power, and stations worldwide report hearing it, so over an evening you get a picture of where your antenna and your band actually reach at power levels where nothing else would be heard at all. Nobody replies and nothing goes in your log. The page shows what was heard each two-minute cycle with distance and bearing, the furthest of the session, and a per-cycle history so an opening band looks different from a closing one. **Receiving is the default**; transmitting is opt-in and, like FT8, refuses to key without your callsign and grid. Its settings — allow transmitting, declared power, duty cycle, band hopping, and publishing what you hear to wsprnet.org — live in the drawer under **WSPR**. **Declared power is a claim, not a measurement**: the Tab5 cannot know what your radio delivers, and that number is published worldwide, so set it to what your transmitter really produces. **The Tab5 also wakes up on the page you left it on**, including after an update — so a station left on WSPR with transmitting on resumes beaconing by itself. **Basic/Expert is now Basic/Advanced**, which names the contents rather than the reader, and **which settings appear in which view is yours to set** from a new **Tab5 config** button in the web UI's Settings window; a firmware update that adds a setting now shows it rather than hiding it behind a layout saved before it existed. **Two field reports from Gyula HA3HZ** are fixed: a station you had just worked could be called again within minutes (the automatic pickers now leave a station alone for 30 minutes after working it, whatever your filters say), and the red **FREQ BUSY** warning is now graded by signal strength and hidden during an exchange, where your tone is deliberately locked to your partner. Full detail in [docs/version-history.md](docs/version-history.md).
 >
@@ -52,7 +54,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -801,6 +803,20 @@ A propagation beacon rather than a contact mode: a very slow, very weak signal
 carrying only your callsign, grid and declared power, reported by stations
 worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4 → WSPR**.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
+
+**Protect finals is on by default, and WSPR is why.** A WSPR transmission keys
+the radio for about **110 seconds out of every 120** — an FT8 burst is about 12.
+The Tab5 turns the radio down for as long as WSPR transmit is enabled (it sets
+the QMX's own *Max. PA voltage* to around 6 V and restores your setting
+afterwards), which is the same precaution the QMX takes with its own built-in
+WSPR beacon. Measured on a QMX at 12 V: **5.4 W → 1.6 W out, and 76% less heat
+in the PA transistors.**
+
+⚠ **That reduces the heat in the finals; it does not remove it from the radio.**
+The excess is dropped inside the QMX instead, so total heat falls far less than
+the finals' share does. **If you plan to beacon for hours, feed the radio from a
+lower supply** — the QMX accepts 6.0–12.0 V, and around 9 V leaves much less to
+throw away as heat. That is the one thing no firmware setting can do for you.
 
 📖 The full chapter:
 [tab5.lav.dk/guide/wspr](https://tab5.lav.dk/guide/wspr/)

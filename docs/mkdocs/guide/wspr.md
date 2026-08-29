@@ -62,6 +62,33 @@ This is **a claim, not a measurement.** The Tab5 has no way to know what your ra
 
 Set it to what your transmitter really produces. A QMX running 200 mW that declares 5 W does not look like a better station; it puts wrong data into everybody else's analysis.
 
+**The Tab5 helps you get it right.** During each transmission it asks the radio what it is actually putting out, and shows the answer under the dropdown — *"radio measured 1.6 W last burst = 32 dBm"*. Switching **Protect finals** on or off also moves the declared figure to the value that setting normally produces, as a starting point. Both are suggestions: the number is a statement about your station and stays yours to choose.
+
+#### Protect finals
+
+**This matters more on WSPR than anywhere else, and it is on by default.**
+
+WSPR transmits for about **110 seconds out of every 120**. Nothing else this radio does comes close to that — an FT8 transmission lasts about 12 seconds. Running a QMX flat out on that cycle puts real, sustained heat through the PA transistors, and QRP Labs warn about exactly this in the QMX manual: *"High supply voltages can stress the PA transistors, particularly when you are using Digi Modes with high duty cycle."*
+
+With **Protect finals** on, the Tab5 turns the radio down for as long as WSPR transmit is enabled — it sets the radio's own **Max. PA voltage** to about 6 V, and puts your setting back afterwards. This is the same precaution the QMX applies to its own built-in WSPR beacon.
+
+Measured on a QMX at 12 V:
+
+| | Output | Heat in the finals |
+|---|---|---|
+| Protection off | 5.4 W | 4.7 W |
+| **Protection on** | **1.6 W** | **1.1 W** |
+
+**The finals run 76% cooler.** The button says which state you are in — green *"ON - about 1 W"*, or red *"OFF - FULL POWER, finals at risk"* — and turning protection off takes two deliberate taps, while turning it back on takes one. When it is off, the TX block on the WSPR page reads **FULL PWR** in red so you cannot leave the station running unprotected without knowing.
+
+#### Running WSPR from a lower supply voltage
+
+**Protection reduces the heat in the finals. It does not remove it from the radio.**
+
+The QMX limits PA voltage with a pass transistor, so when your supply is 12 V and the PA is held at 6 V, the difference is dropped inside the radio as heat instead. In the measurements above, total heat fell only 18% even though the finals' share fell 76%. That trade is worth making — the PA transistors are the fragile, hard-to-replace part — but it is not the whole answer.
+
+**If you intend to beacon on WSPR for hours, feed the QMX from a lower supply.** The QMX accepts **6.0 to 12.0 V**, and running it at around 9 V means less voltage to throw away as heat anywhere in the radio. This is the one thing that helps which no firmware setting can do for you.
+
 #### Duty cycle
 
 How much of the time you are willing to transmit, as a fraction of cycles: **0%** (receive only), **10%**, **20%**, **33%** or **50%**. Each cycle is decided independently at random, which is deliberate — a fixed pattern would have you transmitting in step with everyone else who chose the same setting.

@@ -2950,3 +2950,51 @@ one; the guide is 116 pages now rather than 107.
 Bluetooth's host task moved off the display core, several task stacks were
 returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to
 the WSPR frequency.
+
+### Shipped in v1.10.1 — 2026-08-29
+
+**WSPR now protects your radio's finals, and the declared power stops being a
+guess.**
+
+A WSPR transmission keys the radio for about **110 seconds out of every 120**.
+Nothing else the Tab5 does comes close — an FT8 burst is about 12 seconds — and
+running a QMX flat out on that cycle puts sustained heat through the PA
+transistors. QRP Labs warn about exactly this case in the QMX manual, and the
+radio's own built-in WSPR beacon turns its PA down for the same reason. The
+Tab5's WSPR transmit is driven over CAT and never enters that mode, so it
+inherited none of that protection.
+
+**Protect finals**, on by default, turns the radio down for as long as WSPR
+transmit is enabled — it sets the QMX's own *Max. PA voltage* to about 6 V and
+restores your setting afterwards. Measured on a QMX at 12 V: output falls from
+**5.4 W to 1.6 W**, and the heat in the PA transistors falls **76%**.
+
+It is a full-width button that states which state it is in — green *"ON - about
+1 W"*, or red *"OFF - FULL POWER, finals at risk"*. Turning protection off takes
+two deliberate taps; turning it back on takes one. While it is off, the TX block
+on the WSPR page reads **FULL PWR** in red, so a station cannot be left running
+unprotected without it being visible.
+
+⚠ **Protection reduces the heat in the finals; it does not remove it from the
+radio.** The QMX limits PA voltage with a pass transistor, so the difference is
+dropped inside the radio instead — total heat fell only 18% in the same
+measurements. If you intend to beacon for hours, **feed the QMX from a lower
+supply**: it accepts 6.0–12.0 V, and around 9 V leaves far less to throw away.
+That is the one thing no firmware setting can do for you, and it is now in the
+manual.
+
+**Declared power is advised by measurement.** During each transmission the Tab5
+asks the radio what it is actually producing and shows the answer under the
+setting — *"radio measured 1.6 W last burst = 32 dBm"*. Switching protection on
+or off also moves the declared figure to the value that setting normally gives.
+Both are suggestions; the number is a statement about your station and stays
+yours to choose. The list now runs to **37 dBm (5 W)** again: a declared power
+never commanded the radio, so limiting it could only have prevented an honest
+declaration.
+
+**Also fixed:** the checkboxes in the FT8 **Options** window were very hard to
+hit *(Don WB0LQW)* — the touch target was the small box alone, a tap that
+drifted a few pixels was swallowed by the panel behind it, and the word beside
+each box did nothing. The touch area is now much larger, the tap cannot be
+stolen, and **tapping the word toggles the setting**. The WSPR settings are also
+reachable from the browser for the first time, and the web and Tab5 lists agree.

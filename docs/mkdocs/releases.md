@@ -4,7 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.0** — 2026-08-28
+**v1.10.1** — 2026-08-29
+
+**WSPR now protects your radio's finals, and the declared power stops being a guess.**
+
+- **Protect finals, on by default.** A WSPR transmission keys the radio for about **110 seconds out of every 120** - an FT8 burst is about 12 - and running a QMX flat out on that cycle puts sustained heat through the PA transistors. QRP Labs warn about exactly this in the QMX manual, and the radio's own built-in WSPR beacon turns its PA down for the same reason. The Tab5 now does the same: it sets the QMX's *Max. PA voltage* to about 6 V for as long as WSPR transmit is enabled, and restores your setting afterwards. **Measured on a QMX at 12 V: 5.4 W → 1.6 W out, and 76% less heat in the finals.**
+- **You can always see which state you are in.** The control is a full-width button reading green *"ON - about 1 W"* or red *"OFF - FULL POWER, finals at risk"*. Turning protection off takes two deliberate taps; turning it back on takes one. While it is off the TX block on the WSPR page reads **FULL PWR** in red.
+- ⚠ **It reduces the heat in the finals; it does not remove it from the radio.** The excess is dropped inside the QMX instead, so total heat fell only 18% in the same measurements. **If you intend to beacon for hours, feed the radio from a lower supply** - the QMX accepts 6.0-12.0 V, and around 9 V leaves far less to throw away as heat. That is the one thing no firmware setting can do for you, and it is now in the manual.
+- **Declared power is advised by measurement.** During each transmission the Tab5 asks the radio what it is actually producing and shows the answer under the setting. Switching protection on or off also moves the declared figure to the value that setting normally gives. Both are suggestions - the number is a claim about your station and stays yours to choose. The list runs to 37 dBm again: a declared power never commanded the radio, so limiting it could only have prevented an honest declaration.
+- **The FT8 Options checkboxes are easy to hit** *(Don WB0LQW)*. The touch target was the small box alone, a tap that drifted a few pixels was swallowed by the panel behind it, and the word beside each box did nothing. The touch area is much larger now, the tap cannot be stolen, and **tapping the word toggles the setting**.
+- **The WSPR settings are reachable from the browser** for the first time, and the web and Tab5 lists agree.
+
+## Previous Releases
+
+### v1.10.0 — 2026-08-28
 
 **WSPR, and a settings drawer you decide the shape of.**
 
@@ -16,8 +29,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Basic and Advanced.** The drawer's EXPERT button is now **ADVANCED**, which names the contents rather than the reader. More usefully, which settings appear in which view is no longer fixed: the web UI's Settings window has a **Tab5 config** button opening a table of every section with Basic and Advanced ticks. Basic holds the things an operating session actually reaches; everything remains in Advanced. A firmware update that adds a setting will show it rather than hiding it behind a layout saved before it existed.
 - **Two field reports from Gyula HA3HZ**, both fixed. A station you had just worked could be called again within minutes — the decode list greyed the callsign while the engine ignored it unless a filter was ticked, so the screen and the machine disagreed. The automatic pickers now leave a station alone for 30 minutes after working it, whatever the filter says. And the red **FREQ BUSY** warning had no signal-strength test at all, so a barely-audible station on the other side of the world raised the same alarm as a loud neighbour; it is now graded by strength, and hidden entirely during an exchange, where your transmit tone is deliberately locked to your partner.
 - **Also:** the Tab5's frame rate and redraw load are now in the diagnostic log, Bluetooth's host task moved off the display core, several task stacks were returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to the WSPR frequency.
-
-## Previous Releases
 
 ### v1.9.6 — 2026-08-26
 

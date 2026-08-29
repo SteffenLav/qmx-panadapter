@@ -70,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
+
+**New in v1.10.1 — WSPR now protects your radio's finals.** A WSPR transmission keys the radio for about **110 seconds out of every 120** — an FT8 burst is about 12 — and running a QMX flat out on that cycle puts sustained heat through the PA transistors. QRP Labs warn about exactly this case, and the radio's own built-in WSPR beacon turns its PA down for the same reason. **Protect finals**, on by default, now does the same from the Tab5: it sets the QMX's *Max. PA voltage* to about 6 V for as long as WSPR transmit is enabled and restores your setting afterwards. **Measured on a QMX at 12 V: 5.4 W → 1.6 W out, and 76% less heat in the finals.** The control is a full-width button that says which state you are in, turning protection off takes two deliberate taps, and while it is off the TX block reads **FULL PWR** in red. ⚠ It reduces the heat in the finals but does not remove it from the radio — total heat fell only 18% — so **if you intend to beacon for hours, feed the QMX from a lower supply** (it accepts 6.0–12.0 V; around 9 V leaves far less to throw away). **Declared power is now advised by measurement**: the Tab5 asks the radio what it actually produced and shows the answer under the setting. And the **FT8 Options checkboxes are easy to hit** *(Don WB0LQW)* — the word beside each box now toggles it. Full detail in [docs/version-history.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md).
 
 **New in v1.10.0 — WSPR, and a settings drawer you decide the shape of.** **The Tab5 gains a third page**: swipe now cycles **Panadapter → FT8/FT4 → WSPR**. WSPR is a propagation beacon rather than a contact mode — a very slow, very weak signal carrying only your callsign, grid and power, reported by stations worldwide, so over an evening you get a picture of where your antenna and your band really reach at power levels where nothing else would be heard. Nobody replies and nothing goes in your log. The page shows what was heard each two-minute cycle with distance and bearing, the furthest of the session, and a per-cycle history so an opening band looks different from a closing one. Receiving is the default; transmitting is opt-in and refuses to key without your callsign and grid. Its settings — allow transmitting, declared power, duty cycle, band hopping and publishing to wsprnet.org — live in the drawer under **WSPR**. **Declared power is a claim, not a measurement**: that number is published worldwide, so set it to what your transmitter really produces. **The Tab5 now wakes up on the page you left it on**, including after an update — so a station left on WSPR with transmitting on resumes beaconing by itself. **Basic/Expert is now Basic/Advanced**, and **which settings appear in which view is yours to set** from a new **Tab5 config** button in the web UI's Settings window; a firmware update that adds a setting now shows it rather than hiding it behind a layout saved before it existed. **Two field reports from Gyula HA3HZ** fixed: a station you had just worked could be called again within minutes (the automatic pickers now leave it alone for 30 minutes, whatever your filters say), and the red **FREQ BUSY** warning is now graded by signal strength and hidden during an exchange. Full detail in [docs/version-history.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md).
 
@@ -131,7 +133,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
