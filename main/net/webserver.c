@@ -2939,15 +2939,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
-        /* CLAMPED at 33 dBm (2 W), not WSPR's own 60. WSPR keys the PA for
-         * ~110 s out of every 120 and the QMX finals overheat at full power on
-         * that duty cycle, so the drawer's list stops at 33 - and a cap that
-         * only exists in the UI is not a cap. Clamp rather than reject: this is
-         * a declared power, and silently keeping the old value would be worse
-         * than honouring the intent at the ceiling. Mirrors WSPR_DBM_LIMIT in
-         * ui/ui.c, where the reasoning is written out in full. */
+        /* Clamped to 0..37, which is what BOTH dropdowns can display - not
+         * WSPR's own 0..60. A value neither UI can show is the silent-state
+         * trap this file warns about elsewhere: the setting would hold 43 while
+         * every screen said something else.
+         *
+         * ⚠ 37 is the QMX's full output, and the 33 ceiling that was here
+         * yesterday was a MISTAKE, corrected the same day: this figure is a
+         * DECLARED power published to wsprnet, it does not command the radio,
+         * so capping it could only prevent an honest declaration - never a 5 W
+         * transmission. Protection lives in the PA-voltage guard (#290), which
+         * measurably takes 5.4 W to 1.6 W. */
         if (v < 0)  v = 0;
-        if (v > 33) v = 33;
+        if (v > 37) v = 37;
         settings_set_wspr_tx_dbm((int8_t)v);
     }
 

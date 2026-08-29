@@ -2799,18 +2799,21 @@ const SET_FIELDS = [
   // parity pass named. Added with the v1.10.0 WSPR launch.
   ["WSPR", "wspr_tx_en",  "bool", "Allow transmitting",
      "Receiving needs nothing; transmitting also needs your callsign and grid"],
-  // Declared power stops at 33 dBm. WSPR keys the PA for ~110 s out of every
-  // 120 and the QMX finals overheat at full power on that duty cycle. The cap
-  // is ADVISORY - this number is published to wsprnet, it does not command the
-  // radio (PC; is Get-only; there is no CAT setter for TX power). Same ceiling
-  // and same two colours as the Tab5 drawer; the server clamps it as well.
+  // Declared power goes to 37 dBm and carries NO warning words - matching the
+  // Tab5. Capping it was yesterday's mistake: this number is published to
+  // wsprnet and does not command the radio, so a cap could only prevent an
+  // honest declaration, never a 5 W transmission. Protection lives in the
+  // PA-voltage guard below (measured 5.4 W -> 1.6 W on the bench). The colours
+  // stay as a hint, since they are honest as a correlate: if you are genuinely
+  // declaring 37, you are running full power into a ~110 s key-down.
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
      "What your transmitter really produces - it is published worldwide",
      [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
       ["10","10 dBm (10 mW)"],["13","13 dBm (20 mW)"],["17","17 dBm (50 mW)"],
       ["20","20 dBm (100 mW)"],["23","23 dBm (200 mW)"],["27","27 dBm (500 mW)"],
-      ["30","30 dBm (1 W) - hot",        "#ffa040"],
-      ["33","33 dBm (2 W) - MAX, very hot","#ff4010"]]],
+      ["30","30 dBm (1 W)"],
+      ["33","33 dBm (2 W)", "#c87000"],
+      ["37","37 dBm (5 W)", "#d01000"]]],
   ["WSPR", "wspr_duty_pct", "sel", "Duty cycle",
      "Share of two-minute cycles that transmit; the rest listen",
      [["0","Receive only"],["10","10%"],["20","20%"],["33","33%"],["50","50%"]]],
@@ -2824,8 +2827,8 @@ const SET_FIELDS = [
   // #290. The radio's OWN Virtual U3S WSPR halves the PA voltage because ~110 s
   // of key-down out of every 120 overheats the QMX finals. Our WSPR TX is
   // CAT-driven and bypasses that mode, so it must apply the same guard.
-  ["WSPR", "wspr_pa_reduce", "bool", "Protect the finals while transmitting",
-     "Halves the radio's Max. PA voltage (about a quarter power) while WSPR transmit is on, and puts it back afterwards - the same guard the radio uses for its own WSPR"],
+  ["WSPR", "wspr_pa_reduce", "bool", "Protect finals while transmitting",
+     "Holds the radio near 6 V while WSPR transmit is on - about 1 W - and puts your setting back afterwards. WSPR keys the PA for ~110 s out of every 120; the radio's own WSPR mode does the same thing for the same reason. Measured on the bench: 5.4 W falls to 1.6 W, and the finals dissipate 76% less."],
   ["WSPR", "wspr_net_en", "bool", "Publish spots to wsprnet.org",
      "Reports what you HEAR to the wsprnet database"],
 
