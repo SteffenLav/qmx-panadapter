@@ -1195,6 +1195,72 @@ area ("CAT MU command and MM ... loaded previously saved state (VFO etc)"). Roy'
 is a band change, which reloads that band's config and redraws without touching session
 state. Reported to QRP Labs via Stan KC7XE.
 
+### ⛔ An `MM` Set is STORED, not APPLIED — "MM Effect" decides, and ours read "On demand"
+The WSPR PA-voltage guard (#290) set `MMProtection|Max. PA voltage=7.5;`, the write
+succeeded, the CAT read-back said **7.5 V**, and the radio's own Protection menu said
+**7.5 V**. The burst then measured **5.4 W at 0.940 A** — full power. Four independent
+indicators agreed with each other and **all four were describing STORED state**.
+
+The QMX has an **"MM Effect"** parameter (`System config | CAT config`). Asked over CAT,
+this bench radio answered **`MMOn demand;`** — meaning an MM Set is not applied until the
+operator enters/exits a menu **or the host sends `MU;`**. Nothing in our path did either.
+
+**So `MM<path>=<value>;` alone changes nothing you can measure.** The fix is
+`MM` Set → `MU;` → **re-assert `Q9 1;`**, because `MU;` discards IQ mode (already recorded
+above under `MU;`, and it bit again here). Verified: the same 7.5 V setting then measured
+**2.4 W**, which is exactly what (7.5/12)² predicts on a 12 V supply.
+
+⚠ **`MU;` also makes the value PERSIST.** A 11.5 V set without `MU;` evaporated across a
+QMX power cycle; 7.5 V *with* `MU;` survived one. This supersedes the earlier reading of
+that evidence ("MM Sets don't survive a power cycle") — they don't survive **un-reloaded**.
+
+⚠ **Do not read this as "always send MU;".** It reloads the whole configuration and drops
+session state; it is right for a deliberate, twice-a-session settings change and wrong on a
+hot path.
+
+### ⭐ The WSPR PA guard: what it actually buys, measured end to end
+WSPR keys the PA for **~110 s out of every 120**. The radio's OWN Virtual U3S WSPR halves
+its PA voltage for exactly this reason; our WSPR TX is CAT-driven (`TX;`/`TA;`/`RX;`) and
+never enters that mode, so it inherits none of that protection.
+
+Measured on the dev bench, 12 V supply, 20 m, idle 0.099 A, all three points self-labelled
+by the firmware and cross-checked against `PC;`:
+
+| PA voltage | I(tx) | P in | P out | Q507 | **Finals** | Total heat |
+|---|---|---|---|---|---|---|
+| ~12 V (unguarded) | 0.841 A | 10.09 W | 5.4 W | 0 W | **4.69 W** | 4.69 W |
+| 7.5 V | 0.558 A | 6.70 W | 2.4 W | 2.51 W | **1.79 W** | 4.30 W |
+| **6.0 V (shipping)** | 0.454 A | 5.45 W | 1.6 W | 2.72 W | **1.12 W** | 3.85 W |
+
+**The finals drop 4.69 → 1.12 W (76% less). TOTAL heat drops only 18%.** The guard largely
+**moves** heat off the BS170s into Q507, the amplitude-modulator pass transistor, rather
+than removing it. That is still the right trade — the finals are what fail — but it means
+**the guard is not a substitute for running WSPR from a lower supply**, and the manual
+should say so. QRP Labs' own manual agrees: *"High supply voltages can stress the PA
+transistors, particularly when you are using Digi Modes with high duty cycle"*.
+
+**The target is ABSOLUTE (6.0 V), not a fraction.** Halving whatever the operator's limit
+happens to be is meaningless when that limit exceeds the supply: 15.0 on a 12 V rail meant
+the PA really saw ~12 V and "half" gave 62% of it; a 20 V limit would have been halved to
+10 V and changed nothing while the log reported success. 6.0 V is QRP Labs' own figure for
+about 1 W. The guard **never raises** a limit that is already lower.
+
+⚠ **The 9 V vs 12 V QMX matters in principle and is handled by measurement, not by a
+model.** The supply range is **6.0–12.0 V** and the 9 V/12 V variants differ in PA
+transformer winding (RWTST vs WTST). On a 9 V setup, a 6.0 V limit is (6/9)² = 44% of full
+power rather than 25%, and Hans's "6.0 V ≈ 1 W" is presumably a 12 V figure. **Do not build
+a table of radio versions**: `PC;` measures the actual output every burst, which is
+version-, supply- and band-agnostic. The one case the target cannot help is a supply at or
+below 6.0 V, where the limit does nothing — and the measurement says so.
+
+⚠ **A guard that captures "whatever it finds" inherits whatever the last session left.**
+Harmless in normal use, but a bench session that hand-sets the value makes it the
+operator's new normal: on 2026-08-29 a diagnostic left this radio at 7.5 V, the guard
+faithfully "restored" 7.5, and every mode would have been capped at ~2.4 W. The operator
+remembered the true value (11.5) from the FIRST terminal reading, taken before anything had
+written to the radio — later readings had been displaced by un-reloaded state. **The
+earliest observation was the only clean one.**
+
 ### The QMX's CW centre is a 25 Hz grid from 500-950, and the radio's value must win
 Two faults in one setting (Samuel W7STF, Roy KI0ER). The operation manual's table of all 54
 filters gives centres of **500-950 Hz in 25 Hz steps**, and which are available depends on
