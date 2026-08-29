@@ -935,6 +935,19 @@ static void wspr_dec_task(void *arg)
 #define WSPR_PA_FLOOR_X10  20   /* 2.0 V - below ~1 V the driver's own leakage
                                  * sets the floor and lowering does nothing */
 
+/* ⭐ AN ABSOLUTE TARGET, NOT A FRACTION OF THE OPERATOR'S LIMIT.
+ *
+ * This halved whatever Max. PA voltage was set to, which is wrong whenever that
+ * limit is ABOVE the supply. Measured on the bench: the limit read 15.0 on a
+ * 12 V supply, so the PA was really seeing ~12 V and "halving" produced 7.5 V -
+ * 62% of the real voltage, not 50%. Set a limit of 20 V and halving it would
+ * change nothing at all, while the log cheerfully reported a reduction.
+ *
+ * 6.0 V is QRP Labs' own figure: the operating manual says setting Max. PA
+ * voltage to 6.0 gives roughly 1 W, and names WSPR as a use for it. An absolute
+ * target is meaningful regardless of what the operator's limit happens to be. */
+#define WSPR_PA_TARGET_X10 60   /* 6.0 V - about 1 W, per the QMX manual */
+
 static void wspr_pa_guard_update(const qmx_settings_t *ws)
 {
     bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0;
@@ -947,14 +960,23 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
             cat_query_pa_voltage();
             return;
         }
-        uint16_t half = (uint16_t)(cur / 2);
-        if (half < WSPR_PA_FLOOR_X10) half = WSPR_PA_FLOOR_X10;
-        if (half >= (uint16_t)cur) return;         /* already at or below target */
+        uint16_t target = WSPR_PA_TARGET_X10;
+        if (target < WSPR_PA_FLOOR_X10) target = WSPR_PA_FLOOR_X10;
+        /* NEVER RAISE IT. An operator already running a reduced PA has made a
+         * deliberate choice, and a guard that turns someone's power UP is the
+         * opposite of a guard. */
+        if (target >= (uint16_t)cur) {
+            ESP_LOGI(TAG, "PA guard: Max. PA voltage is already %d.%d V, at or below "
+                          "the %u.%u V target - leaving it alone",
+                     cur / 10, cur % 10, target / 10, target % 10);
+            return;
+        }
         settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
-        cat_request_pa_voltage_x10(half);
+        cat_request_pa_voltage_x10(target);
         ESP_LOGW(TAG, "PA guard: WSPR TX on - Max. PA voltage %d.%d -> %u.%u V "
-                      "(~1/4 power, as the radio's own Virtual U3S does)",
-                 cur / 10, cur % 10, half / 10, half % 10);
+                      "(about 1 W, per the QMX manual - protects the finals over "
+                      "a ~110 s key-down)",
+                 cur / 10, cur % 10, target / 10, target % 10);
     } else if (!want_reduced && ws->wspr_pa_saved_x10 != 0) {
         uint16_t back = ws->wspr_pa_saved_x10;
         cat_request_pa_voltage_x10(back);

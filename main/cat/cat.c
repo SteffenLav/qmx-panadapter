@@ -393,6 +393,13 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
     va_end(ap);
     size_t len = strlen(buf);
     ESP_LOGI("cat", "raw cmd: %s", buf);
+    /* A raw command that touches Max. PA voltage invalidates our cached copy.
+     * The reply to a HAND-sent read is correctly refused by the gated parser
+     * (it is not a reply to a query we made), so without this the cache keeps
+     * an old value and the next burst LABELS ITSELF WRONG - which happened on
+     * 2026-08-29: a burst at a hand-set 7.5 V announced PA=15.0 V. A label that
+     * can be stale is worse than one that admits it does not know. */
+    if (strstr(buf, "Max. PA voltage")) s_pa_voltage_x10 = -1;
     return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf, len, 200);
 }
 
@@ -1453,6 +1460,35 @@ static void poll_task(void *arg)
             esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
             ESP_LOGW(TAG, "PA voltage -> %u.%u V (%s)", (unsigned)(pav / 10),
                      (unsigned)(pav % 10), e == ESP_OK ? "ok" : "fail");
+            /* ⭐ AND NOW MAKE THE RADIO ACTUALLY USE IT.
+             *
+             * The QMX has an "MM Effect" setting (System config | CAT config).
+             * On "On demand" - which is what this bench radio is set to, asked
+             * and answered over CAT - an MM Set is STORED BUT NOT APPLIED until
+             * the operator enters/exits a menu or the host sends MU;.
+             *
+             * Measured 2026-08-29, and it is why the guard was decorative: the
+             * write succeeded, the read-back said 7.5 V, the radio's own
+             * Protection menu said 7.5 V, and PC; measured 5.4 W - full power.
+             * After MU; the same setting measured 2.4 W, which is what (7.5/12)^2
+             * predicts. Every indicator we had agreed with each other and all of
+             * them were describing stored state, not running state.
+             *
+             * ⛔ MU; DROPS IQ MODE. Q9 is session state and a config reload
+             * discards it, which flattens the panadapter until re-asserted -
+             * CLAUDE.md records that being learned the expensive way. So the
+             * handshake follows immediately, in this same task, which owns the
+             * pipe. Cheap here because the guard runs twice a SESSION. */
+            if (e == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(120));
+                const char *mu = "MU;";
+                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mu, 3, 200) == ESP_OK) {
+                    ESP_LOGW(TAG, "PA voltage: MU; sent - config reloaded so the "
+                                  "new limit takes effect (MM Effect may be 'On demand')");
+                    vTaskDelay(pdMS_TO_TICKS(250));
+                    iq_mode_handshake(2);     /* MU; discards Q9 - put it back */
+                }
+            }
             /* An MM *write* makes the radio redraw its menu and sprays ANSI
              * cursor-positioning bytes onto the CAT port (measured, CLAUDE.md).
              * Give them somewhere to land before the poll resumes. */
