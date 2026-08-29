@@ -173,10 +173,11 @@ static inline void ui_theme_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_border_color(ta, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(ta, 1, 0);
 
-    /* Blinking line-cursor, shown only in the focused field (not every
-     * field at once - that was confusing with multiple text entries
-     * on screen). Pair with ui_theme_focus_textarea() to mark the
-     * initially-focused field on modal open. */
+    /* Blinking line-cursor, shown only in the focused field (not every field at
+     * once - that was confusing with multiple text entries on screen), and only
+     * AFTER the operator has selected one. Nothing pre-focuses a field on modal
+     * open any more: the blink is the acknowledgement that a touch landed and
+     * that this is where typing will go. See the tombstone below. */
     lv_obj_set_style_bg_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_side(ta, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_width(ta, 2, LV_PART_CURSOR | LV_STATE_FOCUSED);
@@ -184,12 +185,21 @@ static inline void ui_theme_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_anim_duration(ta, 500, LV_PART_CURSOR | LV_STATE_FOCUSED);
 }
 
-/* Mark a textarea as the initially-focused field when a modal opens, so
- * its cursor blinks immediately without the user tapping in first. */
-static inline void ui_theme_focus_textarea(lv_obj_t *ta)
-{
-    lv_obj_add_state(ta, LV_STATE_FOCUSED);
-}
+/* ⛔ REMOVED - do not bring this back. It used to pre-focus a modal's first
+ * field so "its cursor blinks immediately without the user tapping in first",
+ * and that cursor was a LIE in two ways:
+ *
+ *  - lv_obj_add_state(LV_STATE_FOCUSED) paints the cursor but does NOT send
+ *    LV_EVENT_FOCUSED, which is what records the field as the typing target.
+ *    So the blinking field was not necessarily the one that would receive
+ *    keystrokes.
+ *  - and it blinked before the operator had chosen anything, so it could not
+ *    mean "type here" - which is the one job a cursor has.
+ *
+ * The operator's rule, and it is the right one: no cursor when a modal opens,
+ * a cursor once a field is selected. That makes the blink an acknowledgement
+ * of a touch rather than decoration - which matters most with a Bluetooth
+ * keyboard, where nothing else on screen confirms the tap landed. */
 
 static inline void ui_theme_style_keyboard(lv_obj_t *kb)
 {

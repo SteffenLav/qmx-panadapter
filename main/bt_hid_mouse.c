@@ -75,7 +75,25 @@ static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard ha
  * is truncated and will simply fail to parse, which is loud rather than silent. */
 static uint8_t  s_rmap[512];
 static uint16_t s_rmap_len;
+static bool     s_rmap_reading;   /* true from the long read starting to it finishing */
+
+/* Reports that arrive BEFORE the descriptor has been parsed (#273).
+ *
+ * Measured on a K380: CONNECTED at t=79.5 s, report map parsed at t=82.0 s -
+ * two and a half seconds during which notifications are already flowing and
+ * nothing knows what they mean. Keys pressed in that window were decoded as
+ * mouse movement and lost, which is the "first two or three keystrokes go
+ * missing" the operator hit every time the keyboard woke from sleep.
+ *
+ * Eight is generous for human typing in 2.5 s and costs 144 bytes. */
+#define BT_PEND_MAX 8
+#define BT_PEND_LEN 16
+static uint8_t  s_pend[BT_PEND_MAX][BT_PEND_LEN];
+static uint8_t  s_pend_len[BT_PEND_MAX];
+static uint8_t  s_pend_n;
 static void hid_report_map_ready(const uint8_t *desc, uint16_t n);
+static void bt_replay_pending(void);
+static void bt_kbd_handle(const uint8_t *p, int plen);
 
 static bool s_started;
 // The setting as it was at boot - see bt_hid_mouse_init(). Not the same fact
@@ -322,6 +340,8 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         s_hid_connected = false;
+        s_pend_n = 0;
+        s_rmap_reading = false;
         s_kbd_layout.valid = false;   /* the next device may not be a keyboard */
         // Seconds since encryption, because that is what the 30 s drop is
         // measured from - a bare "disconnected" line cost several rounds of
@@ -536,12 +556,16 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
         if (error && error->status == BLE_HS_EDONE) {
             ESP_LOGI(TAG, "Report Map read OK (%u bytes, long read)",
                      (unsigned)s_rmap_len);
+            s_rmap_reading = false;
             hid_report_map_ready(s_rmap, s_rmap_len);
+            bt_replay_pending();
             return 0;
         }
         if (!error || error->status != 0 || !attr || !attr->om) {
             ESP_LOGW(TAG, "Report Map read failed: status=%d",
                      error ? error->status : -1);
+            s_rmap_reading = false;
+            s_pend_n = 0;            /* nothing can be decoded without a layout */
             return 0;
         }
         uint16_t n = OS_MBUF_PKTLEN(attr->om);
@@ -649,6 +673,8 @@ static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *er
     if (!error || error->status != 0 || !chr) return 0;
     if (what && strcmp(what, "Report Map") == 0) {
         s_rmap_len = 0;                      /* fresh descriptor per connection */
+        s_rmap_reading = true;
+        s_pend_n = 0;
         int rc = ble_gattc_read_long(conn_handle, chr->val_handle, 0,
                                      hid_read_cb, arg);
         if (rc != 0) ESP_LOGW(TAG, "Report Map long read failed to start: %d", rc);
@@ -717,6 +743,55 @@ static void on_reset(int reason)
 static uint8_t s_kbd_prev[BT_KBD_MAX_SLOTS];
 static uint8_t s_kbd_prev_n;
 
+/* Does this report belong to the keyboard, and if so type it. Returns true when
+ * it was consumed. ONE implementation, used for live reports and for replayed
+ * ones, so a keystroke recovered from the connect window cannot be decoded
+ * differently from one typed a second later. */
+static bool bt_kbd_try(const void *d, int len)
+{
+    if (!s_kbd_layout.valid) return false;
+    const uint8_t *p = (const uint8_t *)d;
+
+    /* Payload size the DESCRIPTOR declares, in bytes. A K380 says mods @bit0/8b
+     * + 6 slots @bit8/8b = 56 bits = 7, and it really does send 7 - one short of
+     * the classic boot layout, because it has no reserved byte. Derived, never
+     * assumed.
+     *
+     * ⛔ AND THE REPORT ID IS NOT ON THE WIRE ON BLE. The descriptor can declare
+     * "Report ID 1" - this one does - while the payload begins 00 18 00 ...,
+     * because each report has its own characteristic and the ID lives in its
+     * Report Reference descriptor. Matching p[0] against the ID can never
+     * succeed here, which is why the length is what identifies the report. The
+     * ID form is still tried first, for a transport that does put it on the
+     * wire. */
+    int want = (s_kbd_layout.key_bit +
+                (int)s_kbd_layout.key_count * s_kbd_layout.key_bits + 7) / 8;
+
+    if (s_kbd_layout.report_id != 0 && len == want + 1 &&
+        p[0] == s_kbd_layout.report_id) {
+        bt_kbd_handle(p + 1, len - 1);
+        return true;
+    }
+    if (len == want) {
+        bt_kbd_handle(p, len);
+        return true;
+    }
+    return false;   /* not the keyboard - on a combo device this is the mouse */
+}
+
+/* Type anything that arrived while the descriptor was still being read. */
+static void bt_replay_pending(void)
+{
+    uint8_t n = s_pend_n;
+    s_pend_n = 0;
+    if (!n) return;
+    int typed = 0;
+    for (uint8_t i = 0; i < n; i++)
+        if (bt_kbd_try(s_pend[i], s_pend_len[i])) typed++;
+    ESP_LOGI(TAG, "replayed %u report(s) buffered during connect, %d were keys",
+             (unsigned)n, typed);
+}
+
 static void bt_kbd_handle(const uint8_t *p, int plen)
 {
     const hid_kbd_layout_t *K = &s_kbd_layout;
@@ -779,42 +854,29 @@ static void handle_report(const uint8_t *d, int len)
      * function would happily decode its keystrokes as pointer movement. Checking
      * the keyboard layout first is what stops that, and it is why this sits
      * ahead of the `len < 3` guard's mouse assumptions. */
-    if (s_kbd_layout.valid) {
-        const uint8_t *p = (const uint8_t *)d;
-        int plen = len;
-        /* Payload size the DESCRIPTOR declares for this keyboard, in bytes. A
-         * K380 says mods @bit0/8b + 6 slots @bit8/8b = 56 bits = 7 - and it
-         * really does send 7, with no reserved byte, which is one short of the
-         * classic boot layout. Derived, not assumed. */
-        int want = (s_kbd_layout.key_bit +
-                    (int)s_kbd_layout.key_count * s_kbd_layout.key_bits + 7) / 8;
-
-        /* ⛔ ON BLE THE REPORT ID IS NOT ON THE WIRE.
-         *
-         * A descriptor can declare "Report ID 1" - the K380 does - and over BLE
-         * that ID never appears in the payload, because each report has its own
-         * characteristic and the ID lives in its Report Reference descriptor.
-         * Matching p[0] against the ID therefore NEVER succeeds, and every
-         * keystroke fell through to the mouse path. Measured: the descriptor
-         * said id=1 while the reports began 00 18 00 ...
-         *
-         * So the length the descriptor declares is what identifies the report.
-         * The ID form is still accepted first, for a device that does put it on
-         * the wire - which is what USB does, and this file may yet be shared. */
-        if (s_kbd_layout.report_id != 0 && plen == want + 1 &&
-            p[0] == s_kbd_layout.report_id) {
-            bt_kbd_handle(p + 1, plen - 1);
-            return;
+    /* Still reading the descriptor? Keep the report. Nothing can be decoded
+     * correctly yet - this is the 2.5 s window between CONNECT and the report
+     * map arriving, and it is exactly when a keyboard waking from sleep sends
+     * its first keystrokes. They are replayed the moment the layout is known.
+     *
+     * Deliberately kept AND NOT processed: decoding it as mouse movement in the
+     * meantime would jog the pointer for every key typed. A mouse loses at most
+     * a couple of hundred ms of movement at connect, which is not noticeable;
+     * losing the first characters you type is. */
+    if (s_rmap_reading) {
+        if (s_pend_n < BT_PEND_MAX && len > 0) {
+            int n = len > BT_PEND_LEN ? BT_PEND_LEN : len;
+            for (int i = 0; i < n; i++) s_pend[s_pend_n][i] = ((const uint8_t *)d)[i];
+            s_pend_len[s_pend_n] = (uint8_t)n;
+            s_pend_n++;
         }
-        if (plen == want) {
-            bt_kbd_handle(p, plen);
-            return;
-        }
-        /* Neither shape: fall through. On a combo keyboard/touchpad this is the
-         * mouse report, which the path below decodes properly. */
+        return;
     }
 
+    if (bt_kbd_try(d, len)) return;
+
     if (len < 3) return;
+
 
     // PREFERRED PATH: the layout this mouse declared in its own Report Map.
     //

@@ -1403,6 +1403,7 @@ void ui_set_zoom(float zoom, int pan_bins)
 static void touch_event_cb(lv_event_t *e);
 static void left_edge_swipe_cb(lv_event_t *e);
 static void bottom_edge_swipe_cb(lv_event_t *e);
+static void osk_bt_retire_cb(lv_timer_t *t);   /* #273 - retire a stale on-screen keyboard */
 static void right_edge_swipe_cb(lv_event_t *e);
 static void resmon_drag_cb(lv_event_t *e);
 static void pinch_poll_cb(lv_timer_t *t);
@@ -5069,6 +5070,7 @@ void ui_init(lv_display_t *disp)
         lv_obj_center(lbl);
     }
     lv_timer_create(pause_banner_keepalive_cb, 1000, NULL);
+    lv_timer_create(osk_bt_retire_cb, 500, NULL);   /* #273 */
 
     // "Waiting for QMX" prompt (see qmx_wait_poll_cb above). Full-screen,
     // transparent background so it reads over whatever's underneath on any
@@ -11721,15 +11723,35 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  * A BLE MOUSE does not count: bt_hid_keyboard_active() requires the device's own
  * report map to declare a keyboard. And it goes false on disconnect, so a
  * keyboard that runs flat or walks out of range brings this straight back. */
+static lv_obj_t *s_osk_cur = NULL;   /* the on-screen keyboard currently shown */
+
 void ui_osk_show(lv_obj_t *kb)
 {
     if (!kb) return;
+    s_osk_cur = kb;
     if (bt_hid_keyboard_active()) {
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(kb);
+}
+
+/* A Bluetooth keyboard that wakes AFTER the field was tapped left the on-screen
+ * keyboard sitting there: the tap happened while nothing was connected, so
+ * showing it was right at the time, and nothing revisited that decision when the
+ * keyboard turned up two seconds later. Reported from the bench - the first two
+ * or three keystrokes land in the field with the on-screen keyboard still
+ * covering half the screen.
+ *
+ * Runs on the LVGL task, which is why the BLE side only sets a flag and never
+ * touches a widget itself. */
+static void osk_bt_retire_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_osk_cur || !lv_obj_is_valid(s_osk_cur)) { s_osk_cur = NULL; return; }
+    if (bt_hid_keyboard_active() && !lv_obj_has_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_add_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN);
 }
 
 void ui_kbd_feed(const char *text, uint8_t mods)

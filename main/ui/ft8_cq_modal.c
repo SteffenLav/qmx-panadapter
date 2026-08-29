@@ -584,7 +584,6 @@ void ft8_cq_modal_show(void)
         }
     }
     apply_radio_state();
-    ui_theme_focus_textarea(s_ta[0]);
 
     // Field Day mode: dim the presets (their modifier word is overridden
     // either way) and show a live, always-accurate preview of what Call CQ

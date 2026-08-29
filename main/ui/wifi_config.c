@@ -548,7 +548,6 @@ void wifi_config_modal_show(void)
         if (s_wifi_on) lv_obj_add_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_clear_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
     }
-    ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);

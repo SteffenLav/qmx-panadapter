@@ -554,7 +554,6 @@ static void show_action_panel(int idx)
         lv_textarea_set_text(s_action_ta, "");
     }
 
-    ui_theme_focus_textarea(s_action_ta);
     lv_obj_clear_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_action_panel);
     ui_osk_show(s_action_kb);
