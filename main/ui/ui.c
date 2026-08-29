@@ -8362,6 +8362,13 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
     lv_obj_set_style_border_width(dd, (col == 0xFFFFFF) ? 1 : 3, 0);
 }
 
+static void drawer_check_wspr_pa_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_wspr_pa_reduce(on);
+    ESP_LOGW(TAG, "WSPR PA guard %s from the drawer", on ? "ENABLED" : "DISABLED");
+}
+
 static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -9782,7 +9789,7 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 150);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 208);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -9831,7 +9838,29 @@ static void drawer_build(void)
          * everything around it. Every other dropdown in this drawer
          * already does this; these two were added without it. */
         lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 150;
+
+        /* #290 PA guard. WSPR keys the PA for ~110 s out of every 120, and the
+         * QMX's own Virtual U3S WSPR halves its PA voltage for exactly that
+         * reason; our TX is CAT-driven and bypasses that mode, so it must apply
+         * the same protection itself.
+         *
+         * This lived ONLY in the web settings until now, which made it
+         * unreachable the moment the web server was unavailable - and it is the
+         * control an A/B of the guard has to toggle. A protective setting that
+         * can only be reached from a browser is not reachable at a POTA site
+         * either. */
+        lv_obj_t *l3 = lv_label_create(sec);
+        lv_label_set_text(l3, "Protect finals (half PA volts)");
+        lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
+        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 154);
+        lv_obj_t *cb3 = make_drawer_checkbox(sec, ws.wspr_pa_reduce,
+                                             drawer_check_wspr_pa_cb, NULL);
+        lv_obj_align(cb3, LV_ALIGN_TOP_RIGHT, 0, 150);
+
+        /* Section height and this advance must move TOGETHER - CLAUDE.md
+         * records a release where they did not and the next section overlapped. */
+        y += 208;
     }
     {
         qmx_settings_t ws;
