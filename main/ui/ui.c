@@ -8318,13 +8318,58 @@ static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
  * station rather than a display preference. The list is the standard WSPR set
  * up to the QMX 5 W ceiling; free entry would only let someone be precisely
  * wrong. */
-static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
+static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33 };
 #define N_WSPR_DBM ((int)(sizeof(kWsprDbm) / sizeof(kWsprDbm[0])))
+
+/* 37 dBm (5 W) WAS in this list and is deliberately GONE.
+ *
+ * WSPR keys the PA for ~110 s CONTINUOUSLY out of every 120. Nothing else this
+ * radio does comes close to that duty cycle - an FT8 burst is ~12.6 s - and the
+ * QMX finals overheat at full power on it. The ceiling is the OPERATOR'S, set
+ * to protect their own hardware.
+ *
+ * It is ADVISORY, NOT ENFORCEMENT, and must not be read as more. This value is
+ * a DECLARED power, published to wsprnet with every spot; it does not command
+ * the radio. Checked against the 1_04_004 CAT manual: PC; is Get-only (measured
+ * output in tenths of a watt) and there is no CAT or MM setter for TX power at
+ * all - QMX output follows supply voltage and the band-config PA parameters. So
+ * capping this list cannot prevent a 5 W transmission. It can only stop someone
+ * DECLARING one, and make the risk visible while they are running.
+ *
+ * Hence the tension, recorded rather than hidden: an operator genuinely running
+ * 5 W can no longer say so, and an under-declared spot is bad data in a database
+ * other people reason from - our own docs say "declared power is a claim, not a
+ * measurement". The judgement is that the finals win, and that anyone at 5 W on
+ * WSPR should turn the RADIO down rather than the number. If that trade ever
+ * needs revisiting, this comment is the argument to argue with.
+ *
+ * WSPR's protocol allows 37/40/43+; this limit is ours, not the protocol's. */
+#define WSPR_DBM_CAUTION  30      /* 1 W  - amber */
+#define WSPR_DBM_LIMIT    33      /* 2 W  - red, and the top of the list */
+
+/* Tint the CONTROL by the selected value. LVGL 9.2 has no text recolor (only
+ * image recolor - checked in the vendored source, not assumed) and a dropdown's
+ * options are a single label, so individual rows cannot be coloured. Colouring
+ * the control is the better target anyway: it is what remains on screen while
+ * the beacon runs, whereas a colour inside a closed list is seen once. */
+static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
+{
+    uint32_t col = 0xFFFFFF;
+    if      (dbm >= WSPR_DBM_LIMIT)   col = 0xFF4010;   /* the FREQ BUSY red */
+    else if (dbm >= WSPR_DBM_CAUTION) col = 0xFFA040;   /* the ARMED amber   */
+    lv_obj_set_style_text_color(dd, lv_color_hex(col), 0);
+    lv_obj_set_style_border_color(dd, lv_color_hex(col), 0);
+    lv_obj_set_style_border_width(dd, (col == 0xFFFFFF) ? 1 : 3, 0);
+}
 
 static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
 {
-    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
-    if (i < N_WSPR_DBM) settings_set_wspr_tx_dbm(kWsprDbm[i]);
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint16_t i = lv_dropdown_get_selected(dd);
+    if (i < N_WSPR_DBM) {
+        settings_set_wspr_tx_dbm(kWsprDbm[i]);
+        wspr_dbm_apply_tint(dd, kWsprDbm[i]);
+    }
 }
 
 static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
@@ -9759,7 +9804,7 @@ static void drawer_build(void)
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
             "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W)\n37 dBm (5 W)");
+            "27 dBm (500 mW)\n30 dBm (1 W) - hot\n33 dBm (2 W) - MAX, very hot");
         lv_obj_set_size(dd, 300, 50);
         lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, 0, 92);
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
@@ -9768,6 +9813,17 @@ static void drawer_build(void)
             for (int k = 0; k < N_WSPR_DBM; k++)
                 if (kWsprDbm[k] == ws.wspr_tx_dbm) { idx = (uint16_t)k; break; }
             lv_dropdown_set_selected(dd, idx);
+            /* A 37 dBm stored before the cap has no row now, so idx fell back to
+             * the 23 dBm default. REWRITE the setting to match what is shown -
+             * leaving them disagreeing would beacon a value the drawer denies,
+             * which is the silent-state trap warned about elsewhere here. */
+            if (ws.wspr_tx_dbm > WSPR_DBM_LIMIT) {
+                ESP_LOGW(TAG, "WSPR declared power %d dBm exceeds the %d dBm cap "
+                              "(QMX finals, ~110 s key-down) - reset to %d dBm",
+                         ws.wspr_tx_dbm, WSPR_DBM_LIMIT, kWsprDbm[idx]);
+                settings_set_wspr_tx_dbm(kWsprDbm[idx]);
+            }
+            wspr_dbm_apply_tint(dd, kWsprDbm[idx]);
         }
         lv_obj_add_event_cb(dd, drawer_dropdown_wspr_dbm_cb, LV_EVENT_VALUE_CHANGED, NULL);
         /* The OPTION LIST is a separate object with its own font - without

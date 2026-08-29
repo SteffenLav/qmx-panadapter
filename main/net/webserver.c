@@ -2918,6 +2918,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * misinformation about the operator's station, not a display bug. */
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_dial_hz")))
         settings_set_wspr_dial_hz((uint32_t)it->valuedouble);
+    /* wspr_net_en was in the GET but had NO POST case - the browser would have
+     * shown it, accepted a change and silently dropped it. That is precisely
+     * the swr_limit_x10 bug the v1.6.0 parity pass found; caught here by
+     * diffing the surfaces before adding the form row, not after. */
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_net_en")))
+        settings_set_wspr_net_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
@@ -2926,7 +2932,16 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
-        if (v >= 0 && v <= 60) settings_set_wspr_tx_dbm((int8_t)v);
+        /* CLAMPED at 33 dBm (2 W), not WSPR's own 60. WSPR keys the PA for
+         * ~110 s out of every 120 and the QMX finals overheat at full power on
+         * that duty cycle, so the drawer's list stops at 33 - and a cap that
+         * only exists in the UI is not a cap. Clamp rather than reject: this is
+         * a declared power, and silently keeping the old value would be worse
+         * than honouring the intent at the ceiling. Mirrors WSPR_DBM_LIMIT in
+         * ui/ui.c, where the reasoning is written out in full. */
+        if (v < 0)  v = 0;
+        if (v > 33) v = 33;
+        settings_set_wspr_tx_dbm((int8_t)v);
     }
 
     cJSON *cq = cJSON_GetObjectItem(root, "cq");

@@ -2724,6 +2724,8 @@ const SET_FIELDS = [
      part of the control, not a one-time dialog. */
   ["FT8 filters", "filters.robot_en", "bool", "Auto-answer CQ (robot)",
      "⚠ Transmits unattended - never leave running unsupervised"],
+  ["FT8 filters", "ft8_early_decode", "bool", "Fast pounce (early decode)",
+     "Decode before the slot ends so a reply can go out in the very next slot"],
   ["FT8 filters", "filters.robot_priority", "sel", "Robot picks", "",
      [["0","Strongest signal"],["1","Weakest signal"],["2","Most distant"]]],
 
@@ -2790,6 +2792,37 @@ const SET_FIELDS = [
   ["Radio & display", "charge_limit_en",    "bool", "Battery care (stop charging early)",
      "Stopping short of full is easier on a lithium pack left plugged in"],
   ["Radio & display", "charge_limit_pct",   "num",  "Stop charging at (%)", "50-100; default 80"],
+
+  // ---- WSPR -------------------------------------------------------------
+  // All four were already accepted by /api/settings GET *and* POST and were
+  // invisible in the browser - the worst of both, exactly the gap the v1.6.0
+  // parity pass named. Added with the v1.10.0 WSPR launch.
+  ["WSPR", "wspr_tx_en",  "bool", "Allow transmitting",
+     "Receiving needs nothing; transmitting also needs your callsign and grid"],
+  // Declared power stops at 33 dBm. WSPR keys the PA for ~110 s out of every
+  // 120 and the QMX finals overheat at full power on that duty cycle. The cap
+  // is ADVISORY - this number is published to wsprnet, it does not command the
+  // radio (PC; is Get-only; there is no CAT setter for TX power). Same ceiling
+  // and same two colours as the Tab5 drawer; the server clamps it as well.
+  ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
+     "What your transmitter really produces - it is published worldwide",
+     [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
+      ["10","10 dBm (10 mW)"],["13","13 dBm (20 mW)"],["17","17 dBm (50 mW)"],
+      ["20","20 dBm (100 mW)"],["23","23 dBm (200 mW)"],["27","27 dBm (500 mW)"],
+      ["30","30 dBm (1 W) - hot",        "#ffa040"],
+      ["33","33 dBm (2 W) - MAX, very hot","#ff4010"]]],
+  ["WSPR", "wspr_duty_pct", "sel", "Duty cycle",
+     "Share of two-minute cycles that transmit; the rest listen",
+     [["0","Receive only"],["10","10%"],["20","20%"],["33","33%"],["50","50%"]]],
+  ["WSPR", "wspr_dial_hz", "sel", "Band (dial frequency)", "",
+     [["1836600","160 m  1.836600"],["3568600","80 m   3.568600"],
+      ["5287200","60 m   5.287200"],["7038600","40 m   7.038600"],
+      ["10138700","30 m  10.138700"],["14095600","20 m  14.095600"],
+      ["18104600","17 m  18.104600"],["21094600","15 m  21.094600"],
+      ["24924600","12 m  24.924600"],["28124600","10 m  28.124600"],
+      ["50293000","6 m   50.293000"]]],
+  ["WSPR", "wspr_net_en", "bool", "Publish spots to wsprnet.org",
+     "Reports what you HEAR to the wsprnet database"],
 
   ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
   ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
@@ -2926,10 +2959,22 @@ function setBuildForm(cfg, ft8Opts) {
     } else {
       html += '<label for="' + id + '" style="width:250px;color:var(--fg)">' + label + "</label>";
       if (type === "sel") {
-        html += '<select id="' + id + '" data-path="' + path + '" data-type="num" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
-        for (const [ov, ol] of opts)
-          html += '<option value="' + ov + '"' + (String(v) === ov ? " selected" : "") + ">" + ol + "</option>";
+        html += '<select id="' + id + '" data-path="' + path + '" data-type="num" data-tintable="1" style="flex:1;background:#1e242b;color:SELTINT;border:1px solid #3a4149;border-radius:4px;padding:4px">';
+        // A third element on an option is a COLOUR. Used by WSPR declared power,
+        // where the top two entries are a thermal warning, not a preference.
+        // The <select> itself is tinted too: a native option popup ignores
+        // option colour on some platforms (macOS Safari, several mobiles), and
+        // the closed control is what stays visible while the beacon runs.
+        let selTint = "";
+        for (const [ov, ol, oc] of opts) {
+          const sel = String(v) === ov;
+          if (sel && oc) selTint = oc;
+          html += '<option value="' + ov + '"' + (sel ? " selected" : "") +
+                  (oc ? ' style="color:' + oc + '"' : "") +
+                  (oc ? ' data-tint="' + oc + '"' : "") + ">" + ol + "</option>";
+        }
         html += "</select>";
+        html = html.replace("color:SELTINT", "color:" + (selTint || "#ddd"));
       } else {
         const t = type === "pass" ? "password" : "text";
         const val = type === "pass" ? "" : (v === undefined || v === null ? "" : String(v));
@@ -2942,6 +2987,14 @@ function setBuildForm(cfg, ft8Opts) {
     html += "</div>";
   }
   body.innerHTML = html + "</div>";
+  // Re-tint a warning select as soon as the choice changes, not on save - the
+  // point of the colour is to be seen while deciding.
+  body.querySelectorAll("select[data-tintable]").forEach(sel => {
+    sel.addEventListener("change", () => {
+      const o = sel.options[sel.selectedIndex];
+      sel.style.color = (o && o.dataset.tint) ? o.dataset.tint : "#ddd";
+    });
+  });
 }
 
 async function setOpen(ft8Opts) {
