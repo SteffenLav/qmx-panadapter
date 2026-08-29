@@ -70,6 +70,12 @@ static const char *TAG = "btmouse";
 // authoritative. See hid_report_map.h for the whole story.
 static hid_mouse_layout_t s_layout;
 static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard half */
+/* The report map is assembled here across the chunks of a long read. 512 is
+ * comfortably more than any HID descriptor this device will meet; a longer one
+ * is truncated and will simply fail to parse, which is loud rather than silent. */
+static uint8_t  s_rmap[512];
+static uint16_t s_rmap_len;
+static void hid_report_map_ready(const uint8_t *desc, uint16_t n);
 
 static bool s_started;
 // The setting as it was at boot - see bt_hid_mouse_init(). Not the same fact
@@ -502,6 +508,46 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
 {
     (void)conn_handle;
     const char *what = (const char *)arg;
+    bool is_map = (what && strcmp(what, "Report Map") == 0);
+
+    /* ⛔ THE REPORT MAP NEEDS A *LONG* READ, AND THIS IS WHY.
+     *
+     * A plain ble_gattc_read() returns one ATT_MTU-1 payload - 22 bytes on this
+     * link - and a HID report map is far longer. A Logitech K380 arrived cut off
+     * mid-descriptor, immediately before its first Input item:
+     *
+     *   05 01 09 06 a1 01 85 01 95 08 75 01 15 00 25 01 05 07 19 e0 29 e7
+     *   Usage(Keyboard) ... Usage Min/Max(E0-E7)   <- ends exactly here, 22 bytes
+     *
+     * So the parser saw a keyboard collection with NO fields in it and correctly
+     * concluded there was no keyboard. Every BLE keyboard would have failed the
+     * same way. ble_gattc_read_long() issues Read Blob requests and calls this
+     * back once per chunk, then a final time with BLE_HS_EDONE.
+     *
+     * ⚠ Safe against the failure that got the previous attempt at this reverted:
+     * the subscription walk is chained off the *discovery* EDONE in
+     * hid_info_chr_cb(), NOT off this read completing - so a read that now takes
+     * several round trips cannot stall it. */
+    if (is_map) {
+        if (error && error->status == BLE_HS_EDONE) {
+            ESP_LOGI(TAG, "Report Map read OK (%u bytes, long read)",
+                     (unsigned)s_rmap_len);
+            hid_report_map_ready(s_rmap, s_rmap_len);
+            return 0;
+        }
+        if (!error || error->status != 0 || !attr || !attr->om) {
+            ESP_LOGW(TAG, "Report Map read failed: status=%d",
+                     error ? error->status : -1);
+            return 0;
+        }
+        uint16_t n = OS_MBUF_PKTLEN(attr->om);
+        if (n > (uint16_t)(sizeof s_rmap - s_rmap_len))
+            n = (uint16_t)(sizeof s_rmap - s_rmap_len);
+        if (n && os_mbuf_copydata(attr->om, 0, n, s_rmap + s_rmap_len) == 0)
+            s_rmap_len = (uint16_t)(s_rmap_len + n);
+        return 0;
+    }
+
     if (!error || error->status != 0 || !attr || !attr->om) {
         ESP_LOGW(TAG, "%s read failed: status=%d", what, error ? error->status : -1);
         return 0;
@@ -513,13 +559,14 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
     // This handler logged the length and dropped the bytes, while handle_report()
     // guessed the layout from one hardware capture. The descriptor states it: which
     // report ID carries movement, and at what bit offset and width X, Y and the
-    // wheel sit. Parsing it is why a mouse that packs 16-bit movement now works
-    // instead of decoding to a Y sixteen times too large (Samuel W7STF).
-    if (what && strcmp(what, "Report Map") == 0) {
-        uint8_t desc[256];
-        uint16_t n = OS_MBUF_PKTLEN(attr->om);
-        if (n > sizeof desc) n = sizeof desc;
-        if (os_mbuf_copydata(attr->om, 0, n, desc) == 0) {
+    return 0;
+}
+
+/* Parse a COMPLETE report map. Split out of hid_read_cb so the long read can
+ * assemble the descriptor across several chunks and hand it over once. */
+static void hid_report_map_ready(const uint8_t *desc, uint16_t n)
+{
+        {
             // Log it as hex regardless of whether the parse succeeds: on a mouse
             // this does not handle, that dump in a field diag log is the only way
             // to find out why - and it is read ONCE per connection, not per report.
@@ -561,8 +608,6 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                 ESP_LOGI(TAG, "no keyboard in this report map (mouse-only device)");
             }
         }
-    }
-    return 0;
 }
 
 static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
@@ -587,7 +632,14 @@ static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *er
         return 0;
     }
     if (!error || error->status != 0 || !chr) return 0;
-    ble_gattc_read(conn_handle, chr->val_handle, hid_read_cb, arg);
+    if (what && strcmp(what, "Report Map") == 0) {
+        s_rmap_len = 0;                      /* fresh descriptor per connection */
+        int rc = ble_gattc_read_long(conn_handle, chr->val_handle, 0,
+                                     hid_read_cb, arg);
+        if (rc != 0) ESP_LOGW(TAG, "Report Map long read failed to start: %d", rc);
+    } else {
+        ble_gattc_read(conn_handle, chr->val_handle, hid_read_cb, arg);
+    }
     return 0;
 }
 
