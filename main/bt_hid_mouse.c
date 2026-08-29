@@ -286,7 +286,19 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         s_conn_handle = event->connect.conn_handle;
         s_hid_connected = true;
         ESP_LOGW(TAG, "CONNECTED to HID device (handle %u)", s_conn_handle);
-        hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
+        /* ⛔ NOT here. Connecting is not the same as being usable, and the
+         * bottom-bar Bluetooth glyph is driven by this flag: it went blue
+         * within half a second of a keypress while the keyboard could not type
+         * for another ~2.5 s, because the descriptor had not been read yet.
+         * The operator spotted the discrepancy and asked what the icon meant.
+         *
+         * It is also wrong in its own right for a keyboard: a keyboard-only
+         * device would put a MOUSE POINTER on screen just by connecting.
+         *
+         * Presence is now claimed where it is earned - in hid_report_map_ready()
+         * once a mouse layout is known, or on the first report that actually
+         * decodes as movement (the fallback path, for a descriptor we cannot
+         * parse). */
         // Ask for parameters a mouse can idle on. HYPOTHESIS for the ~30 s
         // drop, and labelled as one: the peripheral terminates the link
         // (reason 531 = HCI 0x13), so the lever is letting it SLEEP rather
@@ -646,6 +658,7 @@ static void hid_report_map_ready(const uint8_t *desc, uint16_t n)
             hid_mouse_layout_t L;
             if (hid_report_map_parse(desc, n, &L)) {
                 s_layout = L;
+                hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
                 ESP_LOGI(TAG, "report layout: id=%u  X @bit%u/%ub  Y @bit%u/%ub  "
                               "wheel %s  payload %u bits",
                          (unsigned)L.report_id, (unsigned)L.x_bit, (unsigned)L.x_bits,
@@ -945,6 +958,9 @@ static void handle_report(const uint8_t *d, int len)
     // scrolling worked perfectly.
     hid_mouse_move_t mv;
     if (!hid_fallback_decode(d, (size_t)len, &mv)) return;
+    /* A descriptor we could not parse, but this really did decode as movement -
+     * so there IS a pointer here, and the glyph may say so. */
+    hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
     hid_cursor_apply(mv.dx, mv.dy, mv.buttons);
     if (mv.wheel) hid_cursor_add_wheel(mv.wheel);
 }

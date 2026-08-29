@@ -534,7 +534,13 @@ static void status_task(void *arg)
         // needed to have the BT radio off but neglected to restart" (#270, Don
         // N2VGU). The drawer offers the restart; the glyph must not pretend it
         // already happened.
-        ui_set_bottom_bt(bt_hid_mouse_started(), hid_cursor_present());
+        /* Blue means USABLE, not merely connected: a pointer that exists, or a
+         * keyboard whose layout has been read and can therefore type. The glyph
+         * used to go blue the instant the link came up, ~2.5 s before a keyboard
+         * could type a character - which is exactly the gap the operator noticed
+         * and asked about. */
+        ui_set_bottom_bt(bt_hid_mouse_started(),
+                         hid_cursor_present() || bt_hid_keyboard_active());
     }
 }
 
