@@ -9815,7 +9815,7 @@ static void drawer_build(void)
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
             "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) hot\n37 dBm (5 W) hottest");
+            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) hot\n37 dBm (5 W) Finals at risk!");
         /* FULL WIDTH ON ITS OWN LINE, matching the duty-cycle dropdown below -
          * which renders correctly and this one did not. At 300 px squeezed onto
          * the label's line it truncated the label to "Declared pow...", ran its
