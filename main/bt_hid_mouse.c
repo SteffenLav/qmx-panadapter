@@ -92,6 +92,7 @@ static int64_t s_connect_us;      // when s_connecting was set; see the stuck gu
 static bool s_connected;
 static uint8_t s_own_addr_type;
 static uint16_t s_conn_handle;
+static bool     s_hid_connected;   /* #273 - drives ui_osk_show() */
 static int64_t  s_enc_us;      // esp_timer at encryption, for measuring the idle drop
 static int      s_cccd_writes; // CCCDs we asked to enable
 static int      s_cccd_done;   // CCCDs that answered
@@ -242,6 +243,7 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         }
         s_connected   = true;
         s_conn_handle = event->connect.conn_handle;
+        s_hid_connected = true;
         ESP_LOGW(TAG, "CONNECTED to HID device (handle %u)", s_conn_handle);
         hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
         // Ask for parameters a mouse can idle on. HYPOTHESIS for the ~30 s
@@ -319,6 +321,8 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
     }
 
     case BLE_GAP_EVENT_DISCONNECT:
+        s_hid_connected = false;
+        s_kbd_layout.valid = false;   /* the next device may not be a keyboard */
         // Seconds since encryption, because that is what the 30 s drop is
         // measured from - a bare "disconnected" line cost several rounds of
         // eyeballing timestamps by hand.
@@ -560,6 +564,17 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
     // guessed the layout from one hardware capture. The descriptor states it: which
     // report ID carries movement, and at what bit offset and width X, Y and the
     return 0;
+}
+
+/* Is a Bluetooth KEYBOARD connected right now?
+ *
+ * Both halves matter: a device is connected AND its report map declared a
+ * keyboard. A BLE mouse answers false, so the on-screen keyboard still appears
+ * for someone using a mouse and no keyboard. Cleared on disconnect, so a
+ * keyboard going flat or out of range brings the on-screen one straight back. */
+bool bt_hid_keyboard_active(void)
+{
+    return s_hid_connected && s_kbd_layout.valid;
 }
 
 /* Parse a COMPLETE report map. Split out of hid_read_cb so the long read can

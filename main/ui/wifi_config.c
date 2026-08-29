@@ -119,8 +119,7 @@ static void ta_focused_cb(lv_event_t *e)
     lv_obj_remove_state(other, LV_STATE_FOCUSED);
 
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 // Hide keyboard when user presses LV_KEY_ESC or LV_KEY_ENTER on the keyboard.

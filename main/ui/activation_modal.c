@@ -138,8 +138,7 @@ static void ta_focused_cb(lv_event_t *e)
 {
     if (!s_keyboard) return;
     lv_keyboard_set_textarea(s_keyboard, lv_event_get_target(e));
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 static void keyboard_event_cb(lv_event_t *e)

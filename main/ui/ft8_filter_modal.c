@@ -73,8 +73,7 @@ static void ta_focused_cb(lv_event_t *e)
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 // Field Day class/section row sits near the bottom of the panel - the
@@ -88,8 +87,7 @@ static void ta_focused_top_cb(lv_event_t *e)
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_TOP_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 static void keyboard_event_cb(lv_event_t *e)

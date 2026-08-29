@@ -373,3 +373,8 @@ static inline void ui_theme_keyboard_attach_caps_cycle_pending(lv_obj_t *kb)
 }
 
 #endif /* UI_THEME_H */
+
+/* Show a modal's on-screen keyboard, unless a Bluetooth keyboard is connected
+ * and doing the job (#273). Use this instead of clearing LV_OBJ_FLAG_HIDDEN by
+ * hand, so the decision stays in one place. */
+void ui_osk_show(lv_obj_t *kb);

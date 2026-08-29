@@ -15,6 +15,10 @@ void bt_hid_mouse_init(void);
 // an icon for a radio that is still transmitting (#270, Don N2VGU).
 bool bt_hid_mouse_started(void);
 
+/* True when a connected BLE device declared a KEYBOARD in its report map.
+ * The on-screen keyboard uses this to stay out of the way (#273). */
+bool bt_hid_keyboard_active(void);
+
 // What bt_mouse_en said when this boot began, i.e. whether the radio was ever
 // going to come up this session. Differs from bt_hid_mouse_started() only
 // during the seconds NimBLE spends waiting for the C6 link, which is exactly

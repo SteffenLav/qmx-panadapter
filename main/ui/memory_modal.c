@@ -434,8 +434,7 @@ static void action_ta_focused_cb(lv_event_t *e)
 
     if (!s_action_kb) return;
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
-    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_action_kb);
+    ui_osk_show(s_action_kb);
 }
 
 static void action_kb_cb(lv_event_t *e)
@@ -558,7 +557,7 @@ static void show_action_panel(int idx)
     ui_theme_focus_textarea(s_action_ta);
     lv_obj_clear_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_action_panel);
-    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    ui_osk_show(s_action_kb);
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
     lv_obj_move_foreground(s_action_kb);
     // Reset the shift cycle to "Abc" (capitalize the next letter, then

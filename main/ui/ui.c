@@ -11705,6 +11705,33 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  *
  * `text` follows tab5_keyboard's contract: one character is a literal, longer is
  * a named key matched with strcasecmp. */
+/* Show a modal's on-screen keyboard - UNLESS a Bluetooth keyboard is doing the
+ * job (#273).
+ *
+ * ⭐ THE POLICY LIVES HERE, ONCE. Six modals each showed their own keyboard with
+ * a bare lv_obj_clear_flag() in eight places; putting the decision in one
+ * function is what stops the next modal quietly reintroducing the pop-up.
+ *
+ * Why this is safe: tapping a field fires LV_EVENT_FOCUSED, which does two
+ * INDEPENDENT things - it records the field for the physical keyboard to type
+ * into, and it pops this up. They share an event, not a dependency. Suppressing
+ * the pop-up therefore costs nothing but the half-screen it was occupying, and
+ * that real estate is exactly what a Bluetooth keyboard is for.
+ *
+ * A BLE MOUSE does not count: bt_hid_keyboard_active() requires the device's own
+ * report map to declare a keyboard. And it goes false on disconnect, so a
+ * keyboard that runs flat or walks out of range brings this straight back. */
+void ui_osk_show(lv_obj_t *kb)
+{
+    if (!kb) return;
+    if (bt_hid_keyboard_active()) {
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(kb);
+}
+
 void ui_kbd_feed(const char *text, uint8_t mods)
 {
     if (!text || !text[0]) return;
