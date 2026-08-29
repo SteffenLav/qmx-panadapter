@@ -54,7 +54,9 @@
 
 #include <string.h>
 
-#include "hid_report_map.h"   // parse the mouse's own report descriptor
+#include "hid_report_map.h"  // parse the device's own report descriptor
+#include "hid_keycode.h"     // #273: HID usage -> the token ui.c already takes
+#include "ui/ui.h"           // ui_kbd_feed
 
 static const char *TAG = "btmouse";
 
@@ -67,6 +69,7 @@ static const char *TAG = "btmouse";
 // be a different model, and a stale layout is worse than no layout because it looks
 // authoritative. See hid_report_map.h for the whole story.
 static hid_mouse_layout_t s_layout;
+static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard half */
 
 static bool s_started;
 // The setting as it was at boot - see bt_hid_mouse_init(). Not the same fact
@@ -539,6 +542,24 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                               "fixed layouts; send the hex above if the pointer "
                               "misbehaves");
             }
+
+            /* The SAME descriptor, walked again for a keyboard (#273). A plain
+             * keyboard has no mouse fields at all, so hid_report_map_parse()
+             * above fails on it and, without this, its keystrokes would fall
+             * through to the mouse FALLBACK and be decoded as pointer movement.
+             * A combo keyboard/touchpad declares both and gets both. */
+            hid_kbd_layout_t K;
+            if (hid_report_map_parse_keyboard(desc, n, &K)) {
+                s_kbd_layout = K;
+                ESP_LOGI(TAG, "keyboard layout: id=%u  mods @bit%u/%ub  "
+                              "%u key slot(s) @bit%u/%ub",
+                         (unsigned)K.report_id, (unsigned)K.mod_bit,
+                         (unsigned)K.mod_bits, (unsigned)K.key_count,
+                         (unsigned)K.key_bit, (unsigned)K.key_bits);
+            } else {
+                s_kbd_layout.valid = false;
+                ESP_LOGI(TAG, "no keyboard in this report map (mouse-only device)");
+            }
         }
     }
     return 0;
@@ -612,6 +633,63 @@ static void on_reset(int reason)
 // [buttons, dx, dy] with 8-bit deltas; some prefix a report ID; some use 12- or
 // 16-bit deltas. Rather than guess, the RAW BYTES are logged at first sight so
 // the real layout can be read off the hardware and this narrowed if needed.
+/* ---- Bluetooth keyboard (#273) -------------------------------------------
+ *
+ * The two halves either side of this were already written and host-tested and
+ * neither was ever called: hid_report_map_parse_keyboard() reads the layout out
+ * of the device's own descriptor, and hid_keycode_translate() turns a usage into
+ * exactly the token ui.c's keyboard bridge already takes. This is the glue.
+ *
+ * A HID keyboard reports the set of keys CURRENTLY HELD, not the key that just
+ * changed - so typing is the difference between successive reports. Without the
+ * edge detection below, holding a key for 300 ms would type it once per
+ * notification, which on a BLE keyboard is a stream of repeats nobody asked for.
+ * Auto-repeat, if it is ever wanted, belongs here as a deliberate timer rather
+ * than as a side effect of the wire format. */
+#define BT_KBD_MAX_SLOTS 8
+static uint8_t s_kbd_prev[BT_KBD_MAX_SLOTS];
+static uint8_t s_kbd_prev_n;
+
+static void bt_kbd_handle(const uint8_t *p, int plen)
+{
+    const hid_kbd_layout_t *K = &s_kbd_layout;
+
+    uint8_t mods = 0;
+    if (K->mod_bits)
+        mods = (uint8_t)hid_field_signed(p, (size_t)plen, K->mod_bit,
+                                         K->mod_bits > 8 ? 8 : K->mod_bits);
+
+    uint8_t now[BT_KBD_MAX_SLOTS];
+    int n = K->key_count > BT_KBD_MAX_SLOTS ? BT_KBD_MAX_SLOTS : K->key_count;
+    for (int k = 0; k < n; k++) {
+        uint16_t bit = (uint16_t)(K->key_bit + (uint16_t)k * K->key_bits);
+        now[k] = (uint8_t)hid_field_signed(p, (size_t)plen, bit,
+                                           K->key_bits > 8 ? 8 : K->key_bits);
+    }
+
+    for (int k = 0; k < n; k++) {
+        uint8_t u = now[k];
+        if (u == 0) continue;
+        /* Held since the last report - not a new press. */
+        bool was_down = false;
+        for (int j = 0; j < s_kbd_prev_n; j++)
+            if (s_kbd_prev[j] == u) { was_down = true; break; }
+        if (was_down) continue;
+
+        hid_key_event_t ev;
+        /* Refuses rollover (0x01-0x03), the modifier usages and anything with no
+         * sensible text. A false return must be DROPPED, never typed: a keyboard
+         * reporting rollover would otherwise spray characters. */
+        if (!hid_keycode_translate(u, mods, &ev)) continue;
+        ESP_LOGI(TAG, "key: usage=0x%02x mods=0x%02x -> '%s'",
+                 (unsigned)u, (unsigned)mods, ev.text);
+        ui_kbd_feed(ev.text, ev.mods);
+    }
+
+    for (int k = 0; k < n; k++) s_kbd_prev[k] = now[k];
+    s_kbd_prev_n = (uint8_t)n;
+}
+
 static void handle_report(const uint8_t *d, int len)
 {
     // Log the first few of ANY report, and ALWAYS log one whose wheel byte is
@@ -629,6 +707,29 @@ static void handle_report(const uint8_t *d, int len)
             n += snprintf(hex + n, sizeof(hex) - n, "%02x ", d[i]);
         ESP_LOGI(TAG, "report[%d]: %s", len, hex);
     }
+    /* KEYBOARD FIRST (#273). A keyboard-only device declares no mouse fields, so
+     * the mouse parse above failed and the fallback at the bottom of this
+     * function would happily decode its keystrokes as pointer movement. Checking
+     * the keyboard layout first is what stops that, and it is why this sits
+     * ahead of the `len < 3` guard's mouse assumptions. */
+    if (s_kbd_layout.valid) {
+        const uint8_t *p = (const uint8_t *)d;
+        int plen = len;
+        if (s_kbd_layout.report_id != 0) {
+            if (plen >= 1 && p[0] == s_kbd_layout.report_id) {
+                bt_kbd_handle(p + 1, plen - 1);
+                return;
+            }
+            /* Not the keyboard's ID - fall through; it may be the mouse half of
+             * a combo device, or a consumer-control report the mouse path drops. */
+        } else if (!s_layout.valid) {
+            /* No IDs on the wire and no mouse in this descriptor: every report
+             * here is the keyboard's. */
+            bt_kbd_handle(p, plen);
+            return;
+        }
+    }
+
     if (len < 3) return;
 
     // PREFERRED PATH: the layout this mouse declared in its own Report Map.

@@ -11692,6 +11692,25 @@ static void kbd_btn_deleted_cb(lv_event_t *e)
     }
 }
 
+static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
+
+/* Feed one keystroke in from a source that is not the snap-on keyboard - today
+ * a Bluetooth HID keyboard (#273).
+ *
+ * It hands straight to kbd_text_cb, which is the ENTIRE typing and shortcut path
+ * already: literal characters, the named-key tokens, the focus walk, every
+ * modal's Enter/Esc and the Ctrl shortcut table. A BLE keyboard therefore
+ * inherits all of it without one line of new UI work, and cannot drift from the
+ * snap-on keyboard's behaviour because there is only one implementation.
+ *
+ * `text` follows tab5_keyboard's contract: one character is a literal, longer is
+ * a named key matched with strcasecmp. */
+void ui_kbd_feed(const char *text, uint8_t mods)
+{
+    if (!text || !text[0]) return;
+    kbd_text_cb(text, mods, NULL);
+}
+
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn)
 {
     // Re-registering the same pair (a modal rebuilt) replaces its slot rather

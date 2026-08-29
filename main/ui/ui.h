@@ -297,6 +297,12 @@ void ui_kbd_note_unfocus(lv_obj_t *ta);
 // Enter key clicks Save (commit + close) and Esc clicks Cancel. Either may be
 // NULL. Auto-cleared when the buttons are deleted (modal closed). Call once
 // after the modal's buttons are created.
+/* Feed one keystroke from a non-snap-on source (Bluetooth HID keyboard, #273).
+ * text: one char = literal, longer = a named key token ("enter", "esc", "tab",
+ * "backspace", "del", "left", "right", "up", "down", "pgup", "pgdn").
+ * mods: HID_KEY_MOD_CTRL / HID_KEY_MOD_ALT, as ui.c's own shortcut table uses. */
+void ui_kbd_feed(const char *text, uint8_t mods);
+
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 // Let the physical keyboard's arrows / PgUp / PgDn scroll this object while it
 // is the visible one. Register once at build time; deletion deregisters.
