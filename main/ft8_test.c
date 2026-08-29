@@ -1733,7 +1733,30 @@ static void ft8_task(void *arg)
         // the reply-on-immediate-slot poll fire the FRESH message once
         // ft8_qso_advance() has run (or the deadline passes). FT8-only, same
         // as the late-TX path itself.
-        bool hold_for_fresh = !is_ft4 &&
+        /* ⭐ FT4 TOO, and the exclusion was over-cautious (Gyula HA3HZ).
+         *
+         * His report is precisely what this gate exists to prevent: "with FT4,
+         * when the decoded response appeared, my message had already been
+         * transmitted, so it was sent out repeatedly" - and the partner gives up
+         * and answers someone else. The fix was written for exactly that in
+         * v1.0.0 and then switched off for the mode he uses, on the assumption
+         * that a 7.5 s slot has no room to wait.
+         *
+         * The arithmetic says otherwise:
+         *     FT8  15.0 s slot - 12.64 s burst (79 x 160 ms) = 2.36 s of room
+         *     FT4   7.5 s slot -  5.04 s burst (105 x 48 ms) = 2.46 s of room
+         * FT4 has MORE room, not less, because its burst shrinks faster than its
+         * slot does. The existing 2300 ms deadline is that room minus a margin,
+         * and it is comfortably safe for both.
+         *
+         * Safe by construction either way: if the decode has not landed by the
+         * deadline the armed message fires anyway, so the worst case is exactly
+         * today's behaviour - a repeat - and never a skipped slot.
+         *
+         * ⚠ HONEST LIMIT: an FT4 decode measures ~2.3 s, which is right at the
+         * deadline, so this will help on the faster slots and do nothing on the
+         * slower ones. It is not a promise that the repeat disappears. */
+        bool hold_for_fresh =
                               (s_decode_jobs_done != s_decode_jobs_queued) &&
                               ft8_qso_is_busy(NULL, 0) &&
                               ft8_tx_slot_would_run(boundary_ms);

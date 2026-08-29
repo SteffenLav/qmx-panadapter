@@ -2925,7 +2925,17 @@ static void rit_pill_sync(void)
         snprintf(txt, sizeof txt, "RIT (%+d)", s_rit_stash_hz);
         col = UI_COLOR_TEXT_SECONDARY;
     } else {
-        snprintf(txt, sizeof txt, "RIT");
+        /* "RIT OFF", not a bare "RIT" (Don N2VGU). His words: it is not obvious
+         * which of a grey "RIT" and an amber "RIT: tap" means ACTIVE, and he
+         * could argue it either way - which is a fair complaint about a label
+         * that names the feature instead of stating its state.
+         *
+         * Now all three states say what they ARE rather than what they are
+         * about: "RIT OFF" grey and struck through, "RIT: tap" amber for armed,
+         * and a signed offset in the RIT colour when it is doing something. The
+         * offset was always the ON indicator; the missing half was an explicit
+         * OFF for it to contrast with. */
+        snprintf(txt, sizeof txt, "RIT OFF");
         col = UI_COLOR_TEXT_SECONDARY;
     }
 
@@ -2937,6 +2947,16 @@ static void rit_pill_sync(void)
         s_last_col = col;
         lv_obj_set_style_text_color(s_rit_pill_lbl, lv_color_hex(col), 0);
         lv_obj_set_style_border_color(s_rit_pill, lv_color_hex(col), 0);
+    }
+    /* Struck through when off - his "extra style points", and it carries the
+     * state without relying on colour, which is the same reason the FT8 Options
+     * checkboxes do not depend on colour alone. */
+    static bool s_last_strike = false;
+    bool strike = (rit == 0 && !s_rit_armed && s_rit_stash_hz == 0);
+    if (strike != s_last_strike) {
+        s_last_strike = strike;
+        lv_obj_set_style_text_decor(s_rit_pill_lbl,
+            strike ? LV_TEXT_DECOR_STRIKETHROUGH : LV_TEXT_DECOR_NONE, 0);
     }
 }
 
