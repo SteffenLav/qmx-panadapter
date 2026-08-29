@@ -8383,10 +8383,19 @@ static lv_timer_t *s_wspr_pa_arm_timer = NULL;
  *
  * ⚠ A DEFAULT, NOT A LOCK. The operator can pick anything afterwards, and once
  * a burst has been measured the hint under the dropdown shows what actually
- * went out - which beats both of these estimates. Measured on the bench at 12 V:
- * protected 1.6 W (32 dBm, so 30 slightly under-declares) and unprotected 5.4 W
- * (37 dBm, spot on). Under-declaring is the safer direction to be wrong in:
- * it makes your own signal look no better than it is. */
+ * went out - which beats both of these estimates.
+ *
+ * The numbers are the bench measurements at 12 V, snapped to the nearest legal
+ * WSPR step, NOT round figures:
+ *   protected   1.6 W = 32.04 dBm -> 33  (30 is 2.04 dB out, 33 is 0.96)
+ *   unprotected 5.4 W = 37.32 dBm -> 37  (0.32 dB out)
+ * 30 was tried first as the conservative choice and the operator's call was
+ * accuracy over caution: this figure is published worldwide and other operators
+ * reason from it, so a deliberately low guess is its own kind of wrong.
+ *
+ * ⚠ Both are 12 V figures. A 9 V QMX at the same 6.0 V limit produces something
+ * different, which is exactly why the measured hint exists and why these are a
+ * starting point rather than an answer. */
 static void wspr_set_declared_dbm(int8_t dbm)
 {
     settings_set_wspr_tx_dbm(dbm);
@@ -8445,8 +8454,8 @@ static void drawer_wspr_pa_btn_cb(lv_event_t *e)
         /* Restoring protection is the SAFE direction - immediate, no confirm. */
         s_wspr_pa_arm_off = false;
         settings_set_wspr_pa_reduce(true);
-        wspr_set_declared_dbm(30);      /* ~1 W - what the guard produces */
-        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer - declared power set to 30 dBm");
+        wspr_set_declared_dbm(33);      /* measured 1.6 W = 32.0 dBm -> nearest step 33 */
+        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer - declared power set to 33 dBm");
     } else if (!s_wspr_pa_arm_off) {
         s_wspr_pa_arm_off = true;          /* first tap: arm, change nothing */
         if (s_wspr_pa_arm_timer) lv_timer_del(s_wspr_pa_arm_timer);
