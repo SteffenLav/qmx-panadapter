@@ -275,6 +275,10 @@ bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
 //   uploaded to QRZ/eQSL/LoTW as if real (Roy KI0ER, 2026-07-29).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
+/* Their numeric report of us, lifted from the message a manual/pileup reply
+ * was built from, so the R-report entry can record it as RST_RCVD (#292). */
+static char               s_heard_their_rpt[8];
+static char               s_heard_their_rpt_call[16];
 // ARRL Field Day: their class+section, captured when their roger/exchange
 // message is recognized (WAIT_RPT pounce path, WAIT_ROGER cqrun path). Empty
 // when the QSO isn't a Field Day exchange.
@@ -497,6 +501,31 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
             make_roger(myrpt, extra_buf, sizeof(extra_buf));
             kind  = FT8_TX_KIND_ROGER_RPT;
             extra = extra_buf;
+            /* ⭐ THIS is RST_RCVD - their own measurement of us - and it was
+             * being thrown away (#292, Gyula HA3HZ).
+             *
+             * A QSO entered here skips straight to TX2 because, as #234's own
+             * comment puts it, "the partner's OWN last message already reported
+             * us". WAIT_RPT - the state that normally records their report -
+             * therefore never runs, and if they then jump to RR73, WAIT_ROGER
+             * never runs either. The QSO logs with RST_SENT and an empty
+             * RST_RCVD, which the viewer shows as a dash.
+             *
+             * From his log: decoded 'HA3HZ UN6GO -02' ... "Logged QSO #157:
+             * UN6GO (-09/)". Their -02 was in the very message that started the
+             * QSO. 2 of his 24 logged QSOs lost it this way.
+             *
+             * The identical fix already existed on the CQ-RUN entry, with the
+             * same reasoning written out - and was never applied to this
+             * sibling path. */
+            strncpy(s_heard_their_rpt, rest, sizeof(s_heard_their_rpt) - 1);
+            s_heard_their_rpt[sizeof(s_heard_their_rpt) - 1] = '\0';
+            /* Tagged with WHOSE report it is: this is a file-static read a
+             * moment later by ft8_qso_start(), and a preview build for a
+             * different row in between would otherwise hand the wrong
+             * station's number to the log. */
+            strncpy(s_heard_their_rpt_call, heard->call, sizeof(s_heard_their_rpt_call) - 1);
+            s_heard_their_rpt_call[sizeof(s_heard_their_rpt_call) - 1] = '\0';
         } else {
             fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf)); // grid -> our report
             kind  = FT8_TX_KIND_REPLY;
@@ -1544,7 +1573,18 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         // inventing a value.
         strncpy(s_rst_sent, first_rpt, sizeof(s_rst_sent) - 1);
         s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
-        s_rst_rcvd[0] = '\0';
+        /* If we got here because they had ALREADY reported us (the #234
+         * R-report entry), that is their measurement of us and belongs in
+         * the log NOW: WAIT_RPT never runs to collect it, and a partner who
+         * jumps straight to RR73 skips WAIT_ROGER too (#292). Still empty for
+         * a genuine skip-TX1 start, where they have told us nothing yet. */
+        if (start_state == FT8_QSO_WAIT_RR73 && s_heard_their_rpt[0] &&
+            strcmp(s_heard_their_rpt_call, tx1_req->target_call) == 0) {
+            strncpy(s_rst_rcvd, s_heard_their_rpt, sizeof(s_rst_rcvd) - 1);
+            s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+        } else {
+            s_rst_rcvd[0] = '\0';
+        }
     } else {
         // Normal pounce: we receive their report (RST_RCVD); we never give our
         // own numeric report in TX1/TX2, so RST_SENT stays empty and is omitted.
