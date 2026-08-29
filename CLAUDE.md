@@ -1195,6 +1195,69 @@ area ("CAT MU command and MM ... loaded previously saved state (VFO etc)"). Roy'
 is a band change, which reloads that band's config and redraws without touching session
 state. Reported to QRP Labs via Stan KC7XE.
 
+### ⛔ BLE HID: the report map needs a LONG read, and the report ID is NOT on the wire
+Two facts that each silently broke Bluetooth keyboard support (#273), both found from
+the device's own log rather than by reading code.
+
+**1. `ble_gattc_read()` returns ONE ATT_MTU-1 payload — 22 bytes here.** A HID report
+map is far longer. A Logitech K380's arrived cut off mid-descriptor, immediately before
+its first `Input` item:
+```
+05 01 09 06 a1 01 85 01 95 08 75 01 15 00 25 01 05 07 19 e0 29 e7
+Usage(Keyboard) Collection ReportID ... Usage Min/Max(E0-E7)   <- ends here, 22 bytes
+```
+So the parser saw a keyboard collection containing **no fields** and correctly reported
+"no keyboard in this report map". **Every BLE keyboard would have failed identically**;
+the mouse path only ever worked because a mouse descriptor fits in 22 bytes.
+`ble_gattc_read_long()` (Read Blob) is required — it calls back once per chunk, then a
+final time with `BLE_HS_EDONE`. Full map: **286 bytes**.
+
+⚠ A previous attempt at this was REVERTED for stalling the subscription walk. It is safe
+here because the walk is chained off the **discovery** EDONE in `hid_info_chr_cb()`, not
+off the read completing. **Check that before touching this again.**
+
+**2. A BLE report NEVER carries the report ID byte.** The descriptor can declare
+`Report ID 1` — the K380 does — while the payload begins `00 18 00 ...`, because each
+report has its own characteristic and the ID lives in its *Report Reference* descriptor.
+Matching `p[0]` against the ID can therefore never succeed, and every keystroke fell
+through to the mouse fallback and was decoded as pointer movement. **The report is
+identified by the payload SIZE the descriptor declares** (`key_bit + key_count*key_bits`).
+
+⚠ **Do not assume the 8-byte boot layout.** The K380 has **no reserved byte** — mods at
+bit 0, keycodes from bit 8, 7 bytes total. Read the descriptor.
+
+⚠ **Reports arrive ~2.5 s before the descriptor does** (CONNECT t=79.5 s, map parsed
+t=82.0 s, measured). Anything typed in that window is buffered and replayed once the
+layout is known — a keyboard waking from sleep types into exactly that gap. They are
+deliberately NOT processed meanwhile: decoding them as movement jogs the pointer for
+every key.
+
+### A cursor, or a status glyph, must not promise more than it knows
+Two in one session, same shape — a UI element answering an easier question than the one
+being asked of it.
+
+**`lv_obj_add_state(ta, LV_STATE_FOCUSED)` paints a cursor but does NOT send
+`LV_EVENT_FOCUSED`**, which is what records the field as the typing target. Four modals
+pre-focused their first field that way, so it blinked before anything was chosen AND was
+not necessarily where typing would go. The operator found both halves: *"a blinking
+cursor is already blinking at the top line"* and *"its not focused - even if it blinks
+already - i cannot type there yet"*. The helper is deleted with a tombstone. **The rule:
+no cursor on open, a cursor once a field is selected** — the blink is an acknowledgement
+that the touch landed, which matters most with a Bluetooth keyboard where nothing else
+confirms it.
+
+**The bottom-bar Bluetooth glyph was driven by `hid_cursor_present()`, set the instant a
+link came up** — so it went blue ~2.5 s before a keyboard could type, and a keyboard-only
+device claimed a mouse POINTER just by connecting. Presence is now earned: claimed when a
+mouse layout parses, or on the first report that really decodes as movement. Blue means
+**usable**, not connected. Verified against the keyboard's own LED going constant.
+
+⚠ **A bounded 75% scan burst runs for 20 s after a bonded device drops** (a K380 hangs up
+after ~30 s idle; rediscovery took EIGHT seconds at the normal 20% duty). **The 20% is not
+a number to raise globally** — it was chosen after measurement because scanning starved
+the WiFi/SDIO link. If WiFi or audio misbehaves just after a keyboard wakes, this burst is
+the first suspect; its log line says `BURST after a drop`.
+
 ### ⛔ An `MM` Set is STORED, not APPLIED — "MM Effect" decides, and ours read "On demand"
 The WSPR PA-voltage guard (#290) set `MMProtection|Max. PA voltage=7.5;`, the write
 succeeded, the CAT read-back said **7.5 V**, and the radio's own Protection menu said
