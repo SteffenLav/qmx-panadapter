@@ -123,6 +123,12 @@ int wspr_tx_seconds_until_next_slot(void);
  * figure. false until a burst has reported one. */
 bool wspr_tx_get_last_power_swr(float *power_w, float *swr);
 
+/* The declaration the LAST MEASUREMENT supports, snapped to a legal WSPR step.
+ * -1 until a burst has been measured. Advisory: the declared figure is the
+ * operator's claim about their station and stays theirs to make - but it is
+ * published worldwide, so it should not be a guess when it can be measured. */
+int wspr_tx_advised_dbm(void);
+
 // True if this build has WSPR_TX_SEND_LIVE=1 (radio actually keyed on a
 // burst), false if it's still the dry-run default. Exposed so callers
 // (e.g. the "wspr_tx_test" dev API action) can report the real state

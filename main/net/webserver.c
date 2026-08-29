@@ -3325,6 +3325,7 @@ static esp_err_t wspr_handler(httpd_req_t *req)
       if (wspr_tx_get_last_power_swr(&pw, &sw)) {
           cJSON_AddNumberToObject(root, "last_tx_watts", pw);
           cJSON_AddNumberToObject(root, "last_tx_swr",   sw);
+          cJSON_AddNumberToObject(root, "advised_dbm", wspr_tx_advised_dbm());
       } }
     cJSON_AddNumberToObject(root, "pa_voltage_x10", cat_get_pa_voltage_x10());
 

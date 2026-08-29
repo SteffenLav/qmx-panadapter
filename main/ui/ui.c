@@ -53,6 +53,7 @@
 #include "diag_log.h"
 #include "sd_archive.h"
 #include "ui_mode.h"
+#include "wspr_tx.h"   /* wspr_tx_advised_dbm - the measured-power hint */
 #include "ui_clock.h"
 #include "time_sync.h"
 #include "ft8_screen.h"
@@ -8318,34 +8319,32 @@ static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
  * station rather than a display preference. The list is the standard WSPR set
  * up to the QMX 5 W ceiling; free entry would only let someone be precisely
  * wrong. */
-static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33 };
+static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
 #define N_WSPR_DBM ((int)(sizeof(kWsprDbm) / sizeof(kWsprDbm[0])))
 
-/* 37 dBm (5 W) WAS in this list and is deliberately GONE.
+/* ⛔ 37 dBm (5 W) IS BACK, and the reasoning that removed it was wrong.
  *
- * WSPR keys the PA for ~110 s CONTINUOUSLY out of every 120. Nothing else this
- * radio does comes close to that duty cycle - an FT8 burst is ~12.6 s - and the
- * QMX finals overheat at full power on it. The ceiling is the OPERATOR'S, set
- * to protect their own hardware.
+ * It was cut on 2026-08-28 to protect the finals over WSPR's ~110 s key-down.
+ * But this value is a DECLARED power - it is published to wsprnet with every
+ * spot and does NOT command the radio. Capping it could never prevent a 5 W
+ * transmission; it could only stop an operator DECLARING one, i.e. it made the
+ * data worse without making the radio safer. The operator's own words on
+ * realising this: "we cant have that".
  *
- * It is ADVISORY, NOT ENFORCEMENT, and must not be read as more. This value is
- * a DECLARED power, published to wsprnet with every spot; it does not command
- * the radio. Checked against the 1_04_004 CAT manual: PC; is Get-only (measured
- * output in tenths of a watt) and there is no CAT or MM setter for TX power at
- * all - QMX output follows supply voltage and the band-config PA parameters. So
- * capping this list cannot prevent a 5 W transmission. It can only stop someone
- * DECLARING one, and make the risk visible while they are running.
+ * The real lever now exists: the PA-voltage guard (#290) turns the radio down
+ * for the duration of WSPR TX, measured 5.4 W -> 1.6 W on the bench. Protection
+ * belongs there, and this list's job is simply to be able to state the truth -
+ * including 37 dBm when 37 dBm is what went out.
  *
- * Hence the tension, recorded rather than hidden: an operator genuinely running
- * 5 W can no longer say so, and an under-declared spot is bad data in a database
- * other people reason from - our own docs say "declared power is a claim, not a
- * measurement". The judgement is that the finals win, and that anyone at 5 W on
- * WSPR should turn the RADIO down rather than the number. If that trade ever
- * needs revisiting, this comment is the argument to argue with.
+ * The colours stay, because "this is a lot of heat for 110 seconds" is still
+ * worth saying; they warn rather than forbid. And wspr_tx_advised_dbm() now
+ * proposes the right entry from the radio's own PC; measurement, so this is a
+ * confirmation rather than a guess.
  *
- * WSPR's protocol allows 37/40/43+; this limit is ours, not the protocol's. */
-#define WSPR_DBM_CAUTION  30      /* 1 W  - amber */
-#define WSPR_DBM_LIMIT    33      /* 2 W  - red, and the top of the list */
+ * WSPR's protocol allows 40/43/47+ as well; the list stops at what a QMX can
+ * actually produce. */
+#define WSPR_DBM_CAUTION  33      /* 2 W  - amber: a lot of heat for 110 s */
+#define WSPR_DBM_LIMIT    37      /* 5 W  - red: the QMX's full output */
 
 /* Tint the CONTROL by the selected value. LVGL 9.2 has no text recolor (only
  * image recolor - checked in the vendored source, not assumed) and a dropdown's
@@ -9803,7 +9802,23 @@ static void drawer_build(void)
         lv_obj_t *cb1 = make_drawer_checkbox(sec, ws.wspr_tx_en, drawer_check_wspr_tx_cb, NULL);
         lv_obj_align(cb1, LV_ALIGN_TOP_RIGHT, 0, 42);
         lv_obj_t *l2 = lv_label_create(sec);
-        lv_label_set_text(l2, "Declared power");
+        /* Show what the radio MEASURED on the last burst, right beside the claim
+         * it is being compared with. The operator still chooses - this is the
+         * one place the choice is made, so it is the one place the evidence
+         * belongs. Silent until a burst has actually been measured; a hint that
+         * invents a number would be worse than no hint. */
+        {
+            int adv = wspr_tx_advised_dbm();
+            float mw = -1.0f, msw = -1.0f;
+            if (adv >= 0 && wspr_tx_get_last_power_swr(&mw, &msw)) {
+                static char pwr_lbl[64];
+                snprintf(pwr_lbl, sizeof(pwr_lbl), "Declared power  (measured %.1f W = %d)",
+                         (double)mw, adv);
+                lv_label_set_text(l2, pwr_lbl);
+            } else {
+                lv_label_set_text(l2, "Declared power");
+            }
+        }
         lv_obj_set_style_text_color(l2, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
         lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 96);
@@ -9811,7 +9826,7 @@ static void drawer_build(void)
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
             "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W) - hot\n33 dBm (2 W) - MAX, very hot");
+            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) - hot\n37 dBm (5 W) - very hot");
         lv_obj_set_size(dd, 300, 50);
         lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, 0, 92);
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);

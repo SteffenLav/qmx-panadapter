@@ -7,6 +7,7 @@
 #include "wspr_fano.h"
 
 #include <string.h>
+#include <math.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
@@ -212,6 +213,34 @@ static void sleep_until(int64_t t0, int64_t offset_us)
 
 // Runs the actual ~110.6 s CAT burst. Called from the worker task once the
 // even-minute boundary has arrived and the state is already ACTIVE.
+/* WSPR declares power as one of a fixed set of dBm steps. This is the WHOLE
+ * protocol set, not our shorter menu list - the advice has to be able to name
+ * 37 dBm (5 W) if that is genuinely what went out, or it is not advice. */
+static const int kWsprDbmSteps[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30,
+                                     33, 37, 40, 43, 47, 50, 53, 57, 60 };
+
+/* Nearest legal declaration for a measured power. -1 if nothing measured yet.
+ *
+ * ⭐ THIS IS THE POINT OF MEASURING. Declared power is published worldwide with
+ * every spot and other operators reason from it, but the Tab5 cannot know what
+ * the radio delivers - so it was a dropdown, i.e. a guess the operator had to
+ * maintain by hand. It stayed wrong in both directions on the bench: 27 dBm
+ * declared while transmitting 5.4 W (37 dBm), then 27 declared while the guard
+ * held it to 1.6 W (32 dBm). PC; answers the question the dropdown was asking. */
+int wspr_tx_advised_dbm(void)
+{
+    if (s_last_power_w <= 0.0f) return -1;
+    float dbm = 10.0f * log10f(s_last_power_w * 1000.0f);
+    int best = kWsprDbmSteps[0];
+    float bestd = 1e9f;
+    for (unsigned i = 0; i < sizeof(kWsprDbmSteps)/sizeof(kWsprDbmSteps[0]); i++) {
+        float d = dbm - (float)kWsprDbmSteps[i];
+        if (d < 0) d = -d;
+        if (d < bestd) { bestd = d; best = kWsprDbmSteps[i]; }
+    }
+    return best;
+}
+
 /* Last measured burst output. Returns false until a burst has reported one. */
 bool wspr_tx_get_last_power_swr(float *power_w, float *swr)
 {
@@ -287,6 +316,17 @@ static void run_burst(const wspr_tx_request_t *req)
                              (double)pw, (double)sw,
                              pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
                              req->power_dbm);
+                    /* Say so when the claim and the measurement disagree by more
+                     * than one step. ADVISORY only - the declared figure is a
+                     * statement about the operator's station and stays theirs to
+                     * make; this just stops it being a guess nobody can check. */
+                    int adv = wspr_tx_advised_dbm();
+                    if (adv >= 0 && (adv - req->power_dbm > 2 || req->power_dbm - adv > 2)) {
+                        ESP_LOGW(TAG, "WSPR declared power looks wrong: declaring %d dBm, "
+                                      "measured %.1f W = %d dBm. wsprnet publishes the "
+                                      "declared figure worldwide.",
+                                 req->power_dbm, (double)pw, adv);
+                    }
                 } else {
                     ESP_LOGW(TAG, "WSPR TX: no PC/SW reading this burst");
                 }
