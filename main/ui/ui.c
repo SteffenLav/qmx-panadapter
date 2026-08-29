@@ -8369,10 +8369,41 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
 /* WSPR PA-guard button. The label IS the state - permanently on screen, in the
  * drawer the operator opened to change it. No toast: a warning that vanishes
  * after two seconds cannot guard anything. */
+static lv_obj_t *s_wspr_dbm_dd = NULL;   /* declared-power dropdown, moved by the guard */
 static lv_obj_t *s_wspr_pa_btn = NULL;
 static lv_obj_t *s_wspr_pa_lbl = NULL;
 static bool      s_wspr_pa_arm_off = false;   /* first tap of the two-tap disable */
 static lv_timer_t *s_wspr_pa_arm_timer = NULL;
+
+/* Point the declared-power dropdown at a value, and store it.
+ *
+ * The guard knows roughly what the radio will now produce, and the operator
+ * should not have to work it out: protected is about 1 W, unprotected is the
+ * QMX's full output. So flipping the guard moves the declaration with it.
+ *
+ * ⚠ A DEFAULT, NOT A LOCK. The operator can pick anything afterwards, and once
+ * a burst has been measured the hint under the dropdown shows what actually
+ * went out - which beats both of these estimates. Measured on the bench at 12 V:
+ * protected 1.6 W (32 dBm, so 30 slightly under-declares) and unprotected 5.4 W
+ * (37 dBm, spot on). Under-declaring is the safer direction to be wrong in:
+ * it makes your own signal look no better than it is. */
+static void wspr_set_declared_dbm(int8_t dbm)
+{
+    settings_set_wspr_tx_dbm(dbm);
+    /* The dropdown lives in a drawer SECTION that is destroyed and rebuilt on
+     * every drawer rebuild, and it is only built at all in WSPR mode - so this
+     * pointer can outlive its object. The setting above is what actually
+     * matters; moving the widget is cosmetic, and must never be done through a
+     * stale pointer. */
+    if (!s_wspr_dbm_dd || !lv_obj_is_valid(s_wspr_dbm_dd)) return;
+    for (int k = 0; k < N_WSPR_DBM; k++) {
+        if (kWsprDbm[k] == dbm) {
+            lv_dropdown_set_selected(s_wspr_dbm_dd, (uint16_t)k);
+            wspr_dbm_apply_tint(s_wspr_dbm_dd, dbm);
+            break;
+        }
+    }
+}
 
 static void wspr_pa_btn_refresh(void)
 {
@@ -8414,7 +8445,8 @@ static void drawer_wspr_pa_btn_cb(lv_event_t *e)
         /* Restoring protection is the SAFE direction - immediate, no confirm. */
         s_wspr_pa_arm_off = false;
         settings_set_wspr_pa_reduce(true);
-        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer");
+        wspr_set_declared_dbm(30);      /* ~1 W - what the guard produces */
+        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer - declared power set to 30 dBm");
     } else if (!s_wspr_pa_arm_off) {
         s_wspr_pa_arm_off = true;          /* first tap: arm, change nothing */
         if (s_wspr_pa_arm_timer) lv_timer_del(s_wspr_pa_arm_timer);
@@ -8423,8 +8455,9 @@ static void drawer_wspr_pa_btn_cb(lv_event_t *e)
     } else {
         s_wspr_pa_arm_off = false;
         settings_set_wspr_pa_reduce(false);
-        ESP_LOGW(TAG, "WSPR PA guard DISABLED from the drawer - WSPR TX will run at "
-                      "FULL power, ~110 s key-down per cycle");
+        wspr_set_declared_dbm(37);      /* the QMX's full output */
+        ESP_LOGW(TAG, "WSPR PA guard DISABLED from the drawer - declared power set to "
+                      "37 dBm; WSPR TX will run at FULL power, ~110 s key-down per cycle");
     }
     wspr_pa_btn_refresh();
 }
@@ -9879,6 +9912,7 @@ static void drawer_build(void)
          * Screenshot-reported; the fix is the layout, not the font. */
         lv_obj_set_size(dd, DRAWER_W - 32, 50);
         lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 136);
+        s_wspr_dbm_dd = dd;   /* the guard moves this when it changes state */
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
         {
             uint16_t idx = 7;                         /* 23 dBm default */
