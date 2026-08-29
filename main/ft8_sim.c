@@ -125,7 +125,22 @@ static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
     { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },        // US
     { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, .terse = true }, // US - TERSE: answers
                            // our CQ with a report, not a grid (see `terse`).
-    { "VK3ABC", "QF22", "1D", "DX",  1550.0f, false },        // Australia (DX)
+    { "VK3ABC", "QF22", "1D", "DX",  1550.0f, .terse = true }, // Australia (DX)
+                           /* ⭐ ALSO TERSE, and it must be a STRONG one (#292).
+                            * N5XYZ alone could not reach the R-report entry in
+                            * ft8_qso_start(): the pileup drain picks by STRONGEST
+                            * SNR, so the weakest phantom is drained last, by which
+                            * time it has gone back to calling CQ and the drain
+                            * takes its "not to us - report-first" fallback instead.
+                            * The terse path was therefore only ever exercised
+                            * through cqrun_answer() - and the pileup drain is the
+                            * path that actually carried the bug.
+                            *
+                            * VK3ABC is the second strongest, so the FIRST caller
+                            * (W1AW) is taken by cqrun_answer and the drain then
+                            * picks VK3ABC while its terse answer is still its
+                            * last_text. That makes the R-report entry reachable on
+                            * the bench with no radio. */
     { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false },        // Japan (DX)
     { "G0ABC",  "IO91", "1D", "DX",  2500.0f, .deaf = true }, // England (DX) - DEAF:
                            // CQs but never hears you; pounces at it time out.
