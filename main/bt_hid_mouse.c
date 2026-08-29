@@ -122,7 +122,14 @@ typedef struct {
      * intentions. */
     hid_mouse_layout_t mouse;
     hid_kbd_layout_t   kbd;
-    uint8_t  rmap[384];        /* a K380's is 286; 384 is headroom, not a guess */
+    /* 768, not 384. A K380's map is 286 and 384 looked like headroom - but a
+     * descriptor that overflows is TRUNCATED, the parse then fails, and the
+     * device reports "no keyboard in this report map" with no hint that the
+     * cause was a buffer. Multimedia keyboards with consumer-control and
+     * vendor collections run well past 384. This lives in PSRAM
+     * (EXT_RAM_BSS_ATTR on the array below), so the headroom is nearly free -
+     * and the failure it prevents is silent and total. */
+    uint8_t  rmap[768];
     uint16_t rmap_len;
     bool     rmap_reading;
     int64_t  rmap_started_us;   /* bounds the buffering - see handle_report */
@@ -729,8 +736,13 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
             return 0;
         }
         uint16_t n = OS_MBUF_PKTLEN(attr->om);
-        if (n > (uint16_t)(sizeof L->rmap - L->rmap_len))
+        if (n > (uint16_t)(sizeof L->rmap - L->rmap_len)) {
             n = (uint16_t)(sizeof L->rmap - L->rmap_len);
+            /* Loud, because a truncated descriptor fails to parse and looks
+             * exactly like a device that declared nothing. */
+            ESP_LOGE(TAG, "report map exceeds %u bytes - TRUNCATED, the parse "
+                          "will fail; raise hid_link_t.rmap", (unsigned)sizeof L->rmap);
+        }
         if (n && os_mbuf_copydata(attr->om, 0, n, L->rmap + L->rmap_len) == 0)
             L->rmap_len = (uint16_t)(L->rmap_len + n);
         return 0;
@@ -808,6 +820,39 @@ static void hid_report_map_ready(hid_link_t *L, const uint8_t *desc, uint16_t n)
             } else {
                 L->kbd.valid = false;
                 ESP_LOGI(TAG, "no keyboard in this report map (mouse-only device)");
+            }
+
+            /* ⛔ AMBIGUITY: two reports the same size on ONE device.
+             *
+             * Reports are identified by the payload size the descriptor
+             * declares, because BLE does not put the report ID on the wire. On
+             * a combo keyboard/touchpad the mouse and keyboard reports can
+             * declare the SAME size, and then that test cannot tell them apart.
+             *
+             * Failing towards the MOUSE, deliberately: a mouse report decoded as
+             * keystrokes types junk into whatever field is focused, which is
+             * actively destructive, while a keystroke decoded as movement only
+             * jitters the pointer. When you cannot tell, choose the harmless
+             * wrong answer.
+             *
+             * The real fix is the Report Reference descriptor (0x2908), which
+             * states each report characteristic's ID - then the ID is known
+             * without it being on the wire. That is the right answer and a
+             * bigger change; this makes the failure safe and LOUD in the
+             * meantime, because a device that silently types garbage is the
+             * worst outcome available. */
+            if (L->mouse.valid && L->kbd.valid) {
+                int mlen = (L->mouse.total_bits + 7) / 8;
+                int klen = (L->kbd.key_bit +
+                            (int)L->kbd.key_count * L->kbd.key_bits + 7) / 8;
+                if (mlen == klen) {
+                    ESP_LOGE(TAG, "mouse and keyboard reports are BOTH %d bytes on "
+                                  "this device - cannot tell them apart without the "
+                                  "Report Reference descriptor. Keyboard DISABLED on "
+                                  "this link so it cannot type junk; send the report "
+                                  "map hex above.", mlen);
+                    L->kbd.valid = false;
+                }
             }
         }
 }
