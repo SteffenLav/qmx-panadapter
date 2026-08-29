@@ -73,9 +73,6 @@ static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard ha
 /* The report map is assembled here across the chunks of a long read. 512 is
  * comfortably more than any HID descriptor this device will meet; a longer one
  * is truncated and will simply fail to parse, which is loud rather than silent. */
-static uint8_t  s_rmap[512];
-static uint16_t s_rmap_len;
-static bool     s_rmap_reading;   /* true from the long read starting to it finishing */
 
 /* Reports that arrive BEFORE the descriptor has been parsed (#273).
  *
@@ -88,12 +85,84 @@ static bool     s_rmap_reading;   /* true from the long read starting to it fini
  * Eight is generous for human typing in 2.5 s and costs 144 bytes. */
 #define BT_PEND_MAX 8
 #define BT_PEND_LEN 16
-static uint8_t  s_pend[BT_PEND_MAX][BT_PEND_LEN];
-static uint8_t  s_pend_len[BT_PEND_MAX];
-static uint8_t  s_pend_n;
+#define BT_KBD_MAX_SLOTS 8
+
+/* ---- TWO LINKS AT ONCE: a mouse AND a keyboard (#273) --------------------
+ *
+ * This was written for one device and held one connection handle, so whichever
+ * of the two woke first took the slot and the other could not get in until it
+ * slept - which is exactly what the operator saw. It is not a radio limitation;
+ * BLE carries several links happily.
+ *
+ * MEASURED before changing anything, because the objection was memory: raising
+ * CONFIG_BT_NIMBLE_MAX_CONNECTIONS 1 -> 2 costs **nothing** statically. .bss and
+ * .data are byte-identical either way, because NimBLE is built with
+ * MEM_ALLOC_MODE_EXTERNAL and builds its per-connection state at runtime in
+ * PSRAM (15.4 MB free) rather than in the internal/DMA pool (~10 KB free).
+ *
+ * The LAYOUTS stay global on purpose: s_layout is a mouse and s_kbd_layout is a
+ * keyboard, they never contend, and reports already route by what the
+ * descriptor declared rather than by which link they came in on. Only the
+ * connection bookkeeping and the descriptor-read scratch needed to become
+ * per-link, which is a far smaller change than a general N-device table.
+ *
+ * ⚠ The remaining risk is AIRTIME, not RAM: two links plus scanning share the
+ * C6/SDIO path with WiFi, which is this project's most fragile subsystem. */
+#define MAX_LINKS 2
+
+typedef struct {
+    bool     used;
+    uint16_t handle;
+    /* Descriptor read scratch. Per link because two devices can be discovered
+     * at once - unlikely, but a shared buffer would splice two descriptors
+     * together and the parse would fail in a way nobody could read. */
+    uint8_t  rmap[384];        /* a K380's is 286; 384 is headroom, not a guess */
+    uint16_t rmap_len;
+    bool     rmap_reading;
+    uint8_t  pend[BT_PEND_MAX][BT_PEND_LEN];
+    uint8_t  pend_len[BT_PEND_MAX];
+    uint8_t  pend_n;
+    uint8_t  kbd_prev[BT_KBD_MAX_SLOTS];   /* keys held, for edge detection */
+    uint8_t  kbd_prev_n;
+} hid_link_t;
+
+/* In PSRAM: ~800 B, on a board where internal RAM is the scarce thing and this
+ * is nowhere near a DMA or hot path. Same treatment as the other big statics. */
+EXT_RAM_BSS_ATTR static hid_link_t s_link[MAX_LINKS];
+
+static hid_link_t *link_for(uint16_t h)
+{
+    for (int i = 0; i < MAX_LINKS; i++)
+        if (s_link[i].used && s_link[i].handle == h) return &s_link[i];
+    return NULL;
+}
+
+static hid_link_t *link_alloc(uint16_t h)
+{
+    for (int i = 0; i < MAX_LINKS; i++) {
+        if (!s_link[i].used) {
+            for (size_t b = 0; b < sizeof s_link[i]; b++) ((uint8_t *)&s_link[i])[b] = 0;
+            s_link[i].used = true;
+            s_link[i].handle = h;
+            return &s_link[i];
+        }
+    }
+    return NULL;
+}
+
+static int link_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_LINKS; i++) if (s_link[i].used) n++;
+    return n;
+}
+
+/* A free slot means we should still be looking for the other device. */
+static bool link_slot_free(void) { return link_count() < MAX_LINKS; }
+
 static void hid_report_map_ready(const uint8_t *desc, uint16_t n);
-static void bt_replay_pending(void);
-static void bt_kbd_handle(const uint8_t *p, int plen);
+static void bt_replay_pending(hid_link_t *L);
+static void bt_kbd_handle(hid_link_t *L, const uint8_t *p, int plen);
 
 static bool s_started;
 // The setting as it was at boot - see bt_hid_mouse_init(). Not the same fact
@@ -165,7 +234,7 @@ static void start_scan(void);
 static int  conn_event_cb(struct ble_gap_event *event, void *arg);
 static int  hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                        const struct ble_gatt_svc *svc, void *arg);
-static void handle_report(const uint8_t *d, int len);
+static void handle_report(uint16_t conn, const uint8_t *d, int len);
 
 static void log_heap(const char *when)
 {
@@ -208,7 +277,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     // first stretch and the mouse never reconnects. Flip between the filtered
     // and open phases here.
     if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
-        if (!s_connecting && !s_connected) {
+        /* Keep looking while a slot is free - that is what lets a mouse and a
+         * keyboard both get in. Previously this stopped at the first connect,
+         * so the second device could never be found. */
+        if (!s_connecting && link_slot_free()) {
             s_scan_wl_phase = !s_scan_wl_phase;
             start_scan();
         }
@@ -255,7 +327,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                  (int)(CONNECT_STUCK_US / 1000000));
         s_connecting = false;
     }
-    if (hid && !s_connecting && !s_connected) {
+    if (hid && !s_connecting && link_slot_free()) {
         ESP_LOGW(TAG, "HID device found - connecting");
         s_connecting = true;
         s_connect_us = esp_timer_get_time();
@@ -285,6 +357,10 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         s_connected   = true;
         s_conn_handle = event->connect.conn_handle;
         s_hid_connected = true;
+        if (!link_alloc(event->connect.conn_handle))
+            ESP_LOGW(TAG, "no free link slot for handle %u",
+                     (unsigned)event->connect.conn_handle);
+        ESP_LOGI(TAG, "links in use: %d of %d", link_count(), MAX_LINKS);
         ESP_LOGW(TAG, "CONNECTED to HID device (handle %u)", s_conn_handle);
         /* ⛔ NOT here. Connecting is not the same as being usable, and the
          * bottom-bar Bluetooth glyph is driven by this flag: it went blue
@@ -357,7 +433,7 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         int len = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (len > (int)sizeof(buf)) len = sizeof(buf);
         if (ble_hs_mbuf_to_flat(event->notify_rx.om, buf, len, NULL) == 0)
-            handle_report(buf, len);
+            handle_report(event->notify_rx.conn_handle, buf, len);
         return 0;
     }
 
@@ -373,12 +449,22 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
     }
 
-    case BLE_GAP_EVENT_DISCONNECT:
-        s_hid_connected = false;
+    case BLE_GAP_EVENT_DISCONNECT: {
+        uint16_t gone = event->disconnect.conn.conn_handle;
+        hid_link_t *L = link_for(gone);
+        if (L) L->used = false;                       /* free the slot */
         s_scan_burst_until = esp_timer_get_time() + (int64_t)SCAN_BURST_MS * 1000;
-        s_pend_n = 0;
-        s_rmap_reading = false;
-        s_kbd_layout.valid = false;   /* the next device may not be a keyboard */
+
+        /* Only forget the KEYBOARD if the keyboard is what left. With two links
+         * up, clearing this unconditionally would disable typing the moment the
+         * MOUSE dropped - and the on-screen keyboard would reappear over a
+         * perfectly good Bluetooth one. */
+        if (link_count() == 0) {
+            s_hid_connected = false;
+            s_kbd_layout.valid = false;
+            s_layout.valid    = false;
+            hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
+        }
         // Seconds since encryption, because that is what the 30 s drop is
         // measured from - a bare "disconnected" line cost several rounds of
         // eyeballing timestamps by hand.
@@ -386,11 +472,12 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
                  event->disconnect.reason,
                  s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000000) : -1);
         s_enc_us = 0;
-        s_connected = false;
-        // Forget the report layout: the next mouse to connect may be a different
-        // model, and a stale layout is worse than none because it looks
-        // authoritative. It is re-read from the descriptor on every connection.
-        s_layout.valid = false;
+        /* Only "not connected" once EVERY link has gone - otherwise losing the
+         * mouse would stop the scan gating from seeing the keyboard as present. */
+        s_connected = (link_count() > 0);
+        /* The layouts are cleared in the link_count()==0 branch above, not here:
+         * with two devices up, forgetting the mouse layout because the KEYBOARD
+         * dropped would break the pointer, and vice versa. */
         // Clear the IN-PROGRESS flag too. A connection attempt that fails to
         // establish (HCI 0x3E, reason 574 here) arrives as DISCONNECT, NOT as
         // CONNECT-with-error - so this path used to leave s_connecting set
@@ -404,9 +491,12 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         // same event seen from the other side - s_enc_us was never set, so it
         // was never really connected.
         s_connecting = false;
-        hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
+        /* The pointer is cleared in the link_count()==0 branch above, not here:
+         * with a mouse and a keyboard up, losing the KEYBOARD must not take the
+         * cursor away. */
         start_scan();
         return 0;
+    }
 
     default:
         return 0;
@@ -592,27 +682,28 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
      * the subscription walk is chained off the *discovery* EDONE in
      * hid_info_chr_cb(), NOT off this read completing - so a read that now takes
      * several round trips cannot stall it. */
-    if (is_map) {
+    hid_link_t *L = link_for(conn_handle);
+    if (is_map && L) {
         if (error && error->status == BLE_HS_EDONE) {
             ESP_LOGI(TAG, "Report Map read OK (%u bytes, long read)",
-                     (unsigned)s_rmap_len);
-            s_rmap_reading = false;
-            hid_report_map_ready(s_rmap, s_rmap_len);
-            bt_replay_pending();
+                     (unsigned)L->rmap_len);
+            L->rmap_reading = false;
+            hid_report_map_ready(L->rmap, L->rmap_len);
+            bt_replay_pending(L);
             return 0;
         }
         if (!error || error->status != 0 || !attr || !attr->om) {
             ESP_LOGW(TAG, "Report Map read failed: status=%d",
                      error ? error->status : -1);
-            s_rmap_reading = false;
-            s_pend_n = 0;            /* nothing can be decoded without a layout */
+            L->rmap_reading = false;
+            L->pend_n = 0;           /* nothing can be decoded without a layout */
             return 0;
         }
         uint16_t n = OS_MBUF_PKTLEN(attr->om);
-        if (n > (uint16_t)(sizeof s_rmap - s_rmap_len))
-            n = (uint16_t)(sizeof s_rmap - s_rmap_len);
-        if (n && os_mbuf_copydata(attr->om, 0, n, s_rmap + s_rmap_len) == 0)
-            s_rmap_len = (uint16_t)(s_rmap_len + n);
+        if (n > (uint16_t)(sizeof L->rmap - L->rmap_len))
+            n = (uint16_t)(sizeof L->rmap - L->rmap_len);
+        if (n && os_mbuf_copydata(attr->om, 0, n, L->rmap + L->rmap_len) == 0)
+            L->rmap_len = (uint16_t)(L->rmap_len + n);
         return 0;
     }
 
@@ -713,9 +804,8 @@ static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *er
     }
     if (!error || error->status != 0 || !chr) return 0;
     if (what && strcmp(what, "Report Map") == 0) {
-        s_rmap_len = 0;                      /* fresh descriptor per connection */
-        s_rmap_reading = true;
-        s_pend_n = 0;
+        hid_link_t *L = link_for(conn_handle);
+        if (L) { L->rmap_len = 0; L->rmap_reading = true; L->pend_n = 0; }
         int rc = ble_gattc_read_long(conn_handle, chr->val_handle, 0,
                                      hid_read_cb, arg);
         if (rc != 0) ESP_LOGW(TAG, "Report Map long read failed to start: %d", rc);
@@ -780,15 +870,12 @@ static void on_reset(int reason)
  * notification, which on a BLE keyboard is a stream of repeats nobody asked for.
  * Auto-repeat, if it is ever wanted, belongs here as a deliberate timer rather
  * than as a side effect of the wire format. */
-#define BT_KBD_MAX_SLOTS 8
-static uint8_t s_kbd_prev[BT_KBD_MAX_SLOTS];
-static uint8_t s_kbd_prev_n;
 
 /* Does this report belong to the keyboard, and if so type it. Returns true when
  * it was consumed. ONE implementation, used for live reports and for replayed
  * ones, so a keystroke recovered from the connect window cannot be decoded
  * differently from one typed a second later. */
-static bool bt_kbd_try(const void *d, int len)
+static bool bt_kbd_try(hid_link_t *L, const void *d, int len)
 {
     if (!s_kbd_layout.valid) return false;
     const uint8_t *p = (const uint8_t *)d;
@@ -810,30 +897,31 @@ static bool bt_kbd_try(const void *d, int len)
 
     if (s_kbd_layout.report_id != 0 && len == want + 1 &&
         p[0] == s_kbd_layout.report_id) {
-        bt_kbd_handle(p + 1, len - 1);
+        bt_kbd_handle(L, p + 1, len - 1);
         return true;
     }
     if (len == want) {
-        bt_kbd_handle(p, len);
+        bt_kbd_handle(L, p, len);
         return true;
     }
     return false;   /* not the keyboard - on a combo device this is the mouse */
 }
 
 /* Type anything that arrived while the descriptor was still being read. */
-static void bt_replay_pending(void)
+static void bt_replay_pending(hid_link_t *L)
 {
-    uint8_t n = s_pend_n;
-    s_pend_n = 0;
+    if (!L) return;
+    uint8_t n = L->pend_n;
+    L->pend_n = 0;
     if (!n) return;
     int typed = 0;
     for (uint8_t i = 0; i < n; i++)
-        if (bt_kbd_try(s_pend[i], s_pend_len[i])) typed++;
+        if (bt_kbd_try(L, L->pend[i], L->pend_len[i])) typed++;
     ESP_LOGI(TAG, "replayed %u report(s) buffered during connect, %d were keys",
              (unsigned)n, typed);
 }
 
-static void bt_kbd_handle(const uint8_t *p, int plen)
+static void bt_kbd_handle(hid_link_t *L, const uint8_t *p, int plen)
 {
     const hid_kbd_layout_t *K = &s_kbd_layout;
 
@@ -855,8 +943,8 @@ static void bt_kbd_handle(const uint8_t *p, int plen)
         if (u == 0) continue;
         /* Held since the last report - not a new press. */
         bool was_down = false;
-        for (int j = 0; j < s_kbd_prev_n; j++)
-            if (s_kbd_prev[j] == u) { was_down = true; break; }
+        for (int j = 0; j < L->kbd_prev_n; j++)
+            if (L->kbd_prev[j] == u) { was_down = true; break; }
         if (was_down) continue;
 
         hid_key_event_t ev;
@@ -869,12 +957,14 @@ static void bt_kbd_handle(const uint8_t *p, int plen)
         ui_kbd_feed(ev.text, ev.mods);
     }
 
-    for (int k = 0; k < n; k++) s_kbd_prev[k] = now[k];
-    s_kbd_prev_n = (uint8_t)n;
+    for (int k = 0; k < n; k++) L->kbd_prev[k] = now[k];
+    L->kbd_prev_n = (uint8_t)n;
 }
 
-static void handle_report(const uint8_t *d, int len)
+static void handle_report(uint16_t conn, const uint8_t *d, int len)
 {
+    hid_link_t *L = link_for(conn);   /* which device sent this */
+
     // Log the first few of ANY report, and ALWAYS log one whose wheel byte is
     // non-zero. The wheel is the thing under investigation and it is rare
     // compared to movement, so a plain first-N budget is spent on movement
@@ -904,17 +994,17 @@ static void handle_report(const uint8_t *d, int len)
      * meantime would jog the pointer for every key typed. A mouse loses at most
      * a couple of hundred ms of movement at connect, which is not noticeable;
      * losing the first characters you type is. */
-    if (s_rmap_reading) {
-        if (s_pend_n < BT_PEND_MAX && len > 0) {
+    if (L && L->rmap_reading) {
+        if (L->pend_n < BT_PEND_MAX && len > 0) {
             int n = len > BT_PEND_LEN ? BT_PEND_LEN : len;
-            for (int i = 0; i < n; i++) s_pend[s_pend_n][i] = ((const uint8_t *)d)[i];
-            s_pend_len[s_pend_n] = (uint8_t)n;
-            s_pend_n++;
+            for (int i = 0; i < n; i++) L->pend[L->pend_n][i] = ((const uint8_t *)d)[i];
+            L->pend_len[L->pend_n] = (uint8_t)n;
+            L->pend_n++;
         }
         return;
     }
 
-    if (bt_kbd_try(d, len)) return;
+    if (L && bt_kbd_try(L, d, len)) return;
 
     if (len < 3) return;
 
