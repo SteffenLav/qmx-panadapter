@@ -131,6 +131,14 @@ static volatile uint32_t s_pending_ssb_bw = 0;
  * mode, so it gets none of that protection unless we apply it ourselves. */
 static volatile uint16_t s_pending_pa_mv10 = 0;      /* set request, 0 = none */
 static volatile bool     s_pa_query_pending = false; /* read it back          */
+/* Set when OUR query goes out, cleared by the reply that answers it.
+ * ⛔ WITHOUT THIS THE PARSER STEALS OTHER PEOPLE'S MM REPLIES. s_mm_resp is
+ * shared by every MM user in this file, so an unrelated MM Get that happens
+ * to answer with a number was filed as the PA voltage. Caught on hardware
+ * 2026-08-29: a boot-time MM query answered MM15.0; on a radio whose Max. PA
+ * voltage was 11.5, the guard halved 15.0 and would have RESTORED 15.0 -
+ * turning the operator's PA UP, the one thing its own comment forbids. */
+static volatile bool     s_pa_awaiting_reply = false;
 static volatile int16_t  s_pa_voltage_x10 = -1;      /* -1 = not yet known    */
 // Last SSB filter width the user set. While non-zero and we're in USB/LSB, the
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
@@ -675,7 +683,8 @@ static void process_cat_message(const char *msg, size_t len)
          * was there rather than assuming the 11.5 V factory default: an
          * operator who has already turned their PA down must never be turned
          * back UP by us. */
-        {
+        if (s_pa_awaiting_reply) {
+            s_pa_awaiting_reply = false;
             const char *v = s_mm_resp + 2;
             if (*v >= '0' && *v <= '9') {
                 int whole = atoi(v);
@@ -1427,7 +1436,11 @@ static void poll_task(void *arg)
         if (s_pa_query_pending) {
             s_pa_query_pending = false;
             const char *q = "MMProtection|Max. PA voltage;";
-            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, strlen(q), 200);
+            s_pa_awaiting_reply = true;
+            if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                              strlen(q), 200) != ESP_OK) {
+                s_pa_awaiting_reply = false;   /* nothing is coming */
+            }
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -1624,6 +1637,17 @@ static void link_task(void *arg)
             // false and ui_set_iq_mode_warning() raises a persistent on-screen
             // banner so the user isn't left guessing why the spectrum looks
             // wrong.
+            /* A radio that has just appeared has ALREADY restored its own
+             * Max. PA voltage: an MM Set does not survive a QMX power cycle
+             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0, and
+             * the radio's own Protection menu agrees with CAT throughout).
+             *
+             * So any value the WSPR PA guard was holding to restore is now
+             * STALE, and writing it back would push the operator's ceiling to
+             * a number they never chose. Drop it: the radio has already done
+             * the restore for us. */
+            s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
+            settings_set_wspr_pa_saved_x10(0);
             iq_mode_handshake(4);
             // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
             // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
