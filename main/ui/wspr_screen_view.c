@@ -1279,17 +1279,38 @@ void wspr_screen_view_tick(void)
         int secs = 0;
         wspr_tx_state_t tst = wspr_tx_get_status(NULL, 0, &secs);
 
+        /* ⚠ UNPROTECTED is said ON THIS PAGE, not only in the drawer.
+         *
+         * WSPR keys the PA for ~110 s out of every 120 and the finals overheat
+         * at full power on that cycle. The guard defaults ON and switching it
+         * off is deliberate and toasted - but someone who switched it off and
+         * walked away had nothing in front of them saying so, and this is the
+         * screen they are actually looking at. A protection whose absence is
+         * invisible is a protection you cannot trust.
+         *
+         * Deliberately NOT a block. It is the operator's radio, and there are
+         * legitimate reasons (a low supply, a dummy load, a QMX already turned
+         * down). It just may not be silent. */
+        bool unprotected = st.wspr_tx_en && !st.wspr_pa_reduce;
+
         if (tst == WSPR_TX_ACTIVE) {
-            snprintf(txt, sizeof(txt), "TX  ON AIR");
+            snprintf(txt, sizeof(txt), unprotected ? "TX  ON AIR  FULL PWR" : "TX  ON AIR");
             lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_TX_ACTIVE), 0);
         } else if (tst == WSPR_TX_ARMED) {
-            snprintf(txt, sizeof(txt), "TX  in %d:%02d", secs / 60, secs % 60);
+            snprintf(txt, sizeof(txt), "TX  in %d:%02d%s", secs / 60, secs % 60,
+                     unprotected ? "  FULL PWR" : "");
             lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_PRIMARY), 0);
         } else {
-            snprintf(txt, sizeof(txt), "TX  %s", st.wspr_tx_en ? "ON" : "OFF");
+            snprintf(txt, sizeof(txt), "TX  %s%s", st.wspr_tx_en ? "ON" : "OFF",
+                     unprotected ? "  FULL PWR" : "");
             lv_obj_set_style_bg_color(s_btn_tx,
                 lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
         }
+        /* Red text on the TX block whenever the finals are unprotected, in every
+         * one of the three states above - the risk does not pause between
+         * bursts, because the next one is coming in under two minutes. */
+        lv_obj_set_style_text_color(s_lbl_tx,
+            lv_color_hex(unprotected ? 0xFF4010 : 0xFFFFFF), 0);
         if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0)
             lv_label_set_text(s_lbl_tx, txt);
 

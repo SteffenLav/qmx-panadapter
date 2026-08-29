@@ -8371,6 +8371,14 @@ static void drawer_check_wspr_pa_cb(lv_event_t *e)
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_set_wspr_pa_reduce(on);
     ESP_LOGW(TAG, "WSPR PA guard %s from the drawer", on ? "ENABLED" : "DISABLED");
+    /* Say it out loud at the moment the protection is REMOVED. This is where the
+     * friction belongs: the operator is not choosing a number here, they are
+     * choosing to key the PA flat out for ~110 s out of every 120. Nothing is
+     * blocked - it is their station and their radio - but it should not be a
+     * silent tick. Measured figures, not adjectives. */
+    if (!on) {
+        ui_toast("WSPR TX will now run at FULL power - 110 s key-down per cycle");
+    }
 }
 
 static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
@@ -9793,7 +9801,7 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 292);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 330);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -9815,7 +9823,7 @@ static void drawer_build(void)
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
             "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) hot\n37 dBm (5 W) Finals at risk!");
+            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W)\n37 dBm (5 W)");
         /* FULL WIDTH ON ITS OWN LINE, matching the duty-cycle dropdown below -
          * which renders correctly and this one did not. At 300 px squeezed onto
          * the label's line it truncated the label to "Declared pow...", ran its
@@ -9878,17 +9886,38 @@ static void drawer_build(void)
          * can only be reached from a browser is not reachable at a POTA site
          * either. */
         lv_obj_t *l3 = lv_label_create(sec);
-        lv_label_set_text(l3, "Protect finals (half PA volts)");
+        lv_label_set_text(l3, "Protect finals");
         lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
         lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 232);
         lv_obj_t *cb3 = make_drawer_checkbox(sec, ws.wspr_pa_reduce,
                                              drawer_check_wspr_pa_cb, NULL);
         lv_obj_align(cb3, LV_ALIGN_TOP_RIGHT, 0, 228);
+        /* The warning belongs HERE, on the control that actually determines the
+         * power - not on the declared-power dropdown, where it implied that
+         * picking a number changed the radio. It does not: declared power is
+         * only the figure published to wsprnet. Putting "Finals at risk!" there
+         * invited a novice to declare dishonestly in order to feel safe, which
+         * is the same misreading that started this whole thread.
+         *
+         * State-dependent, because "what is it doing right now" is the useful
+         * thing to say, and the risk only exists in one of the two states. */
+        {
+            lv_obj_t *st = lv_label_create(sec);
+            if (ws.wspr_pa_reduce) {
+                lv_label_set_text(st, "radio held near 6 V while transmitting - about 1 W");
+                lv_obj_set_style_text_color(st, lv_color_hex(0x9AA6B2), 0);
+            } else {
+                lv_label_set_text(st, "OFF - full power for 110 s per cycle. Finals at risk!");
+                lv_obj_set_style_text_color(st, lv_color_hex(0xFF4010), 0);
+            }
+            lv_obj_set_style_text_font(st, &lv_font_montserrat_20, 0);
+            lv_obj_align(st, LV_ALIGN_TOP_LEFT, 0, 272);
+        }
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped. */
-        y += 292;
+        y += 330;
     }
     {
         qmx_settings_t ws;
