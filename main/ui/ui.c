@@ -8418,14 +8418,14 @@ static lv_timer_t *s_wspr_pa_arm_timer = NULL;
  * ⚠ Both are 12 V figures. A 9 V QMX at the same 6.0 V limit produces something
  * different, which is exactly why the measured hint exists and why these are a
  * starting point rather than an answer. */
-static void wspr_set_declared_dbm(int8_t dbm)
+/* Move the declared-power dropdown onto a value. Read-only with respect to the
+ * setting - see wspr_set_declared_dbm() below for the writing half.
+ *
+ * The dropdown lives in a drawer SECTION that is destroyed and rebuilt on every
+ * drawer rebuild, and is only built at all in WSPR mode, so this pointer can
+ * outlive its object and must always be validated. */
+static void wspr_dbm_dd_sync(int8_t dbm)
 {
-    settings_set_wspr_tx_dbm(dbm);
-    /* The dropdown lives in a drawer SECTION that is destroyed and rebuilt on
-     * every drawer rebuild, and it is only built at all in WSPR mode - so this
-     * pointer can outlive its object. The setting above is what actually
-     * matters; moving the widget is cosmetic, and must never be done through a
-     * stale pointer. */
     if (!s_wspr_dbm_dd || !lv_obj_is_valid(s_wspr_dbm_dd)) return;
     for (int k = 0; k < N_WSPR_DBM; k++) {
         if (kWsprDbm[k] == dbm) {
@@ -8434,6 +8434,38 @@ static void wspr_set_declared_dbm(int8_t dbm)
             break;
         }
     }
+}
+
+static void wspr_set_declared_dbm(int8_t dbm)
+{
+    settings_set_wspr_tx_dbm(dbm);
+    /* The setting above is what actually matters; moving the widget is
+     * cosmetic, and must never be done through a stale pointer. */
+    wspr_dbm_dd_sync(dbm);
+}
+
+/* Re-read the declared power from settings on every drawer open (#291).
+ *
+ * A dropdown keeps whatever it was BUILT with, and reopening the drawer does not
+ * rebuild the section - so a value changed from the WEB left the Tab5 showing
+ * the old one indefinitely. Verified by screenshot: POST 27 dBm, /api/settings
+ * read back 27, drawer still displayed 33.
+ *
+ * That is not cosmetic here. Declared power is PUBLISHED to wsprnet with every
+ * spot, so the shape of the bug is the Tab5 stating one power while the station
+ * claims another - a control that disagrees with the stored value while looking
+ * authoritative. Same precedent as drawer_refresh_qmx_vol(): refresh the one
+ * control on open rather than rebuilding the drawer.
+ *
+ * ⚠ This closes the declared-power instance, NOT the class. Every other drawer
+ * control mirroring a web-writable setting still has the gap - #291 stays open
+ * for them, and the fix for each is a line here. */
+static void drawer_refresh_wspr(void)
+{
+    if (!s_wspr_dbm_dd || !lv_obj_is_valid(s_wspr_dbm_dd)) return;
+    qmx_settings_t ws;
+    settings_load_all(&ws);
+    wspr_dbm_dd_sync(ws.wspr_tx_dbm);
 }
 
 static void wspr_pa_btn_refresh(void)
@@ -10251,6 +10283,10 @@ static void drawer_open(void)
     // from the web settings page, so the offer is re-tested on every open
     // rather than only when the switch is tapped here.
     drawer_bt_restart_refresh();
+    // Declared power can be changed from the web settings page, and it is
+    // PUBLISHED to wsprnet - so the dropdown must state the stored value, not
+    // whatever it was built with (#291).
+    drawer_refresh_wspr();
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.
