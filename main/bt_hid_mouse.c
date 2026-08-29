@@ -68,8 +68,6 @@ static const char *TAG = "btmouse";
 // rather than assumed. Cleared on every disconnect: the next mouse to connect may
 // be a different model, and a stale layout is worse than no layout because it looks
 // authoritative. See hid_report_map.h for the whole story.
-static hid_mouse_layout_t s_layout;
-static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard half */
 /* The report map is assembled here across the chunks of a long read. 512 is
  * comfortably more than any HID descriptor this device will meet; a longer one
  * is truncated and will simply fail to parse, which is loud rather than silent. */
@@ -100,11 +98,9 @@ static hid_kbd_layout_t   s_kbd_layout;   /* #273 - same descriptor, keyboard ha
  * MEM_ALLOC_MODE_EXTERNAL and builds its per-connection state at runtime in
  * PSRAM (15.4 MB free) rather than in the internal/DMA pool (~10 KB free).
  *
- * The LAYOUTS stay global on purpose: s_layout is a mouse and s_kbd_layout is a
- * keyboard, they never contend, and reports already route by what the
- * descriptor declared rather than by which link they came in on. Only the
- * connection bookkeeping and the descriptor-read scratch needed to become
- * per-link, which is a far smaller change than a general N-device table.
+ * ⚠ The layouts are PER-LINK. An earlier version kept them global, arguing a
+ * mouse and a keyboard never contend; hardware falsified that in minutes (see
+ * the note on the struct fields).
  *
  * ⚠ The remaining risk is AIRTIME, not RAM: two links plus scanning share the
  * C6/SDIO path with WiFi, which is this project's most fragile subsystem. */
@@ -116,6 +112,16 @@ typedef struct {
     /* Descriptor read scratch. Per link because two devices can be discovered
      * at once - unlikely, but a shared buffer would splice two descriptors
      * together and the parse would fail in a way nobody could read. */
+    /* ⛔ PER-LINK, and the commit that made these global was WRONG. It argued
+     * "s_layout is a mouse and s_kbd_layout is a keyboard, they never contend".
+     * Hardware falsified that within minutes: with both devices up the mouse
+     * moved for a split second and then froze for good, because parsing the
+     * KEYBOARD's descriptor overwrote the single shared mouse layout, and the
+     * mouse's reports were then decoded against a layout that was not its own.
+     * A shared global is not made safe by the two users having different
+     * intentions. */
+    hid_mouse_layout_t mouse;
+    hid_kbd_layout_t   kbd;
     uint8_t  rmap[384];        /* a K380's is 286; 384 is headroom, not a guess */
     uint16_t rmap_len;
     bool     rmap_reading;
@@ -160,7 +166,7 @@ static int link_count(void)
 /* A free slot means we should still be looking for the other device. */
 static bool link_slot_free(void) { return link_count() < MAX_LINKS; }
 
-static void hid_report_map_ready(const uint8_t *desc, uint16_t n);
+static void hid_report_map_ready(hid_link_t *L, const uint8_t *desc, uint16_t n);
 static void bt_replay_pending(hid_link_t *L);
 static void bt_kbd_handle(hid_link_t *L, const uint8_t *p, int plen);
 
@@ -461,8 +467,6 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
          * perfectly good Bluetooth one. */
         if (link_count() == 0) {
             s_hid_connected = false;
-            s_kbd_layout.valid = false;
-            s_layout.valid    = false;
             hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
         }
         // Seconds since encryption, because that is what the 30 s drop is
@@ -688,7 +692,7 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
             ESP_LOGI(TAG, "Report Map read OK (%u bytes, long read)",
                      (unsigned)L->rmap_len);
             L->rmap_reading = false;
-            hid_report_map_ready(L->rmap, L->rmap_len);
+            hid_report_map_ready(L, L->rmap, L->rmap_len);
             bt_replay_pending(L);
             return 0;
         }
@@ -729,12 +733,14 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
  * keyboard going flat or out of range brings the on-screen one straight back. */
 bool bt_hid_keyboard_active(void)
 {
-    return s_hid_connected && s_kbd_layout.valid;
+    for (int i = 0; i < MAX_LINKS; i++)
+        if (s_link[i].used && s_link[i].kbd.valid) return true;
+    return false;
 }
 
 /* Parse a COMPLETE report map. Split out of hid_read_cb so the long read can
  * assemble the descriptor across several chunks and hand it over once. */
-static void hid_report_map_ready(const uint8_t *desc, uint16_t n)
+static void hid_report_map_ready(hid_link_t *L, const uint8_t *desc, uint16_t n)
 {
         {
             // Log it as hex regardless of whether the parse succeeds: on a mouse
@@ -746,15 +752,15 @@ static void hid_report_map_ready(const uint8_t *desc, uint16_t n)
                 used += snprintf(hex + used, sizeof hex - used, "%02x ", desc[i]);
             ESP_LOGI(TAG, "report map [%u]: %s%s", n, hex, n > 64 ? "..." : "");
 
-            hid_mouse_layout_t L;
-            if (hid_report_map_parse(desc, n, &L)) {
-                s_layout = L;
+            hid_mouse_layout_t M;
+            if (hid_report_map_parse(desc, n, &M)) {
+                L->mouse = M;
                 hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
                 ESP_LOGI(TAG, "report layout: id=%u  X @bit%u/%ub  Y @bit%u/%ub  "
                               "wheel %s  payload %u bits",
-                         (unsigned)L.report_id, (unsigned)L.x_bit, (unsigned)L.x_bits,
-                         (unsigned)L.y_bit, (unsigned)L.y_bits,
-                         L.have_wheel ? "yes" : "no", (unsigned)L.total_bits);
+                         (unsigned)M.report_id, (unsigned)M.x_bit, (unsigned)M.x_bits,
+                         (unsigned)M.y_bit, (unsigned)M.y_bits,
+                         M.have_wheel ? "yes" : "no", (unsigned)M.total_bits);
             } else {
                 ESP_LOGW(TAG, "report map not understood - falling back to the "
                               "fixed layouts; send the hex above if the pointer "
@@ -768,14 +774,14 @@ static void hid_report_map_ready(const uint8_t *desc, uint16_t n)
              * A combo keyboard/touchpad declares both and gets both. */
             hid_kbd_layout_t K;
             if (hid_report_map_parse_keyboard(desc, n, &K)) {
-                s_kbd_layout = K;
+                L->kbd = K;
                 ESP_LOGI(TAG, "keyboard layout: id=%u  mods @bit%u/%ub  "
                               "%u key slot(s) @bit%u/%ub",
                          (unsigned)K.report_id, (unsigned)K.mod_bit,
                          (unsigned)K.mod_bits, (unsigned)K.key_count,
                          (unsigned)K.key_bit, (unsigned)K.key_bits);
             } else {
-                s_kbd_layout.valid = false;
+                L->kbd.valid = false;
                 ESP_LOGI(TAG, "no keyboard in this report map (mouse-only device)");
             }
         }
@@ -877,7 +883,7 @@ static void on_reset(int reason)
  * differently from one typed a second later. */
 static bool bt_kbd_try(hid_link_t *L, const void *d, int len)
 {
-    if (!s_kbd_layout.valid) return false;
+    if (!L || !L->kbd.valid) return false;
     const uint8_t *p = (const uint8_t *)d;
 
     /* Payload size the DESCRIPTOR declares, in bytes. A K380 says mods @bit0/8b
@@ -892,11 +898,11 @@ static bool bt_kbd_try(hid_link_t *L, const void *d, int len)
      * succeed here, which is why the length is what identifies the report. The
      * ID form is still tried first, for a transport that does put it on the
      * wire. */
-    int want = (s_kbd_layout.key_bit +
-                (int)s_kbd_layout.key_count * s_kbd_layout.key_bits + 7) / 8;
+    int want = (L->kbd.key_bit +
+                (int)L->kbd.key_count * L->kbd.key_bits + 7) / 8;
 
-    if (s_kbd_layout.report_id != 0 && len == want + 1 &&
-        p[0] == s_kbd_layout.report_id) {
+    if (L->kbd.report_id != 0 && len == want + 1 &&
+        p[0] == L->kbd.report_id) {
         bt_kbd_handle(L, p + 1, len - 1);
         return true;
     }
@@ -923,7 +929,7 @@ static void bt_replay_pending(hid_link_t *L)
 
 static void bt_kbd_handle(hid_link_t *L, const uint8_t *p, int plen)
 {
-    const hid_kbd_layout_t *K = &s_kbd_layout;
+    const hid_kbd_layout_t *K = &L->kbd;
 
     uint8_t mods = 0;
     if (K->mod_bits)
@@ -1014,23 +1020,23 @@ static void handle_report(uint16_t conn, const uint8_t *d, int len)
     // Everything below is fallback for a descriptor we could not read or parse. It
     // is kept because it is known to work on at least one real mouse, but it is a
     // guess and this is not.
-    if (s_layout.valid) {
+    if (L && L->mouse.valid) {
         const uint8_t *p = (const uint8_t *)d;
         int plen = len;
         // A descriptor that declares a report ID means the byte is on the wire.
         // Reports for OTHER IDs (a consumer-control page, a battery report) share
         // this notification and must be ignored rather than decoded as movement.
-        if (s_layout.report_id != 0) {
-            if (plen < 1 || p[0] != s_layout.report_id) return;
+        if (L->mouse.report_id != 0) {
+            if (plen < 1 || p[0] != L->mouse.report_id) return;
             p++; plen--;
         }
-        int x = hid_field_signed(p, (size_t)plen, s_layout.x_bit, s_layout.x_bits);
-        int y = hid_field_signed(p, (size_t)plen, s_layout.y_bit, s_layout.y_bits);
+        int x = hid_field_signed(p, (size_t)plen, L->mouse.x_bit, L->mouse.x_bits);
+        int y = hid_field_signed(p, (size_t)plen, L->mouse.y_bit, L->mouse.y_bits);
         // Buttons are the low bits of the first byte on every mouse I have seen,
         // and the descriptor's button range is not parsed, so this stays as it was.
         hid_cursor_apply(x, y, p[0]);
-        if (s_layout.have_wheel) {
-            int w = hid_field_signed(p, (size_t)plen, s_layout.wheel_bit, s_layout.wheel_bits);
+        if (L->mouse.have_wheel) {
+            int w = hid_field_signed(p, (size_t)plen, L->mouse.wheel_bit, L->mouse.wheel_bits);
             if (w) hid_cursor_add_wheel(w);
         }
         return;
