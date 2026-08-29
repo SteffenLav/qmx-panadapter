@@ -8366,19 +8366,67 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
     lv_obj_set_style_border_width(dd, (col == 0xFFFFFF) ? 1 : 3, 0);
 }
 
-static void drawer_check_wspr_pa_cb(lv_event_t *e)
+/* WSPR PA-guard button. The label IS the state - permanently on screen, in the
+ * drawer the operator opened to change it. No toast: a warning that vanishes
+ * after two seconds cannot guard anything. */
+static lv_obj_t *s_wspr_pa_btn = NULL;
+static lv_obj_t *s_wspr_pa_lbl = NULL;
+static bool      s_wspr_pa_arm_off = false;   /* first tap of the two-tap disable */
+static lv_timer_t *s_wspr_pa_arm_timer = NULL;
+
+static void wspr_pa_btn_refresh(void)
 {
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_set_wspr_pa_reduce(on);
-    ESP_LOGW(TAG, "WSPR PA guard %s from the drawer", on ? "ENABLED" : "DISABLED");
-    /* Say it out loud at the moment the protection is REMOVED. This is where the
-     * friction belongs: the operator is not choosing a number here, they are
-     * choosing to key the PA flat out for ~110 s out of every 120. Nothing is
-     * blocked - it is their station and their radio - but it should not be a
-     * silent tick. Measured figures, not adjectives. */
-    if (!on) {
-        ui_toast("WSPR TX will now run at FULL power - 110 s key-down per cycle");
+    if (!s_wspr_pa_btn || !s_wspr_pa_lbl) return;
+    qmx_settings_t st;
+    settings_load_all(&st);
+
+    if (s_wspr_pa_arm_off) {
+        lv_label_set_text(s_wspr_pa_lbl, "Tap again to REMOVE protection");
+        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0xFF4010), 0);
+        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
+    } else if (st.wspr_pa_reduce) {
+        lv_label_set_text(s_wspr_pa_lbl, "ON - about 1 W");
+        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0x2E7D32), 0);
+        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
+    } else {
+        lv_label_set_text(s_wspr_pa_lbl, "OFF - FULL POWER, finals at risk");
+        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0xFF4010), 0);
+        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
     }
+}
+
+/* The armed state must not linger: a red "tap again" left on screen from a
+ * stray touch minutes ago would be confirmed by an innocent second tap. */
+static void wspr_pa_arm_expire_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_wspr_pa_arm_timer = NULL;
+    if (s_wspr_pa_arm_off) { s_wspr_pa_arm_off = false; wspr_pa_btn_refresh(); }
+}
+
+static void drawer_wspr_pa_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    qmx_settings_t st;
+    settings_load_all(&st);
+
+    if (!st.wspr_pa_reduce) {
+        /* Restoring protection is the SAFE direction - immediate, no confirm. */
+        s_wspr_pa_arm_off = false;
+        settings_set_wspr_pa_reduce(true);
+        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer");
+    } else if (!s_wspr_pa_arm_off) {
+        s_wspr_pa_arm_off = true;          /* first tap: arm, change nothing */
+        if (s_wspr_pa_arm_timer) lv_timer_del(s_wspr_pa_arm_timer);
+        s_wspr_pa_arm_timer = lv_timer_create(wspr_pa_arm_expire_cb, 6000, NULL);
+        lv_timer_set_repeat_count(s_wspr_pa_arm_timer, 1);
+    } else {
+        s_wspr_pa_arm_off = false;
+        settings_set_wspr_pa_reduce(false);
+        ESP_LOGW(TAG, "WSPR PA guard DISABLED from the drawer - WSPR TX will run at "
+                      "FULL power, ~110 s key-down per cycle");
+    }
+    wspr_pa_btn_refresh();
 }
 
 static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
@@ -9801,7 +9849,7 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 330);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 352);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -9875,49 +9923,47 @@ static void drawer_build(void)
             }
         }
 
-        /* #290 PA guard. WSPR keys the PA for ~110 s out of every 120, and the
-         * QMX's own Virtual U3S WSPR halves its PA voltage for exactly that
-         * reason; our TX is CAT-driven and bypasses that mode, so it must apply
-         * the same protection itself.
+        /* #290 PA guard - a FULL-WIDTH BUTTON, not a checkbox, and the button
+         * IS the status display.
          *
-         * This lived ONLY in the web settings until now, which made it
-         * unreachable the moment the web server was unavailable - and it is the
-         * control an A/B of the guard has to toggle. A protective setting that
-         * can only be reached from a browser is not reachable at a POTA site
-         * either. */
+         * Four things were wrong with the checkbox version, all reported from
+         * the bench and all fair:
+         *  - a TOAST is worthless as a guard: 1-2 s, white on black, gone. A
+         *    safety warning that disappears is not a safety warning.
+         *  - the status line never updated, because it was built once from
+         *    settings and nothing rewrote it when the box was ticked (the same
+         *    class as TODO #291).
+         *  - montserrat_20 is too small to be useful to this project's actual
+         *    users, who are mostly not 25.
+         *  - a small checkbox at the panel EDGE can be brushed on or off
+         *    without noticing - the worst possible mounting for the one control
+         *    that decides whether the finals cook.
+         *
+         * So: full width (no edge to brush), montserrat_28 (readable), the
+         * label states the CURRENT state permanently (nothing to miss), and
+         * turning protection OFF takes two deliberate taps while turning it
+         * back ON is immediate. Confirmation only in the dangerous direction -
+         * an accidental tap can never remove protection, and never delays
+         * restoring it. */
         lv_obj_t *l3 = lv_label_create(sec);
         lv_label_set_text(l3, "Protect finals");
         lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
         lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 232);
-        lv_obj_t *cb3 = make_drawer_checkbox(sec, ws.wspr_pa_reduce,
-                                             drawer_check_wspr_pa_cb, NULL);
-        lv_obj_align(cb3, LV_ALIGN_TOP_RIGHT, 0, 228);
-        /* The warning belongs HERE, on the control that actually determines the
-         * power - not on the declared-power dropdown, where it implied that
-         * picking a number changed the radio. It does not: declared power is
-         * only the figure published to wsprnet. Putting "Finals at risk!" there
-         * invited a novice to declare dishonestly in order to feel safe, which
-         * is the same misreading that started this whole thread.
-         *
-         * State-dependent, because "what is it doing right now" is the useful
-         * thing to say, and the risk only exists in one of the two states. */
-        {
-            lv_obj_t *st = lv_label_create(sec);
-            if (ws.wspr_pa_reduce) {
-                lv_label_set_text(st, "radio held near 6 V while transmitting - about 1 W");
-                lv_obj_set_style_text_color(st, lv_color_hex(0x9AA6B2), 0);
-            } else {
-                lv_label_set_text(st, "OFF - full power for 110 s per cycle. Finals at risk!");
-                lv_obj_set_style_text_color(st, lv_color_hex(0xFF4010), 0);
-            }
-            lv_obj_set_style_text_font(st, &lv_font_montserrat_20, 0);
-            lv_obj_align(st, LV_ALIGN_TOP_LEFT, 0, 272);
-        }
+
+        s_wspr_pa_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_wspr_pa_btn, DRAWER_W - 32, 60);
+        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 272);
+        lv_obj_add_event_cb(s_wspr_pa_btn, drawer_wspr_pa_btn_cb, LV_EVENT_CLICKED, NULL);
+        s_wspr_pa_lbl = lv_label_create(s_wspr_pa_btn);
+        lv_obj_set_style_text_font(s_wspr_pa_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_center(s_wspr_pa_lbl);
+        s_wspr_pa_arm_off = false;
+        wspr_pa_btn_refresh();
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped. */
-        y += 330;
+        y += 352;
     }
     {
         qmx_settings_t ws;
