@@ -111,6 +111,29 @@ static bool s_connected;
 static uint8_t s_own_addr_type;
 static uint16_t s_conn_handle;
 static bool     s_hid_connected;   /* #273 - drives ui_osk_show() */
+static int64_t  s_scan_burst_until; /* scan hard until this time after a drop */
+
+/* ⚡ A BOUNDED BURST AFTER A DISCONNECT, and only then.
+ *
+ * A Logitech K380 hangs up after ~30 s idle (reason 531 = remote user
+ * terminated) and comes back when a key is pressed. Measured on this bench:
+ * disconnect at t=70.9 s, rediscovered at t=78.9 s - EIGHT SECONDS, nearly all
+ * of it ours, because a 20% duty cycle listens for 20 ms in every 100 and a
+ * keyboard advertising for a short window is easy to miss.
+ *
+ * ⛔ The 20% is NOT a number to raise globally. It was chosen after measurement:
+ * continuous scanning starved the SDIO link shared with WiFi, and three cheaper
+ * suspects were tested and cleared before landing on it. What is different here
+ * is that we have just LOST a bonded device, so we know something is about to
+ * advertise and we know roughly when. Listening hard for a short, bounded window
+ * costs airtime once per disconnect rather than continuously.
+ *
+ * ⚠ WATCH THIS if WiFi or audio ever misbehaves right after a keyboard wakes:
+ * this burst is the only place scanning got more aggressive. */
+#define SCAN_BURST_ITVL_UNITS  64    // x0.625 ms = 40 ms between windows
+#define SCAN_BURST_WIN_UNITS   48    // x0.625 ms = 30 ms listening -> 75% duty
+#define SCAN_BURST_MS       20000    // how long the burst lasts after a disconnect
+
 static int64_t  s_enc_us;      // esp_timer at encryption, for measuring the idle drop
 static int      s_cccd_writes; // CCCDs we asked to enable
 static int      s_cccd_done;   // CCCDs that answered
@@ -340,6 +363,7 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_DISCONNECT:
         s_hid_connected = false;
+        s_scan_burst_until = esp_timer_get_time() + (int64_t)SCAN_BURST_MS * 1000;
         s_pend_n = 0;
         s_rmap_reading = false;
         s_kbd_layout.valid = false;   /* the next device may not be a keyboard */
@@ -399,6 +423,7 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
 #define SCAN_WL_MS      60000     // stretch spent filtered to the bonded mouse
 #define SCAN_OPEN_MS    15000     // stretch spent open, so a new mouse is findable
 
+
 // Put the bonded peers on the controller whitelist. Returns how many, so the
 // caller can fall back to an open scan when there is nothing to filter to.
 static int whitelist_bonded(void)
@@ -432,9 +457,11 @@ static void start_scan(void)
     // while guaranteeing the mouse is still discoverable either way.
     int wl = s_scan_wl_phase ? whitelist_bonded() : 0;
 
+    bool burst = wl && esp_timer_get_time() < s_scan_burst_until;
+
     struct ble_gap_disc_params p = {0};
-    p.itvl          = SCAN_ITVL_UNITS;
-    p.window        = SCAN_WIN_UNITS;
+    p.itvl          = burst ? SCAN_BURST_ITVL_UNITS : SCAN_ITVL_UNITS;
+    p.window        = burst ? SCAN_BURST_WIN_UNITS  : SCAN_WIN_UNITS;
     p.limited       = 0;
     p.filter_duplicates = 1;
     // Filtered stretch: the controller drops non-bonded adverts before they ever
@@ -446,13 +473,14 @@ static void start_scan(void)
     p.passive       = wl ? 1 : 0;
 
     int32_t dur = wl ? SCAN_WL_MS : SCAN_OPEN_MS;
+    if (burst) dur = SCAN_BURST_MS;   /* then the normal cycle resumes by itself */
     int rc = ble_gap_disc(own_addr_type, dur, &p, gap_event_cb, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
         return;
     }
-    if (wl) ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty)",
-                     wl, (SCAN_WIN_UNITS * 100) / SCAN_ITVL_UNITS);
+    if (wl) ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty%s)",
+                     wl, (p.window * 100) / p.itvl, burst ? " - BURST after a drop" : "");
     else {
         // Reset the per-scan log budget so EVERY open window reports what it
         // found, not only the first one after boot. The old counter was
