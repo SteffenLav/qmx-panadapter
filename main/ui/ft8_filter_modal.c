@@ -246,7 +246,31 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent, const char *text)
     lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_add_style(cb, &style_ind, LV_PART_INDICATOR);
     lv_obj_add_style(cb, &style_ind_checked, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    /* The indicator is 31x32 px and, until now, was the ENTIRE touch target in
+     * this modal - the drawer's checkboxes were given both of these lines after
+     * Don WB0LQW reported the same thing on 2026-07-29 and this modal was never
+     * brought into line. He reported it again on v1.9.6, about these ones.
+     *
+     * ext_click_area grows the hittable region on all sides without changing
+     * how it looks; clearing SCROLL_CHAIN_VER stops a tap that wanders a few px
+     * being reinterpreted as a scroll of the panel underneath, which is what
+     * made them feel intermittent rather than simply small. */
+    lv_obj_set_ext_click_area(cb, 28);
+    lv_obj_clear_flag(cb, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
     return cb;
+}
+
+/* Tapping the LABEL toggles its checkbox. The label is a separate object here
+ * (see make_labeled_checkbox below), so without this the operator must hit a
+ * 31 px box while a perfectly good ~200 px word sits beside it doing nothing.
+ * This is the single biggest thing that makes these rows easy to hit. */
+static void label_toggles_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!cb || lv_obj_has_state(cb, LV_STATE_DISABLED)) return;
+    if (lv_obj_has_state(cb, LV_STATE_CHECKED)) lv_obj_clear_state(cb, LV_STATE_CHECKED);
+    else                                        lv_obj_add_state(cb, LV_STATE_CHECKED);
+    lv_obj_send_event(cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 // A textless checkbox plus a separate label object placed beside it.
@@ -271,6 +295,12 @@ static lv_obj_t *make_labeled_checkbox(lv_obj_t *panel, const char *text, int x,
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_align_to(lbl, cb, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    /* Make the WORD a target too, not just the box beside it. A label is not
+     * clickable by default, so this needs the flag as well as the handler. */
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    lv_obj_set_ext_click_area(lbl, 12);
+    lv_obj_add_event_cb(lbl, label_toggles_cb, LV_EVENT_CLICKED, cb);
     if (lbl_out) *lbl_out = lbl;
     return cb;
 }
