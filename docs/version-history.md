@@ -2998,3 +2998,15 @@ drifted a few pixels was swallowed by the panel behind it, and the word beside
 each box did nothing. The touch area is now much larger, the tap cannot be
 stolen, and **tapping the word toggles the setting**. The WSPR settings are also
 reachable from the browser for the first time, and the web and Tab5 lists agree.
+
+### Shipped in v1.10.2 — 2026-08-30
+
+**Bluetooth keyboards work, and two logging faults are fixed.**
+
+- **A Bluetooth keyboard now types into every field** *(Don N2VGU)*. Pair one and it works everywhere the snap-on keyboard already did: every text field, Enter and Esc in every window, Tab to move between fields, and the arrow keys. The on-screen keyboard steps aside while a Bluetooth keyboard is connected, which is the point of having one - it gives you back the screen space it was covering.
+- **A keyboard and a mouse can be connected at the same time.** Either one first, the other after, and both keep working. If your keyboard sleeps, it reconnects on the first keypress and anything you typed while it was waking is delivered rather than lost.
+- ⚠ **US keyboard layout only for now.** A Bluetooth keyboard reports key *positions* rather than characters, so letters, digits, Enter and the arrows are correct on any keyboard, but punctuation on a non-US layout will not be. National layouts are coming.
+- **A logged contact could be missing the received signal report** *(Gyula HA3HZ)*. If the other station's message already carried their report of you, the Tab5 replied and moved straight to the roger step - and their report, which was sitting in that very message, was never written to the log. It is recorded now. Contacts already in your log are unaffected; this applies to new ones.
+- **FT4 replies no longer go out a cycle late** *(Gyula HA3HZ)*. FT8 waits for the current slot to finish decoding before it transmits, so a fresh reply lands in the right slot. That had never been switched on for FT4, which is why FT4 exchanges took roughly twice as long as they should. Now on for both.
+- **The RIT indicator says what it is doing** *(Don N2VGU)*. With no offset engaged it read simply "RIT", which is easy to mistake for switched on. It now reads **RIT OFF** in grey with a line through it, so all four states - off, armed, engaged, and parked - state what they are rather than naming the feature.
+- **Declared WSPR power set from the browser now shows on the Tab5.** The Tab5's own dropdown kept the value it was built with, so the two screens could disagree about a figure that is published with every spot.

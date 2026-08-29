@@ -4,7 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.1** — 2026-08-29
+**v1.10.2** — 2026-08-30
+
+**Bluetooth keyboards work, and two logging faults are fixed.**
+
+- **A Bluetooth keyboard now types into every field** *(Don N2VGU)*. Pair one and it works everywhere the snap-on keyboard already did: every text field, Enter and Esc in every window, Tab to move between fields, and the arrow keys. The on-screen keyboard steps aside while a Bluetooth keyboard is connected, which is the point of having one - it gives you back the screen space it was covering.
+- **A keyboard and a mouse can be connected at the same time.** Either one first, the other after, and both keep working. If your keyboard sleeps, it reconnects on the first keypress and anything you typed while it was waking is delivered rather than lost.
+- ⚠ **US keyboard layout only for now.** A Bluetooth keyboard reports key *positions* rather than characters, so letters, digits, Enter and the arrows are correct on any keyboard, but punctuation on a non-US layout will not be. National layouts are coming.
+- **A logged contact could be missing the received signal report** *(Gyula HA3HZ)*. If the other station's message already carried their report of you, the Tab5 replied and moved straight to the roger step - and their report, which was sitting in that very message, was never written to the log. It is recorded now. Contacts already in your log are unaffected; this applies to new ones.
+- **FT4 replies no longer go out a cycle late** *(Gyula HA3HZ)*. FT8 waits for the current slot to finish decoding before it transmits, so a fresh reply lands in the right slot. That had never been switched on for FT4, which is why FT4 exchanges took roughly twice as long as they should. Now on for both.
+- **The RIT indicator says what it is doing** *(Don N2VGU)*. With no offset engaged it read simply "RIT", which is easy to mistake for switched on. It now reads **RIT OFF** in grey with a line through it, so all four states - off, armed, engaged, and parked - state what they are rather than naming the feature.
+- **Declared WSPR power set from the browser now shows on the Tab5.** The Tab5's own dropdown kept the value it was built with, so the two screens could disagree about a figure that is published with every spot.
+
+## Previous Releases
+
+### v1.10.1 — 2026-08-29
 
 **WSPR now protects your radio's finals, and the declared power stops being a guess.**
 
@@ -14,8 +28,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Declared power is advised by measurement.** During each transmission the Tab5 asks the radio what it is actually producing and shows the answer under the setting. Switching protection on or off also moves the declared figure to the value that setting normally gives. Both are suggestions - the number is a claim about your station and stays yours to choose. The list runs to 37 dBm again: a declared power never commanded the radio, so limiting it could only have prevented an honest declaration.
 - **The FT8 Options checkboxes are easy to hit** *(Don WB0LQW)*. The touch target was the small box alone, a tap that drifted a few pixels was swallowed by the panel behind it, and the word beside each box did nothing. The touch area is much larger now, the tap cannot be stolen, and **tapping the word toggles the setting**.
 - **The WSPR settings are reachable from the browser** for the first time, and the web and Tab5 lists agree.
-
-## Previous Releases
 
 ### v1.10.0 — 2026-08-28
 

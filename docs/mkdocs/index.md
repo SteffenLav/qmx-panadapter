@@ -70,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
+
+**New in v1.10.2 — Bluetooth keyboards, and two logging faults fixed.** **A Bluetooth keyboard now types into every field** *(Don N2VGU)* — every text box, Enter and Esc in every window, Tab between fields and the arrow keys, exactly as the snap-on keyboard already did. The on-screen keyboard steps aside while one is connected, which gives you back the screen space it was covering. **A keyboard and a mouse can be connected at the same time**, in either order, and a keyboard that has gone to sleep reconnects on the first keypress with anything typed while it woke delivered rather than lost. ⚠ **US layout only for now** — a Bluetooth keyboard reports key *positions* rather than characters, so letters, digits, Enter and the arrows are right on any keyboard but punctuation on a non-US layout will not be. **Two fixes from Gyula HA3HZ:** a logged contact could be missing the received signal report when the other station's message already carried it, and **FT4 replies went out a cycle late** because the wait-for-this-slot's-decode rule FT8 has always had was never switched on for FT4 — which is why FT4 exchanges took about twice as long as they should. **The RIT indicator now reads RIT OFF** *(Don N2VGU)* rather than a bare "RIT" that is easy to mistake for switched on. Full detail in [docs/version-history.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md).
 
 **New in v1.10.1 — WSPR now protects your radio's finals.** A WSPR transmission keys the radio for about **110 seconds out of every 120** — an FT8 burst is about 12 — and running a QMX flat out on that cycle puts sustained heat through the PA transistors. QRP Labs warn about exactly this case, and the radio's own built-in WSPR beacon turns its PA down for the same reason. **Protect finals**, on by default, now does the same from the Tab5: it sets the QMX's *Max. PA voltage* to about 6 V for as long as WSPR transmit is enabled and restores your setting afterwards. **Measured on a QMX at 12 V: 5.4 W → 1.6 W out, and 76% less heat in the finals.** The control is a full-width button that says which state you are in, turning protection off takes two deliberate taps, and while it is off the TX block reads **FULL PWR** in red. ⚠ It reduces the heat in the finals but does not remove it from the radio — total heat fell only 18% — so **if you intend to beacon for hours, feed the QMX from a lower supply** (it accepts 6.0–12.0 V; around 9 V leaves far less to throw away). **Declared power is now advised by measurement**: the Tab5 asks the radio what it actually produced and shows the answer under the setting. And the **FT8 Options checkboxes are easy to hit** *(Don WB0LQW)* — the word beside each box now toggles it. Full detail in [docs/version-history.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md).
 
@@ -133,7 +135,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

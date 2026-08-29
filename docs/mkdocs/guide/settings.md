@@ -208,7 +208,7 @@ teal. You can always see what is being touched.
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
 
-## Bluetooth mouse
+## Bluetooth mouse and keyboard
 
 A Bluetooth mouse is the one pointer that works **while the QMX is plugged in**.
 A USB mouse cannot: the radio occupies the Tab5's only USB host, and sharing it
@@ -249,8 +249,8 @@ and has three states:
 | Symbol | Meaning |
 |--------|---------|
 | Dim grey | Bluetooth is switched off |
-| Pale | On and looking for a mouse |
-| **Blue** | A mouse is connected |
+| Pale | On and looking for a device |
+| **Blue** | A mouse or keyboard is ready to use |
 
 **What works:** moving the pointer, left click, and the scroll wheel — the wheel
 scrolls whatever is under the pointer, so the decode list, the settings drawer
@@ -261,6 +261,34 @@ and the manual all scroll.
     moved, to save its battery. The pointer vanishes with it and comes back the
     instant you touch the mouse — reconnecting takes under a third of a second.
     This is the mouse looking after its own battery, not a fault.
+
+### A Bluetooth keyboard
+
+A Bluetooth keyboard works the same way and needs no separate setting — the same
+**Bluetooth → Enable** switch covers both. Pair it and it types into every text
+field, exactly as the snap-on keyboard does: **Enter** presses Save in any
+window, **Esc** presses Cancel, **Tab** moves to the next field, and the arrow
+keys move the cursor.
+
+**A keyboard and a mouse can be connected at the same time**, in either order.
+
+**The on-screen keyboard steps aside** whenever a Bluetooth keyboard is
+connected. That is most of the reason to have one: the on-screen keyboard covers
+a large part of the display, and with a real keyboard you get that space back.
+
+!!! warning "US keyboard layout only for now"
+    A Bluetooth keyboard sends key *positions* rather than characters, and the
+    Tab5 currently reads them through a US layout. Letters, digits, **Enter**,
+    **Tab**, **Esc** and the arrow keys are the same on every layout, so typing a
+    callsign, a grid, a frequency or a password works on any keyboard. Some
+    punctuation on a non-US layout will produce a different character. National
+    layouts are planned.
+
+!!! note "A sleeping keyboard costs you nothing"
+    Like the mouse, a Bluetooth keyboard switches itself off when idle. Pressing
+    any key wakes it, and reconnecting takes a few seconds — but anything you
+    type while it is waking up is held and delivered once the link is back, so
+    you do not lose the first characters.
 
 ---
 
