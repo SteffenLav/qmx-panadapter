@@ -8353,7 +8353,12 @@ static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 }
  * the beacon runs, whereas a colour inside a closed list is seen once. */
 static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
 {
-    uint32_t col = 0xFFFFFF;
+    /* ⛔ NOT WHITE. A drawer dropdown is WHITE with dark text (see the duty-cycle
+     * one), so the previous 0xFFFFFF "normal" made every value below the warning
+     * threshold invisible - white on white. Caught on screen, not in code
+     * review: the closed control simply looked empty. The warning colours were
+     * fine and are unchanged; only the default was wrong. */
+    uint32_t col = 0x101010;
     if      (dbm >= WSPR_DBM_LIMIT)   col = 0xFF4010;   /* the FREQ BUSY red */
     else if (dbm >= WSPR_DBM_CAUTION) col = 0xFFA040;   /* the ARMED amber   */
     lv_obj_set_style_text_color(dd, lv_color_hex(col), 0);
@@ -9788,7 +9793,7 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 208);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 292);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -9802,23 +9807,7 @@ static void drawer_build(void)
         lv_obj_t *cb1 = make_drawer_checkbox(sec, ws.wspr_tx_en, drawer_check_wspr_tx_cb, NULL);
         lv_obj_align(cb1, LV_ALIGN_TOP_RIGHT, 0, 42);
         lv_obj_t *l2 = lv_label_create(sec);
-        /* Show what the radio MEASURED on the last burst, right beside the claim
-         * it is being compared with. The operator still chooses - this is the
-         * one place the choice is made, so it is the one place the evidence
-         * belongs. Silent until a burst has actually been measured; a hint that
-         * invents a number would be worse than no hint. */
-        {
-            int adv = wspr_tx_advised_dbm();
-            float mw = -1.0f, msw = -1.0f;
-            if (adv >= 0 && wspr_tx_get_last_power_swr(&mw, &msw)) {
-                static char pwr_lbl[64];
-                snprintf(pwr_lbl, sizeof(pwr_lbl), "Declared power  (measured %.1f W = %d)",
-                         (double)mw, adv);
-                lv_label_set_text(l2, pwr_lbl);
-            } else {
-                lv_label_set_text(l2, "Declared power");
-            }
-        }
+        lv_label_set_text(l2, "Declared power");
         lv_obj_set_style_text_color(l2, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
         lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 96);
@@ -9826,9 +9815,14 @@ static void drawer_build(void)
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
             "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) - hot\n37 dBm (5 W) - very hot");
-        lv_obj_set_size(dd, 300, 50);
-        lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, 0, 92);
+            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W) hot\n37 dBm (5 W) hottest");
+        /* FULL WIDTH ON ITS OWN LINE, matching the duty-cycle dropdown below -
+         * which renders correctly and this one did not. At 300 px squeezed onto
+         * the label's line it truncated the label to "Declared pow...", ran its
+         * own text under the chevron, and left nowhere for the measured hint.
+         * Screenshot-reported; the fix is the layout, not the font. */
+        lv_obj_set_size(dd, DRAWER_W - 32, 50);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 136);
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
         {
             uint16_t idx = 7;                         /* 23 dBm default */
@@ -9854,6 +9848,25 @@ static void drawer_build(void)
          * already does this; these two were added without it. */
         lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
+        /* What the radio MEASURED on the last burst, on its own line under the
+         * control it is advising. Dim and smaller: it informs the choice, it is
+         * not the choice. Silent until a burst has been measured - a hint that
+         * invented a number would be worse than no hint. */
+        {
+            int adv = wspr_tx_advised_dbm();
+            float mw = -1.0f, msw = -1.0f;
+            if (adv >= 0 && wspr_tx_get_last_power_swr(&mw, &msw)) {
+                lv_obj_t *hint = lv_label_create(sec);
+                static char hint_txt[72];
+                snprintf(hint_txt, sizeof(hint_txt),
+                         "radio measured %.1f W last burst = %d dBm", (double)mw, adv);
+                lv_label_set_text(hint, hint_txt);
+                lv_obj_set_style_text_color(hint, lv_color_hex(0x9AA6B2), 0);
+                lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+                lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 194);
+            }
+        }
+
         /* #290 PA guard. WSPR keys the PA for ~110 s out of every 120, and the
          * QMX's own Virtual U3S WSPR halves its PA voltage for exactly that
          * reason; our TX is CAT-driven and bypasses that mode, so it must apply
@@ -9868,14 +9881,14 @@ static void drawer_build(void)
         lv_label_set_text(l3, "Protect finals (half PA volts)");
         lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
-        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 154);
+        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 232);
         lv_obj_t *cb3 = make_drawer_checkbox(sec, ws.wspr_pa_reduce,
                                              drawer_check_wspr_pa_cb, NULL);
-        lv_obj_align(cb3, LV_ALIGN_TOP_RIGHT, 0, 150);
+        lv_obj_align(cb3, LV_ALIGN_TOP_RIGHT, 0, 228);
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped. */
-        y += 208;
+        y += 292;
     }
     {
         qmx_settings_t ws;
