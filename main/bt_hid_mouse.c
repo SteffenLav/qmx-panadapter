@@ -125,6 +125,7 @@ typedef struct {
     uint8_t  rmap[384];        /* a K380's is 286; 384 is headroom, not a guess */
     uint16_t rmap_len;
     bool     rmap_reading;
+    int64_t  rmap_started_us;   /* bounds the buffering - see handle_report */
     uint8_t  pend[BT_PEND_MAX][BT_PEND_LEN];
     uint8_t  pend_len[BT_PEND_MAX];
     uint8_t  pend_n;
@@ -427,9 +428,20 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         // subscription does not catch. Do not re-add it without also handling
         // the Report Reference descriptors that Report mode implies.
         //
-        // The 30 s disconnect therefore remains UNEXPLAINED. Evidence so far:
-        // it is measured from the encryption-change event, not from the last
-        // report, and it is far too repeatable to be a battery-saving timer.
+        // ⭐ THE 30 s DISCONNECT IS EXPLAINED, and this comment used to argue
+        // itself out of the answer: "far too repeatable to be a battery-saving
+        // timer". Backwards - repeatability is exactly what a DESIGNED timer
+        // looks like; a fault would be erratic.
+        //
+        // The operator asked the obvious question nobody had: isn't it just the
+        // peripheral going to sleep? The disconnect reason says so outright.
+        // 531 = 0x213 = BLE_HS_HCI_ERR(0x13), and HCI 0x13 is "Remote User
+        // Terminated Connection" - the far end hung up deliberately. Confirmed
+        // across two different Logitech devices, a K380 keyboard and a mouse,
+        // both at 30 s to the second.
+        //
+        // So there is nothing here to fix. The lever is reconnecting FAST when
+        // it comes back, which is what the post-drop scan burst does.
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -694,6 +706,19 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
             L->rmap_reading = false;
             hid_report_map_ready(L, L->rmap, L->rmap_len);
             bt_replay_pending(L);
+            /* ⛔ AND GO LOOKING FOR THE OTHER DEVICE.
+             *
+             * Connecting calls ble_gap_disc_cancel(), and nothing restarted the
+             * scan afterwards - the gating was changed to allow a second link
+             * but the scan that would FIND it was never resumed, so the log read
+             * "links in use: 1 of 2" for ever and only whichever device won the
+             * race was usable. Restarted here, after this link's discovery has
+             * finished, rather than at connect: scanning across a descriptor
+             * read would slow the read that everything else waits on. */
+            if (link_slot_free() && !s_connecting) {
+                ESP_LOGI(TAG, "slot still free - scanning for a second device");
+                start_scan();
+            }
             return 0;
         }
         if (!error || error->status != 0 || !attr || !attr->om) {
@@ -811,7 +836,8 @@ static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *er
     if (!error || error->status != 0 || !chr) return 0;
     if (what && strcmp(what, "Report Map") == 0) {
         hid_link_t *L = link_for(conn_handle);
-        if (L) { L->rmap_len = 0; L->rmap_reading = true; L->pend_n = 0; }
+        if (L) { L->rmap_len = 0; L->rmap_reading = true; L->pend_n = 0;
+                 L->rmap_started_us = esp_timer_get_time(); }
         int rc = ble_gattc_read_long(conn_handle, chr->val_handle, 0,
                                      hid_read_cb, arg);
         if (rc != 0) ESP_LOGW(TAG, "Report Map long read failed to start: %d", rc);
@@ -1000,6 +1026,22 @@ static void handle_report(uint16_t conn, const uint8_t *d, int len)
      * meantime would jog the pointer for every key typed. A mouse loses at most
      * a couple of hundred ms of movement at connect, which is not noticeable;
      * losing the first characters you type is. */
+    /* ⛔ BOUNDED. Buffering while the descriptor is read is right; buffering
+     * FOREVER is a device that moved for a second and then froze for good,
+     * which is exactly the shape the operator reported. If the read never
+     * completes - for any reason, including ones not yet understood - give up
+     * waiting and decode the report with whatever we have, which for a mouse is
+     * the fallback and is how it behaved before any of this existed.
+     *
+     * A guard like this is worth having even when the cause is known, because
+     * the failure it prevents is total and silent. */
+    if (L && L->rmap_reading &&
+        esp_timer_get_time() - L->rmap_started_us > 6000000) {
+        ESP_LOGW(TAG, "descriptor read did not finish in 6 s - decoding reports "
+                      "without it rather than dropping them");
+        L->rmap_reading = false;
+        L->pend_n = 0;
+    }
     if (L && L->rmap_reading) {
         if (L->pend_n < BT_PEND_MAX && len > 0) {
             int n = len > BT_PEND_LEN ? BT_PEND_LEN : len;
@@ -1026,9 +1068,29 @@ static void handle_report(uint16_t conn, const uint8_t *d, int len)
         // A descriptor that declares a report ID means the byte is on the wire.
         // Reports for OTHER IDs (a consumer-control page, a battery report) share
         // this notification and must be ignored rather than decoded as movement.
-        if (L->mouse.report_id != 0) {
-            if (plen < 1 || p[0] != L->mouse.report_id) return;
+        /* ⛔ THE REPORT ID IS NOT ON THE WIRE ON BLE - the same fact that broke
+         * the keyboard, and it broke the mouse the moment the long read made
+         * its descriptor parse for the FIRST time.
+         *
+         * Before that fix the map was truncated to 22 bytes, the parse failed,
+         * and the mouse ran on hid_fallback_decode() - which never looks at a
+         * report ID, which is why nobody had ever hit this. With the descriptor
+         * parsing, this branch demanded p[0] == 2 on a report that begins with
+         * movement data, returned every time, and the pointer froze solid a
+         * second after connecting. Measured: "report layout: id=2 ... payload
+         * 56 bits" against reports that carry no ID byte at all.
+         *
+         * So the payload SIZE the descriptor declares is what identifies the
+         * report, exactly as on the keyboard side. The ID form is still tried
+         * first, for a transport that does put it on the wire. */
+        int want = (L->mouse.total_bits + 7) / 8;
+        if (L->mouse.report_id != 0 && plen == want + 1 &&
+            p[0] == L->mouse.report_id) {
             p++; plen--;
+        } else if (want > 0 && plen != want) {
+            /* Neither shape - some other report on this connection (a
+             * consumer-control page, a battery report). Not ours to decode. */
+            return;
         }
         int x = hid_field_signed(p, (size_t)plen, L->mouse.x_bit, L->mouse.x_bits);
         int y = hid_field_signed(p, (size_t)plen, L->mouse.y_bit, L->mouse.y_bits);
