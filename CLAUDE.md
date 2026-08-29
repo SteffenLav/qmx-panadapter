@@ -1232,6 +1232,37 @@ layout is known — a keyboard waking from sleep types into exactly that gap. Th
 deliberately NOT processed meanwhile: decoding them as movement jogs the pointer for
 every key.
 
+### BLE: two devices at once, per-link state, and why the 30 s drop is not a bug
+`CONFIG_BT_NIMBLE_MAX_CONNECTIONS` is **2** — a mouse and a keyboard together.
+Measured before changing it, because the objection was memory and the objection was
+**wrong**: 1 → 2 costs **nothing** statically (`.bss` and `.data` byte-identical), since
+NimBLE is built `MEM_ALLOC_MODE_EXTERNAL` and builds per-connection state at runtime in
+PSRAM. Verified on hardware: `links in use: 2 of 2`, keyboard on handle 0, mouse on
+handle 1, each with its own parsed layout.
+
+⛔ **The layouts are PER-LINK (`hid_link_t`, `EXT_RAM_BSS_ATTR`), and a commit that made
+them global was falsified by hardware in minutes.** It argued *"s_layout is a mouse and
+s_kbd_layout is a keyboard, they never contend"*. They contend: parsing the keyboard's
+descriptor overwrote the shared mouse layout and the pointer froze. **A shared global is
+not made safe by its two users having different intentions.**
+
+⛔ **Scanning must RESUME after a successful connect**, or the second device is never
+found — `ble_gap_disc_cancel()` runs to connect and nothing restarted it, so the log read
+`links in use: 1 of 2` for ever. It restarts once a link's discovery is done, not at
+connect, so it cannot slow the descriptor read everything waits on.
+
+⭐ **The "unexplained" 30 s disconnect was never a fault.** The old comment argued it was
+*"far too repeatable to be a battery-saving timer"* — backwards, since repeatability is
+what a designed timer looks like. **`reason 531` = `BLE_HS_HCI_ERR(0x13)` = "Remote User
+Terminated Connection"**: the peripheral hangs up. Confirmed on two Logitech devices at
+30 s to the second. Nothing to fix; the lever is reconnecting fast (the post-drop burst).
+
+⚠ **Fixing the truncated read EXPOSED a bug hiding under it.** With the map truncated, a
+mouse's parse failed and it ran on `hid_fallback_decode()`, which ignores report IDs. Once
+the descriptor parsed, the mouse path demanded `p[0] == report_id` on a report carrying no
+ID byte and froze the pointer — the same BLE trap as the keyboard, one layer down.
+**When a fix makes a previously-dead code path live, audit that path.**
+
 ### A cursor, or a status glyph, must not promise more than it knows
 Two in one session, same shape — a UI element answering an easier question than the one
 being asked of it.
