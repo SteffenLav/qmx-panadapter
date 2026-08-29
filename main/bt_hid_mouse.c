@@ -767,19 +767,36 @@ static void handle_report(const uint8_t *d, int len)
     if (s_kbd_layout.valid) {
         const uint8_t *p = (const uint8_t *)d;
         int plen = len;
-        if (s_kbd_layout.report_id != 0) {
-            if (plen >= 1 && p[0] == s_kbd_layout.report_id) {
-                bt_kbd_handle(p + 1, plen - 1);
-                return;
-            }
-            /* Not the keyboard's ID - fall through; it may be the mouse half of
-             * a combo device, or a consumer-control report the mouse path drops. */
-        } else if (!s_layout.valid) {
-            /* No IDs on the wire and no mouse in this descriptor: every report
-             * here is the keyboard's. */
+        /* Payload size the DESCRIPTOR declares for this keyboard, in bytes. A
+         * K380 says mods @bit0/8b + 6 slots @bit8/8b = 56 bits = 7 - and it
+         * really does send 7, with no reserved byte, which is one short of the
+         * classic boot layout. Derived, not assumed. */
+        int want = (s_kbd_layout.key_bit +
+                    (int)s_kbd_layout.key_count * s_kbd_layout.key_bits + 7) / 8;
+
+        /* ⛔ ON BLE THE REPORT ID IS NOT ON THE WIRE.
+         *
+         * A descriptor can declare "Report ID 1" - the K380 does - and over BLE
+         * that ID never appears in the payload, because each report has its own
+         * characteristic and the ID lives in its Report Reference descriptor.
+         * Matching p[0] against the ID therefore NEVER succeeds, and every
+         * keystroke fell through to the mouse path. Measured: the descriptor
+         * said id=1 while the reports began 00 18 00 ...
+         *
+         * So the length the descriptor declares is what identifies the report.
+         * The ID form is still accepted first, for a device that does put it on
+         * the wire - which is what USB does, and this file may yet be shared. */
+        if (s_kbd_layout.report_id != 0 && plen == want + 1 &&
+            p[0] == s_kbd_layout.report_id) {
+            bt_kbd_handle(p + 1, plen - 1);
+            return;
+        }
+        if (plen == want) {
             bt_kbd_handle(p, plen);
             return;
         }
+        /* Neither shape: fall through. On a combo keyboard/touchpad this is the
+         * mouse report, which the path below decodes properly. */
     }
 
     if (len < 3) return;
