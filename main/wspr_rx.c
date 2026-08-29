@@ -32,6 +32,7 @@
 #include "wspr_subtract.h"   /* two-pass: take a decoded signal back out */
 #include "wspr_sim.h"
 #include "wspr_tx.h"
+#include "cat/cat.h"   /* #290 PA-voltage guard */
 #include "esp_random.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
@@ -911,6 +912,58 @@ static void wspr_dec_task(void *arg)
     psram_task_park();
 }
 
+/* ---- WSPR PA-voltage guard (#290) --------------------------------------
+ *
+ * WSPR keys the PA for ~110 s out of every 120. Nothing else this radio does
+ * approaches that duty cycle - an FT8 burst is ~12.6 s - and the QMX finals
+ * overheat at full power on it. QRP Labs guard against this in the radio's OWN
+ * Virtual U3S WSPR, which runs the PA at 50% voltage (a quarter of the power);
+ * our WSPR TX is CAT-driven (TX;/TA;/RX;) and never enters that mode, so it
+ * inherits none of that protection. This applies the same guard.
+ *
+ * EDGE-TRIGGERED, ONCE PER SESSION - never per burst. An MM Set is written to
+ * the QMX's EEPROM, so a burst-by-burst guard would be thousands of EEPROM
+ * writes over a night of beaconing. wspr_pa_saved_x10 doubles as the "currently
+ * reduced" flag: non-zero means we have turned the radio down and owe it a
+ * restore. It is persisted, so a Tab5 that dies mid-session still knows what to
+ * put back on the next boot - the radio is left turned DOWN in the meantime,
+ * which is the safe direction to fail.
+ *
+ * The saved value is READ FROM THE RADIO, never assumed to be the 11.5 V
+ * factory default: an operator already running a reduced PA must never be
+ * turned UP by us. */
+#define WSPR_PA_FLOOR_X10  20   /* 2.0 V - below ~1 V the driver's own leakage
+                                 * sets the floor and lowering does nothing */
+
+static void wspr_pa_guard_update(const qmx_settings_t *ws)
+{
+    bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0;
+
+    if (want_reduced && ws->wspr_pa_saved_x10 == 0) {
+        int16_t cur = cat_get_pa_voltage_x10();
+        if (cur < 0) {
+            /* Not known yet - ask, and act on the next cycle. Two minutes late
+             * is fine; guessing the current value is not. */
+            cat_query_pa_voltage();
+            return;
+        }
+        uint16_t half = (uint16_t)(cur / 2);
+        if (half < WSPR_PA_FLOOR_X10) half = WSPR_PA_FLOOR_X10;
+        if (half >= (uint16_t)cur) return;         /* already at or below target */
+        settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
+        cat_request_pa_voltage_x10(half);
+        ESP_LOGW(TAG, "PA guard: WSPR TX on - Max. PA voltage %d.%d -> %u.%u V "
+                      "(~1/4 power, as the radio's own Virtual U3S does)",
+                 cur / 10, cur % 10, half / 10, half % 10);
+    } else if (!want_reduced && ws->wspr_pa_saved_x10 != 0) {
+        uint16_t back = ws->wspr_pa_saved_x10;
+        cat_request_pa_voltage_x10(back);
+        settings_set_wspr_pa_saved_x10(0);
+        ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage restored to %u.%u V",
+                 back / 10, back % 10);
+    }
+}
+
 static void wspr_rx_task(void *arg)
 {
     (void)arg;
@@ -1082,6 +1135,10 @@ static void wspr_rx_task(void *arg)
          * transmission. */
         qmx_settings_t ws;
         settings_load_all(&ws);
+
+        /* Turn the PA down before any burst can be armed, and put it back as
+         * soon as transmitting is switched off. Edge-triggered inside. */
+        wspr_pa_guard_update(&ws);
 
         char txtext[64];
 
@@ -1442,10 +1499,33 @@ bool wspr_rx_start(void)
     return true;
 }
 
+/* Give the radio its power back, whatever the reason we are leaving.
+ *
+ * ⛔ WITHOUT THIS THE GUARD IS WORSE THAN NOT HAVING IT. Max. PA voltage is a
+ * GLOBAL radio setting, not a per-mode one, and wspr_rx_stop() ends the slot
+ * loop - so the periodic guard in the loop never runs again. Enable WSPR TX,
+ * swipe to FT8, and every FT8 burst goes out at a quarter power, silently,
+ * with the radio's STORED configuration left changed. The operator would have
+ * no way to see it except on the radio's own Protection menu.
+ *
+ * Called from wspr_rx_stop() rather than only from the loop precisely because
+ * leaving the page is the case the loop cannot cover. */
+static void wspr_pa_guard_release(void)
+{
+    qmx_settings_t ws;
+    settings_load_all(&ws);
+    if (ws.wspr_pa_saved_x10 == 0) return;      /* nothing outstanding */
+    cat_request_pa_voltage_x10(ws.wspr_pa_saved_x10);
+    settings_set_wspr_pa_saved_x10(0);
+    ESP_LOGW(TAG, "PA guard: leaving WSPR - Max. PA voltage restored to %u.%u V",
+             ws.wspr_pa_saved_x10 / 10, ws.wspr_pa_saved_x10 % 10);
+}
+
 void wspr_rx_stop(void)
 {
     if (!s_run) return;
     s_run = false;
+    wspr_pa_guard_release();
     /* The task frees its own buffers and clears s_task; the mode goes back here
      * so the panadapter starts drawing again immediately rather than waiting for
      * a capture in flight to finish.

@@ -124,6 +124,14 @@ static char hamlib_mode_to_digit(const char *mode);  // forward declaration
 // raced the FA/MD/FW poll and the QMX got a garbled command (returned ?;),
 // which is why BW changes worked only intermittently. 0 = nothing pending.
 static volatile uint32_t s_pending_ssb_bw = 0;
+/* WSPR PA-voltage guard (#290). Tenths of a volt; 0 = nothing pending.
+ * The QMX's own Virtual U3S WSPR runs the PA at 50% voltage (a quarter of the
+ * power) because ~110 s of key-down out of every 120 cooks the BS170s. Our
+ * WSPR TX is CAT-driven (TX;/TA;/RX;) and therefore does NOT go through that
+ * mode, so it gets none of that protection unless we apply it ourselves. */
+static volatile uint16_t s_pending_pa_mv10 = 0;      /* set request, 0 = none */
+static volatile bool     s_pa_query_pending = false; /* read it back          */
+static volatile int16_t  s_pa_voltage_x10 = -1;      /* -1 = not yet known    */
 // Last SSB filter width the user set. While non-zero and we're in USB/LSB, the
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
@@ -233,6 +241,27 @@ void cat_request_af_gain(uint16_t ag)
     // Gated, and the read-back deliberately NOT queued here - see
     // cat_request_rf_gain() for both reasons.
     if (cat_is_ready()) s_af_gain = ag;
+}
+
+/* Max. PA voltage, in TENTHS of a volt (115 = 11.5 V). Menu and item spelling
+ * were read off the radio's own Protection menu through the terminal, not
+ * guessed - CLAUDE.md records that guessing MM tokens has cost real time.
+ *
+ * WARNING: an MM Set is written to the QMX's EEPROM, so this must be called
+ * once per session, never per burst. */
+void cat_request_pa_voltage_x10(uint16_t v_x10)
+{
+    s_pending_pa_mv10 = v_x10;
+}
+
+void cat_query_pa_voltage(void)
+{
+    s_pa_query_pending = true;
+}
+
+int16_t cat_get_pa_voltage_x10(void)
+{
+    return s_pa_voltage_x10;
 }
 
 void cat_request_ssb_bandwidth(uint32_t hz)
@@ -640,6 +669,29 @@ static void process_cat_message(const char *msg, size_t len)
         s_mm_resp_len = len;
         memcpy(s_mm_resp, msg, len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1);
         s_mm_resp[len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1] = '\0';
+        /* Max. PA voltage read-back (#290). A Get answers with the bare
+         * value, e.g. MM11.5; - the same shape the GPS-source probe
+         * documents. Parsed into tenths so the guard restores EXACTLY what
+         * was there rather than assuming the 11.5 V factory default: an
+         * operator who has already turned their PA down must never be turned
+         * back UP by us. */
+        {
+            const char *v = s_mm_resp + 2;
+            if (*v >= '0' && *v <= '9') {
+                int whole = atoi(v);
+                int tenth = 0;
+                const char *dot = strchr(v, '.');
+                if (dot && dot[1] >= '0' && dot[1] <= '9') tenth = dot[1] - '0';
+                int x10 = whole * 10 + tenth;
+                /* Sanity: the QMX PA runs single-digit to mid-teens volts.
+                 * Anything else is a different MM reply landing here. */
+                if (x10 > 0 && x10 <= 200) {
+                    s_pa_voltage_x10 = (int16_t)x10;
+                    ESP_LOGI(TAG, "Max. PA voltage read back: %d.%d V",
+                             x10 / 10, x10 % 10);
+                }
+            }
+        }
         return;
     }
     // PC response: "PCnn;" - power output in tenths of a watt, queried via
@@ -1366,6 +1418,33 @@ static void poll_task(void *arg)
             // requesting side it would be served first (this loop checks the query
             // ahead of the write) and would read back the old value.
             if (err == ESP_OK) s_rf_gain_query_pending = true;
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        /* Read Max. PA voltage. Served BEFORE the write below so a
+         * request-then-confirm sequence cannot read the stale value - the
+         * same ordering the RF-gain path documents. */
+        if (s_pa_query_pending) {
+            s_pa_query_pending = false;
+            const char *q = "MMProtection|Max. PA voltage;";
+            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, strlen(q), 200);
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint16_t pav = s_pending_pa_mv10;
+        if (pav != 0) {
+            s_pending_pa_mv10 = 0;
+            char mm[48];
+            int n = snprintf(mm, sizeof(mm), "MMProtection|Max. PA voltage=%u.%u;",
+                             (unsigned)(pav / 10), (unsigned)(pav % 10));
+            esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
+            ESP_LOGW(TAG, "PA voltage -> %u.%u V (%s)", (unsigned)(pav / 10),
+                     (unsigned)(pav % 10), e == ESP_OK ? "ok" : "fail");
+            /* An MM *write* makes the radio redraw its menu and sprays ANSI
+             * cursor-positioning bytes onto the CAT port (measured, CLAUDE.md).
+             * Give them somewhere to land before the poll resumes. */
+            vTaskDelay(pdMS_TO_TICKS(120));
+            if (e == ESP_OK) s_pa_query_pending = true;   /* confirm by reading back */
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }

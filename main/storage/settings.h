@@ -316,6 +316,24 @@ typedef struct {
      * not a private action, and it cannot be taken back once indexed. */
     bool     wspr_net_en;
 
+    /* WSPR PA-voltage guard (#290). WSPR keys the PA for ~110 s out of every
+     * 120 - a duty cycle nothing else this radio does approaches - and the QMX
+     * finals overheat at full power on it. The radio's OWN Virtual U3S WSPR
+     * halves the PA voltage for exactly this reason; our WSPR TX is CAT-driven
+     * and never enters that mode, so it inherits none of that protection.
+     *
+     * wspr_pa_reduce ON (the default) means: when WSPR transmit is enabled,
+     * read the radio's Max. PA voltage, remember it here, and set it to half.
+     * Restore it when transmit is turned off.
+     *
+     * wspr_pa_saved_x10 is the value to restore, in tenths of a volt, 0 when
+     * nothing is outstanding. It is PERSISTED deliberately: if the Tab5 dies
+     * mid-session the radio is left turned down, and only this tells the next
+     * boot what to put back. Restoring a guess would be worse than not
+     * restoring - an operator who runs a reduced PA must not be turned UP. */
+    bool     wspr_pa_reduce;
+    uint16_t wspr_pa_saved_x10;
+
     uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
@@ -520,6 +538,8 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+void settings_set_wspr_pa_reduce(bool v);       // #290 halve PA voltage while WSPR TX is on
+void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a volt, 0 = none
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF

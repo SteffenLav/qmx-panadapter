@@ -215,6 +215,21 @@ void cat_request_mode(const char *mode);
  * write is deferred to the poll task (which owns the CDC pipe), avoiding a
  * command-interleave race with the FA/MD/FW poll that made BW changes flaky.
  */
+/* WSPR PA-voltage guard (#290) - QMX "Max. PA voltage" in the Protection menu,
+ * in TENTHS of a volt (115 = 11.5 V, the factory default).
+ *
+ * WSPR keys the PA for ~110 s out of every 120. The radio's OWN Virtual U3S
+ * WSPR halves the PA voltage (a quarter of the power) to protect the BS170s;
+ * our WSPR TX is CAT-driven and bypasses that mode entirely, so it gets none
+ * of that protection unless we apply it.
+ *
+ * WARNING: an MM Set is stored in the QMX's EEPROM. Call this once per TX
+ * SESSION, never per burst - a burst-by-burst guard would be thousands of
+ * EEPROM writes over a night of beaconing. */
+void    cat_request_pa_voltage_x10(uint16_t v_x10);
+void    cat_query_pa_voltage(void);
+int16_t cat_get_pa_voltage_x10(void);   /* -1 until the radio has answered */
+
 void cat_request_ssb_bandwidth(uint32_t hz);
 
 /* QMX AF gain (volume), in the radio's own 0.25 dB steps. Kenwood "AG0nnn;".

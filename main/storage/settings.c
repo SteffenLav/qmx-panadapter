@@ -101,6 +101,8 @@ static const char *TAG = "settings";
 #define KEY_WSPR_TX_EN     "wspr_tx_en"
 #define KEY_WSPR_DUTY      "wspr_duty"
 #define KEY_WSPR_DBM       "wspr_dbm"
+#define KEY_WSPR_PARED     "wspr_pared"
+#define KEY_WSPR_PASAVE    "wspr_pasave"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
@@ -332,6 +334,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
  * happy, and nothing at runtime complains. tools/check_dirty_bits.py now
  * fails the build on this, because nothing else was ever going to notice. */
 #define DIRTY_DRAWER_EXPERT 104   /* Basic/Expert drawer choice, remembered */
+#define DIRTY_WSPR_PA       107   /* #290 WSPR PA-voltage guard + the value to restore */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -549,6 +552,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
+            nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
+            nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, snap.wspr_pa_saved_x10);
+        }
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap.wspr_dump_cycles);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap.wspr_hop_mask);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap.wspr_hop_en ? 1 : 0);
@@ -742,6 +749,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
     out->wspr_duty_pct = 20;          /* the conventional WSPR fraction */
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
+    out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
+    out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
     out->wspr_dump_cycles = 0;        /* never dump unless asked */
     out->wspr_hop_mask = 0;           /* nothing ticked until the operator does */
     out->wspr_hop_en   = false;
@@ -931,6 +940,8 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) out->wspr_duty_pct = u8v;
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_PARED, &u8v) == ESP_OK) out->wspr_pa_reduce = (u8v != 0); }
+    { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_PASAVE, &u16v) == ESP_OK) out->wspr_pa_saved_x10 = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_HOPM, &u16v) == ESP_OK) out->wspr_hop_mask = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_HOPE, &u8v) == ESP_OK) out->wspr_hop_en = (u8v != 0); }
@@ -2101,6 +2112,26 @@ void settings_set_wspr_tx_dbm(int8_t v)
     s_pending.wspr_tx_dbm = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_DBM);
+}
+
+void settings_set_wspr_pa_reduce(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_pa_reduce == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_pa_reduce = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_PA);
+}
+
+void settings_set_wspr_pa_saved_x10(uint16_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_pa_saved_x10 == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_pa_saved_x10 = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_PA);
 }
 
 void settings_set_ft8_op_mode(uint8_t v)

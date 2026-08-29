@@ -2821,6 +2821,11 @@ const SET_FIELDS = [
       ["18104600","17 m  18.104600"],["21094600","15 m  21.094600"],
       ["24924600","12 m  24.924600"],["28124600","10 m  28.124600"],
       ["50293000","6 m   50.293000"]]],
+  // #290. The radio's OWN Virtual U3S WSPR halves the PA voltage because ~110 s
+  // of key-down out of every 120 overheats the QMX finals. Our WSPR TX is
+  // CAT-driven and bypasses that mode, so it must apply the same guard.
+  ["WSPR", "wspr_pa_reduce", "bool", "Protect the finals while transmitting",
+     "Halves the radio's Max. PA voltage (about a quarter power) while WSPR transmit is on, and puts it back afterwards - the same guard the radio uses for its own WSPR"],
   ["WSPR", "wspr_net_en", "bool", "Publish spots to wsprnet.org",
      "Reports what you HEAR to the wsprnet database"],
 

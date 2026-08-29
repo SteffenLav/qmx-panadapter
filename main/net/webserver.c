@@ -2762,6 +2762,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
     cJSON_AddBoolToObject(root,   "wspr_tx_en",    c.wspr_tx_en);
+    cJSON_AddBoolToObject(root,   "wspr_pa_reduce", c.wspr_pa_reduce);
+    /* Tenths of a volt, 0 when nothing is outstanding. Exposed so "is the
+     * radio currently turned down, and to what does it owe a restore?" is
+     * answerable without a serial log - the same reasoning as wspr_dump_cycles. */
+    cJSON_AddNumberToObject(root, "wspr_pa_saved_x10", c.wspr_pa_saved_x10);
     /* Cycles still to be dumped. Exposed because otherwise "is a dump armed?"
      * is only answerable from the serial log - and the arm reply tells you what
      * happened at the time, not what the state is now. A persisted request that
@@ -2924,6 +2929,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * diffing the surfaces before adding the form row, not after. */
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_net_en")))
         settings_set_wspr_net_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_pa_reduce")))
+        settings_set_wspr_pa_reduce(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
