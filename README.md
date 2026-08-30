@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.10.4.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.10.4 — FT4 replies are quick again.** FT4 now waits for the current slot to finish decoding before transmitting, the same rule FT8 has used since v0.21.0, so a reply lands in the slot it belongs to instead of a cycle later *(Gyula HA3HZ)*. It was attempted in v1.10.2, broke FT4 transmit outright and was withdrawn in v1.10.3; it is back with the timing checked by an automatic test rather than by eye. **FT4 also stops reporting a made-up 5.0 W** — it cannot be sampled mid-transmission the way FT8 is, and the display was filling the gap with a fixed figure, so it now shows no power rather than a wrong one. And **auto-work pileup leaves busy stations alone**. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.10.3 — FT4 transmits again.** In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent *(Gyula HA3HZ)*: the countdown ran normally and nothing went on the air, on a CQ and on a call alike. FT8 was unaffected. Fixed — FT4 transmits at the start of its slot as it did in v1.10.1. The FT4 reply timing added in v1.10.2 is withdrawn with it, because that change is what broke transmitting; it returns once the transmit window is sized for FT4's shorter slot. **Update if you use FT4.**
 >
@@ -58,7 +60,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.3.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.4.pdf).
 
 <!-- USERGUIDE:START -->
 

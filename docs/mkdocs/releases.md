@@ -4,14 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.3** — 2026-08-30
+**v1.10.4** — 2026-08-30
+
+**FT4 replies are quick again, and the Tab5 stops inventing an FT4 power reading.**
+
+- **FT4 answers in the right slot** *(Gyula HA3HZ)*. FT4 now waits for the current slot to finish decoding before it transmits, the same rule FT8 has used since v0.21.0, so a reply goes out in the slot it belongs to instead of a cycle later. It should feel at least as quick as FT8. This was tried in v1.10.2, broke FT4 transmit entirely, and was withdrawn in v1.10.3 — it is back, this time with the transmit timing checked by an automatic test rather than by eye.
+- **FT4 no longer reports a made-up 5.0 W** *(Gyula HA3HZ)*. An FT4 symbol is 48 ms and asking the radio for its power can take 50 ms, so the power cannot be sampled during an FT4 transmission the way it is in FT8 — and the display was filling that gap with a fixed 5.0 W. The radio's own reading was the correct one. **FT4 now shows no power rather than a wrong one**; FT8 is unaffected and still measures properly.
+- **Auto-work pileup leaves busy stations alone** *(Gyula HA3HZ)*. A station who had called you could be answered a couple of minutes later, by which time they were already in a contact with somebody else — and then called repeatedly. If their last message shows them working another station, they are now skipped until they are free.
+
+## Previous Releases
+
+### v1.10.3 — 2026-08-30
 
 **FT4 transmits again — update if you use FT4.**
 
 - **FT4 would not transmit at all** *(Gyula HA3HZ)*. In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent: the countdown ran normally, the message was armed, and nothing went on the air — on a CQ and on a call alike. FT8 was unaffected throughout. Fixed, and FT4 now transmits at the start of its slot as it did in v1.10.1.
 - **The FT4 reply timing from v1.10.2 is withdrawn with it.** That release made FT4 wait for the current slot to finish decoding before transmitting, so a reply landed in the right slot instead of a cycle later — and that is exactly the change that broke transmitting. FT4 replies can again be a cycle late. It needs a transmit window sized for FT4's shorter slot, which is being done properly rather than quickly.
-
-## Previous Releases
 
 ### v1.10.2 — 2026-08-30
 

@@ -70,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
+
+**New in v1.10.4 — FT4 replies are quick again.** FT4 now waits for the current slot to finish decoding before transmitting, the same rule FT8 has used since v0.21.0, so a reply goes out in the slot it belongs to instead of a cycle later *(Gyula HA3HZ)* — it should feel at least as quick as FT8. This was attempted in v1.10.2, broke FT4 transmit outright and was withdrawn in v1.10.3; it is back with the transmit timing checked by an automatic test rather than by eye. **FT4 also stops reporting a made-up 5.0 W**: an FT4 symbol is 48 ms and a power query can take 50 ms, so it cannot be sampled mid-transmission the way FT8 is, and the display was filling the gap with a fixed figure — it now shows no power rather than a wrong one, and FT8 still measures properly. And **auto-work pileup leaves busy stations alone**: a caller answered a couple of minutes late could be mid-contact with somebody else and was then called repeatedly.
 
 **New in v1.10.3 — FT4 transmits again.** In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent *(Gyula HA3HZ)*: the countdown ran normally, the message was armed, and nothing went on the air, on a CQ and on a call alike. FT8 was unaffected. Fixed — FT4 transmits at the start of its slot as it did in v1.10.1. The FT4 reply timing introduced in v1.10.2 is withdrawn with it, since that change is what broke transmitting; FT4 replies can again be a cycle late, and it will return once the transmit window is sized for FT4's shorter slot. **Update if you use FT4.**
 
@@ -137,7 +139,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.3.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.4.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
