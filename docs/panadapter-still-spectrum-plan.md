@@ -135,6 +135,40 @@ re-frame by a **half view** (page), not by a pixel. Otherwise the forced clamp
 fires on every tune while at an edge and the display micro-jitters — the "still"
 promise broken in the least readable way possible.
 
+⭐ **DECIDED 2026-08-30, after driving both in the simulator: JUMP A WINDOW, not
+push.** The operator's words: *"i like the jumping better"*. Paging holds
+completely still and then re-frames once, rather than pinning the cursor near the
+edge and sliding the spectrum under it for as long as tuning continues. Land the
+cursor far enough from the opposite trigger that reversing direction does not
+immediately page back: triggers at 5% / 95% landing at 75% / 25% proved stable,
+8% / 92% landing at 82% / 18% did not.
+
+### 4.1 Paging is ASYMMETRIC, and below x4 it only works upward
+
+Found in the simulator when the operator asked why it only paged to the right. It
+is not a policy bug, it falls out of section 1. With a fixed viewport the ceiling
+requires `dial >= V_lo + W - 12`, so the cursor's reachable range inside the view
+is, as a fraction of the view width:
+
+```
+cursor in [ max(0, (W-12)/W) , min(1, 36/W) ]
+```
+
+| Zoom | W | cursor may sit | page left possible? |
+|---|---|---|---|
+| x1 | 48 kHz | pinned at 75% | no |
+| x2 | 24 kHz | right half only | no |
+| x3 | 16 kHz | right three-quarters | no |
+| **x4** | **12 kHz** | **whole width** | **yes** |
+
+So tuning **up** pages cleanly at every zoom, while tuning **down** below x4 can
+never reach the left trigger and is **forced** to slide instead. Confirmed in the
+simulator at x2: the cursor sat at exactly 50% and the view pushed continuously.
+
+**This must be visible in the UI**, or it reads as a bug. It did to the operator
+within a minute of using it. A dashed marker showing how far left the cursor can
+get is enough; the simulator draws exactly that.
+
 ---
 
 ## 5. The waterfall — the hardest part
