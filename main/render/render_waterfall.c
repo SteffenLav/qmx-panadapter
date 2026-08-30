@@ -9,6 +9,16 @@
 #include <stdbool.h>
 #include <math.h>
 
+
+/* No-data shading for the region the radio cannot hear (#297). Deliberately
+ * the same slate as the spectrum's hatch so the two panes read as one block,
+ * and deliberately NOT a colour from the waterfall LUT - it must not look like
+ * a signal level. s_wf_row_parity advances once per row so the strokes lean
+ * instead of forming vertical lines.
+ */
+#define WF_NODATA_BG     0x18E3   /* very dark slate */
+#define WF_NODATA_HATCH  0x3186   /* one shade up, the stroke */
+static int s_wf_row_parity;
 static const char *TAG = "render_wf";
 
 // Must match the display canvas width.
@@ -275,8 +285,21 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     float floor_global = (floor_cnt > 0) ? (floor_sum / (float)floor_cnt)
                                          : floor_arr[0];
 
+    /* The half of #297 the waterfall owns. The spectrum above already refuses
+     * to wrap; if this still did, the two panes would disagree and the history
+     * would carry a band of somebody else's spectrum down the screen for the
+     * next minute. A column outside what the radio can hear is hatched with the
+     * same 9-px diagonal the spectrum uses, so the dead area reads as one block
+     * across both panes rather than stopping at the axis. */
+    const int wf_half = n_bins / 2;
     for (int x = 0; x < WF_WIDTH; x++) {
         int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
+
+        if (zoom_spec == NULL && (b < -wf_half || b > wf_half)) {
+            row[x] = (((x + s_wf_row_parity) % 9) == 0) ? WF_NODATA_HATCH
+                                                        : WF_NODATA_BG;
+            continue;
+        }
         int bin = ((b % n_bins) + n_bins) % n_bins;
 
         float db = use_spectrum[bin];
@@ -294,6 +317,7 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         row[x] = s_lut[idx];
     }
 
+    s_wf_row_parity++;
     ui_push_waterfall_row(s_row);
 }
 
