@@ -1182,7 +1182,26 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                     }
                     ps_sent = false;   // re-arm the next send/read cycle
                 }
-            } else if (!ps_have && i == nn / 4) {
+            } else if (sim && !ps_have && i == nn / 4) {
+                /* ⛔ THIS USED TO CATCH LIVE FT4 AND INVENT A POWER READING.
+                 *
+                 * The condition above is `!sim && !is_ft4`, so its `else` is
+                 * `sim || is_ft4` - and a LIVE FT4 burst therefore wrote the
+                 * simulation placeholder (5.0 W / 1.20) into the live
+                 * s_last_power_w / s_last_swr, on a radio that was really
+                 * keyed. Gyula HA3HZ, 2026-08-30: "on Tab5 the max. power is
+                 * always 5.0W - while QMX indicates higher. This only happens
+                 * with FT4." His log has zero "radio not keyed" lines and shows
+                 * `sim TX power=5.0W (placeholder, not measured)` on bursts that
+                 * were genuinely on the air, while his FT8 bursts logged real
+                 * `live TX power=5.3..5.5W`.
+                 *
+                 * Same rule as never writing 599 into an ADIF record: a number
+                 * nobody measured must not be presented as a measurement. FT4
+                 * genuinely cannot be sampled mid-burst (48 ms symbols, a CDC
+                 * write is bounded at 50 ms), so the honest answer is no
+                 * reading at all - see #300 for why the post-burst query is not
+                 * a substitute either. */
                 // Simulated burst (settings' sim mode): no real PA to query,
                 // so populate the same s_last_*
                 // fields with a fixed placeholder reading at roughly the same
