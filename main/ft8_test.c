@@ -37,6 +37,7 @@
 // only way to hear the station we're working (they transmit opposite us).
 
 #include "ft8_test.h"
+#include "ft8_slot_gate.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -200,7 +201,13 @@ int ft8_op_mode_slot_ms(void)
 // would start transmitting outside the range the far end can decode - strictly
 // worse than waiting for the next slot. Do NOT raise further without moving the
 // decoder's +19-block search bound too.
-#define FT8_REPLY_TX_WINDOW_MS 2800
+/* ⛔ RETIRED - do not reinstate. 2800 ms was looser than EITHER protocol's
+ * room (FT8 has 15000-12640 = 2360 ms, FT4 7500-5040 = 2460 ms), so a reply
+ * fired at the window edge overran its own slot. It rarely bit only because
+ * decodes usually land about a second in. The window is now derived per
+ * protocol by ft8_gate_reply_window_ms() as slot - burst - margin: 2260 ms
+ * for FT8, 2360 ms for FT4. Putting 2800 back is a caught mutation. */
+/* #define FT8_REPLY_TX_WINDOW_MS 2800  - see ft8_slot_gate.h */
 
 // Hold-for-decode gate (the "everything goes twice" fix). During an active
 // QSO, the just-ended RX slot's decode is ALWAYS still running at the next
@@ -216,7 +223,7 @@ int ft8_op_mode_slot_ms(void)
 // somehow hasn't landed by this deadline, fire whatever is armed - worst case
 // is exactly the old resend behaviour, never a skipped slot. Must be < the
 // FT8_REPLY_TX_WINDOW_MS poll cutoff or a late decode ends in NO TX at all.
-#define FT8_TX_HOLD_DEADLINE_MS 2300
+/* #define FT8_TX_HOLD_DEADLINE_MS 2300  - now ft8_gate_hold_deadline_ms() */
 
 // Early-decode (the "reply at dt~=0" path, WSJT-X-style). All the hold/reply
 // machinery above ships the fresh reply ~1-2 s late for one reason: the
@@ -1768,11 +1775,26 @@ static void ft8_task(void *arg)
          *
          * One flag now drives BOTH, so the gate cannot be half-removed again.
          * Holding a burst that nothing is allowed to fire is the whole bug. */
-        bool late_fire_ok = !is_ft4;
-        bool hold_for_fresh = late_fire_ok &&
-                              (s_decode_jobs_done != s_decode_jobs_queued) &&
-                              ft8_qso_is_busy(NULL, 0) &&
-                              ft8_tx_slot_would_run(boundary_ms);
+        /* Both gates come from ft8_slot_gate.c, which is portable and
+         * host-tested (test/ft8_slot_gate_harness.c, 9/9 mutations caught).
+         * They share ONE ft8_gate_late_fire_enabled(), so the pair can no
+         * longer be half-removed - which is exactly what broke FT4 transmit in
+         * v1.10.2 and what the harness's first test now forbids.
+         *
+         * The three inputs are evaluated in the same short-circuit ORDER as
+         * before: the two accessors are side-effect-free peeks, but reading
+         * them only when needed keeps this off the hot path. */
+        ft8_gate_boundary_t bgate = {
+            .is_ft4           = is_ft4,
+            .decode_in_flight = (s_decode_jobs_done != s_decode_jobs_queued),
+            .qso_busy         = false,
+            .tx_would_run     = false,
+        };
+        if (bgate.decode_in_flight) {
+            bgate.qso_busy = ft8_qso_is_busy(NULL, 0);
+            if (bgate.qso_busy) bgate.tx_would_run = ft8_tx_slot_would_run(boundary_ms);
+        }
+        bool hold_for_fresh = ft8_gate_should_hold(&bgate);
         if (hold_for_fresh)
             ESP_LOGI(TAG, "slot %d: TX due but previous slot still decoding - holding for fresh reply",
                      slot_idx);
@@ -1951,9 +1973,19 @@ static void ft8_task(void *arg)
                     // ft8_qso_advance() has replaced the armed content) or the
                     // deadline passes (fire whatever is armed = old behaviour).
                     bool decode_landed = (s_decode_jobs_done == s_decode_jobs_queued);
-                    if (late_fire_ok && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
-                        (!hold_for_fresh || decode_landed ||
-                         into_slot_ms >= FT8_TX_HOLD_DEADLINE_MS) &&
+                    /* tx_should_run is set true here and the REAL check is
+                     * left as the last term below, deliberately: unlike the
+                     * peeks above, ft8_tx_should_run_this_slot() fills
+                     * late_txreq and is the commit path, so it must stay behind
+                     * the short circuit and must not be called speculatively. */
+                    ft8_gate_late_t lgate = {
+                        .is_ft4        = is_ft4,
+                        .held          = hold_for_fresh,
+                        .decode_landed = decode_landed,
+                        .tx_should_run = true,
+                        .into_slot_ms  = into_slot_ms,
+                    };
+                    if (ft8_gate_should_late_fire(&lgate) &&
                         ft8_tx_should_run_this_slot(boundary_ms, &late_txreq)) {
                         late_tx = true;
                         break;
