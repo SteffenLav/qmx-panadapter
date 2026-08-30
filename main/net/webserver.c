@@ -817,6 +817,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 cat_request_cw_passband(bw);    // CW: MMCW menu item (Kenwood FW is rejected)
             }
         }
+    } else if (action && strcmp(action, "still_view") == 0) {
+        /* Dev action while #298 is being judged on the bench: with it off the
+         * panadapter behaves as it always has (display follows the dial), with
+         * it on the spectrum holds still and the cursor moves. No web UI element
+         * points at this - it is a bench control, not a setting yet. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool v = cJSON_IsBool(on) ? cJSON_IsTrue(on) : true;
+        ui_set_still_view(v);
+        ESP_LOGI(TAG, "web: still display -> %s", v ? "on" : "off");
     } else if (action && strcmp(action, "set_zoom") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "zoom");
         if (cJSON_IsNumber(item)) {

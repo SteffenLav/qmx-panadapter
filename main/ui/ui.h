@@ -68,6 +68,13 @@ bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
 int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
+/* Still display (#298): the spectrum and waterfall hold still and the VFO
+ * cursor moves across them, instead of the display following the dial.
+ * Toggle from /api/cmd {"action":"still_view","on":false} while it is
+ * being evaluated - it changes how the whole panadapter feels. */
+void ui_set_still_view(bool on);
+bool ui_get_still_view(void);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:

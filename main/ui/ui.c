@@ -1356,6 +1356,117 @@ static void zoom_popup_open(void)
 // Re-center the passband-centered pan offset (zoom > x1) and push it to the
 // DSP zoom-FFT. No LVGL calls - safe to call from non-LVGL tasks (e.g. the
 // CAT task, when mode/passband width changes).
+static void recompute_zoom_pan(void);
+
+/* ---- still display (#298) ------------------------------------------------
+ *
+ * The operator's policy, settled in the simulator on 2026-08-30:
+ *   - a DEAD BAND where nothing moves at all;
+ *   - past it, a small PUSH so a signal sitting on the screen edge can be
+ *     worked without the page turning underneath;
+ *   - past that, a PAGE that carries part of the old screen over so you can see
+ *     where you came from.
+ *
+ * Fractions of the view width. Provisional - "it might change". */
+#define SV_EDGE      0.90f   /* dead band ends here */
+#define SV_PUSHMAX   0.10f   /* how far it may push before paging */
+#define SV_OVERLAP   0.10f   /* of the old screen kept after a page */
+
+static bool  s_still_view = true;   /* dev action "still_view" turns it off */
+static float s_sv_push    = 0.0f;   /* push accumulated at the current edge */
+static int   s_sv_side    = 0;      /* +1 right, -1 left, 0 none */
+
+/* ⛔ THE PAN IS KEPT IN Hz, NOT IN BINS, AND THAT IS THE WHOLE POINT.
+ *
+ * s_pan_offset_bins is quantised to one FFT bin = 46.875 Hz. The first version
+ * of this rounded EACH TUNE STEP into bins, so a 10 Hz step rounded to zero and
+ * the pan did not move at all - the display simply followed the dial, 10 Hz at
+ * a time, and ten steps drifted 100 Hz in the direction of tuning. Reported
+ * from the bench: "I actually see the spectrum moving slightly in the same
+ * direction as I am tuning", and only when zoomed, because 100 Hz is 2.7 px at
+ * x1 and 21 px at x8.
+ *
+ * Accumulating in Hz and rounding the TOTAL keeps the error bounded at half a
+ * bin instead of letting it grow without limit. */
+static int64_t s_sv_pan_hz = 0;
+
+static void sv_apply_pan_hz(int64_t hz)
+{
+    s_sv_pan_hz       = hz;
+    s_pan_offset_bins = (int)llround((double)hz * (double)DSP_FFT_SIZE
+                                                / (double)DSP_SAMPLE_RATE_HZ);
+}
+
+/* For the paths that compute a bin offset directly (zoom changes, the
+ * passband re-centre): adopt it as the new truth so the next tune measures
+ * from where the display actually is. */
+static void sv_sync_pan_from_bins(void)
+{
+    s_sv_pan_hz = (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / DSP_FFT_SIZE;
+}
+
+void ui_set_still_view(bool on)
+{
+    s_still_view = on;
+    if (!on) { s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0.0f; s_sv_side = 0;
+               recompute_zoom_pan(); }
+    ESP_LOGI(TAG, "still display: %s", on ? "ON - spectrum holds, cursor moves"
+                                          : "OFF - spectrum follows the dial");
+}
+bool ui_get_still_view(void) { return s_still_view; }
+
+/* Where the cursor sits, as a fraction of the view. The overlays derive their x
+ * the same way, so this is the same number they draw with. */
+static float sv_cursor_frac(void)
+{
+    float span = (float)DSP_SAMPLE_RATE_HZ / s_zoom_factor;
+    if (span <= 0.0f) return 0.5f;
+    return 0.5f - (float)s_sv_pan_hz / span;
+}
+
+static void sv_set_cursor_frac(float f)
+{
+    float span = (float)DSP_SAMPLE_RATE_HZ / s_zoom_factor;
+    sv_apply_pan_hz((int64_t)llroundf((0.5f - f) * span));
+}
+
+static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
+{
+    int64_t d = (int64_t)now_hz - (int64_t)prev_hz;
+    if (d == 0) return;
+
+    /* A jump larger than the whole captured window - band change, memory
+     * recall, a spot click - leaves nothing on screen worth holding still, so
+     * re-centre rather than page across a void. */
+    if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
+        s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0.0f; s_sv_side = 0;
+        recompute_zoom_pan();
+        return;
+    }
+
+    /* Hold the same absolute frequencies: baseband moved down by d, so the pan
+     * moves down by d too. */
+    sv_apply_pan_hz(s_sv_pan_hz - d);   /* in Hz - see sv_apply_pan_hz */
+
+    float f = sv_cursor_frac(), lo_edge = 1.0f - SV_EDGE;
+    if (f > SV_EDGE) {
+        if (s_sv_side != 1) { s_sv_side = 1; s_sv_push = 0.0f; }
+        s_sv_push += f - SV_EDGE;
+        if (s_sv_push > SV_PUSHMAX) { sv_set_cursor_frac(SV_OVERLAP + 0.02f);
+                                      s_sv_push = 0.0f; s_sv_side = 0; }
+        else                        { sv_set_cursor_frac(SV_EDGE); }
+    } else if (f < lo_edge) {
+        if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0.0f; }
+        s_sv_push += lo_edge - f;
+        if (s_sv_push > SV_PUSHMAX) { sv_set_cursor_frac(1.0f - SV_OVERLAP - 0.02f);
+                                      s_sv_push = 0.0f; s_sv_side = 0; }
+        else                        { sv_set_cursor_frac(lo_edge); }
+    } else {
+        s_sv_side = 0; s_sv_push = 0.0f;
+    }
+    dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+}
+
 static void recompute_zoom_pan(void)
 {
     if (s_zoom_factor <= 1.0f) return;
@@ -1364,6 +1475,7 @@ static void recompute_zoom_pan(void)
     int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
     float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
     s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+    sv_sync_pan_from_bins();
     dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
 }
 
@@ -1382,6 +1494,7 @@ void ui_set_zoom(float zoom, int pan_bins)
     }
     s_zoom_factor     = zoom;
     s_pan_offset_bins = pan_bins;
+    sv_sync_pan_from_bins();
     settings_set_zoom_factor(zoom);
     dsp_set_zoom(zoom, pan_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
     // Update zoom label
@@ -3542,7 +3655,11 @@ static void update_bandplan_strip(uint32_t freq_hz)
     // filter passband.
     if (s_bp_span) {
         int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
-        int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        /* Same exact pan the trace is drawn with (see sv_apply_pan_hz) - deriving it
+     * from the rounded bin count here would let the labels creep against the
+     * signals by up to half a bin. */
+    int32_t pan_hz  = s_still_view ? (int32_t)s_sv_pan_hz
+                                   : (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int64_t center  = (int64_t)freq_hz + pan_hz;
         int64_t vis_lo  = center - span_hz / 2;
         int64_t vis_hi  = center + span_hz / 2;
@@ -5711,14 +5828,31 @@ void ui_update_frequency(uint32_t freq_hz)
             ft8_screen_clear();
         }
     }
+    uint32_t prev_freq_hz = s_last_qmx_freq_hz;
     s_last_qmx_freq_hz = freq_hz;
-    // Reset pan to 0 on freq change — new center is the tuned freq.
-    s_pan_offset_bins = 0;
-    // At zoom > x1, re-derive the passband-centered pan around the new VFO
-    // freq (and push it to the DSP zoom-FFT) — otherwise the zoom-FFT keeps
-    // centering on the old target while the overlay lines/labels above
-    // recompute using pan=0, knocking them out of sync with the spectrum.
-    recompute_zoom_pan();
+    /* ⭐ STILL DISPLAY (#298). This line used to be `s_pan_offset_bins = 0;`
+     * followed by recompute_zoom_pan() - re-deriving the pan from the passband
+     * centre on EVERY tune. That single reset is what welded the spectrum to
+     * the dial: the view was dragged along and the cursor never moved.
+     *
+     * Now the pan TRACKS the dial instead. When the dial rises by d, every
+     * signal's baseband position falls by d, so moving the pan down by the same
+     * amount leaves the same absolute frequencies on screen and walks the
+     * cursor across it. Nothing else had to change for the overlays: the axis,
+     * the VFO cursor, the passband edges and the RIT marker all already compute
+     * their x as (offset - pan_hz) * W / span + W/2, so they follow for free.
+     *
+     * still_view_step() then applies the operator's policy from the simulator -
+     * a dead band where nothing moves, a small push at the edge so a signal
+     * sitting there stays workable, then a page carrying some of the old screen
+     * over. */
+    if (!s_still_view || prev_freq_hz == 0) {
+        s_pan_offset_bins = 0;
+        s_sv_pan_hz = 0;
+        recompute_zoom_pan();
+    } else {
+        still_view_follow_dial(prev_freq_hz, freq_hz);
+    }
     settings_set_last_vfo(freq_hz);
     if (!s_freq_label) return;
     char buf[32];
@@ -6574,7 +6708,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
         pvc.if_offset_hz   = ui_get_if_offset_hz();
         pvc.zoom           = eff_zoom;
         pvc.clamp_to_capture = false;      /* blank, never dragged along */
-        int64_t pan_hz = (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
+        /* The TRUE pan, not the bin-rounded one. s_pan_offset_bins is quantised
+         * to 46.875 Hz; using it here would re-introduce, at draw time, exactly
+         * the stepping sv_apply_pan_hz() exists to avoid. On this path the view
+         * position is then exact to the Hz. */
+        int64_t pan_hz = s_still_view ? s_sv_pan_hz
+                                      : (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
         int32_t span_hz = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)eff_zoom + 0.5);
         pan_view_resolve(&pvc, pvc.dial_hz + pan_hz - span_hz / 2, &pv);
         pv_ok = pv.ok;
