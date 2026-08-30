@@ -42,11 +42,13 @@ void pan_view_resolve(const pan_view_cfg_t *c, int64_t want_lo_hz, pan_view_t *v
                      ? c->dial_hz - span / 2
                      : want_lo_hz;
 
-    /* Clamp into the capture window. Order matters: pushing the top down first
-     * and then the bottom up means a span equal to the capture width lands
-     * exactly on it rather than oscillating. */
-    if (lo + span > v->cap_hi_hz) lo = v->cap_hi_hz - span;
-    if (lo < v->cap_lo_hz)        lo = v->cap_lo_hz;
+    /* Clamp only when asked. Order matters: pushing the top down first and then
+     * the bottom up means a span equal to the capture width lands exactly on it
+     * rather than oscillating. */
+    if (c->clamp_to_capture) {
+        if (lo + span > v->cap_hi_hz) lo = v->cap_hi_hz - span;
+        if (lo < v->cap_lo_hz)        lo = v->cap_lo_hz;
+    }
 
     v->lo_hz   = lo;
     v->hi_hz   = lo + span;

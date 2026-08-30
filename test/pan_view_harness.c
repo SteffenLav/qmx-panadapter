@@ -39,6 +39,7 @@ static pan_view_cfg_t base(float zoom, int64_t dial, int32_t ifoff)
     memset(&c, 0, sizeof c);
     c.sample_rate_hz = 48000; c.n_bins = 1024; c.screen_w = 1280;
     c.dial_hz = dial; c.if_offset_hz = ifoff; c.zoom = zoom;
+    c.clamp_to_capture = 1;      /* the clamping tests below opt in; 8b turns it off */
     return c;
 }
 
@@ -147,6 +148,34 @@ int main(void)
         okneard(n, lo, want[i].lo, 0.001);
         snprintf(n, sizeof n, "zoom %.0f cursor hi", (double)want[i].z);
         okneard(n, hi, want[i].hi, 0.001);
+    }
+
+    /* 8b. THE SHIPPING DEFAULT: no clamp. The view stays where it is asked to
+     *     be, and columns the radio cannot hear come back as NO_DATA to be
+     *     hatched. "Let it go blank - or it is not a moving vfo" (operator,
+     *     2026-08-30). This is the #297 fix in its final form: the right-hand
+     *     quarter at zoom 1 is EMPTY, not wrapped. */
+    printf("no-clamp default: dial stays centred, the rest goes blank\n");
+    {
+        pan_view_cfg_t c8 = base(1.0f, 14074000, 12000);
+        c8.clamp_to_capture = 0;
+        pan_view_resolve(&c8, PAN_VIEW_CENTRE, &v);
+        okeq("view is dial-centred, NOT clamped", v.lo_hz, 14074000 - 24000);
+        okeq("dial sits mid-screen", pan_view_hz_to_x(&c8, &v, 14074000), 640);
+
+        int have = 0, blank = 0, last_have = -1, first_blank = -1;
+        for (int x = 0; x < 1280; x++) {
+            int b = pan_view_x_to_bin(&c8, &v, x);
+            if (b == PAN_VIEW_NO_DATA) { blank++; if (first_blank < 0) first_blank = x; }
+            else { have++; last_have = x; }
+        }
+        printf("   %d columns with data, %d blank, first blank at x=%d\n",
+               have, blank, first_blank);
+        okeq("about a quarter of the screen is blank", blank > 300 && blank < 340, 1);
+        okeq("the blank part is the RIGHT edge", first_blank > 940, 1);
+        okeq("data runs right up to it", last_have == first_blank - 1, 1);
+        okeq("the blank columns really are above the ceiling",
+             pan_view_x_to_hz(&c8, &v, first_blank) >= v.cap_hi_hz, 1);
     }
 
     /* 9. Degenerate configs must say "draw nothing", never divide by zero or

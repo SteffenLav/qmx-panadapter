@@ -24,6 +24,7 @@
  * still one (#298).
  */
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,16 @@ typedef struct {
     int64_t dial_hz;          /* the frequency the operator is tuned to */
     int32_t if_offset_hz;     /* baseband Hz the dial maps to - ui_get_if_offset_hz() */
     float   zoom;             /* 1.0 = the whole sample rate on screen */
+
+    /* Hold the view inside the capture window? DEFAULT (false) is the shipping
+     * behaviour: the view stays where it is asked to be and any column outside
+     * what the radio hears comes back as PAN_VIEW_NO_DATA, to be drawn as
+     * visibly empty. Clamping is what drags the view along with the dial, and a
+     * view dragged by the dial is not a still one - the operator's call,
+     * 2026-08-30: "Let it go blank - or it is not a moving vfo."
+     *
+     * Set true only where a deliberate re-frame wants to land somewhere useful. */
+    bool    clamp_to_capture;
 } pan_view_cfg_t;
 
 typedef struct {

@@ -1,5 +1,6 @@
 #include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
+#include "util/pan_view.h"
 #include "ui_theme.h"
 #include "nvs.h"
 #include "wspr_screen_view.h"
@@ -6543,9 +6544,57 @@ void ui_push_spectrum(const float *bins, int n_bins)
     // hit zones and the tune check drifted apart in v1.8.1.
     spur_marks_update(N, bin_start, window_bins);
 
+    /* ⭐ #297. The QMX's LO sits ui_get_if_offset_hz() BELOW the dial, so the
+     * spectrum it can hear is dial-36k..dial+12k - NOT centred on the dial. The
+     * old mapping took the bin index modulo N, which filled the missing top
+     * 12 kHz with real spectrum from 24-36 kHz BELOW the dial, under an axis
+     * claiming dial+12..+24. Confirmed on air 2026-08-30: sitting at 14.100 put
+     * the 14.074 FT8 cluster in the right-hand quarter, and tapping it tuned
+     * ~48 kHz away.
+     *
+     * pan_view owns that arithmetic now (portable, host-tested, and mutating the
+     * wrap back in is a caught test). A column outside the capture window comes
+     * back as PAN_VIEW_NO_DATA and is drawn as visibly empty rather than filled
+     * with somebody else's spectrum - "let it go blank, or it is not a moving
+     * vfo" (operator, 2026-08-30).
+     *
+     * ⚠ Only the BASE spectrum path. At zoom >= 2 dsp_set_zoom() has already
+     * mixed the pan target to DC, so `use_bins` is the zoom FFT and these bins
+     * mean something else entirely. That path also cannot wrap: its span is at
+     * most 24 kHz and sits inside the capture window by construction. */
+    pan_view_cfg_t pvc;
+    pan_view_t     pv;
+    bool           pv_ok = (zoom_spec == NULL);
+    memset(&pvc, 0, sizeof pvc);
+    if (pv_ok) {
+        pvc.sample_rate_hz = DSP_SAMPLE_RATE_HZ;
+        pvc.n_bins         = N;
+        pvc.screen_w       = DISPLAY_H_RES;
+        pvc.dial_hz        = (int64_t)s_last_qmx_freq_hz;
+        pvc.if_offset_hz   = ui_get_if_offset_hz();
+        pvc.zoom           = eff_zoom;
+        pvc.clamp_to_capture = false;      /* blank, never dragged along */
+        int64_t pan_hz = (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
+        int32_t span_hz = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)eff_zoom + 0.5);
+        pan_view_resolve(&pvc, pvc.dial_hz + pan_hz - span_hz / 2, &pv);
+        pv_ok = pv.ok;
+    }
+    int nodata_from = -1, nodata_to = -1;      /* run of columns with nothing */
+
     for (int x = 0; x < DISPLAY_H_RES; x++) {
-        int b = bin_start + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
-        int bin = ((b % N) + N) % N;
+        int bin;
+        if (pv_ok) {
+            bin = pan_view_x_to_bin(&pvc, &pv, x);
+            if (bin == PAN_VIEW_NO_DATA) {
+                if (nodata_from < 0) nodata_from = x;
+                nodata_to = x;
+                s_prev_y_top = SPECTRUM_H - 1;   /* don't drag the curve across */
+                continue;
+            }
+        } else {
+            int b = bin_start + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
+            bin = ((b % N) + N) % N;
+        }
 
         int y_top;
         if (s_flat_mode) {
@@ -6555,12 +6604,19 @@ void ui_push_spectrum(const float *bins, int n_bins)
             for (int dx = -2; dx <= 2; dx++) {
                 int xn = x + dx;
                 if (xn < 0 || xn >= DISPLAY_H_RES) continue;
-                int sn = bin_start + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
-                int bn = ((sn % N) + N) % N;
+                int bn;
+                if (pv_ok) {
+                    bn = pan_view_x_to_bin(&pvc, &pv, xn);
+                    if (bn == PAN_VIEW_NO_DATA) continue;   /* never average in a wrap */
+                } else {
+                    int sn = bin_start + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
+                    bn = ((sn % N) + N) % N;
+                }
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
                 cnt++;
             }
-            float v = sum / (float)cnt - FLAT_FLOOR_BIAS_DB;
+            /* Every neighbour can be a no-data column at the seam. */
+            float v = (cnt > 0) ? (sum / (float)cnt) - FLAT_FLOOR_BIAS_DB : 0.0f;
             if (v < 0.0f) v = 0.0f;
             if (v > FLAT_RANGE_DB) v = FLAT_RANGE_DB;
             y_top = SPECTRUM_H - 1 - (int)(v * (SPECTRUM_H - 1) / FLAT_RANGE_DB);
@@ -6587,6 +6643,28 @@ void ui_push_spectrum(const float *bins, int n_bins)
             px[y * DISPLAY_H_RES + x] = fg_dim;
         }
         s_prev_y_top = y_top;
+    }
+
+    /* The part of the screen the radio cannot hear, drawn as visibly EMPTY.
+     *
+     * At zoom 1 this is the top 12 kHz - a quarter of the width - because the
+     * LO sits 12 kHz below the dial. It used to be filled with wrapped spectrum
+     * (#297). Leaving it merely blank would read as a dead receiver or a very
+     * quiet band, so it is hatched: diagonal strokes say "no information here"
+     * in a way a flat trace never can. Operator's request, 2026-08-30. */
+    if (nodata_from >= 0) {
+        const uint16_t hatch = 0x3186;   /* dim slate, ~20% grey in RGB565 */
+        const uint16_t seam  = 0x52AA;   /* the boundary, one shade brighter  */
+        for (int x = nodata_from; x <= nodata_to && x < DISPLAY_H_RES; x++) {
+            for (int y = 0; y < SPECTRUM_H; y++) {
+                /* 45 degrees, 9 px pitch - coarse enough to read as texture at
+                 * a glance rather than as noise. */
+                if (((x + y) % 9) == 0) px[y * DISPLAY_H_RES + x] = hatch;
+            }
+        }
+        int sx = (nodata_from > 0) ? nodata_from : nodata_to;
+        if (sx > 0 && sx < DISPLAY_H_RES)
+            for (int y = 0; y < SPECTRUM_H; y++) px[y * DISPLAY_H_RES + sx] = seam;
     }
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
