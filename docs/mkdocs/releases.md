@@ -4,7 +4,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.2** — 2026-08-30
+**v1.10.3** — 2026-08-30
+
+**FT4 transmits again — update if you use FT4.**
+
+- **FT4 would not transmit at all** *(Gyula HA3HZ)*. In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent: the countdown ran normally, the message was armed, and nothing went on the air — on a CQ and on a call alike. FT8 was unaffected throughout. Fixed, and FT4 now transmits at the start of its slot as it did in v1.10.1.
+- **The FT4 reply timing from v1.10.2 is withdrawn with it.** That release made FT4 wait for the current slot to finish decoding before transmitting, so a reply landed in the right slot instead of a cycle later — and that is exactly the change that broke transmitting. FT4 replies can again be a cycle late. It needs a transmit window sized for FT4's shorter slot, which is being done properly rather than quickly.
+
+## Previous Releases
+
+### v1.10.2 — 2026-08-30
 
 **Bluetooth keyboards work, and two logging faults are fixed.**
 
@@ -15,8 +24,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **FT4 replies no longer go out a cycle late** *(Gyula HA3HZ)*. FT8 waits for the current slot to finish decoding before it transmits, so a fresh reply lands in the right slot. That had never been switched on for FT4, which is why FT4 exchanges took roughly twice as long as they should. Now on for both.
 - **The RIT indicator says what it is doing** *(Don N2VGU)*. With no offset engaged it read simply "RIT", which is easy to mistake for switched on. It now reads **RIT OFF** in grey with a line through it, so all four states - off, armed, engaged, and parked - state what they are rather than naming the feature.
 - **Declared WSPR power set from the browser now shows on the Tab5.** The Tab5's own dropdown kept the value it was built with, so the two screens could disagree about a figure that is published with every spot.
-
-## Previous Releases
 
 ### v1.10.1 — 2026-08-29
 

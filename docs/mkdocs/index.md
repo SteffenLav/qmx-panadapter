@@ -70,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
+
+**New in v1.10.3 — FT4 transmits again.** In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent *(Gyula HA3HZ)*: the countdown ran normally, the message was armed, and nothing went on the air, on a CQ and on a call alike. FT8 was unaffected. Fixed — FT4 transmits at the start of its slot as it did in v1.10.1. The FT4 reply timing introduced in v1.10.2 is withdrawn with it, since that change is what broke transmitting; FT4 replies can again be a cycle late, and it will return once the transmit window is sized for FT4's shorter slot. **Update if you use FT4.**
 
 **New in v1.10.2 — Bluetooth keyboards, and two logging faults fixed.** **A Bluetooth keyboard now types into every field** *(Don N2VGU)* — every text box, Enter and Esc in every window, Tab between fields and the arrow keys, exactly as the snap-on keyboard already did. The on-screen keyboard steps aside while one is connected, which gives you back the screen space it was covering. **A keyboard and a mouse can be connected at the same time**, in either order, and a keyboard that has gone to sleep reconnects on the first keypress with anything typed while it woke delivered rather than lost. ⚠ **US layout only for now** — a Bluetooth keyboard reports key *positions* rather than characters, so letters, digits, Enter and the arrows are right on any keyboard but punctuation on a non-US layout will not be. **Two fixes from Gyula HA3HZ:** a logged contact could be missing the received signal report when the other station's message already carried it, and **FT4 replies went out a cycle late** because the wait-for-this-slot's-decode rule FT8 has always had was never switched on for FT4 — which is why FT4 exchanges took about twice as long as they should. **The RIT indicator now reads RIT OFF** *(Don N2VGU)* rather than a bare "RIT" that is easy to mistake for switched on. Full detail in [docs/version-history.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md).
 
@@ -135,7 +137,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
