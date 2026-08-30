@@ -142,6 +142,41 @@ int main(void)
         ok("nothing armed -> no fire",             !ft8_gate_should_late_fire(&l));
     }
 
+    /* ---------------------------------------------------------------- 4b --
+     * ⛔ MODEL THE POLL LOOP, NOT THE PREDICATE.
+     *
+     * The slot loop samples every FT8_GATE_POLL_MS. Testing the predicate at
+     * hand-picked instants (t == window, t == window+1) passes even when the
+     * deadline is unreachable in practice - which is exactly what happened: I
+     * set deadline == window, every algebraic test still passed, and on hardware
+     * FT4 held on seven consecutive transmit slots and fired once.
+     *
+     * So sweep the slot the way the caller really does, and require that a HELD
+     * request whose decode NEVER lands still gets away. */
+    printf("4b. a held request whose decode never lands still fires (polled)\n");
+    for (int p = 0; p < 2; p++) {
+        bool is_ft4 = protos[p];
+        int fired_at = -1, chances = 0;
+        for (int t = 0; t <= ft8_gate_slot_ms(is_ft4); t += FT8_GATE_POLL_MS) {
+            ft8_gate_late_t l = { .is_ft4 = is_ft4, .held = true,
+                                  .decode_landed = false, .tx_should_run = true,
+                                  .into_slot_ms = t };
+            if (ft8_gate_should_late_fire(&l)) {
+                if (fired_at < 0) fired_at = t;
+                chances++;
+            }
+        }
+        printf("   %s: first chance at %d ms, %d polls could fire\n",
+               pname[p], fired_at, chances);
+        ok("the deadline backstop is reachable at all", fired_at >= 0);
+        /* One reachable poll is luck. Demand real slack, or a jittery loop
+         * misses it and the slot is silently skipped. */
+        ok("several polls fall inside the band", chances >= 5);
+        if (fired_at >= 0)
+            ok("and it still fits the slot",
+               fired_at + ft8_gate_burst_ms(is_ft4) <= ft8_gate_slot_ms(is_ft4));
+    }
+
     /* ---------------------------------------------------------------- 5 ---
      * FT4 has MORE room than FT8, which is the fact the v1.10.3 release note
      * muddled. Pin it so nobody "corrects" it back. */

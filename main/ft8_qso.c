@@ -1894,34 +1894,49 @@ static bool try_start_pileup_pounce(void)
         if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
         // Grey-listed (repeated failed pounces) - don't auto-drain into them.
         if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
-        /* ⛔ AND NOT WHILE THEY ARE MID-QSO WITH SOMEBODY ELSE (Gyula HA3HZ,
-         * 2026-08-30: "I did not call and did not mark YL3PK before, but the
-         * software called him").
-         *
-         * He HAD been called - 'HA3HZ YL3PK KO27', legitimately putting YL3PK in
-         * the pileup - but the drain reached him 129 s later, by which time he
-         * was working ER1SKI/P. We then called him five times over.
-         *
-         * The information was right there and was used for the wrong thing: the
-         * drain reads their last message to CHOOSE THE MESSAGE FORMAT, logging
-         * "last heard '...' is not to us - report-first", and never asks whether
-         * that means it should call at all. partner_busy_with() already exists
-         * and is consulted once a QSO is running; it was never consulted at the
-         * moment of picking.
-         *
-         * The pileup keeps them for the OPERATOR, who can see they are busy and
-         * decide - which is why ft8_pileup.h has no expiry and says so. That was
-         * sound while "nothing in this module ever arms a TX". Auto-work-pileup
-         * broke that premise without revisiting the premise. */
-        {
-            char busy_with[FT8_CALL_MAX_LEN] = {0};
-            if (partner_busy_with(pile[i].call, busy_with, sizeof busy_with)) {
-                ESP_LOGI(TAG, "auto-pileup: skipping %s - busy with %s",
-                         pile[i].call, busy_with);
-                continue;
-            }
-        }
         if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+    }
+
+    /* ⛔ AND NOT WHILE THEY ARE MID-QSO WITH SOMEBODY ELSE (Gyula HA3HZ,
+     * 2026-08-30: "I did not call and did not mark YL3PK before, but the
+     * software called him").
+     *
+     * He HAD been called - 'HA3HZ YL3PK KO27', legitimately putting YL3PK in the
+     * pileup - but the drain reached him 129 s later, by which time he was
+     * working ER1SKI/P. We then called him five times over.
+     *
+     * The information was right there and was used for the wrong thing: the
+     * drain reads their last message to CHOOSE THE MESSAGE FORMAT, logging
+     * "last heard '...' is not to us - report-first", and never asks whether that
+     * means it should call at all. partner_busy_with() already existed and was
+     * consulted once a QSO was RUNNING; it was never consulted when picking.
+     *
+     * ⚠ CHECKED ON THE WINNER, NOT INSIDE THE SELECTION LOOP. partner_busy_with()
+     * allocates ~11 KB of PSRAM and snapshots the whole call table under the
+     * screen mutex; calling it for every one of up to FT8_PILEUP_MAX entries
+     * would do that twelve times in a burst on the decode task, which is the
+     * shape CLAUDE.md warns about for the cyan flash. Exclude-and-repick costs
+     * ONE call in the ordinary case and never more than it would have.
+     *
+     * The deeper cause is a premise that stopped being true: ft8_pileup.h has no
+     * expiry and justifies it as "nothing in this module ever arms a TX", which
+     * was sound while a human chose from the list and could see they were busy.
+     * Auto-work-pileup was built on top later without revisiting that. */
+    while (best >= 0) {
+        char busy_with[FT8_CALL_MAX_LEN] = {0};
+        if (!partner_busy_with(pile[best].call, busy_with, sizeof busy_with)) break;
+        ESP_LOGI(TAG, "auto-pileup: skipping %s - busy with %s",
+                 pile[best].call, busy_with);
+        pile[best].call[0] = '\0';          /* take them out of THIS pass only */
+        best = -1;
+        for (int i = 0; i < n; i++) {
+            if (!pile[i].call[0]) continue;
+            if (qs.ft8_filters.excl_worked_before &&
+                adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+            if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
+            if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
+            if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+        }
     }
     if (best < 0) return false;
 

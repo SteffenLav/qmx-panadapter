@@ -42,6 +42,21 @@ extern "C" {
 /* Slack left between the end of a burst and the end of its slot. */
 #define FT8_GATE_MARGIN_MS          100
 
+/* ⛔ THE DEADLINE MUST BE REACHABLE BY A DISCRETE POLLER, NOT JUST BY ALGEBRA.
+ *
+ * The late-fire test is `into >= deadline && into <= window`. Setting the two
+ * equal makes that satisfiable at exactly ONE instant, and the slot loop samples
+ * every FT8_GATE_POLL_MS - so the "fire whatever is armed rather than skip the
+ * slot" backstop becomes unreachable in practice. Measured on hardware when I
+ * did precisely that: FT4 held on seven consecutive transmit slots and fired
+ * once.
+ *
+ * So the deadline sits a BAND below the window, wide enough that several polls
+ * fall inside it. The harness models the poll loop rather than testing the
+ * predicate at hand-picked instants, which is how it missed this. */
+#define FT8_GATE_POLL_MS             15   /* the slot loop's vTaskDelay */
+#define FT8_GATE_DEADLINE_BAND_MS   300   /* window - deadline, ~20 polls */
+
 int ft8_gate_slot_ms(bool is_ft4);
 int ft8_gate_burst_ms(bool is_ft4);
 

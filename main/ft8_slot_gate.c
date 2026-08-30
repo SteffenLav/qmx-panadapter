@@ -20,11 +20,12 @@ int ft8_gate_reply_window_ms(bool is_ft4)
 
 int ft8_gate_hold_deadline_ms(bool is_ft4)
 {
-    /* Deliberately the same instant as the window: if the decode has not landed
-     * by the last moment a burst can still fit, fire what is armed rather than
-     * skip the slot. A deadline LATER than the window would be unreachable, and
-     * one much earlier would give up on a fresh reply sooner than necessary. */
-    return ft8_gate_reply_window_ms(is_ft4);
+    /* A BAND below the window, not equal to it - see the header. Equal makes the
+     * backstop reachable only at a single instant, which a 15 ms poll loop
+     * essentially never hits. Later than the window would be unreachable
+     * outright; much earlier would give up on a fresh reply sooner than needed. */
+    int d = ft8_gate_reply_window_ms(is_ft4) - FT8_GATE_DEADLINE_BAND_MS;
+    return d < 0 ? 0 : d;
 }
 
 bool ft8_gate_late_fire_enabled(bool is_ft4)
