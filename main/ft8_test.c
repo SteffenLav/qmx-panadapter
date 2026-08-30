@@ -1756,7 +1756,20 @@ static void ft8_task(void *arg)
          * ⚠ HONEST LIMIT: an FT4 decode measures ~2.3 s, which is right at the
          * deadline, so this will help on the faster slots and do nothing on the
          * slower ones. It is not a promise that the repeat disappears. */
-        bool hold_for_fresh =
+        /* ⛔ THE HOLD AND THE FIRE MUST AGREE ON WHICH PROTOCOLS THEY COVER.
+         * v1.10.2 shipped with the hold enabled for FT4 (the #295 fix) while the
+         * late-fire path below still carried its own `!is_ft4`. So an FT4 burst
+         * was held at the boundary and then NEVER fired: FT4 stopped
+         * transmitting altogether, on CQ and on a reply alike, with the slot
+         * countdown running normally - reported within hours by Gyula HA3HZ.
+         *
+         * `ft8_qso_is_busy()` is true throughout a CQ run, which is why calling
+         * CQ was hit and not just replies.
+         *
+         * One flag now drives BOTH, so the gate cannot be half-removed again.
+         * Holding a burst that nothing is allowed to fire is the whole bug. */
+        bool late_fire_ok = !is_ft4;
+        bool hold_for_fresh = late_fire_ok &&
                               (s_decode_jobs_done != s_decode_jobs_queued) &&
                               ft8_qso_is_busy(NULL, 0) &&
                               ft8_tx_slot_would_run(boundary_ms);
@@ -1938,7 +1951,7 @@ static void ft8_task(void *arg)
                     // ft8_qso_advance() has replaced the armed content) or the
                     // deadline passes (fire whatever is armed = old behaviour).
                     bool decode_landed = (s_decode_jobs_done == s_decode_jobs_queued);
-                    if (!is_ft4 && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
+                    if (late_fire_ok && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
                         (!hold_for_fresh || decode_landed ||
                          into_slot_ms >= FT8_TX_HOLD_DEADLINE_MS) &&
                         ft8_tx_should_run_this_slot(boundary_ms, &late_txreq)) {
