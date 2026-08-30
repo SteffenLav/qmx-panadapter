@@ -143,6 +143,33 @@ cursor far enough from the opposite trigger that reversing direction does not
 immediately page back: triggers at 5% / 95% landing at 75% / 25% proved stable,
 8% / 92% landing at 82% / 18% did not.
 
+### 4.2 The shipping behaviour: DEAD BAND -> SOFT PUSH -> PAGE WITH OVERLAP
+
+Operator's design, 2026-08-30, after driving the simulator. A bare page is too
+abrupt for the case that matters most - working a signal that happens to sit near
+the edge of the screen. Three stages:
+
+1. **Dead band.** Cursor inside the middle ~80% of the view: nothing moves.
+2. **Soft push.** Past `EDGE` (0.90 of the view) the view nudges along just far
+   enough to keep the cursor in sight. *"so that it will not jump when you just
+   wanted to tune a signal on the edge or close to it"*. Bounded: it will give up
+   to `PUSHMAX` of a view width of ground, accumulated.
+3. **Page.** Keep tuning outward past `PUSHMAX` and it turns the page, landing
+   the cursor at `OVERLAP` from the far side so a slice of the previous screen is
+   still visible - *"a little overlap of the previous screen so you are not
+   disoriented and can see where you came from"*. Show the carried-over slice for
+   a second or so with the seam drawn.
+
+Starting values, exposed as live sliders in the simulator so they can be tuned by
+feel rather than guessed: `EDGE = 0.90`, `PUSHMAX = 0.10`, `OVERLAP = 0.28`.
+At x4 that gives roughly **8.6 kHz still, 1.2 kHz of nudge, then a page**.
+
+⚠ **The page target must be clamped into the cursor's reachable range**
+(`[lMost, rMost]` from 4.1) before it is applied. Otherwise the capture clamp
+overrides it and a deliberate page reports itself as a *forced* move - which is
+what happens at x2 tuning up, where the 28% landing spot is under the 50% floor.
+Found by running the state machine over a tuning sweep, not by reading it.
+
 ### 4.1 Trigger the page on the CURSOR'S OWN LIMIT, not a fixed fraction
 
 ⛔ **I got this wrong first, and the operator was right to push back.** I claimed
