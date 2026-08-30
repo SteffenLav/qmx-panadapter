@@ -34,6 +34,7 @@ idf_component_register(
         "util/status.c"
         "util/maidenhead.c"
     "util/db_gridlines.c"
+    "util/pan_view.c"
     "util/net_guard.c"
     "util/ansi_term.c"
         "util/bandplan.c"
