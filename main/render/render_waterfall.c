@@ -292,8 +292,24 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
      * same 9-px diagonal the spectrum uses, so the dead area reads as one block
      * across both panes rather than stopping at the axis. */
     const int wf_half = n_bins / 2;
+
+    /* The same sub-bin correction the spectrum applies (see ui.c). The zoom FFT
+     * can only be centred to a whole base bin - 46.875 Hz, which is 10 px at x16
+     * - so the remainder is applied to the mapping instead. Without it the
+     * waterfall steps while the spectrum above it does not, and the two panes
+     * disagree by up to half a bin. */
+    int wf_res_bins = 0;
+    if (zoom_spec) {
+        int decim = dsp_get_zoom_decim();
+        if (decim < 1) decim = 1;
+        int64_t pan_q = (int64_t)ui_get_pan_offset_bins() * DSP_SAMPLE_RATE_HZ / n_bins;
+        int64_t r_hz  = ui_get_pan_offset_hz() - pan_q;
+        wf_res_bins   = (int)llround((double)r_hz * (double)n_bins * (double)decim
+                                     / (double)DSP_SAMPLE_RATE_HZ);
+    }
+
     for (int x = 0; x < WF_WIDTH; x++) {
-        int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
+        int b = wf_start + wf_res_bins + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
 
         if (zoom_spec == NULL && (b < -wf_half || b > wf_half)) {
             row[x] = (((x + s_wf_row_parity) % 9) == 0) ? WF_NODATA_HATCH

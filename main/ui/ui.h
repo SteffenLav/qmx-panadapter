@@ -75,6 +75,11 @@ void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to N
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);
 
+/* The pan the display is ACTUALLY drawn at, in Hz. ui_get_pan_offset_bins() is
+ * the same value rounded to a whole FFT bin (46.875 Hz); anything that has to
+ * agree with the spectrum to better than that needs this one. */
+int64_t ui_get_pan_offset_hz(void);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:

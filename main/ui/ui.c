@@ -1,6 +1,7 @@
 #include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
 #include "util/pan_view.h"
+#include "util/freq_gridlines.h"
 #include "ui_theme.h"
 #include "nvs.h"
 #include "wspr_screen_view.h"
@@ -1414,6 +1415,8 @@ void ui_set_still_view(bool on)
                                           : "OFF - spectrum follows the dial");
 }
 bool ui_get_still_view(void) { return s_still_view; }
+int64_t ui_get_pan_offset_hz(void) { return s_still_view ? s_sv_pan_hz
+                                        : (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / DSP_FFT_SIZE; }
 
 /* Where the cursor sits, as a fraction of the view. The overlays derive their x
  * the same way, so this is the same number they draw with. */
@@ -3658,8 +3661,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
         /* Same exact pan the trace is drawn with (see sv_apply_pan_hz) - deriving it
      * from the rounded bin count here would let the labels creep against the
      * signals by up to half a bin. */
-    int32_t pan_hz  = s_still_view ? (int32_t)s_sv_pan_hz
-                                   : (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+    int32_t pan_hz  = (int32_t)ui_get_pan_offset_hz();
         int64_t center  = (int64_t)freq_hz + pan_hz;
         int64_t vis_lo  = center - span_hz / 2;
         int64_t vis_hi  = center + span_hz / 2;
@@ -3870,44 +3872,78 @@ static void build_bandplan_strip(lv_obj_t *parent)
 // At 48 kHz span, ticks are at -24/-12/0/+12/+24 kHz. Format as 7.000 / 14.012 etc.
 static void update_freq_axis_labels(uint32_t center_hz)
 {
-    // Zoomed view: full span = sample_rate / zoom_factor.
-    // 5 ticks at display positions 0, 1/4, 1/2, 3/4, 1 of display width.
-    // Pan shifts the center by pan_bins * (sample_rate / N) Hz.
+    /* ⭐ ROUND ticks, not five evenly-spaced ones.
+     *
+     * This used to place five labels at fixed pixel positions and print whatever
+     * frequency fell there - centre + pan + span*(i-2)/4 - so every label
+     * carried one-hertz resolution and CHANGED as the operator tuned. At x16
+     * that reads as "14.006.070" ticking digit by digit, which is unusable on a
+     * display whose whole point is standing still: "those freq labels show a
+     * resolution of one Hz - they need to be frozen within the shown window"
+     * (operator, 2026-08-30).
+     *
+     * Now the axis works like an instrument's: freq_gridlines_build() picks the
+     * finest 1-2-5 step that fits, ticks sit on round values, and a label keeps
+     * its value while the window slides under it - proved in the harness by
+     * sliding 400 Hz and requiring that no surviving tick changes. */
     int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
-    int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+    /* The pan the trace is ACTUALLY drawn at. Deriving it from the bin-rounded
+     * count would let the labels creep against the signals by half a bin. */
+    int64_t pan_hz  = ui_get_pan_offset_hz();
 
-    // Hand the same window to the spots lane. Deliberately computed HERE, from
-    // the axis's own span/pan, rather than recomputed inside the lane: a spot
-    // drawn from a second, subtly different mapping would point at the wrong
-    // frequency under a correct axis, and that is the one bug that would make
-    // the feature actively harmful.
-    {
-        int64_t lo = (int64_t)center_hz + pan_hz - span_hz / 2;
-        int64_t hi = (int64_t)center_hz + pan_hz + span_hz / 2;
-        if (lo < 0) lo = 0;
-        if (hi > lo) spots_lane_set_view((uint32_t)lo, (uint32_t)hi);
+    int64_t lo = (int64_t)center_hz + pan_hz - span_hz / 2;
+    int64_t hi = lo + span_hz;
+
+    /* Hand the same window to the spots lane. Deliberately computed HERE, from
+     * the axis's own span/pan, rather than recomputed inside the lane: a spot
+     * drawn from a second, subtly different mapping would point at the wrong
+     * frequency under a correct axis, and that is the one bug that would make
+     * the feature actively harmful. */
+    if (lo > 0 && hi > lo) spots_lane_set_view((uint32_t)lo, (uint32_t)hi);
+
+    int64_t tick[5];
+    int32_t step = 0;
+    int n = freq_gridlines_build(lo, hi, 5, tick, &step);
+
+    /* Redraw the tick marks at the gridlines. They used to be painted once at
+     * build time every 3 kHz assuming a x1 span, so at any other zoom they bore
+     * no relation to the labels beneath them. */
+    if (s_label_canvas_buf && s_label_canvas) {
+        uint16_t *px = (uint16_t *)s_label_canvas_buf;
+        for (int y = 0; y < 12; y++)
+            for (int x = 0; x < DISPLAY_H_RES; x++) px[y * DISPLAY_H_RES + x] = 0x0000;
+        for (int i = 0; i < n; i++) {
+            int x = (int)(((tick[i] - lo) * DISPLAY_H_RES) / span_hz);
+            if (x < 0 || x >= DISPLAY_H_RES) continue;
+            for (int y = 0; y < 10; y++) px[y * DISPLAY_H_RES + x] = 0xC618;
+        }
+        lv_obj_invalidate(s_label_canvas);
     }
 
-    // Tick positions: -span/2, -span/4, 0, +span/4, +span/2 relative to panned center.
     for (int i = 0; i < 5; i++) {
         if (!s_tick_labels[i]) continue;
-        int32_t offset = pan_hz + (span_hz * (i - 2)) / 4;
-        int32_t hz = (int32_t)center_hz + offset;
-        if (hz < 0) hz = 0;
-        char buf[20];
-        // High zoom: show Hz resolution; low zoom: kHz is enough.
-        if (span_hz < 10000) {
-            // Show MM.KKK.HHH
+        if (i >= n) { lv_obj_add_flag(s_tick_labels[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_tick_labels[i], LV_OBJ_FLAG_HIDDEN);
+
+        int64_t hz = tick[i];
+        char buf[24];
+        /* Hertz only when the grid is finer than a kilohertz - printing three
+         * more digits under a 1 kHz grid is exactly the noise this replaced. */
+        if (step < 1000)
             snprintf(buf, sizeof(buf), "%lu.%03lu.%03lu",
                      (unsigned long)(hz / 1000000),
                      (unsigned long)((hz / 1000) % 1000),
                      (unsigned long)(hz % 1000));
-        } else {
+        else
             snprintf(buf, sizeof(buf), "%lu.%03lu",
                      (unsigned long)(hz / 1000000),
                      (unsigned long)((hz / 1000) % 1000));
-        }
         lv_label_set_text(s_tick_labels[i], buf);
+
+        int x = (int)(((hz - lo) * DISPLAY_H_RES) / span_hz) - 44;
+        if (x < 2) x = 2;
+        if (x > DISPLAY_H_RES - 92) x = DISPLAY_H_RES - 92;
+        lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x, -3);
     }
 }
 
@@ -5838,9 +5874,16 @@ void ui_update_frequency(uint32_t freq_hz)
      * Now the pan TRACKS the dial instead. When the dial rises by d, every
      * signal's baseband position falls by d, so moving the pan down by the same
      * amount leaves the same absolute frequencies on screen and walks the
-     * cursor across it. Nothing else had to change for the overlays: the axis,
-     * the VFO cursor, the passband edges and the RIT marker all already compute
-     * their x as (offset - pan_hz) * W / span + W/2, so they follow for free.
+     * cursor across it. The axis, the VFO cursor, the passband edges and the
+     * RIT marker all compute their x as (offset - pan_hz) * W / span + W/2, so
+     * they follow the dial for free.
+     *
+     * ⚠ That was first written as "nothing else had to change", and it was
+     * wrong in one detail that took a bench report to surface: they were each
+     * re-deriving pan_hz from s_pan_offset_bins, which is rounded to 46.875 Hz,
+     * so the overlays moved in bin-sized jumps over a trace that moved smoothly.
+     * They ALL read ui_get_pan_offset_hz() now. Any new overlay must too - do
+     * not recompute a pan from the bin count.
      *
      * still_view_step() then applies the operator's policy from the simulator -
      * a dead band where nothing moves, a small push at the edge so a signal
@@ -6571,10 +6614,34 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int32_t rit_pb_hz = cat_get_rit_hz();
         pb_low_hz  += rit_pb_hz;
         pb_high_hz += rit_pb_hz;
-        int32_t pan_hz_pb = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        /* ⛔ THE EXACT PAN, NOT THE BIN-ROUNDED ONE.
+         *
+         * s_pan_offset_bins is quantised to one FFT bin = 46.875 Hz, so an
+         * overlay deriving its pan from it JUMPS a whole bin every fourth or
+         * fifth 10 Hz step of the dial while the trace underneath moves
+         * smoothly. From the bench, 2026-08-30: "I need to see it move at every
+         * step - not those jumps every 30-40 hz."
+         *
+         * The trace has used the exact pan since the still display landed
+         * (pan_view_resolve below, and zoom_res_bins for the zoom path). These
+         * overlays did not, so they disagreed with the very spectrum they are
+         * drawn on top of. ui_get_pan_offset_hz() is the one true answer -
+         * everything that must sit on the trace asks it, and nothing recomputes
+         * the pan from bins. */
+        int32_t pan_hz_pb = (int32_t)ui_get_pan_offset_hz();
         int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
-        int edge_x_lo = (int)((int64_t)(pb_low_hz  - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
-        int edge_x_hi = (int)((int64_t)(pb_high_hz - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+        /* ⛔ The passband must carry ui_get_if_residual_hz() exactly as the VFO
+         * cursor does, or the two disagree by up to half an FFT bin.
+         *
+         * The spectrum is rotated by a WHOLE number of bins, so the drawn centre
+         * is up to 23 Hz from the true dial; the cursor already compensates and
+         * the passband did not. At zoom 1 that is half a pixel and invisible.
+         * Measured at x16 in CW on 2026-08-30: cursor at x=633, passband centre
+         * at x=641.5 - 8.5 px, and the operator saw it as "the center freq is
+         * not in the middle of the bw". Pre-existing; zoom is what exposed it. */
+        int32_t pb_res = ui_get_if_residual_hz();
+        int edge_x_lo = (int)((int64_t)(pb_low_hz  + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+        int edge_x_hi = (int)((int64_t)(pb_high_hz + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
         if (edge_x_lo < 0) edge_x_lo = 0;
         if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
@@ -6712,13 +6779,34 @@ void ui_push_spectrum(const float *bins, int n_bins)
          * to 46.875 Hz; using it here would re-introduce, at draw time, exactly
          * the stepping sv_apply_pan_hz() exists to avoid. On this path the view
          * position is then exact to the Hz. */
-        int64_t pan_hz = s_still_view ? s_sv_pan_hz
-                                      : (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
+        int64_t pan_hz = ui_get_pan_offset_hz();
         int32_t span_hz = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)eff_zoom + 0.5);
         pan_view_resolve(&pvc, pvc.dial_hz + pan_hz - span_hz / 2, &pv);
         pv_ok = pv.ok;
     }
     int nodata_from = -1, nodata_to = -1;      /* run of columns with nothing */
+
+    /* ⛔ SUB-BIN CENTRING FOR THE ZOOM PATH.
+     *
+     * dsp_set_zoom() takes its centre in WHOLE base bins, and a base bin is
+     * 46.875 Hz. So the zoom FFT can only be centred to +/-23 Hz of where the
+     * pan actually is - which is 1.2 px at x2 and 10 px at x16, and it JUMPS a
+     * full bin as the rounding crosses. That is the "middle freq labels count
+     * up and down when I tune, and I see it on the waterfall too" at x16: the
+     * axis uses the exact pan while the trace was stuck on the quantised one.
+     *
+     * The unrepresented remainder is applied here instead, as a shift of the
+     * column-to-bin mapping. A zoom bin is (SR/decim)/N Hz, so r Hz is
+     * r*N*decim/SR zoom bins. No DSP change needed. */
+    int zoom_res_bins = 0;
+    if (zoom_spec && s_still_view) {
+        int decim = dsp_get_zoom_decim();
+        if (decim < 1) decim = 1;
+        int64_t pan_q_hz = (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
+        int64_t r_hz     = s_sv_pan_hz - pan_q_hz;
+        zoom_res_bins    = (int)llround((double)r_hz * (double)N * (double)decim
+                                        / (double)DSP_SAMPLE_RATE_HZ);
+    }
 
     for (int x = 0; x < DISPLAY_H_RES; x++) {
         int bin;
@@ -6731,7 +6819,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 continue;
             }
         } else {
-            int b = bin_start + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
+            int b = bin_start + zoom_res_bins
+                    + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
             bin = ((b % N) + N) % N;
         }
 
@@ -6748,7 +6837,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     bn = pan_view_x_to_bin(&pvc, &pv, xn);
                     if (bn == PAN_VIEW_NO_DATA) continue;   /* never average in a wrap */
                 } else {
-                    int sn = bin_start + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
+                    int sn = bin_start + zoom_res_bins
+                             + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
                     bn = ((sn % N) + N) % N;
                 }
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
@@ -6832,9 +6922,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
             /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
-            int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+            int32_t pan_hz = (int32_t)ui_get_pan_offset_hz();   /* exact - see the tint above */
             int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
-            int edge_x = (int)((int64_t)(edge_hz - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+            /* Same residual as the tint above and the cursor below - all three
+             * must agree or the edges sit off the block they bound. */
+            int edge_x = (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
             if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
@@ -6857,7 +6949,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             center_color = (r << 11) | (g << 5) | b;
         }
 
-        int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        int32_t pan_hz_vfo = (int32_t)ui_get_pan_offset_hz();   /* exact - see the tint above */
         int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
         // The dial does not sit exactly at the drawn centre - the spectrum is
         // rotated by a whole number of bins, so it sits at (dial - residual).
@@ -7787,7 +7879,10 @@ static void touch_event_cb(lv_event_t *e)
         {
             int dx = (int)p.x - DISPLAY_H_RES / 2;
             int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(DISPLAY_H_RES * s_zoom_factor));
-            int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * UAC_SAMPLE_RATE / DSP_FFT_SIZE);
+            /* Exact, like the cursor and passband it must land on: a
+             * bin-rounded pan puts the tune target up to 23 Hz from the line
+             * the operator is actually looking at. */
+            int32_t pan_hz = (int32_t)ui_get_pan_offset_hz();
             offset_hz += pan_hz;
             int32_t snap = 10;
             // 250 -> 500 Hz on Dave KX3DX's report, and his reasoning decided
