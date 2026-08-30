@@ -143,31 +143,44 @@ cursor far enough from the opposite trigger that reversing direction does not
 immediately page back: triggers at 5% / 95% landing at 75% / 25% proved stable,
 8% / 92% landing at 82% / 18% did not.
 
-### 4.1 Paging is ASYMMETRIC, and below x4 it only works upward
+### 4.1 Trigger the page on the CURSOR'S OWN LIMIT, not a fixed fraction
 
-Found in the simulator when the operator asked why it only paged to the right. It
-is not a policy bug, it falls out of section 1. With a fixed viewport the ceiling
-requires `dial >= V_lo + W - 12`, so the cursor's reachable range inside the view
-is, as a fraction of the view width:
+⛔ **I got this wrong first, and the operator was right to push back.** I claimed
+paging downward was impossible below x4 and blamed the hardware. It is not: the
+viewport can slide anywhere inside the 48 kHz, exactly as the band-plan slider
+already pans the view today. At x2 a 24 kHz window has 24 kHz of room.
+
+What actually blocked it was **my trigger**. I paged when the cursor reached 5%
+of the view; but the ceiling stops the cursor short of the left edge, so below x4
+that threshold is unreachable and the clamp dragged the view down continuously
+instead. A policy fault dressed up as a physical limit.
+
+**The cursor's reachable range, as a fraction of the view:**
 
 ```
 cursor in [ max(0, (W-12)/W) , min(1, 36/W) ]
 ```
 
-| Zoom | W | cursor may sit | page left possible? |
-|---|---|---|---|
-| x1 | 48 kHz | pinned at 75% | no |
-| x2 | 24 kHz | right half only | no |
-| x3 | 16 kHz | right three-quarters | no |
-| **x4** | **12 kHz** | **whole width** | **yes** |
+| Zoom | W | cursor may sit | page down works | still travel between pages |
+|---|---|---|---|---|
+| x1 | 48 kHz | pinned at 75% | **no** (zero play) | — |
+| x2 | 24 kHz | 50-100% | yes | **10.8 kHz** |
+| x3 | 16 kHz | 25-100% | yes | **11.2 kHz** |
+| x4 | 12 kHz | 0-100% | yes | **11.4 kHz** |
+| x8 | 6 kHz | 0-100% | yes | 5.7 kHz |
 
-So tuning **up** pages cleanly at every zoom, while tuning **down** below x4 can
-never reach the left trigger and is **forced** to slide instead. Confirmed in the
-simulator at x2: the cursor sat at exactly 50% and the view pushed continuously.
+**So the rule is: page when the cursor reaches the limit of where it can GO**, not
+a fixed screen fraction — and land it at the far side (95%), letting the clamp
+trim that where the ceiling forbids it. Paging then works in both directions at
+every zoom except x1, with roughly the same still-travel at x2, x3 and x4, and
+the cursor never leaves the screen.
 
-**This must be visible in the UI**, or it reads as a bug. It did to the operator
-within a minute of using it. A dashed marker showing how far left the cursor can
-get is enough; the simulator draws exactly that.
+x1 remains the sole exception, and for the reason in section 1: the view already
+*is* the whole capture window, so there is nothing to page into.
+
+**The cursor being confined to the right of the view is still true** and still
+worth drawing — it is why a page lands at the right and walks left, rather than
+landing centre. It just never prevented paging.
 
 ---
 
