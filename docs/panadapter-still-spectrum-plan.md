@@ -261,8 +261,19 @@ Phases 0 and 1 are worth doing regardless of whether 2-5 are ever built.
 Everything above is arithmetic and code reading. The falsifying tests all need
 real signals:
 
-- **The x1 wrap (#297):** on 20 m with FT8 active, tune below 14.074 and watch
-  the cluster appear in the right-hand quarter once the dial is more than 12 kHz
-  below it.
+- **The `dial + 12 kHz` ceiling — CONFIRMED 2026-08-30.** The operator tuned
+  about 12 kHz below 14.074 at x1 and the FT8 signals simply **disappeared**.
+  That is the ceiling behaving exactly as section 1 predicts: at dial 14.062 the
+  capture top *is* 14.074, so the sub-band sits at and above the edge and is
+  genuinely absent from the data. First on-air confirmation of the capture
+  window on our own hardware, and the foundation the rest of this document
+  rests on.
+
+- **The x1 wrap (#297) — still untested, and my first stated test was wrong.**
+  Tuning *below* a signal cannot show the wrap; it walks the signal off the
+  ceiling instead. A signal only reaches the wrapped quarter when it lies in
+  `dial-36k .. dial-24k`, i.e. when you tune **above** it by 24-36 kHz.
+  **Correct test: sit at about 14.100 MHz and the 14.074 FT8 cluster should
+  appear in the right-hand quarter, where the axis claims ~14.112-14.124.**
 - **The play figure:** at x4, tune across 36 kHz and confirm the display holds.
 - **The x2 confinement:** confirm the cursor cannot enter the lower half.
