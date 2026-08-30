@@ -119,6 +119,65 @@ a performance *win*, not a cost.
 
 ---
 
+## 3.5 DECIDED 2026-08-30 — the display may go BLANK, and that is the point
+
+The operator's call, and it overturns mine. I had proposed clamping the
+viewport inside the capture window so every pixel showed real spectrum. His
+answer: **"Let it go blank - or it is not a moving vfo."**
+
+He is right. Clamping to keep the screen full is exactly what drags the view
+along with the dial - so the spectrum is still moving, just less, and the VFO is
+not really roaming over anything. **Keeping the screen full and having a still
+display are the same trade, and stillness wins.**
+
+### What this deletes
+
+The clamp in `pan_view_resolve()` stops being the normal path. With blank
+allowed there is:
+
+- **no forced re-frame** - the viewport never has to move for hardware reasons;
+- **no cursor-reachability limit** - the whole "pinned at 75% / right half at x2"
+  geometry in section 1.1 simply does not arise;
+- **no asymmetry between tuning up and tuning down.**
+
+Every column reduces to one question: *is this frequency inside
+`[dial-36k, dial+12k]`?* Draw the bin, or draw nothing. That is also exactly the
+#297 fix, so phase 0 and this decision are the same mechanism.
+
+⚠ The clamp is still WANTED as an option for the courtesy re-frame - paging
+should land somewhere useful - but it is no longer applied every frame.
+
+### What it costs, stated plainly
+
+Blank screen where the radio cannot hear. At x1 with the cursor hard left that
+is up to 75% of the width; at x2 up to 50%; at x4 none at all. The UI must draw
+that region as obviously empty rather than as a flat noise floor, or it reads as
+a dead receiver.
+
+## 3.6 DECIDED 2026-08-30 — gestures: swipe moves, hold-then-drag tunes
+
+**"Swipe moves wf - point and hold then drag will tune. Just like now."**
+
+Navigating and tuning become different gestures rather than one gesture with a
+mode:
+
+- **Swipe** - pans the spectrum and waterfall. Does not retune.
+- **Press, dwell, then drag** - tunes, with the existing snap cursor. The dwell
+  is what disambiguates, the same way `ROW_HOLD_SELECT_MS` (250 ms) already
+  separates a scroll from a row selection in the FT8 list. Reuse that constant
+  rather than inventing a second dwell.
+- **Tap** - unchanged.
+
+This retires the current "one-finger drag strolls and retunes on release", which
+is the muscle-memory cost. It is deliberate: a still display needs panning far
+more than a dial-locked one did.
+
+## 3.7 DECIDED 2026-08-30 — starting values
+
+`EDGE = 0.90`, `PUSHMAX = 0.10`, `OVERLAP = 0.10` — his numbers from the
+simulator, and explicitly provisional ("it might change"). Keep both exposed
+until they have been used on air.
+
 ## 4. Re-framing policy — when may the display move?
 
 Two distinct triggers, and conflating them is a trap:
