@@ -1369,27 +1369,25 @@ static void recompute_zoom_pan(void);
  *   - past that, a PAGE that carries part of the old screen over so you can see
  *     where you came from.
  *
- * Fractions of the view width. Provisional - "it might change". */
-#define SV_EDGE      0.90f   /* dead band ends here */
-#define SV_PUSHMAX   0.10f   /* how far it may push before paging */
-#define SV_OVERLAP   0.10f   /* of the old screen kept after a page */
+ * ⭐ Stated in PASSBAND WIDTHS, not fractions of the view - see the block in
+ * still_view_follow_dial for why, and for what each step now means. */
 
-static bool  s_still_view = true;   /* dev action "still_view" turns it off */
-static float s_sv_push    = 0.0f;   /* push accumulated at the current edge */
-static int   s_sv_side    = 0;      /* +1 right, -1 left, 0 none */
+/* ⛔ SV_EDGE / SV_PUSHMAX / SV_LAND ARE GONE, and so is the _Static_assert that
+ * kept them from forming a combination that paged edge to edge.
+ *
+ * They expressed the re-framing policy as fractions of the view, which is one
+ * abstraction too far from what an operator is doing. Three of them, mutually
+ * constrained, all "provisional", and a whole bench session was spent tuning
+ * them by feel - during which a landing value I had offered turned out to be
+ * inside the opposite trigger band and thrashed the display.
+ *
+ * The policy is stated in passband widths now: see the block in
+ * still_view_follow_dial. There is nothing left to mis-tune. */
 
-/* ⛔ THE PAN IS KEPT IN Hz, NOT IN BINS, AND THAT IS THE WHOLE POINT.
- *
- * s_pan_offset_bins is quantised to one FFT bin = 46.875 Hz. The first version
- * of this rounded EACH TUNE STEP into bins, so a 10 Hz step rounded to zero and
- * the pan did not move at all - the display simply followed the dial, 10 Hz at
- * a time, and ten steps drifted 100 Hz in the direction of tuning. Reported
- * from the bench: "I actually see the spectrum moving slightly in the same
- * direction as I am tuning", and only when zoomed, because 100 Hz is 2.7 px at
- * x1 and 21 px at x8.
- *
- * Accumulating in Hz and rounding the TOTAL keeps the error bounded at half a
- * bin instead of letting it grow without limit. */
+static bool    s_still_view = true;  /* the SETTING - behaviour asks sv_effective() */
+static int64_t s_sv_push    = 0;     /* Hz tuned past the trigger at the current edge */
+static int     s_sv_side    = 0;     /* +1 right, -1 left, 0 none */
+
 static int64_t s_sv_pan_hz = 0;
 
 static void sv_apply_pan_hz(int64_t hz)
@@ -1410,29 +1408,77 @@ static void sv_sync_pan_from_bins(void)
 void ui_set_still_view(bool on)
 {
     s_still_view = on;
-    if (!on) { s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0.0f; s_sv_side = 0;
+    if (!on) { s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0; s_sv_side = 0;
                recompute_zoom_pan(); }
     ESP_LOGI(TAG, "still display: %s", on ? "ON - spectrum holds, cursor moves"
                                           : "OFF - spectrum follows the dial");
 }
 bool ui_get_still_view(void) { return s_still_view; }
-int64_t ui_get_pan_offset_hz(void) { return s_still_view ? s_sv_pan_hz
+
+/* ⭐ STILL MODE NEEDS PLAY, AND AT x1 THERE IS NONE.
+ *
+ * Holding the view still while the dial moves requires somewhere for the view
+ * to stay while the capture window slides under it. The capture window is one
+ * sample rate wide, and at x1 so is the view - so the play is exactly
+ * SR - span = 0. Every option at that zoom is bad:
+ *
+ *   clamp the view into the capture window -> it is dragged by the dial, the
+ *       VFO is pinned on screen, and there is no stillness. Implemented first,
+ *       and the operator's immediate report was "we are back to fixed vfo and
+ *       panning spec/wf".
+ *   let it drift and go blank -> his own earlier decision, and right at higher
+ *       zooms; at x1 the blank grows without bound while tuning down, until
+ *       "there is nothing instead of the signal".
+ *
+ * So still mode simply does not apply at x1. The display falls back to the
+ * familiar dial-centred view with the #297 hatching - which he has already seen
+ * and verified on air - and goes still from x2 up, where there is 24 kHz of
+ * play and it works. The plan called this out as pitfall 1: "x1 cannot be
+ * still. Design the UI around it; do not hide it."
+ *
+ * ⛔ Everything that changes BEHAVIOUR asks this, not s_still_view.
+ * s_still_view is the operator's SETTING and is what the drawer, the web page
+ * and the config export read. */
+static bool sv_effective(void)
+{
+    /* Just the setting. A zoom gate lived here for one flash - the idea being
+     * that x1 has no play so stillness is impossible - and it made x1 fall back
+     * to the dial-centred display. Also rejected on the bench: x1 with the
+     * hatching IS the still display doing the right thing, the hatch simply
+     * grows as you tune away from what the radio can hear.
+     *
+     * Kept as a function rather than folded back into s_still_view because the
+     * split earned its place: s_still_view is the operator's SETTING, read by
+     * the drawer, the web page and the config export; this is what BEHAVIOUR
+     * asks. If a reason to diverge ever appears, there is one place for it. */
+    return s_still_view;
+}
+int64_t ui_get_pan_offset_hz(void) { return sv_effective() ? s_sv_pan_hz
                                         : (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / DSP_FFT_SIZE; }
 
-/* Where the cursor sits, as a fraction of the view. The overlays derive their x
- * the same way, so this is the same number they draw with. */
-static float sv_cursor_frac(void)
-{
-    float span = (float)DSP_SAMPLE_RATE_HZ / s_zoom_factor;
-    if (span <= 0.0f) return 0.5f;
-    return 0.5f - (float)s_sv_pan_hz / span;
-}
-
-static void sv_set_cursor_frac(float f)
-{
-    float span = (float)DSP_SAMPLE_RATE_HZ / s_zoom_factor;
-    sv_apply_pan_hz((int64_t)llroundf((0.5f - f) * span));
-}
+/* ⛔ THERE IS NO FORCED CLAMP, AND THAT IS A DECISION, NOT AN OMISSION.
+ *
+ * I built one on 2026-08-31 - hold the view inside the capture window so it can
+ * never show dead space - and it was WRONG TWICE OVER, on the operator's bench
+ * within the hour:
+ *
+ *  - It overrode his own standing rule. "Let it go blank - or it is not a
+ *    moving vfo." A view that is dragged by the dial so it can stay over live
+ *    spectrum is not a still view; it is the old display with extra steps. At
+ *    x1 the play is exactly SR - span = 0, so the clamp pinned the pan outright
+ *    and the VFO sat fixed on screen: "x1 suddenly have fixed vfo - garbage.
+ *    x1 was okay before with the hatched areas!"
+ *
+ *  - It silently broke PAGING at x2. A page wants the cursor to land at 0.12 of
+ *    the view so a full screen of new band comes into sight; that needs
+ *    pan = span*(0.5-0.12) = 9120 Hz, and the clamp's ceiling at x2 is 0.
+ *    So the pan was pulled back to 0, the cursor landed dead CENTRE, and only
+ *    half a screen of new territory arrived - "you only jump half a screen
+ *    having the vfo centered just after the jump".
+ *
+ * The blank IS the feature. A column the radio cannot hear is hatched and says
+ * so; that is what #297 built and what he verified on air. Do not re-add a
+ * clamp here without asking him first - it is his call, and he has made it. */
 
 static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
 {
@@ -1443,7 +1489,7 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
      * recall, a spot click - leaves nothing on screen worth holding still, so
      * re-centre rather than page across a void. */
     if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
-        s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0.0f; s_sv_side = 0;
+        s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0; s_sv_side = 0;
         recompute_zoom_pan();
         return;
     }
@@ -1452,22 +1498,84 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
      * moves down by d too. */
     sv_apply_pan_hz(s_sv_pan_hz - d);   /* in Hz - see sv_apply_pan_hz */
 
-    float f = sv_cursor_frac(), lo_edge = 1.0f - SV_EDGE;
-    if (f > SV_EDGE) {
-        if (s_sv_side != 1) { s_sv_side = 1; s_sv_push = 0.0f; }
-        s_sv_push += f - SV_EDGE;
-        if (s_sv_push > SV_PUSHMAX) { sv_set_cursor_frac(SV_OVERLAP + 0.02f);
-                                      s_sv_push = 0.0f; s_sv_side = 0; }
-        else                        { sv_set_cursor_frac(SV_EDGE); }
-    } else if (f < lo_edge) {
-        if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0.0f; }
-        s_sv_push += lo_edge - f;
-        if (s_sv_push > SV_PUSHMAX) { sv_set_cursor_frac(1.0f - SV_OVERLAP - 0.02f);
-                                      s_sv_push = 0.0f; s_sv_side = 0; }
-        else                        { sv_set_cursor_frac(lo_edge); }
+    /* ⭐ THE TRIGGER IS THE PASSBAND, NOT THE CURSOR (operator, 2026-08-31).
+     *
+     * The re-framing policy used to watch the DIAL as a fraction of the view -
+     * page when the cursor passes 95%. He noticed on the bench that the two
+     * edges did not behave alike and worked out why himself: the passband is
+     * not centred on the dial. In USB it runs +200..+2900, so by the time the
+     * CURSOR reaches 95% of a 6 kHz view the passband's right edge went off
+     * screen 2900 Hz ago - while at the left trigger it is still 500 Hz inside.
+     * The display was re-framing on the wrong thing at one edge and too late at
+     * the other, and in LSB it was mirrored.
+     *
+     * "I want the right edge of the BW touching the right edge of the screen
+     * before pushing the window - and the pushing can only happen one more
+     * BW... we are going away from absolute percentages to real how-does-it-
+     * feel measures."
+     *
+     * So the rule is now about the thing being listened through:
+     *   trigger  the passband edge reaches the screen edge
+     *   push     at most one passband width further
+     *   land     the OPPOSITE passband edge on the OPPOSITE screen edge
+     *
+     * ⭐ The BW cancels: travel to the trigger is (span - BW), the push is BW,
+     * so a page happens every SPAN of tuning whatever filter is in use - and
+     * that holds even when the filter is WIDER than the view (DiGi or AM at
+     * x16), where the landing simply starts with the push already part spent.
+     * Simulated across every mode and zoom before it was written: no thrash,
+     * and it survives a reversal of direction.
+     *
+     * This retires SV_EDGE / SV_PUSHMAX / SV_LAND and the static assert that
+     * guarded their interaction - there are no free percentages left to get
+     * into a bad combination. RIT is included because it moves what you are
+     * actually listening to, which is the whole point. */
+    int32_t pb_lo, pb_hi;
+    compute_passband_edges_hz(&pb_lo, &pb_hi);
+    { int32_t rit = cat_get_rit_hz(); pb_lo += rit; pb_hi += rit; }
+    int32_t bw = pb_hi - pb_lo;
+    if (bw < 100) bw = 100;          /* a degenerate filter must not page instantly */
+
+    int32_t span_hz  = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
+    int64_t dial_hz  = (int64_t)now_hz;
+    int64_t view_lo  = dial_hz + s_sv_pan_hz - span_hz / 2;
+    int64_t hi_over  = (dial_hz + pb_hi) - (view_lo + span_hz);
+    int64_t lo_over  = view_lo - (dial_hz + pb_lo);
+
+    if (hi_over > 0) {
+        if (s_sv_side != 1) { s_sv_side = 1; s_sv_push = 0; }
+        s_sv_push += hi_over;
+        if (s_sv_push > bw) { sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2);
+                              s_sv_push = 0; s_sv_side = 0; }
+        else                { sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2); }
+    } else if (lo_over > 0) {
+        if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0; }
+        s_sv_push += lo_over;
+        if (s_sv_push > bw) { sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2);
+                              s_sv_push = 0; s_sv_side = 0; }
+        else                { sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2); }
     } else {
-        s_sv_side = 0; s_sv_push = 0.0f;
+        s_sv_side = 0; s_sv_push = 0;
     }
+
+    /* ⛔ THE FORCED CLAMP - the view may not leave what the radio can hear.
+     *
+     * The push/page logic above is COURTESY: it acts when the CURSOR nears an
+     * edge. This is the hardware limit, and it is not optional. Without it the
+     * view held its absolute frequency while the capture window slid out from
+     * under it, so tuning progressively replaced real spectrum with hatching -
+     * from the bench: "there is nothing instead of the signal".
+     *
+     * ⭐ AND IT IS WHY x1 CANNOT BE STILL. At zoom 1 the view is exactly as wide
+     * as the capture window, so these two bounds MEET: the pan is pinned and the
+     * display necessarily follows the dial. That is not a failure of the still
+     * display, it is the only 48 kHz window that exists - the plan lists it as
+     * pitfall 1, "design the UI around it, do not hide it". Stillness needs
+     * play, and play starts at x2. At x16 there is 45 kHz of it and this never
+     * binds.
+     *
+     * The courtesy policy runs FIRST so it gets the chance to page before the
+     * clamp bites; the clamp only ever tightens what is left. */
     dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
 }
 
@@ -1550,6 +1658,76 @@ static void pinch_poll_cb(lv_timer_t *t);
 static void sync_nav_affordances(void);   // defined below; called from the 1 Hz poll
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
+
+/* ⭐ THE VIEWPORT IS SNAPPED TO A WHOLE PIXEL, and that is what stops the
+ * waterfall shimmering while the dial is turned (bench, 2026-08-31: "the wf
+ * miss out and offset the pixels in those lines so it looks disturbed").
+ *
+ * TWO GRIDS WERE BEATING AGAINST EACH OTHER. A row's CONTENT quantises to FFT
+ * bins (46.875 Hz); the canvas POSITION quantises to whole pixels (37.5 Hz at
+ * x1). Left to move independently, a 10 Hz dial click sometimes crossed a bin
+ * boundary without crossing a pixel boundary, or the reverse - so a new row
+ * landed one pixel out of step with the rows above it, over and over. Neither
+ * quantisation is avoidable: the FFT has the resolution it has, and a canvas
+ * cannot be offset by half a pixel.
+ *
+ * Snapping the VIEW ITSELF to the pixel grid makes both derive from one number.
+ * Between snaps nothing moves at all - which is the "buffered or suppressed"
+ * the operator asked for - and on the snap the content and the canvas step by
+ * exactly one pixel together. */
+static int64_t view_lo_snapped(int32_t span, int64_t want_lo)
+{
+    if (span < 1) return want_lo;
+    int64_t px = (want_lo * DISPLAY_H_RES + ((want_lo >= 0) ? span / 2 : -span / 2)) / span;
+    return (px * span) / DISPLAY_H_RES;
+}
+
+/* The current viewport's left edge, snapped, whichever FFT is driving the
+ * display. One definition, so the spectrum, the waterfall's content and the
+ * waterfall's canvas offset cannot disagree. */
+static int64_t ui_view_lo_now(int32_t *span_out)
+{
+    int32_t span = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
+    if (span < 1) span = 1;
+    if (span_out) *span_out = span;
+    int64_t want = (int64_t)s_last_qmx_freq_hz + ui_get_pan_offset_hz() - span / 2;
+    return view_lo_snapped(span, want);
+}
+
+/* ⛔ ONE MAPPING FOR BOTH PANES (#297/#298).
+ *
+ * render_waterfall.c used to decide "is this column outside what the radio can
+ * hear" with its own arithmetic - a signed bin offset tested against +/- n/2,
+ * built on a wf_center that is taken MODULO n_bins. That answers a different
+ * question from the spectrum's, and once the view was panned the two disagreed
+ * completely: on the bench, 2026-08-31, the spectrum hatched its left 13% while
+ * the waterfall hatched everything else, hiding the signals underneath.
+ *
+ * pan_view.h says exactly this in its own header - "one mapping, or they drift
+ * again" - and the waterfall was the one caller still outside it. It now asks
+ * here, so the two panes cannot disagree by construction.
+ *
+ * Returns false when the zoom FFT is driving the display: dsp_set_zoom() has
+ * already mixed the pan target to DC, so the bins mean something else and
+ * pan_view does not apply. The caller keeps its own path for that, exactly as
+ * ui_push_spectrum does. */
+bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
+{
+    if (!c || !v) return false;
+    if (n_bins == DSP_FFT_SIZE && dsp_get_zoom_spectrum()) return false;
+
+    memset(c, 0, sizeof *c);
+    c->sample_rate_hz    = DSP_SAMPLE_RATE_HZ;
+    c->n_bins            = n_bins;
+    c->screen_w          = DISPLAY_H_RES;
+    c->dial_hz           = (int64_t)s_last_qmx_freq_hz;
+    c->if_offset_hz      = ui_get_if_offset_hz();
+    c->zoom              = s_zoom_factor;
+    c->clamp_to_capture  = false;      /* blank, never dragged along */
+
+    pan_view_resolve(c, ui_view_lo_now(NULL), v);
+    return v->ok;
+}
 static int      s_last_band_idx = -1;    // track band changes for decode list clearing
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
@@ -1717,6 +1895,10 @@ static bool s_hide_passband_now = false;       // immediately hide on pan settle
 // One-finger hold for tune: only tunes if held still >= TUNE_HOLD_MS.
 static uint64_t s_touch_down_us     = 0;    // timestamp of last PRESSED event
 #define TUNE_HOLD_MS    250                 // hold still for this long to trigger tune
+/* How still "still" has to be. Generous, because this is a 5" glass panel used
+ * with a bare finger and sometimes in the field: a real dwell wanders a few
+ * pixels, and a real swipe passes this in the first moments. */
+#define TUNE_STILL_PX    18
 static uint64_t s_last_tap_us       = 0;   // for double-tap detection
 static int      s_last_tap_x        = -1;
 #define DOUBLE_TAP_MS   500
@@ -5757,7 +5939,7 @@ static void pinch_poll_cb(lv_timer_t *t)
              * the whole reason a still display exists, and there was no gesture
              * for it before. In CENTRED mode the old behaviour is untouched -
              * the drag still strolls and retunes on release. */
-            if (s_still_view) {
+            if (sv_effective()) {
                 stroll_apply_offset(0);
                 if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
 
@@ -5860,8 +6042,21 @@ static void pinch_poll_cb(lv_timer_t *t)
                 last_log_us = now_us;
             }
 
-            // Pan activates ONLY if fast movement (>70px) AND within first 250ms
-            if (movement >= PAN_THRESHOLD_PX && hold_us < (uint64_t)TUNE_HOLD_MS * 1000 && !s_tune_mode_locked) {
+            /* ⭐ MOVEMENT WINS OVER TIME (#298 phase 4, bench 2026-08-31).
+             *
+             * This used to require the 70 px to happen INSIDE 250 ms, so a
+             * deliberate slow swipe ran out of clock, fell through to the tune
+             * branch below, and retuned the radio instead of panning. Reported
+             * as "most of my slower swipes did re-tune - we need better contrast
+             * between pan and tune".
+             *
+             * The gesture the operator described is "point and HOLD then drag",
+             * so the discriminator is whether the finger STAYED STILL for the
+             * dwell, not whether it moved fast enough. A drag of any speed is a
+             * pan; only a finger that has genuinely dwelt in one place arms
+             * tuning. Once tune is armed a drag moves the cursor, exactly as
+             * before. */
+            if (movement >= PAN_THRESHOLD_PX && !s_tune_mode_locked) {
                 // User is swiping FAST: activate pan immediately.
                 s_stroll_active    = true;
                 s_stroll_start_hz  = (int64_t)s_last_qmx_freq_hz;
@@ -5873,8 +6068,12 @@ static void pinch_poll_cb(lv_timer_t *t)
                 ESP_LOGI("pinch", "*** PAN ACTIVATED: movement=%dpx (threshold=%d) hold=%" PRIu64 "ms ***",
                          movement, PAN_THRESHOLD_PX, hold_us / 1000);
             }
-            // Lock into TUNE mode after 250ms without panning
-            else if (hold_us >= (uint64_t)TUNE_HOLD_MS * 1000 && !s_stroll_active) {
+            /* Arm TUNE only after the dwell AND only if the finger has stayed
+             * put. TUNE_STILL_PX is what makes the two gestures distinguishable
+             * by intent rather than by reaction time - without it, resting a
+             * finger while drifting slowly armed a tune. */
+            else if (hold_us >= (uint64_t)TUNE_HOLD_MS * 1000 &&
+                     movement < TUNE_STILL_PX && !s_stroll_active) {
                 s_tune_mode_locked = true;
                 ESP_LOGI("pinch", "*** TUNE MODE LOCKED: hold=%" PRIu64 "ms movement=%dpx ***", hold_us / 1000, movement);
             }
@@ -5901,7 +6100,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         /* Band edges bound a TUNE. A still-display pan is not going near the
          * radio, so it is bounded by what the radio can hear instead, and that
          * is applied once on release rather than per tick. */
-        if (!s_still_view && legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
+        if (!sv_effective() && legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
             if (tgt < (int64_t)lo) tgt = lo;
             if (tgt > (int64_t)hi) tgt = hi;
         }
@@ -5913,7 +6112,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         // fast drag can't flood the QMX with frequency writes). Real VFO
         // commit + ui_update_frequency() (which also updates this label)
         // still happens only on settle, in the npts<1 branch below.
-        if (s_freq_label && !s_still_view) {
+        if (s_freq_label && !sv_effective()) {
             /* Still mode leaves this alone: the dial is not moving, so writing a
              * changing frequency into the readout would be a plain lie about
              * what the gesture is doing. */
@@ -5926,7 +6125,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
         if (s_tune_tooltip) {
             char b[32];
-            if (s_still_view) snprintf(b, sizeof(b), "view %.3f MHz", (double)tgt / 1e6);
+            if (sv_effective()) snprintf(b, sizeof(b), "view %.3f MHz", (double)tgt / 1e6);
             else              snprintf(b, sizeof(b), "%.3f MHz",      (double)tgt / 1e6);
             lv_label_set_text(s_tune_tooltip, b);
             lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, 0, TOP_BAR_H + 6);
@@ -6040,7 +6239,7 @@ void ui_update_frequency(uint32_t freq_hz)
      * a dead band where nothing moves, a small push at the edge so a signal
      * sitting there stays workable, then a page carrying some of the old screen
      * over. */
-    if (!s_still_view || prev_freq_hz == 0) {
+    if (!sv_effective() || prev_freq_hz == 0) {
         s_pan_offset_bins = 0;
         s_sv_pan_hz = 0;
         recompute_zoom_pan();
@@ -6950,7 +7149,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * column-to-bin mapping. A zoom bin is (SR/decim)/N Hz, so r Hz is
      * r*N*decim/SR zoom bins. No DSP change needed. */
     int zoom_res_bins = 0;
-    if (zoom_spec && s_still_view) {
+    if (zoom_spec && sv_effective()) {
         int decim = dsp_get_zoom_decim();
         if (decim < 1) decim = 1;
         int64_t pan_q_hz = (int64_t)s_pan_offset_bins * DSP_SAMPLE_RATE_HZ / N;
@@ -7333,16 +7532,16 @@ static void wf_track_viewport(void)
 {
     if (!s_wf_canvas_buf) return;
 
-    if (!s_still_view) {
+    if (!sv_effective()) {
         if (s_wf_view_x != WF_MARGIN || s_wf_anchor_ok) {
             wf_clear_all();          /* leaving still mode: history is not aligned */
         }
         return;
     }
 
-    int32_t span = (int32_t)(DSP_SAMPLE_RATE_HZ / s_zoom_factor);
+    int32_t span = 0;
+    int64_t view_lo = ui_view_lo_now(&span);   /* snapped - see view_lo_snapped */
     if (span <= 0) return;
-    int64_t view_lo = (int64_t)s_last_qmx_freq_hz + ui_get_pan_offset_hz() - span / 2;
 
     /* A scale change cannot be honoured by moving pixels - the old rows are at
      * a different Hz/px and rescaling them would be a lie. Start again. */
@@ -7378,6 +7577,26 @@ static void wf_track_viewport(void)
         s_wf_anchor_hz += (int64_t)(pl.src_x - pl.dst_x) * span / DISPLAY_H_RES;
     }
     for (int i = 0; i < pl.n_clear; i++) wf_blank_cols(pl.clear[i].x, pl.clear[i].n);
+
+    /* ⛔ RE-ANCHOR WHEN NOTHING SURVIVED, or the waterfall never draws again.
+     *
+     * On the no-overlap path (a band change, a memory recall, the band-plan
+     * slider) wf_shift_plan blanks the whole canvas and re-centres the view, but
+     * it does NOT move any pixels - so the branch above, which is where the
+     * anchor was being maintained, never ran. The anchor kept pointing at the
+     * OLD frequency, the next tick computed the same enormous dx, and the
+     * canvas was wiped again. Every tick. For ever.
+     *
+     * On the bench that looked like "the wf disappears and never gets drawn
+     * again except the first line of pixels" - which is exactly right: one row
+     * was written after each clear and erased by the next.
+     *
+     * Note the shape of the mistake. The anchor was updated in the branch that
+     * MOVED pixels, on the reasoning that moving pixels is what changes the
+     * mapping. True, but incomplete: resetting view_x changes it too. */
+    if (!pl.move && pl.n_clear == 1 && pl.clear[0].n >= WF_CANVAS_W) {
+        s_wf_anchor_hz = view_lo - (int64_t)pl.view_x * span / DISPLAY_H_RES;
+    }
 
     s_wf_view_x = pl.view_x;
     wf_apply_x();

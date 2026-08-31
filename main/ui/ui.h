@@ -4,6 +4,7 @@
 #include "lvgl.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include "util/pan_view.h"
 
 void ui_init(lv_display_t *disp);
 
@@ -84,6 +85,11 @@ bool ui_get_still_view(void);
  * the same value rounded to a whole FFT bin (46.875 Hz); anything that has to
  * agree with the spectrum to better than that needs this one. */
 int64_t ui_get_pan_offset_hz(void);
+
+/* The viewport the spectrum is being drawn with, so the waterfall can use the
+ * SAME column->bin mapping instead of deriving its own (they drifted, #297).
+ * Returns false when the zoom FFT is active and pan_view does not apply. */
+bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
 
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
