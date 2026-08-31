@@ -46,6 +46,7 @@
 #include "ft8_pileup_modal.h"
 #include "activation_modal.h"
 #include "hid_cursor.h"
+#include "util/hid_rotate.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -4235,12 +4236,12 @@ static void build_resource_monitor(lv_obj_t *scr)
 }
 
 // ---- USB mouse pointer indev -------------------------------------------------
-// The USB HID layer (usb_hid_mouse.c) accumulates the cursor in LANDSCAPE space
-// (lx 0..1279, ly 0..719). LVGL auto-applies the display's ROTATION_90 transform
-// to indev points (lv_indev.c indev_pointer_proc: lx = ver_res-1 - iy, ly = ix),
-// so we feed the INVERSE here (point.x = ly, point.y = (W-1) - lx) to land the
-// cursor where the user expects. The cursor object is hidden until a mouse is
-// actually enumerated.
+// The USB HID layer (usb_hid_mouse.c) and the BLE one both accumulate the cursor
+// in LANDSCAPE space (lx 0..1279, ly 0..719) via hid_cursor.c. LVGL auto-applies
+// the display's rotation to indev points (lv_indev.c indev_pointer_proc), so
+// mouse_read_cb feeds the INVERSE and the two cancel. The rotation is _90 or
+// _270 depending on "Flip 180", and the inverse differs between them - see
+// util/hid_rotate.h. The cursor object is hidden until a mouse is enumerated.
 static lv_obj_t *s_mouse_cursor = NULL;
 // Which indev is the mouse. Kept so the edge grips can offer CLICK activation to
 // a pointer without changing what a finger does - see grip_mouse_click().
@@ -4781,13 +4782,29 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     // works identically whichever transport the mouse arrived on.
     hid_cursor_get(&lx, &ly, &b);
 
-    // The INVERSE of LVGL's own ROTATION_90 pointer map, so LVGL's rotation and
-    // this cancel out and (lx,ly) reach the screen unchanged. It must use the
-    // HORIZONTAL resolution: swapping in the vertical one breaks the
-    // cancellation and walls the cursor off at x = 1280 - 720 = 560.
-    int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
-    data->point.x = ly;
-    data->point.y = (w - 1) - lx;
+    // The INVERSE of LVGL's own pointer-rotation map, so LVGL's rotation and
+    // this cancel out and (lx,ly) reach the screen unchanged.
+    //
+    // ⛔ IT DEPENDS ON THE ROTATION, AND THAT IS WHAT "Flip 180" CHANGES.
+    // display_set_flipped() moves the display from ROTATION_90 to _270 for
+    // upside-down mounting. TOUCH follows for free (the driver is fed raw panel
+    // coordinates), which is exactly why this was missed: nothing else on the
+    // input side had to know. The mouse is fed SCREEN coordinates, so this map
+    // is the only place that knows, and the 90 inverse on a 270 display lands
+    // the cursor at (W-1-lx, H-1-ly) - point-reflected, travelling backwards on
+    // both axes. Reported 2026-08-31: "on flip 180 the mouse do not flip".
+    //
+    // The arithmetic lives in util/hid_rotate.c so test/hid_rotate_harness.c can
+    // round-trip every one of the 921,600 pixels back through a verbatim copy of
+    // LVGL's forward map, in both rotations. It is not checkable any other way.
+    lv_display_t *disp = lv_display_get_default();
+    int32_t ix, iy;
+    hid_rotate_to_indev(display_is_flipped() ? HID_ROT_270 : HID_ROT_90,
+                        lv_display_get_horizontal_resolution(disp),   // 1280
+                        lv_display_get_vertical_resolution(disp),     //  720
+                        lx, ly, &ix, &iy);
+    data->point.x = ix;
+    data->point.y = iy;
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     // The wheel is applied from its own timer, NOT here: this callback runs
     // inside LVGL's input processing, and scrolling an object from within it
