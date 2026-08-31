@@ -1705,6 +1705,7 @@ static int      s_pinch_mid_x       = 0;   // midpoint x at pinch start
 static bool     s_stroll_active     = false;
 static int      s_pan_start_x       = 0;    // x position when one-finger pan starts being tracked
 static int64_t  s_stroll_start_hz   = 0;    // VFO freq when the drag began
+static int64_t  s_stroll_start_pan  = 0;    // viewport pan when the drag began (#298 phase 4)
 static int64_t  s_stroll_target_hz  = 0;    // previewed centre while dragging
 static bool     s_tune_mode_locked  = false; // once 250ms passes without panning, lock into tune mode
 #define PAN_THRESHOLD_PX 70                 // must move this far to activate pan (vs hold-for-tune) — avoids touch sensor jitter
@@ -5742,6 +5743,59 @@ static void pinch_poll_cb(lv_timer_t *t)
             s_hide_passband_now = true;
             s_passband_fade_start_us = esp_timer_get_time();
 
+            /* ⭐ #298 PHASE 4 - IN A STILL DISPLAY A SWIPE MOVES THE VIEW, NOT
+             * THE RADIO.
+             *
+             * "Swipe moves wf - point and hold then drag will tune. Just like
+             * now." Navigating and tuning become different gestures instead of
+             * one gesture with a mode, and the dwell that already separates
+             * them (TUNE_HOLD_MS) does the disambiguating - the same 250 ms the
+             * FT8 list uses to tell a scroll from a row selection.
+             *
+             * This is the muscle-memory cost of the still display, taken
+             * deliberately: looking somewhere else without moving the dial is
+             * the whole reason a still display exists, and there was no gesture
+             * for it before. In CENTRED mode the old behaviour is untouched -
+             * the drag still strolls and retunes on release. */
+            if (s_still_view) {
+                stroll_apply_offset(0);
+                if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+
+                int32_t span = (int32_t)(DSP_SAMPLE_RATE_HZ / s_zoom_factor);
+                int64_t want = s_stroll_start_pan
+                             + (s_stroll_target_hz - s_stroll_start_hz);
+
+                /* Bounded so the operator cannot pan into nothing and lose the
+                 * band. The rule is that the view's CENTRE stays inside what the
+                 * radio can hear, which keeps at least half the screen real
+                 * spectrum. Deliberately NOT a clamp to the whole capture
+                 * window: at x1 the view is exactly as wide as the capture, so
+                 * that would pin the pan and there would be no gesture at all -
+                 * and it would also move the default dial-centred view, which is
+                 * the shipped #297 behaviour. */
+                int32_t if_hz  = ui_get_if_offset_hz();
+                int64_t pan_hi = if_hz;
+                int64_t pan_lo = (int64_t)if_hz - DSP_SAMPLE_RATE_HZ;
+                if (want > pan_hi) want = pan_hi;
+                if (want < pan_lo) want = pan_lo;
+
+                if (want != ui_get_pan_offset_hz()) {
+                    sv_apply_pan_hz(want);
+                    dsp_set_zoom(s_zoom_factor, s_pan_offset_bins,
+                                 ui_get_if_bin_shift(DSP_FFT_SIZE));
+                    /* ⛔ The waterfall is NOT cleared. wf_track_viewport() shifts
+                     * it to match on the next tick, so a pan keeps its history
+                     * instead of throwing it away - which is the entire point of
+                     * phase 3, and the reason panning is now worth having. */
+                    ESP_LOGI("pinch", "still pan: %lld -> %lld Hz (span %ld)",
+                             (long long)s_stroll_start_pan, (long long)want, (long)span);
+                }
+                s_stroll_active = false;
+                s_pan_start_x = 0;
+                s_tune_mode_locked = false;
+                return;
+            }
+
             uint32_t tgt = (uint32_t)s_stroll_target_hz;
             uint32_t lo, hi;
             if (!legal_band_edges(tgt, &lo, &hi) || tgt < lo || tgt > hi) {
@@ -5812,6 +5866,7 @@ static void pinch_poll_cb(lv_timer_t *t)
                 s_stroll_active    = true;
                 s_stroll_start_hz  = (int64_t)s_last_qmx_freq_hz;
                 s_stroll_target_hz = (int64_t)s_last_qmx_freq_hz;
+                s_stroll_start_pan = ui_get_pan_offset_hz();   /* #298 phase 4 */
                 s_pinch_mid_x      = lx0;
                 s_target_x = -1;  // Clear cyan line when pan activates
                 if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
@@ -5832,10 +5887,21 @@ static void pinch_poll_cb(lv_timer_t *t)
         if (display_is_flipped()) off = -off;
         stroll_apply_offset(off);
 
-        const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ / (float)DISPLAY_H_RES;
+        /* ⛔ THE SCALE IS PER ZOOM, and it was not. This read
+         *     DSP_SAMPLE_RATE_HZ / DISPLAY_H_RES
+         * unconditionally, which is the x1 figure - so at x16 a drag moved the
+         * target SIXTEEN TIMES too far while the tooltip above the finger
+         * reported the smaller number. Pre-existing in centred mode; phase 4
+         * needs the right scale anyway, and leaving two different ones in one
+         * function would be worse than fixing it. */
+        const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ
+                              / (s_zoom_factor * (float)DISPLAY_H_RES);
         int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
         uint32_t lo, hi;
-        if (legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
+        /* Band edges bound a TUNE. A still-display pan is not going near the
+         * radio, so it is bounded by what the radio can hear instead, and that
+         * is applied once on release rather than per tick. */
+        if (!s_still_view && legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
             if (tgt < (int64_t)lo) tgt = lo;
             if (tgt > (int64_t)hi) tgt = hi;
         }
@@ -5847,7 +5913,10 @@ static void pinch_poll_cb(lv_timer_t *t)
         // fast drag can't flood the QMX with frequency writes). Real VFO
         // commit + ui_update_frequency() (which also updates this label)
         // still happens only on settle, in the npts<1 branch below.
-        if (s_freq_label) {
+        if (s_freq_label && !s_still_view) {
+            /* Still mode leaves this alone: the dial is not moving, so writing a
+             * changing frequency into the readout would be a plain lie about
+             * what the gesture is doing. */
             char fb[32];
             uint32_t t = (uint32_t)tgt;
             snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
@@ -5856,8 +5925,9 @@ static void pinch_poll_cb(lv_timer_t *t)
             lv_label_set_text(s_freq_label, fb);
         }
         if (s_tune_tooltip) {
-            char b[24];
-            snprintf(b, sizeof(b), "%.3f MHz", (double)tgt / 1e6);
+            char b[32];
+            if (s_still_view) snprintf(b, sizeof(b), "view %.3f MHz", (double)tgt / 1e6);
+            else              snprintf(b, sizeof(b), "%.3f MHz",      (double)tgt / 1e6);
             lv_label_set_text(s_tune_tooltip, b);
             lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, 0, TOP_BAR_H + 6);
             lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
@@ -7057,6 +7127,25 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (cx >= 0 && cx < DISPLAY_H_RES) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
+            }
+        } else {
+            /* ⭐ THE DIAL IS OFF THE VIEW (#298 phase 4). Reachable now that a
+             * swipe pans without retuning, and before this the amber line simply
+             * vanished - leaving no way to tell "panned away from the VFO" from
+             * "something is broken".
+             *
+             * A TRIANGLE, never a line parked on the edge: a line at x=0 reads
+             * as "tuned here", which is precisely the wrong thing to say about a
+             * frequency that is off screen. pan_view.h calls this out, which is
+             * why hz_to_x is deliberately unclamped. */
+            const int th = 22;                       /* half-height of the arrow */
+            const int tw = 14;                       /* how far it juts inwards  */
+            int mid = SPECTRUM_H / 2;
+            for (int i = 0; i < tw; i++) {
+                int half = th - (th * i) / tw;       /* widest at the edge       */
+                int x = (cx < 0) ? i : (DISPLAY_H_RES - 1 - i);
+                for (int y = mid - half; y <= mid + half; y++)
+                    if (y >= 0 && y < SPECTRUM_H) px[y * DISPLAY_H_RES + x] = center_color;
             }
         }
 
