@@ -664,6 +664,33 @@ knowledge.
 ### Task stacks on this board are TINY — a multi-hundred-byte local is a bug until proven otherwise
 Measured stack bounds from real crash dumps: **`sys_evt` 2808 B**, **`settings_flush` 3064 B**. `taskLVGL` is ~8 KB. So a "small" local array is not small here. Instances so far, all the same bug: the v0.20.1 pounce crash (11 KB `ft8_call_t snap[]` on taskLVGL — the compiler reserves the frame at the prologue **unconditionally**, so it fired on every pounce regardless of the code path taken), and three in one sitting on 2026-08-05 while adding the WiFi known-network list — a `wifi_known_t[6]` (~590 B) on `sys_evt` (twice: the GOT_IP log and the backoff probe) and on `settings_flush`, each producing `Guru Meditation: Stack protection fault` and a **crash loop**.
 
+⛔ **AND IT HAPPENED AGAIN IN THE SAME FILE ON 2026-08-31 — a FOURTH time, THIRD
+in `wifi.c`, with the rule already written above.** The static-IP feature (#307)
+added `static_ip_wanted()`, which called `settings_load_all()` — a whole
+**multi-kilobyte `qmx_settings_t`** — and called it from the WiFi/IP event
+handlers, i.e. on `sys_evt`'s 2808 bytes. Stack protection fault at **8.283 s of
+every boot**, the moment WiFi came up: a boot loop, reported from the bench as
+"cyan screen twice looping". Fixed by `settings_get_wifi_static()`, which copies
+the four address strings and **nothing else** — 64 bytes.
+
+**Two things to take from the repeat, because the rule alone plainly is not
+enough:**
+- ⭐ **The struct is the trap, not just arrays.** Every earlier instance was a
+  visible `type name[N]`, so `settings_load_all(&st)` does not *look* like a big
+  local at the call site — the size is off in a header. **Treat any
+  `settings_load_all()` as a multi-kilobyte stack allocation** and check the task
+  before writing one. There is already a precedent to copy:
+  `settings_get_cw_tx_offset_hz()` and `settings_wifi_known_count()` exist for
+  exactly this, and both headers cite this section.
+- ⭐ **`wifi.c` is where this keeps happening**, because event handlers look like
+  ordinary functions and nothing at the call site says which task they are on.
+  Anything new inside `on_wifi_event`/`on_ip_event` gets a narrow accessor, never
+  the whole struct.
+
+⭐ **The crash record (#117) made this a five-minute diagnosis** — it named the
+task, the core and 8.283 s of uptime on the very next boot, so nothing had to be
+reproduced and no backtrace had to be decoded. This is what that feature is for.
+
 **Before adding a local bigger than a couple of hundred bytes, identify which task the code runs on.** Event handlers (`on_wifi_event`, `on_ip_event`) run on `sys_evt`; the settings flush has its own 3 KB task; LVGL callbacks and `lv_timer` callbacks run on taskLVGL. Then pick: a **count-only accessor** if you only need a number (`settings_wifi_known_count()` exists precisely for this), a **file-local `static`** when the callers are single-threaded on one task (the pattern `wifi.c`'s `static wifi_ap_record_t recs[]` already used), or **PSRAM** via `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` for anything genuinely large or shared. Never the stack. A stack-protection fault names the task and prints its bounds — that line is the fastest way to confirm which one you hit.
 
 ### Audit every `malloc()` under ~16 KB on a hot/recurring path — it's silently going to internal RAM
