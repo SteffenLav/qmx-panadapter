@@ -4883,6 +4883,12 @@ let spotHover = null;
 function overlayTuneCursor() {
   // Always clear the wf cursor canvas so old lines don't persist
   wfcurctx.clearRect(0, 0, wfPxW, wfPxH);
+
+  /* The dead-band caption, on the OVERLAY rather than painted into the
+     waterfall - the waterfall scrolls its own canvas onto itself every row, so
+     text drawn there would smear down the screen. Same reason the Tab5 uses an
+     LVGL overlay object for it instead of writing into the bitmap. */
+  drawNoDataCaption(wfcurctx, wfPxW, wfPxH);
   /* Over a label the click does NOT go to the pointer, so show where it does go
      instead of a tune cursor that would be lying about it. */
   if (spotHover) {
@@ -5823,6 +5829,7 @@ function drawNoDataHatch(ctx, W, H) {
   if (!lastView) return;
   ctx.strokeStyle = "#3a4450"; ctx.lineWidth = 1;
   let n0 = -1;
+  const runs = [];
   for (let i = 0; i <= W; i++) {
     const dead = (i < W) && (viewBinAt(i, W, frameDialHz || radioFreqHz) === null);
     if (dead && n0 < 0) n0 = i;
@@ -5832,9 +5839,38 @@ function drawNoDataHatch(ctx, W, H) {
         ctx.beginPath(); ctx.moveTo(n0 + d, 0); ctx.lineTo(n0 + d + H, H); ctx.stroke();
       }
       ctx.restore();
+      runs.push([n0, i - n0]);
       n0 = -1;
     }
   }
+}
+
+/* The same words the Tab5 puts on its hatched block, so a screenshot of one
+   screen explains the other. Two centred lines, and - like the Tab5 - a block
+   too narrow for the text declines to draw it rather than spilling the caption
+   onto live spectrum. */
+function drawNoDataCaption(ctx, W, H) {
+  if (!lastView) return;
+  const runs = []; let n0 = -1;
+  for (let i = 0; i <= W; i++) {
+    const dead = (i < W) && (viewBinAt(i, W, frameDialHz || radioFreqHz) === null);
+    if (dead && n0 < 0) n0 = i;
+    if (!dead && n0 >= 0) { runs.push([n0, i - n0]); n0 = -1; }
+  }
+  if (!runs.length) return;
+  ctx.save();
+  ctx.font = "500 16px system-ui, sans-serif";
+  ctx.fillStyle = "#7a8894";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const L = ["QMX cannot", "display this"];
+  const need = Math.max(ctx.measureText(L[0]).width, ctx.measureText(L[1]).width) + 26;
+  for (const [x, w] of runs) {
+    if (w < need) continue;
+    const cx = x + w / 2, cy = H / 3;
+    ctx.fillText(L[0], cx, cy - 11);
+    ctx.fillText(L[1], cx, cy + 11);
+  }
+  ctx.restore();
 }
 
 /* Spectrum — flat mode */
