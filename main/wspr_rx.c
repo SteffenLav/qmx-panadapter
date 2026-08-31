@@ -1191,6 +1191,8 @@ static void wspr_rx_task(void *arg)
             set_status("transmitting");
             ESP_LOGW(TAG, "cycle %lld: TX still busy - receiver stood down",
                      (long long)cycle_utc);
+            /* ⭐ MARK THE STALL - see the note beside the other stand-down. */
+            wf_mark_boundary();
             while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
@@ -1221,6 +1223,31 @@ static void wspr_rx_task(void *arg)
             set_status("transmitting");
             ESP_LOGW(TAG, "cycle %lld: TX cycle - receiver stood down",
                      (long long)cycle_utc);
+
+            /* ⭐ A TX CYCLE MUST MARK THE CARPET TOO (Dirk, 2026-08-31: "the
+             * nice waterfall is not updated during the cycle before transmit").
+             *
+             * This branch returns to the top of the loop BEFORE wf_begin() and
+             * before the wf_mark_boundary() at the end of a receive cycle, so a
+             * transmit was the one stall that drew nothing at all: the pane
+             * holds exactly one cycle (WSPR_WF_CYCLES 1), so the previous
+             * cycle's finished picture simply sat there, unchanged, for two
+             * minutes. The status line said "transmitting" and the carpet said
+             * nothing - which is precisely what the note above wf_mark_boundary()
+             * already forbids: a stalled carpet is indistinguishable from a hung
+             * display.
+             *
+             * ⛔ ONCE, HERE - NOT INSIDE THE WAIT BELOW. That loop polls every
+             * 500 ms for the ~110 s of the burst; marking per iteration would
+             * publish ~440 rows into a 176-row buffer and wipe the picture the
+             * operator still wants to see.
+             *
+             * Deliberately the mark ALONE, keeping the last received cycle on
+             * screen (operator's call, 2026-08-31). The pane is the only place
+             * those signals exist, and a full TX band would have thrown them
+             * away to repeat what the status line already says. */
+            wf_mark_boundary();
+
             while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
