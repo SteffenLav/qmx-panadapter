@@ -191,6 +191,12 @@ typedef struct {
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
+    /* #298 STILL DISPLAY. true (the default) = the spectrum and waterfall hold
+     * still and the VFO marker moves across them; false = the old behaviour,
+     * the view re-centres on the dial on every tune. A real preference, not a
+     * dev switch: it changes how the main screen is read. */
+    bool     still_view;        // spectrum holds, VFO moves (default TRUE)
+    bool     still_notice_done; // the one-time "you can switch back" toast has been shown
     uint8_t  spur_mode;         // 0=off 1=subtract 2=interpolate (see spur_map.h); default 0, opt-in
     bool     ft8_early_decode; // FT8 monitoring: cut capture ~1.8 s early so decodes surface BEFORE the
                                // slot boundary (WSJT-X-style), letting a cold pounce fire in the reply
@@ -451,6 +457,8 @@ uint8_t settings_get_swr_limit_x10(void);
 // when true show distance in miles.
 void settings_set_distance_in_miles(bool v);
 void settings_set_rit_pill_show(bool v);
+void settings_set_still_view(bool v);
+void settings_set_still_notice_done(bool v);
 void settings_set_spur_mode(uint8_t v);
 
 // FT8 early-decode / fast-pounce timing (debounced flush). When true, plain

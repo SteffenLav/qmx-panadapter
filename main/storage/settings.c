@@ -76,6 +76,8 @@ static const char *TAG = "settings";
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
+#define KEY_STILL_VIEW     "still_vw"
+#define KEY_STILL_NOTICE   "still_note"
 #define KEY_SPUR_SUP       "spur_sup"
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
@@ -335,6 +337,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
  * fails the build on this, because nothing else was ever going to notice. */
 #define DIRTY_DRAWER_EXPERT 104   /* Basic/Expert drawer choice, remembered */
 #define DIRTY_WSPR_PA       107   /* #290 WSPR PA-voltage guard + the value to restore */
+#define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
+#define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -365,6 +369,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
+    DIRTY_STILL_VIEW,   /* #298 - config_io_export() carries still_spectrum */
 };
 
 // ---- Module state ------------------------------------------------------
@@ -512,6 +517,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap.spur_mode);
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
@@ -655,6 +662,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
+    /* #298: the still display is the DEFAULT. Anyone who prefers the old
+     * dial-centred view turns it off in the drawer, and is told once that they
+     * can - see the notice in ui.c. still_notice_done stays false so an
+     * upgrading unit shows that notice exactly once. */
+    out->still_view = true;      // opt-OUT, same reason as the line above
     // Spur suppression is opt-IN for now: it nudges the dial 25 Hz to learn a
     // frequency, which is a visible side effect, and it is out with the beta
     // testers before it can be a default.
@@ -887,6 +899,8 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPUR_SUP, &u8v) == ESP_OK) out->spur_mode = (u8v <= 2) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
@@ -1740,6 +1754,26 @@ void settings_set_rit_pill_show(bool v)
     s_pending.rit_pill_show = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RIT_PILL_SHOW);
+}
+
+void settings_set_still_view(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.still_view == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.still_view = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_STILL_VIEW);
+}
+
+void settings_set_still_notice_done(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.still_notice_done == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.still_notice_done = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_STILL_NOTICE);
 }
 
 // Opt-IN. See spur_map.h: enabling it lets the firmware nudge the dial 25 Hz

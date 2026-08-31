@@ -283,6 +283,10 @@ void app_main(void)
     ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
     ui_set_cw_cal_hz(cfg.cw_cal_hz);
     ui_set_rit_pill_show(cfg.rit_pill_show);   // before the drawer is ever opened
+    /* #298: before the first frame, so nobody sees the wrong one and then a jump.
+     * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
+    ui_set_still_view(cfg.still_view);
+    ui_still_notice_arm(!cfg.still_notice_done);
     render_waterfall_set_colormap(cfg.colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).

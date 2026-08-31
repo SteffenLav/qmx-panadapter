@@ -818,13 +818,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             }
         }
     } else if (action && strcmp(action, "still_view") == 0) {
-        /* Dev action while #298 is being judged on the bench: with it off the
-         * panadapter behaves as it always has (display follows the dial), with
-         * it on the spectrum holds still and the cursor moves. No web UI element
-         * points at this - it is a bench control, not a setting yet. */
+        /* Was a bench-only control while #298 was being judged. It is a real
+         * setting now (drawer + web Settings), so this PERSISTS - a dev action
+         * that silently reverts on the next boot is worse than none. */
         cJSON *on = cJSON_GetObjectItem(root, "on");
         bool v = cJSON_IsBool(on) ? cJSON_IsTrue(on) : true;
         ui_set_still_view(v);
+        settings_set_still_view(v);
+        settings_set_still_notice_done(true);
         ESP_LOGI(TAG, "web: still display -> %s", v ? "on" : "off");
     } else if (action && strcmp(action, "set_zoom") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "zoom");
@@ -2791,6 +2792,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
+    cJSON_AddBoolToObject(root, "still_view",        c.still_view);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
@@ -3050,6 +3052,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         bool v = cJSON_IsTrue(it);
         settings_set_rit_pill_show(v);
         ui_set_rit_pill_show(v);
+    }
+    /* #298. Live as well as stored, same reason as the pill above - and it also
+     * retires the one-time notice, because someone setting this from the web
+     * has plainly found the control. */
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "still_view"))) {
+        bool v = cJSON_IsTrue(it);
+        settings_set_still_view(v);
+        settings_set_still_notice_done(true);
+        ui_set_still_view(v);
     }
     // Spur suppression, like IQ balance below, is a live DSP path as well as a
     // stored value - set both or the control does nothing until the next boot.

@@ -31,6 +31,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 // Brief centered auto-hiding toast (1.5 s). Runs on the LVGL task — call only
 // from the LVGL/UI thread. Used for "Work in progress…." on shelved controls.
 void ui_toast(const char *msg);
+/* Same toast, with a readable dwell for anything the operator must act on. */
+void ui_toast_ms(const char *msg, uint32_t ms);
+/* #298: arm the one-time "you can switch back" notice. Called from main.c with
+ * the stored flag; a unit that has already been told never arms it. */
+void ui_still_notice_arm(bool armed);
 
 // The QMX was found receiving on VFO B or Split and has been switched to VFO A
 // (the panadapter reads and writes VFO A only). Tells the operator, because we

@@ -1879,6 +1879,8 @@ static int16_t   s_resmon_drag_start_dx, s_resmon_drag_start_dy;
 #define RESMON_PANEL_H 168
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
+static lv_obj_t *s_check_still     = NULL;  // #298 still-spectrum checkbox
+static lv_obj_t *s_lbl_still       = NULL;  // the sentence under it, which way is which
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
 static lv_obj_t *s_activation_btn  = NULL;  // POTA/SOTA activation entry
 static lv_obj_t *s_activation_lbl  = NULL;  // shows the live reference, not a static label
@@ -1924,6 +1926,7 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_WSPRDUTY   32  // WSPR-only: duty cycle (moved off the page, 2026-08-28)
 #define DRAWER_SEC_WSPRHOP    33  // WSPR-only: band hopping on/off + the band picker
 #define DRAWER_SEC_WSPRNET    36  // WSPR-only: publish spots to wsprnet
+#define DRAWER_SEC_STILL      37  /* #298 spectrum holds still / follows the dial */
 #define DRAWER_SEC_RITPILL    30  // panadapter-only: show/hide the RIT pill in the top bar.
                                    // Only the pill's VISIBILITY - the control itself stays where
                                    // it is; RIT is not operated from the drawer (operator).
@@ -2055,6 +2058,10 @@ static const drawer_item_t GRP_FT8[] = {
     { DRAWER_SEC_SIMMODE, "Simulation mode", false },
 };
 static const drawer_item_t GRP_SPECTRUM[] = {
+    /* Basic (true): this is not a tweak, it decides how the main screen reads,
+     * and an operator who dislikes the still display must be able to find it
+     * without first discovering that an Advanced view exists. */
+    { DRAWER_SEC_STILL, "Still spectrum", true },
     { DRAWER_SEC_PRESETS, "Presets", false },
     { DRAWER_SEC_DBRANGE, "dB Range", false },
     { DRAWER_SEC_SMOOTHING, "Smoothing", false },
@@ -2279,12 +2286,30 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * phantoms and the WSPR ones (see wspr_sim.h). */
     if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
     if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_FT8SYNC) return ft8;
+    /* ⛔ THE FALL-THROUGH AT THE BOTTOM OF THIS FUNCTION IS `return true`, so a
+     * section nobody names here appears on EVERY page. Three were doing that and
+     * should not have been (found 2026-08-31, operator: "we have ft8 settings in
+     * the wspr settings drawer - not at all relevant"):
+     *
+     *  - Activation counts contacts in the ADIF log, and ft8_qso.c is the log's
+     *    only writer. On the WSPR page it would show a total that nothing on
+     *    that page can ever move, which is worse than absent.
+     *  - The band-plan region picker's only visible effect is the band-plan
+     *    strip, which exists on the panadapter alone.
+     *  - CW centre and CW transmit offset apply in CW/CW-R only, and both decode
+     *    pages force the radio to DiGi on entry.
+     *
+     * Note the precedent right below: DRAWER_SEC_RITPILL sits in the Radio GROUP
+     * and is still panadapter-only. Group is where a control is FILED; this
+     * function is where it is SHOWN. They are allowed to differ. */
+    if (id == DRAWER_SEC_ACTIVATION) return !wspr;
+    if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW) return !ft8 && !wspr;
     /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
         id == DRAWER_SEC_WSPRHOP || id == DRAWER_SEC_WSPRNET) return wspr;
     // The spectrum/waterfall controls describe a view neither decode page shows.
-    if (id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
+    if (id == DRAWER_SEC_STILL   || id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
         id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
         id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
@@ -2442,6 +2467,8 @@ static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
+static void drawer_check_still_cb(lv_event_t *e);
+static void drawer_still_refresh_label(void);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_activation_btn_cb(lv_event_t *e);
 static void drawer_refresh_activation(void);
@@ -2502,6 +2529,10 @@ static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
+/* #297: the words on the hatched block. An OVERLAY object, for the same reason
+ * s_wf_cursor is one - the waterfall's rows scroll, so text painted into the
+ * bitmap would trail down the screen. */
+static lv_obj_t *s_nodata_lbl = NULL;
 static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the waterfall (not drawn into the
                                       // bitmap — that trailed as rows scrolled); a single current-position line
 
@@ -4021,6 +4052,17 @@ static void build_waterfall(lv_obj_t *parent)
     // repaints it at the current x each frame, so it shows only the actual
     // position, never the path taken. Non-clickable so touches fall through to
     // the waterfall's own tune handler. Hidden until a tune drag is active.
+    /* #297 the hatched block's caption. Placed on the WATERFALL rather than the
+     * spectrum: it is 370 px against 200, so the text sits in open space instead
+     * of competing with the trace's own baseline. Hidden until there is a block
+     * wide enough to hold it - see the paint. */
+    s_nodata_lbl = lv_label_create(s_waterfall_obj);
+    lv_label_set_text(s_nodata_lbl, "QMX cannot hear this");
+    lv_obj_set_style_text_color(s_nodata_lbl, lv_color_hex(0x7A8894), 0);
+    lv_obj_set_style_text_font(s_nodata_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_clear_flag(s_nodata_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
+
     s_wf_cursor = lv_obj_create(s_waterfall_obj);
     lv_obj_set_size(s_wf_cursor, 2, WATERFALL_H);
     lv_obj_set_style_bg_color(s_wf_cursor, lv_color_hex(0x00FFFF), 0);
@@ -6895,6 +6937,23 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (sx > 0 && sx < DISPLAY_H_RES)
             for (int y = 0; y < SPECTRUM_H; y++) px[y * DISPLAY_H_RES + sx] = seam;
     }
+    /* Say WHY it is empty, so nobody reads the hatching as a dead receiver.
+     *
+     * ⛔ A block too narrow for its own label declines to draw it - the same rule
+     * the manual's diagram renderer follows. Half a caption bleeding out of the
+     * hatched area onto live spectrum would claim the radio cannot hear a part
+     * of the band it can. */
+    if (s_nodata_lbl) {
+        int w = (nodata_from >= 0) ? (nodata_to - nodata_from + 1) : 0;
+        int lw = lv_obj_get_width(s_nodata_lbl);
+        if (lw <= 0) lw = 200;                    /* before the first layout pass */
+        if (w >= lw + 24) {
+            lv_obj_set_pos(s_nodata_lbl, nodata_from + (w - lw) / 2, WATERFALL_H / 3);
+            lv_obj_remove_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
     {
@@ -8932,7 +8991,57 @@ void ui_set_vfo_switched_notice(const char *was)
     ui_toast(msg);
 }
 
-void ui_toast(const char *msg)
+void ui_toast(const char *msg) { ui_toast_ms(msg, 1500); }
+
+/* ---- #298 the one-time "you can switch back" notice -----------------------
+ *
+ * Shown ONCE in the life of a unit, then never again - the flag is written the
+ * moment it is shown, and also the moment the operator touches the switch
+ * themselves, because at that point they plainly know it exists.
+ *
+ * ⛔ ONCE, not once per boot. This file records why: the "power-cycle the QMX"
+ * toasts were removed in v1.8.0 for firing repeatedly at an ordinary state,
+ * and the operator's word for that was "irritating and for no use".
+ *
+ * It waits for the panadapter to be on screen with the drawer shut, because a
+ * notice about the spectrum shown over the FT8 or WSPR page describes nothing
+ * the reader can see. If the unit boots into FT8 the timer simply keeps
+ * waiting, and the notice arrives whenever they first swipe across. */
+static lv_timer_t *s_still_notice_timer = NULL;
+static uint32_t    s_still_notice_armed_ms = 0;
+
+static void still_notice_cb(lv_timer_t *t)
+{
+    /* Nothing to say to someone who has already turned it off. */
+    if (!ui_get_still_view()) goto done;
+    if (ui_mode_get() != UI_MODE_PANADAPTER) return;    /* keep waiting */
+    if (s_drawer_open) return;
+    /* Let the screen settle first - a toast during the boot's own churn is
+     * competing with the QMX-wait prompt and the first spectrum frames. */
+    if (lv_tick_get() - s_still_notice_armed_ms < 8000) return;
+
+    ui_toast_ms("The spectrum now holds still and the VFO marker moves across it.\n"
+                "Settings -> Still spectrum turns this off.", 9000);
+    ESP_LOGI(TAG, "still display: one-time notice shown");
+
+done:
+    settings_set_still_notice_done(true);
+    lv_timer_delete(t);
+    s_still_notice_timer = NULL;
+}
+
+void ui_still_notice_arm(bool armed)
+{
+    if (!armed || s_still_notice_timer) return;
+    s_still_notice_armed_ms = lv_tick_get();
+    s_still_notice_timer = lv_timer_create(still_notice_cb, 1000, NULL);
+}
+
+/* 1500 ms is right for "saved" or "already tuned there". It is far too short
+ * for anything the operator has to READ and then act on, and a notice they
+ * miss is a notice that never happened - this one is shown exactly once in the
+ * life of the unit. Hence the duration parameter. */
+void ui_toast_ms(const char *msg, uint32_t ms)
 {
     // Unlike every other ui_toast() call site (touch/button handlers already
     // running on the LVGL thread), ft8_test.c's stuck-decoder watchdog calls
@@ -8962,9 +9071,10 @@ void ui_toast(const char *msg)
     lv_obj_move_foreground(s_toast);   // above the open drawer
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     if (s_toast_timer) {
+        lv_timer_set_period(s_toast_timer, ms);
         lv_timer_reset(s_toast_timer);
     } else {
-        s_toast_timer = lv_timer_create(toast_hide_cb, 1500, NULL);
+        s_toast_timer = lv_timer_create(toast_hide_cb, ms, NULL);
         lv_timer_set_repeat_count(s_toast_timer, 1);
     }
 
@@ -9647,6 +9757,30 @@ static void drawer_build(void)
         s_switch_otadl = make_drawer_checkbox(sec, oc.ota_autodl, drawer_otadl_cb, NULL);
         lv_obj_align(s_switch_otadl, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 88;
+    }
+
+    /* #298 STILL SPECTRUM. Two sentences of explanation under the switch,
+     * because the label alone cannot say which way is which - "Still spectrum
+     * OFF" is not obviously "the view follows the dial". */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_STILL, y, 116);
+        lv_obj_t *lbl = lv_label_create(sec);
+        lv_label_set_text(lbl, "Still spectrum");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_still = make_drawer_checkbox(sec, ui_get_still_view(),
+                                             drawer_check_still_cb, NULL);
+        lv_obj_align(s_check_still, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        s_lbl_still = lv_label_create(sec);
+        lv_label_set_long_mode(s_lbl_still, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_lbl_still, DRAWER_W - 80);
+        lv_obj_set_style_text_color(s_lbl_still, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(s_lbl_still, &lv_font_montserrat_20, 0);
+        lv_obj_align(s_lbl_still, LV_ALIGN_TOP_LEFT, 0, 52);
+        drawer_still_refresh_label();
+        y += 116;
     }
 
     // Phase 5.12: Flat Spectrum ON/OFF row
@@ -10822,6 +10956,30 @@ void ui_set_flat_mode(bool on)
         }
     }
     update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
+}
+
+/* Says which way is which. "Still spectrum: off" is not self-evidently "the
+ * view re-centres on the dial", and this switch changes the main screen enough
+ * that a guess is not good enough. */
+static void drawer_still_refresh_label(void)
+{
+    if (!s_lbl_still) return;
+    lv_label_set_text(s_lbl_still,
+        ui_get_still_view()
+            ? "The spectrum and waterfall hold still and the VFO marker moves across them."
+            : "The spectrum re-centres on the dial each time you tune. The marker stays put.");
+}
+
+static void drawer_check_still_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    ui_set_still_view(on);
+    settings_set_still_view(on);
+    /* Whichever way they went, they have now MADE the choice, so the one-time
+     * notice has done its job and must not appear again. */
+    settings_set_still_notice_done(true);
+    drawer_still_refresh_label();
 }
 
 static void drawer_switch_flat_cb(lv_event_t *e)
