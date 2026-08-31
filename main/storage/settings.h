@@ -456,6 +456,14 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
  * reason settings_wifi_known_count() exists (see CLAUDE.md, "Task stacks on
  * this board are TINY"). */
 int16_t settings_get_cw_tx_offset_hz(void);
+/* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
+ * be NULL. Empty ip means DHCP.
+ *
+ * ⛔ Use this, NEVER settings_load_all(), from a WiFi/IP event handler: those
+ * run on `sys_evt`, whose stack is 2808 bytes, and a qmx_settings_t there is a
+ * Stack protection fault. See the note on the implementation - it has already
+ * boot-looped this device once. */
+void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16]);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)

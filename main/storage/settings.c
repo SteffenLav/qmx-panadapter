@@ -1761,6 +1761,34 @@ int16_t settings_get_cw_tx_offset_hz(void)
     return v;
 }
 
+/* ⛔ THIS EXISTS BECAUSE ITS CALLERS RUN ON `sys_evt`, WHOSE STACK IS 2808 B.
+ *
+ * The static-IP code is driven from the WiFi and IP event handlers, and the
+ * first version called settings_load_all() there - a whole qmx_settings_t on a
+ * 2808-byte stack. It crashed the device with a Stack protection fault at 8.3 s
+ * of every boot, i.e. a boot loop, the moment WiFi came up (2026-08-31).
+ *
+ * That is the third time this exact bug has been written in wifi.c: CLAUDE.md
+ * records a wifi_known_t[6] doing it TWICE on `sys_evt` on 2026-08-05, which is
+ * why settings_wifi_known_count() exists. Four 16-byte strings is 64 bytes.
+ *
+ * Any future event-handler code wanting a setting gets an accessor like this
+ * one - never the whole struct. */
+void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16])
+{
+    if (ip)   ip[0]   = '\0';
+    if (mask) mask[0] = '\0';
+    if (gw)   gw[0]   = '\0';
+    if (dns)  dns[0]  = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (ip)   memcpy(ip,   s_pending.wifi_ip,   sizeof(s_pending.wifi_ip));
+    if (mask) memcpy(mask, s_pending.wifi_mask, sizeof(s_pending.wifi_mask));
+    if (gw)   memcpy(gw,   s_pending.wifi_gw,   sizeof(s_pending.wifi_gw));
+    if (dns)  memcpy(dns,  s_pending.wifi_dns,  sizeof(s_pending.wifi_dns));
+    xSemaphoreGive(s_mutex);
+}
+
 // Default ON: the RIT pill is a v1.8.0 feature and hiding it by default would make
 // it invisible to everyone who never opens the drawer. This is opt-OUT, for
 // operators who do not use RIT and do not want the top-right corner spent on it

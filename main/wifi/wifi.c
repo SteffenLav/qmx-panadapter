@@ -192,29 +192,40 @@ static void manual_netif_start(esp_event_base_t base, int32_t id, void *data)
  *
  * Hence: stop at STA_START, apply at STA_CONNECTED, DNS last.
  */
-static bool static_ip_wanted(qmx_settings_t *out)
+/* ⛔ EVERY CALLER OF THIS RUNS ON `sys_evt`, STACK 2808 BYTES.
+ *
+ * This took a whole qmx_settings_t via settings_load_all() and boot-looped the
+ * device: Stack protection fault on sys_evt at 8.3 s of every boot, the moment
+ * WiFi came up (2026-08-31, caught on the first flash). CLAUDE.md records the
+ * same mistake being made twice in this very file on 2026-08-05.
+ *
+ * settings_get_wifi_static() copies the four strings and nothing else - 64
+ * bytes. Keep it that way; do not "simplify" this back to the whole struct. */
+typedef struct { char ip[16], mask[16], gw[16], dns[16]; } static_ip_cfg_t;
+
+static bool static_ip_wanted(static_ip_cfg_t *out)
 {
-    settings_load_all(out);
-    return out->wifi_ip[0] != '\0';
+    settings_get_wifi_static(out->ip, out->mask, out->gw, out->dns);
+    return out->ip[0] != '\0';
 }
 
 static void static_ip_apply_on_connect(void)
 {
-    qmx_settings_t st;
+    static_ip_cfg_t st;
     if (!static_ip_wanted(&st)) return;
 
     esp_netif_ip_info_t ip = { 0 };
-    if (!esp_netif_str_to_ip4(st.wifi_ip, &ip.ip)) {
+    if (!esp_netif_str_to_ip4(st.ip, &ip.ip)) {
         ESP_LOGW(TAG, "static IP '%s' is not a valid address - staying on DHCP",
-                 st.wifi_ip);
+                 st.ip);
         return;
     }
     /* A blank mask is the common case on a home LAN and /24 is the answer
      * there; guessing it is better than refusing the whole configuration over
      * a field most operators would leave empty. */
-    if (!st.wifi_mask[0] || !esp_netif_str_to_ip4(st.wifi_mask, &ip.netmask))
+    if (!st.mask[0] || !esp_netif_str_to_ip4(st.mask, &ip.netmask))
         esp_netif_str_to_ip4("255.255.255.0", &ip.netmask);
-    if (st.wifi_gw[0]) esp_netif_str_to_ip4(st.wifi_gw, &ip.gw);
+    if (st.gw[0]) esp_netif_str_to_ip4(st.gw, &ip.gw);
 
     esp_err_t e = esp_netif_set_ip_info(s_sta_netif, &ip);
     if (e != ESP_OK) {
@@ -224,16 +235,16 @@ static void static_ip_apply_on_connect(void)
     }
     /* AFTER the address: set_ip_info clears the DNS list on the way through. */
     esp_netif_dns_info_t dns = { 0 };
-    const char *dns_src = st.wifi_dns[0] ? st.wifi_dns
-                        : (st.wifi_gw[0] ? st.wifi_gw : NULL);
+    const char *dns_src = st.dns[0] ? st.dns
+                        : (st.gw[0] ? st.gw : NULL);
     if (dns_src && esp_netif_str_to_ip4(dns_src, &dns.ip.u_addr.ip4)) {
         dns.ip.type = ESP_IPADDR_TYPE_V4;
         esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
     }
     ESP_LOGI(TAG, "static IP applied: %s mask %s gw %s dns %s",
-             st.wifi_ip,
-             st.wifi_mask[0] ? st.wifi_mask : "255.255.255.0 (assumed)",
-             st.wifi_gw[0]   ? st.wifi_gw   : "(none)",
+             st.ip,
+             st.mask[0] ? st.mask : "255.255.255.0 (assumed)",
+             st.gw[0]   ? st.gw   : "(none)",
              dns_src ? dns_src : "(none)");
 }
 
@@ -359,7 +370,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             /* Stop DHCP here, while the netif is started but not yet up:
              * set_ip_info at STA_CONNECTED refuses outright unless the client
              * is STOPPED. Harmless to call when it never started. */
-            qmx_settings_t st;
+            static_ip_cfg_t st;   /* 64 bytes - NOT a qmx_settings_t; sys_evt */
             if (static_ip_wanted(&st)) {
                 esp_err_t e = esp_netif_dhcpc_stop(s_sta_netif);
                 if (e != ESP_OK && e != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
@@ -367,7 +378,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                              esp_err_to_name(e));
                 else
                     ESP_LOGI(TAG, "DHCP client stopped - static IP %s requested",
-                             st.wifi_ip);
+                             st.ip);
             }
         }
         if (s_ssid[0] == '\0') {
