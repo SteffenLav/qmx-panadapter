@@ -35,6 +35,7 @@ idf_component_register(
         "util/maidenhead.c"
     "util/db_gridlines.c"
     "util/pan_view.c"
+    "util/wf_shift.c"
     "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"

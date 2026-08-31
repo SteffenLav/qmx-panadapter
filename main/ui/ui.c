@@ -47,6 +47,7 @@
 #include "ft8_pileup_modal.h"
 #include "activation_modal.h"
 #include "hid_cursor.h"
+#include "util/wf_shift.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -1516,6 +1517,28 @@ void ui_set_zoom(float zoom, int pan_bins)
 
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
 
+/* ⭐ THE WATERFALL CANVAS IS WIDER THAN THE SCREEN (#298 phase 3).
+ *
+ * In a still display the waterfall becomes frequency-aligned history, so the
+ * image has to travel with the viewport. A full horizontal memmove of this
+ * canvas is ~1.9 MB in PSRAM, roughly 20 ms on a core measured at 0-7% idle -
+ * far too slow to do per 10 Hz dial click.
+ *
+ * So the canvas carries slack each side and a VIEW OFFSET moves instead, which
+ * is the same trick the double-height buffer already uses for vertical
+ * scrolling. A real memmove happens only when the slack runs out, and the
+ * viewport's own policy makes that rare: it holds still inside the dead band,
+ * pushes at most 10% of the span (128 px) before it pages, and a page discards
+ * most of the history legitimately anyway.
+ *
+ * Costs 0.76 MB more PSRAM (of ~15 MB free) and NOTHING at redraw time:
+ * lv_obj_area_is_visible() truncates an invalidation recursively to every
+ * parent, and the parent here is DISPLAY_H_RES wide. Checked in the LVGL 9.2
+ * source before committing to this, because a 40% rise in the dominant core-0
+ * load would have killed the idea. */
+#define WF_MARGIN       256
+#define WF_CANVAS_W     (DISPLAY_H_RES + 2 * WF_MARGIN)
+
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
 static void left_edge_swipe_cb(lv_event_t *e);
@@ -2529,6 +2552,19 @@ static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
+/* Which canvas column is shown at screen x=0, and the absolute frequency of
+ * canvas column 0. The anchor is held FIXED while only the view offset moves,
+ * so a canvas column keeps meaning one frequency and sub-pixel tuning steps
+ * accumulate instead of rounding away. It is adjusted only when the image is
+ * physically moved, and reset when the scale changes. */
+static int     s_wf_view_x     = WF_MARGIN;
+static int64_t s_wf_anchor_hz  = 0;
+static int32_t s_wf_anchor_span = 0;
+static bool    s_wf_anchor_ok  = false;
+static int     s_wf_stroll_off = 0;   /* the pan gesture's own offset, added on top */
+
+static void wf_apply_x(void);    /* defined beside the row push, used from ui_init */
+static void wf_clear_all(void);
 /* #297: the words on the hatched block. An OVERLAY object, for the same reason
  * s_wf_cursor is one - the waterfall's rows scroll, so text painted into the
  * bitmap would trail down the screen. */
@@ -3994,7 +4030,7 @@ static void build_waterfall(lv_obj_t *parent)
     // Allocate 2x WATERFALL_H so we can use the "double buffer" scroll trick:
     // new rows are written to both write_head and write_head+WATERFALL_H positions,
     // and the canvas view pointer moves through the buffer instead of memmove'ing.
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    size_t buf_size = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
         ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_size);
@@ -4041,11 +4077,13 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
-                         DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+                         WF_CANVAS_W, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
-    memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);    lv_obj_invalidate(s_wf_canvas);
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H * 2 * 2);
+    wf_apply_x();   /* the view starts centred in the slack, not at column 0 */
+    lv_obj_invalidate(s_wf_canvas);
 
     // Tune-cursor overlay: a thin full-height cyan line drawn ON TOP of the
     // waterfall (not into its bitmap, which would trail as rows scroll). LVGL
@@ -5463,8 +5501,12 @@ void ui_init(lv_display_t *disp)
 static void stroll_apply_offset(int off)
 {
     if (s_spec_canvas) lv_obj_set_x(s_spec_canvas, off);
-    if (s_wf_canvas)   lv_obj_set_x(s_wf_canvas,   off);
     if (s_label_bar)   lv_obj_set_x(s_label_bar,   off);
+    /* The waterfall's x carries TWO things now: this gesture, and the still
+     * display's frequency anchor. Setting it directly here would throw the
+     * anchor away and slide the history off by WF_MARGIN. */
+    s_wf_stroll_off = off;
+    wf_apply_x();
 }
 
 // === Display sleep (#34, Samuel W7STF) =====================================
@@ -5719,10 +5761,7 @@ static void pinch_poll_cb(lv_timer_t *t)
                 cat_set_frequency(tgt);
                 ui_update_frequency(tgt);
                 // Clear waterfall on pan
-                if (s_wf_canvas_buf) {
-                    size_t wf_size = (size_t)DISPLAY_H_RES * WATERFALL_H * 2;  // circular buffer has 2× height
-                    memset(s_wf_canvas_buf, 0, wf_size * 2);
-                }
+                if (s_wf_canvas_buf) wf_clear_all();
                 ESP_LOGI("pinch", "Waterfall processed, passband fade started");
             }
             s_stroll_active = false;
@@ -7160,6 +7199,101 @@ void ui_push_spectrum(const float *bins, int n_bins)
 // That means the view base = the position of the newest row.
 static int s_wf_head = 0;  // next write position (0..WATERFALL_H-1)
 
+/* Canvas column s_wf_view_x must appear at screen x = 0, plus whatever the pan
+ * gesture is currently holding. */
+static void wf_apply_x(void)
+{
+    if (s_wf_canvas) lv_obj_set_x(s_wf_canvas, s_wf_stroll_off - s_wf_view_x);
+}
+
+static void wf_clear_all(void)
+{
+    if (!s_wf_canvas_buf) return;
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H * 2 * 2);
+    s_wf_view_x    = WF_MARGIN;
+    s_wf_anchor_ok = false;          /* re-anchored on the next row */
+    wf_apply_x();
+}
+
+/* Blank a span of canvas columns on EVERY row of the buffer. Black, deliberately
+ * not the hatching: hatching means "the radio cannot hear this", and these are
+ * frequencies it hears perfectly well - we simply have no history for them yet. */
+static void wf_blank_cols(int x, int n)
+{
+    if (n <= 0 || x >= WF_CANVAS_W) return;
+    if (x < 0) { n += x; x = 0; }
+    if (n <= 0) return;
+    if (x + n > WF_CANVAS_W) n = WF_CANVAS_W - x;
+    const size_t row_bytes = (size_t)WF_CANVAS_W * 2;
+    for (int r = 0; r < WATERFALL_H * 2; r++)
+        memset(s_wf_canvas_buf + r * row_bytes + (size_t)x * 2, 0, (size_t)n * 2);
+}
+
+/* ⭐ KEEP THE HISTORY UNDER THE FREQUENCY IT BELONGS TO (#298 phase 3).
+ *
+ * Called once per waterfall tick, BEFORE the new row is written, so any tuning
+ * since the last tick is applied in one shift and the fresh row lands in the
+ * right place.
+ *
+ * ⛔ STILL MODE ONLY. In centred mode the view follows the dial by definition,
+ * so tracking it would scroll the history away on every tune - a visible change
+ * to the behaviour people already have, and the switch exists precisely so that
+ * choosing "centred" gets today's device back exactly. The same latent smear is
+ * present there and is left alone deliberately. */
+static void wf_track_viewport(void)
+{
+    if (!s_wf_canvas_buf) return;
+
+    if (!s_still_view) {
+        if (s_wf_view_x != WF_MARGIN || s_wf_anchor_ok) {
+            wf_clear_all();          /* leaving still mode: history is not aligned */
+        }
+        return;
+    }
+
+    int32_t span = (int32_t)(DSP_SAMPLE_RATE_HZ / s_zoom_factor);
+    if (span <= 0) return;
+    int64_t view_lo = (int64_t)s_last_qmx_freq_hz + ui_get_pan_offset_hz() - span / 2;
+
+    /* A scale change cannot be honoured by moving pixels - the old rows are at
+     * a different Hz/px and rescaling them would be a lie. Start again. */
+    if (!s_wf_anchor_ok || s_wf_anchor_span != span) {
+        wf_clear_all();
+        s_wf_anchor_span = span;
+        s_wf_anchor_hz   = view_lo - (int64_t)WF_MARGIN * span / DISPLAY_H_RES;
+        s_wf_anchor_ok   = true;
+        return;
+    }
+
+    /* Where the view SHOULD sit, from the anchor. Derived rather than
+     * accumulated, so a 10 Hz step that is 0.27 px at x1 is not rounded away
+     * tick after tick - it moves the view on the tick it crosses a pixel. */
+    int64_t num  = (view_lo - s_wf_anchor_hz) * DISPLAY_H_RES;
+    int     want = (int)((num >= 0) ? (num + span / 2) / span
+                                    : (num - span / 2) / span);
+    int     dx   = want - s_wf_view_x;
+    if (dx == 0) return;
+
+    wf_shift_cfg_t cfg = { WF_CANVAS_W, DISPLAY_H_RES, WF_MARGIN, s_wf_view_x };
+    wf_shift_plan_t pl;
+    if (!wf_shift_plan(&cfg, dx, &pl)) return;   /* refuse quietly, never clear */
+
+    const size_t row_bytes = (size_t)WF_CANVAS_W * 2;
+    if (pl.move) {
+        for (int r = 0; r < WATERFALL_H * 2; r++) {
+            uint8_t *row = s_wf_canvas_buf + r * row_bytes;
+            memmove(row + (size_t)pl.dst_x * 2, row + (size_t)pl.src_x * 2,
+                    (size_t)pl.keep_n * 2);
+        }
+        /* The image moved, so canvas column 0 now means a different frequency. */
+        s_wf_anchor_hz += (int64_t)(pl.src_x - pl.dst_x) * span / DISPLAY_H_RES;
+    }
+    for (int i = 0; i < pl.n_clear; i++) wf_blank_cols(pl.clear[i].x, pl.clear[i].n);
+
+    s_wf_view_x = pl.view_x;
+    wf_apply_x();
+}
+
 // (touch-target cursor state declared near top of file)
 
 // Waterfall scroll via moving-pointer trick.
@@ -7172,20 +7306,29 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
 {
     if (!s_wf_canvas_buf || !rgb565_row) return;
 
-    const size_t row_bytes = DISPLAY_H_RES * 2;  // RGB565 = 2 B/px
+    const size_t row_bytes = (size_t)WF_CANVAS_W * 2;   // RGB565 = 2 B/px
+    const size_t vis_bytes = (size_t)DISPLAY_H_RES * 2; // the row we were handed
 
     if (!display_lock(20)) return;
 
+    /* FIRST: move the existing history if the viewport has moved since the last
+     * tick, so this row lands beside the right history rather than on top of
+     * the wrong frequency. Order matters - shifting after the write would blank
+     * part of the row just written. */
+    wf_track_viewport();
+
     // Decrement head (with wrap), then write the new row at head and head+WATERFALL_H.
     s_wf_head = (s_wf_head + WATERFALL_H - 1) % WATERFALL_H;
-    memcpy(s_wf_canvas_buf +  s_wf_head                * row_bytes, rgb565_row, row_bytes);
-    memcpy(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes, rgb565_row, row_bytes);
+    memcpy(s_wf_canvas_buf +  s_wf_head                * row_bytes + (size_t)s_wf_view_x * 2,
+           rgb565_row, vis_bytes);
+    memcpy(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes + (size_t)s_wf_view_x * 2,
+           rgb565_row, vis_bytes);
 
     // Point the canvas at the WATERFALL_H window starting at s_wf_head.
     // Newest row sits at view row 0 (top), oldest at view row WATERFALL_H-1 (bottom).
     lv_canvas_set_buffer(s_wf_canvas,
                          s_wf_canvas_buf + s_wf_head * row_bytes,
-                         DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+                         WF_CANVAS_W, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
 
     // FT8-sync-vs-SNTP-only slot-boundary overlay - panadapter-mode-only
     // diagnostic, gated on the "FT8 sync lines" drawer checkbox
@@ -7225,8 +7368,10 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
             // would vanish at that crossing point instead of riding all the
             // way to the bottom. This was the actual cause of "lines
             // disappear randomly" - not a timing/jitter issue at all.
-            uint16_t *row0a = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
-            uint16_t *row0b = (uint16_t *)(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes);
+            /* + s_wf_view_x: these draw across the VISIBLE width, and the
+             * canvas is wider than the screen since #298 phase 3. */
+            uint16_t *row0a = (uint16_t *)(s_wf_canvas_buf +  s_wf_head                * row_bytes) + s_wf_view_x;
+            uint16_t *row0b = (uint16_t *)(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes) + s_wf_view_x;
             const uint16_t magenta = 0xF81F;
             const uint16_t white   = 0xFFFF;
             // Both can land on the same tick when well-synced - interleave
