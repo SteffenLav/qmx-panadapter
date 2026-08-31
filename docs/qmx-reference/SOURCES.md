@@ -17,14 +17,32 @@ Manual FT8 TX work in particular):
   ⚠ Its page footers still say "firmware 1_04_003"; the document revision history is the
   authority. Extract: `cat_104_004.txt`.
 
-- `QDX_operation_manual_1_10.pdf` — **QDX** Operating Manual, firmware 1_10 (includes its
-  full CAT command list). Added 2026-08-29 to answer whether the panadapter could support
-  a QDX (Travis AK6TB). Extract: `qdx_op_110.txt`. Findings, so nobody re-derives them:
-  QDX has the **same `Q9` IQ mode** (same session-only caveat), the **same 48 ksps 24-bit
-  stereo I/Q**, and the **same 12 kHz IF** — so the receive DSP would carry across. It has
-  **no `TA`**, which is how every Tab5 transmission is generated, and no `PC`, `SW`, `MM`,
-  `TM` or `RG`. `MD` is USB/LSB only. `VN;` returns `VN1_05;` with no "QMX" suffix, which
-  is a reliable way to tell the radios apart.
+- `QDX_operation_manual_1_10.pdf` — **QDX** Operating Manual, firmware 1_10 (19-Jul-2023;
+  includes its full CAT command list — QDX has no separate CAT manual). Added 2026-08-29 to
+  answer whether the panadapter could support a QDX (Travis AK6TB). Extract: `qdx_op_110.txt`.
+  **This IS the current QDX manual** — verified 2026-08-31: QDX firmware downloads stop at
+  `1_10_.zip`, so the firmware has been frozen since Jul-2023. (`manual_1_12.pdf` /
+  `manual_1_24.pdf` on the QDX page are the kit ASSEMBLY manuals, not firmware 1_12.)
+
+  Full analysis: **`docs/qdx-vs-qmx-comparison.md`**. Headlines, so nobody re-derives them:
+  QDX has the **same `Q9` IQ mode** (same session-only caveat) and the **same 48 ksps 24-bit
+  stereo I/Q**, and no `TA`, `PC`, `SW`, `MM`, `TM` or `RG`. `MD` is USB/LSB only. `VN;`
+  returns `VN1_10;` with no "QMX" suffix — a reliable way to tell the radios apart. `AG` is
+  in **plain dB** on a QDX, not the QMX's 0.25 dB steps, so our `AG0nnn;` asks for 4x too much.
+
+  ⚠ **Two corrections to the note that stood here from 2026-08-29 to 2026-08-31:**
+  1. It said QDX has "the **same 12 kHz IF** — so the receive DSP would carry across".
+     **Probably wrong.** The firmware 1_06 changelog says *"12kHz IF offset is removed when
+     you enable IQ Mode"*, i.e. a QDX likely delivers TRUE BASEBAND and our `n_bins/4` shift
+     would put every signal 12 kHz off. Changelog-sourced, not in the manual body — confirm on
+     hardware before building on either reading.
+  2. It implied the missing `TA` made transmit impossible. **Also wrong.** The Tab5 is the USB
+     HOST, so it can stream synthesised PCM into the QDX's sound-card output exactly as a PC
+     does — `uac_host_device_write()` exists in our patched UAC component, `audio.c` already
+     receives (and ignores) `UAC_HOST_DRIVER_EVENT_TX_CONNECTED`, and `synth_gfsk_heap()`
+     already generates FT8 audio on-device. TX is a separate engine, not a wall. The real
+     constraint is that the QDX **disables transmit while IQ mode is on** (same changelog), so
+     `Q9` must be toggled around every burst — and that toggle also moves the LO by 12 kHz.
 
 **Not yet cached** (newer than the above, noted 2026-08-29): operating manual for
 1_04_004 and above (23-Jul-2026), and the Virtual U3S manual for **1_04_008a** and above
