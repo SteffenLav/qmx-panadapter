@@ -33,6 +33,14 @@
 #include "iq_balance.h"
 #include "spur_map.h"
 
+
+/* The dial the CURRENT spectrum's samples were captured under (#298). Set in
+ * the FFT loop from audio_dial_for_last_read(), which indexes by sample number
+ * rather than wall time - the pipeline latency was measured varying better than
+ * 2:1, so no time-based constant can stand in for this. */
+static volatile uint32_t s_spec_dial_hz = 0;
+uint32_t dsp_get_spectrum_dial_hz(void) { return s_spec_dial_hz; }
+
 // Linear-power averaging for spur_map.c's dial-nudge detector. Accumulated on
 // the FFT task; armed and collected from the detection task.
 static float   *s_avg_acc    = NULL;
@@ -889,6 +897,9 @@ static void fft_task(void *arg)
         }
 
         // Block until we have a full FFT window of stereo pairs (1024 pairs).
+        /* #298: taken BEFORE the window is consumed, so it describes THIS
+         * spectrum rather than the next one. */
+        s_spec_dial_hz = audio_dial_for_last_read();
         // audio_read_samples may return less than requested - loop until full.
         size_t got = 0;
         while (got < DSP_FFT_SIZE) {

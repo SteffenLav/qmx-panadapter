@@ -13,7 +13,8 @@
 #include "util/status.h"      // status_charge_limit_active
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
-#include "ui.h"               // ui_get_*, ui_set_zoom
+#include "ui.h"
+#include "audio.h"          // audio_ring_backlog_pairs - spectrum staleness               // ui_get_*, ui_set_zoom
 #include "qmx_term.h"         // /api/term
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
@@ -478,6 +479,58 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     cJSON_AddNumberToObject(root, "zoom",        (double)ui_get_zoom_factor());
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
+
+    /* ⭐ THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
+     *
+     * index.html computes `panHz = lastPanBins * HZ_PER_BIN` in six separate
+     * places and masks a centre bin with `& (SPEC_W - 1)`. That is the pan
+     * ROUNDED TO A WHOLE FFT BIN - the number the Tab5 itself stopped using on
+     * 2026-08-31 because it made every overlay step in 46.875 Hz jumps - and
+     * that mask is the same modulo wrap that was #297.
+     *
+     * So the browser is a THIRD mapping carrying both faults we just fixed.
+     * pan_view.h's rule applies to it as much as to the waterfall: one mapping,
+     * or they drift. It cannot run pan_view.c, but it does not need to - given
+     * these four numbers the only arithmetic left is a linear interpolation
+     * across the width.
+     *
+     * It also makes the still display free on the browser: it draws whatever
+     * viewport it is told, so it follows the Tab5 with no notion of stillness
+     * at all.
+     *
+     * view_* is what is on screen; cap_* is what the radio can hear. A column
+     * outside cap_* is frequency that does not exist and must be drawn as
+     * visibly empty, never filled by wrapping. */
+    {
+        pan_view_cfg_t pvc;
+        pan_view_t     pv;
+        if (ui_pan_view_current(&pvc, &pv, DSP_FFT_SIZE)) {
+            cJSON_AddNumberToObject(root, "view_lo_hz", (double)pv.lo_hz);
+            cJSON_AddNumberToObject(root, "view_hi_hz", (double)pv.hi_hz);
+            cJSON_AddNumberToObject(root, "cap_lo_hz",  (double)pv.cap_lo_hz);
+            cJSON_AddNumberToObject(root, "cap_hi_hz",  (double)pv.cap_hi_hz);
+            cJSON_AddNumberToObject(root, "span_hz",    (double)pv.span_hz);
+            /* Sent, not re-derived. It is IF_OFFSET_HZ plus the CW centre plus
+             * the per-unit trim minus RIT, and a browser rebuilding that from
+             * four separate fields is one more place for the two screens to
+             * disagree - which is the entire failure this phase exists to end. */
+            cJSON_AddNumberToObject(root, "if_offset_hz", (double)pvc.if_offset_hz);
+            cJSON_AddNumberToObject(root, "n_bins",       (double)pvc.n_bins);
+        }
+        /* Absent while the zoom FFT is driving the display - pan_view does not
+         * describe that path. A browser must treat missing fields as "keep
+         * using what you had", never as zero. */
+    }
+
+    /* HOW STALE THE SPECTRUM IS, in audio pairs still queued ahead of the FFT.
+     *
+     * Measuring rather than assuming: the ring HOLDS 341 ms but is normally
+     * drained continuously, so the real figure could be a tenth of that - and
+     * the difference decides whether the tuning wriggle is worth a fix that
+     * stamps every spectrum with its capture frequency. At 48 kHz, pairs/48
+     * is milliseconds. */
+    cJSON_AddNumberToObject(root, "audio_backlog_pairs",
+                            (double)audio_ring_backlog_pairs());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
@@ -792,7 +845,32 @@ static esp_err_t cmd_handler(httpd_req_t *req)
 
     if (action && strcmp(action, "set_freq") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) cat_set_frequency((uint32_t)item->valuedouble);
+        if (cJSON_IsNumber(item)) {
+            uint32_t hz = (uint32_t)item->valuedouble;
+            cat_set_frequency(hz);
+            /* ⭐ TELL THE UI NOW, do not wait to be told (#298 phase 5).
+             *
+             * This called cat_set_frequency() and stopped, so the Tab5 learned
+             * the new dial only from the FA poll - up to 150 ms later. The radio
+             * retunes almost at once, so for that window the display mapped a
+             * NEW spectrum with the OLD dial, and the trace slid the way the VFO
+             * was going and then snapped back. On the bench: "the spectrum and
+             * wf wriggle some in the direction of the vfo - then bounce back
+             * where it should be", visible on the Tab5 as well as the browser.
+             *
+             * ⭐ MEASURED before fixing, and the measurement changed the fix.
+             * The audio backlog is 0 pairs in 23 of 25 samples with the radio
+             * streaming 48,000 pairs/s - so the spectrum is stale by about one
+             * FFT window, 21 ms, while our knowledge of the dial was stale by up
+             * to 150 ms. The DATA was never the late one. Stamping each spectrum
+             * with its capture frequency - the obvious fix, and a big one - would
+             * have corrected the smaller of the two lags by a factor of seven.
+             *
+             * Every other tune path already does this: the band buttons, the
+             * memory recall and tap-to-tune all move the display straight after
+             * the CAT write. The web path simply never did. */
+            ui_update_frequency(hz);
+        }
     } else if (action && strcmp(action, "set_band") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
@@ -802,7 +880,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // auto-answer down, because the antenna is probably not tuned for
             // the new band. Doing it from the browser must not be the loophole.
             ft8_robot_stand_down("band changed");
-            cat_set_frequency(target ? target : center_hz);
+            uint32_t want = target ? target : center_hz;
+            cat_set_frequency(want);
+            /* Same reason as set_freq above: the Tab5's own band buttons move
+             * the display immediately (ui.c band_preset_cb) and this path did
+             * not, so a band change from the browser left the Tab5 mapping a
+             * whole new band's spectrum with the old dial until the FA poll
+             * caught up. */
+            ui_update_frequency(want);
         }
     } else if (action && strcmp(action, "set_mode") == 0) {
         const char *mode = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
@@ -817,6 +902,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 cat_request_cw_passband(bw);    // CW: MMCW menu item (Kenwood FW is rejected)
             }
         }
+    } else if (action && strcmp(action, "still_notice") == 0) {
+        /* Re-arm the one-time "the spectrum now holds still" window. It fires
+         * once in the life of a unit, which makes it impossible to LOOK at once
+         * it has been seen - and a notice nobody can review is a notice nobody
+         * can correct the wording of. Dev action; no web UI points at it. */
+        settings_set_still_notice_done(false);
+        ui_still_notice_arm(true);
+        ESP_LOGI(TAG, "web: still-display notice re-armed");
+    } else if (action && strcmp(action, "still_view") == 0) {
+        /* Was a bench-only control while #298 was being judged. It is a real
+         * setting now (drawer + web Settings), so this PERSISTS - a dev action
+         * that silently reverts on the next boot is worse than none. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool v = cJSON_IsBool(on) ? cJSON_IsTrue(on) : true;
+        ui_set_still_view(v);
+        settings_set_still_view(v);
+        settings_set_still_notice_done(true);
+        ESP_LOGI(TAG, "web: still display -> %s", v ? "on" : "off");
     } else if (action && strcmp(action, "set_zoom") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "zoom");
         if (cJSON_IsNumber(item)) {
@@ -2782,6 +2885,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
+    cJSON_AddBoolToObject(root, "still_view",        c.still_view);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
@@ -3041,6 +3145,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         bool v = cJSON_IsTrue(it);
         settings_set_rit_pill_show(v);
         ui_set_rit_pill_show(v);
+    }
+    /* #298. Live as well as stored, same reason as the pill above - and it also
+     * retires the one-time notice, because someone setting this from the web
+     * has plainly found the control. */
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "still_view"))) {
+        bool v = cJSON_IsTrue(it);
+        settings_set_still_view(v);
+        settings_set_still_notice_done(true);
+        ui_set_still_view(v);
     }
     // Spur suppression, like IQ balance below, is a live DSP path as well as a
     // stored value - set both or the control does nothing until the next boot.

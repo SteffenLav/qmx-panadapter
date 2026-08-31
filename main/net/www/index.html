@@ -1204,6 +1204,111 @@ let bpDragging       = false;  // true once a bandplan-strip drag has crossed th
 const SPEC_W     = 1024;
 const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
 
+/* ===================================================================== *
+ * THE DEVICE'S VIEWPORT (#298 phase 5).
+ *
+ * This page used to derive its own geometry: `panHz = lastPanBins * HZ_PER_BIN`
+ * in six separate places, and a centre bin masked with `& (SPEC_W - 1)`. Both
+ * are faults the Tab5 fixed on 2026-08-31 and this page inherited:
+ *
+ *   - pan_bins is the pan ROUNDED TO A WHOLE FFT BIN. At x16 that is 10 px of
+ *     error, and it JUMPS a bin at a time while the device draws smoothly.
+ *   - the mask WRAPS. A column past the end of the capture window came back as
+ *     a bin from the far side - real spectrum from 24-36 kHz below the dial,
+ *     drawn under an axis claiming otherwise. That is #297, still live here.
+ *
+ * So the device now sends what it is actually drawing and this page stops
+ * computing it. pan_view.h's rule - "one mapping, or they drift again" - covers
+ * the browser too; it cannot run pan_view.c, but given these numbers the only
+ * arithmetic left is a linear interpolation, and viewBinAt() below mirrors
+ * pan_view_x_to_bin() line for line.
+ *
+ * It also makes the still display free here: this page draws whatever viewport
+ * it is told, so it follows the Tab5 with no notion of stillness at all.
+ *
+ * NULL until the device sends it - older firmware, or the zoom-FFT path, which
+ * pan_view deliberately does not describe. Every consumer must fall back to its
+ * old path rather than assume zero. */
+let lastView = null;   /* {lo, hi, capLo, capHi, span} in absolute Hz */
+
+/* ⛔ THE RADIO'S FREQUENCY, NEVER THE OPTIMISTIC ONE - and the distinction is
+ * load-bearing.
+ *
+ * lastFreqHz is what the OPERATOR is heading for: the wheel advances it on
+ * every click so the readout and the VFO marker stay live while the commit is
+ * still deferred. That is right for anything describing intent.
+ *
+ * It is WRONG for mapping the spectrum payload. Those are raw FFT bins captured
+ * by the radio at the RADIO's dial, so locating them with a dial the radio has
+ * not reached yet slides the whole spectrum by the pending delta - and since
+ * each waterfall row is drawn with a different pending delta, the history
+ * smears into a diagonal mess. From the bench: "the spectrum now follow the vfo
+ * and the wf makes a screwed image... the whole idea of moving the vfo along
+ * the wf is gone if there is just a messy picture there".
+ *
+ * So this one tracks the poll and is never held. It pairs with lastView, which
+ * comes from the same poll and describes the same instant. */
+let radioFreqHz = 0;
+
+/* The dial THIS frame was captured at, straight out of its own header. Used for
+   every payload mapping in preference to radioFreqHz, which is only as fresh as
+   the last 1 Hz poll. */
+let frameDialHz = 0;
+
+/* div_round() from pan_view.c: round-half-away-from-zero, not JS truncation. */
+function pvRound(num, den) {
+  return (num >= 0) ? Math.floor((num + den / 2) / den)
+                    : -Math.floor((-num + den / 2) / den);
+}
+
+/* pan_view_x_to_hz(): the column CENTRE, so column 0 sits half a pixel in. */
+function viewHzAt(px, W) {
+  if (!lastView) return null;
+  return lastView.lo + pvRound((2 * px + 1) * lastView.span, 2 * W);
+}
+
+/* pan_view_x_to_bin(), mirrored. Returns null where the radio hears nothing -
+ * NEVER a wrapped bin. The Nyquist bin at exactly +n/2 is real data and folds
+ * to the same index as -n/2; rejecting it left the last column of a zoom-1 view
+ * dead, which is why the C guard reads the way it does. */
+function viewBinAt(px, W, dialHz) {
+  /* ⛔ THE FRAME SAYS WHICH FORMAT IT IS, not the status poll.
+   *
+   * byte[1] of the WS frame is the decimation factor, and since the wire format
+   * changed it also distinguishes the two payload layouts:
+   *
+   *   decim === 1  base spectrum, RAW FFT bins - map them here
+   *   decim  >  1  zoom FFT, still fftshifted about DC - old centred path
+   *
+   * Reading that off the FRAME rather than off lastView matters: the status
+   * poll and the spectrum stream are separate channels, so across a zoom change
+   * they disagree for a moment. Deciding from the frame cannot be raced by its
+   * own payload.
+   *
+   * Raw bins with no viewport yet has no correct answer, so it returns null -
+   * draw nothing - rather than fall through to a mapping built for the other
+   * layout, which would put signals at the wrong frequency and look plausible. */
+  if (lastZoomDecim > 1) return undefined;            /* zoom FFT: old path */
+  if (!lastView || lastView.ifOff === undefined) return null;
+  const hz = viewHzAt(px, W);
+  if (hz < lastView.capLo || hz >= lastView.capHi) return null;
+  const nBins = lastView.nBins;
+  const base  = hz - (dialHz - lastView.ifOff);
+  let   k     = pvRound(base * nBins, 48000);
+  const half  = nBins / 2;
+  if (k < -half || k > half) return null;
+  if (k < 0) k += nBins;
+  return k;
+}
+
+/* pan_view_hz_to_x(). Deliberately UNCLAMPED, same as the C: a caller drawing
+ * the VFO cursor needs to know it is off screen so it can draw an edge arrow
+ * rather than park the cursor on the edge, which would read as "tuned here". */
+function viewXAt(hz, W) {
+  if (!lastView || lastView.span <= 0) return null;
+  return pvRound((hz - lastView.lo) * W, lastView.span);
+}
+
 /* Format as 14.074.000 Hz — European dot-separated with Hz suffix. */
 function fmtHz(hz) {
     if (!hz) return "---.---.--- Hz";
@@ -1230,6 +1335,7 @@ function fmtHz(hz) {
    clicking and drawing disagreed in CW and only in CW. */
 function freqToPixelX(freqHz, W) {
     if (!lastFreqHz || !freqHz) return W * 0.5;
+    if (lastView) return (freqHz - lastView.lo) / lastView.span * W;
     const spanHz = 48000 / lastZoom;
     const panHz  = lastPanBins * HZ_PER_BIN;
     return W * 0.5 + (freqHz - lastFreqHz - panHz) / spanHz * W;
@@ -2776,6 +2882,8 @@ const SET_FIELDS = [
   ["Radio & display", "qmx_rf_gain_db",    "num",  "QMX RF gain (dB)", "0-99, per band; the radio's default is 54"],
   ["Radio & display", "cw_tx_offset_hz",   "num",  "CW transmit offset (Hz)",
      "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -300 to +300, and around 100 Hz or less is typical - most CW operators run a 500 Hz filter or narrower (200 Hz is not unusual), and a QRP signal loses energy towards the filter edges (Michael KZ4LY). Roy KI0ER uses +60"],
+  ["Radio & display", "still_view",        "bool", "Still spectrum",
+     "On (the default): the spectrum and waterfall hold still and the VFO marker moves across them, so a signal stays where you last saw it while you tune. Off: the old behaviour, where the view re-centres on the dial at every step and the marker stays in the middle. Either way, the hatched region on the right is frequency the radio genuinely cannot hear"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "rit_pill_show",     "bool", "Show the RIT button",
@@ -4037,7 +4145,20 @@ async function tick() {
        the radio's own knob all count. Armed clicks never move the dial, so this
        cannot disarm itself mid-use. */
     if (ritArmed && lastFreqHz && s.freq_hz && s.freq_hz !== lastFreqHz) ritArmed = false;
-    lastFreqHz     = s.freq_hz     || 0;
+    /* ⛔ THE 1 Hz POLL MUST NOT FIGHT A GESTURE IN PROGRESS.
+     *
+     * The wheel advances lastFreqHz locally on every click so the readout stays
+     * live, but only COMMITS to the radio once the wheel settles. In between,
+     * s.freq_hz is the radio's OLD frequency - and writing it here snapped the
+     * display back, then the commit landed and it jumped forward, then the next
+     * poll snapped it back again. From the bench: "as if it was a rubber band
+     * that stretches too much".
+     *
+     * So the local value stays authoritative until the commit has gone out and
+     * one poll has had time to return carrying it. That window is the debounce
+     * plus a round trip; anything shorter and the last snap-back still shows. */
+    radioFreqHz = s.freq_hz || 0;      /* always - see its declaration */
+    if (Date.now() >= wheelHoldUntil) lastFreqHz = s.freq_hz || 0;
     lastPassbandHz = s.passband_hz || 0;
     lastRitHz      = s.rit_hz     || 0;
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
@@ -4072,6 +4193,15 @@ async function tick() {
     lastIfCalHz    = s.if_cal_hz   || 0;
     lastZoom       = s.zoom        || 1.0;
     lastPanBins    = s.pan_bins    || 0;
+    /* Absent means the device is on the zoom-FFT path (or is older firmware):
+     * keep the last viewport rather than blanking, exactly as "spots" does. */
+    if (s.view_lo_hz !== undefined && s.span_hz > 0) {
+      lastView = { lo: s.view_lo_hz, hi: s.view_hi_hz,
+                   capLo: s.cap_lo_hz, capHi: s.cap_hi_hz, span: s.span_hz,
+                   ifOff: s.if_offset_hz, nBins: s.n_bins || SPEC_W };
+    } else if (s.zoom <= 1.0001) {
+      lastView = null;      /* only drop it when the device plainly has none */
+    }
     lastBands      = s.bands       || [];
     lastBandplan   = s.bandplan    || null;
     // "spots" absent means UNCHANGED (the device always sends spots_v), so keep
@@ -4209,7 +4339,15 @@ async function tick() {
       firstStatus = false;
     }
 
-    document.getElementById("vfo").textContent  = fmtHz(s.freq_hz);
+    /* lastFreqHz, NOT s.freq_hz. The guard further up holds lastFreqHz against
+       the poll while a wheel gesture is in flight - and this line went straight
+       to the polled value, so the READOUT snapped back to the radio's old
+       frequency every second while the amber line and the overlays (which do
+       read lastFreqHz) stayed put. That is the rubber band, and adding the guard
+       without finding this second path made it worse rather than better: the
+       number a person is watching disagreed with the marker beside it.
+       lastFreqHz already equals s.freq_hz whenever no gesture is running. */
+    document.getElementById("vfo").textContent  = fmtHz(lastFreqHz);
     document.getElementById("mode").textContent = s.mode || "--";
     document.getElementById("band").textContent = s.band || "--";
     document.getElementById("bw").textContent   = lastPassbandHz ? (lastPassbandHz + " Hz") : "--";
@@ -4407,8 +4545,11 @@ function pxToFreqHz(clientX, rect) {
      Mirrors the Tab5 touch-to-tune formula:
        offset_hz = dx * sample_rate / (display_width * zoom) + pan_hz  */
   const frac     = (clientX - rect.left) / rect.width;  // 0..1
-  const spanHz   = 48000 / lastZoom;
-  const panHz    = lastPanBins * HZ_PER_BIN;
+  /* Device viewport when we have one; the old dial-centred derivation is
+     the fallback for a device not sending one. */
+  const spanHz   = lastView ? lastView.span : 48000 / lastZoom;
+  const panHz    = lastView ? (lastView.lo + lastView.span / 2 - lastFreqHz)
+                            : lastPanBins * HZ_PER_BIN;
   const offsetHz = (frac - 0.5) * spanHz + panHz;
 
   /* Snap the ABSOLUTE target frequency, not the offset - the same correction
@@ -4742,6 +4883,12 @@ let spotHover = null;
 function overlayTuneCursor() {
   // Always clear the wf cursor canvas so old lines don't persist
   wfcurctx.clearRect(0, 0, wfPxW, wfPxH);
+
+  /* The dead-band caption, on the OVERLAY rather than painted into the
+     waterfall - the waterfall scrolls its own canvas onto itself every row, so
+     text drawn there would smear down the screen. Same reason the Tab5 uses an
+     LVGL overlay object for it instead of writing into the bitmap. */
+  drawNoDataCaption(wfcurctx, wfPxW, wfPxH);
   /* Over a label the click does NOT go to the pointer, so show where it does go
      instead of a tune cursor that would be lying about it. */
   if (spotHover) {
@@ -4751,8 +4898,11 @@ function overlayTuneCursor() {
     return;
   }
   if (tuneCursorX < 0) return;
-  const spanHz   = 48000 / lastZoom;
-  const panHz    = lastPanBins * HZ_PER_BIN;
+  /* Device viewport when we have one; the old dial-centred derivation is
+     the fallback for a device not sending one. */
+  const spanHz   = lastView ? lastView.span : 48000 / lastZoom;
+  const panHz    = lastView ? (lastView.lo + lastView.span / 2 - lastFreqHz)
+                            : lastPanBins * HZ_PER_BIN;
   const fracX    = tuneCursorX / specPxW;
   const offsetHz = (fracX - 0.5) * spanHz + panHz;
   /* Same grid and the same absolute rounding as the commit (pxToFreqHz) - this is
@@ -4984,7 +5134,11 @@ let wsDisplaced = false;
 /* When the current socket opened, and the last few close codes - see ws.onclose. */
 let wsOpenedAt = 0;
 const wsCloseLog = [];
-const HEADER_LEN = 2;
+/* Must equal WS_HEADER_LEN in webserver_ws.c. It grew from 2 to 24 when the
+   frame was made self-describing (#298 phase 5) - the viewport and the dial the
+   payload was captured at now travel WITH the bins instead of arriving
+   separately at 1 Hz. The payload therefore starts 24 bytes in, not 2. */
+const HEADER_LEN = 24;
 
 let specPxW = SPEC_W, specPxH = 200;
 let wfPxW   = SPEC_W, wfPxH   = 600;
@@ -5238,10 +5392,19 @@ function passbandBins() {
      whole-band strip a few hundred Hz is sub-pixel anyway. */
   const loHz = edges.loHz + lastRitHz, hiHz = edges.hiHz + lastRitHz;
 
+  /* Device viewport when we have one; the old dial-centred derivation is
+     the fallback for a device not sending one. */
+  const W = SPEC_W;
+  if (lastView) {
+    /* Absolute Hz through the one mapping, so the passband cannot drift from
+       the trace it is drawn over. */
+    const loBin = (lastFreqHz + loHz - lastView.lo) / lastView.span * W;
+    const hiBin = (lastFreqHz + hiHz - lastView.lo) / lastView.span * W;
+    return { loBin, hiBin };
+  }
   /* Pan offset in Hz (positive pan_bins = spectrum shifts right = view shifts left) */
   const panHz  = lastPanBins * HZ_PER_BIN;
   const spanHz = 48000 / lastZoom;
-  const W      = SPEC_W;
   const loBin  = (loHz - panHz) / spanHz * W + W / 2;
   const hiBin  = (hiHz - panHz) / spanHz * W + W / 2;
   return { loBin, hiBin };
@@ -5433,8 +5596,11 @@ function drawBandplan(previewHz) {
   // Visible-span highlight: the slice of the band currently on the
   // spectrum/waterfall (depends on zoom + pan), same formula as the
   // frequency-axis labels so the two stay in lockstep.
-  const spanHz = 48000 / lastZoom;
-  const panHz  = lastPanBins * HZ_PER_BIN;
+  /* Device viewport when we have one; the old dial-centred derivation is
+     the fallback for a device not sending one. */
+  const spanHz = lastView ? lastView.span : 48000 / lastZoom;
+  const panHz  = lastView ? (lastView.lo + lastView.span / 2 - lastFreqHz)
+                          : lastPanBins * HZ_PER_BIN;
   const center = freqHz + panHz;
   let sx0 = Math.round((center - spanHz / 2 - bandLo) / span * W);
   let sx1 = Math.round((center + spanHz / 2 - bandLo) / span * W);
@@ -5654,6 +5820,59 @@ function getZoomWindow() {
   };
 }
 
+/* Columns the radio cannot hear, hatched exactly as the Tab5 does - the same
+   9 px diagonal, so a screenshot of one pane explains the other. Drawn UNDER
+   the trace, so a signal sitting on the boundary is never hidden by it.
+   Shared by both spectrum modes; the waterfall draws its own per row. */
+let wfRowParity = 0;
+function drawNoDataHatch(ctx, W, H) {
+  if (!lastView) return;
+  ctx.strokeStyle = "#3a4450"; ctx.lineWidth = 1;
+  let n0 = -1;
+  const runs = [];
+  for (let i = 0; i <= W; i++) {
+    const dead = (i < W) && (viewBinAt(i, W, frameDialHz || radioFreqHz) === null);
+    if (dead && n0 < 0) n0 = i;
+    if (!dead && n0 >= 0) {
+      ctx.save(); ctx.beginPath(); ctx.rect(n0, 0, i - n0, H); ctx.clip();
+      for (let d = -H; d < (i - n0) + H; d += 9) {
+        ctx.beginPath(); ctx.moveTo(n0 + d, 0); ctx.lineTo(n0 + d + H, H); ctx.stroke();
+      }
+      ctx.restore();
+      runs.push([n0, i - n0]);
+      n0 = -1;
+    }
+  }
+}
+
+/* The same words the Tab5 puts on its hatched block, so a screenshot of one
+   screen explains the other. Two centred lines, and - like the Tab5 - a block
+   too narrow for the text declines to draw it rather than spilling the caption
+   onto live spectrum. */
+function drawNoDataCaption(ctx, W, H) {
+  if (!lastView) return;
+  const runs = []; let n0 = -1;
+  for (let i = 0; i <= W; i++) {
+    const dead = (i < W) && (viewBinAt(i, W, frameDialHz || radioFreqHz) === null);
+    if (dead && n0 < 0) n0 = i;
+    if (!dead && n0 >= 0) { runs.push([n0, i - n0]); n0 = -1; }
+  }
+  if (!runs.length) return;
+  ctx.save();
+  ctx.font = "500 16px system-ui, sans-serif";
+  ctx.fillStyle = "#7a8894";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const L = ["QMX cannot", "display this"];
+  const need = Math.max(ctx.measureText(L[0]).width, ctx.measureText(L[1]).width) + 26;
+  for (const [x, w] of runs) {
+    if (w < need) continue;
+    const cx = x + w / 2, cy = H / 3;
+    ctx.fillText(L[0], cx, cy - 11);
+    ctx.fillText(L[1], cx, cy + 11);
+  }
+  ctx.restore();
+}
+
 /* Spectrum — flat mode */
 /* =====================================================================
    RIT marker - where the receiver is listening, when it is not the dial.
@@ -5754,20 +5973,36 @@ function drawSpectrumFlat(bytes) {
   const { windowBins, centerBin } = getZoomWindow();
   const binStart = centerBin - Math.floor(windowBins / 2);
 
+  /* Device viewport first; the fallback is the OLD path, kept only for a device
+     that is not sending one - note its `% SPEC_W`, the wrap that draws spectrum
+     from the wrong side of the band (#297). */
   const getBin = (px) => {
+    const v = viewBinAt(px, W, frameDialHz || radioFreqHz);
+    if (v !== undefined) return v;                 /* null = nothing to draw */
     const b = binStart + Math.round(px * windowBins / W);
     return ((b % SPEC_W) + SPEC_W) % SPEC_W;
   };
   const aboveRaw = (b) => specSmooth[b] - specFloor[b] - SPEC_FLOOR_BIAS;
   const aboveAt = (px) => {
     const b = getBin(px);
+    if (b === null) return null;
     let v = aboveRaw(b);
     return Math.max(0, Math.min(SPEC_RANGE_Q, v));
   };
-  const yOf = (px) => H - 1 - Math.round(aboveAt(px) * (H-1) / SPEC_RANGE_Q);
+  const yOf = (px) => {
+    const a = aboveAt(px);
+    return (a === null) ? null : H - 1 - Math.round(a * (H-1) / SPEC_RANGE_Q);
+  };
 
-  sctx.beginPath(); sctx.moveTo(0, H);
-  for (let i = 0; i < W; i++) sctx.lineTo(i, yOf(i));
+  drawNoDataHatch(sctx, W, H);
+
+  sctx.beginPath();
+  let penDown = false;
+  for (let i = 0; i < W; i++) {
+    const y = yOf(i);
+    if (y === null) { if (penDown) { sctx.stroke(); sctx.beginPath(); penDown = false; } continue; }
+    if (!penDown) { sctx.moveTo(i, y); penDown = true; } else sctx.lineTo(i, y);
+  }
   sctx.lineTo(W, H); sctx.closePath();
   sctx.fillStyle = "#003800"; sctx.fill();
 
@@ -5815,16 +6050,25 @@ function drawSpectrumRaw(bytes) {
     if (x2 >= 0 && x2 < W) sctx.fillRect(x2 - 1, 0, 2, H);
   }
 
+  /* Prefer the device's own viewport. The fallback below is the OLD path, kept
+     only for a device that is not sending one (older firmware, or the zoom-FFT
+     case pan_view does not describe) - note its `% SPEC_W`, which is the wrap
+     that draws spectrum from the wrong side of the band. */
   const { windowBins: windowBinsR, centerBin: centerBinR } = getZoomWindow();
   const binStartR = centerBinR - Math.floor(windowBinsR / 2);
   const getBinR = (px) => {
+    const v = viewBinAt(px, W, frameDialHz || radioFreqHz);
+    if (v !== undefined) return v;                    /* null = nothing to draw */
     const b = binStartR + Math.round(px * windowBinsR / W);
     return ((b % SPEC_W) + SPEC_W) % SPEC_W;
   };
 
+  drawNoDataHatch(sctx, W, H);
+
   sctx.beginPath(); sctx.moveTo(0, H);
   for (let i = 0; i < W; i++) {
     const b = getBinR(i);
+    if (b === null) { sctx.stroke(); sctx.beginPath(); continue; }  /* leave it empty */
     sctx.lineTo(i, H - 1 - Math.round(bytes[b] * (H-1) / 255));
   }
   sctx.lineTo(W, H); sctx.closePath();
@@ -6024,14 +6268,28 @@ function drawWaterfall(bytes) {
   const binStartW = centerBinW - Math.floor(windowBinsW / 2);
   const data=wfRowImg.data;
   for (let x=0; x<SPEC_W; x++) {
-    const b = ((binStartW + Math.round(x * windowBinsW / SPEC_W)) % SPEC_W + SPEC_W) % SPEC_W;
+    const o=x*4;
+    /* Same viewport as the spectrum above, so the two panes agree - the Tab5's
+       waterfall was the last caller deriving its own and it hatched the exact
+       opposite half (2026-08-31). */
+    let b = viewBinAt(x, SPEC_W, frameDialHz || radioFreqHz);
+    if (b === null) {
+      /* Outside what the radio hears: the 9 px diagonal the Tab5 draws, so a
+         screenshot of one pane explains the other. */
+      const on = ((x + wfRowParity) % 9) === 0;
+      data[o]=on?0x3a:0x18; data[o+1]=on?0x44:0x1c; data[o+2]=on?0x50:0x24; data[o+3]=255;
+      continue;
+    }
+    if (b === undefined)
+      b = ((binStartW + Math.round(x * windowBinsW / SPEC_W)) % SPEC_W + SPEC_W) % SPEC_W;
     const effFloor = wfFloorGlobal + (wfFloorArr[b] - wfFloorGlobal) * wfFloorBlend;
     let idx = (wfSmooth[b] - (effFloor + blackCounts)) * scale + 32;
     idx=Math.max(0,Math.min(255,idx))|0;
-    const p=idx*4, o=x*4;
+    const p=idx*4;
     data[o]=wfPalette[p]; data[o+1]=wfPalette[p+1];
     data[o+2]=wfPalette[p+2]; data[o+3]=255;
   }
+  wfRowParity++;
   wfRowCtx.putImageData(wfRowImg,0,0);
   wfctx.drawImage(wf,0,0,wfPxW,wfPxH,0,1,wfPxW,wfPxH);
   wfctx.drawImage(wfRow,0,0,SPEC_W,1,0,0,wfPxW,1);
@@ -6353,6 +6611,22 @@ function connectWs() {
     if (buf[0]!==FRAME_TYPE_SPECTRUM) return;
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)
     const d = buf[1]; lastZoomDecim = (d >= 1 && d <= 16) ? d : 1;
+
+    /* ⭐ THE FRAME DESCRIBES ITSELF. Everything needed to locate these bins is
+       in the header, sampled by the device at capture time - so it cannot be
+       raced by the 1 Hz status poll the way it was when the two arrived on
+       separate channels. See the header layout in webserver_ws.c.
+       span === 0 means the device had no viewport for this frame (the zoom-FFT
+       path); the browser then keeps its own centred mapping. */
+    const u32 = (o) => (buf[o] | (buf[o+1] << 8) | (buf[o+2] << 16) | (buf[o+3] << 24)) >>> 0;
+    const spanF = u32(10);
+    if (spanF > 0) {
+      let ifo = buf[22] | (buf[23] << 8);
+      if (ifo & 0x8000) ifo -= 0x10000;              /* signed */
+      frameDialHz = u32(2);
+      lastView = { lo: u32(6), hi: u32(6) + spanF, span: spanF,
+                   capLo: u32(14), capHi: u32(18), ifOff: ifo, nBins: SPEC_W };
+    }
     const payload=buf.subarray(HEADER_LEN,HEADER_LEN+SPEC_W);
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
        built from the RAW frame, exactly as render.c does it. */
@@ -6394,6 +6668,17 @@ function connectWs() {
 /* =====================================================================
    Mouse-wheel tuning (KV4TT feature request)
    ===================================================================== */
+/* Long enough that a continuous spin is one command, short enough that a single
+   click still feels immediate. The device rate-limits CAT writes at 200 ms, so
+   there is nothing to gain by going below that. */
+const WHEEL_SETTLE_MS = 120;
+/* How long the LOCAL frequency outranks the polled one after a wheel click:
+   the debounce, plus a POST round trip, plus a poll interval to carry the new
+   value back. Generous on purpose - being briefly stale is invisible, whereas
+   being briefly WRONG is the rubber band. */
+const WHEEL_HOLD_MS   = WHEEL_SETTLE_MS + 1400;
+let wheelTimer     = null;
+let wheelHoldUntil = 0;
 function handleWheel(e) {
   e.preventDefault();
   if (!lastFreqHz) return;
@@ -6407,10 +6692,39 @@ function handleWheel(e) {
   const dir = e.deltaY > 0 ? -1 : 1;  // scroll up = tune up
   // Snap to step grid then advance one step, so we always land on a grid point
   const newHz = Math.round(lastFreqHz / step) * step + dir * step;
-  sendCmd({ action: "set_freq", hz: newHz });
+
+  /* ⛔ ONE POST PER GESTURE, NOT PER CLICK.
+   *
+   * This used to call sendCmd() on every wheel event. A wheel is not a button -
+   * one flick of a finger is easily fifty events, so fifty separate
+   * POST /api/cmd requests went at a SINGLE-WORKER httpd that is also pushing
+   * the 10 fps spectrum stream. They queued on the wire and the Tab5 ended up
+   * showing whichever arrived last, seconds later - measured on the bench at
+   * 10-15 s, scaling with how far the wheel was spun.
+   *
+   * The radio was never the bottleneck: cat_set_frequency() DROPS writes inside
+   * 200 ms rather than queueing them. And because the line below moves
+   * lastFreqHz immediately, the browser's own readout was instant while the
+   * Tab5 waited for the queue to drain - which is exactly the divergence he
+   * described.
+   *
+   * So the local state keeps advancing per click (the display stays live and
+   * each click still lands on the grid) and only the COMMIT is deferred until
+   * the wheel has been still for WHEEL_SETTLE_MS. Same shape as the Tab5's own
+   * touch path, which defers its CAT write to release for the same reason. */
   lastFreqHz = newHz;
   document.getElementById("vfo").textContent = fmtHz(newHz);
   updateFreqAxis();
+
+  wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+  if (wheelTimer) clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => {
+    wheelTimer = null;
+    sendCmd({ action: "set_freq", hz: lastFreqHz });
+    /* Re-armed from the COMMIT, not from the last click: the poll that must be
+       ignored is the one racing this request, and it has not happened yet. */
+    wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+  }, WHEEL_SETTLE_MS);
 }
 document.getElementById("spec-overlay").addEventListener("wheel", handleWheel, { passive: false });
 document.getElementById("wf-overlay").addEventListener("wheel",  handleWheel, { passive: false });

@@ -227,6 +227,73 @@ esp_err_t audio_init(void)
     return ESP_OK;
 }
 
+/* ⭐ WHICH DIAL EACH SAMPLE BELONGS TO (#298).
+ *
+ * A spectrum is built from audio that left the radio a while ago, so drawing it
+ * against the dial as it is NOW puts it in the wrong place - the trace slides
+ * the way the VFO went and every waterfall row carries a different error, which
+ * is the diagonal smear seen on the bench.
+ *
+ * ⛔ AND A TIME-BASED CONSTANT CANNOT FIX IT. Measured twice on 2026-08-31 by
+ * commanding a 2 kHz step and watching the raw bins arrive: the audio moved
+ * between 565 and 653 ms on one run and between 104 and 312 ms on the next -
+ * the same rig, minutes apart, better than a factor of two. Frame spacing was
+ * ~100 ms, so that is not measurement noise. Any fixed SPECTRUM_LATENCY would
+ * be right for one run and wrong for the next.
+ *
+ * So the dial travels WITH THE SAMPLES instead, indexed by a monotonic pair
+ * counter rather than by wall time. Scheduling jitter, ring depth and how often
+ * the FFT gets to run all stop mattering: sample number N was captured under
+ * exactly one dial, whenever it happens to be processed.
+ *
+ * ⚠ ONE FIXED OFFSET REMAINS, and it is the one that is genuinely fixed:
+ * AUDIO_USB_QUEUE_PAIRS. Samples reach this ring having already sat in the USB
+ * isochronous queue, which is CONFIGURED depth - 8 URBs x 40 packets x 1 ms
+ * (CONFIG_UAC_NUM_ISOC_URBS / _NUM_PACKETS_PER_URB, deliberately deep for #51).
+ * That part cannot vary the way scheduling does. If those Kconfig values ever
+ * change, this must change with them. */
+#define AUDIO_USB_QUEUE_PAIRS   (320 * 48)      /* 320 ms at 48 kHz */
+#define AUDIO_DIAL_TRAIL_N      24
+
+static uint64_t s_pairs_written = 0;            /* monotonic, written side */
+static uint64_t s_pairs_read    = 0;            /* monotonic, read side    */
+static struct { uint64_t at_pair; uint32_t hz; } s_dial_trail[AUDIO_DIAL_TRAIL_N];
+static int      s_dial_trail_n  = 0;
+static uint32_t s_dial_now      = 0;
+
+void audio_note_dial_hz(uint32_t hz)
+{
+    if (hz == s_dial_now) return;
+    s_dial_now = hz;
+    /* This dial applies to samples that reach the ring AFTER the ones already
+     * queued in USB - hence the offset. Everything downstream is exact. */
+    int i = s_dial_trail_n % AUDIO_DIAL_TRAIL_N;
+    s_dial_trail[i].at_pair = s_pairs_written + AUDIO_USB_QUEUE_PAIRS;
+    s_dial_trail[i].hz      = hz;
+    s_dial_trail_n++;
+}
+
+/* The dial in force for the sample at monotonic index `pair`. */
+static uint32_t dial_for_pair(uint64_t pair)
+{
+    uint32_t best = 0; uint64_t best_at = 0; bool found = false;
+    int have = (s_dial_trail_n < AUDIO_DIAL_TRAIL_N) ? s_dial_trail_n : AUDIO_DIAL_TRAIL_N;
+    for (int k = 0; k < have; k++) {
+        int idx = (s_dial_trail_n - 1 - k) % AUDIO_DIAL_TRAIL_N;
+        if (idx < 0) idx += AUDIO_DIAL_TRAIL_N;
+        uint64_t at = s_dial_trail[idx].at_pair;
+        if (at <= pair && (!found || at > best_at)) {
+            best = s_dial_trail[idx].hz; best_at = at; found = true;
+        }
+    }
+    return found ? best : s_dial_now;
+}
+
+uint32_t audio_dial_for_last_read(void)
+{
+    return dial_for_pair(s_pairs_read);
+}
+
 size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
 {
     if (!s_ring || !dst || max_pairs == 0) return 0;
@@ -239,7 +306,9 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
 
     memcpy(dst, item, got_bytes);
     vRingbufferReturnItem(s_ring, item);
-    return got_bytes / (sizeof(int16_t) * 2);
+    size_t pairs = got_bytes / (sizeof(int16_t) * 2);
+    s_pairs_read += pairs;
+    return pairs;
 }
 
 size_t audio_ring_backlog_pairs(void)
@@ -515,6 +584,7 @@ static bool process_rx(void)
 
         size_t bytes_to_push = pairs * sizeof(int16_t) * 2;
         BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
+        if (sent == pdTRUE) s_pairs_written += pairs;
         if (sent != pdTRUE) {
             s_dropped_this_period += pairs;
             s_dropped_total += pairs;

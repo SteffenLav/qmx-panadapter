@@ -36,6 +36,8 @@ idf_component_register(
     "util/db_gridlines.c"
     "util/pan_view.c"
     "util/hid_rotate.c"
+    "util/wf_shift.c"
+    "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"
     "util/ansi_term.c"

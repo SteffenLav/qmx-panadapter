@@ -29,6 +29,13 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms);
 /** @brief Stereo pairs currently buffered in the ring (latency indicator). */
 size_t audio_ring_backlog_pairs(void);
 
+/* #298: tell the audio layer the dial moved, so each sample can be attributed
+ * to the frequency it was actually captured at. Called from ui_update_frequency
+ * - every tune path already goes through there. */
+void     audio_note_dial_hz(uint32_t hz);
+/* The dial the most recently READ samples were captured under. */
+uint32_t audio_dial_for_last_read(void);
+
 /** @brief Running total of stereo pairs dropped on ring-full since boot. */
 uint32_t audio_get_dropped_total(void);
 

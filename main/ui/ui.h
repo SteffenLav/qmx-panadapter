@@ -4,6 +4,7 @@
 #include "lvgl.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include "util/pan_view.h"
 
 void ui_init(lv_display_t *disp);
 
@@ -31,6 +32,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 // Brief centered auto-hiding toast (1.5 s). Runs on the LVGL task — call only
 // from the LVGL/UI thread. Used for "Work in progress…." on shelved controls.
 void ui_toast(const char *msg);
+/* Same toast, with a readable dwell for anything the operator must act on. */
+void ui_toast_ms(const char *msg, uint32_t ms);
+/* #298: arm the one-time "you can switch back" notice. Called from main.c with
+ * the stored flag; a unit that has already been told never arms it. */
+void ui_still_notice_arm(bool armed);
 
 // The QMX was found receiving on VFO B or Split and has been switched to VFO A
 // (the panadapter reads and writes VFO A only). Tells the operator, because we
@@ -68,6 +74,23 @@ bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
 int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
+/* Still display (#298): the spectrum and waterfall hold still and the VFO
+ * cursor moves across them, instead of the display following the dial.
+ * Toggle from /api/cmd {"action":"still_view","on":false} while it is
+ * being evaluated - it changes how the whole panadapter feels. */
+void ui_set_still_view(bool on);
+bool ui_get_still_view(void);
+
+/* The pan the display is ACTUALLY drawn at, in Hz. ui_get_pan_offset_bins() is
+ * the same value rounded to a whole FFT bin (46.875 Hz); anything that has to
+ * agree with the spectrum to better than that needs this one. */
+int64_t ui_get_pan_offset_hz(void);
+
+/* The viewport the spectrum is being drawn with, so the waterfall can use the
+ * SAME column->bin mapping instead of deriving its own (they drifted, #297).
+ * Returns false when the zoom FFT is active and pan_view does not apply. */
+bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:

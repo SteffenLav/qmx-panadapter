@@ -50,6 +50,7 @@ char *config_io_export(size_t *out_len)
     APP("if_cal_hz          = %d\n", (int)c.cw_cal_hz);
     APP("iq_balance         = %s\n", yn(c.iq_enabled));
     APP("flat_spectrum      = %s\n", yn(c.flat_mode));
+    APP("still_spectrum     = %s\n", yn(c.still_view));
     APP("spots              = %s\n", yn(c.spots_en));
     APP("spots_rbn          = %s\n", yn(c.rbn_en));
     APP("spots_sota         = %s\n", yn(c.sota_en));
@@ -216,6 +217,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "if_cal_hz"))         settings_set_cw_cal_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "iq_balance"))        settings_set_iq_enabled(to_bool(val));
             else if (!strcasecmp(key, "flat_spectrum"))     settings_set_flat_mode(to_bool(val));
+            else if (!strcasecmp(key, "still_spectrum"))    { settings_set_still_view(to_bool(val));
+                                                              settings_set_still_notice_done(true); }
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
