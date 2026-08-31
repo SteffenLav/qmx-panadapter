@@ -45,6 +45,12 @@ char *config_io_export(size_t *out_len)
     APP("grid               = %s\n", c.my_grid);
     APP("wifi_ssid          = %s\n", c.wifi_ssid);
     APP("wifi_pass          = %s\n", c.wifi_pass);
+    /* Static IP. Empty wifi_ip means DHCP - and an empty value here restores
+       DHCP on import, which is what clearing the field is meant to do. */
+    APP("wifi_ip            = %s\n", c.wifi_ip);
+    APP("wifi_mask          = %s\n", c.wifi_mask);
+    APP("wifi_gw            = %s\n", c.wifi_gw);
+    APP("wifi_dns           = %s\n", c.wifi_dns);
     APP("wifi_enabled       = %s\n", yn(c.wifi_enabled));
     APP("cw_pitch_hz        = %u\n", (unsigned)c.cw_pitch_hz);
     APP("if_cal_hz          = %d\n", (int)c.cw_cal_hz);
@@ -169,6 +175,16 @@ int config_io_import(char *text)
     ft8_filters_t filt = cur.ft8_filters;
     bool filt_touched = false;
 
+    // Static IP: the four fields are one setting, so they are collected here
+    // and applied once at the end. Seeded from the CURRENT values so a file
+    // carrying only some of them cannot half-erase the rest.
+    char sip[16], smask[16], sgw[16], sdns[16];
+    snprintf(sip,   sizeof sip,   "%s", cur.wifi_ip);
+    snprintf(smask, sizeof smask, "%s", cur.wifi_mask);
+    snprintf(sgw,   sizeof sgw,   "%s", cur.wifi_gw);
+    snprintf(sdns,  sizeof sdns,  "%s", cur.wifi_dns);
+    bool sip_touched = false;
+
     // Remembered networks, collected across the [wifi_known] section and applied
     // in one go at the end so the file's order is preserved.
     // STATIC for the same reason as everywhere else this array appears: ~590
@@ -213,6 +229,11 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wifi_ssid"))         settings_set_wifi_ssid(val);
             else if (!strcasecmp(key, "wifi_pass"))         settings_set_wifi_pass(val);
             else if (!strcasecmp(key, "wifi_enabled"))      settings_set_wifi_enabled(to_bool(val));
+            /* All four are one setting - collected, applied once at the end. */
+            else if (!strcasecmp(key, "wifi_ip"))   { snprintf(sip,   sizeof sip,   "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_mask")) { snprintf(smask, sizeof smask, "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_gw"))   { snprintf(sgw,   sizeof sgw,   "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_dns"))  { snprintf(sdns,  sizeof sdns,  "%s", val); sip_touched = true; }
             else if (!strcasecmp(key, "cw_pitch_hz"))       settings_set_cw_pitch_hz((uint16_t)atoi(val));
             else if (!strcasecmp(key, "if_cal_hz"))         settings_set_cw_cal_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "iq_balance"))        settings_set_iq_enabled(to_bool(val));
@@ -353,6 +374,7 @@ int config_io_import(char *text)
     }
 
     if (filt_touched) settings_set_ft8_filters(&filt);
+    if (sip_touched)  settings_set_wifi_static(sip, smask, sgw, sdns);
     // Applied wholesale, in file order: see the buffer's declaration.
     if (known_touched) settings_wifi_known_set_all(known, known_n);
     settings_flush();

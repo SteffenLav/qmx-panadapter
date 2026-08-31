@@ -66,6 +66,11 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+/* A band change ends any QSO in progress AND stands the robot down. Use this
+ * from every band-change path - ft8_robot_stand_down() alone leaves a running
+ * exchange transmitting on the new band (Randy N4OPI, 2026-08-31). */
+void ft8_band_change_stand_down(const char *why);
+
 // Mark the QSO just started as ROBOT-initiated (call right after a successful
 // ft8_qso_start from the auto-answer picker). Changes one behaviour: a robot
 // pick that turns out to be mid-QSO with somebody else is abandoned so the

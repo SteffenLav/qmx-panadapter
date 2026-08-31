@@ -690,7 +690,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -787,7 +787,8 @@
         <a href="#" id="eqsl-creds-link" class="subrow" style="display:none" title="Replace the stored eQSL.cc username and password.">&#8627; Change eQSL login</a>
         <a href="#" id="cloudlog-link" title="Upload to your own Cloudlog or Wavelog server. If it is on your home network this is the only upload that needs no internet at all.">Cloudlog upload &#8593;</a>
         <a href="#" id="cloudlog-creds-link" class="subrow" style="display:none" title="Replace the stored Cloudlog server address and API key.">&#8627; Change Cloudlog server</a>
-        <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
+        <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads.">LoTW setup</a>
+        <a href="#" id="lotw-creds-link" class="subrow" style="display:none" title="Import a fresh callsign certificate - after a renewal (they expire about every three years), or to correct the station details. Re-signs and re-sends the whole log; LoTW discards the duplicates.">&#8627; Change LoTW certificate</a>
         <a href="#" id="adif-view-link" title="View the QSO log in the browser - delete single records or clear the whole log. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly what you submit.">View / edit log</a>
       </div>
     </div>
@@ -1406,7 +1407,15 @@ async function pollUploadStatus(label) {
       if (j.failed) {
         alert(label + " upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
       } else {
-        alert(label + " upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
+        /* j.note is what the SERVER said. LoTW in particular accepts the FILE
+           and processes the contacts inside it afterwards, so our count is a
+           claim about what we sent, not about what landed in anyone's log -
+           which is how an upload can report success and show up nowhere. Say
+           both, and let the operator read the server's own sentence. */
+        let m = label + " upload: " + j.uploaded + " QSO" +
+                (j.uploaded === 1 ? "" : "s") + " uploaded.";
+        if (j.note) m += "\n\n" + label + " replied: " + j.note;
+        alert(m);
       }
       return;
     }
@@ -1431,6 +1440,12 @@ function updateCredsRows() {
   if (e) e.style.display = eqslCredsSet ? "block" : "none";
   const c = document.getElementById("cloudlog-creds-link");
   if (c) c.style.display = cloudlogSet ? "block" : "none";
+  /* The comment above says a hidden gesture is not the answer - and LoTW, the
+     one that had the Ctrl-click, was the one row that never got a visible way
+     in. A certificate expires about every three years, so this is the row most
+     certain to be needed eventually and least likely to be found. */
+  const l = document.getElementById("lotw-creds-link");
+  if (l) l.style.display = lotwReady ? "block" : "none";
 }
 
 async function promptQrzKey() {
@@ -1691,9 +1706,13 @@ function lotwOpenSetup() {
 
 document.getElementById("lotw-link").addEventListener("click", (e) => {
   e.preventDefault();
-  // Ctrl-click re-runs setup even when already configured - the certificate
-  // expires every ~3 years and the renewed one needs a fresh import.
+  // Ctrl-click still re-runs setup, for anyone who learned it, but the
+  // "Change LoTW certificate" row below is now the discoverable way.
   if (lotwReady && !e.ctrlKey) { lotwRunUpload(); return; }
+  lotwOpenSetup();
+});
+document.getElementById("lotw-creds-link").addEventListener("click", (e) => {
+  e.preventDefault();
   lotwOpenSetup();
 });
 
@@ -1744,6 +1763,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     });
     if (!r.ok) throw new Error("Tab5 rejected the import (HTTP " + r.status + ")");
     lotwReady = true;
+    updateCredsRows();  // the change-certificate row exists from now on
     lotwCloseModal();   // hides modal + resumes the WS stream
     const who = parsed.call ? " for " + parsed.call : "";
     if (confirm("LoTW certificate" + who + " imported. Upload the pending QSOs now?"))
@@ -2155,6 +2175,28 @@ async function sendCmd(payload) {
     btn.textContent = "Calling...";
     await sendCmd({ action: "cq_start" });
     setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
+  });
+})();
+
+/* Band presets. Selecting one retunes and, for an FT4 frequency, puts the Tab5
+   into FT4 - the same thing the Tab5's own preset row does, through the same
+   API path (apply_freq_preset). */
+(function wireFt8Preset() {
+  const sel = document.getElementById("ft8-preset");
+  if (!sel) return;
+  sel.addEventListener("change", async () => {
+    const hz = parseInt(sel.value, 10);
+    if (!hz) return;
+    const ft4 = !!(window.__ft8Presets &&
+                   window.__ft8Presets.ft4.some(p => p.hz === hz));
+    /* Optimistically, like the wheel: the readout and the marker move now and
+       the poll confirms, rather than the control looking dead for a second. */
+    lastFreqHz = hz;
+    document.getElementById("vfo").textContent = fmtHz(hz);
+    /* set_ft8_mode already exists and already does all of this - retune, FT4
+       switch, stale-decode clear. Adding an ft8_preset action would have been a
+       second door onto the same room. */
+    await sendCmd({ action: "set_ft8_mode", mode: ft4 ? "ft4" : "ft8", freq_hz: hz });
   });
 })();
 
@@ -2984,6 +3026,20 @@ const SET_FIELDS = [
 
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
+  /* Static IP (Randy N4OPI). Leave the address empty for DHCP, which is what
+     every unit does today - so these appear without changing anyone's network.
+     Deliberately four plain text fields and no "use static IP" checkbox: the
+     address being filled in IS the switch, and a separate tick could disagree
+     with it (the same reasoning that gave WSPR band hopping no on/off of its
+     own). */
+  ["WiFi", "wifi_ip", "text", "Static IP address",
+     "Leave empty to use DHCP, which is the normal setting. Fill this in to give the Tab5 a fixed address, so a bookmark keeps working. Takes effect the next time it connects"],
+  ["WiFi", "wifi_mask", "text", "Subnet mask",
+     "Only used when a static address is set. Leave empty for 255.255.255.0, which is right on almost every home network"],
+  ["WiFi", "wifi_gw", "text", "Gateway",
+     "Only used when a static address is set. Usually your router, e.g. 192.168.1.1"],
+  ["WiFi", "wifi_dns", "text", "DNS server",
+     "Only used when a static address is set. Leave empty to use the gateway. Needed for uploads to QRZ, eQSL and LoTW, which are reached by name"],
 ];
 
 let setLoaded = null;
@@ -3005,6 +3061,56 @@ const FT8_OPTS_GROUPS = ["CQ messages", "FT8 filters"];
 // settings changed ("you see a '5' but you don't really know what 5
 // features were altered" - fair complaint), so the field labels go in the
 // button's title tooltip too.
+/* ⭐ THE PRESETS COME FROM THE DEVICE, not from a copy in this file.
+ *
+ * Randy N4OPI, 2026-08-31: "when running FTx via the web app, it would be nice
+ * to have the list of default FTx preset frequencies available as a pull down."
+ *
+ * The obvious way is to paste the eleven numbers here, and that is exactly how
+ * the two screens end up disagreeing about a band plan. The device serves its
+ * OWN tables behind ?presets=1 - asked for once, because the list never changes
+ * and a 1 Hz poll would spend ~300 B/s on it for ever.
+ *
+ * The list shown follows the mode: FT4 has its own calling frequencies and they
+ * are not the FT8 ones plus an offset. */
+let ft8PresetsLoaded = false;
+async function ft8LoadPresets() {
+  if (ft8PresetsLoaded) return;
+  try {
+    const r = await fetch("/api/status?presets=1", { cache: "no-store" });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.ft8_presets) return;
+    ft8PresetsLoaded = true;
+    window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [] };
+    ft8FillPresets();
+  } catch (e) { /* offline - the control just stays empty rather than lying */ }
+}
+
+function ft8FillPresets() {
+  const sel = document.getElementById("ft8-preset");
+  if (!sel || !window.__ft8Presets) return;
+  const ft4  = (lastMode || "").toUpperCase().indexOf("FT4") >= 0 || ft8IsFt4();
+  const list = ft4 ? window.__ft8Presets.ft4 : window.__ft8Presets.ft8;
+  const cur  = sel.value;
+  sel.innerHTML = '<option value="">Band…</option>';
+  for (const p of list) {
+    const o = document.createElement("option");
+    o.value = String(p.hz);
+    o.textContent = p.band + " m  " + (p.hz / 1e6).toFixed(3);
+    /* Mark the one we are already on, so the control reads as a position and
+       not just a jump list. */
+    if (Math.abs(p.hz - lastFreqHz) < 500) o.selected = true;
+    sel.appendChild(o);
+  }
+  if (!sel.value && cur) sel.value = cur;
+}
+
+function ft8IsFt4() {
+  const t = document.getElementById("ft8-tx");
+  return !!(t && /FT4/i.test(t.textContent || ""));
+}
+
 function ft8OptsSummarize(cfg) {
   const labels = [];
   for (const [grp, path, type, label] of SET_FIELDS) {
@@ -4248,6 +4354,7 @@ async function tick() {
       document.getElementById("wf-wrap").style.display       = noPan ? "none" : "";
       document.getElementById("bandplan-wrap").style.display = noPan ? "none" : "";  // falls back to the .show-class-controlled default when cleared
       document.getElementById("ft8-notice").style.display    = isFt8 ? "flex" : "none";
+      if (isFt8) { ft8LoadPresets(); ft8FillPresets(); }
       /* ⛔ The WSPR card follows the SCREEN, not the wspr_en feature flag.
          It used to key off the flag alone, so it sat at the bottom of every
          page - and worse than untidy, it was misleading: wspr_rx_start() runs

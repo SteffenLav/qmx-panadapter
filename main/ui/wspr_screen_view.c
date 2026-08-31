@@ -104,6 +104,14 @@ static const wspr_band_t kBands[] = {
 };
 #define N_BANDS ((int)(sizeof(kBands) / sizeof(kBands[0])))
 
+const char *wspr_band_name_for_dial(uint32_t dial_hz)
+{
+    if (!dial_hz) return NULL;                    /* recorded before we kept it */
+    for (int i = 0; i < N_BANDS; i++)
+        if (kBands[i].dial_hz == dial_hz) return kBands[i].name;
+    return NULL;                                  /* off-table dial - say nothing */
+}
+
 const wspr_band_t *wspr_bands(int *out_count)
 {
     if (out_count) *out_count = N_BANDS;
@@ -745,6 +753,10 @@ static void arm_dial_push(const char *why)
  * (COUNTRY_W left at 11 when the format went to 7, then the reverse). A
  * stringified constant cannot disagree with itself. */
 #define W_UTC   5
+/* Which band the spot was HEARD on. Beside UTC because it answers the same kind
+ * of question - the circumstances of the hearing, not a property of the station.
+ * Blank for spots recorded before the dial was kept (Roy KI0ER, 2026-08-31). */
+#define W_BAND  3
 #define W_CALL  7
 #define W_GRID  4
 #define W_CTY  11
@@ -758,7 +770,7 @@ static void arm_dial_push(const char *why)
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
+#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %-" STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
@@ -795,7 +807,8 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
     if (sp->bearing_deg < 0) snprintf(brg, sizeof(brg), "--");
     else snprintf(brg, sizeof(brg), "%d", (int)sp->bearing_deg);
 
-    snprintf(out, n, ROW_FMT, utc, sp->call, sp->grid,
+    const char *bnd = wspr_band_name_for_dial(sp->dial_hz);
+    snprintf(out, n, ROW_FMT, utc, bnd ? bnd : "", sp->call, sp->grid,
              country_field(sp), snr, drift, hz, pwr, km, brg);
 }
 
@@ -809,12 +822,14 @@ static void fmt_header(char *out, size_t n)
      * "TONE" rather than "HZ": every column here is a number in some unit, so
      * "HZ" named the unit while the others name the quantity. What the column
      * holds is the station's audio tone within the 200 Hz window. */
-    char h[10][16];
-    const char *raw[10] = { "UTC", "CALL", "GRID", "COUNTRY", "SNR",
+    char h[11][16];   /* 11 columns since BND was added - keep in step with raw[]/w[] */
+    /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
+     * so the unit belongs in the heading and not repeated on every row. */
+    const char *raw[11] = { "UTC", "M", "CALL", "GRID", "COUNTRY", "SNR",
                             "DRF", "TONE", "PWR", "KM", "BRG" };
-    const int   w[10]   = { W_UTC, W_CALL, W_GRID, W_CTY, W_SNR,
+    const int   w[11]   = { W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
                             W_DRF, W_TONE, W_PWR, W_KM, W_BRG };
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 11; i++) {
         const int len  = (int)strlen(raw[i]);
         const int pad  = w[i] > len ? w[i] - len : 0;
         const int left = pad / 2;
@@ -825,7 +840,7 @@ static void fmt_header(char *out, size_t n)
         h[i][k] = '\0';
     }
     snprintf(out, n, ROW_FMT, h[0], h[1], h[2], h[3], h[4],
-             h[5], h[6], h[7], h[8], h[9]);
+             h[5], h[6], h[7], h[8], h[9], h[10]);
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)
@@ -913,8 +928,12 @@ void wspr_screen_view_init(lv_obj_t *parent)
     s_dd_dial = lv_dropdown_create(s_container);
     s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
     rebuild_dial_options();
-    lv_obj_set_size(s_dd_dial, LEFT_W - 32, 56);
-    lv_obj_set_pos(s_dd_dial, 16, 70);
+    lv_obj_set_size(s_dd_dial, LEFT_W - 48, 56);   /* SHIFTED clear of the swipe zone, not shrunk */
+    /* 40, not 16: same reason as the TX button below - a CONTROL on this pane
+     * must clear the 30 px left edge-swipe zone, or a gesture aimed at the
+     * panadapter lands on it. The labels around it stay at 16; they cannot be
+     * pressed, so they cost nothing there. */
+    lv_obj_set_pos(s_dd_dial, 40, 70);
     lv_obj_set_style_radius(s_dd_dial, 8, 0);
     lv_obj_set_style_border_width(s_dd_dial, 1, 0);
     /* 28, not 24 and certainly not 20. Read on the actual screen at arm's
@@ -1003,9 +1022,27 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * a session - "how much of the time may this thing transmit" - while TX
      * ON/OFF is the control reached during one. Splitting them puts the
      * decision where it belongs and gives the one live control the whole row. */
+    /* ⛔ CLEAR OF THE PAGE-SWIPE STRIP. At x=16 this button's first 14 px sat
+     * INSIDE the left edge-swipe zone (EDGE_SWIPE_ZONE_PX = 30, x 0..30), the
+     * gesture used to reach the panadapter - so a swipe that began a little
+     * high could land on a control that keys the radio for 110 seconds.
+     * Reported by Randy N4OPI, 2026-08-31: "it is somewhat easy to accidentally
+     * turn on transmit when trying to switch pages to the Pandapter."
+     *
+     * That is not the operator being careless, it is two hit areas overlapping.
+     * Starting at 40 puts the whole button outside the strip with 10 px to
+     * spare, and the RIGHT edge moves out to match so the control keeps its
+     * width - the row simply begins where the swipe zone ends. Moving the left
+     * edge without the right just made the button smaller and left 24 px of
+     * dead space against the right pane, which the operator spotted at once.
+     *
+     * ⚠ Any control added to this pane must clear 30 px too. The rule this
+     * project already has for radio-keying controls - impossible to trigger by
+     * accident - is not satisfied by a confirmation label if the thing can be
+     * hit by a gesture aimed at something else entirely. */
     s_btn_tx = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_tx, LEFT_W - 32, 56);
-    lv_obj_set_pos(s_btn_tx, 16, 258);
+    lv_obj_set_size(s_btn_tx, LEFT_W - 48, 56);
+    lv_obj_set_pos(s_btn_tx, 40, 258);
     lv_obj_set_style_radius(s_btn_tx, 8, 0);
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_tx = lv_label_create(s_btn_tx);
@@ -1069,7 +1106,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
 
     /* ---------------- right pane, lower: the log ---------------- */
     lv_obj_t *hdr = lv_label_create(s_container);
-    { char h[160]; fmt_header(h, sizeof(h)); lv_label_set_text(hdr, h); }
+    { char h[224]; fmt_header(h, sizeof(h)); lv_label_set_text(hdr, h); }
     lv_obj_set_style_text_font(hdr, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_pos(hdr, RIGHT_X, LIST_Y);
@@ -1327,7 +1364,16 @@ void wspr_screen_view_tick(void)
     lv_bar_set_value(s_bar_cycle, into, LV_ANIM_OFF);
 
     char c[48];
-    snprintf(c, sizeof(c), "cycle  %d:%02d / 2:00", into / 60, into % 60);
+    /* ⭐ THE BAND, beside the cycle clock. Roy KI0ER, 2026-08-31: "Band could be
+     * indicated in the section banner along with UTC." It goes here rather than
+     * in the MODE title because this line already refreshes every second, and
+     * with band hopping on the answer CHANGES - a band printed once when the
+     * page was built would be wrong for most of the session, which is worse
+     * than absent. Blank if the dial matches no WSPR band. */
+    qmx_settings_t bs; settings_load_all(&bs);
+    const char *bn = wspr_band_name_for_dial(bs.wspr_dial_hz);
+    if (bn) snprintf(c, sizeof(c), "%s m   cycle  %d:%02d / 2:00", bn, into / 60, into % 60);
+    else    snprintf(c, sizeof(c), "cycle  %d:%02d / 2:00", into / 60, into % 60);
     lv_label_set_text(s_lbl_cycle, c);
 
     /* status straight from the slot loop - change-detected, because writing an
@@ -1401,7 +1447,7 @@ void wspr_screen_view_tick(void)
      * task, and the compiler reserves the frame at the prologue whether the
      * code path is taken or not). Safe as a static because this runs only on
      * taskLVGL, the same reasoning snap[] above uses. */
-    EXT_RAM_BSS_ATTR static char buf[VIEW_ROWS * 110 + 256];
+    EXT_RAM_BSS_ATTR static char buf[VIEW_ROWS * 120 + 256];
     size_t off = 0;
     int64_t last_cycle = 0;
     for (int i = 0; i < got && off < sizeof(buf) - 96; i++) {
@@ -1414,7 +1460,7 @@ void wspr_screen_view_tick(void)
             last_cycle = snap[i].cycle_utc;
             cycle_label(utc, sizeof(utc), last_cycle);
         }
-        char row[160];
+        char row[224];   /* grew with the BND column - -Werror=format-truncation */
         fmt_row(row, sizeof(row), &snap[i], utc);
         off += snprintf(buf + off, sizeof(buf) - off, "%s\n", row);
     }

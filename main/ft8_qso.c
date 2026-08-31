@@ -26,6 +26,7 @@
 // "arm refused, burst already in progress" race that previously left CQ stuck.
 
 #include "ft8_qso.h"
+#include "ft8_robot.h"   // ft8_band_change_stand_down also stands the robot down
 #include "ft8_pileup.h"
 #include "ft8_greylist.h"
 #include "ft8_hound.h"  // Fox/Hound (DXpedition) rules - see the s_hound_active notes
@@ -3069,6 +3070,33 @@ void ft8_qso_notify_manual_final(const char *target_call)
     ft8_status_set("QSO %s: sending final", target_call);
     ESP_LOGI(TAG, "manual final to %s armed - WAIT_DONE (sent=%s rcvd=%s)",
              target_call, rst_sent, rst_rcvd);
+}
+
+/* ⭐ A BAND CHANGE MUST END THE QSO, not just stop the robot picking a new one.
+ *
+ * Every band-change path called ft8_robot_stand_down(), which stops the AUTO
+ * PICKER. A QSO already in progress was untouched: it kept re-arming its next
+ * message on every slot and transmitting the exchange ON THE NEW BAND, to a
+ * station that is no longer there. Reported by Randy N4OPI, 2026-08-31 - "if I
+ * give up on a response from a CQ caller and switch bands, the app will
+ * continue with the previous auto call sequence on the new band."
+ *
+ * He blamed himself for not cancelling first. He should not have to: the
+ * operator changed band, which says plainly that the previous contact is over,
+ * and nothing else on the radio would carry on regardless.
+ *
+ * ⛔ Deliberately NOT gated on "was the robot running". A hand-started pounce
+ * transmits on the wrong band just as readily as an automatic one, and the
+ * on-air consequence is identical. */
+void ft8_band_change_stand_down(const char *why)
+{
+    char who[16];
+    if (ft8_qso_is_busy(who, sizeof who)) {
+        ESP_LOGW(TAG, "%s - abandoning the QSO with %s rather than "
+                      "transmitting its next message on the new band", why, who);
+        ft8_qso_abort();
+    }
+    ft8_robot_stand_down(why);
 }
 
 void ft8_qso_abort(void)

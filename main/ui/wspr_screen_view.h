@@ -43,6 +43,12 @@ typedef struct {
 
 const wspr_band_t *wspr_bands(int *out_count);
 
+/* "20", "30"... for a dial frequency, or NULL if it matches no WSPR band.
+ * NULL rather than a guess: a spot recorded before dial_hz existed has 0 here,
+ * and a blank is honest where "160" would be invented (Roy KI0ER, 2026-08-31 -
+ * with band hopping on there was no way to tell which band a spot came from). */
+const char *wspr_band_name_for_dial(uint32_t dial_hz);
+
 /* Indices into wspr_bands() that THIS radio can actually reach, in table order.
  * Returns the count. With no CAT band list yet (radio off, or not polled) it
  * returns every band - a picker that is empty because the radio has not

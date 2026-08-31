@@ -170,6 +170,73 @@ static void manual_netif_start(esp_event_base_t base, int32_t id, void *data)
     esp_netif_action_start(s_sta_netif, base, id, data);
 }
 
+/* ---- static IP (Randy N4OPI) -------------------------------------------
+ *
+ * Empty `wifi_ip` means DHCP, which is what every existing unit has and what a
+ * fresh one gets, so this cannot change anybody's network by being added.
+ *
+ * ⚠ THE ORDER IS NOT OBVIOUS AND IT IS LOAD-BEARING, established by reading
+ * esp_netif_lwip.c rather than by trying combinations:
+ *
+ *  - `esp_netif_set_ip_info()` REFUSES with ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED
+ *    while the DHCP client is anything but STOPPED. So the stop has to come
+ *    first, and it has to come after the netif is started (that is where
+ *    dhcpc_status exists to be stopped).
+ *  - It also posts IP_EVENT_STA_GOT_IP itself - but ONLY when the lwIP netif is
+ *    already UP. The netif comes up in esp_netif_action_connected(), i.e. on
+ *    STA_CONNECTED. Setting the address any earlier stores it and posts
+ *    nothing, and GOT_IP is what starts mDNS, SNTP and the web server here -
+ *    so an early apply gives a device with an address and no services.
+ *  - `esp_netif_set_ip_info()` calls dns_clear_servers() on a DHCP-client
+ *    netif, so DNS must be set AFTER the address, never before.
+ *
+ * Hence: stop at STA_START, apply at STA_CONNECTED, DNS last.
+ */
+static bool static_ip_wanted(qmx_settings_t *out)
+{
+    settings_load_all(out);
+    return out->wifi_ip[0] != '\0';
+}
+
+static void static_ip_apply_on_connect(void)
+{
+    qmx_settings_t st;
+    if (!static_ip_wanted(&st)) return;
+
+    esp_netif_ip_info_t ip = { 0 };
+    if (!esp_netif_str_to_ip4(st.wifi_ip, &ip.ip)) {
+        ESP_LOGW(TAG, "static IP '%s' is not a valid address - staying on DHCP",
+                 st.wifi_ip);
+        return;
+    }
+    /* A blank mask is the common case on a home LAN and /24 is the answer
+     * there; guessing it is better than refusing the whole configuration over
+     * a field most operators would leave empty. */
+    if (!st.wifi_mask[0] || !esp_netif_str_to_ip4(st.wifi_mask, &ip.netmask))
+        esp_netif_str_to_ip4("255.255.255.0", &ip.netmask);
+    if (st.wifi_gw[0]) esp_netif_str_to_ip4(st.wifi_gw, &ip.gw);
+
+    esp_err_t e = esp_netif_set_ip_info(s_sta_netif, &ip);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "static IP refused: %s - the DHCP client is probably "
+                      "still running", esp_err_to_name(e));
+        return;
+    }
+    /* AFTER the address: set_ip_info clears the DNS list on the way through. */
+    esp_netif_dns_info_t dns = { 0 };
+    const char *dns_src = st.wifi_dns[0] ? st.wifi_dns
+                        : (st.wifi_gw[0] ? st.wifi_gw : NULL);
+    if (dns_src && esp_netif_str_to_ip4(dns_src, &dns.ip.u_addr.ip4)) {
+        dns.ip.type = ESP_IPADDR_TYPE_V4;
+        esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
+    }
+    ESP_LOGI(TAG, "static IP applied: %s mask %s gw %s dns %s",
+             st.wifi_ip,
+             st.wifi_mask[0] ? st.wifi_mask : "255.255.255.0 (assumed)",
+             st.wifi_gw[0]   ? st.wifi_gw   : "(none)",
+             dns_src ? dns_src : "(none)");
+}
+
 // Apply a remembered network's credentials directly to the driver.
 //
 // Deliberately NOT panadapter_wifi_update_credentials(): that persists the SSID
@@ -289,6 +356,19 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         if (s_manual_netif && !s_netif_started) {
             s_netif_started = true;
             manual_netif_start(base, id, data);
+            /* Stop DHCP here, while the netif is started but not yet up:
+             * set_ip_info at STA_CONNECTED refuses outright unless the client
+             * is STOPPED. Harmless to call when it never started. */
+            qmx_settings_t st;
+            if (static_ip_wanted(&st)) {
+                esp_err_t e = esp_netif_dhcpc_stop(s_sta_netif);
+                if (e != ESP_OK && e != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
+                    ESP_LOGW(TAG, "could not stop the DHCP client: %s",
+                             esp_err_to_name(e));
+                else
+                    ESP_LOGI(TAG, "DHCP client stopped - static IP %s requested",
+                             st.wifi_ip);
+            }
         }
         if (s_ssid[0] == '\0') {
             ESP_LOGI(TAG, "STA started but no SSID configured; not connecting");
@@ -311,6 +391,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                 esp_wifi_register_if_rxcb(drv, esp_netif_receive, s_sta_netif);
             }
             esp_netif_action_connected(s_sta_netif, base, id, data);
+            /* The netif is UP only now, which is what makes set_ip_info post
+             * GOT_IP - see the block comment on static_ip_apply_on_connect(). */
+            static_ip_apply_on_connect();
         }
     } else if (id == WIFI_EVENT_SCAN_DONE) {
         // Harvest FIRST: esp_wifi_connect() flushes the scan results on the

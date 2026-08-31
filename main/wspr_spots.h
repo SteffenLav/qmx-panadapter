@@ -48,6 +48,16 @@ typedef struct {
      * why it needs a sentinel rather than a "harmless" zero. */
     int16_t  drift_hz;
     int16_t  power_dbm;     /* as REPORTED by that station - never inferred */
+    /* ⭐ THE DIAL THIS SPOT WAS HEARD ON. freq_hz above is only the audio offset
+     * inside the 200 Hz window, so with band hopping on there was no way at all
+     * to tell which band a spot came from - Roy KI0ER, 2026-08-31: "there's no
+     * good way to know what band a particular spot came from."
+     *
+     * Not a band LABEL: the dial is the honest record and a label derives from
+     * it, whereas "20m" throws away which WSPR sub-band it was and cannot be
+     * re-derived. 0 means unknown - spots already in the ring when this landed
+     * have no dial, and a blank is honest where a guess is not. */
+    uint32_t dial_hz;
     int32_t  km;            /* -1 when the grid gives no answer */
     int16_t  bearing_deg;   /* -1 when unknown */
     /* Set once this spot has been accepted by wsprnet. Lives in the ring

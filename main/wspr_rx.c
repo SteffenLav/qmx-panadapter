@@ -179,6 +179,16 @@ bool wspr_rx_running(void)       { return s_run; }
 /* Same conversion the spot store's other producer does. Distance, bearing and
  * country come from the device's own helpers so this list and the FT8 list
  * cannot disagree. */
+/* The dial as of the window being queued. Kept as a file static so the decode
+ * task, which runs later and on another core, files spots under the band they
+ * were HEARD on rather than the band the hopper has since moved to. */
+static uint32_t s_cycle_dial_hz;
+static uint32_t wspr_rx_cycle_dial_hz(void)
+{
+    qmx_settings_t cs; settings_load_all(&cs);
+    return cs.wspr_dial_hz;
+}
+
 static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc,
                        int snr_db, int drift_hz)
 {
@@ -204,6 +214,7 @@ static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc,
         sp.km          = (int32_t)haversine_km(mlat, mlon, tlat, tlon);
         sp.bearing_deg = (int16_t)bearing_deg(mlat, mlon, tlat, tlon);
     }
+    sp.dial_hz = s_cycle_dial_hz;   /* the band it was HEARD on - see wspr_dec_job_t */
     wspr_spots_add(&sp);
 }
 
@@ -571,6 +582,15 @@ static volatile bool s_dec_exited;
 typedef struct {
     int     slot;
     int64_t cycle_utc;
+    /* ⭐ THE DIAL THIS WINDOW WAS CAPTURED ON, carried with the job.
+     *
+     * Reading the dial when the SPOT is filed would attribute it to the wrong
+     * band: band hopping retunes HOP_LEAD_SEC before the next cycle, and a
+     * decode routinely finishes after that, so spots from the cycle just ended
+     * would be filed under the band we have already moved to. Captured at the
+     * moment the window is queued instead - which is what the samples actually
+     * belong to. */
+    uint32_t dial_hz;
 } wspr_dec_job_t;
 
 /* Claimed by the CAPTURE task only, released by the DECODE task only - one
@@ -903,6 +923,8 @@ static void wspr_dec_task(void *arg)
         wspr_dec_job_t job;
         if (xQueueReceive(s_dec_q, &job, pdMS_TO_TICKS(250)) != pdTRUE) continue;
         if (job.slot < 0 || job.slot >= WSPR_PCM_SLOTS) continue;
+        s_cycle_dial_hz = job.dial_hz;   /* before decoding, so every spot from
+                                            this window is filed under it */
         decode_one_window(s_pcm[job.slot], job.cycle_utc);
         s_pcm_busy[job.slot] = false;
     }
@@ -1229,7 +1251,8 @@ static void wspr_rx_task(void *arg)
             /* Through the SAME queue as a real window - a sim that took a
              * shortcut past the handoff would stop exercising the thing most
              * likely to be wrong about it. */
-            wspr_dec_job_t sjob = { .slot = sslot, .cycle_utc = cycle_utc };
+            wspr_dec_job_t sjob = { .slot = sslot, .cycle_utc = cycle_utc,
+                                    .dial_hz = wspr_rx_cycle_dial_hz() };
             if (!s_dec_q || xQueueSend(s_dec_q, &sjob, 0) != pdTRUE) {
                 ESP_LOGE(TAG, "sim: decode queue full - dropping window");
                 s_pcm_busy[sslot] = false;
@@ -1402,7 +1425,8 @@ static void wspr_rx_task(void *arg)
          * the next boundary. THIS is what ends the every-other-cycle deafness:
          * the capture below starts on time while this window is still decoding. */
         {
-            wspr_dec_job_t job = { .slot = slot, .cycle_utc = cycle_utc };
+            wspr_dec_job_t job = { .slot = slot, .cycle_utc = cycle_utc,
+                                   .dial_hz = wspr_rx_cycle_dial_hz() };
             if (!s_dec_q || xQueueSend(s_dec_q, &job, 0) != pdTRUE) {
                 ESP_LOGE(TAG, "cycle %lld: decode queue full - dropping window",
                          (long long)cycle_utc);

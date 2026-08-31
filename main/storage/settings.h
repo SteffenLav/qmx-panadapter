@@ -90,6 +90,16 @@ typedef struct {
     bool  flat_mode;    // Phase 5.12: flat-spectrum view (per-bin floor)
     char  wifi_ssid[33];   // WiFi SSID (32 chars + NUL, IEEE max)
     char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
+    // Static IP (Randy N4OPI). An EMPTY wifi_ip means DHCP, which is the
+    // default and the only state an existing unit can be in after an upgrade -
+    // so this cannot change anyone's network by appearing. All four are edited
+    // as one set and share one dirty bit, the same way the LoTW station fields
+    // do. Stored as dotted text so the config export stays readable and a
+    // half-typed address is visibly wrong rather than silently a number.
+    char  wifi_ip[16];     // e.g. "192.168.1.50"; empty = use DHCP
+    char  wifi_mask[16];   // e.g. "255.255.255.0"; empty defaults to /24
+    char  wifi_gw[16];     // e.g. "192.168.1.1"
+    char  wifi_dns[16];    // e.g. "192.168.1.1"; empty falls back to the gateway
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
     uint32_t ft8_freq_hz; // last FT8/FT4 preset frequency in Hz (persisted so FT8 mode doesn't inherit the panadapter's VFO; default 14074000)
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
@@ -631,6 +641,12 @@ void settings_set_lotw_ituz(const char *ituz);
 // handler and config import), so one bit covers them coherently.
 void settings_set_lotw_state(const char *state);
 void settings_set_lotw_county(const char *county);
+
+// Static IP. Pass NULL or "" for ip to go back to DHCP. Takes effect on the
+// next connect - see wifi.c for why it is applied at STA_CONNECTED and not
+// at boot.
+void settings_set_wifi_static(const char *ip, const char *mask,
+                              const char *gw, const char *dns);
 
 // Count of ADIF records already uploaded to LoTW (offset into the log file
 // for the next upload batch). Debounced flush.

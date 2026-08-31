@@ -31,6 +31,7 @@
 #include "settings.h"
 #include "bandplan.h"
 #include "ft8_robot.h"   // ft8_robot_stand_down - a band change stops auto-answer
+#include "ft8_qso.h"     // ft8_band_change_stand_down - a band change ends the QSO
 #include "ft8_tx.h"      // ft8_tx_disarm / ft8_tx_request_abort - safe power off
 #include "bsp/m5stack_tab5.h"   // bsp_generate_poweroff_signal
 #include "db_gridlines.h"   // round dBm gridlines derived from the dB Range sliders
@@ -293,7 +294,7 @@ static void band_preset_cb(lv_event_t *e)
     // an auto-ATU, and the robot arms within a cycle or two. Roy KI0ER: "that's
     // quite a lot of responsibility to entrust to the operator". Stand it down
     // and say so; turning it back on is one tap and is the operator's decision.
-    ft8_robot_stand_down("band changed");
+    ft8_band_change_stand_down("band changed");
 
     cat_set_frequency_forced(target);
     // Optimistically move the display (don't rely solely on the FA poll, which
@@ -6569,7 +6570,7 @@ static void topbar_reconcile_cb(lv_timer_t *t)
     // nothing.
     if (s_band_changed_pending) {
         s_band_changed_pending = false;
-        ft8_robot_stand_down("band changed");
+        ft8_band_change_stand_down("band changed");
     }
 
     if (!s_topbar_stale) return;

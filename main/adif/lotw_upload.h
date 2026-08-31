@@ -24,6 +24,13 @@ typedef struct {
     int  skipped;    // permanently un-uploadable records skipped (e.g. no LoTW band)
     int  failed;     // 1 if the run stopped on an error
     char error[120]; // human-readable reason when failed
+    // What LoTW ITSELF said on the last successful POST (its <!-- .UPLMESSAGE. -->
+    // text). Kept on SUCCESS, not only on failure: an upload is accepted as a
+    // FILE and the QSOs inside it are processed afterwards, so "accepted" is not
+    // the same claim as "your contacts are in LoTW". Randy N4OPI reported
+    // uploads reporting success with nothing ever appearing, and we had thrown
+    // away the only sentence the server sent us about it.
+    char note[120];
 } lotw_upload_result_t;
 
 // Store the callsign certificate / private key as single-line base64 DER

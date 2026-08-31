@@ -105,6 +105,12 @@ static struct {
     int uploaded;
     int failed;
     char error[80];
+    // What the SERVER said about a run that SUCCEEDED. LoTW accepts a FILE and
+    // processes the QSOs inside it afterwards, so "22 uploaded" is our claim,
+    // not theirs - and theirs is the one that answers "why is nothing in my
+    // log". Randy N4OPI reported exactly that, and we were discarding the only
+    // sentence the server sent us about it.
+    char note[120];
     bool busy;
 } s_last_upload = {0};
 static SemaphoreHandle_t s_upload_mutex = NULL;
@@ -529,6 +535,28 @@ static esp_err_t status_handler(httpd_req_t *req)
      * the difference decides whether the tuning wriggle is worth a fix that
      * stamps every spectrum with its capture frequency. At 48 kHz, pairs/48
      * is milliseconds. */
+    /* The FT8/FT4 calling frequencies, sent ONLY when asked for (?presets=1).
+     * The list never changes, so putting it in a 1 Hz poll would spend ~300 B/s
+     * on this link for ever - the same reason the spots array is versioned. The
+     * browser asks once when it builds the dropdown. */
+    {
+        char q[96];
+        if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+            httpd_query_key_value(q, "presets", (char[4]){0}, 4) == ESP_OK) {
+            for (int k = 0; k < 2; k++) {
+                int n = 0;
+                const ft8_preset_t *pl = ft8_preset_list(k == 1, &n);
+                cJSON *arr = cJSON_AddArrayToObject(root, k ? "ft4_presets" : "ft8_presets");
+                for (int i = 0; i < n; i++) {
+                    cJSON *o = cJSON_CreateObject();
+                    cJSON_AddStringToObject(o, "band", pl[i].band);
+                    cJSON_AddNumberToObject(o, "hz",   (double)pl[i].freq_hz);
+                    cJSON_AddItemToArray(arr, o);
+                }
+            }
+        }
+    }
+
     cJSON_AddNumberToObject(root, "audio_backlog_pairs",
                             (double)audio_ring_backlog_pairs());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
@@ -879,7 +907,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // Same rule as the Tab5's own band buttons: a band change stands
             // auto-answer down, because the antenna is probably not tuned for
             // the new band. Doing it from the browser must not be the loophole.
-            ft8_robot_stand_down("band changed");
+            ft8_band_change_stand_down("band changed");
             uint32_t want = target ? target : center_hz;
             cat_set_frequency(want);
             /* Same reason as set_freq above: the Tab5's own band buttons move
@@ -2118,6 +2146,7 @@ static esp_err_t qrz_upload_handler(httpd_req_t *req)
     s_last_upload.uploaded = 0;
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
+    s_last_upload.note[0] = '\0';
     xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_QRZ };
@@ -2186,6 +2215,7 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
     s_last_upload.uploaded = 0;
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
+    s_last_upload.note[0] = '\0';
     xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_EQSL };
@@ -2275,6 +2305,7 @@ static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
     s_last_upload.uploaded = 0;
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
+    s_last_upload.note[0] = '\0';
     xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_CLOUDLOG };
@@ -2401,6 +2432,7 @@ static esp_err_t lotw_upload_handler(httpd_req_t *req)
     s_last_upload.uploaded = 0;
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
+    s_last_upload.note[0] = '\0';
     xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_LOTW };
@@ -2555,6 +2587,8 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "uploaded", s_last_upload.uploaded);
         cJSON_AddNumberToObject(root, "failed",   s_last_upload.failed);
         cJSON_AddStringToObject(root, "error",    s_last_upload.error);
+        if (s_last_upload.note[0])
+            cJSON_AddStringToObject(root, "note", s_last_upload.note);
     }
     xSemaphoreGive(s_upload_mutex);
 
@@ -2917,6 +2951,13 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // password only when the operator types a new one.
     cJSON_AddStringToObject(root, "wifi_ssid", c.wifi_ssid);
     cJSON_AddBoolToObject(root, "wifi_pass_set", c.wifi_pass[0] != '\0');
+    // Static IP. Unlike the password these ARE returned: they are not secret,
+    // and an operator who set a fixed address needs to see what it is in order
+    // to change it.
+    cJSON_AddStringToObject(root, "wifi_ip",   c.wifi_ip);
+    cJSON_AddStringToObject(root, "wifi_mask", c.wifi_mask);
+    cJSON_AddStringToObject(root, "wifi_gw",   c.wifi_gw);
+    cJSON_AddStringToObject(root, "wifi_dns",  c.wifi_dns);
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -3306,6 +3347,20 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     const char *ssid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_ssid"));
     const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_pass"));
     if (ssid && ssid[0] && pass && pass[0]) panadapter_wifi_update_credentials(ssid, pass);
+
+    // Static IP. Only touched when the form actually carries wifi_ip, so every
+    // other settings save leaves the network configuration alone; an empty
+    // string IS meaningful here and means "go back to DHCP".
+    cJSON *sip = cJSON_GetObjectItem(root, "wifi_ip");
+    if (cJSON_IsString(sip)) {
+        settings_set_wifi_static(
+            sip->valuestring,
+            cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_mask")),
+            cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_gw")),
+            cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_dns")));
+        ESP_LOGI(TAG, "static IP set to '%s' - takes effect on the next connect",
+                 sip->valuestring[0] ? sip->valuestring : "(DHCP)");
+    }
 
     cJSON_Delete(root);
     settings_flush();
@@ -4262,6 +4317,8 @@ static void upload_task(void *arg)
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
+            strncpy(s_last_upload.note, result.note, sizeof(s_last_upload.note) - 1);
+            s_last_upload.note[sizeof(s_last_upload.note) - 1] = '\0';
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
         }

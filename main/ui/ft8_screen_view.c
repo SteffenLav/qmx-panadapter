@@ -1,3 +1,4 @@
+#include <stddef.h>   // offsetof - the layout assert below
 #include "ft8_screen_view.h"
 #include "ui_theme.h"
 #include "ft8_screen.h"
@@ -2279,6 +2280,28 @@ static const ft8_band_freq_t FT4_BAND_FREQS[] = {
 #define N_FT4_BAND_FREQS (sizeof(FT4_BAND_FREQS) / sizeof(FT4_BAND_FREQS[0]))
 #endif
 
+/* One accessor over both tables, so the web dropdown is built from the very
+ * numbers the Tab5 tunes to. ft8_preset_t is layout-identical to
+ * ft8_band_freq_t on purpose - the cast keeps the tables where they are and
+ * avoids a second list to forget to update. */
+_Static_assert(sizeof(ft8_preset_t) == sizeof(ft8_band_freq_t) &&
+               offsetof(ft8_preset_t, band)    == offsetof(ft8_band_freq_t, band) &&
+               offsetof(ft8_preset_t, freq_hz) == offsetof(ft8_band_freq_t, freq_hz),
+               "ft8_preset_t must stay layout-identical to ft8_band_freq_t - the "
+               "accessor below casts between them so the web and the Tab5 read ONE table");
+
+const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count)
+{
+#ifndef FT4_MODE_DISABLED
+    if (ft4) { if (out_count) *out_count = (int)N_FT4_BAND_FREQS;
+               return (const ft8_preset_t *)FT4_BAND_FREQS; }
+#else
+    (void)ft4;
+#endif
+    if (out_count) *out_count = (int)N_FT8_BAND_FREQS;
+    return (const ft8_preset_t *)FT8_BAND_FREQS;
+}
+
 // Cyan accent used for everything FT4: the dropdown's FT4 column header and the
 // "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
 // UI_COLOR_ACCENT_GOLD.
@@ -2308,9 +2331,41 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     ESP_LOGW(TAG, "freq preset: %lu Hz %s (from %s)",
              (unsigned long)freq_hz, ft4 ? "FT4" : "FT8", src ? src : "?");
     ft8_freq_popup_close();
+
+    /* Did this preset actually move anything? Read BEFORE the retune below.
+     *
+     * Compared against the RADIO rather than a stored copy on purpose:
+     * settings_load_all() puts a multi-kilobyte qmx_settings_t on the caller's
+     * stack, this runs on taskLVGL (~8 KB), and ft8_robot_stand_down() below
+     * already puts one there - see the task-stack rule in CLAUDE.md. */
+    const uint32_t dial_hz = cat_get_frequency();
+    const bool     was_ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    const bool     moved   = (dial_hz && dial_hz != freq_hz) || (ft4 != was_ft4);
+
     // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
     // goes through even if the sticky-settings restore just fired a freq write.
     if (cat_set_frequency_forced(freq_hz) != ESP_OK) return;
+
+    /* ⭐ A PRESET CHANGE ENDS THE QSO, for the same reason a band button does
+     * (Randy N4OPI, 2026-08-31) - see ft8_band_change_stand_down().
+     *
+     * A CROSS-BAND preset tap was already covered, but only indirectly and only
+     * later: topbar_reconcile_cb() notices the band the CAT poll reports has
+     * changed and stands down from there, up to a poll interval afterwards.
+     * What that can never see is a move WITHIN one band - FT8 14.074 -> FT4
+     * 14.080 - because the band string does not change. The QSO then survives a
+     * change of PROTOCOL and goes on sending its next message in FT4 at a
+     * partner who is listening on FT8.
+     *
+     * Done here as well so this path is self-sufficient rather than relying on
+     * a side effect of the poll observing our own retune. Both are safe
+     * together: ft8_robot_stand_down() early-returns when auto-answer is
+     * already off, so there is no second toast, and the QSO abort is a no-op
+     * once IDLE.
+     *
+     * Gated on something having actually changed - re-tapping the preset you
+     * are already on must not kill a contact in progress. */
+    if (moved) ft8_band_change_stand_down("preset changed");
 
     // Persist the chosen FT8/FT4 frequency so it survives a reboot and FT8 mode
     // never opens on the panadapter's inherited (non-FT8) VFO. (The FT4/FT8

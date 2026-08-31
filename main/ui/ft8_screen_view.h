@@ -38,6 +38,13 @@ void ft8_screen_view_request_refresh(void);
 // only raises a flag that the FT8 view's 1 Hz timer drains on the LVGL thread, since
 // the QSO state machine belongs to that task. Ignored, with a log line, if FT8 mode
 // is not up - there would be nothing to transmit on.
+/* The conventional FT8/FT4 calling frequencies, so the WEB can offer the same
+ * list the Tab5 does instead of keeping a second copy that drifts. One table,
+ * one set of numbers - the rule pan_view.h states for geometry applies just as
+ * well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31). */
+typedef struct { const char *band; uint32_t freq_hz; } ft8_preset_t;
+const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count);
+
 void ft8_screen_view_request_cq(void);
 
 // CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling

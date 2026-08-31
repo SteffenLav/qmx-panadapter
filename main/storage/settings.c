@@ -25,6 +25,10 @@ static const char *TAG = "settings";
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
 #define KEY_WIFI_PASS   "wifi_pass"
+#define KEY_WIFI_IP     "wifi_ip"
+#define KEY_WIFI_MASK   "wifi_mask"
+#define KEY_WIFI_GW     "wifi_gw"
+#define KEY_WIFI_DNS    "wifi_dns"
 #define KEY_LAST_VFO   "last_vfo"
 #define KEY_FT8_FREQ   "ft8_freq"
 #define KEY_CW_PITCH   "cw_pitch"
@@ -339,6 +343,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WSPR_PA       107   /* #290 WSPR PA-voltage guard + the value to restore */
 #define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
+#define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -584,6 +589,15 @@ static void flush_task(void *arg)
             nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap.lotw_dxcc);
             nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap.lotw_state);
             nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap.lotw_county);
+        }
+        // One bit for all four: they are only ever set together, and a
+        // partially-applied network configuration is not a state worth being
+        // able to reach.
+        if (dirty_test(&dirty_local, DIRTY_WIFI_STATIC)) {
+            nvs_set_str(s_nvs, KEY_WIFI_IP,   snap.wifi_ip);
+            nvs_set_str(s_nvs, KEY_WIFI_MASK, snap.wifi_mask);
+            nvs_set_str(s_nvs, KEY_WIFI_GW,   snap.wifi_gw);
+            nvs_set_str(s_nvs, KEY_WIFI_DNS,  snap.wifi_dns);
         }
         if (dirty_test(&dirty_local, DIRTY_LOTW_CQZ))      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
         if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
@@ -980,6 +994,11 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->lotw_county);
     nvs_get_str(s_nvs, KEY_LOTW_COUNTY, out->lotw_county, &sz);
     nvs_get_u32(s_nvs, KEY_LOTW_UPLOADED, &out->lotw_uploaded_n);
+    out->wifi_ip[0] = out->wifi_mask[0] = out->wifi_gw[0] = out->wifi_dns[0] = '\0';
+    sz = sizeof(out->wifi_ip);   nvs_get_str(s_nvs, KEY_WIFI_IP,   out->wifi_ip,   &sz);
+    sz = sizeof(out->wifi_mask); nvs_get_str(s_nvs, KEY_WIFI_MASK, out->wifi_mask, &sz);
+    sz = sizeof(out->wifi_gw);   nvs_get_str(s_nvs, KEY_WIFI_GW,   out->wifi_gw,   &sz);
+    sz = sizeof(out->wifi_dns);  nvs_get_str(s_nvs, KEY_WIFI_DNS,  out->wifi_dns,  &sz);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -2269,6 +2288,15 @@ void settings_set_lotw_state(const char *state)
 void settings_set_lotw_county(const char *county)
 {
     set_lotw_str(s_pending.lotw_county, sizeof(s_pending.lotw_county), county, DIRTY_LOTW_DXCC);
+}
+
+void settings_set_wifi_static(const char *ip, const char *mask,
+                              const char *gw, const char *dns)
+{
+    set_lotw_str(s_pending.wifi_ip,   sizeof(s_pending.wifi_ip),   ip,   DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_mask, sizeof(s_pending.wifi_mask), mask, DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_gw,   sizeof(s_pending.wifi_gw),   gw,   DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_dns,  sizeof(s_pending.wifi_dns),  dns,  DIRTY_WIFI_STATIC);
 }
 
 void settings_set_lotw_uploaded_n(uint32_t n)
