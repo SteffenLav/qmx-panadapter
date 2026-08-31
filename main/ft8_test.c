@@ -467,6 +467,38 @@ static void free_shared_fft(void)
     s_shared_fft_internal = false;
 }
 
+/* ⛔ DROP OUR REFERENCES TO THE CAPTURE POOL WITHOUT FREEING ANY OF IT.
+ *
+ * For the ONE case where freeing is the crash: the decode task did not exit
+ * within ft8_task's bounded wait, so its core-0 worker may still be reading a
+ * monitor's waterfall. Hardware-captured 2026-09-01 on v1.10.5 - a Load access
+ * fault in estimate_snr_db (ft8_lib decode.c:471) reading block[bin], MTVAL a
+ * garbage pointer, 20 s AFTER `ft8_task exiting` had already logged.
+ *
+ * This is the rule the rest of the teardown already follows and this one path
+ * ignored: reap_pending_tasks() deliberately reaps nothing on a join timeout,
+ * and the worker context is deliberately LEAKED with the comment "a small leak
+ * beats a crash". The pool is the same trade at a larger size - two waterfalls
+ * (163 KB each in FT8, 82 KB in FT4) plus scratch, in PSRAM, where there are
+ * ~15 MB free, and only on a pathological timeout.
+ *
+ * The next FT8 entry builds a fresh pool because every pointer here is NULL.
+ *
+ * ⚠ Do NOT "fix" the underlying starvation by widening the 15 s wait. The
+ * worker is tskIDLE_PRIORITY+1 on core 0, and returning to the panadapter puts
+ * taskLVGL back on that core at ~74 % - the log showed `idle0 0.0%` at the
+ * moment of the fault. A longer bound changes the odds, not the race; this
+ * file already records two fixes falsified for exactly that reasoning. */
+static void forget_capture_pool(void)
+{
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) s_mon_pool[i] = NULL;
+    s_shared_fft_work     = NULL;
+    s_shared_fft_cfg      = NULL;
+    s_shared_fft_internal = false;
+    s_cap_scratch         = NULL;
+    s_pool_proto          = -1;
+}
+
 // Free the monitor pool + capture scratch (idempotent; safe on partial alloc).
 static void free_capture_pool(void)
 {
@@ -2106,16 +2138,38 @@ static void ft8_task(void *arg)
     // itself dead while the decode task still runs - the overlap window
     // behind Dennis WN4FLA's crash (the 10 s it used to be was shorter than
     // the join bound it was waiting on).
-    xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000));
+    bool joined = (xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000)) == pdTRUE);
 
     /* The decode task has notified us and parked; free its 64 KB stack (#279).
      * If the wait TIMED OUT it has not parked and is not on the list, so this
      * reaps nothing - which is the safe outcome, not a missed one. */
     reap_pending_tasks();
 
-    vQueueDelete(s_decode_queue);
-    s_decode_queue = NULL;
-    free_capture_pool();
+    if (joined) {
+        vQueueDelete(s_decode_queue);
+        s_decode_queue = NULL;
+        free_capture_pool();
+    } else {
+        /* ⛔ THE TIMEOUT PATH MUST FREE NOTHING. Hardware-captured 2026-09-01:
+         * this branch logged `ft8_task exiting` at 457.114 s and the still-live
+         * core-0 worker took a Load access fault at 477.268 s in
+         * estimate_snr_db, reading a waterfall this function had freed.
+         *
+         * BOTH objects are unsafe here, not just the pool. The decode task
+         * blocks on a LOCAL COPY of the queue handle (`QueueHandle_t q =
+         * s_decode_queue`), so vQueueDelete() under it is the same
+         * use-after-free one layer down; its NULL check only guards the NEXT
+         * iteration. Clearing the global is what makes that iteration exit.
+         *
+         * So: clear the references, free neither, and say so loudly. The
+         * decode task finishes on its own, joins its worker and parks; what it
+         * was reading stays valid the whole time. */
+        s_decode_queue = NULL;
+        forget_capture_pool();
+        ESP_LOGW(TAG, "decode task did not exit in 15 s - LEAKING its queue and "
+                      "the capture pool rather than freeing memory a live worker "
+                      "may still be reading (crash-safe; see forget_capture_pool)");
+    }
 
     ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
     s_ft8_task_alive = false;
