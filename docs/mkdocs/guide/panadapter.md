@@ -222,7 +222,7 @@ finer step for a narrow range. Before this they were fixed at −40 to −120 re
 so any range other than the default was described by labels that did not belong to it
 (found by Samuel W7STF running −118/−13). At the default range the labels are unchanged.
 
-The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision.
+The **frequency axis** shows absolute MHz labels across whatever span is on screen, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision. With **Still Spectrum** on — the default above ×1 — the axis stays put as you tune and the VFO marker moves along it; with it off, the axis is centred on the QMX VFO.
 
 The **waterfall** runs newest row at the top, in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
 
@@ -333,11 +333,42 @@ Pinching sets any value in between; double-tap returns to ×1 and re-centres.
 
 **One-finger pan (stroll).** A fast horizontal swipe — more than about 70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
 
-At zoom levels above ×1 the display **centres on the passband**, not the VFO dial — which matters in USB and LSB, where the passband sits to one side of the carrier. It re-centres automatically when you change mode or filter width, so the active receive area stays on screen, and the passband lines and frequency axis track correctly at every zoom level.
+At zoom levels above ×1 the display **centres on the passband**, not the VFO dial — which matters in USB and LSB, where the passband sits to one side of the carrier. It re-centres whenever you change mode, filter width or zoom, so the active receive area stays on screen, and the passband lines and frequency axis track correctly at every zoom level. What happens as you *tune* is governed by **Still Spectrum**, below.
 
 The zoom level is **persisted**, and comes back at full zoom-FFT resolution on the next boot.
 
-### 9. S-Meter
+### 9. Still Spectrum
+
+By default the spectrum and waterfall **hold still and the VFO marker moves across them**, so a signal stays where you last saw it while you tune towards it. This is how a Flex behaves, and it is what makes the waterfall readable as history: a signal's past sits directly above its present, under the frequency it belongs to, instead of the whole picture sliding sideways every time you touch the dial.
+
+The view re-frames only when you tune far enough to need it:
+
+| Where you are | What the display does |
+|---|---|
+| Inside the view | nothing moves at all |
+| Your passband reaches the screen edge | a small push, so a station sitting right at the edge can still be worked |
+| One passband width past that | a page, carrying part of the old screen across so you can see where you came from |
+
+The trigger is **your filter passband reaching the edge of the screen**, not a fixed percentage of the view. That distinction matters because the passband is not centred on the dial — in USB it runs roughly +200 to +2900 Hz — so a percentage rule re-frames too early at one edge and too late at the other, and mirrors itself in LSB. Because both the trigger and the push scale with the filter, a page happens about once per screen-width of tuning whatever filter you are using. RIT is counted in, since it changes what you are actually listening to.
+
+Changing mode, filter width or zoom re-centres the view on the passband, as before.
+
+Switch it off under **Settings → Radio & display → Still spectrum**, and the display returns to re-centring on the dial at every step with the marker in the middle.
+
+!!! warning "×1 is always dial-centred"
+    Holding a view still needs somewhere for it to stay while the capture window slides underneath it. At ×1 the view is already the whole 48 kHz the radio sends, so there is no room and the setting has nothing to work with. Zoom to **×2 or beyond** for the still display.
+
+### 10. The Hatched Region
+
+The QMX's local oscillator sits **12 kHz below the dial**. The 48 kHz it delivers therefore covers **dial−36 kHz to dial+12 kHz** — all of it real, but only 12 kHz of it above the frequency you are tuned to.
+
+Above dial+12 kHz there is no data, and there never was. That part of the display is drawn **hatched** and does not respond to tapping, on the Tab5 and in the browser alike, with a caption saying why it is empty.
+
+Before v1.10.5 the display filled that quarter of the ×1 view by wrapping the bottom of the band into it, and the frequency scale labelled it as dial+12 to +24. The signals shown there were real, but they were about 48 kHz from where the scale claimed — so tapping one tuned you to the wrong place entirely.
+
+If a signal you want falls into the hatching, tune down or zoom in. The radio cannot hear above dial+12 kHz, and no display setting can change that.
+
+### 11. S-Meter
 
 The **Signal** field in the top bar is a tick-scale bar labelled S1, S3, S5, S7, S9, +10, +20, with a moving green bar beneath it.
 
@@ -350,7 +381,7 @@ The reading is the peak level in a ±64-bin window centred on the **IF-shifted V
 
 It is a readout, not a control: there is nothing to tap, and there is no peak-hold mode.
 
-### 10. Settings Drawer
+### 12. Settings Drawer
 
 Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
 

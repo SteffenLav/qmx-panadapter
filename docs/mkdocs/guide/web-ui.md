@@ -62,6 +62,8 @@ Click anywhere on the spectrum to tune to that frequency. The waterfall updates 
 
 When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a **live TX status banner**, a **Call CQ** button, and the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Everything else about operating FT8 (watching the decode list, tapping a station to reply) happens **on the Tab5 itself**.
 
+**Band presets.** A dropdown beside the TX tone lists the standard FT8 or FT4 calling frequencies — the same list the Tab5's own **Preset** button offers, and it switches sub-mode and frequency together, so picking an FT4 frequency puts the Tab5 into FT4. The list follows whichever mode the Tab5 is in.
+
 The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
 ### Live spots on the browser spectrum
@@ -348,7 +350,9 @@ After setup the button reads **LoTW ↑**. Each click signs all not-yet-uploaded
 
 **US stations: fill in state and county** (new in v1.3.3). These were not being sent at all before, which meant US operators' uploaded QSOs earned **no Worked All States and no county credit** — for them or for the stations they worked. Fill them in if your TQSL station location has them. The county is the **name on its own** (`Arlington`), not `VA,Arlington`. Operators outside the US can leave both blank.
 
-**Certificate renewal** — LoTW certificates expire roughly every 3 years. **Ctrl-click** the **LoTW ↑** button to re-run setup. From v1.3.3, re-submitting the *same* certificate no longer re-uploads your whole log — only an actually-changed certificate resets the upload position, because a new key means every QSO has to be re-signed. So you can go back in to add a state and county without resending everything.
+**Certificate renewal** — LoTW certificates expire roughly every 3 years. Use the **↳ Change LoTW certificate** row beneath the upload button to re-run setup (**Ctrl-click** on **LoTW ↑** still works, and was the only way in before v1.10.5). From v1.3.3, re-submitting the *same* certificate no longer re-uploads your whole log — only an actually-changed certificate resets the upload position, because a new key means every QSO has to be re-signed. So you can go back in to add a state and county without resending everything.
+
+**What the result tells you.** From v1.10.5 the message shown after an upload is **LoTW's own reply**, not just our count. That matters: LoTW accepts a *file* and processes the contacts in it afterwards, so a figure like "22 uploaded" only ever described what was sent. If contacts are being rejected, the server's own words are what say why.
 
 **If an upload does not appear on LoTW**, check [ARRL's queue status](https://www.arrl.org/logbook-queue-status) before assuming a fault — the queue has run hours behind at busy times. LoTW rejects a malformed file at upload time, so anything that reached the queue was signed correctly.
 

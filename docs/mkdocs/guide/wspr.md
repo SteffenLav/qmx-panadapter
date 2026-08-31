@@ -25,6 +25,7 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 | Column | Meaning |
 |---|---|
 | **UTC** | The cycle this spot came from |
+| **M** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
 | **GRID** | Their Maidenhead locator, as transmitted |
 | **COUNTRY** | Country from the callsign prefix |
@@ -41,6 +42,8 @@ Below the list:
 - **WSPRNET** — whether spots are being published, and whether they can be.
 
 The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR's whole sub-band is narrower than a single FT8 signal, so this is a very close-up view: individual beacons appear as near-horizontal lines, and a sloping line is a drifting transmitter.
+
+**On a cycle you transmit, the waterfall does not advance** — the receiver is stood down for the whole two minutes, so there is nothing to draw. Rather than leave the previous cycle's picture sitting there looking frozen, the display lays down its cycle-boundary marker and keeps the last received image below it, so you can still see what was there before you transmitted. The status line reads **transmitting** throughout.
 
 **The panadapter spectrum is not available while WSPR runs.** The receiver takes the IQ stream for the whole cycle, so there is nothing left to draw a live spectrum from. This is expected, not a fault.
 

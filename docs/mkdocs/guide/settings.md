@@ -124,6 +124,18 @@ Tap **WiFi setup** in the settings drawer to open the WiFi window.
 
 Once connected, the settings show your **IP address** — use this to access the web UI from a browser.
 
+**Static IP address / Subnet mask / Gateway / DNS server** — set in the web UI's Settings
+window under **WiFi** (there is no Tab5 equivalent — four addresses typed on glass is no
+kindness). **Leave the address empty for DHCP**, which is what every unit does by default,
+so nothing changes unless you fill it in. A blank mask assumes 255.255.255.0 and a blank
+DNS falls back to the gateway. It takes effect the next time the Tab5 connects.
+
+!!! warning "Get the subnet right"
+    An address that is malformed is rejected and the unit stays on DHCP. An address that
+    is *valid but on the wrong subnet* is not: the Tab5 comes up happily and is
+    unreachable, and the web page is the only place to change the setting back. The Tab5's
+    own bottom bar always shows the address it actually has, so you can see what happened.
+
 ## Time Sync
 
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
@@ -201,6 +213,14 @@ teal. You can always see what is being touched.
     is off by default.
 
 ## Panadapter & Zoom
+
+**Still spectrum** *(Radio & display, on by default)* — the spectrum and waterfall hold
+still and the VFO marker moves across them, so a signal stays where you last saw it while
+you tune towards it. Switch it off and the display re-centres on the dial at every step
+with the marker in the middle. Applies from **×2 zoom up**; at ×1 the view is already the
+whole 48 kHz the radio sends, so there is no room to hold it still. The full behaviour,
+including when the view re-frames, is in
+[Panadapter → Still Spectrum](panadapter.md#9-still-spectrum).
 
 **Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
 
