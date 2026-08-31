@@ -9,6 +9,7 @@
 
 #include "cat.h"
 #include "dsp.h"
+#include "ui.h"          // ui_pan_view_current - the viewport carried in the frame
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
 // Sent to a client that is about to be displaced by a newer one, so it can stop
@@ -43,9 +44,37 @@
 //     hard frame and swinging 10 fps -> 3 fps and back within seconds.
 // Before reaching for this again, measure the SPREAD: a bandwidth ceiling gives
 // consistent throughput, and this link does not.
-#define WS_HEADER_LEN           2
+/* ⭐ THE FRAME CARRIES THE STATE IT WAS CAPTURED WITH (#298 phase 5).
+ *
+ * The viewport and the dial used to reach the browser only through /api/status
+ * at 1 Hz, while frames arrive at 10. So for up to a second after the radio
+ * moved, every frame was located with a stale dial: the spectrum slid by the
+ * pending delta and - since each waterfall row carried a different stale value
+ * - the history smeared into a diagonal. Two channels describing one instant
+ * cannot be kept in step by hoping.
+ *
+ * byte[1] already worked this way for the payload layout, and the reasoning is
+ * the same: a frame that describes itself cannot be raced by its own data.
+ *
+ * Header, little-endian:
+ *   [0]      frame type
+ *   [1]      zoom decimation (1 = raw base bins, >1 = fftshifted zoom FFT)
+ *   [2..5]   dial Hz            - what the radio was on for THIS capture
+ *   [6..9]   view_lo Hz         - left edge of what is drawn
+ *   [10..13] span Hz
+ *   [14..17] cap_lo Hz          - what the radio can hear
+ *   [18..21] cap_hi Hz
+ *   [22..23] if_offset Hz       - signed, fits comfortably in 16 bits
+ * 22 extra bytes on a 1026-byte frame, 10 times a second: 1.8 kbit/s. */
+#define WS_HEADER_LEN           24
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
+
+static inline void ws_put_u32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
 
 // Quantization range: -130 dBm (q=0) .. -30 dBm (q=255). ~0.39 dB/step.
 // The quantisation window for the spectrum bytes. The FLOOR matters more than it
@@ -69,7 +98,9 @@
 #define WS_DB_MAX   (-30.0f)
 
 // Must match IF_OFFSET_HZ inside main/ui/ui.c (QMX dial sits at +12 kHz baseband).
-#define WS_IF_OFFSET_HZ 12000
+/* WS_IF_OFFSET_HZ is gone with the rotation - the browser gets if_offset_hz
+ * from /api/status now, which also carries the CW pitch and the per-unit trim
+ * that this constant never did. */
 
 static const char *TAG = "ws";
 
@@ -389,10 +420,9 @@ static void ws_push_task(void *arg)
         // Select spectrum source. When zoom-FFT is active the DSP has already
         // mixed the zoom center down to DC; only an fftshift is needed and the
         // browser gets higher-resolution bins. When inactive (or not ready yet),
-        // fall back to the base 1024-bin spectrum with a full IF shift.
+        // fall back to the base 1024-bin spectrum, sent RAW - see the loop below.
         int decim = dsp_get_zoom_decim();
         const float *spec_data = NULL;
-        int if_shift = 0;
 
         if (decim > 1) {
             spec_data = dsp_get_zoom_spectrum();  // NULL if accumulation still filling
@@ -401,24 +431,75 @@ static void ws_push_task(void *arg)
             decim = 1;
             if (dsp_get_spectrum(s_spec) != ESP_OK) continue;
             spec_data = s_spec;
-            // CW mode: add CW pitch on top of base 12 kHz IF so the browser
-            // centers on the audio tone, matching the Tab5 display.
-            int total_if_hz = WS_IF_OFFSET_HZ;
-            const char *mode = cat_get_mode_str();
-            if (mode && strcmp(mode, "CW") == 0) {
-                total_if_hz += cat_get_cw_offset_hz();
-            }
-            if_shift = (total_if_hz * N + DSP_SAMPLE_RATE_HZ / 2) / DSP_SAMPLE_RATE_HZ;
+            /* The IF shift that used to be applied here is GONE. It existed to
+             * centre the payload on the dial - including the CW pitch, so the
+             * browser landed on the audio tone - and the browser now gets
+             * if_offset_hz in /api/status and does that itself, through the same
+             * mapping the Tab5 uses. One rotation fewer between the FFT and the
+             * screen is one fewer place for the two to disagree. */
         }
 
         // byte[1] carries the decimation factor so the browser can apply
         // residual zoom instead of full zoom when rendering zoom-FFT data.
         s_payload[1] = (uint8_t)decim;
 
-        // fftshift (+ IF shift for base spectrum path)
+        /* The rest of the header: everything needed to locate THIS payload,
+         * sampled here so it cannot disagree with the bins below it. Zeroed on
+         * the zoom path, where pan_view does not apply and the browser keeps its
+         * own centred mapping - a browser must check span before trusting any of
+         * it. */
+        {
+            pan_view_cfg_t pvc; pan_view_t pv;
+            bool have = (decim == 1) && ui_pan_view_current(&pvc, &pv, N);
+            ws_put_u32(&s_payload[2],  have ? (uint32_t)pvc.dial_hz  : 0);
+            ws_put_u32(&s_payload[6],  have ? (uint32_t)pv.lo_hz     : 0);
+            ws_put_u32(&s_payload[10], have ? (uint32_t)pv.span_hz   : 0);
+            ws_put_u32(&s_payload[14], have ? (uint32_t)pv.cap_lo_hz : 0);
+            ws_put_u32(&s_payload[18], have ? (uint32_t)pv.cap_hi_hz : 0);
+            int16_t ifo = have ? (int16_t)pvc.if_offset_hz : 0;
+            s_payload[22] = (uint8_t)ifo;
+            s_payload[23] = (uint8_t)(((uint16_t)ifo) >> 8);
+        }
+
+        /* ⭐ RAW BINS ON THE BASE PATH - the rotation is gone (#298 phase 5).
+         *
+         * This used to fftshift AND apply the IF shift before sending, so the
+         * payload arrived centred on the dial. Two things were wrong with that:
+         *
+         *  - The browser then had to know the rotation to locate anything, and
+         *    it did not - it assumed dial-at-centre and derived its own pan from
+         *    the BIN-ROUNDED pan_bins. When the page was moved onto the device's
+         *    real viewport the two orderings disagreed by 256 bins, which folded
+         *    to 768 and showed up on the bench as the spectrum sitting exactly
+         *    36 kHz low.
+         *
+         *  - The `% N` WRAPPED. The rotated payload spans dial +/-24 kHz, but the
+         *    radio hears dial-36k..dial+12k, so the top 12 kHz of every frame was
+         *    somebody else's spectrum and the bottom 12 kHz of real signal was
+         *    never sent anywhere recoverable. That is #297, alive in the wire
+         *    format long after the Tab5 stopped doing it.
+         *
+         * Sending raw bins lets the browser run the SAME mapping the Tab5 does -
+         * viewBinAt() mirrors pan_view_x_to_bin() - so both screens locate a
+         * signal identically and the browser can reach the whole capture window.
+         *
+         * ⚠ This is a WIRE FORMAT CHANGE. It is safe because the page is served
+         * BY the device, so the two can never be out of step; but a browser tab
+         * left open across a firmware update must be reloaded, and byte[1] is
+         * not enough to tell it so.
+         *
+         * ⛔ The ZOOM path still fftshifts. dsp_set_zoom() has already mixed the
+         * target to DC, pan_view deliberately does not describe it, and the
+         * browser keeps its old centre-based path there. Do not "make it
+         * consistent" without giving the browser a viewport for that path too. */
+        const bool raw_bins = (decim == 1);
         for (int i = 0; i < N; i++) {
-            int bin = (i < half) ? (i + half) : (i - half);
-            if (if_shift) bin = ((bin + if_shift) % N + N) % N;
+            int bin;
+            if (raw_bins) {
+                bin = i;                        /* untouched FFT order */
+            } else {
+                bin = (i < half) ? (i + half) : (i - half);
+            }
             float db = spec_data[bin];
             if (db < WS_DB_MIN) db = WS_DB_MIN;
             else if (db > WS_DB_MAX) db = WS_DB_MAX;

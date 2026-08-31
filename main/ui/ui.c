@@ -8,6 +8,7 @@
 #include "render.h"
 #include "render_waterfall.h"
 #include "dsp.h"
+#include "audio.h"    // audio_note_dial_hz - #298
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1697,6 +1698,40 @@ static void sync_nav_affordances(void);   // defined below; called from the 1 Hz
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 
+/* ⭐ THE DIAL AS IT WAS WHEN THE SAMPLES WERE TAKEN (#298).
+ *
+ * A spectrum frame is built from audio that left the radio a long time ago, so
+ * locating it with the dial as it is NOW draws it in the wrong place - the trace
+ * slides the way the VFO went and snaps back once the audio catches up, and
+ * because every waterfall row carries a different error the history smears into
+ * a diagonal. Reported repeatedly from the bench, on the Tab5 and the browser
+ * alike, and visible in his screenshots as sloping signals and a staircase edge
+ * on the hatching.
+ *
+ * ⭐ MEASURED, 2026-08-31, and the measurement overturned two of my guesses.
+ * A commanded 2 kHz step, watching the raw bins arrive over the WS: frames at
+ * 38, 147, 257, 346, 446 and 565 ms still showed ZERO shift, then at 653 ms the
+ * whole spectrum moved by exactly the 43 bins asked for. One frame old, the next
+ * entirely new.
+ *
+ *     end-to-end pipeline   653 ms
+ *     our audio ring         ~0 ms   <- the buffer I measured first, and it is
+ *                                       empty because the FFT drains it
+ *     FFT window             21 ms
+ *
+ * Nearly all of it is UPSTREAM of anything this firmware buffers: 8 URBs x 40
+ * packets of USB isochronous audio is 320 ms on its own (see #51 - that depth is
+ * deliberate and must not be cut), plus the radio's own retune and the transfer.
+ * So "the audio ring is empty" says nothing about how old the audio is.
+ *
+ * The fix is not to make either lag smaller - it is to make them EQUAL. The
+ * viewport still follows the live dial, so the VFO marker stays live and the
+ * view holds where the operator put it; only the BIN MAPPING is resolved against
+ * the dial of the capture instant. */
+/* The time-based version of this lived here for one flash and could not work -
+ * see the note in audio.c. The dial now travels WITH the samples, indexed by
+ * sample number, so nothing here needs to know how deep the pipeline is. */
+
 /* ⭐ THE VIEWPORT IS SNAPPED TO A WHOLE PIXEL, and that is what stops the
  * waterfall shimmering while the dial is turned (bench, 2026-08-31: "the wf
  * miss out and offset the pixels in those lines so it looks disturbed").
@@ -1758,7 +1793,26 @@ bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
     c->sample_rate_hz    = DSP_SAMPLE_RATE_HZ;
     c->n_bins            = n_bins;
     c->screen_w          = DISPLAY_H_RES;
-    c->dial_hz           = (int64_t)s_last_qmx_freq_hz;
+    /* ⛔ THE CAPTURE DIAL, NOT THE LIVE ONE - this is the whole fix.
+     *
+     * pan_view uses dial_hz for two things: locating the capture window, and
+     * turning a screen column into an FFT bin. Both belong to the INSTANT THE
+     * SAMPLES WERE TAKEN, which audio.c now carries with them. The viewport's left
+     * edge comes from ui_view_lo_now() below and still follows the LIVE dial, so
+     * the view holds where the operator put it and the VFO marker stays live.
+     *
+     * That split is the point: the marker answers "where am I tuned NOW", the
+     * bins answer "what did the radio hear THEN", and drawing both from one dial
+     * is what made the spectrum chase the VFO. */
+    {
+        /* The dial THESE samples were captured under, carried with them from
+         * audio.c by sample index. Replaces a time-based lookup that could not
+         * work: the pipeline latency was measured at 565-653 ms on one run and
+         * 104-312 ms on the next, same rig, minutes apart. Falls back to the
+         * live dial only before any audio has been processed. */
+        uint32_t cap = dsp_get_spectrum_dial_hz();
+        c->dial_hz = (int64_t)(cap ? cap : s_last_qmx_freq_hz);
+    }
     c->if_offset_hz      = ui_get_if_offset_hz();
     c->zoom              = s_zoom_factor;
     c->clamp_to_capture  = false;      /* blank, never dragged along */
@@ -4316,9 +4370,12 @@ static void build_waterfall(lv_obj_t *parent)
      * of competing with the trace's own baseline. Hidden until there is a block
      * wide enough to hold it - see the paint. */
     s_nodata_lbl = lv_label_create(s_waterfall_obj);
-    lv_label_set_text(s_nodata_lbl, "QMX cannot hear this");
+    /* Two lines, centred: "display" rather than "hear" because the radio can
+       often hear it perfectly well - what it cannot do is send it to us. */
+    lv_label_set_text(s_nodata_lbl, "QMX cannot\ndisplay this");
+    lv_obj_set_style_text_align(s_nodata_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_nodata_lbl, lv_color_hex(0x7A8894), 0);
-    lv_obj_set_style_text_font(s_nodata_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_nodata_lbl, &lv_font_montserrat_22, 0);
     lv_obj_clear_flag(s_nodata_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
 
@@ -6254,6 +6311,7 @@ void ui_update_frequency(uint32_t freq_hz)
     }
     uint32_t prev_freq_hz = s_last_qmx_freq_hz;
     s_last_qmx_freq_hz = freq_hz;
+    audio_note_dial_hz(freq_hz);   /* so each sample carries its own dial (#298) */
     /* ⭐ STILL DISPLAY (#298). This line used to be `s_pan_offset_bins = 0;`
      * followed by recompute_zoom_pan() - re-deriving the pan from the passband
      * centre on EVERY tune. That single reset is what welded the spectrum to
@@ -9522,18 +9580,119 @@ void ui_toast(const char *msg) { ui_toast_ms(msg, 1500); }
 static lv_timer_t *s_still_notice_timer = NULL;
 static uint32_t    s_still_notice_armed_ms = 0;
 
+/* ⛔ A WINDOW, NOT A TOAST. A toast is the wrong shape for this: the display has
+ * changed under someone who did not ask for it, they have to READ where the
+ * switch is, and a message that removes itself on a timer is either missed or
+ * gone before they can act. It is shown exactly ONCE in the life of the unit,
+ * so it has to survive being looked away from - it waits for a press. */
+static lv_obj_t *s_still_modal = NULL;
+
+/* ⛔ HIDE, NEVER DELETE - and this crashed the device before it was hidden.
+ *
+ * This called lv_obj_delete(s_still_modal) from the OK button's own CLICKED
+ * handler. That button is a DESCENDANT of the object being deleted, so LVGL was
+ * still dispatching the event through memory the callback had just freed:
+ * "Guru Meditation: Core 0 panic'ed (Load access fault)", MTVAL 0x1c, straight
+ * after the press, taking the panel down with it - the operator saw it as a
+ * cyan screen and asked whether he should be worried. He should have.
+ *
+ * Every other modal in this project (tune_modal, and the rest) hides with
+ * LV_OBJ_FLAG_HIDDEN and keeps the objects. That is not a style choice - it is
+ * why none of them can do this. Deleting from inside an event handler needs
+ * lv_obj_delete_async() at minimum; hiding needs nothing and matches the
+ * codebase. */
+static void still_notice_ok_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_still_modal) lv_obj_add_flag(s_still_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void still_notice_show(void)
+{
+    if (s_still_modal) {                       /* built already - just show it */
+        lv_obj_remove_flag(s_still_modal, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_still_modal);
+        return;
+    }
+    s_still_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_still_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_still_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_still_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_still_modal, UI_OPA_MODAL_SCRIM, 0);
+    lv_obj_set_style_border_width(s_still_modal, 0, 0);
+    lv_obj_set_style_radius(s_still_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_still_modal, 0, 0);
+    lv_obj_clear_flag(s_still_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *p = lv_obj_create(s_still_modal);
+    /* 520 tall, not 440: at 440 the OK button sat on top of the last line -
+     * which is the menu path, the one line the window exists to deliver. The
+     * body is laid out from the top and the button from the bottom, so they
+     * meet in the middle and nothing warns you when they collide.
+     *
+     * Sized with real margin rather than the arithmetic minimum: my estimate of
+     * the wrapped body was 10 lines and 18 px of clearance, and an estimate of
+     * how text wraps is exactly the thing that put the button on the last line
+     * in the first place. 580 leaves ~78 px. */
+    lv_obj_set_size(p, 1100, 580);
+    lv_obj_align(p, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(p, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    lv_obj_set_style_radius(p, 10, 0);
+    lv_obj_set_style_pad_all(p, 28, 0);
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t2 = lv_label_create(p);
+    lv_label_set_text(t2, "With this FW spectrum can hold still");
+    lv_obj_set_style_text_color(t2, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_text_font(t2, &lv_font_montserrat_48, 0);
+    lv_obj_align(t2, LV_ALIGN_TOP_MID, 0, 0);
+
+    lv_obj_t *b = lv_label_create(p);
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(b, 1040);
+    lv_label_set_text(b,
+        "The spectrum and waterfall stay where they are while you tune, and the "
+        "amber VFO marker moves across them - so a signal keeps its place on "
+        "screen instead of the whole display sliding under it.\n\n"
+        "The hatched area is frequency the QMX cannot send us, so nothing is "
+        "ever drawn there.\n\n"
+        "To go back to the display you had before, with the VFO fixed in the "
+        "middle:\n      Settings  ->  Spectrum  ->  Still spectrum");
+    lv_obj_set_style_text_color(b, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_24, 0);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 0, 92);   /* clear of the 48 px title */
+
+    lv_obj_t *ok = lv_btn_create(p);
+    lv_obj_set_size(ok, 200, 64);
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(ok, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_color(ok, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    lv_obj_set_style_border_width(ok, 2, 0);
+    lv_obj_set_style_radius(ok, 8, 0);
+    lv_obj_add_event_cb(ok, still_notice_ok_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *okl = lv_label_create(ok);
+    lv_label_set_text(okl, "OK");
+    lv_obj_set_style_text_font(okl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(okl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(okl);
+
+    lv_obj_move_foreground(s_still_modal);
+}
+
 static void still_notice_cb(lv_timer_t *t)
 {
     /* Nothing to say to someone who has already turned it off. */
     if (!ui_get_still_view()) goto done;
     if (ui_mode_get() != UI_MODE_PANADAPTER) return;    /* keep waiting */
     if (s_drawer_open) return;
-    /* Let the screen settle first - a toast during the boot's own churn is
-     * competing with the QMX-wait prompt and the first spectrum frames. */
+    /* Let the screen settle first - competing with the QMX-wait prompt and the
+     * first spectrum frames would put this behind them. */
     if (lv_tick_get() - s_still_notice_armed_ms < 8000) return;
 
-    ui_toast_ms("The spectrum now holds still and the VFO marker moves across it.\n"
-                "Settings -> Still spectrum turns this off.", 9000);
+    still_notice_show();
     ESP_LOGI(TAG, "still display: one-time notice shown");
 
 done:
@@ -9545,6 +9704,7 @@ done:
 void ui_still_notice_arm(bool armed)
 {
     if (!armed || s_still_notice_timer) return;
+    if (s_still_modal) lv_obj_add_flag(s_still_modal, LV_OBJ_FLAG_HIDDEN);
     s_still_notice_armed_ms = lv_tick_get();
     s_still_notice_timer = lv_timer_create(still_notice_cb, 1000, NULL);
 }

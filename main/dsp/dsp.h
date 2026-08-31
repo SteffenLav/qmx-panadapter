@@ -43,6 +43,11 @@ esp_err_t dsp_init(void);
  * Rebuilds the window in place; the change is visible on the next FFT frame.
  * Safe to call after dsp_init() at any time.
  */
+/* #298: the dial the samples behind the CURRENT spectrum were captured under.
+ * Drawing must locate bins with this, not with the live dial - the pipeline is
+ * hundreds of ms deep and its depth was measured varying better than 2:1. */
+uint32_t dsp_get_spectrum_dial_hz(void);
+
 void dsp_set_window(uint8_t idx);
 
 /**
