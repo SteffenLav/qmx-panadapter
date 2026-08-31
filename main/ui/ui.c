@@ -1480,6 +1480,37 @@ int64_t ui_get_pan_offset_hz(void) { return sv_effective() ? s_sv_pan_hz
  * so; that is what #297 built and what he verified on air. Do not re-add a
  * clamp here without asking him first - it is his call, and he has made it. */
 
+/* ⭐ WHERE A RESET LANDS: on the live spectrum, not on the dial.
+ *
+ * A band change, a memory recall or a long band-plan slide throws the old view
+ * away, and it used to land dial-CENTRED. At x1 that is wrong in a way you can
+ * see: the view is exactly as wide as the capture window but offset from it, so
+ * a quarter of the screen is dead. Operator, 2026-08-31 - "when i slide the
+ * band-plan far away it always land with centered freq and blacked out curtain
+ * to the right on x1... i want the screen to show the spectrum that is actually
+ * active - so right side should be 12kHz above vfo and left side 48kHz lower".
+ *
+ * So a reset frames on what the radio can hear: take the dial-centred view and
+ * push it inside the capture window. At x1 that lands exactly on the capture
+ * window (dial at 75% across, nothing dead); at x2 and above the centred view
+ * already fits and the dial stays in the middle, unchanged.
+ *
+ * ⛔ THIS IS THE LANDING ONLY, NOT A CLAMP ON EVERY TUNE. A clamp was built
+ * this afternoon and rejected on the bench - see the tombstone above: holding
+ * the view inside the capture window drags it with the dial and there is no
+ * still display left. Tuning away from here still holds the view and lets the
+ * hatching grow, which is the behaviour he approved. */
+static void sv_frame_on_capture(void)
+{
+    int32_t span   = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
+    int64_t cap_hi = (int64_t)ui_get_if_offset_hz();          /* relative to the dial */
+    int64_t cap_lo = cap_hi - DSP_SAMPLE_RATE_HZ;
+    int64_t lo     = -(int64_t)span / 2;                      /* dial-centred */
+    if (lo + span > cap_hi) lo = cap_hi - span;
+    if (lo < cap_lo)        lo = cap_lo;
+    sv_apply_pan_hz(lo + span / 2);
+}
+
 static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
 {
     int64_t d = (int64_t)now_hz - (int64_t)prev_hz;
@@ -1489,8 +1520,9 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
      * recall, a spot click - leaves nothing on screen worth holding still, so
      * re-centre rather than page across a void. */
     if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
-        s_pan_offset_bins = 0; s_sv_pan_hz = 0; s_sv_push = 0; s_sv_side = 0;
-        recompute_zoom_pan();
+        s_sv_push = 0; s_sv_side = 0;
+        sv_frame_on_capture();      /* land on live spectrum, not on the dial */
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
         return;
     }
 
@@ -1545,13 +1577,19 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     if (hi_over > 0) {
         if (s_sv_side != 1) { s_sv_side = 1; s_sv_push = 0; }
         s_sv_push += hi_over;
-        if (s_sv_push > bw) { sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2);
+        /* Pages are logged because when he asked me to follow one in the log,
+         * nothing logged them at all and I had to simulate the code instead. */
+        if (s_sv_push > bw) { ESP_LOGI(TAG, "page: upper edge, bw=%d span=%d",
+                                       (int)bw, (int)span_hz);
+                              sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
         else                { sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2); }
     } else if (lo_over > 0) {
         if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0; }
         s_sv_push += lo_over;
-        if (s_sv_push > bw) { sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2);
+        if (s_sv_push > bw) { ESP_LOGI(TAG, "page: lower edge, bw=%d span=%d",
+                                       (int)bw, (int)span_hz);
+                              sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
         else                { sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2); }
     } else {
@@ -7341,7 +7379,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
             const int tw = 14;                       /* how far it juts inwards  */
             int mid = SPECTRUM_H / 2;
             for (int i = 0; i < tw; i++) {
-                int half = th - (th * i) / tw;       /* widest at the edge       */
+                /* POINT AT THE EDGE, base inwards - an arrow towards the VFO,
+                 * not a wedge away from it. It was drawn the other way up and
+                 * the operator spotted it at once: the shape is the only thing
+                 * saying WHICH WAY the dial went, so getting it backwards makes
+                 * it worse than no marker at all. */
+                int half = (th * i) / tw;
                 int x = (cx < 0) ? i : (DISPLAY_H_RES - 1 - i);
                 for (int y = mid - half; y <= mid + half; y++)
                     if (y >= 0 && y < SPECTRUM_H) px[y * DISPLAY_H_RES + x] = center_color;
@@ -7567,6 +7610,14 @@ static void wf_track_viewport(void)
     if (!wf_shift_plan(&cfg, dx, &pl)) return;   /* refuse quietly, never clear */
 
     const size_t row_bytes = (size_t)WF_CANVAS_W * 2;
+    /* Timed, because I had only ESTIMATED it - "roughly 20 ms on a core measured
+     * at 0-7% idle" - and it runs under the display lock while the operator is
+     * actively tuning. An estimate standing in for a measurement is what this
+     * project keeps getting caught by. Only logged when pixels really move,
+     * which is once per span of tuning, so this is not a periodic path. */
+    int64_t t0 = esp_timer_get_time();
+    int cleared = 0;
+
     if (pl.move) {
         for (int r = 0; r < WATERFALL_H * 2; r++) {
             uint8_t *row = s_wf_canvas_buf + r * row_bytes;
@@ -7576,7 +7627,15 @@ static void wf_track_viewport(void)
         /* The image moved, so canvas column 0 now means a different frequency. */
         s_wf_anchor_hz += (int64_t)(pl.src_x - pl.dst_x) * span / DISPLAY_H_RES;
     }
-    for (int i = 0; i < pl.n_clear; i++) wf_blank_cols(pl.clear[i].x, pl.clear[i].n);
+    for (int i = 0; i < pl.n_clear; i++) {
+        wf_blank_cols(pl.clear[i].x, pl.clear[i].n);
+        cleared += pl.clear[i].n;
+    }
+    if (pl.move || cleared > 8) {
+        ESP_LOGI(TAG, "wf reframe: dx=%d moved=%d blanked=%d cols in %lld us",
+                 dx, pl.move ? pl.keep_n : 0, cleared,
+                 (long long)(esp_timer_get_time() - t0));
+    }
 
     /* ⛔ RE-ANCHOR WHEN NOTHING SURVIVED, or the waterfall never draws again.
      *
