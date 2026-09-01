@@ -382,6 +382,11 @@ static bool mirror_diag(void)
 static bool s_parked = false;   // (forward-declared above for the temp instrument)
 static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
 static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
+/* Set once the slow diag mirror has given up for this session. The card stays
+ * MOUNTED - only the 30 s background append stops. Never cleared: a path that
+ * has failed three times running has earned being left alone, and the on-demand
+ * consumers are unaffected. */
+static bool    s_slow_stopped = false;
 
 // Cleanly stop mirroring and release the card, leaving the completed backup on
 // it. Used when WiFi is (or is becoming) active: live mirroring provably cannot
@@ -664,7 +669,7 @@ static void sd_archive_task(void *arg)
             // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
             // was sent to explain. Only while a card is actually mounted; the
             // no-card park below must stay silent.
-            if (s_mounted) {
+            if (s_mounted && !s_slow_stopped) {
                 int64_t now_us = esp_timer_get_time();
                 if (now_us - s_slow_last_us >= (int64_t)SLOW_LOG_MS * 1000) {
                     s_slow_last_us = now_us;
@@ -675,9 +680,48 @@ static void sd_archive_task(void *arg)
                         bool ok = mirror_diag_slow();
                         if (!ok) {
                             if (++s_slow_fail >= 3) {
-                                ESP_LOGW(TAG, "slow diag mirror failed %d times - card gone?",
+                                // ⛔ STOP THE MIRROR - DO NOT UNMOUNT.
+                                //
+                                // This used to call unmount("slow mirror
+                                // failures"), and park_snapshot() a few lines
+                                // above already argues why that is wrong, in its
+                                // own words: "a remount is impossible once WiFi
+                                // is up... Unmounting would therefore make all
+                                // three report 'no SD card' with a card
+                                // physically inserted, and nothing could ever
+                                // bring it back." The failure path did it anyway.
+                                //
+                                // What is being given up here is an OPTIONAL
+                                // background write. The full backup - qso.adi,
+                                // qmx-config.txt, the LoTW cert and key, the
+                                // README - was completed seconds after boot, and
+                                // what the card is still FOR at this point is
+                                // Save-offline, the /files browser and the SD log
+                                // download. Destroying all three because a
+                                // best-effort diag append failed three times is
+                                // the wrong trade, and it is exactly what the
+                                // operator sees as the SD dot going out.
+                                //
+                                // Measured 2026-09-01: `SDFAIL[slowopen] err=0x5`
+                                // three times at the 30 s cadence, then unmount,
+                                // on a card that had been serving files happily
+                                // for 1 h 56 m. The card was almost certainly
+                                // still there.
+                                //
+                                // A genuinely REMOVED card still gets noticed -
+                                // by the on-demand paths, which fail loudly to
+                                // the operator who asked for something. That is
+                                // the only case where "card gone" is a safe
+                                // conclusion; a background write that failed is
+                                // not.
+                                s_slow_stopped = true;
+                                ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);
+                                ESP_LOGW(TAG, "slow diag mirror failed %d times - "
+                                              "stopping it for this session. The card "
+                                              "stays MOUNTED and usable for Save-offline, "
+                                              "/files and the log download; only the "
+                                              "30 s diag append is given up.",
                                          s_slow_fail);
-                                unmount("slow mirror failures");
                             }
                         } else if (s_slow_fail) {
                             ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s)",
