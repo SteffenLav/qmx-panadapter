@@ -48,10 +48,12 @@ be dragged to scrub across the band.
 **A spectrum that holds still** — From ×2 zoom up, the spectrum and waterfall stay where
 they are and the VFO marker moves across them, so a signal stays put on screen while you
 tune towards it and the waterfall's history stays lined up under the frequency it belongs
-to. The view re-frames only when you tune far enough to need it: a dead band where nothing
-moves, a small push so a station at the screen edge is still workable, then a page that
-carries part of the old screen across. The trigger is your filter passband reaching the
-screen edge, so it behaves the same in every mode. On by default, and switchable. At ×1
+to. It really does hold still: the picture never slides along with the dial. Tune far
+enough and your filter passband reaches the screen edge, keeps going, and once about half
+of it has slid off the display pages in one step, carrying part of the old screen across.
+The trigger is your filter passband rather than a percentage of the view, so it behaves
+the same in every mode. Tapping a spot moves only the marker when the spot is already on
+screen, and re-frames when it is not. On by default, and switchable. At ×1
 the view stays centred on the dial, because the view is already the whole 48 kHz the radio
 sends. The band above dial+12 kHz is hatched on both screens — the radio genuinely cannot
 hear it, and drawing something there would be inventing signal.
@@ -423,7 +425,21 @@ Taps always tune to exactly where you touched (snapped to the mode-aware grid ab
 
 **Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier. The offset comes from the radio and is re-read every few seconds while you are in CW, so changing it on the radio is followed rather than leaving the display compensating by a stale figure.
 
-**Still spectrum.** By default, from ×2 zoom up, the spectrum and waterfall **hold still and the VFO marker moves across them**, so a signal stays where you last saw it while you tune towards it and the waterfall's history stays lined up under the frequency it belongs to. The view re-frames only when your filter passband reaches the edge of the screen — a dead band, then a small push, then a page. Switch it off under **Settings → Radio & display → Still spectrum**. At ×1 the view is already the whole 48 kHz the radio sends, so it stays centred on the dial.
+**Still spectrum.** By default, from ×2 zoom up, the spectrum and waterfall **hold still and the VFO marker moves across them**, so a signal stays where you last saw it while you tune towards it and the waterfall's history stays lined up under the frequency it belongs to.
+
+The display is never dragged along by the dial. It holds, completely, until it pages in one step:
+
+| Where you are | What the display does |
+|---|---|
+| Your passband is inside the view | nothing moves — only the marker |
+| Your passband reaches the screen edge | still nothing — it begins to slide off |
+| Half a passband width past that | a page, carrying part of the old screen across |
+
+Half a filter width is the whole allowance, and it is a deliberate compromise: long enough that a station right at the edge can still be worked, short enough that you are not tuning blind for long. How far you get between pages depends on your filter — roughly a screen-width less half a filter, so about 4.7 kHz of a 6 kHz view on a 2.7 kHz SSB filter.
+
+**Tapping a spot** moves only the VFO marker when that spot is already comfortably on screen — the picture stays put, which is the point of the feature. If the spot is off screen, or so close to an edge that your passband would not fit, the display re-frames on it instead of leaving it stranded at the edge.
+
+Switch it off under **Settings → Radio & display → Still spectrum**. At ×1 the view is already the whole 48 kHz the radio sends, so it stays centred on the dial.
 
 **The hatched region.** The QMX's local oscillator sits 12 kHz below the dial, so the 48 kHz it delivers covers dial−36 kHz to dial+12 kHz — there is no data above dial+12, and that part of the display is hatched and inert. Before v1.10.5 it was filled by wrapping the bottom of the band into it and labelling it as dial+12 to +24, so tapping a signal there tuned you about 48 kHz away.
 
