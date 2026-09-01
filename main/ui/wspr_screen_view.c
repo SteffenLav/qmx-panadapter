@@ -752,16 +752,20 @@ static void arm_dial_push(const char *why)
  * was prepared - and that drift has already caused two bugs in one evening
  * (COUNTRY_W left at 11 when the format went to 7, then the reverse). A
  * stringified constant cannot disagree with itself. */
+/* The pane holds RIGHT_W / 15 characters (qmx_mono_25 advances exactly 15 px).
+ * Checked against the real widths at first paint - see fmt_header(). Two stale
+ * comments in this file claimed 62 and 59 while the row had grown to 63. */
+#define WSPR_ROW_MAX_CHARS  (RIGHT_W / 15)
 #define W_UTC   5
 /* Which band the spot was HEARD on. Beside UTC because it answers the same kind
  * of question - the circumstances of the hearing, not a property of the station.
  * Blank for spots recorded before the dial was kept (Roy KI0ER, 2026-08-31). */
-#define W_BAND  3
+#define W_BAND  4
 #define W_CALL  7
 #define W_GRID  4
-#define W_CTY  11
+#define W_CTY   7
 #define W_SNR   3
-#define W_DRF   3
+#define W_DRF   2
 #define W_TONE  6
 #define W_PWR   3
 #define W_KM    5
@@ -770,7 +774,7 @@ static void arm_dial_push(const char *why)
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %-" STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
+#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
@@ -778,11 +782,24 @@ static void arm_dial_push(const char *why)
  * dxcc_lookup(), the same source the web panel uses, so the two screens
  * cannot disagree. */
 #define COUNTRY_W W_CTY   /* one number, see the widths above */
+/* ⛔ TRUNCATE THE NAME, do not fall back to the code (operator, 2026-09-01:
+ * "if country names extend over 7 then just cut them off - dont go back to 3
+ * letter that can be difficult to decipher").
+ *
+ * This used to return sp->cty - a 2-3 letter prefix code - whenever the full
+ * name did not fit, so narrowing the column to 7 would have turned most rows
+ * into codes. A clipped "United " still reads as a place; "K" does not.
+ *
+ * ⚠ The opposite rule still holds one column to the left, and for a different
+ * reason: a truncated CALLSIGN is a DIFFERENT STATION, so CALL is never cut.
+ * A country name is a label, not an identity - which is why it may be. */
 static const char *country_field(const wspr_spot_t *sp)
 {
+    static char buf[COUNTRY_W + 1];   /* one row is formatted at a time */
     const char *full = dxcc_lookup(sp->call);
-    if (full && full[0] && strlen(full) <= COUNTRY_W) return full;
-    return sp->cty[0] ? sp->cty : "--";
+    if (!full || !full[0]) full = sp->cty[0] ? sp->cty : "--";
+    snprintf(buf, sizeof(buf), "%.*s", COUNTRY_W, full);
+    return buf;
 }
 
 static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
@@ -825,14 +842,68 @@ static void fmt_header(char *out, size_t n)
     char h[11][16];   /* 11 columns since BND was added - keep in step with raw[]/w[] */
     /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
      * so the unit belongs in the heading and not repeated on every row. */
-    const char *raw[11] = { "UTC", "M", "CALL", "GRID", "COUNTRY", "SNR",
-                            "DRF", "TONE", "PWR", "KM", "BRG" };
+    const char *raw[11] = { "UTC", "BAND", "CALL", "GRID", "COUNTRY", "SNR",
+                            "DR", "TONE", "PWR", "KM", "BRG" };
     const int   w[11]   = { W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
                             W_DRF, W_TONE, W_PWR, W_KM, W_BRG };
+    /* ⭐ BIAS THE HEADING THE WAY ITS DATA IS ALIGNED (operator, 2026-09-01:
+     * "KM header should be moved one character right to centre properly above
+     * the column").
+     *
+     * With an ODD amount of padding a heading cannot sit dead centre, so it
+     * leans one way - and `pad / 2` rounded DOWN, leaning every heading LEFT.
+     * Over a RIGHT-aligned numeric column that is the wrong way: the digits
+     * gather at the right edge while the title drifts left of them. KM is the
+     * clearest case (5 wide, 2 letters, 3 to share) but SNR, DRF, TONE, PWR and
+     * BRG all lean the same wrong way.
+     *
+     * So the lean follows the data: left-aligned text columns keep the left
+     * bias, right-aligned numeric ones take the right. Nothing is nudged by
+     * hand - which matters here, because the hand-spaced header is exactly what
+     * drifted out of step with the rows before ROW_FMT was made to serve both. */
+    /* BAND is right-aligned with the other numbers. */
+    const bool right_aligned[11] = { false, true, false, false, false,
+                                     true, true, true, true, true, true };
+    /* ⛔ A HEADING LONGER THAN ITS COLUMN SILENTLY WIDENS THE ROW. printf does
+     * not truncate, so an over-long title pushes every later column right and
+     * the last one off the pane - invisible in code review, obvious only on
+     * glass. It bit TWICE inside ten minutes on 2026-09-01 ("COUNTRY" over a
+     * 6-wide column, then "DRF" over a 2-wide one), which is twice more than a
+     * check this cheap should have allowed. Once per boot, not per row. */
+    {
+        static bool checked = false;
+        if (!checked) {
+            checked = true;
+            int total = 10;   /* the single spaces between 11 columns */
+            for (int i = 0; i < 11; i++) {
+                total += w[i];
+                if ((int)strlen(raw[i]) > w[i])
+                    ESP_LOGE(TAG, "column %d: heading '%s' is %d chars in a %d "
+                                  "wide column - the row will overflow",
+                             i, raw[i], (int)strlen(raw[i]), w[i]);
+            }
+            if (total > WSPR_ROW_MAX_CHARS)
+                ESP_LOGE(TAG, "spot row is %d chars but the pane holds %d - the "
+                              "right-hand column(s) are off screen",
+                         total, WSPR_ROW_MAX_CHARS);
+        }
+    }
     for (int i = 0; i < 11; i++) {
         const int len  = (int)strlen(raw[i]);
         const int pad  = w[i] > len ? w[i] - len : 0;
-        const int left = pad / 2;
+        /* ⭐ THE HEADING IS ALIGNED THE SAME WAY ITS DATA IS - not centred.
+         *
+         * Centring was wrong and the operator saw it at once: over a LEFT-
+         * aligned column the data starts at the left edge while a centred
+         * title floats in the middle, so the two never line up. CALL was the
+         * worst - " CALL  " sitting over "OZ1LAV ". Leaning the centring one
+         * way or the other (what this did first) only chooses which mismatch
+         * you get.
+         *
+         * Aligning the heading exactly as the column aligns its values makes
+         * the title sit ON the data by construction, whatever the widths
+         * later become. */
+        const int left = right_aligned[i] ? pad : 0;
         int k = 0;
         for (int j = 0; j < left && k < (int)sizeof(h[i]) - 1; j++) h[i][k++] = ' ';
         for (int j = 0; raw[i][j] && k < (int)sizeof(h[i]) - 1; j++) h[i][k++] = raw[i][j];
