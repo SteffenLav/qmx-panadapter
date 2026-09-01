@@ -30,6 +30,12 @@ extern volatile uint32_t g_qmx_usb_chan_err_no_halt;
 // OVERFLOW/STALL. Stock IDF abort()s here; we complete the URB with an error.
 extern volatile uint32_t g_qmx_usb_pipe_event_unexpected;
 
+// Patch #9: _buffer_parse() found the buffer at the parse index with no URB
+// attached - a teardown race, which is what a QMX power-cycle with isochronous
+// transfers in flight looks like. Stock IDF asserts here; we skip the buffer
+// and advance the ring bookkeeping.
+extern volatile uint32_t g_qmx_usb_buffer_parse_no_urb;
+
 // Log the counters, but ONLY when one has changed since the last call. Called
 // from the 10 s heap watchdog, so printing zeros every tick would be pure noise
 // on a healthy device - and worse, would make the interesting case easy to miss.

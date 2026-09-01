@@ -546,6 +546,42 @@ hardware-confirmed, and #189's whole argument — that a silent tolerant patch i
 indistinguishable from a missing one — is what made the confirmation readable at
 a glance instead of needing a reproduction.
 
+### A DMA buffer with no URB abort()s the device (IDF-tree patch #9 — must be re-applied)
+`hcd_dwc.c`'s `_buffer_parse()` opens with
+`assert(buffer_to_parse->urb != NULL)`. Field-observed 2026-09-01: **the operator
+restarted the QMX**, the Tab5 flashed cyan and rebooted. A power cycle with
+isochronous transfers in flight tears the pipe down underneath the parser, so the
+buffer at `fr_idx` can legitimately have been released already — the assert calls
+that impossible, and on this board it happens.
+
+⭐ **The #117 crash record had the entire thing on the next boot with nothing to
+reproduce**, which is exactly what that feature exists for:
+```
+assert failed: _buffer_parse hcd_dwc.c:2573 (buffer_to_parse->urb != NULL)
+task   : USB UAC Host   core 0   after 397.023 s of uptime
+```
+
+⛔ **The reboot is not the expensive part** — an abort is a warm reset with the
+radio attached, i.e. the documented **#74** trigger, so restarting the radio can
+cost the radio. That inversion (a Tab5 abort reported as "the QMX wedged") has
+now happened three ways.
+
+**Fix:** there is nothing to parse into a URB that is not there, so the buffer is
+skipped — but the ring bookkeeping still advances exactly as the tail of
+`_buffer_parse()` advances it (`flags.val = 0`, `fr_idx++`,
+`buffer_num_to_parse--`, `buffer_num_to_fill++`), or `_buffer_flush_all()` spins
+on counts that never drain. On an isochronous stream the cost is one lost audio
+packet. `tools/patches/apply_hcd_buffer_parse_no_urb_tolerant.ps1`. Counts rather
+than logs (#189, interrupt path), reported as `usb_patch.buffer_parse_no_urb`.
+
+⚠ **`hcd_dwc.c` now carries THREE of our patches (#4, #8 and #9)** with separate
+markers; applying one does not apply the others, and `check_patches.py` has a row
+for each. **Eleven standing patches now** — the count in older notes is stale.
+
+⚠ **This is the FIFTH of the family** (#4, #5, #7, #8, #9). The generalisation
+stands and keeps paying: *IDF's USB stack asserts on hardware states it treats as
+impossible, and on this board they happen.*
+
 ### USB mouse — WORKS mouse-alone (hw-verified 2026-07-20); simultaneous-with-QMX blocked by the hub/TT wall
 Frank K4FMH asked for mouse support (USB or BT). **The full USB-mouse stack works and is hardware-verified**: a mouse plugged **directly** into USB-A (no hub, QMX not attached) enumerates, and `main/usb_hid_mouse.c` (HID host, boot-protocol report → cursor accumulation) + the LVGL pointer indev in `ui.c` (`ui_mouse_init()`, `mouse_read_cb`, white-circle cursor on `lv_layer_top()`) give a moving cursor that drives every menu/button/drawer via normal LVGL clicks. The 90° rotation transform (`point.x = ly; point.y = (W-1) - lx`, the inverse of LVGL's own `indev_pointer_proc` ROTATION_90 map) was correct first try — cursor tracks and clicks land accurately. Verified with the mouse as the SOLE USB device.
 
