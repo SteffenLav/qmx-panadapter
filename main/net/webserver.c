@@ -829,6 +829,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     if (usbp) {
         cJSON_AddNumberToObject(usbp, "chan_err_no_halt",  (double)g_qmx_usb_chan_err_no_halt);
         cJSON_AddNumberToObject(usbp, "unexpected_pipe_event", (double)g_qmx_usb_pipe_event_unexpected);
+        /* Patch #9 (#314). Reported here as well as in the 10 s watchdog line
+         * because a silent tolerant patch is indistinguishable from a missing
+         * one - the whole argument of #189. */
+        cJSON_AddNumberToObject(usbp, "buffer_parse_no_urb", (double)g_qmx_usb_buffer_parse_no_urb);
     }
 
     const esp_app_desc_t *app = esp_app_get_description();
