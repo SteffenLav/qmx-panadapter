@@ -141,7 +141,28 @@ int wspr_tx_seconds_until_next_slot(void)
     int sec_in_minute = (int)(now % 60);
     int minute_is_even = ((now / 60) % 2) == 0;
     int secs;
-    if (minute_is_even && sec_in_minute == 0) {
+    if (minute_is_even && sec_in_minute <= WSPR_TX_LATE_GRACE_S) {
+        /* ⭐ A GRACE WINDOW, NOT AN EXACT SECOND (Dirk, 2026-09-01).
+         *
+         * This used to require `sec_in_minute == 0` - a ONE-SECOND window -
+         * and wspr_rx.c's loop cannot reliably hit it: between the cycle
+         * boundary and the arm it does settings_load_all(), the PA guard
+         * (which can issue MM writes and MU; over CAT) and two status polls.
+         * Miss by a single second and the burst was scheduled for the NEXT
+         * even minute, 119 s away, with the receiver stood down for the whole
+         * wait - so the waterfall died for TWO cycles instead of one.
+         *
+         * MEASURED on the dev bench, not reasoned: of seven real arms,
+         * 2 x (0 s), 1 x (40 s) and FOUR x (119 s). More than half of all
+         * transmissions cost an entire extra receive cycle.
+         *
+         * The grace is bounded at 2 s by the operator, and it is spent where
+         * it is affordable: run_burst() delays only the REMAINDER of
+         * WSPR_TX_START_OFFSET_MS, so a late arm still fires as close to +1 s
+         * as it can and never later than the grace itself. The five reference
+         * stations in WSJT's own capture start at 1.109-2.133 s, so a burst
+         * inside this window is still within the population every receiver is
+         * already searching around. */
         secs = 0;
     } else if (minute_is_even) {
         // this minute is even but already started - next even minute is 2 away
@@ -389,7 +410,27 @@ static void wspr_tx_worker_task(void *arg)
     // with each station's own clock error above it. Firing at :00 would put us
     // ~1.6 s ahead of the population every receiver is searching around, which
     // spends decode margin for nothing.
-    vTaskDelay(pdMS_TO_TICKS(WSPR_TX_START_OFFSET_MS));
+    /* Delay only the REMAINDER of the offset. The old fixed delay was correct
+     * only when the wait above ended exactly on the even minute; with the grace
+     * window it can end up to WSPR_TX_LATE_GRACE_S late, and adding a further
+     * full second on top would put the burst at +3 s - past the whole reference
+     * population instead of inside it. Already past +1 s means fire now. */
+    {
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        int64_t into_min_ms = (int64_t)(tv_now.tv_sec % 60) * 1000
+                            + tv_now.tv_usec / 1000;
+        int64_t remain = (int64_t)WSPR_TX_START_OFFSET_MS - into_min_ms;
+        if (remain > 0) {
+            vTaskDelay(pdMS_TO_TICKS((uint32_t)remain));
+        } else if (into_min_ms > WSPR_TX_START_OFFSET_MS) {
+            ESP_LOGW(TAG, "burst starting %lld ms into the minute (%lld ms later "
+                          "than the +%d ms convention) - inside the %d s grace",
+                     (long long)into_min_ms,
+                     (long long)(into_min_ms - WSPR_TX_START_OFFSET_MS),
+                     WSPR_TX_START_OFFSET_MS, WSPR_TX_LATE_GRACE_S);
+        }
+    }
 
     lock();
     s_state = WSPR_TX_ACTIVE;

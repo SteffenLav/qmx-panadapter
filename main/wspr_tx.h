@@ -65,6 +65,10 @@ typedef struct {
 // minute) begin at 1.109 / 1.515 / 1.621 / 1.813 / 2.133 s - a floor at ~1.1 s
 // with each station's own clock error stacked on top. See wspr_tx_worker_task().
 #define WSPR_TX_START_OFFSET_MS   1000
+// How late an arm may still claim the CURRENT even minute rather than waiting
+// two more (Dirk, 2026-09-01; bound set by the operator). See the grace-window
+// note in wspr_tx_seconds_until_next_slot().
+#define WSPR_TX_LATE_GRACE_S      2
 
 // One-time module init (mutex creation). Call once at boot. Idempotent.
 void wspr_tx_init(void);

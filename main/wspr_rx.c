@@ -32,6 +32,9 @@
 #include "wspr_subtract.h"   /* two-pass: take a decoded signal back out */
 #include "wspr_sim.h"
 #include "wspr_tx.h"
+/* A burst closer than this owns the cycle, so do not open a 120 s capture in
+ * front of it. Anything further away is a whole cycle we can still listen in. */
+#define WSPR_RX_TX_IMMINENT_S  10
 #include "cat/cat.h"   /* #290 PA-voltage guard */
 #include "esp_random.h"
 #include "wspr_spots.h"
@@ -1218,8 +1221,31 @@ static void wspr_rx_task(void *arg)
             }
         }
 
-        /* Re-read AFTER the arm - see the ordering note above. */
-        if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
+        /* Re-read AFTER the arm - see the ordering note above.
+         *
+         * ⭐ ONLY STAND DOWN IF THE BURST IS IN *THIS* CYCLE (Dirk, 2026-09-01:
+         * "the waterfall is already frozen the cycle before the transmit... so
+         * the waterfall is off for 2 cycles. Not just for the transmit one,
+         * which is unavoidable").
+         *
+         * ARMED and ACTIVE were treated alike here, so an arm that landed on a
+         * slot up to 119 s away stood the receiver down for the ENTIRE waiting
+         * cycle as well as the transmitting one. Two dead cycles for one burst,
+         * and the second of them was pure waste: nothing was on the air, the
+         * radio was free, and the band was simply not being listened to.
+         *
+         * The grace window in wspr_tx_seconds_until_next_slot() should make a
+         * far-off arm rare now, but this is the guard that makes it harmless
+         * whenever it still happens - an odd-minute arm, or one more than the
+         * grace late. Receive normally and let the NEXT pass through this loop
+         * stand down, by which time the burst really is imminent. */
+        int secs_to_slot = wspr_tx_seconds_until_next_slot();
+        if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE &&
+            secs_to_slot > WSPR_RX_TX_IMMINENT_S) {
+            ESP_LOGI(TAG, "cycle %lld: TX armed but %d s away - receiving this "
+                          "cycle instead of standing down",
+                     (long long)cycle_utc, secs_to_slot);
+        } else if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
             set_status("transmitting");
             ESP_LOGW(TAG, "cycle %lld: TX cycle - receiver stood down",
                      (long long)cycle_utc);
