@@ -125,16 +125,26 @@ Tap **WiFi setup** in the settings drawer to open the WiFi window.
 Once connected, the settings show your **IP address** — use this to access the web UI from a browser.
 
 **Static IP address / Subnet mask / Gateway / DNS server** — set in the web UI's Settings
-window under **WiFi** (there is no Tab5 equivalent — four addresses typed on glass is no
-kindness). **Leave the address empty for DHCP**, which is what every unit does by default,
-so nothing changes unless you fill it in. A blank mask assumes 255.255.255.0 and a blank
-DNS falls back to the gateway. It takes effect the next time the Tab5 connects.
+window under **WiFi** (there is no Tab5 equivalent for typing them — four addresses on
+glass is no kindness). **Leave the address empty for DHCP**, which is what every unit does
+by default, so nothing changes unless you fill it in. It takes effect the next time the
+Tab5 connects.
 
-!!! warning "Get the subnet right"
-    An address that is malformed is rejected and the unit stays on DHCP. An address that
-    is *valid but on the wrong subnet* is not: the Tab5 comes up happily and is
-    unreachable, and the web page is the only place to change the setting back. The Tab5's
-    own bottom bar always shows the address it actually has, so you can see what happened.
+**Leave the mask, gateway and DNS blank unless you have a reason not to.** They are filled
+in from the address the Tab5 currently holds, so on an ordinary network you only have to
+type the address itself — and on anything that is not a plain 255.255.255.0 network, that
+is also the part most easily got wrong by hand.
+
+**An address on the wrong network is refused.** The Tab5 compares what you type against the
+network it is on and will not accept an address that would put it somewhere else, telling
+you both. If you are deliberately setting a unit up for a different network, confirm when
+it asks and it will be stored as typed.
+
+**Use DHCP** — a button in the Tab5's settings drawer, under **WiFi setup**. It appears
+only when a static address is configured. One tap arms it, a second clears the address and
+restarts on DHCP. This is the way back if a static address ever leaves the web page
+unreachable, and it needs nothing but the Tab5 itself. The bottom bar always shows the
+address the unit actually has.
 
 ## Time Sync
 

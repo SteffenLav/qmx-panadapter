@@ -106,13 +106,23 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.5 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.6 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
+**New in v1.10.6 — a release of things users found on the air.** WSPR no longer loses two
+receive cycles to every transmission, its TX button stops a burst at once, and leaving the
+mode gives the radio back the PA voltage it borrowed — which was quietly being left behind,
+so CW and FT8 ran at a quarter power with nothing on the Tab5 to say so. A picked spot is
+brought into view instead of landing at the screen edge, and the still display now holds
+completely still and then jumps, rather than being dragged along in between. A static IP
+that would lock you out of the web page is refused before it can, and a **Use DHCP** button
+on the Tab5 undoes one that already has. A microSD card inserted while the Tab5 is running
+is finally noticed.
+
+**In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
 marker moves over them, so a signal stays put on screen while you tune towards it and the
 waterfall's history stays lined up under the frequency it belongs to. The view re-frames
@@ -145,7 +155,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.5.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.6.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

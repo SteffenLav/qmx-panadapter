@@ -67,13 +67,23 @@ Set it to what your transmitter really produces. A QMX running 200 mW that decla
 
 **The Tab5 helps you get it right.** During each transmission it asks the radio what it is actually putting out, and shows the answer under the dropdown — *"radio measured 1.6 W last burst = 32 dBm"*. Switching **Protect finals** on or off also moves the declared figure to the value that setting normally produces, as a starting point. Both are suggestions: the number is a statement about your station and stays yours to choose.
 
+**Switching transmit off stops a burst that is already on the air.** The **TX** button keys the radio down at once rather than waiting for the two-minute cycle to end.
+
 #### Protect finals
 
 **This matters more on WSPR than anywhere else, and it is on by default.**
 
 WSPR transmits for about **110 seconds out of every 120**. Nothing else this radio does comes close to that — an FT8 transmission lasts about 12 seconds. Running a QMX flat out on that cycle puts real, sustained heat through the PA transistors, and QRP Labs warn about exactly this in the QMX manual: *"High supply voltages can stress the PA transistors, particularly when you are using Digi Modes with high duty cycle."*
 
-With **Protect finals** on, the Tab5 turns the radio down for as long as WSPR transmit is enabled — it sets the radio's own **Max. PA voltage** to about 6 V, and puts your setting back afterwards. This is the same precaution the QMX applies to its own built-in WSPR beacon.
+With **Protect finals** on, the Tab5 turns the radio down for as long as WSPR transmit is enabled — it sets the radio's own **Max. PA voltage** to about 6 V, and puts your setting back when you leave WSPR. This is the same precaution the QMX applies to its own built-in WSPR beacon.
+
+!!! note "Your setting comes back when you leave the WSPR page"
+    Not when you switch transmit off — the reduced voltage stays while you are still on the
+    page, because the next burst may be two minutes away. Leaving WSPR stops any
+    transmission in progress, waits for the radio to stop keying, and only then restores
+    your voltage; putting it back while the radio was still transmitting would be the very
+    stress this setting exists to avoid. **Max. PA voltage** is a global radio setting, so
+    you can always check it on the QMX's own **Protection** menu.
 
 Measured on a QMX at 12 V:
 

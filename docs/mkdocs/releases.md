@@ -4,7 +4,23 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.5** — 2026-09-01
+**v1.10.6** — 2026-09-01
+
+**A release of things users found — almost every item here came from a report on the air.**
+
+- **WSPR: the waterfall no longer goes blank for two cycles around a transmission** *(Dirk DK7CVD)*. Only the transmitting cycle is dark now. The transmitter was being armed up to two minutes before its slot and the receiver stood down for that whole wait as well, so at a 50% duty cycle the band went unheard about half the time it looked like it was listening.
+- **WSPR: the TX button stops a transmission at once** *(Roy KI0ER)*, instead of doing nothing visible until the end of the cycle.
+- **WSPR: leaving the mode gives the radio its power back** *(Roy KI0ER)*. With "Protect finals" on, the reduced PA voltage was being left behind, so CW and FT8 ran at a quarter power with nothing on the Tab5 to say so — visible only on the radio's own Protection menu.
+- **WSPR: the spot list fits the screen.** The right-hand column was running off the edge. Headings now sit over their own columns, **M** is headed **BAND**, and long country names are shortened rather than replaced by a two-letter code.
+- **Picking a spot brings it into view** *(Roy KI0ER)*. With the still display on, a chosen spot could land right at the screen edge — reliably so, given the view only re-frames when something reaches an edge.
+- **The still display holds completely still, then jumps** *(Dirk DK7CVD)*. It used to hold, then be dragged along by the tuning, then jump, so the empty edge kept changing size. At most half your filter width now slides off before it re-frames.
+- **A static IP that would lock you out is refused**, and blank mask/gateway/DNS are filled from the current DHCP lease rather than assumed. There is also a **"Use DHCP" button on the Tab5** *(Michael KZ4LY)*, shown only when a static address is set — until now the only way back was the web page the wrong address had just made unreachable.
+- **A QMX restart could reboot the Tab5.** Worth knowing if you have seen this: the reboot also disturbs the radio, so what looks like the QMX wedging can be the Tab5 restarting underneath it.
+- **The microSD card is handled better.** Its first write no longer collides with WiFi starting up, a failed background write no longer unmounts a working card, and the card is retried for an hour after start-up — so **a card inserted while the Tab5 is running is now picked up** within about five minutes instead of being ignored until the next restart.
+
+## Previous Releases
+
+### v1.10.5 — 2026-09-01
 
 **The spectrum holds still while you tune across it, and a quarter of the ×1 view stops lying about where signals are.**
 
@@ -20,8 +36,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A LoTW upload now shows LoTW's own reply** *(Randy N4OPI)*. The count reported before was our count of what was *sent* — LoTW accepts a file and processes the contacts afterwards — so an upload could report success while nothing appeared in the log. The server's own message is now shown, which is what says whether anything was actually rejected.
 - **The LoTW certificate can be replaced from a visible button.** Re-importing it used to need a Ctrl-click nobody would guess at, and a certificate expires about every three years.
 - **A static IP address** can be set under **Settings → WiFi** — address, mask, gateway and DNS. Leave the address empty for DHCP, which is what every unit does today, so nothing changes unless you fill it in. ⚠ Get the subnet right: an address that is valid but on the wrong subnet leaves the Tab5 unreachable, and the web page is the only place to change the setting back.
-
-## Previous Releases
 
 ### v1.10.4 — 2026-08-30
 

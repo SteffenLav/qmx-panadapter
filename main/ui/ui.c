@@ -1549,9 +1549,8 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     if (d == 0) return;
 
     /* A jump larger than the whole captured window - band change, memory
-     * recall - leaves nothing on screen worth holding still. So does any
-     * DELIBERATE jump, however small: see the note above. */
-    if (jumped || d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
+     * recall - leaves nothing on screen worth holding still. */
+    if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
         s_sv_push = 0; s_sv_side = 0;
         sv_frame_on_capture();      /* land on live spectrum, not on the dial */
         dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
@@ -1561,6 +1560,40 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     /* Hold the same absolute frequencies: baseband moved down by d, so the pan
      * moves down by d too. */
     sv_apply_pan_hz(s_sv_pan_hz - d);   /* in Hz - see sv_apply_pan_hz */
+
+    /* ⛔ A DELIBERATE JUMP RE-FRAMES ONLY IF THE TARGET WILL NOT FIT AS IT IS.
+     *
+     * The first version of this re-framed on EVERY pick, and the operator saw
+     * the problem immediately: with spots scattered across the screen, tapping
+     * any of them threw the whole picture away to move the marker a few hundred
+     * hertz - "that is counterintuitive... so if the tune to spot is within the
+     * same screen then the vfo should jump not the spectrum/wf".
+     *
+     * He is right, and it is the still display's own principle: the picture
+     * moves only when it must. Roy's complaint was never "a spot in the middle
+     * of the screen fails to centre" - it was that a picked spot LANDS ON THE
+     * EDGE, which is the case where the passband does not fit.
+     *
+     * So the test is exactly that, and nothing more: would the new passband sit
+     * entirely inside the view we are already holding? If yes, hold - only the
+     * VFO marker moves, which is what the whole feature is for. If no - the
+     * spot is off screen, or close enough to an edge that you could not work it
+     * where it lies - re-frame on it. */
+    if (jumped) {
+        int32_t j_lo, j_hi;
+        compute_passband_edges_hz(&j_lo, &j_hi);
+        { int32_t rit = cat_get_rit_hz(); j_lo += rit; j_hi += rit; }
+        int32_t j_span  = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
+        int64_t j_dial  = (int64_t)now_hz;
+        int64_t j_vlo   = j_dial + s_sv_pan_hz - j_span / 2;
+        bool fits = ((j_dial + j_lo) >= j_vlo) && ((j_dial + j_hi) <= (j_vlo + j_span));
+        s_sv_push = 0; s_sv_side = 0;
+        if (!fits) {
+            sv_frame_on_capture();
+            dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+        }
+        return;
+    }
 
     /* ⭐ THE TRIGGER IS THE PASSBAND, NOT THE CURSOR (operator, 2026-08-31).
      *

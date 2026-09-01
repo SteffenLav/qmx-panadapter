@@ -3042,3 +3042,34 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 - **A LoTW upload now shows LoTW's own reply** *(Randy N4OPI)*. The count reported before was our count of what was *sent* — LoTW accepts a file and processes the contacts afterwards — so an upload could report success while nothing appeared in the log. The server's own message is now shown, which is what says whether anything was actually rejected.
 - **The LoTW certificate can be replaced from a visible button.** Re-importing it used to need a Ctrl-click nobody would guess at, and a certificate expires about every three years.
 - **A static IP address** can be set under **Settings → WiFi** — address, mask, gateway and DNS. Leave the address empty for DHCP, which is what every unit does today, so nothing changes unless you fill it in. ⚠ Get the subnet right: an address that is valid but on the wrong subnet leaves the Tab5 unreachable, and the web page is the only place to change the setting back.
+
+### Shipped in v1.10.6 — 2026-09-01
+
+**A release of things users found. Almost every item below came from a report on the air.**
+
+**WSPR**
+
+- **The waterfall no longer goes blank for two cycles around a transmission** *(Dirk DK7CVD)*. Only the transmitting cycle itself is dark now, which is the one that cannot be helped. The transmitter was being armed as much as two minutes before its slot, and the receiver stood down for that entire wait as well as for the transmission — so on a 50% duty cycle the band was going unheard about half the time it appeared to be listening. It now keeps receiving until the burst is actually due.
+- **The TX button stops a transmission immediately** *(Roy KI0ER)*. Tapping it mid-burst used to do nothing visible until the end of the two-minute cycle. It now keys down at once.
+- **Leaving WSPR gives the radio its power back** *(Roy KI0ER)*. With "Protect finals" on, WSPR reduces the QMX's maximum PA voltage to 6 V for the duration. That reduction was being left behind when you switched to CW or FT8, so those modes ran at a quarter power with nothing on the Tab5 to say so — it was visible only on the radio's own Protection menu. Leaving WSPR now stops any transmission first, waits for the radio to unkey, and only then restores the voltage.
+- **The spot list fits the screen.** The right-hand column was running off the edge, so bearing was invisible and distance partly so. Every heading now sits directly over its own column, **M** is headed **BAND**, and a country name too long for its column is shortened rather than replaced by a two-letter code.
+
+**Panadapter**
+
+- **Picking a spot brings it into view** *(Roy KI0ER)*. With the still display on, a spot could land right at the screen edge — reliably, because the view only re-frames when something reaches an edge. Choosing a spot or a callsign now re-frames on it.
+- **The still display holds completely still, then jumps** *(Dirk DK7CVD)*. It used to hold, then be dragged along by the tuning for a while, then jump — so the empty area at the edge kept changing size. The dragging is gone. At most half your filter width slides off the edge before the display re-frames.
+
+**Network**
+
+- **A static IP address that would lock you out is refused.** The Tab5 compares what you type against the network it is on and rejects an address on a different subnet, naming both. A blank mask, gateway or DNS is filled in from the current DHCP lease instead of assuming the usual home-network defaults — which is where this most often went subtly wrong. Setting one up in advance for a different network still works; it asks you to confirm.
+- **A "Use DHCP" button on the Tab5** *(Michael KZ4LY)*. It appears in the settings drawer only when a static address is configured, and clears it. Until now the only way back was the web page that a wrong address had just made unreachable.
+
+**Reliability**
+
+- **A QMX restart could reboot the Tab5.** A power cycle while audio was streaming could catch the USB driver mid-teardown, and it stopped the device rather than carrying on. Worth knowing if you have seen this: the reboot also disturbs the radio, so what looks like the QMX wedging can be the Tab5 restarting underneath it.
+- **The microSD card is handled better in three ways.** Its first write no longer collides with WiFi starting up; a failed background write no longer unmounts a card that is working; and the card is retried for an hour after start-up instead of being given up on. That last one also means **a card inserted while the Tab5 is running is now picked up**, within about five minutes, instead of being ignored until the next restart.
+
+**Smaller things**
+
+- A warning in the diagnostic log about the FT8 decoder "respawning" was describing entirely normal behaviour and made ordinary mode switches look like faults. It no longer does.
+- The diagnostic log now says so if the device ever runs out of network connections — a state in which the web page stops answering while everything else keeps working.

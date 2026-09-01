@@ -346,10 +346,14 @@ The view re-frames only when you tune far enough to need it:
 | Where you are | What the display does |
 |---|---|
 | Inside the view | nothing moves at all |
-| Your passband reaches the screen edge | a small push, so a station sitting right at the edge can still be worked |
-| One passband width past that | a page, carrying part of the old screen across so you can see where you came from |
+| Your passband reaches the screen edge | still nothing — it keeps holding, and your passband begins to slide off the edge |
+| Half a passband width past that | a page, carrying part of the old screen across so you can see where you came from |
 
-The trigger is **your filter passband reaching the edge of the screen**, not a fixed percentage of the view. That distinction matters because the passband is not centred on the dial — in USB it runs roughly +200 to +2900 Hz — so a percentage rule re-frames too early at one edge and too late at the other, and mirrors itself in LSB. Because both the trigger and the push scale with the filter, a page happens about once per screen-width of tuning whatever filter you are using. RIT is counted in, since it changes what you are actually listening to.
+The trigger is **your filter passband reaching the edge of the screen**, not a fixed percentage of the view. That distinction matters because the passband is not centred on the dial — in USB it runs roughly +200 to +2900 Hz — so a percentage rule re-frames too early at one edge and too late at the other, and mirrors itself in LSB. RIT is counted in, since it changes what you are actually listening to.
+
+The display holds completely still right up to the page — it is never dragged along by the tuning. The cost is that your passband slides off the screen edge for a moment before the jump, which is why the allowance is **half** a filter width and not a whole one: long enough that a station right at the edge can still be worked, short enough that you are not tuning blind. How far you can tune between pages therefore depends on your filter — roughly a screen-width less half a filter, so about 4.7 kHz of a 6 kHz view on a 2.7 kHz SSB filter.
+
+**Picking a spot brings it into view only if it is not already usable where it is.** Tap a spot that is comfortably on screen and the display does not move at all — only the VFO marker jumps to it, which is the whole point of holding still. Tap one that is off screen, or so close to an edge that your passband would not fit, and the display re-frames on it rather than leaving it stuck at the edge.
 
 Changing mode, filter width or zoom re-centres the view on the passband, as before.
 
