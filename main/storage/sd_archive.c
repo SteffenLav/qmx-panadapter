@@ -56,6 +56,11 @@ static const char *TAG = "sd_arch";
 // months is roughly a tenth of the old continuous mode, and there is no held-open
 // handle for a card pull or a crash to damage.
 #define SLOW_LOG_MS       30000
+// Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
+// capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
+// 5 minutes apart and gives up after an hour rather than probing for ever.
+#define MOUNT_RETRY_MS    300000            // 5 min between post-boot attempts
+#define MOUNT_RETRY_MAX   12                // ~1 hour, then stop for good
 #define DIAG_CHUNK        4096                // diag flush copy buffer
 
 static volatile bool s_mounted      = false;
@@ -387,6 +392,9 @@ static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
  * has failed three times running has earned being left alone, and the on-demand
  * consumers are unaffected. */
 static bool    s_slow_stopped = false;
+/* Post-boot mount retries (see the watchdog in the task loop). */
+static int     s_mount_retries = 0;
+static int64_t s_mount_retry_last_us = 0;
 
 // Cleanly stop mirroring and release the card, leaving the completed backup on
 // it. Used when WiFi is (or is becoming) active: live mirroring provably cannot
@@ -664,6 +672,70 @@ static void sd_archive_task(void *arg)
                 ESP_LOGW(TAG, "WiFi now off - card still mounted and usable, but "
                               "background mirroring stays off until reboot");
             }
+            // ⭐ MOUNT RETRY WATCHDOG (operator's suggestion, 2026-09-01:
+            // "maybe you should establish a watchdog? The card is playing with
+            // you"). He is right, and the thing it replaces is a CLAIM that was
+            // never tested.
+            //
+            // The no-card park below says "further mount attempts cannot
+            // succeed", on the strength of a 2026-07-26 measurement that the
+            // MALLOC_CAP_DMA pool falls to ~400 B once WiFi is up. After the
+            // #284 reclamation that is no longer what the device reads: this
+            // very session sat at ~16 KB DMA free, and the boot attempts that
+            // failed did so with 44-50 KB free. So "cannot" is an assumption
+            // carried forward from different numbers.
+            //
+            // The mount is genuinely intermittent - measured across six boots
+            // today with TWO cards and both a warm reset and a cold power
+            // cycle, it has failed all five boot attempts and it has succeeded
+            // on the first, with no variable yet found that predicts which.
+            // Four different error codes in one boot (0x108 INVALID_RESPONSE,
+            // 0x109 INVALID_CRC, 0x103 INVALID_STATE, 0x107 TIMEOUT). Against
+            // an intermittent fault, retrying IS the fix.
+            //
+            // ⛔ BOUNDED, and deliberately slow. CLAUDE.md records the FT8
+            // respawn watchdog firing ~390 times and degrading the device it
+            // was rescuing - "a watchdog that degrades the device it is trying
+            // to rescue is not a watchdog". A mount attempt touches the SD/WiFi
+            // contention this file exists to avoid, so it gets a wide interval
+            // and a hard cap, and then it really does stop.
+            //
+            // It also fixes something the operator hit head-on: a card inserted
+            // while the device is running was IGNORED FOR THE WHOLE SESSION,
+            // silently, with the dot never lighting. Now it is picked up within
+            // one retry interval.
+            if (!s_mounted && s_mount_retries < MOUNT_RETRY_MAX) {
+                int64_t now_us = esp_timer_get_time();
+                if (now_us - s_mount_retry_last_us >= (int64_t)MOUNT_RETRY_MS * 1000) {
+                    s_mount_retry_last_us = now_us;
+                    s_mount_retries++;
+                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                        bool ok = try_mount();
+                        xSemaphoreGive(s_sd_mutex);
+                        if (ok) {
+                            // Say it plainly: this is the answer to whether a
+                            // post-boot mount is possible at all, and it was
+                            // asserted to be impossible for a year.
+                            ESP_LOGW(TAG, "MOUNT RETRY %d/%d SUCCEEDED - a card "
+                                          "mounted after the boot window, which "
+                                          "the old code assumed could never happen",
+                                     s_mount_retries, MOUNT_RETRY_MAX);
+                            s_parked = false;   // let the normal burst path run
+                            s_mount_retry_last_us = 0;
+                            s_mount_retries = 0;
+                            continue;
+                        }
+                        ESP_LOGI(TAG, "mount retry %d/%d failed - next in %d s",
+                                 s_mount_retries, MOUNT_RETRY_MAX,
+                                 MOUNT_RETRY_MS / 1000);
+                        if (s_mount_retries >= MOUNT_RETRY_MAX)
+                            ESP_LOGW(TAG, "mount retries exhausted (%d) - no "
+                                          "further attempts this session",
+                                     MOUNT_RETRY_MAX);
+                    }
+                }
+            }
+
             // ⭐ #153: keep the DIAG LOG going, slowly, so the card can still
             // contain a crash. Parking used to stop it dead, which made every SD
             // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
