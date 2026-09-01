@@ -209,23 +209,49 @@ static bool static_ip_wanted(static_ip_cfg_t *out)
     return out->ip[0] != '\0';
 }
 
+/* ⛔ esp_netif_str_to_ip4() RETURNS esp_err_t, AND ESP_OK IS 0.
+ *
+ * Every check in this file used it as if it returned a truthy "valid", which
+ * inverts all three: a VALID address was rejected, a valid netmask was thrown
+ * away for an assumed /24, and DNS was set only when the string FAILED to
+ * parse. Static IP therefore never worked for anybody, and because the caller
+ * stops the DHCP client BEFORE calling this, the unit was left with no address
+ * at all - WiFi simply never came up. Field-observed on the bench 2026-09-01
+ * ("static IP '192.168.1.209' is not a valid address - staying on DHCP",
+ * followed by no `wifi: online` ever); the feature shipped in v1.10.6 and this
+ * is the first machine to have tried it.
+ *
+ * Wrap it once, named for what it answers, so the convention cannot be got
+ * wrong again by reading a call site. */
+static inline bool ip4_ok(const char *str, esp_ip4_addr_t *out)
+{
+    return str && str[0] && esp_netif_str_to_ip4(str, out) == ESP_OK;
+}
+
 static void static_ip_apply_on_connect(void)
 {
     static_ip_cfg_t st;
     if (!static_ip_wanted(&st)) return;
 
     esp_netif_ip_info_t ip = { 0 };
-    if (!esp_netif_str_to_ip4(st.ip, &ip.ip)) {
-        ESP_LOGW(TAG, "static IP '%s' is not a valid address - staying on DHCP",
+    if (!ip4_ok(st.ip, &ip.ip)) {
+        /* Say it, and MEAN it: the caller already stopped the DHCP client, so
+         * without restarting it here "staying on DHCP" was a false statement
+         * and the radio ended up on no network at all. */
+        ESP_LOGW(TAG, "static IP '%s' is not a valid address - returning to DHCP",
                  st.ip);
+        esp_err_t e = esp_netif_dhcpc_start(s_sta_netif);
+        if (e != ESP_OK && e != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
+            ESP_LOGE(TAG, "and the DHCP client would not restart: %s - this unit "
+                          "has no address", esp_err_to_name(e));
         return;
     }
     /* A blank mask is the common case on a home LAN and /24 is the answer
      * there; guessing it is better than refusing the whole configuration over
      * a field most operators would leave empty. */
-    if (!st.mask[0] || !esp_netif_str_to_ip4(st.mask, &ip.netmask))
+    if (!ip4_ok(st.mask, &ip.netmask))
         esp_netif_str_to_ip4("255.255.255.0", &ip.netmask);
-    if (st.gw[0]) esp_netif_str_to_ip4(st.gw, &ip.gw);
+    if (st.gw[0]) (void)ip4_ok(st.gw, &ip.gw);
 
     esp_err_t e = esp_netif_set_ip_info(s_sta_netif, &ip);
     if (e != ESP_OK) {
@@ -237,7 +263,7 @@ static void static_ip_apply_on_connect(void)
     esp_netif_dns_info_t dns = { 0 };
     const char *dns_src = st.dns[0] ? st.dns
                         : (st.gw[0] ? st.gw : NULL);
-    if (dns_src && esp_netif_str_to_ip4(dns_src, &dns.ip.u_addr.ip4)) {
+    if (ip4_ok(dns_src, &dns.ip.u_addr.ip4)) {
         dns.ip.type = ESP_IPADDR_TYPE_V4;
         esp_netif_set_dns_info(s_sta_netif, ESP_NETIF_DNS_MAIN, &dns);
     }
