@@ -571,6 +571,10 @@ static void tune_to_spot(const tap_target_t *t, const char *what)
     const char *mode = cat_mode_for_spot(t->mode, t->freq_hz);
     ESP_LOGI(TAG, "%s -> %lu Hz mode=%s", what, (unsigned long)t->freq_hz,
              mode ? mode : "(unchanged)");
+    /* The still display must re-frame on this rather than hold: the operator
+     * picked this signal, so it belongs on screen and not at an edge (Roy
+     * KI0ER). Before the tune - the flag is consumed by the update it causes. */
+    ui_note_frequency_jump();
     cat_set_frequency_forced(t->freq_hz);   // deliberate user action, bypass the rate limiter
     ui_update_frequency(t->freq_hz);        // optimistic, same as tap-to-tune on the spectrum
     // Via the poll task: the LVGL thread must never write the CDC pipe directly

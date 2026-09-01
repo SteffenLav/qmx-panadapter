@@ -1514,15 +1514,44 @@ static void sv_frame_on_capture(void)
     sv_apply_pan_hz(lo + span / 2);
 }
 
+/* ⭐ A JUMP IS NOT TUNING, AND SIZE ALONE CANNOT TELL THEM APART (Roy KI0ER,
+ * 2026-09-01: "if the spot the Panadapter switches to happens to land on either
+ * edge... the spot frequency chosen should be either centered or perhaps
+ * centered in the left or right 1/3... rather than stay at a left or right
+ * edge").
+ *
+ * The re-centre below is gated on the jump being wider than the whole capture
+ * window - which catches a band change and misses exactly the case Roy is
+ * describing. A spot two kilohertz away is a DELIBERATE CHOICE of a new
+ * frequency, but it is smaller than a screen, so it went down the hold-still
+ * path and the chosen signal landed wherever the held view happened to leave
+ * it. He reports it lands on an edge "every time", which is what you would
+ * expect: the still view only re-frames when something reaches an edge, so a
+ * held view is usually already near one.
+ *
+ * Holding still is right for TUNING - the operator is exploring, and the point
+ * of the feature is that the picture does not slide about underneath them. It
+ * is wrong for a JUMP, where they have named a frequency and want to see it.
+ * So the caller says which it was, rather than the arithmetic guessing. */
+static bool s_sv_jump_pending = false;
+
+void ui_note_frequency_jump(void)
+{
+    s_sv_jump_pending = true;
+}
+
 static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
 {
     int64_t d = (int64_t)now_hz - (int64_t)prev_hz;
+    const bool jumped = s_sv_jump_pending;
+    s_sv_jump_pending = false;      /* consumed either way - a stale flag would
+                                     * re-frame on some later ordinary tune */
     if (d == 0) return;
 
     /* A jump larger than the whole captured window - band change, memory
-     * recall, a spot click - leaves nothing on screen worth holding still, so
-     * re-centre rather than page across a void. */
-    if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
+     * recall - leaves nothing on screen worth holding still. So does any
+     * DELIBERATE jump, however small: see the note above. */
+    if (jumped || d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
         s_sv_push = 0; s_sv_side = 0;
         sv_frame_on_capture();      /* land on live spectrum, not on the dial */
         dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));

@@ -78,6 +78,13 @@ void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to N
  * cursor moves across them, instead of the display following the dial.
  * Toggle from /api/cmd {"action":"still_view","on":false} while it is
  * being evaluated - it changes how the whole panadapter feels. */
+/* Tell the still display that the NEXT frequency change is a deliberate jump -
+ * a spot pick, a callsign banner, a memory recall - rather than tuning. The
+ * view then re-frames on the new frequency instead of holding still and
+ * leaving it at a screen edge (Roy KI0ER). Call it BEFORE the tune; it is
+ * consumed by the next frequency update, whatever that turns out to be. */
+void ui_note_frequency_jump(void);
+
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);
 
