@@ -1606,24 +1606,54 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     int64_t hi_over  = (dial_hz + pb_hi) - (view_lo + span_hz);
     int64_t lo_over  = view_lo - (dial_hz + pb_lo);
 
+    /* ⭐ NO PIN DURING THE PUSH (Dirk DK7CVD, 2026-09-01; operator's call).
+     *
+     * The push used to PIN the passband edge to the screen edge - the `else`
+     * branches below re-applied a dial-relative pan on every tune step, so for
+     * up to one bandwidth the view was DRAGGED BY THE DIAL rather than held.
+     * The sequence an operator saw was hold, then drag, then jump, and Dirk
+     * named it exactly: "the unpopulated area is changing size all the time. I
+     * would expect it to run to the limit and either redraw completly or start
+     * panning, but here something inbetween happens." He turned the feature off
+     * over it.
+     *
+     * Now the view HOLDS all the way to the page. The pan set at the top of
+     * this function (hold the same absolute frequencies) is simply left alone
+     * while the push accumulates, so the display is still until it pages, and
+     * the hatched area stops breathing.
+     *
+     * ⚠ The cost, which is real and is why this was the operator's decision to
+     * make: the passband slides up to one bandwidth off the screen edge before
+     * the page, so the signal being tuned is briefly out of sight. The pin
+     * existed to prevent exactly that - "I want the right edge of the BW
+     * touching the right edge of the screen before pushing the window". Both
+     * behaviours cannot be had at once; this is the one being tried. */
     if (hi_over > 0) {
         if (s_sv_side != 1) { s_sv_side = 1; s_sv_push = 0; }
-        s_sv_push += hi_over;
+        /* ⛔ ASSIGN, DO NOT ACCUMULATE - and this changed WITH the pin.
+         *
+         * hi_over is measured fresh each call as "how far the passband edge is
+         * past the screen edge". While the view was PINNED it was re-framed
+         * every step, so that overshoot collapsed back to ~0 and `+=` was
+         * summing per-step increments. With the view now HELD, hi_over is
+         * already the running total since the trigger, so `+=` would compound
+         * it quadratically and page after a fraction of the intended travel. */
+        s_sv_push = hi_over;
         /* Pages are logged because when he asked me to follow one in the log,
          * nothing logged them at all and I had to simulate the code instead. */
         if (s_sv_push > bw) { ESP_LOGI(TAG, "page: upper edge, bw=%d span=%d",
                                        (int)bw, (int)span_hz);
                               sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
-        else                { sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2); }
+        /* else: hold - the pan from the top of the function already does it. */
     } else if (lo_over > 0) {
         if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0; }
-        s_sv_push += lo_over;
+        s_sv_push = lo_over;    /* assign, not accumulate - see the note above */
         if (s_sv_push > bw) { ESP_LOGI(TAG, "page: lower edge, bw=%d span=%d",
                                        (int)bw, (int)span_hz);
                               sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
-        else                { sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2); }
+        /* else: hold. */
     } else {
         s_sv_side = 0; s_sv_push = 0;
     }
