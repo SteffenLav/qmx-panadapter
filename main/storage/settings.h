@@ -464,6 +464,21 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Stack protection fault. See the note on the implementation - it has already
  * boot-looped this device once. */
 void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16]);
+
+/* ---- targeted getters, for code on a small stack ------------------------
+ *
+ * qmx_settings_t is ~1 KB and grows with every setting added, so
+ * settings_load_all() on a 3-4 KB task stack is a stack overflow waiting for
+ * the next field. It has already happened FOUR times in this codebase - twice
+ * with wifi_known_t on `sys_evt` (2026-08-05), once in the static-IP path on
+ * `sys_evt` (2026-08-31, a boot loop), and once in `settings_flush` and
+ * `render` on the CW branch (2026-09-01, a reboot on every page swipe).
+ *
+ * The rule, from the comment above settings_get_wifi_static(): code on a task
+ * stack of 4 KB or less asks for the fields it needs, never the whole struct.
+ */
+uint32_t settings_get_last_unix_time(void);
+void     settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)

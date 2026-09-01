@@ -679,13 +679,11 @@ static void wifi_task(void *arg)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip_event, NULL, NULL));
 
-    // Load credentials from NVS.
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    strncpy(s_ssid, cfg.wifi_ssid, sizeof(s_ssid) - 1);
-    s_ssid[sizeof(s_ssid) - 1] = '\0';
-    strncpy(s_pass, cfg.wifi_pass, sizeof(s_pass) - 1);
-    s_pass[sizeof(s_pass) - 1] = '\0';
+    // Load credentials from NVS - the two fields, not the whole struct: this
+    // task has a 4096-byte stack and qmx_settings_t is ~1 KB. settings.h has
+    // the rule, and the four times it has been broken.
+    bool wifi_enabled_at_boot = false;
+    settings_get_wifi_creds(s_ssid, s_pass, &wifi_enabled_at_boot);
 
     wifi_config_t sta_cfg = { 0 };
     // s_ssid/s_pass already NUL-terminated; sta.ssid/password are zero-init via { 0 }.
@@ -701,7 +699,7 @@ static void wifi_task(void *arg)
     // suspenders against the double-add crash above) and saves power. WiFi is
     // brought up later from panadapter_wifi_reconnect() when the user saves
     // credentials in the settings drawer.
-    if (s_ssid[0] != '\0' && cfg.wifi_enabled) {
+    if (s_ssid[0] != '\0' && wifi_enabled_at_boot) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
         ensure_sta_netif();
         ESP_ERROR_CHECK(esp_wifi_start());

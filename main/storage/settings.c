@@ -1789,6 +1789,29 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
     xSemaphoreGive(s_mutex);
 }
 
+/* See the header: small-stack code takes the field, not the struct. */
+uint32_t settings_get_last_unix_time(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t v = s_pending.last_unix_time;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out)
+{
+    if (ssid) ssid[0] = 0;
+    if (pass) pass[0] = 0;
+    if (enabled_out) *enabled_out = false;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (ssid) { strncpy(ssid, s_pending.wifi_ssid, 32); ssid[32] = 0; }
+    if (pass) { strncpy(pass, s_pending.wifi_pass, 64); pass[64] = 0; }
+    if (enabled_out) *enabled_out = s_pending.wifi_enabled;
+    xSemaphoreGive(s_mutex);
+}
+
 // Default ON: the RIT pill is a v1.8.0 feature and hiding it by default would make
 // it invisible to everyone who never opens the drawer. This is opt-OUT, for
 // operators who do not use RIT and do not want the top-right corner spent on it
