@@ -1542,7 +1542,32 @@ static void t_clock_cb(lv_timer_t *t)
 
         if (now >= s_respawn_next_ms) {
             if (s_respawn_tries < RESPAWN_FAST_TRIES) {
-                ESP_LOGW(TAG, "t_clock_cb: FT8 view visible but no ft8_task alive - respawning");
+                /* INFO, and worded as the routine event it is (#280).
+                 *
+                 * This fires on MOST FT8 entries and it is not a fault - it is
+                 * this watchdog doing the job it was written for. Measured over
+                 * 4 entry/exit cycles on 2026-09-01: teardown takes ~10 s (the
+                 * decode task finishes its slot, then joins its worker), so
+                 * re-entering FT8 inside that window finds the previous task
+                 * still alive; ft8_self_test() correctly REFUSES, teardown
+                 * completes ~250 ms later, and this picks it up ~1 s after that.
+                 *
+                 * The same run showed 4 monitor-pool builds for 4 entries, ZERO
+                 * "rebuilt with no teardown", zero crashes, and PSRAM figures
+                 * that repeated byte-identically every cycle - so there is no
+                 * double spawn and no leak behind this line.
+                 *
+                 * It was ESP_LOGW reading "no ft8_task alive - respawning",
+                 * which looks like a fault on every ordinary toggle and buries
+                 * the back-off warning below that IS one.
+                 *
+                 * ⛔ Do NOT "fix" the underlying delay with a grace period here.
+                 * CLAUDE.md records two attempts falsified on hardware for
+                 * exactly that reasoning: timing changes the odds of a race, not
+                 * the race. The ~1 s of delayed start is the price of a
+                 * single-spawner design, and it is the right price. */
+                ESP_LOGI(TAG, "t_clock_cb: previous FT8 session has finished "
+                              "tearing down - starting the new one");
                 s_respawn_next_ms = now + RESPAWN_FAST_MS;
             } else {
                 if (s_respawn_tries == RESPAWN_FAST_TRIES)

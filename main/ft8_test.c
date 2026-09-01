@@ -2617,7 +2617,14 @@ void ft8_self_test(void)
     // s_decode_queue and crash one decode task on xQueueReceive(NULL). The
     // surviving task keeps serving FT8 (its loop re-checks ui_mode each slot).
     if (s_ft8_task_alive) {
-        ESP_LOGW(TAG, "ft8_self_test: an FT8 task is still alive; not spawning a second");
+        /* INFO: this is the ORDINARY case on an FT8 re-entry, not a fault.
+         * Teardown takes ~10 s (measured), so any toggle quicker than that
+         * lands here, and the 1 Hz watchdog in ft8_screen_view.c starts the
+         * new session about a second later. Refusing IS the correct answer -
+         * see the double-spawn history below (#199). It was a WARN, which
+         * made every normal toggle look like a defect (#280). */
+        ESP_LOGI(TAG, "ft8_self_test: previous FT8 session is still tearing "
+                      "down; the watchdog will start the new one");
         return;
     }
     // The decode task can outlive ft8_task (ft8_task's teardown wait is
@@ -2627,7 +2634,9 @@ void ft8_self_test(void)
     // but still refuse the overlap: the old instance also still owns monitor
     // pool buffers and the decode list mutex path.
     if (s_decode_task_alive) {
-        ESP_LOGW(TAG, "ft8_self_test: previous decode task still exiting; not spawning yet");
+        /* Same: routine, and the watchdog retries. See above (#280). */
+        ESP_LOGI(TAG, "ft8_self_test: previous decode task is still exiting; "
+                      "the watchdog will start the new one");
         return;
     }
     // ⛔ CLAIM THE SLOT BEFORE CREATING THE TASK, NOT INSIDE IT (#199).
