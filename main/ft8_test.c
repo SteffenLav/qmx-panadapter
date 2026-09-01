@@ -1028,6 +1028,31 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     settings_load_all(&sim_qs);
     bool sim_suppresses_real = sim_qs.sim_mode_en;
     for (int i = start; i < n_cand; i += step) {
+        /* ⭐ ABANDON THE SLOT THE MOMENT WE ARE TEARING DOWN (#312).
+         *
+         * ft8_task clears s_ft8_running BEFORE it sends the stop sentinel, so
+         * by the time a teardown is under way this loop is doing work whose
+         * results nobody will ever see - the decode list is about to be torn
+         * down with the pool.
+         *
+         * Finishing it anyway is what made the teardown overrun its bound:
+         * measured 2026-09-01, ~19.2 s against 15 s, because the worker is
+         * tskIDLE_PRIORITY+2 on core 0 and leaving FT8 puts taskLVGL (priority
+         * 4) back on that core - `idle0 0.0%` at the moment of the fault. The
+         * timeout then leaked the pool (see forget_capture_pool), and at
+         * ~905 KB a time that is not something a station switching modes can
+         * afford to pay repeatedly.
+         *
+         * ⛔ Deliberately NOT a priority raise, which was the obvious fix and
+         * is worse here: the handle belongs to the decode task, which is
+         * itself BLOCKED waiting on this worker at that moment, and reaching
+         * it from ft8_task means republishing a handle across instances -
+         * exactly the cross-instance sharing that caused Dennis WN4FLA's
+         * crash and that worker_ctx_t exists to prevent.
+         *
+         * Costs the final slot's decodes on the way out, which is precisely
+         * what the operator asked for by leaving. */
+        if (!s_ft8_running) break;
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
         }
