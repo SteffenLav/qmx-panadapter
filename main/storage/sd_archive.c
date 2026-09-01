@@ -295,8 +295,45 @@ static bool mirror_diag(void)
         return false;
     }
 
+    // ⛔ BOUNDED. This loop used to be `for (;;)` - it drained the ENTIRE diag
+    // backlog to the card in one go, under one hold of s_sd_mutex.
+    //
+    // On the first burst after a boot mount, that backlog is the whole boot log,
+    // and the burst therefore runs straight through WiFi bring-up - the one
+    // window this project has hardware-proven the card cannot survive (2026-07-26:
+    // with WiFi never started the same card mirrored flawlessly for 230 s; with
+    // WiFi on it dies within 10-140 s).
+    //
+    // Measured on this bench 2026-09-01, and it is what the operator sees as the
+    // SD dot appearing and then going out:
+    //
+    //     13.703s  SD mounted on boot attempt 5/5
+    //     18.869s  Got IP                        <- WiFi comes up DURING the burst
+    //     42.547s  diag write failed: I/O error (errno 5), parked=0, live handle
+    //     90.2s    unmount(write failures)
+    //
+    // `sd_arch` logs NOTHING between 13.703 and 42.547 - 28.8 s of silence. That
+    // cannot be many quiet iterations: a burst that completes with WiFi on calls
+    // park_snapshot(), which logs. So it is ONE burst, and it is still running
+    // when WiFi comes up 5 s later.
+    //
+    // Two consequences, and the second is the nastier one:
+    //  - the card is being written continuously across exactly the wrong window;
+    //  - park_snapshot() is the design's OWN protection against that, and it can
+    //    only run after a burst that SUCCEEDS - so the failure keeps the device
+    //    permanently in the mode the parking was invented to leave.
+    // The retry path then re-attempts the same oversized write (the cursor is
+    // deliberately not advanced on error), so every retry is the same doomed
+    // write, five times, and then the card is declared removed.
+    //
+    // Bounding it fixes both: a burst is short, a partial catch-up still counts
+    // as success, the cursor advances, and the very first burst can reach the
+    // park. Whatever backlog is left is then written by mirror_diag_slow() at
+    // the #153 cadence, in 4 KB pieces with the stream paused - which is the
+    // safe path, not the one that has to be raced.
+    #define MIRROR_DIAG_MAX_CHUNKS 4      // 16 KB per burst, ~1 burst per 3 s
     static char buf[DIAG_CHUNK];
-    for (;;) {
+    for (int chunk = 0; chunk < MIRROR_DIAG_MAX_CHUNKS; chunk++) {
         uint64_t next = s_diag_cursor;
         size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
         if (got == 0) break;
