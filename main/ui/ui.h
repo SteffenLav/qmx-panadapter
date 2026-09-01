@@ -98,6 +98,15 @@ int64_t ui_get_pan_offset_hz(void);
  * Returns false when the zoom FFT is active and pan_view does not apply. */
 bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
 
+/* The on-device spectrum viewport. The CW page's keyer pane covers columns
+ * [0, CW_PANE_W), so the Tab5 draws the view into [ui_spec_x0(), 1280) and the
+ * WEB keeps the full width - see the block comment in ui.c. Anything drawing on
+ * the spectrum, the waterfall or the axis must use these two and the _disp()
+ * viewport, or it will disagree with the trace about where a frequency is. */
+int  ui_spec_x0(void);
+int  ui_spec_w(void);
+bool ui_pan_view_current_disp(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:

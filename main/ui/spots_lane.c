@@ -176,7 +176,14 @@ static int freq_to_x(uint32_t hz)
 {
     if (s_view_hi <= s_view_lo) return -1;
     double span = (double)s_view_hi - (double)s_view_lo;
-    return (int)(((double)hz - (double)s_view_lo) / span * (double)DISPLAY_H_RES);
+    /* Across the DRAWN view, which the CW page narrows to clear its keyer pane.
+     * The lane sits on top of the spectrum, so it has to use the trace's
+     * mapping - a spot 320 px from where its signal is drawn is worse than no
+     * spot at all. ui_spec_x0() is 0 everywhere else, so the panadapter and
+     * the host self-test below are unchanged. */
+    const int x0 = ui_spec_x0();
+    const int vw = DISPLAY_H_RES - x0;
+    return x0 + (int)(((double)hz - (double)s_view_lo) / span * (double)vw);
 }
 
 // Full opacity while fresh, linearly down to half at AGE_HALF_S, hidden past
@@ -380,7 +387,7 @@ static void repaint(void)
             continue;
         }
         int x = freq_to_x(s_w->buf[i].freq_hz);
-        if (x < 0 || x >= DISPLAY_H_RES) continue;
+        if (x < ui_spec_x0() || x >= DISPLAY_H_RES) continue;
         s_w->idx[vis_n] = (uint16_t)i;
         s_w->x[vis_n]   = (int16_t)x;
         vis_n++;
@@ -437,7 +444,7 @@ static void repaint(void)
         lv_obj_update_layout(lb);
         int w = lv_obj_get_width(lb);
         int x = s_w->x[i] - w / 2;                      // centre the name on its tick
-        if (x < 0) x = 0;
+        if (x < ui_spec_x0()) x = ui_spec_x0();
         if (x + w > DISPLAY_H_RES) x = DISPLAY_H_RES - w;
 
         int row = pick_row(x, w, row_end);

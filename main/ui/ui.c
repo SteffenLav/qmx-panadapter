@@ -1421,18 +1421,14 @@ static void zoom_popup_open(void)
 // Re-center the passband-centered pan offset (zoom > x1) and push it to the
 // DSP zoom-FFT. No LVGL calls - safe to call from non-LVGL tasks (e.g. the
 // CAT task, when mode/passband width changes).
-// CW page: the 320 px left pane hides the leftmost quarter of the spectrum,
-// so the center of what the operator actually SEES is x=800, not x=640.
-// Shifting the displayed window down by span/8 puts the passband center at
-// the visible center, and because it's a plain pan offset, the freq axis,
-// waterfall, VFO cursor and tap-to-tune all follow the same mapping for
-// free (operator, 2026-08-02: "center freq needs to be in the center of the
-// scale"). In bins of the un-zoomed FFT: (160/1280) * FFT/zoom.
-static int cw_visible_center_shift_bins(float zoom)
-{
-    if (ui_mode_get() != UI_MODE_CW) return 0;
-    return -(int)lroundf((float)DSP_FFT_SIZE / (8.0f * zoom));
-}
+/* ⛔ cw_visible_center_shift_bins() WAS HERE, AND MUST NOT COME BACK.
+ *
+ * It faked a centred view by panning the zoom window a further span/8 down, so
+ * that the passband landed in the middle of the part of a FULL-WIDTH spectrum
+ * the CW pane did not cover. That was a workaround for drawing a 1280 px view
+ * into 960 px of glass. The view is now genuinely drawn into [ui_spec_x0(),
+ * 1280), so the centre is really the centre - and applying the old shift on top
+ * would move the view half a pane-width off for no reason. */
 
 static void recompute_zoom_pan(void);
 
@@ -1806,8 +1802,7 @@ static void recompute_zoom_pan(void)
     compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
     int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
     float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
-    s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz)
-                        + cw_visible_center_shift_bins(s_zoom_factor);
+    s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
     sv_sync_pan_from_bins();
     dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
 }
@@ -1823,8 +1818,7 @@ void ui_set_zoom(float zoom, int pan_bins)
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
         int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
         float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
-        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz)
-                   + cw_visible_center_shift_bins(zoom);
+        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
     }
     s_zoom_factor     = zoom;
     s_pan_offset_bins = pan_bins;
@@ -1967,6 +1961,49 @@ static int64_t ui_view_lo_now(int32_t *span_out)
  * already mixed the pan target to DC, so the bins mean something else and
  * pan_view does not apply. The caller keeps its own path for that, exactly as
  * ui_push_spectrum does. */
+/* ---- the on-device spectrum viewport ------------------------------------
+ *
+ * The CW page overlays a 320 px keyer pane on the LEFT of a full-width
+ * spectrum canvas, so a quarter of the trace used to be drawn underneath it -
+ * present in the buffer, invisible on the glass, and the axis had to hide the
+ * labels that fell there. The operator's call, 2026-09-02: "the spectrum is
+ * still like in panadapter mode - please adapt to this more narrow window."
+ *
+ * So on-device drawing maps the view into columns [x0, DISPLAY_H_RES) instead
+ * of [0, DISPLAY_H_RES). Only pixels-per-Hz changes: pan_view_resolve() takes
+ * the span from sample_rate/zoom and never looks at screen_w, so the frequency
+ * window the operator is tuned across is IDENTICAL either way.
+ *
+ * ⛔ THE WEB UI MUST NOT NARROW. The browser has no pane, and it consumes the
+ * same viewport through ui_pan_view_current() (webserver.c, webserver_ws.c).
+ * That function therefore stays full-width and the DISPLAY consumers - the
+ * spectrum canvas, the waterfall, the frequency axis, the spots lane - use
+ * ui_pan_view_current_disp() instead. Keep that split: giving the web a
+ * 960-wide viewport would put every browser-side frequency 25% out.
+ *
+ * The canvases stay DISPLAY_H_RES wide on purpose. Narrowing the LVGL objects
+ * would mean reallocating canvas buffers and changing every stride in the
+ * drawing code; painting the unused columns black costs nothing and the pane
+ * covers them anyway. */
+int ui_spec_x0(void)
+{
+    return (ui_mode_get() == UI_MODE_CW) ? CW_PANE_W : 0;
+}
+
+int ui_spec_w(void)
+{
+    return DISPLAY_H_RES - ui_spec_x0();
+}
+
+/* The viewport as the Tab5 DRAWS it - narrowed on the CW page. */
+bool ui_pan_view_current_disp(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
+{
+    if (!ui_pan_view_current(c, v, n_bins)) return false;
+    c->screen_w = ui_spec_w();
+    pan_view_resolve(c, ui_view_lo_now(NULL), v);
+    return v->ok;
+}
+
 bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
 {
     if (!c || !v) return false;
@@ -4505,9 +4542,11 @@ static void update_freq_axis_labels(uint32_t center_hz)
         uint16_t *px = (uint16_t *)s_label_canvas_buf;
         for (int y = 0; y < 12; y++)
             for (int x = 0; x < DISPLAY_H_RES; x++) px[y * DISPLAY_H_RES + x] = 0x0000;
+        const int tx0 = ui_spec_x0();
+        const int tvw = DISPLAY_H_RES - tx0;
         for (int i = 0; i < n; i++) {
-            int x = (int)(((tick[i] - lo) * DISPLAY_H_RES) / span_hz);
-            if (x < 0 || x >= DISPLAY_H_RES) continue;
+            int x = tx0 + (int)(((tick[i] - lo) * tvw) / span_hz);
+            if (x < tx0 || x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < 10; y++) px[y * DISPLAY_H_RES + x] = 0xC618;
         }
         lv_obj_invalidate(s_label_canvas);
@@ -4533,21 +4572,15 @@ static void update_freq_axis_labels(uint32_t center_hz)
                      (unsigned long)((hz / 1000) % 1000));
         lv_label_set_text(s_tick_labels[i], buf);
 
-        /* CW page: the 320 px left pane covers the leftmost quarter of the
-         * spectrum, so a label positioned there is simply invisible - and a
-         * label CLAMPED to the screen edge would sit under the pane claiming
-         * to belong to a tick you cannot see. Gridlines behind the pane are
-         * hidden; the rest are clamped into what is actually on screen.
-         * The trace mapping itself is unchanged (the pane overlays the canvas,
-         * it does not narrow it), so this is a label-placement rule only. */
-        const int lx0  = (ui_mode_get() == UI_MODE_CW) ? CW_PANE_W : 0;
-        int tick_x = (int)(((hz - lo) * DISPLAY_H_RES) / span_hz);
-        if (lx0 && tick_x < lx0) {
-            lv_obj_add_flag(s_tick_labels[i], LV_OBJ_FLAG_HIDDEN);
-            continue;
-        }
-        int x = tick_x - 44;
-        if (x < lx0 + 2) x = lx0 + 2;
+        /* The view is DRAWN into [X0, DISPLAY_H_RES) (the CW page's keyer pane
+         * covers the rest), so a tick's column is measured across that window -
+         * the same mapping the trace uses. An earlier version left the trace
+         * full-width and merely hid the labels that fell behind the pane; the
+         * operator's answer was to narrow the drawing instead. */
+        const int X0 = ui_spec_x0();
+        const int VW = DISPLAY_H_RES - X0;
+        int x = X0 + (int)(((hz - lo) * VW) / span_hz) - 44;
+        if (x < X0 + 2) x = X0 + 2;
         if (x > DISPLAY_H_RES - 92) x = DISPLAY_H_RES - 92;
         lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x, -3);
     }
@@ -6470,7 +6503,7 @@ static void pinch_poll_cb(lv_timer_t *t)
          * needs the right scale anyway, and leaving two different ones in one
          * function would be worse than fixing it. */
         const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ
-                              / (s_zoom_factor * (float)DISPLAY_H_RES);
+                              / (s_zoom_factor * (float)ui_spec_w());
         int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
         uint32_t lo, hi;
         /* Band edges bound a TUNE. A still-display pan is not going near the
@@ -7356,6 +7389,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
     if (!display_lock(20)) return;
 
+    /* The CW page's keyer pane covers columns [0, X0); the view is drawn into
+     * [X0, DISPLAY_H_RES). X0 is 0 on every other page, so the panadapter path
+     * is byte-identical. See the ui_spec_x0() comment. */
+    const int X0 = ui_spec_x0();
+    const int VW = DISPLAY_H_RES - X0;
+
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
     const uint16_t fg = 0x07E0;  // green in RGB565
@@ -7455,10 +7494,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
          * at x=641.5 - 8.5 px, and the operator saw it as "the center freq is
          * not in the middle of the bw". Pre-existing; zoom is what exposed it. */
         int32_t pb_res = ui_get_if_residual_hz();
-        int edge_x_lo = (int)((int64_t)(pb_low_hz  + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
-        int edge_x_hi = (int)((int64_t)(pb_high_hz + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+        int edge_x_lo = X0 + (int)((int64_t)(pb_low_hz  + pb_res - pan_hz_pb) * VW / span_hz_pb) + VW / 2;
+        int edge_x_hi = X0 + (int)((int64_t)(pb_high_hz + pb_res - pan_hz_pb) * VW / span_hz_pb) + VW / 2;
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
-        if (edge_x_lo < 0) edge_x_lo = 0;
+        if (edge_x_lo < X0) edge_x_lo = X0;
         if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
         uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
         // Apply fade opacity to band fill
@@ -7500,7 +7539,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             int gy = gys[g];
             if (gy >= 0 && gy < SPECTRUM_H) {
                 uint16_t *row = px + gy * DISPLAY_H_RES;
-                for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
+                for (int x = X0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
             }
         }
     }
@@ -7585,7 +7624,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
     if (pv_ok) {
         pvc.sample_rate_hz = DSP_SAMPLE_RATE_HZ;
         pvc.n_bins         = N;
-        pvc.screen_w       = DISPLAY_H_RES;
+        pvc.screen_w       = VW;
         pvc.dial_hz        = (int64_t)s_last_qmx_freq_hz;
         pvc.if_offset_hz   = ui_get_if_offset_hz();
         pvc.zoom           = eff_zoom;
@@ -7623,10 +7662,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
                                         / (double)DSP_SAMPLE_RATE_HZ);
     }
 
-    for (int x = 0; x < DISPLAY_H_RES; x++) {
+    for (int x = X0; x < DISPLAY_H_RES; x++) {
+        const int wx = x - X0;          /* column within the drawn view */
         int bin;
         if (pv_ok) {
-            bin = pan_view_x_to_bin(&pvc, &pv, x);
+            bin = pan_view_x_to_bin(&pvc, &pv, wx);
             if (bin == PAN_VIEW_NO_DATA) {
                 if (nodata_from < 0) nodata_from = x;
                 nodata_to = x;
@@ -7635,7 +7675,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             }
         } else {
             int b = bin_start + zoom_res_bins
-                    + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
+                    + (int)((float)wx * (float)window_bins / (float)VW);
             bin = ((b % N) + N) % N;
         }
 
@@ -7646,14 +7686,14 @@ void ui_push_spectrum(const float *bins, int n_bins)
             int   cnt = 0;
             for (int dx = -2; dx <= 2; dx++) {
                 int xn = x + dx;
-                if (xn < 0 || xn >= DISPLAY_H_RES) continue;
+                if (xn < X0 || xn >= DISPLAY_H_RES) continue;
                 int bn;
                 if (pv_ok) {
-                    bn = pan_view_x_to_bin(&pvc, &pv, xn);
+                    bn = pan_view_x_to_bin(&pvc, &pv, xn - X0);
                     if (bn == PAN_VIEW_NO_DATA) continue;   /* never average in a wrap */
                 } else {
                     int sn = bin_start + zoom_res_bins
-                             + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
+                             + (int)((float)(xn - X0) * (float)window_bins / (float)VW);
                     bn = ((sn % N) + N) % N;
                 }
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
@@ -7758,8 +7798,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
             int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
             /* Same residual as the tint above and the cursor below - all three
              * must agree or the edges sit off the block they bound. */
-            int edge_x = (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
-            if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
+            int edge_x = X0 + (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz) * VW / span_hz_pb) + VW / 2;
+            if (edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
                 if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
@@ -7787,8 +7827,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // rotated by a whole number of bins, so it sits at (dial - residual).
         // Drawing the marker at +residual puts it on the signal rather than up to
         // ~23 Hz beside it, and keeps it agreeing with where a tap now tunes.
-        int cx = (int)((int64_t)(ui_get_if_residual_hz() - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
-        if (cx >= 0 && cx < DISPLAY_H_RES) {
+        int cx = X0 + (int)((int64_t)(ui_get_if_residual_hz() - pan_hz_vfo) * VW / span_hz_vfo) + VW / 2;
+        if (cx >= X0 && cx < DISPLAY_H_RES) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
             }
@@ -7812,7 +7852,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                  * saying WHICH WAY the dial went, so getting it backwards makes
                  * it worse than no marker at all. */
                 int half = (th * i) / tw;
-                int x = (cx < 0) ? i : (DISPLAY_H_RES - 1 - i);
+                int x = (cx < X0) ? (X0 + i) : (DISPLAY_H_RES - 1 - i);
                 for (int y = mid - half; y <= mid + half; y++)
                     if (y >= 0 && y < SPECTRUM_H) px[y * DISPLAY_H_RES + x] = center_color;
             }
@@ -7837,9 +7877,9 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // exactly what you want to keep seeing.
         int rit_hz_now = cat_get_rit_hz();
         if (rit_hz_now != 0) {
-            int rx = (int)((int64_t)(rit_hz_now - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo)
-                     + DISPLAY_H_RES / 2;
-            if (rx >= 0 && rx < DISPLAY_H_RES) {
+            int rx = X0 + (int)((int64_t)(rit_hz_now - pan_hz_vfo) * VW / span_hz_vfo)
+                     + VW / 2;
+            if (rx >= X0 && rx < DISPLAY_H_RES) {
                 for (int y = 0; y < SPECTRUM_H; y++) {
                     if ((y / 6) & 1) continue;   // 6 on, 6 off
                     px[y * DISPLAY_H_RES + rx] = UI_RIT_COLOR_565;
@@ -7852,7 +7892,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             // reason s_wf_cursor is one: rows scroll, so a drawn line would trail.
             // Positioned from this same pass so the two can never disagree.
             if (s_rit_wf_marker) {
-                if (rx >= 0 && rx < DISPLAY_H_RES) {
+                if (rx >= X0 && rx < DISPLAY_H_RES) {
                     lv_obj_set_x(s_rit_wf_marker, rx);
                     lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
                 } else {
@@ -8756,7 +8796,7 @@ static void touch_event_cb(lv_event_t *e)
                 }
             }
             double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
-                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
+                               (double)ui_spec_w();
             int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
             target = ((target + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
             if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
@@ -8830,7 +8870,7 @@ static void touch_event_cb(lv_event_t *e)
                 // spectrum tune — the drag path already uses the last stable
                 // PRESSING value via s_bp_drag_target_hz).
                 double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
-                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
+                               (double)ui_spec_w();
                 int64_t tap_hz = (int64_t)s_bp_drag_band_lo + (int64_t)lround((double)s_bp_drag_start_pt.x * hz_per_px);
                 tap_hz = ((tap_hz + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
                 if (tap_hz < (int64_t)s_bp_drag_band_lo) tap_hz = (int64_t)s_bp_drag_band_lo;
@@ -8888,8 +8928,13 @@ static void touch_event_cb(lv_event_t *e)
         // so the line jumps from snap to snap and shows exactly where the
         // freq will land.
         {
-            int dx = (int)p.x - DISPLAY_H_RES / 2;
-            int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(DISPLAY_H_RES * s_zoom_factor));
+            /* Measured from the centre of the DRAWN view, across its width -
+             * the same mapping ui_push_spectrum uses. Getting this wrong does
+             * not look wrong, it just tunes somewhere else (see #297). */
+            const int tt_x0 = ui_spec_x0();
+            const int tt_w  = DISPLAY_H_RES - tt_x0;
+            int dx = (int)p.x - (tt_x0 + tt_w / 2);
+            int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(tt_w * s_zoom_factor));
             /* Exact, like the cursor and passband it must land on: a
              * bin-rounded pan puts the tune target up to 23 Hz from the line
              * the operator is actually looking at. */
@@ -8931,8 +8976,8 @@ static void touch_event_cb(lv_event_t *e)
                                 - ui_get_if_residual_hz();
             int64_t rounded_target = ((target_hz + (target_hz >= 0 ? snap/2 : -snap/2)) / snap) * snap;
             int32_t rounded = (int32_t)(rounded_target - (int64_t)s_last_qmx_freq_hz);
-            int32_t snapped_dx = (int32_t)((int64_t)(rounded - pan_hz) * (int)(DISPLAY_H_RES * s_zoom_factor) / UAC_SAMPLE_RATE);
-            s_target_x = DISPLAY_H_RES / 2 + snapped_dx;
+            int32_t snapped_dx = (int32_t)((int64_t)(rounded - pan_hz) * (int)(tt_w * s_zoom_factor) / UAC_SAMPLE_RATE);
+            s_target_x = tt_x0 + tt_w / 2 + snapped_dx;
             s_target_freq_hz = rounded_target;
         }
         s_target_until_us = esp_timer_get_time() + 200000;
@@ -9183,7 +9228,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         }
         if (be_decided == 2 && be_bp_ok) {
             double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
-                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
+                               (double)ui_spec_w();
             int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
             target = ((target + 500) / 1000) * 1000;              // snap centre to whole kHz
             if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;

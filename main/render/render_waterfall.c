@@ -317,12 +317,23 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
      * pan_view.h had already written the rule - one mapping, or they drift. */
     pan_view_cfg_t pvc;
     pan_view_t     pv;
-    const bool     pv_ok = ui_pan_view_current(&pvc, &pv, n_bins);
+    /* _disp(): the DRAWN viewport, narrowed to clear the CW page's keyer pane.
+     * It must be the same call the spectrum makes - the comment above is about
+     * exactly this drifting apart, and a waterfall drawn 320 px wider than the
+     * trace above it would put every signal in the wrong column. */
+    const bool     pv_ok = ui_pan_view_current_disp(&pvc, &pv, n_bins);
+    const int      X0    = ui_spec_x0();
+    const int      VW    = WF_WIDTH - X0;
 
-    for (int x = 0; x < WF_WIDTH; x++) {
+    /* Columns behind the pane are never seen; paint them out so a page change
+     * cannot leave the previous page's pixels showing through. */
+    for (int x = 0; x < X0; x++) row[x] = 0x0000;
+
+    for (int x = X0; x < WF_WIDTH; x++) {
+        const int wx = x - X0;
         int bin;
         if (pv_ok) {
-            bin = pan_view_x_to_bin(&pvc, &pv, x);
+            bin = pan_view_x_to_bin(&pvc, &pv, wx);
             if (bin == PAN_VIEW_NO_DATA) {
                 row[x] = (((x + s_wf_row_parity) % 9) == 0) ? WF_NODATA_HATCH
                                                             : WF_NODATA_BG;
@@ -334,7 +345,7 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
              * at most 24 kHz and sits inside the capture window by
              * construction, so this path cannot wrap either. */
             int b = wf_start + wf_res_bins
-                  + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
+                  + (int)((float)wx * (float)wf_window / (float)VW);
             bin = ((b % n_bins) + n_bins) % n_bins;
         }
 
