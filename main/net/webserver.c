@@ -1071,6 +1071,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 }
                 ui_request_base_mode_m(UI_MODE_WSPR);
             }
+            else if (!strcmp(scr, "cw"))   ui_request_base_mode_m(UI_MODE_CW);
             else                            ui_request_base_mode_m(UI_MODE_PANADAPTER);
         }
     } else if (action && strcmp(action, "reply") == 0) {

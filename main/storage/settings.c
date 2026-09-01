@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"   // the flush snapshot is heaped - see flush_task
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -437,15 +438,33 @@ static void load_from_nvs(qmx_settings_t *out);
 // Runs forever, wakes every 100 ms, writes to NVS once the dirty set is
 // older than DEBOUNCE_MS. Cheap to leave running; only allocates a
 // 1.5kB stack.
+//
+// ⛔ THE SNAPSHOT IS HEAPED, NOT A LOCAL, AND MUST STAY THAT WAY.
+// qmx_settings_t is over a kilobyte and grows every time a setting is added.
+// As a local it sat on this task's 3072-byte stack alongside an ESP_LOG's
+// ~1 KB vfprintf frame, which left no room and was NOT obviously wrong at any
+// single point in its history - it fit at 912 bytes and overflowed at 1192,
+// so the commit that broke it was simply the one that happened to add a field.
+// Serial-captured 2026-09-01 as a Stack protection fault in "settings_flush"
+// on EVERY page swipe (a swipe writes last_ui_mode, which wakes this task).
+// One PSRAM allocation for the life of the task costs nothing and makes the
+// next field free. Same rule as ft8_tx.c and ft8_qso.c: kB-scale structs do
+// not go on stacks. See CLAUDE.md's note on the v0.20.1 pounce crash.
 static void flush_task(void *arg)
 {
     (void)arg;
+    qmx_settings_t *const snap = heap_caps_malloc(sizeof(qmx_settings_t),
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) {
+        ESP_LOGE(TAG, "flush task: no memory for the settings snapshot - settings will NOT persist");
+        vTaskDelete(NULL);
+        return;
+    }
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(100));
         if (!s_ready) continue;
 
         dirty_t dirty_local = {0};
-        qmx_settings_t snap;
         bool do_flush = false;
 
         if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
@@ -453,7 +472,7 @@ static void flush_task(void *arg)
                 TickType_t age = xTaskGetTickCount() - s_last_change_tick;
                 if (age >= pdMS_TO_TICKS(DEBOUNCE_MS)) {
                     dirty_local = s_dirty;
-                    snap = s_pending;
+                    *snap = s_pending;
                     dirty_clear_all(&s_dirty);
                     do_flush = true;
                 }
@@ -464,97 +483,97 @@ static void flush_task(void *arg)
         if (!do_flush) continue;
 
         // We hold no mutex now — NVS writes can be slow.
-        if (dirty_test(&dirty_local, DIRTY_DB_MIN))     nvs_set_float(KEY_DB_MIN,    snap.db_min);
-        if (dirty_test(&dirty_local, DIRTY_DB_MAX))     nvs_set_float(KEY_DB_MAX,    snap.db_max);
-        if (dirty_test(&dirty_local, DIRTY_EMA_ALPHA))  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
-        if (dirty_test(&dirty_local, DIRTY_IQ_ENABLED)) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FLAT_MODE))  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap.flat_mode    ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WIFI_SSID))  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
-        if (dirty_test(&dirty_local, DIRTY_MY_CALL))    nvs_set_str(s_nvs, KEY_MY_CALL,   snap.my_callsign);
-        if (dirty_test(&dirty_local, DIRTY_MY_GRID))    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
-        if (dirty_test(&dirty_local, DIRTY_WIFI_PASS))  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
-        if (dirty_test(&dirty_local, DIRTY_LAST_VFO))  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
-        if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
-        if (dirty_test(&dirty_local, DIRTY_CW_PITCH))  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
-        if (dirty_test(&dirty_local, DIRTY_CW_CAL))    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
+        if (dirty_test(&dirty_local, DIRTY_DB_MIN))     nvs_set_float(KEY_DB_MIN,    snap->db_min);
+        if (dirty_test(&dirty_local, DIRTY_DB_MAX))     nvs_set_float(KEY_DB_MAX,    snap->db_max);
+        if (dirty_test(&dirty_local, DIRTY_EMA_ALPHA))  nvs_set_float(KEY_EMA_ALPHA, snap->ema_alpha);
+        if (dirty_test(&dirty_local, DIRTY_IQ_ENABLED)) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap->iq_enabled ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FLAT_MODE))  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap->flat_mode    ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WIFI_SSID))  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap->wifi_ssid);
+        if (dirty_test(&dirty_local, DIRTY_MY_CALL))    nvs_set_str(s_nvs, KEY_MY_CALL,   snap->my_callsign);
+        if (dirty_test(&dirty_local, DIRTY_MY_GRID))    nvs_set_str(s_nvs, KEY_MY_GRID,   snap->my_grid);
+        if (dirty_test(&dirty_local, DIRTY_WIFI_PASS))  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap->wifi_pass);
+        if (dirty_test(&dirty_local, DIRTY_LAST_VFO))  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap->last_vfo_hz);
+        if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap->ft8_freq_hz);
+        if (dirty_test(&dirty_local, DIRTY_CW_PITCH))  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap->cw_pitch_hz);
+        if (dirty_test(&dirty_local, DIRTY_CW_CAL))    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap->cw_cal_hz);
         if (dirty_test(&dirty_local, DIRTY_ZOOM)) {
-            uint32_t bits; memcpy(&bits, &snap.zoom_factor, 4);
+            uint32_t bits; memcpy(&bits, &snap->zoom_factor, 4);
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
         }
-        if (dirty_test(&dirty_local, DIRTY_COLORMAP))  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
-        if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
-        if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
-        if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
-        if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
-        if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
-        if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
-        if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
-        if (dirty_test(&dirty_local, DIRTY_CQ_MAX_CALLS)) nvs_set_u8(s_nvs, KEY_CQ_MAX, snap.cq_max_calls);
+        if (dirty_test(&dirty_local, DIRTY_COLORMAP))  nvs_set_u8(s_nvs, KEY_COLORMAP, snap->colormap_idx);
+        if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap->brightness_pct);
+        if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap->last_ui_mode);
+        if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap->last_unix_time);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap->cq_msg[0]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap->cq_msg[1]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap->cq_msg[2]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap->cq_sel);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MAX_CALLS)) nvs_set_u8(s_nvs, KEY_CQ_MAX, snap->cq_max_calls);
         for (int i = 0; i < 6; i++) {
             if (dirty_test(&dirty_local, DIRTY_CW_MSG0 + i)) {
                 char k[12];
                 snprintf(k, sizeof(k), KEY_CW_MSG "%d", i);
-                nvs_set_str(s_nvs, k, snap.cw_msg[i]);
+                nvs_set_str(s_nvs, k, snap->cw_msg[i]);
             }
         }
-        if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap.cw_park);
-        if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap.cw_sim_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap.hound_mode);
-        if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap.cq_listen_every);
-        if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
-        if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
-        if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_CALC)) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap->cw_park);
+        if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap->hound_mode);
+        if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap->cq_listen_every);
+        if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap->onboarded ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap->ft8_filters, sizeof(snap->ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap->kbd_bindings, sizeof(snap->kbd_bindings));
+        if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap->wifi_enabled ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap->qmx_gps      ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap->qmx_time_pushed ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_CALC)) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap->freq_kp_calc ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_KP_POS)) {
-            nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
-            nvs_set_i16(s_nvs, KEY_FREQ_KP_DY, snap.freq_kp_dy);
+            nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap->freq_kp_dx);
+            nvs_set_i16(s_nvs, KEY_FREQ_KP_DY, snap->freq_kp_dy);
         }
-        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_SMALL)) nvs_set_u8(s_nvs, KEY_FREQ_KP_SMALL, snap.freq_kp_small ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_PASSBAND_HZ))   nvs_set_u32(s_nvs, KEY_PASSBAND_HZ, snap.passband_width_hz);
-        if (dirty_test(&dirty_local, DIRTY_QRZ_KEY))      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
-        if (dirty_test(&dirty_local, DIRTY_QRZ_UPLOADED)) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
-        if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
-        if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
-        if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
-        if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap.cloudlog_url);
-        if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap.cloudlog_key);
-        if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap.cloudlog_station);
-        if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap.cloudlog_uploaded_n);
-        if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
-        if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
-        if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
-        if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
-        if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
-        if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
-        if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
-        if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_SMALL)) nvs_set_u8(s_nvs, KEY_FREQ_KP_SMALL, snap->freq_kp_small ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PASSBAND_HZ))   nvs_set_u32(s_nvs, KEY_PASSBAND_HZ, snap->passband_width_hz);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_KEY))      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap->qrz_api_key);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_UPLOADED)) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap->qrz_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap->eqsl_user);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap->eqsl_pswd);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap->eqsl_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap->cloudlog_url);
+        if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap->cloudlog_key);
+        if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap->cloudlog_station);
+        if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap->cloudlog_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap->cw_audio_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap->cw_audio_vol);
+        if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap->wf_black_db);
+        if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap->wf_contrast_db);
+        if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap->wf_floor_blend);
+        if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap->wf_window);
+        if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap->display_flip ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap->qmx_vol_db);
+        if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap->cw_tx_offset_hz);
+        if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap->swr_limit_x10);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
-            nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
-            nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
+            nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap->act_type);
+            nvs_set_str(s_nvs, KEY_ACT_REF, snap->act_ref);
         }
-        if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
-        if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap.spur_mode);
-        if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap.psk_rx_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap.bt_mouse_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_CLUSTER_EN))    nvs_set_u8(s_nvs, KEY_CLUSTER_EN,    snap.cluster_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap->bandplan_region);
+        if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap->distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap->rit_pill_show ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap->still_view ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap->still_notice_done ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap->spur_mode);
+        if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap->ft8_early_decode ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap->greylist_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap->pskreporter_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap->psk_rx_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap->bt_mouse_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CLUSTER_EN))    nvs_set_u8(s_nvs, KEY_CLUSTER_EN,    snap->cluster_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap->spots_mode_filter ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap->spots_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap->rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap->sota_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap->ota_autodl ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap->drawer_expert ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
         // Known-network list: not part of s_pending (see settings.h), so take a
         // consistent copy under the mutex before writing it out.
@@ -571,55 +590,55 @@ static void flush_task(void *arg)
         xSemaphoreGive(s_mutex);
         nvs_set_blob(s_nvs, KEY_WIFI_KNOWN, kn, (size_t)kn_n * sizeof(wifi_known_t));
     }
-        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
-        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FIELD_DAY_EN)) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap.field_day_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FD_CLASS))     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
-        if (dirty_test(&dirty_local, DIRTY_FD_SECTION))   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
-        if (dirty_test(&dirty_local, DIRTY_SIM_MODE))     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_DIAL))    nvs_set_u32(s_nvs, KEY_WSPR_DIAL, snap.wspr_dial_hz);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
+        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap->tx_tone_hz);
+        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap->tx_tone_hold ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap->ft8_sync_lines ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FIELD_DAY_EN)) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap->field_day_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FD_CLASS))     nvs_set_str(s_nvs, KEY_FD_CLASS, snap->fd_class);
+        if (dirty_test(&dirty_local, DIRTY_FD_SECTION))   nvs_set_str(s_nvs, KEY_FD_SECTION, snap->fd_section);
+        if (dirty_test(&dirty_local, DIRTY_SIM_MODE))     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap->sim_mode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DIAL))    nvs_set_u32(s_nvs, KEY_WSPR_DIAL, snap->wspr_dial_hz);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap->wspr_tx_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap->wspr_duty_pct);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap->wspr_tx_dbm);
         if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
-            nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
-            nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, snap.wspr_pa_saved_x10);
+            nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap->wspr_pa_reduce ? 1 : 0);
+            nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, snap->wspr_pa_saved_x10);
         }
-        if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap.wspr_dump_cycles);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap.wspr_hop_mask);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap.wspr_hop_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap.wspr_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_NET))     nvs_set_u8(s_nvs, KEY_WSPR_NET,  snap.wspr_net_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
-        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
-        if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap->wspr_dump_cycles);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap->wspr_hop_mask);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap->wspr_hop_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap->wspr_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_NET))     nvs_set_u8(s_nvs, KEY_WSPR_NET,  snap->wspr_net_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap->ft8_op_mode);
+        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap->charge_limit_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap->charge_limit_pct);
+        if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap->resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
-            nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
-            nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
+            nvs_set_i16(s_nvs, KEY_RESMON_DX, snap->resmon_dx);
+            nvs_set_i16(s_nvs, KEY_RESMON_DY, snap->resmon_dy);
         }
-        if (dirty_test(&dirty_local, DIRTY_DISP_SLEEP))    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap.display_sleep_min);
+        if (dirty_test(&dirty_local, DIRTY_DISP_SLEEP))    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap->display_sleep_min);
         // State/county ride DIRTY_LOTW_DXCC: the dirty bitmap is full (bits
         // 0-63 all allocated) and all three are only ever written together, so
         // one bit covers them. Re-writing an unchanged dxcc costs nothing.
         if (dirty_test(&dirty_local, DIRTY_LOTW_DXCC)) {
-            nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap.lotw_dxcc);
-            nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap.lotw_state);
-            nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap.lotw_county);
+            nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap->lotw_dxcc);
+            nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap->lotw_state);
+            nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap->lotw_county);
         }
         // One bit for all four: they are only ever set together, and a
         // partially-applied network configuration is not a state worth being
         // able to reach.
         if (dirty_test(&dirty_local, DIRTY_WIFI_STATIC)) {
-            nvs_set_str(s_nvs, KEY_WIFI_IP,   snap.wifi_ip);
-            nvs_set_str(s_nvs, KEY_WIFI_MASK, snap.wifi_mask);
-            nvs_set_str(s_nvs, KEY_WIFI_GW,   snap.wifi_gw);
-            nvs_set_str(s_nvs, KEY_WIFI_DNS,  snap.wifi_dns);
+            nvs_set_str(s_nvs, KEY_WIFI_IP,   snap->wifi_ip);
+            nvs_set_str(s_nvs, KEY_WIFI_MASK, snap->wifi_mask);
+            nvs_set_str(s_nvs, KEY_WIFI_GW,   snap->wifi_gw);
+            nvs_set_str(s_nvs, KEY_WIFI_DNS,  snap->wifi_dns);
         }
-        if (dirty_test(&dirty_local, DIRTY_LOTW_CQZ))      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
-        if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
-        if (dirty_test(&dirty_local, DIRTY_LOTW_UPLOADED)) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap.lotw_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_CQZ))      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap->lotw_cqz);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap->lotw_ituz);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_UPLOADED)) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap->lotw_uploaded_n);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {

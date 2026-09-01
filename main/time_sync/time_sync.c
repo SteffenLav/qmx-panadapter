@@ -671,5 +671,10 @@ void time_sync_init(i2c_master_bus_handle_t bus)
         set_qmx_time_pushed(true);
     }
 
-    psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
+    /* 4608, not 3072: this task puts qmx_settings_t on its stack (twice), and
+     * that struct is now 1192 bytes and grows with every setting added - the
+     * same growth that overflowed "settings_flush" on 2026-09-01. The stack is
+     * in PSRAM, so the extra 1.5 KB is free. If a third settings copy ever
+     * lands here, heap it instead of raising this again. */
+    psram_task_create(time_sync_task, "time_sync", 4608, NULL, 4, tskNO_AFFINITY);
 }
