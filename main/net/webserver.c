@@ -40,6 +40,7 @@
 #include "adif/cloudlog_upload.h" // cloudlog_upload_pending (#171)
 #include "util/net_guard.h"   // net_url_parse - save-time URL sanity only
 #include "util/ip_guard.h"    // #307: a static IP must not lock the operator out
+#include "util/sock_probe.h"  // #313: how many LWIP sockets are left
 #include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
@@ -831,6 +832,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
 
     const esp_app_desc_t *app = esp_app_get_description();
+    /* #313: two listeners died together with the stack alive underneath.
+     * A small capped probe, so the figure costs a few socket()/close()
+     * pairs and never holds enough of the table to cause what it measures. */
+    cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free(6));
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
     int band_count = 0;

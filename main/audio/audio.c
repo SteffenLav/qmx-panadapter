@@ -2,6 +2,7 @@
 #include "cat.h"          // cat_is_ready - the dead-stream watchdog's CAT-alive test
 #include "usb_replug.h"   // the dead-stream watchdog's escalation
 #include "util/usb_patch_counters.h"  // #189: report the silent USB patches' counts
+#include "util/sock_probe.h"          // #313: socket-exhaustion canary
 #include "dsp.h"
 
 #include <string.h>
@@ -100,6 +101,10 @@ static void heap_watchdog_task(void *arg)
         // where the count is read (TODO #189). Prints only on change, so a
         // healthy device stays quiet and the line appearing IS the evidence.
         usb_patch_counters_report();
+        /* #313: the socket table filling up is silent - two listeners stop
+         * accepting while ping, CAT and FT8 all keep working. One socket()
+         * plus close(), change-detected, so a healthy device stays quiet. */
+        sock_probe_report();
 
         size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
