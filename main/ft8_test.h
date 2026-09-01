@@ -48,6 +48,20 @@ void ft8_arrl_fd_e2e_selftest(void);
 // stack (>=32 KB), same constraint as the self-test (see ft8_test.c's
 // comment on why this can't run on the default "main" task stack).
 // Returns false if encoding/allocation failed or no candidate decoded.
+// As ft8_synth_and_decode(), but the signal is placed at a chosen level in
+// synthetic noise so the decoder measures a REAL signal-to-noise ratio near
+// want_snr_db. FT8_SIM_SNR_CLEAN means "no noise at all" - the original
+// behaviour, which every self-test uses and which always reads about +10.
+//
+// The measured value will not equal want_snr_db exactly: it goes through the
+// same estimator as a real signal, including its calibration offset, and that
+// is the point - the simulator must not report a number it was simply told.
+#define FT8_SIM_SNR_CLEAN  999
+bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
+                             int want_snr_db,
+                             char *out_text, size_t out_len,
+                             int *out_snr_db, int *out_score);
+
 bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
                           char *out_text, size_t out_len,
                           int *out_snr_db, int *out_score);
@@ -61,6 +75,24 @@ void ft8_sim_synth_selftest(void);
 // decoded FT8 candidate in the last slot that decoded anything. Positive = system
 // clock is fast. Returns false if no valid measurement is available yet.
 bool ft8_get_last_timing_ms(int *out_ms);
+
+// Slot-start UTC (seconds) of the last slot we actually RECEIVED in the given
+// transmit window, or 0 if we have never received one. 0 while nothing has been
+// captured yet.
+//
+// Exists because "no stations decoded in this window" is ambiguous: it means the
+// window is empty OR that we were transmitting into it and heard nothing at all.
+// Those must not look the same, and before this they both rendered as FREE -
+// i.e. the window we were keying read as "entirely available" (Roy KI0ER, #135).
+// Compare the age against a couple of slot periods to decide whether the picture
+// for that window is current or merely the last thing we knew.
+int64_t ft8_last_rx_utc_for_parity(bool even);
+
+// Slot-start UTC of the last slot we TRANSMITTED in, per window. Lets a caller
+// tell "never heard this window" from "we were talking in it" - see
+// ft8_robot_occupancy_ready(), where conflating the two stalled auto-answer for a
+// cycle after every QSO.
+int64_t ft8_last_tx_utc_for_parity(bool even);
 
 // The REAL per-slot correction actually applied to the UTC clock (ms; 0 = none
 // applied this slot). This is the damped+clamped value, NOT the raw measurement

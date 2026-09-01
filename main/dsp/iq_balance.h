@@ -24,6 +24,14 @@ bool iq_balance_is_enabled(void);
 // samples or the running estimates.
 void iq_balance_apply(int16_t *i_inout, int16_t *q_inout);
 
+// Snapshot of the estimator's internal state, for diagnosing whether it is
+// actually converging rather than sitting frozen. `upd`/`frozen` are counts
+// since the previous call and are reset by it; any pointer may be NULL. Kept
+// out of the estimator itself so this file stays ESP-free and host-testable.
+void iq_balance_get_debug(float *k_phi, float *k_amp,
+                          float *p_i, float *p_q, float *xy,
+                          uint32_t *upd, uint32_t *frozen);
+
 #ifdef __cplusplus
 }
 #endif

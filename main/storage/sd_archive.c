@@ -11,6 +11,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"      // RTC_NOINIT_ATTR - the #282 durable instrument
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_app_desc.h"   // esp_app_get_description() for the README version stamp
 
@@ -22,6 +24,10 @@
 #include "settings.h"   // wifi_enabled: the WiFi-aware mirroring gate
 #include "ui.h"
 #include "psram_task.h"
+// The SD write pauses the spectrum stream around itself - see mirror_diag_slow().
+// storage -> net is the same direction net/webserver.c already goes the other way
+// (it takes sd_archive_lock() for uploads); both live in the `main` component.
+#include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
 
 static const char *TAG = "sd_arch";
 
@@ -44,6 +50,17 @@ static const char *TAG = "sd_arch";
 #define SD_LOG_MAX_BYTES (5 * 1024 * 1024)   // rotate qmx-log.txt at 5 MB
 #define PROBE_MS          10000               // mount-probe cadence when no card
 #define WORK_MS           3000                // mirror cadence while mounted
+// Slow diag-only cadence used while WiFi is on (#153). 30 s rather than 3, and the
+// file is opened, appended, fsync'd and CLOSED each time instead of being held
+// open - so the exposure to the SD/WiFi contention this project has fought for
+// months is roughly a tenth of the old continuous mode, and there is no held-open
+// handle for a card pull or a crash to damage.
+#define SLOW_LOG_MS       30000
+// Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
+// capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
+// 5 minutes apart and gives up after an hour rather than probing for ever.
+#define MOUNT_RETRY_MS    300000            // 5 min between post-boot attempts
+#define MOUNT_RETRY_MAX   12                // ~1 hour, then stop for good
 #define DIAG_CHUNK        4096                // diag flush copy buffer
 
 static volatile bool s_mounted      = false;
@@ -181,6 +198,77 @@ static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see 
 static int s_consec_write_fail = 0;
 
 // Quick mount retries inside the boot window, while DMA memory is still plentiful.
+// Forward declaration: the temp instrument in mirror_diag() reports it.
+static bool s_parked;
+
+// ===========================================================================
+// TEMP INSTRUMENT (#282) - DURABLE ON PURPOSE. Remove with the diagnosis.
+//
+// The 2026-08-28 capture contains a contradiction this file's code does not
+// allow: "diag write failed" (reachable only through mirror_diag() with a
+// non-NULL s_log_file, which only mount() sets) on a boot where mount() never
+// logged success and all five boot attempts failed; plus the "stopping probes"
+// line printed twice, though its branch is unreachable once s_parked is set and
+// nothing ever clears s_parked.
+//
+// ⛔ IT MUST SURVIVE NOT BEING WATCHED. A serial capture expires, rotates and
+// is only running when someone started it, and /api/log/saved holds ~11 minutes
+// (CLAUDE.md). If this takes days to recur, log lines alone would miss it. So
+// the evidence is COUNTED into RTC no-init RAM - the same store the crash
+// record uses - which survives every warm reset (a reboot, a flash, a panic)
+// and is served in /api/status as "sd_instr". Ask the device at any later date;
+// a non-zero handle_no_mount or park_reentered is the thing being hunted.
+//
+// Cleared only by a full power cycle, which is honest: RTC RAM does not survive
+// one, and the counters say which boot they belong to via boot_id.
+// ===========================================================================
+#define SD_INSTR_MAGIC 0x5D1A0282u
+RTC_NOINIT_ATTR static struct {
+    uint32_t magic;
+    uint32_t boot_id;          // increments each boot, so a count can be dated
+    uint32_t mount_enter;      // mount() called
+    uint32_t mount_ok;         // ...and reached the end
+    uint32_t handle_no_mount;  // ⭐ THE ANOMALY: a write path held a handle with !s_mounted
+    uint32_t unmount_calls;
+    uint32_t park_set;         // s_parked latched true
+    uint32_t park_reentered;   // ⭐ THE OTHER ANOMALY: the no-card branch ran while parked
+    uint32_t first_anom_uptime_s;  // uptime of the FIRST anomaly of either kind, 0 = none
+    uint32_t first_anom_boot;      // and which boot it was
+} s_instr;
+
+static void instr_init(void)
+{
+    if (s_instr.magic != SD_INSTR_MAGIC) {
+        memset(&s_instr, 0, sizeof s_instr);
+        s_instr.magic = SD_INSTR_MAGIC;
+    }
+    s_instr.boot_id++;
+}
+
+// Record the first anomaly seen, whichever kind, so there is a timestamp to
+// correlate against a capture if one happens to be running.
+static void instr_note_anomaly(void)
+{
+    if (s_instr.first_anom_uptime_s == 0) {
+        s_instr.first_anom_uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        s_instr.first_anom_boot     = s_instr.boot_id;
+    }
+}
+
+void sd_archive_instr_get(sd_archive_instr_t *out)
+{
+    if (!out) return;
+    out->boot_id             = s_instr.boot_id;
+    out->mount_enter         = s_instr.mount_enter;
+    out->mount_ok            = s_instr.mount_ok;
+    out->handle_no_mount     = s_instr.handle_no_mount;
+    out->unmount_calls       = s_instr.unmount_calls;
+    out->park_set            = s_instr.park_set;
+    out->park_reentered      = s_instr.park_reentered;
+    out->first_anom_uptime_s = s_instr.first_anom_uptime_s;
+    out->first_anom_boot     = s_instr.first_anom_boot;
+}
+
 #define SD_BOOT_MOUNT_TRIES   5
 #define SD_BOOT_MOUNT_GAP_MS  150
 
@@ -188,15 +276,75 @@ static int s_consec_write_fail = 0;
 // Returns false on a write error (possible card removal).
 static bool mirror_diag(void)
 {
-    if (!s_log_file) return false;
+    // === TEMP INSTRUMENT (2026-08-28, #282) - remove once the contradiction is
+    // closed. This early return is SILENT, which is why the 2026-08-28 capture
+    // could not be read: it shows "diag write failed" (reachable only with a
+    // non-NULL handle) on a boot where mount() never logged success, so either
+    // a mount happened without logging or a handle exists without a mount.
+    // Change-detected so a parked session does not spam.
+    // ⭐ THE ANOMALY, counted durably: a live handle with no mount. This is the
+    // state the 2026-08-28 capture implies and that the code says cannot exist.
+    if (s_log_file && !s_mounted) {
+        s_instr.handle_no_mount++;
+        instr_note_anomaly();
+        ESP_LOGE(TAG, "INSTR ANOMALY: log handle %p with s_mounted=0 (parked=%d) "
+                      "- this is the #282 case", (void *)s_log_file, (int)s_parked);
+    }
+    if (!s_log_file) {
+        static bool s_noted_nofile = false;
+        if (!s_noted_nofile) {
+            s_noted_nofile = true;
+            ESP_LOGW(TAG, "INSTR mirror_diag declined: no log handle "
+                          "(mounted=%d parked=%d)", (int)s_mounted, (int)s_parked);
+        }
+        return false;
+    }
 
+    // ⛔ BOUNDED. This loop used to be `for (;;)` - it drained the ENTIRE diag
+    // backlog to the card in one go, under one hold of s_sd_mutex.
+    //
+    // On the first burst after a boot mount, that backlog is the whole boot log,
+    // and the burst therefore runs straight through WiFi bring-up - the one
+    // window this project has hardware-proven the card cannot survive (2026-07-26:
+    // with WiFi never started the same card mirrored flawlessly for 230 s; with
+    // WiFi on it dies within 10-140 s).
+    //
+    // Measured on this bench 2026-09-01, and it is what the operator sees as the
+    // SD dot appearing and then going out:
+    //
+    //     13.703s  SD mounted on boot attempt 5/5
+    //     18.869s  Got IP                        <- WiFi comes up DURING the burst
+    //     42.547s  diag write failed: I/O error (errno 5), parked=0, live handle
+    //     90.2s    unmount(write failures)
+    //
+    // `sd_arch` logs NOTHING between 13.703 and 42.547 - 28.8 s of silence. That
+    // cannot be many quiet iterations: a burst that completes with WiFi on calls
+    // park_snapshot(), which logs. So it is ONE burst, and it is still running
+    // when WiFi comes up 5 s later.
+    //
+    // Two consequences, and the second is the nastier one:
+    //  - the card is being written continuously across exactly the wrong window;
+    //  - park_snapshot() is the design's OWN protection against that, and it can
+    //    only run after a burst that SUCCEEDS - so the failure keeps the device
+    //    permanently in the mode the parking was invented to leave.
+    // The retry path then re-attempts the same oversized write (the cursor is
+    // deliberately not advanced on error), so every retry is the same doomed
+    // write, five times, and then the card is declared removed.
+    //
+    // Bounding it fixes both: a burst is short, a partial catch-up still counts
+    // as success, the cursor advances, and the very first burst can reach the
+    // park. Whatever backlog is left is then written by mirror_diag_slow() at
+    // the #153 cadence, in 4 KB pieces with the stream paused - which is the
+    // safe path, not the one that has to be raced.
+    #define MIRROR_DIAG_MAX_CHUNKS 4      // 16 KB per burst, ~1 burst per 3 s
     static char buf[DIAG_CHUNK];
-    for (;;) {
+    for (int chunk = 0; chunk < MIRROR_DIAG_MAX_CHUNKS; chunk++) {
         uint64_t next = s_diag_cursor;
         size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
         if (got == 0) break;
         if (fwrite(buf, 1, got, s_log_file) != got) {
-            ESP_LOGW(TAG, "diag write failed: %s", strerror(errno));
+            ESP_LOGW(TAG, "diag write failed: %s  [INSTR mounted=%d parked=%d file=%p]",
+                     strerror(errno), (int)s_mounted, (int)s_parked, (void *)s_log_file);
             sd_fail_diag("diagwrite", errno);
             // MUST clear the stream error indicator, or every later fwrite on
             // this FILE* returns short WITHOUT touching the card - the retry
@@ -236,7 +384,17 @@ static bool mirror_diag(void)
 }
 
 // True once we have deliberately stopped touching the card for this session.
-static bool s_parked = false;
+static bool s_parked = false;   // (forward-declared above for the temp instrument)
+static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
+static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
+/* Set once the slow diag mirror has given up for this session. The card stays
+ * MOUNTED - only the 30 s background append stops. Never cleared: a path that
+ * has failed three times running has earned being left alone, and the on-demand
+ * consumers are unaffected. */
+static bool    s_slow_stopped = false;
+/* Post-boot mount retries (see the watchdog in the task loop). */
+static int     s_mount_retries = 0;
+static int64_t s_mount_retry_last_us = 0;
 
 // Cleanly stop mirroring and release the card, leaving the completed backup on
 // it. Used when WiFi is (or is becoming) active: live mirroring provably cannot
@@ -249,6 +407,86 @@ static bool s_parked = false;
 // corrupted, which is the most likely origin of the garbage entries seen on the
 // operator's card. fsync before fclose is mandatory (FatFs only commits the data
 // + directory entry on f_sync/f_close).
+// Append whatever the diag ring has produced since the last call, opening and
+// closing the file around the write.
+//
+// ⛔ WHY THIS EXISTS (#153). Parking used to stop SD logging entirely once WiFi
+// was up, on the reasoning that "the full log is available over the network at
+// /api/log". That reasoning fails in exactly the case the log is for: after a
+// crash the RAM ring is GONE, and the flash copy is a rolling ~11-minute window.
+// Michael KZ4LY sent "the full log from the microSD" to explain a reboot and it
+// was 17 boot headers each ending at uptime ~4.8 s - a log that stops before the
+// crash every single time, and which LOOKS like evidence.
+//
+// So the card keeps getting the log, just slowly. Open/append/fsync/close per
+// burst is deliberately not the held-open handle the continuous path uses: it
+// costs a little more per write and removes the corruption window entirely.
+// ⛔ AND WHY IT IS QUIESCED (2026-09-01). #153 restored this write, and THIS
+// WRITE IS WHAT TRIPS THE EIO WEDGE - measured on the bench the same morning:
+//
+//     6.1-8.2s  boot mount attempts 1-4 FAILED err=0x108
+//    13.7s      mounted on attempt 5/5                <- the dot comes on
+//    42-90s     diag write failed: I/O error (errno 5) x5, mounted=1
+//    90.2s      INSTR unmount(write failures)         <- the dot goes out
+//
+// which is exactly the operator's report: the SD dot appears, then vanishes.
+// It is NOT a v1.10.5 regression - no SD code changed in that release - and it
+// is not memory: CLAUDE.md records this same EIO with 135 KB of DMA free and a
+// 65 KB largest block. It is the documented SPI2-SD vs WiFi-SDIO contention.
+//
+// Every OTHER place in this firmware that writes the card while WiFi is up
+// already knows this and quiets the link first - the QRZ/eQSL/LoTW uploads, the
+// log download, the Reader's Save offline, the /files browser. This path, added
+// later, did none of it. So it is the one SD write on the device that runs
+// straight into the contention with the stream at full rate.
+//
+// ⚠ SAVE AND RESTORE, never set-then-clear. The pause is a plain boolean shared
+// with ~29 other call sites, and upload_task() raises it BEFORE it takes
+// sd_archive_lock() - so a 30 s write can land inside an upload's own pause
+// window, and clearing it unconditionally would drop that upload's protection
+// while it is still running. Which is the very hazard being guarded against.
+//
+// ⛔ THE WS PAUSE ONLY - NOT dsp_set_transfer_quiet(), which the upload path
+// pairs it with. Considered and rejected on 2026-09-01, so it does not get
+// "restored" later as an oversight:
+//   - It buys nothing here. It exists to stop fft_task (pri 4, core 1)
+//     preempting the upload task (pri 3, core 0). THIS task is pri 2 pinned to
+//     core 0, so fft_task never preempts it and there is nothing to yield.
+//   - And it would cost real decodes. In the quiet branch fft_task DISCARDS
+//     audio in 50 ms chunks (dsp.c). An upload is occasional and operator-
+//     initiated; this write runs every 30 s forever, so during FT8 it would
+//     throw audio away on every cycle - which is #51, the single most expensive
+//     bug in this project's history, reintroduced deliberately.
+// The contention being avoided is SPI2-SD DMA against WiFi-SDIO DMA, and the
+// ~10 fps spectrum stream is the SDIO traffic that matters. Pausing it is the
+// whole point; quieting the FFT is not.
+static bool mirror_diag_slow(void)
+{
+    static char buf[DIAG_CHUNK];
+    uint64_t next = s_diag_cursor;
+    size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
+    if (got == 0) return true;              // nothing new; not a failure
+
+    const bool was_paused = webserver_ws_is_paused();
+    if (!was_paused) webserver_ws_set_paused(true);
+
+    FILE *f = fopen(SD_LOG_PATH, "ab");
+    bool ok;
+    if (!f) {
+        sd_fail_diag("slowopen", errno);
+        ok = false;
+    } else {
+        ok = (fwrite(buf, 1, got, f) == got);
+        if (ok) { fflush(f); fsync(fileno(f)); }
+        else    { sd_fail_diag("slowwrite", errno); }
+        fclose(f);
+        if (ok) { s_diag_cursor = next; s_log_bytes += got; }
+    }
+
+    if (!was_paused) webserver_ws_set_paused(false);
+    return ok;
+}
+
 static void park_snapshot(void)
 {
     // Close the diag log but deliberately KEEP THE CARD MOUNTED.
@@ -273,12 +511,18 @@ static void park_snapshot(void)
     }
     s_parked = true;                        // stop background mirroring only
     ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);   // yellow: card usable, not live-mirroring
-    ESP_LOGW(TAG, "backup snapshot complete - background mirroring off while WiFi is "
-                  "on; card stays mounted for Save-offline / web file browser");
+    ESP_LOGW(TAG, "backup snapshot complete - file mirroring off while WiFi is on; "
+                  "diag log continues every %d s (#153) and the card stays mounted "
+                  "for Save-offline / web file browser", SLOW_LOG_MS / 1000);
 }
 
-static void unmount(void)
+static void unmount(const char *why)
 {
+    // === TEMP INSTRUMENT (#282): "SD card unmounted" said nothing about which
+    // path decided that, and the dot going dark is what the operator sees.
+    s_instr.unmount_calls++;
+    ESP_LOGW(TAG, "INSTR unmount(%s) (mounted=%d parked=%d file=%p)",
+             why ? why : "?", (int)s_mounted, (int)s_parked, (void *)s_log_file);
     if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
     bsp_sdcard_deinit(SD_MOUNT_POINT);
     s_mounted = false;
@@ -315,6 +559,12 @@ static bool try_mount(void)
 {
     size_t pre_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t pre_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    // === TEMP INSTRUMENT (#282): mount() logs success at the very END, so any
+    // path that opens the log handle and then leaves early is invisible - and
+    // that is exactly the shape the 2026-08-28 capture implies.
+    s_instr.mount_enter++;
+    ESP_LOGW(TAG, "INSTR mount() entered (mounted=%d parked=%d file=%p)",
+             (int)s_mounted, (int)s_parked, (void *)s_log_file);
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
     if (err != ESP_OK) {
         sd_fail_diag("mount", (int)err);
@@ -344,12 +594,17 @@ static bool try_mount(void)
     }
     long pos = ftell(s_log_file);
     s_log_bytes = (pos > 0) ? (size_t)pos : 0;
+    // The handle now EXISTS while s_mounted is still false. If anything below
+    // fails or blocks, that is the state the capture appears to have caught.
+    ESP_LOGW(TAG, "INSTR mount() opened log handle %p, s_mounted still %d",
+             (void *)s_log_file, (int)s_mounted);
 
     s_adif_dirty = true;           // force a full mirror right after mounting
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
     s_mounted = true;
+    s_instr.mount_ok++;
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
     return true;
@@ -417,6 +672,138 @@ static void sd_archive_task(void *arg)
                 ESP_LOGW(TAG, "WiFi now off - card still mounted and usable, but "
                               "background mirroring stays off until reboot");
             }
+            // ⭐ MOUNT RETRY WATCHDOG (operator's suggestion, 2026-09-01:
+            // "maybe you should establish a watchdog? The card is playing with
+            // you"). He is right, and the thing it replaces is a CLAIM that was
+            // never tested.
+            //
+            // The no-card park below says "further mount attempts cannot
+            // succeed", on the strength of a 2026-07-26 measurement that the
+            // MALLOC_CAP_DMA pool falls to ~400 B once WiFi is up. After the
+            // #284 reclamation that is no longer what the device reads: this
+            // very session sat at ~16 KB DMA free, and the boot attempts that
+            // failed did so with 44-50 KB free. So "cannot" is an assumption
+            // carried forward from different numbers.
+            //
+            // The mount is genuinely intermittent - measured across six boots
+            // today with TWO cards and both a warm reset and a cold power
+            // cycle, it has failed all five boot attempts and it has succeeded
+            // on the first, with no variable yet found that predicts which.
+            // Four different error codes in one boot (0x108 INVALID_RESPONSE,
+            // 0x109 INVALID_CRC, 0x103 INVALID_STATE, 0x107 TIMEOUT). Against
+            // an intermittent fault, retrying IS the fix.
+            //
+            // ⛔ BOUNDED, and deliberately slow. CLAUDE.md records the FT8
+            // respawn watchdog firing ~390 times and degrading the device it
+            // was rescuing - "a watchdog that degrades the device it is trying
+            // to rescue is not a watchdog". A mount attempt touches the SD/WiFi
+            // contention this file exists to avoid, so it gets a wide interval
+            // and a hard cap, and then it really does stop.
+            //
+            // It also fixes something the operator hit head-on: a card inserted
+            // while the device is running was IGNORED FOR THE WHOLE SESSION,
+            // silently, with the dot never lighting. Now it is picked up within
+            // one retry interval.
+            if (!s_mounted && s_mount_retries < MOUNT_RETRY_MAX) {
+                int64_t now_us = esp_timer_get_time();
+                if (now_us - s_mount_retry_last_us >= (int64_t)MOUNT_RETRY_MS * 1000) {
+                    s_mount_retry_last_us = now_us;
+                    s_mount_retries++;
+                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                        bool ok = try_mount();
+                        xSemaphoreGive(s_sd_mutex);
+                        if (ok) {
+                            // Say it plainly: this is the answer to whether a
+                            // post-boot mount is possible at all, and it was
+                            // asserted to be impossible for a year.
+                            ESP_LOGW(TAG, "MOUNT RETRY %d/%d SUCCEEDED - a card "
+                                          "mounted after the boot window, which "
+                                          "the old code assumed could never happen",
+                                     s_mount_retries, MOUNT_RETRY_MAX);
+                            s_parked = false;   // let the normal burst path run
+                            s_mount_retry_last_us = 0;
+                            s_mount_retries = 0;
+                            continue;
+                        }
+                        ESP_LOGI(TAG, "mount retry %d/%d failed - next in %d s",
+                                 s_mount_retries, MOUNT_RETRY_MAX,
+                                 MOUNT_RETRY_MS / 1000);
+                        if (s_mount_retries >= MOUNT_RETRY_MAX)
+                            ESP_LOGW(TAG, "mount retries exhausted (%d) - no "
+                                          "further attempts this session",
+                                     MOUNT_RETRY_MAX);
+                    }
+                }
+            }
+
+            // ⭐ #153: keep the DIAG LOG going, slowly, so the card can still
+            // contain a crash. Parking used to stop it dead, which made every SD
+            // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
+            // was sent to explain. Only while a card is actually mounted; the
+            // no-card park below must stay silent.
+            if (s_mounted && !s_slow_stopped) {
+                int64_t now_us = esp_timer_get_time();
+                if (now_us - s_slow_last_us >= (int64_t)SLOW_LOG_MS * 1000) {
+                    s_slow_last_us = now_us;
+                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                        // ONE call - an earlier version called it twice in the
+                        // recovery branch, which would have written the same
+                        // chunk to the card a second time.
+                        bool ok = mirror_diag_slow();
+                        if (!ok) {
+                            if (++s_slow_fail >= 3) {
+                                // ⛔ STOP THE MIRROR - DO NOT UNMOUNT.
+                                //
+                                // This used to call unmount("slow mirror
+                                // failures"), and park_snapshot() a few lines
+                                // above already argues why that is wrong, in its
+                                // own words: "a remount is impossible once WiFi
+                                // is up... Unmounting would therefore make all
+                                // three report 'no SD card' with a card
+                                // physically inserted, and nothing could ever
+                                // bring it back." The failure path did it anyway.
+                                //
+                                // What is being given up here is an OPTIONAL
+                                // background write. The full backup - qso.adi,
+                                // qmx-config.txt, the LoTW cert and key, the
+                                // README - was completed seconds after boot, and
+                                // what the card is still FOR at this point is
+                                // Save-offline, the /files browser and the SD log
+                                // download. Destroying all three because a
+                                // best-effort diag append failed three times is
+                                // the wrong trade, and it is exactly what the
+                                // operator sees as the SD dot going out.
+                                //
+                                // Measured 2026-09-01: `SDFAIL[slowopen] err=0x5`
+                                // three times at the 30 s cadence, then unmount,
+                                // on a card that had been serving files happily
+                                // for 1 h 56 m. The card was almost certainly
+                                // still there.
+                                //
+                                // A genuinely REMOVED card still gets noticed -
+                                // by the on-demand paths, which fail loudly to
+                                // the operator who asked for something. That is
+                                // the only case where "card gone" is a safe
+                                // conclusion; a background write that failed is
+                                // not.
+                                s_slow_stopped = true;
+                                ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);
+                                ESP_LOGW(TAG, "slow diag mirror failed %d times - "
+                                              "stopping it for this session. The card "
+                                              "stays MOUNTED and usable for Save-offline, "
+                                              "/files and the log download; only the "
+                                              "30 s diag append is given up.",
+                                         s_slow_fail);
+                            }
+                        } else if (s_slow_fail) {
+                            ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s)",
+                                     s_slow_fail);
+                            s_slow_fail = 0;
+                        }
+                        xSemaphoreGive(s_sd_mutex);
+                    }
+                }
+            }
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
         }
@@ -425,6 +812,16 @@ static void sd_archive_task(void *arg)
         // futile (they fail 0x101 ESP_ERR_NO_MEM regardless of the card), and
         // retrying every 10 s forever is pure log noise. Stop cleanly instead.
         if (wifi_on && !s_mounted) {
+            // ⭐ THE OTHER ANOMALY: reaching here a second time means s_parked
+            // was false again, and nothing in this file ever clears it.
+            if (s_parked) {
+                s_instr.park_reentered++;
+                instr_note_anomaly();
+                ESP_LOGE(TAG, "INSTR ANOMALY: no-card branch re-entered while "
+                              "parked - s_parked was cleared by something (#282)");
+            } else {
+                s_instr.park_set++;
+            }
             s_parked = true;
             ui_set_sd_state(UI_SD_NONE);
             ESP_LOGW(TAG, "no card mounted in the boot window and WiFi is up - "
@@ -500,7 +897,7 @@ static void sd_archive_task(void *arg)
             ESP_LOGW(TAG, "SD write failed %d times consecutively - treating as removal",
                      s_consec_write_fail);
             s_consec_write_fail = 0;
-            unmount();
+            unmount("write failures");
             xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
@@ -530,6 +927,7 @@ static void sd_archive_task(void *arg)
             continue;
         }
 
+
         xSemaphoreGive(s_sd_mutex);
 
         // 30 s heartbeat: proves SD is alive + shows how hard it's writing, so
@@ -551,6 +949,7 @@ static void sd_archive_task(void *arg)
 
 void sd_archive_init(void)
 {
+    instr_init();   // TEMP INSTRUMENT (#282) - durable counters in RTC RAM
 #if SD_ARCHIVE_DISABLED
     ESP_LOGW(TAG, "SD auto-archive soft-disabled (see SD_ARCHIVE_DISABLED in "
                   "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");

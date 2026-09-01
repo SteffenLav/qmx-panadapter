@@ -66,6 +66,18 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+/* A band change ends any QSO in progress AND stands the robot down. Use this
+ * from every band-change path - ft8_robot_stand_down() alone leaves a running
+ * exchange transmitting on the new band (Randy N4OPI, 2026-08-31). */
+void ft8_band_change_stand_down(const char *why);
+
+// Mark the QSO just started as ROBOT-initiated (call right after a successful
+// ft8_qso_start from the auto-answer picker). Changes one behaviour: a robot
+// pick that turns out to be mid-QSO with somebody else is abandoned so the
+// robot can choose another CQ caller, where a human pounce holds and waits -
+// a deliberate pounce means the operator wants THAT station (Roy KI0ER).
+void ft8_qso_mark_robot_started(void);
+
 // Manually override the next outgoing message during an active exchange.
 //   FT8_TX_KIND_REPLY    → re-arm the current message unchanged (re-send)
 //   FT8_TX_KIND_ROGER_RPT → force-send RR73 and advance to WAIT_DONE
@@ -75,7 +87,28 @@ void ft8_qso_abort(void);
 bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
 ft8_qso_state_t ft8_qso_get_state(void);
+
+// True while the running contact is being worked as a HOUND (Fox/Hound
+// DXpedition mode): we called from up-band, we QSY onto the Fox to answer, and
+// its RR73 ends the contact with no 73 from us. See ft8_hound.h for the protocol
+// and ft8_qso.c's s_hound_active for the four behaviours it changes. The UI uses
+// this to say so, since it changes where the operator's signal is going.
+bool ft8_qso_is_hound_active(void);
 void            ft8_qso_get_target(char *buf, size_t len);
+
+// Which station's rows should be held at the top of the decode list, or "" for
+// none. Don WB0LQW: while working someone, "there is no station that I am as
+// interested in", and their replies were sorting down-screen where he had to go
+// looking for them mid-exchange.
+//
+// Answers for both routes into a contact: a live engine-driven exchange
+// (pounce or an answer to our CQ), and a hand-typed reply where the state machine
+// never took over - the latter bounded by the same MANUAL_TARGET_TTL_S the pileup
+// exemption uses, so the two cannot disagree about who we are working.
+//
+// Deliberately empty once a QSO completes: their closing 73 is addressed to us, and
+// messages containing our own callsign are already sorted to the top.
+void            ft8_qso_get_pinned_call(char *buf, size_t len);
 
 // CQ auto-stop progress: CQ bursts already transmitted in the current CQ
 // sequence, or -1 when no CQ run is in progress. The armed/on-air call is
@@ -170,3 +203,12 @@ bool ft8_qso_get_working_target(char *buf, size_t len);
 // Note: this covers only the term filters; worked-before / plain-CQ toggles
 // are enforced by the caller.
 bool ft8_filter_match(const char *text, const ft8_filters_t *f);
+
+// True if this callsign was worked on this band inside the recently-worked
+// grace window (30 min, RAM-only, cleared by a reboot). The UNATTENDED pickers
+// consult this regardless of the "Exclude worked-before" checkbox, because the
+// decode list already greys such a station unconditionally and because the
+// duplicate guard would refuse to LOG a repeat inside its own window - so
+// working one would key the radio through a full exchange and discard it.
+// Gyula HA3HZ 2026-08-28, and BD4AHS said the same on 2026-08-06.
+bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz);

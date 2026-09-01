@@ -1,4 +1,8 @@
 #include "status.h"
+#include "display.h"
+#include "net/update_check.h"
+#include "net/ota_update.h"
+#include "ui/ota_modal.h"
 #include "battery.h"
 #include "wifi.h"
 #include "time_sync.h"
@@ -17,6 +21,8 @@
 #include "psram_task.h"
 #include "lvgl.h"
 #include "ui.h"
+#include "bt_hid_mouse.h"
+#include "hid_cursor.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 
@@ -34,6 +40,36 @@ static const char *TAG = "status";
 // doesn't change fast enough to need second-by-second polling anyway.
 #define SD_POLL_INTERVAL_S 20
 static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
+
+// How long "Failed - tap retries" blinks red/white before quietly reverting
+// to the plain version line. Long enough to be seen even away from the bar
+// for a few seconds, short enough that an abandoned failure does not sit in
+// red forever. Tap-and-hold still retries after this - see the OTA_FAILED
+// branch in status_task().
+#define OTA_FAILED_SHOW_S 3
+
+// The arrow between the two versions, and all three obvious choices are wrong:
+//   LV_SYMBOL_RIGHT  - a chevron in LVGL's symbol font. Screenshot-checked: it
+//                      reads as ">" and is visually heavy next to 24 px text.
+//                      Operator: "too bulky and makes it not readable".
+//   U+2192 "->"      - NOT in this font. Tried, and rendered as tofu boxes on
+//                      the bar (screenshot). montserrat here is ASCII plus
+//                      LVGL's symbol set, nothing else.
+//   a bitmap/second  - the line is ONE label; mixing a glyph in needs either a
+//   label             font rebuild or splitting the label, both of which cost
+//                      more than the arrow is worth right now.
+// So: plain ASCII. Small, light, unmistakable, and it cannot turn into a box on
+// someone else's build. A real U+2192 needs montserrat_24 regenerating with
+// lv_font_conv - worth doing, not worth blocking a release on.
+#define UI_ARROW "->"
+
+// Set when the operator presses "Later" on the update window: the ready line
+// keeps its words but stops breathing. Cleared whenever the OTA state is not
+// DONE, so a NEW update gets the eye again rather than inheriting the last
+// dismissal.
+static volatile bool s_ota_ready_ack = false;
+void status_ota_ready_ack(void) { s_ota_ready_ack = true; }
+
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 
@@ -48,6 +84,11 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 // needs to track true resting SoC, not momentarily-loaded terminal voltage.
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
+
+bool status_charge_limit_active(void)
+{
+    return s_charge_cutoff_active;
+}
 
 // Pick an LVGL battery glyph based on charge level (0-100).
 static const char *battery_glyph(int level)
@@ -74,6 +115,45 @@ static uint32_t battery_color(int level)
     return BATT_COLOR_FULL;
 }
 
+
+// #218: the bottom-bar version label is CENTRE-aligned at a fixed offset and
+// grows both ways, so it collides with the SD dot and the clock if the text
+// gets long. A release version ("v1.8.9") is short; a dev build
+// ("v1.8.8-9-g7f4451a-dirty") is not, and it was overlapping both neighbours.
+// Keep only "vX.Y.Z" for display - the full string is still in the boot log,
+// /api/status and the diagnostic download, where it matters.
+static void short_ver(const char *in, char *out, size_t out_sz)
+{
+    if (!in || !out || !out_sz) { if (out && out_sz) out[0] = 0; return; }
+    size_t n = 0, dashes = 0;
+    while (in[n] && n < out_sz - 1) {
+        if (in[n] == '-' && ++dashes >= 1) break;   // stop at the first -N-g...
+        out[n] = in[n];
+        n++;
+    }
+    out[n] = 0;
+}
+
+
+// ---------------------------------------------------------------------------
+// #239: what a TAP on the bottom-bar update line means - it opens the window,
+// and nothing else.
+//
+// It used to do the work itself: start a download, or restart the radio, or
+// force a check, decided from a ~264 px label with no room to say which. That
+// is what made Don N2VGU's "tap to update" wrong, and it is why the gesture
+// had to be a 700 ms HOLD - a stray brush from the 22 px band-plan strip
+// directly above must never start a download or reboot a radio.
+//
+// Opening a dismissible window is safe to do by accident, so the gesture is
+// free to be a plain tap again, and the label is free to say "tap" honestly.
+// Every action now lives in ota_modal.c behind a named button.
+// ---------------------------------------------------------------------------
+static void update_line_tap(void)
+{
+    ota_modal_show();
+}
+
 static void status_task(void *arg)
 {
     (void)arg;
@@ -81,6 +161,20 @@ static void status_task(void *arg)
     char ssid_buf[64];
     char suffix_buf[80];
     bool blink_on = true;
+    // #<pending>: how long "Failed - tap retries" has been showing. A
+    // correctly-registered long-press followed by an instantly-failed
+    // download (the exact v1.9.0/v1.9.1 OTA bug) LOOKED identical to the
+    // press not registering at all - the diag log proved the press fired
+    // every time, but a static red line at the far end of the bottom bar,
+    // outside where the operator was watching (their own thumb, mid-press),
+    // was easy to miss entirely. Blinking makes it impossible to miss even
+    // glancing back a few seconds later; the auto-revert after
+    // OTA_FAILED_SHOW_S keeps a genuinely abandoned failure from sitting in
+    // red forever - tap-and-hold still retries afterward regardless, since
+    // that reads ota_update_get_state() fresh and the backend's FAILED state
+    // is untouched by this purely cosmetic timeout.
+    uint32_t ota_failed_ticks = 0;
+    uint32_t last_fail_seq    = 0;   // last ota_update_get_fail_seq() we've seen
 
     // We use coloured-text formatting in the right label only; the static label
     // style needs recolor enabled, but the runtime API lv_label_set_recolor()
@@ -89,9 +183,190 @@ static void status_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
+        // --- #218: the bottom-bar version label doubles as the update line ---
+        //
+        // One writer for one label, and it lives here because this is the only
+        // 1 Hz bottom-bar refresh - the update poller runs hours apart and could
+        // never show live download progress. The wording is deliberately the
+        // same as the browser's, so the two screens read alike.
+        {
+            static char vline[96];   // two versions plus an arrow - 64 truncates
+            // The running version, with nothing to report. Was 0x808080, a
+            // mid-grey noticeably dimmer than everything else on this bar -
+            // the operator's words were "grey (dim) and not white-ish". It is
+            // not a warning and not an afterthought, it is simply which
+            // firmware this is, so it reads like the rest of the bar. The
+            // colours below still carry the states that DO mean something.
+            // 0xC0C0C0 is UI_COLOR_TEXT_SECONDARY, spelled literally because
+            // this file deliberately does not depend on ui_theme.h - every
+            // other state below is a literal for the same reason.
+            uint32_t vcol = 0xC0C0C0;
+            // ⛔ STATIC, NOT STACK. status_task's stack is 4096 bytes (crash
+            // dump gave bounds 0x481b97b4-0x481ba7b0 = 4092), and the ~384
+            // bytes of buffers here - added for #218 - overflowed it: "Stack
+            // protection fault ... task status", 20 minutes in. Exactly the
+            // class CLAUDE.md warns about ("a multi-hundred-byte local is a bug
+            // until proven otherwise"), and the remedy it prescribes: a
+            // file-local static is safe because status_task is the ONLY caller
+            // and there is exactly one of it.
+            // The RUNNING version is shown VERBATIM, not shortened - a dev
+            // build's "-N-gHASH[-dirty]" suffix is exactly the fact that was
+            // hidden here before, and hiding it is what let the dev Tab5 run
+            // a drifted build (git HEAD one commit past the v1.9.1 tag) while
+            // both screens still read a clean "v1.9.1", indistinguishable from
+            // the real release. over_s/latest_s stay shortened - those always
+            // come from a published release tag, never a local build, so
+            // there is nothing to hide there in the first place.
+            static char running[48], over_s[32], latest_s[32];
+            snprintf(running, sizeof(running), "%s", esp_app_get_description()->version);
+
+            int  opct = 0;
+            static char omsg[128], over[32], latest[32];
+            ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
+            // A NEW failure resets the pulse counter regardless of what ost
+            // was doing in between - see ota_update_get_fail_seq()'s own
+            // comment: a fast failure (bad hostname, under 100ms measured)
+            // can complete entirely between two 1 Hz ticks with no
+            // observable OTA_RUNNING in the middle, so ost alone cannot
+            // tell "brand new failure" from "still the same one as before".
+            {
+                uint32_t seq = ota_update_get_fail_seq();
+                if (seq != last_fail_seq) {
+                    last_fail_seq    = seq;
+                    ota_failed_ticks = 0;
+                }
+            }
+            ota_update_get_target_version(over, sizeof(over));
+            update_check_get_latest(latest, sizeof(latest));
+            short_ver(over,   over_s,   sizeof(over_s));
+            short_ver(latest, latest_s, sizeof(latest_s));
+            // ⚠ And the RUNNING version too. short_ver() exists precisely to
+            // keep this slot to "vX.Y.Z" (its own comment says so), but it was
+            // only ever applied to the target - so on a dev build the line read
+            // "v1.9.2-9-g7580eb4-dirty -> v1.9.2 42%", the auto-shrink dropped
+            // to a tiny font, and it still ran into the SD text and the clock.
+            // Operator, from the bench. The full string is still in the boot
+            // log, /api/status and the diagnostic download, where it matters.
+            static char running_s[24];
+            short_ver(running, running_s, sizeof(running_s));
+
+
+            // Wording and colours are the operator's, chosen to fit at the
+            // ORIGINAL montserrat_24 - every state below is ~20 characters,
+            // where "touch to update" was 24 and overlapped the clock.
+            // Set true only by the pulsing OTA_FAILED branch, which already
+            // called ui_set_update_line_failed() itself - the plain
+            // ui_set_update_line() call at the end of this block would
+            // otherwise immediately stop the pulse it just started.
+            if (ost != OTA_DONE) s_ota_ready_ack = false;
+            bool skip_plain_update_line = false;
+            if (ost == OTA_RUNNING) {
+                ota_failed_ticks = 0;
+                // over_s is empty until esp_https_ota has read the incoming
+                // image descriptor - about 2 s in on this link - and the line
+                // used to read a bare "updating 0%" until then, which the
+                // operator saw as the bar changing its mind. latest_s is the
+                // same version and update_check already has it, so fall back to
+                // that and the line reads the same from the first tick.
+                const char *tgt = over_s[0] ? over_s : latest_s;
+                if (running_s[0] && tgt[0])
+                    snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s  %d%%",
+                             running_s, tgt, opct);
+                else
+                    snprintf(vline, sizeof(vline), "updating  %d%%", opct);
+                vcol = 0xFFA040;                       // amber - working
+            } else if (ost == OTA_DONE) {
+                ota_failed_ticks = 0;
+                // #236, Don N2VGU: "tap updates" described the wrong action at
+                // the wrong moment. By here the bytes are already on the device
+                // and what remains is a RESTART - he suggested exactly this
+                // ("tap to reboot" / "tap to finish"). #237: and it is a hold,
+                // not a tap. The banner below has the room to say both.
+                if (running_s[0] && over_s[0])
+                    snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s ?", running_s, over_s);
+                else if (over_s[0])
+                    snprintf(vline, sizeof(vline), "%s ready ?", over_s);
+                else
+                    snprintf(vline, sizeof(vline), "ready ?");
+                // BREATHING, not static. This state waits for a person and
+                // will sit there for hours otherwise; a dim static line in a
+                // 264 px slot is exactly what nobody notices. Same animation as
+                // the failure pulse, in green.
+                // Breathing UNTIL ACKNOWLEDGED. "Later" means "I have seen it",
+                // so after that it says the same thing quietly - still there,
+                // still tappable, no longer asking for the eye. Operator's call
+                // and the right one: a pulse that never stops stops being a
+                // signal.
+                ui_set_update_line_tappable(true);
+                if (s_ota_ready_ack) ui_set_update_line(vline, 0x8FE0A0);
+                else                 ui_set_update_line_pulsing(vline, 0x8FE0A0);
+                skip_plain_update_line = true;
+            } else if (ost == OTA_FAILED && ota_failed_ticks < OTA_FAILED_SHOW_S) {
+                // A correctly-registered long-press followed by an instantly
+                // failed download (v1.9.0/v1.9.1's own OTA bug) was
+                // indistinguishable from the press not registering at all -
+                // the diag log proved the press fired every time; a static
+                // red line was just easy to miss. A 1 Hz red/white colour
+                // swap turned out to be far too subtle over a short window
+                // (changes at most 2-3 times - a glance mid-cycle just reads
+                // "red"), so this now PULSES (ui_set_update_line_failed(),
+                // a fast opacity animation, not tied to this 1 Hz tick) for
+                // OTA_FAILED_SHOW_S seconds, unmistakable even at a glance.
+                // "Server busy" rather than "Failed": the operator did
+                // nothing wrong, and this IS what happened (a connection
+                // that could not be reached), not a vague failure.
+                ota_failed_ticks++;
+                snprintf(vline, sizeof(vline), "Server busy - tap retries");
+                ui_set_update_line_tappable(true);
+                ui_set_update_line_failed(vline);
+                skip_plain_update_line = true;
+            } else if (ost == OTA_FAILED) {
+                // Given up being loud about it, but tap-and-hold still
+                // retries from here - update_line_tap() reads the backend
+                // state fresh and it is untouched by this display-only
+                // timeout, it just no longer LOOKS different from normal.
+                snprintf(vline, sizeof(vline), "%s", running);
+            } else if (update_check_available() && latest_s[0]) {
+                ota_failed_ticks = 0;
+                // #237 ended up fixed by construction rather than by wording:
+                // the press now only OPENS ota_modal, so it is safe as a plain
+                // tap and "tap?" is true again.
+                snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s  tap?",
+                              running_s, latest_s);
+                vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
+            } else {
+                ota_failed_ticks = 0;
+                snprintf(vline, sizeof(vline), "%s", running);
+            }
+            // Tell the UI whether there is anything to tap. While true the WHOLE
+            // bottom bar accepts the tap and the band-plan strip ignores presses
+            // in its lowest pixels above the label - so reaching for this cannot
+            // nudge the dial (the strip is 22 px, sits on the bar, and a tap on
+            // it retunes).
+            // Tappable in every state EXCEPT mid-download, because the long
+            // press now always means something: install, restart, retry - or,
+            // when there is nothing to install, CHECK NOW (see update_line_tap).
+            // Previously it was inert whenever the device was up to date, which
+            // is nearly all the time, so on the Tab5 itself there was no way to
+            // act on a release announcement without a browser.
+            //
+            // ⚠ THE COST, and it is why this was gated before: while tappable,
+            // the lowest 8 px of the band-plan strip across this label's own
+            // x-range stop accepting a press, so a miss aimed at the bar cannot
+            // nudge the dial. That exclusion is now permanent rather than only
+            // while an update is pending. It is 8 px of a 22 px strip over a
+            // couple of hundred pixels of width - small, but real, and this is
+            // the line to change back if tap-to-tune ever feels worse near the
+            // bottom bar.
+            if (!skip_plain_update_line) {
+                ui_set_update_line_tappable(ost != OTA_RUNNING);
+                ui_set_update_line(vline, vcol);
+            }
+
+        }
+
         // --- LEFT: battery icon (colored by level) + percentage text ---
         int  level    = battery_get_level();
-        int  mv       = battery_get_mv();
         bool charging = battery_is_charging();
 
         qmx_settings_t cfg;
@@ -160,15 +435,22 @@ static void status_task(void *arg)
             ui_set_resource_monitor_text(rbuf);
         }
 
+        // Charge-limit cutoff has no glyph of its own - "charging" is
+        // correctly false at this point (bsp_set_charge_en(false) really did
+        // stop it), so without this the charge symbol just silently
+        // disappears, identical to "unplugged" or "full" (Don N2VGU: no way
+        // to tell "capped on purpose" from "not charging for some unknown
+        // reason"). Short enough to fit the bar at every level width.
+        //
+        // The voltage used to be printed too ("80% (7.9V)"), dropped per the
+        // operator's own call - nobody reading the bar needs the raw cell
+        // voltage, and the battery icon already carries the level visually.
+        const char *limit_suffix = s_charge_cutoff_active ? "  (limit)" : "";
         if (level < 0) {
             snprintf(left, sizeof(left), "--%%");
-        } else if (mv < 0) {
-            snprintf(left, sizeof(left), "%d%%%s", level,
-                     charging ? "  " LV_SYMBOL_CHARGE : "");
         } else {
-            snprintf(left, sizeof(left), "%d%% (%d.%dV)%s",
-                     level, mv / 1000, (mv / 100) % 10,
-                     charging ? "  " LV_SYMBOL_CHARGE : "");
+            snprintf(left, sizeof(left), "%d%%%s%s", level,
+                     charging ? "  " LV_SYMBOL_CHARGE : "", limit_suffix);
         }
         const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
 
@@ -243,13 +525,42 @@ static void status_task(void *arg)
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
+        // Bluetooth, next to it. "Started" and "a mouse is on the other end"
+        // are separate facts and the glyph shows both.
+        // The first fact is the RADIO, and only the radio. This used to be
+        // ANDed with the bt_mouse_en setting, so unticking the box greyed the
+        // glyph out at once while NimBLE went on running until the next boot -
+        // "the icon does not truly reflect the state of the radio... a user
+        // needed to have the BT radio off but neglected to restart" (#270, Don
+        // N2VGU). The drawer offers the restart; the glyph must not pretend it
+        // already happened.
+        /* Blue means USABLE, not merely connected: a pointer that exists, or a
+         * keyboard whose layout has been read and can therefore type. The glyph
+         * used to go blue the instant the link came up, ~2.5 s before a keyboard
+         * could type a character - which is exactly the gap the operator noticed
+         * and asked about. */
+        ui_set_bottom_bt(bt_hid_mouse_started(),
+                         hid_cursor_present() || bt_hid_keyboard_active());
     }
 }
 
 void status_bar_start(void)
 {
     ui_set_bottom_version(esp_app_get_description()->version);
+    ui_set_update_tap_cb(update_line_tap);   // #218
     // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
     // and driven live by the sd_archive task on mount/unmount.
-    psram_task_create(status_task, "status", 4096, NULL, 2, tskNO_AFFINITY);
+    // 4096 was the historic size, and #218 added real work to this task -
+    // composing the update line, two version shortenings, ota/update_check
+    // queries and a wider snprintf. It crashed TWICE within an hour on 4 KB:
+    // first "Stack protection fault" outright, then "spinlock_acquire
+    // (lock->count == 0)" on a log call, which is what earlier corruption tends
+    // to look like by the time it is noticed.
+    //
+    // The buffers are static now, so this is deliberate headroom rather than a
+    // fix for a known overflow - and it is nearly free, because the stack lives
+    // in PSRAM (28 MB spare) while the TCB stays internal. On a board whose task
+    // stacks are documented as "TINY", being generous with a background task is
+    // the cheap side of the trade.
+    psram_task_create(status_task, "status", 8192, NULL, 2, tskNO_AFFINITY);
 }

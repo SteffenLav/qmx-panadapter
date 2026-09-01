@@ -146,6 +146,30 @@ static size_t b64_decode(const char *in, uint8_t *out)
 
 int main(void)
 {
+    // --- ADIF mode/submode -> LoTW mode -------------------------------------
+    // The log writes FT4 the ADIF-correct way (MODE=MFSK, SUBMODE=FT4) since
+    // v1.9.6, and LoTW has no MFSK mode at all - so this collapse is the only
+    // thing standing between an ADIF fix made for POTA/ADIFMaster and every FT4
+    // upload being rejected. The invariant worth pinning is not just "FT4 comes
+    // out" but that NOTHING ELSE MOVES: what this firmware sends for every mode
+    // LoTW has already been accepting must be unchanged.
+    check(strcmp(lotw_mode_from_adif("MFSK", "FT4"), "FT4") == 0,
+          "MFSK + SUBMODE FT4 -> LoTW mode FT4");
+    check(strcmp(lotw_mode_from_adif("mfsk", "FT4"), "FT4") == 0,
+          "the MFSK compare is case-insensitive");
+    check(strcmp(lotw_mode_from_adif("FT8", NULL), "FT8") == 0,
+          "FT8 with no submode is untouched");
+    check(strcmp(lotw_mode_from_adif("FT8", ""), "FT8") == 0,
+          "an empty submode is untouched");
+    check(strcmp(lotw_mode_from_adif("FT4", NULL), "FT4") == 0,
+          "a legacy MODE=FT4 record still signs as FT4");
+    check(strcmp(lotw_mode_from_adif("CW", "PCW"), "CW") == 0,
+          "a submode on a non-MFSK mode does NOT replace the mode");
+    check(strcmp(lotw_mode_from_adif("MFSKX", "FT4"), "MFSKX") == 0,
+          "a mode merely starting with MFSK must not match");
+    check(strcmp(lotw_mode_from_adif("MFS", "FT4"), "MFS") == 0,
+          "nor a truncation of it");
+
     // --- one-time key + self-signed cert ---
     FILE *f = fopen(KEY_PEM, "rb");
     if (f) {

@@ -9,6 +9,16 @@
 #define DSP_FFT_SIZE       1024
 #define DSP_SAMPLE_RATE_HZ 48000
 
+// Phase 5.8: dBm calibration offset. Added to every dB value before display so
+// readings match real-world signal strength. Procedure: with QMX on dummy load,
+// log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
+// the offset is then -130 - median.
+// In the header because spur_map.c must UNDO it: the spectra it compares are
+// dBm, but the powers it subtracts go back into raw FFT magnitude-squared.
+#ifndef DSP_DB_CALIBRATION_OFFSET
+#define DSP_DB_CALIBRATION_OFFSET -148.0f  /* measured against QMX on dummy load (-130 dBm floor target) */
+#endif
+
 // Bin frequency width = sample_rate / FFT_SIZE = 46.875 Hz at 48000/1024
 // Total span = sample_rate (i.e., -24 kHz to +24 kHz around tuned center)
 
@@ -33,6 +43,11 @@ esp_err_t dsp_init(void);
  * Rebuilds the window in place; the change is visible on the next FFT frame.
  * Safe to call after dsp_init() at any time.
  */
+/* #298: the dial the samples behind the CURRENT spectrum were captured under.
+ * Drawing must locate bins with this, not with the live dial - the pipeline is
+ * hundreds of ms deep and its depth was measured varying better than 2:1. */
+uint32_t dsp_get_spectrum_dial_hz(void);
+
 void dsp_set_window(uint8_t idx);
 
 /**
@@ -45,6 +60,12 @@ void dsp_set_window(uint8_t idx);
  */
 void dsp_set_transfer_quiet(bool quiet);
 
+// True once fft_task has actually observed a quiet request and drained the
+// audio ring. Setting the flag is not enough on its own - it is cooperative,
+// and anything that needs a genuinely idle system (a long flash verify) must
+// wait for this, bounded, before starting.
+bool dsp_transfer_quiet_settled(void);
+
 /**
  * @brief Get a snapshot of the latest spectrum.
  *
@@ -54,21 +75,23 @@ void dsp_set_transfer_quiet(bool quiet);
  */
 esp_err_t dsp_get_spectrum(float *dst);
 
+// Average LINEAR power over the next `frames` FFT frames, then convert to dB.
+// A single frame is Rayleigh-noisy (+/-13 dB bin to bin), so anything that has
+// to compare two spectra - spur_map.c's dial-nudge detector - needs averaging
+// to tell a real difference from luck. Averaging in the linear domain matters:
+// averaging dB would bias every result low.
+void dsp_avg_start(uint32_t frames);
+
+// True once the run has completed; copies DSP_FFT_SIZE dB values into `dst` and
+// disarms. Poll it - the accumulation happens on the FFT task.
+bool dsp_avg_ready(float *dst);
+
 // Phase 5.10D: peak dBm in a window centered on the VFO bin.
 // center_bin: index of the VFO bin in the raw (non-fftshifted) FFT array
 // (i.e. ui_get_if_bin_shift(DSP_FFT_SIZE), wrapped into [0, DSP_FFT_SIZE)).
 // half_width_bins=64 at 48 kHz/1024 ~ ±3 kHz.
 // Returns peak via *peak_dbm. ESP_ERR_NOT_FOUND if no spectrum yet.
 esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float *peak_dbm);
-
-// Snap-to-peak helper for touch-to-tune. Given a touched frequency offset
-// from the QMX dial (in Hz, can be negative), search ±radius_hz for the
-// strongest spectrum bin. If the peak exceeds the local mean by >3 dB,
-// returns its Hz offset in *out_hz; otherwise returns center_hz unchanged.
-// if_offset_hz is the baseband frequency the dial maps to: +12 kHz IF in
-// SSB/data, plus the CW LO offset + per-unit trim in CW mode (use the same
-// value the display centers on, i.e. the pre-bin total in ui_get_if_bin_shift).
-esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t if_offset_hz, int32_t *out_hz);
 
 // Step 3 v0.10 FT8 RX: one-shot slot capture.
 // When armed, the FFT task diverts its 1024-sample reads through a mixer

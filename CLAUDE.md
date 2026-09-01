@@ -13,6 +13,163 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+### ⛔⛔ THE QMX NEVER SURVIVES A FLASH. NOT ONCE. STOP RE-DISCOVERING THIS.
+
+**Every flash of a Tab5 with the radio attached wedges the QMX** (#74 — a flash
+is a warm reset, which is the documented trigger). It needs a **manual power
+cycle by the operator, every single time.** The operator's own words, said
+repeatedly: *"qmx can NOT survive any flash"* and *"it will never survive on
+its own"*.
+
+⛔ **NEVER report that the radio survived.** On 2026-08-24 I told him it had,
+on the strength of `audio: RX 48561 pairs/s` and a live `qmx_fw` about 40 s
+after boot — and offered it as "the first counter-example" to his own account
+of his own bench. What had actually happened, almost certainly, is that he was
+sitting at the shack and power-cycled it himself. **I credited the firmware for
+his hand, and argued with him about his own hardware.**
+
+**Why that evidence is worthless, and this file already said so:** the identical
+mistake is recorded under the `MU;` note — *"that figure proves the stream is
+flowing and says nothing about its content"*. A pairs/s reading cannot
+distinguish "re-enumerated on its own" from "the operator reached over and
+switched it off and on". Neither can `/api/status`, since it reports whatever
+the link currently is, not how it got there.
+
+**So the standing behaviour is:**
+1. Before flashing with the radio attached, say plainly that the QMX will need
+   a power cycle afterwards.
+2. After flashing, **ask** whether he has power-cycled it — never infer it.
+3. If audio is flowing, that means *someone* fixed it. Assume it was him.
+4. A survival claim would need the port watched across the whole reset with
+   nobody touching the radio. Absent that, there is no counter-example.
+
+⚠ **This lived only in a memory file until now, which is exactly why it kept
+happening** — memory is consulted when something feels relevant, and a routine
+flash never does. Same reasoning as the serial-capture rules below. It belongs
+here, in the file that is read in full every session.
+
+
+### ⛔ FOUR boards share this machine — resolve every port by BENCH NAME
+
+`docs/bench-setup.md` is the standing reference and `tools/bench.json` is the
+registry the tooling reads. Read the doc before touching hardware; the short
+version:
+
+| Bench | Board | Radio | Console | Tree |
+|---|---|---|---|---|
+| **dev** | Tab5 #1 `30:ED:A0:EA:DD:57` | QMX | COM3 → COM20 | `qmx-panadapter` / `main` |
+| **lab** | Tab5 #3 | QMX+ | COM21 | `-wspr` / `-cw` |
+| **field** | Tab5 #2 `80:F1:B2:D1:45:92` | none | COM22 | last **release**, **OTA only — never USB-flash it** |
+| **port** | Waveshare P4 7B | none | COM12 → COM23 | `-p4` / `feat/board-hal-seam` |
+
+- **All four enumerate as `VID_303A&PID_1001` with no serial number**, so the COM
+  number follows the SOCKET, not the board. `idf.py flash` with no `-p` has
+  already partially flashed a Tab5 binary onto the Waveshare and boot-looped it.
+  Use `bench flash <name>`, which resolves the port from the registry and then
+  **verifies the `serial(MAC)=` line in the boot header afterwards**.
+- **ONE build at a time, all four trees.** Not an IDF limitation — the CPU is 2
+  cores, so a second build starves both. (The earlier "the pinned IDF Python
+  environment isn't concurrency-safe" explanation was wrong; nothing was
+  locking.) `bench build`/`bench flash` take `C:/dev/bench.lock`.
+- **ONE antenna, two radios, a switch.** Decode counts, SNR and noise floor from
+  the bench that does NOT hold the antenna are meaningless. `bench antenna
+  <name>` records the holder; ask before believing any receive measurement.
+- **Standing patches split two ways**: six edit the shared IDF tree
+  (`C:/esp/v5.4.4`, applied once per machine — one IDF reinstall breaks all four
+  benches), three edit `managed_components/` (per tree, wiped by `fullclean` — so
+  four applications, one per tree). Table in the doc.
+
+### ⛔ Serial capture: the rules, because getting these wrong has cost DAYS
+
+Every one of these is a mistake I actually made, each of which produced a
+CONFIDENT WRONG CONCLUSION reported to the operator as fact. They are here, in
+the file that is read in full every session, because they were in memory
+instead and memory is only consulted when something feels relevant — which is
+exactly what a routine step never does. **Read this list before touching a
+capture, not after a result looks strange.**
+
+1. **A capture that reset the device is how the "mystery double boot" was
+   born.** `cap_serial_boot.ps1` and `-Reset` pulse RTS on open. Starting one
+   as a passive monitor REBOOTS THE TAB5. The operator spent an hour reporting
+   a boot→dark→boot cycle that was my monitor, on top of the flash's own reset.
+   Use `tools/cap_serial_reboot.ps1` with NO `-Reset` for anything
+   standing (or just `bench capture <name>`, which gets the flags right).
+   ⚠ **These three scripts moved from `scratchpad/` to `tools/` on 2026-08-23**
+   because `scratchpad/` is gitignored — the most load-bearing diagnostic tool
+   in the project was untracked, existed on exactly one disk, and would have
+   been lost by a clone onto a new machine. Only pass `-Reset` when the boot itself is the thing under study.
+   ⛔ **AND "NO `-Reset`" IS NOT A GUARANTEE OF PASSIVITY. Opening the port
+   can reset the Tab5 anyway.** Caught 2026-08-27: a standing capture was
+   restarted with no `-Reset` and the device came up with
+   `rst:0x17 (CHIP_USB_UART_RESET)` - the USB-serial peripheral resetting the
+   chip, not a crash, and no panic record. The script never touches DTR/RTS
+   without the switch; .NET's `SerialPort.Open()` evidently drives the lines
+   enough for the P4's auto-reset circuit. **It is NOT deterministic** - an
+   identical restart four hours earlier on the same day left a 41-minute
+   uptime untouched, so it cannot be predicted either way.
+   The cost is never just the reboot: a warm reset with the radio attached is
+   the documented **#74** trigger, so that restart wedged the QMX and threw
+   away 4 h 17 m of accumulated in-RAM WSPR spots. **Treat restarting a
+   capture as an action that may reboot the device and wedge the radio.** Do
+   it when the operator can reach the power switch, not while they are out,
+   and never mid-run on a device that is accumulating something.
+2. **NEVER put `Stop-Process` in the same PowerShell call as the capture.** It
+   exits non-zero, PowerShell aborts the rest of the chain, the capture never
+   starts, and a zero-byte file gets read as "no crash in the log". This single
+   bug is the whole history of "the background shell didn't run". Kill in one
+   call, start in another.
+3. **Two captures cannot share COM3.** Kill the old one first or the new one
+   logs `PORT LOST` and records nothing.
+4. **VERIFY BYTES BEFORE INTERPRETING.** `stat -c%s` / `.Length` must be > 0.
+   An empty log is not evidence of a quiet device. This one rule would have
+   caught every failure above.
+5. **Count boots ONLY with `grep -c "Loaded app from partition"`.** A regex over
+   numbers in parentheses matches image-segment sizes like `( 22520)` and
+   invents reboots that never happened (done twice in one session).
+6. **A capture without reconnect CANNOT see a reboot.** The console is
+   USB-Serial/JTAG implemented BY the P4, so a reset drops the USB device and
+   the handle dies — the file just stops, looking healthy. Only
+   `cap_serial_reboot.ps1` reopens.
+7. **A post-flash first boot is a different event from an RTS reset.** To catch
+   it: `python -m esptool --port COM3 --after no_reset write_flash
+   "@flash_project_args"` (from `build/`), then start the capture with `-Reset`.
+8. **The monitor ALWAYS misses the boot after `idf.py flash`.** For boot lines
+   use `/api/log` (live ring) or `/api/log/saved` (flash-persisted) instead.
+9. **`GET /api/log` DELETES the ring it just served.** `log_handler` calls
+   `diag_log_clear()` after a successful send, so each download is "since the
+   last one". Polling it in a loop to watch for something therefore **erases the
+   evidence continuously** — every fetch returns a few seconds of delta, and a
+   feature that logged something 20 s ago looks like a feature that never ran.
+   Cost most of a Fox/Hound test cycle on 2026-08-10, and produced two confident
+   wrong conclusions ("the tick never fires", "the Fox is never injected") from a
+   log I had shredded myself. **To WATCH the device, use a serial capture**
+   (`cap_serial_reboot.ps1`, no `-Reset`) — non-destructive, survives reboots,
+   and it is what these rules already told me to do. `/api/log` is for taking ONE
+   snapshot to keep; `/api/log/saved` (flash) is read-only and safe but lags
+   ~30 s.
+10. **A capture that has EXPIRED looks exactly like a quiet, healthy device.**
+   `cap_serial_reboot.ps1` runs for `-Seconds` (default 300) and then exits,
+   writing a tidy `=== [capture] done ===` at the end. Grep that file an hour
+   later and you get "0 reboots, 0 panics" — for a window that closed long ago.
+   Caught 2026-08-09 when the operator asked whether the monitor was still up
+   and it had been dead for 50 minutes. **Before reporting anything from a
+   capture, check the process is alive AND that the file's `LastWriteTime` is
+   within the last few seconds.** Note the parameter is `-Seconds`, not
+   `-Minutes`; pass something long for a standing monitor.
+   ⛔ **Re-check DURING a long session, not only at the start.** A CONCURRENT
+   SESSION taking COM3 produces this exact state with the victim process still
+   running and reporting nothing wrong — 2026-08-24, a capture went deaf at
+   18:20 and read like a quiet, healthy device for two hours while the Tab5 was
+   fine. The PORT dies, not the process, so the file's timestamp is the only
+   honest liveness test. Running several sessions at once is the operator's
+   normal daily practice, so treat this as expected, not exotic.
+
+**And the standing one: NEVER GUESS.** When a symptom appears, get the
+measurement first. Every "obvious cause" in this file has been wrong when
+measured — WiFi death was not memory (99 KB free), the BLE 30 s drop was not
+Protocol Mode (it made it worse), the cursor was not off-screen (I misread a
+pre-rotation coordinate). If a fix is a hypothesis, say so in those words.
+
 **Claude Code note**: each PowerShell tool call is a fresh non-interactive shell — the user's `$PROFILE` (which defines `qmx`/`idfenv`) is not loaded, and `idf.py` fails with "IDF_PATH environment variable needs to be set". Activate the IDF environment in the same command chain first:
 ```powershell
 & "C:\esp\v5.4.4\esp-idf\export.ps1" | Out-Null; idf.py build
@@ -28,7 +185,13 @@ Exit monitor: `Ctrl+T` then `Ctrl+X`.
 main/
   main.c                  app_main, task launch, orchestration
   display/display.c       BSP bring-up (PI4IO expander + LCD + touch)
-  ui/ui.c                 LVGL widgets, touch handler, spectrum/waterfall canvases
+  ui/ui.c                 LVGL widgets, touch handler, spectrum/waterfall canvases.
+                          Also the STILL DISPLAY (#298): s_still_view + sv_effective() +
+                          still_view_follow_dial(). The view holds and the VFO marker moves
+                          over it; re-framing is stated in PASSBAND WIDTHS (trigger / push /
+                          land), never in fractions of the view. x1 has zero play and falls
+                          back to the dial-centred view BY DESIGN. Every overlay reads
+                          ui_get_pan_offset_hz() - never re-derive a pan from the bin count
   ui/ft8_screen_view.c    FT8 RX decode list UI, touch-drag row selection, TX controls.
                           Left-pane TX row is [TXCQ ANY/EVEN/ODD cycle][TX <n> Hz] plus a
                           live mini occupancy strip (mini_paint, 1 Hz, change-detected per
@@ -44,6 +207,17 @@ main/
   audio/audio.c           USB UAC + ring buffer producer (core 0, polling)
   dsp/dsp.c               FFT consumer (reads ring buffer), spectrum mutex, DC blocker
   dsp/iq_balance.c        Blind adaptive Gram-Schmidt I/Q correction (Phases A–C)
+  dsp/spur_map.c          Suppress the QMX's OWN synthesizer spurs (opt-in, DEFAULT OFF).
+                          Nudges the dial 25 Hz: a spur's baseband offset moves at 16-50x
+                          the dial (16.0 and 23.0 measured over several intervals), a real
+                          signal at 1x - a PHYSICAL discriminator with an order of
+                          magnitude of margin, not a statistical guess. Measures at f,
+                          f+25, f. Modes: subtract the measured power (never hides a real
+                          signal, ~12-17 dB) or interpolate the bins away (spur gone, hides
+                          anything sharing them while the dial is still). Cached per
+                          frequency so a revisit needs NO nudge. Baseband DC is qualified a
+                          priori - bin 0 cannot move when the LO does, so the motion test
+                          can never find it. See the spur section under Critical quirks
   ft8_tx.c                FT8 TX engine: build/arm/run/abort, ft8_find_clear_tone_hz()
   ft8_test.c              FT8 slot loop: RX decode or TX burst each 15-second slot
   ft8_qso.c               Auto search-and-pounce QSO state machine (WAIT_RPT/RR73/DONE)
@@ -66,24 +240,107 @@ main/
   render/render_waterfall.c  Waterfall tick, double-height canvas scroll trick
   screenshot/screenshot.c RGB565 framebuffer capture for the web UI's /ss.bmp endpoint
   util/fps.c              FPS counter
+  util/db_gridlines.c     Round dBm gridline values for the spectrum's right-edge scale,
+                          derived from the dB Range sliders (was a hardcoded -40..-120).
+                          Portable, no ESP deps, host-tested + mutation-tested by
+                          test/db_gridlines_harness.c
   ui/ui_clock.c           Bottom-bar widgets: jitter-free HH:MM:SS cells + the WiFi
                           strength FAN (dot + 2 lv_arc bows; LV_SYMBOL_WIFI can't do
                           partial). Replaced the numeric -NN dBm readout in v1.3.4
   util/diag_log.c         Opt-in ESP_LOG ring-buffer capture (web /api/log + serial)
+  hid_report_map.c        Parse a BLE mouse's HID Report Map for the bit offsets/widths of
+                          X, Y and the wheel. Portable, no ESP deps, host-tested by
+                          test/hid_map_harness.c - BLE mice do not agree on a layout and
+                          bt_hid_mouse.c used to assume one (see the RIT/mouse notes)
   keyboard/tab5_keyboard.c  Optional Tab5 snap-on keyboard (STM32 I2C slave 0x6D, String mode); UI bridge lives in ui.c
   storage/settings.c      NVS-backed settings (debounced flush task)
   storage/sd_archive.c    microSD auto-archive: mirrors diag log/ADIF/config to /sdcard (probe-mount, no CD line)
   wifi/wifi.c             C6 co-processor WiFi bring-up + SNTP, QMX RTC push
   net/webserver.c         HTTP server: /, /api/status, /api/cmd, /ss.bmp, /api/log
   net/filebrowser.c       Web microSD file browser: /files page + /api/files (list) + /api/file (GET/POST/DELETE)
-  ui/reader_view.c        On-device docs Reader (v1.2.0): full-screen overlay + markdown-subset renderer; drawer-launched
-  net/reader_net.c        Reader content shim: resolves a page from the EMBEDDED manual into the
-                          SPIFFS render cache. No network/SD any more (see manual_embed.h)
+  ui/reader_view.c        On-device docs Reader (v1.2.0): full-screen overlay + markdown-subset renderer; drawer-launched.
+                          reader_view_open_help(page, anchor) jumps to a HEADING (v1.5.0); pages render
+                          STRAIGHT FROM THE EMBEDDED BLOB (manual_embed_get), never from /spiffs
+  ui/help_topics.c        Context-help table: topic -> {page, anchor, label} - the ONLY place that knows
+                          which chapter covers what. Anchors are case-insensitive heading SUBSTRINGS;
+                          tools/pack_manual.py FAILS THE BUILD on a rotted link. Also holds the triage
+                          candidate list + help_triage_collect() ranking and
+                          help_topic_for_current_context() (drives the drawer's User Manual button)
+  ui/help_triage.c        "Need guidance?" panel: scrolling symptom list, rows the firmware can see are
+                          happening now are highlighted and floated up. Presentation only - ranking is in
+                          help_topics.c. NEVER auto-navigates: the device ranks, the operator chooses
+  net/reader_net.c        Reader page-load shim: resolves a page from the EMBEDDED manual and notifies the
+                          Reader. Still writes the (now VESTIGIAL) SPIFFS cache as the hand-off; a failed
+                          write is logged and NOT shown, since the page renders from the blob regardless.
+                          No network/SD any more (see manual_embed.h)
   net/manual_embed.c      User manual built into the binary (main/manual.bin via EMBED_FILES,
                           packed by tools/pack_manual.py from the mkdocs hook)
+  ui/reader_diagram.c     Manual DIAGRAMS (v1.6.0). A ```qmxdiagram fence carries a SEMANTIC
+                          spec (what the parts are, never where they go); this draws it with
+                          LVGL, tools/diagram_svg.py renders the SAME spec to SVG for the
+                          website via mkdocs_reader_export.py's on_page_markdown. Four types:
+                          flow / stack / timeline / panel. THE RULE: the renderer does the
+                          arithmetic - flow+stack are flex (cannot overlap), the timeline
+                          derives x from time/span, and a band too narrow for its own label
+                          declines to draw it. pack_manual.py fails the build on a bad spec.
+                          Character drawings are gone: the Reader folds UTF-8 to ASCII and
+                          some folds CHANGE THE LINE LENGTH, so no font could ever align them
+  net/mdns_svc.c          mDNS responder: qmx.local + _http._tcp advert. Started from wifi.c's
+                          got-IP path; idempotent, and soft-fails to "IP still works"
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)
+  adif/cloudlog_upload.c  Cloudlog/Wavelog QSO upload (#171). The ONLY self-hosted target, so
+                          the address is the operator's and is stored, not compiled in. Batches
+                          20 records; server-side dedupe makes the cursor an optimisation, not a
+                          correctness requirement. Response schema is UNDOCUMENTED - success is
+                          HTTP status only, and the body is quoted verbatim on failure
+  util/net_guard.c        Decides whether an upload may go out in the CLEAR. Portable, no ESP
+                          deps, host-tested + mutation-tested by test/net_guard_harness.c.
+                          Plain http only onto our own subnet, and the check is re-taken on
+                          EVERY upload - see the header for why caching it is the whole bug
   ft8_greylist.c          Grey-list: stations that time out 2 pounces are skipped by the auto pickers
-  net/update_check.c      Background GitHub /releases poll (+ latest.json fallback) → "update available" banner in the Reader
+  net/update_check.c      Background GitHub /releases poll (+ latest.json fallback) → "update available" banner in the Reader.
+                          Also STARTS the quiet background download (#239) when ota_autodl is on
+  net/net_quiet.c         "Stop starting new network work" - held for the duration of an OTA so the
+                          feeds' TLS churn does not eat the internal heap the image verify needs.
+                          ADVISORY: gates POTA, SOTA, RBN, DX cluster, psk_rx and update_check's own
+                          GitHub fallback. Never closes a live socket
+  ui/ota_modal.c          The update conversation, centred and readable (#239). Replaced a flow that
+                          lived in the bar's ~264 px version slot: an offer squeezed into ~20 chars, a
+                          700 ms long-press to accept, a percentage in the same slot, a second
+                          long-press to restart. Re-reads live state every 500 ms, so a download that
+                          finishes while it is open flips "Downloading" to "Restart now" by itself.
+                          ⛔ Opening it is ALL the bar tap does - that is what makes a plain tap safe
+  util/ansi_term.c        80x24 ANSI/VT100 screen model for the QMX terminal (#147). Portable,
+                          no ESP deps, host-tested by test/ansi_term_harness.c against the REAL
+                          bytes the radio sent, re-fed at every byte-split point. Reverse video
+                          is load-bearing: it is the ONLY thing marking the selected menu item
+  qmx_term.c              Terminal SESSION on the QMX's SECOND serial port (INTERFACE 5 - the
+                          audio function occupies 2-4, so it is NOT contiguous with CAT's 0).
+                          CAT keeps polling interface 0 throughout, measured. Closing walks the
+                          radio's own "Exit terminal" by READING THE SCREEN, never a fixed key
+                          count; a 2-minute idle watchdog is the backstop if the browser vanishes
+  ui/qmx_term_view.c      The Tab5's "Radio menus" screen: 80x24 grid in JetBrains Mono at
+                          size 25 (font_qmx_mono_25.c). ⛔ The UI posts to a worker queue and
+                          NEVER touches the port itself - open blocks ~2.4 s and froze taskLVGL
+  wspr_rx.c               WSPR RX slot loop: 2-minute cycle, capture -> decode -> spot list.
+                          Decodes EVERY cycle (an older comment claimed every other one BY
+                          CONSTRUCTION - that was stale and is corrected)
+  wspr_decode.c           WSPR decoder proper: sync search, candidate ranking, Fano
+                          sequential decode (wspr_fano.c + wspr_metric_table.h), then
+                          wspr_subtract.c removes a decoded signal so weaker ones surface
+  wspr_proto.c            WSPR message pack/unpack: callsign, grid, power - the 50-bit payload
+  wspr_tx.c               WSPR TX: 162 symbols, ~110 s on air, CAT-driven like FT8's TA burst.
+                          ⛔ WSPR_TX_SEND_LIVE was 0 in every committed build until v1.10.0 -
+                          TX ran its full timing and sent ZERO BYTES. The evidence for "it
+                          works" came from locally-flipped builds. It is 1 now: the radio keys
+  wspr_spots.c            Heard-station table: distance, bearing, per-cycle history, furthest
+  wspr_sim.c              Synthesised WSPR signals for bench work with no antenna
+  wspr_wav.c              WAV in/out for the host-side decoder harness
+  wspr_selftest.c         Boot self-test: synthesise -> decode round-trip
+  ui/wspr_screen_view.c   The WSPR page (UI_MODE_WSPR = 3). Swipe cycles Panadapter -> FT8 ->
+                          WSPR. Page keeps only the TX switch; duty cycle, band hopping,
+                          declared power and wsprnet publishing live in the drawer's WSPR group
+  net/wsprnet.c           Publish received spots to wsprnet.org (default OFF)
 ```
 
 Data flow: **audio → ring buffer → dsp (FFT) → spectrum mutex → render → LVGL canvases**
@@ -124,14 +381,40 @@ code.**
 
 `components/espressif__esp_lcd_touch_st7123/` is a hand-patched fork fixing ST7121 compatibility (see **ST7121 has an incomplete register map** below). Do not replace with the registry version.
 
+### mDNS: the device answers to `qmx.local`
+`net/mdns_svc.c` starts an mDNS responder from wifi.c's got-IP path (idempotent — that path also runs on every reconnect and roam) and advertises `_http._tcp` on port 80. Hostname is a fixed `MDNS_SVC_HOSTNAME` ("qmx"), deliberately not a setting: it is the one thing an operator has to remember about the web UI, and something you must look up is barely better than an IP. Two units on one LAN would collide — make it a setting then, defaulting to this.
+
+**Why it earns its place on a device this memory-tight:** the WiFi layer picks its own network (up to six remembered, roams to whichever is on the air), so the IP changes without anyone deciding it should — and the only place it is shown is the Tab5's own bottom bar, which is useless when the Tab5 is in the shack and you are not. Failure is soft everywhere: `mdns_init()` or the service advert failing logs a warning and leaves the IP working.
+
+**It costs internal RAM, and the fix was NOT the obvious one.** Stock, mDNS took the internal low-water mark from **~31 KB to ~9 KB** — on this board that is the difference between "fine" and "the next runtime allocation is a coin toss" (see the `MALLOC_CAP_DMA` and `.bss` notes). Measured, three builds, same session and same network:
+
+| Build | internal low-water mark |
+|---|---|
+| before mDNS | 27–31 KB |
+| mDNS defaults (internal task, `MAX_INTERFACES=3`, `MAX_SERVICES=10`) | 8–12 KB |
+| + `MDNS_TASK_CREATE_FROM_SPIRAM` + `MDNS_MEMORY_ALLOC_SPIRAM` | 9–10 KB — **no measurable change** |
+| + `MDNS_MAX_INTERFACES=1`, `MDNS_MAX_SERVICES=2` | **22 KB** |
+
+So the cost was the **static tables**, not the task stack — the component sizes for 3 interfaces and 10 services by default, and we have exactly one of each (WiFi STA, `_http._tcp`). The PSRAM settings are kept because they match this project's standing rule for background tasks (`util/psram_task.h`), **not** because they were shown to help; do not cite them as the fix. All four settings live in `sdkconfig` AND `sdkconfig.defaults`, since a `fullclean` regenerates the former.
+
+**Generalise this:** a managed component's defaults are sized for a generic device with several interfaces. On this board, check its Kconfig for interface/service/buffer counts and cut them to what we actually have BEFORE assuming a memory cost is intrinsic — and measure, because the obvious culprit (a task stack) was not the one that mattered here.
+
+⚠ **Adding `espressif/mdns` to `main/idf_component.yml` re-resolves `managed_components/`** — which is where the two hand-applied `esp_hosted` patches live. They survived this particular refresh (verified: both scripts reported "already patched"), but *any* dependency change is a moment to re-run `apply_esp_hosted_psram.ps1` and `apply_esp_hosted_sdio_recovery.ps1` before building.
+
 ### esp_hosted transport buffers → PSRAM (managed-component patch — must be re-applied)
 `managed_components/espressif__esp_hosted/host/port/include/os_wrapper.h` has a one-line patch in its `MEM_ALLOC` macro: `extra_heap_caps = MALLOC_CAP_SPIRAM` (was `0`). This routes the esp_hosted WiFi transport DMA pool (the per-packet TX/RX buffers that grow under WiFi bursts) into PSRAM instead of the scarce internal DRAM. **Without it the device reboots** under QMX+FT8 load when WiFi TX bursts (web UI / QRZ upload) exhaust internal DMA RAM → `transport_drv_sta_tx` → `assert(copy_buff)`. Safe on ESP32-P4: `SOC_SDMMC_PSRAM_DMA_CAPABLE == 1`, and the 1536-byte block is 64-byte aligned. `managed_components/` is **git-ignored** and is wiped by `idf.py fullclean` / a dependency refresh / the release process's `rm -r managed_components/`, so after any of those re-run `tools/patches/apply_esp_hosted_psram.ps1` (idempotent) before building. This is half of the upload/web-stability fix; the rest is in-repo: audio ring → PSRAM, `dsp_set_transfer_quiet()` (CPU-yield during transfers), and the WS-stream pause.
 
 ### Diagnostic log persistence (RAM ring → flash → SD)
 The always-on diag log lives in a 5 MB PSRAM ring (`util/diag_log.c`) — wiped on power-off. Two persistence layers survive a reboot/battery-pull:
-- **Internal flash (always, no card needed)**: `diag_log_persist_start()` (called from `app_main` after `adif_log_init` mounts SPIFFS) runs a task appending the ring to `/spiffs/diag.log` (256 KB rolling, one rotation to `diag.0.log`), flushed+`fsync`'d every 30 s only when there are new bytes (low wear; SPIFFS is 1 MB, shared with the ADIF log). This is the POTA path: log in the field, download at home after power-off. Served at **`/api/log/saved`** (web UI "Diag(saved) ↓"). The live full-session ring is still at `/api/log` ("Diag ↓").
+- **Internal flash (always, no card needed)**: `diag_log_persist_start()` (called from `app_main` after `adif_log_init` mounts SPIFFS) runs a task appending the ring to `/spiffs/diag.log` (256 KB rolling, one rotation to `diag.0.log`), flushed+`fsync`'d every 30 s only when there are new bytes (low wear; SPIFFS is 1 MB, shared with the ADIF log). This is the POTA path: log in the field, download at home after power-off. Served at **`/api/log/saved`**. The live full-session ring is at `/api/log`. Both are fetched by the SINGLE web-UI item **Files -> "Diagnostic download ↓"** (`diag-both-link`), which triggers two staggered downloads, `qmx-log.txt` + `qmx-log-saved.txt` — it replaced the old separate "Diag ↓" / "Diag(saved) ↓" buttons, so ask users for "Diagnostic download", not those names.
 - **microSD (full 5 MB+, when a card is in)**: see below.
 Both the SD and flash mirrors read the ring incrementally via `diag_log_total()`/`diag_log_read_from()` (separate monotonic cursors in `s_total` space; the `head == total % cap` invariant lets a total-position map straight to a ring index). **`fsync` is mandatory after writing an open log file** — `fflush` alone leaves the bytes in FatFs/SPIFFS buffers, so the file reads empty if the card is pulled / power cut before an `f_sync`/`f_close` (this bit the SD `qmx-log.txt`, which is held open and only appended).
+
+⚠ **The flash copy is an ~11-MINUTE window, not a session record — and it ENOSPC'd with 400 KB free (2026-08-18, #191).** Measured on the operator's unit: the log grows **~47 KB/min** in an FT8 session (dominated by legitimate per-decode `ft8_test`/`ft8_screen` lines — CLAUDE.md's older "~0 lines/s at the deduplicated steady state" describes the CAT poll only, not FT8), so `diag.log` reaches its 256 KB cap and **rotates about every 11 minutes**. That is the real retention figure; for anything longer, the **serial capture** is the record, not `/api/log/saved`.
+
+The ENOSPC was **not** a capacity problem — SPIFFS reported 536 KB used of 934 KB and `qso.adi` was 6 KB (37 QSOs). Deleting a 256 KB file every 11 minutes leaves many blocks holding a mix of live and deleted pages, and SPIFFS returns `ENOSPC` the moment GC cannot free a whole block within `CONFIG_SPIFFS_GC_MAX_RUNS`. **So on this filesystem "free space" does not mean "writable".** It self-heals (`diag_log.c` rotates early on `ENOSPC`) but only by **discarding a generation**, so the flash log silently loses the history it exists to preserve. Fixes: **GC budget 10 → 32** (`sdkconfig` *and* `sdkconfig.defaults`; safe here specifically because `SPI_FLASH_ERASE_YIELD_DURATION_MS=20` + `SPIRAM_XIP_FROM_PSRAM` mean GC cannot hold cache down long enough to trip the cyan flash, and the writes are on a priority-2 task), and the **reader page/TOC cache writes are deleted** — dead since 2026-08-06, up to ~30 KB per page view that nothing read back, plus a one-time reclaim at boot (`reader_net_purge_legacy_caches()`).
+
+**The boot log now LISTS every `/spiffs` file with its size** (`adif_log.c`), because "536 KB used" was not actionable: answering *which file* previously needed a rebuilt firmware, and this partition holds the QSO log, the LoTW certificate **and private key**, and the diag log. The structural fix — the diag log deserves its own partition, ~6.5 MB of flash after `storage` is unused — is **#192, deliberately not done**: it changes the flash layout on shipped units.
 
 ### microSD auto-archive + exFAT (IDF-tree patch — must be re-applied)
 `storage/sd_archive.c` mirrors the always-on diag log (`qmx-log.txt`, rotated at 5 MB), the ADIF log (`qso.adi`), and the config export (`qmx-config.txt`) to `/sdcard/qmx-panadapter/` whenever a FAT/exFAT card is present (it probes for a mount on a background task — the Tab5 routes **no card-detect line** to the SoC, so presence is found by retrying `bsp_sdcard_init`, and removal by a write failure). The bottom-bar **"SD"** dot lights up green (static, not animated) while a card is mounted (`ui_set_sd_active()`) — deliberately not the breathing/pulsing style used for things needing attention elsewhere in the UI, since "a card is in the slot" is an ambient, usually-permanent state, not something to draw the eye to.
@@ -152,6 +435,8 @@ What SPI mode actually bought (real, keep it): time-to-wedge went from **~1 min 
 - The wedge signature `H_SDIO_DRV: sdio_get_len_from_slave ... exceeds max [1536]` is not "corrupted length" — it's a legit **rolling pending-byte delta** `(slave_counter − host sdio_rx_byte_count) mod ESP_RX_BYTE_MAX` that occasionally exceeds the fixed RX_NONE buffer (1536). When it does, stock `sdio_drv.c` (`sdio_get_len_from_slave` → caller in `sdio_read_task`) returned `ESP_FAIL` and **`continue`d WITHOUT reading the bytes or advancing `sdio_rx_byte_count`** → the identical oversized delta recurred every interrupt → SDIO livelock → every RPC (the 1 Hz `0x126` `WifiStaGetApInfo` poll from `status_task`) times out forever. **Heap is NOT involved** (wedged with 65 KB internal free / 31 KB largest block — the "starvation" theory above is correctly rejected).
 - **Fix (firmware recovery, hardware-verified):** patched `managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c` — removed the return-`ESP_FAIL` guard and, on an oversized delta, **DRAIN+DISCARD** the pending bytes in ≤1536 block-padded chunks (same CMD53 addressing as the normal read) then advance `sdio_rx_byte_count` so the delta re-aligns. One frame is lost (TCP/UDP retransmits); the link survives. Logs `SDIO RX oversize: len=.. host_cnt=.. slave_reg=.. - draining to recover`. **Verified on hardware: the recovery fired at ~42 min uptime (len=1916) and WiFi stayed fully up — web client reconnected, WS streaming continued, zero `0x126` timeouts.** So there IS a clean firmware cure for the *permanence*; the earlier "possibly no clean firmware cure" pessimism was wrong.
 - **Re-apply patch:** `managed_components/` is git-ignored + wiped by fullclean, so the fix ships as a store/restore — `tools/patches/esp_hosted_sdio_drv.c.patched` (byte-exact) + `tools/patches/apply_esp_hosted_sdio_recovery.ps1` (idempotent, version-guarded). Re-run after any clean fetch, same as `apply_esp_hosted_psram.ps1` / `apply_fatfs_exfat.ps1`.
+- ⭐ **THE TX SIDE ALSO GIVES UP, AND STOCK REBOOTS THE DEVICE FOR IT — patched 2026-08-16, same file.** The recovery above covers RX only. Serial-captured at ~51 min uptime: `sdio_write_task` hit two CMD53 timeouts (`0x107`) **11 ms apart**, logged `Unrecoverable host sdio state, reset host mcu`, and called `_h_restart_host()`. That is a clean `esp_restart()`, so there is **no panic dump and `reset_reason` reads `SW_CPU_RESET`** — the operator sees an unexplained reboot with a clean log and nothing to report, which is the worst possible shape for a field fault. Stock `MAX_SDIO_WRITE_RETRY` is **2 with no delay**, so both attempts land inside 11 ms: not a real attempt at riding out a transient. Patched to **8 attempts with a 2 ms pause**, and on exhausting them the frame is **dropped** via the existing unlock/free path rather than restarting — exactly the precedent the RX side already sets (*one frame is lost, TCP/UDP retransmits, the link survives*). The restart is kept as a last resort behind `H_SDIO_TX_FAIL_STREAK_MAX` (32 **consecutive** failed packets = a genuinely dead link); any successful write clears the streak, so transients cannot accumulate toward a reboot. ⚠ **The new path has NOT been observed firing** — it needs a soak or a provoked failure. ⚠ **The stored `.patched` file was refreshed to match**, because a store/restore patch makes that file the source of truth: editing only `managed_components/` would have been silently reverted by the next `fullclean`.
+- **Same run, and it reframes the "still open" question below:** 27 RX recoveries in 50 minutes, **bursty** rather than steadily worsening (per-minute rate by quarter 0.34 / 2.38 / 0.72 / 0.47), two of them 652 ms apart. That clustering is what the note below says would indicate drift and warrant a prevention fix on top of the recovery — so treat "rare and isolated" as **falsified**. BLE was enabled but unconnected, i.e. scanning (TODO #109/#131).
 - **Still open (not blocking):** *why* the delta crosses 1536 — an occasional coalesced/oversized frame (looks likely: the first observed event was isolated, then clean) vs slow counter drift (block-only-xfer pads reads to 512-byte blocks but the counter advances by the unpadded length; if the C6 counts the padding, the host lags progressively). The recovery handles either. If a longer soak shows recoveries *accelerating/clustering*, that's drift and warrants a prevention (counter-accounting) fix on top; if they stay rare and isolated, the recovery alone suffices. The recovery log line captures `host_cnt`/`slave_reg` precisely so the pattern is directly observable. This **supersedes the "no auto-recovery exists once the RPC link wedges — reboot only" claim above**: on a patched build the link self-heals; that claim now applies only to *unpatched* builds.
 
 **RE-ENABLED 2026-07-19 (`SD_ARCHIVE_DISABLED 0`) — the FT8-collapse blocker was #51 all along.** The archive was shelved 2026-07-10 not for the WiFi wedge (exonerated above — SD-independent, self-heals) but because a live test showed FT8 decode collapsing to `cand=140/dec=0` zero-clusters with a card mounted, blamed on internal-heap starvation. That is the *exact* #51 signature (USB ISO audio lost at the wire), root-caused + fixed 2026-07-19. Re-verified on hardware: with a card mounted the internal heap still craters (min ~12 KB, lblk ~15 KB — the SD tax is real, ~14–49 KB depending on card) **yet FT8 decodes 35–54/slot with no collapse, no WiFi wedge, no SDIO-recovery events.** So the low heap was never the cause. The archive is now a full **grab-and-go station backup** (`storage/sd_archive.c`): mirrors `qso.adi`, `qmx-config.txt` (settings + secrets), `lotw_cert.b64`+`lotw_key.b64` (via `sd_archive_mark_lotw_dirty()`, hooked in the `/api/lotw_cert` handler), the diag log, and a self-describing version-stamped `README.txt` (written each mount) that warns the card holds credentials in clear (WiFi pw, QRZ/eQSL, LoTW private key) — inherent to a restorable backup. Deliberately NOT mirrored: the LoTW TQ8 (derived/regenerable, signing-on-write is heavy) and screenshots. A 30 s `sd_arch: heartbeat` + per-burst SPI timing were added as soak instrumentation. FAT32 (≤32 GB) works with no patch — the exFAT patch below is only for >32 GB exFAT cards. If FT8 ever zero-clusters *only* with a card in, the fallback is gating the mount off in FT8/FT4 mode (the tightest-heap case); not needed as of this writing.
@@ -170,7 +455,167 @@ The way to get at the SD card from a connected computer is a plain **web page**,
 ESP-IDF v5.4.4's `hcd_dwc.c` `_buffer_parse_bulk()` `assert()`s if a bulk transfer completes with a non-SUCCESS descriptor status — field-observed 2026-07-16 (serial-captured: `assert failed: _buffer_parse_bulk hcd_dwc.c:2406` mid-FT8-session, a transient bulk transaction error on the CDC-ACM/CAT pipe while UAC streamed on the same host) → full device reboot. Patched to report `USB_TRANSFER_STATUS_ERROR` with 0 bytes instead (identical semantics to the driver's own `_buffer_parse_error()` path); the CDC layer retries and `cat.c`'s poll task already tolerates ~20 consecutive transient failures. Deliberately NO log line inside the patch — it can run inside the HCD's critical section (the cyan-flash rule). Because this edits the **pinned IDF install tree**, it's wiped on IDF reinstall and must be re-applied per build machine: `tools/patches/apply_hcd_bulk_error_recovery.ps1` (idempotent, version-guarded) — the 4th standing patch script alongside `apply_esp_hosted_psram.ps1`, `apply_esp_hosted_sdio_recovery.ps1`, `apply_fatfs_exfat.ps1`. Only one occurrence ever observed; the patch converts a reboot into a retried CAT poll.
 
 ### USB hub root-port recover abort → tolerant (IDF-tree patch #5 — must be re-applied)
-ESP-IDF v5.4.4's `hub.c` `root_port_req()` feeds `hcd_port_recover()` into `ESP_ERROR_CHECK` — serial-captured 2026-08-03: `usb_replug()`'s root-port power cycle (the TODO #75 zombie-device recovery) raced the hub FSM's queued `PORT_REQ_RECOVER`, the port had already left the RECOVERY state, recover returned `ESP_ERR_INVALID_STATE` → abort() → reboot ("hub.c line 462"). `tools/patches/apply_hub_recover_tolerant.ps1` (idempotent, version-guarded, **5th standing patch script**) downgrades the recover and the follow-on POWER_ON to log-and-continue, mirroring the driver's own "We allow this to fail" precedent on PORT_REQ_DISABLE. Same maintenance model as patch #4: edits the pinned IDF tree, wiped on IDF reinstall, re-apply per build machine. Hardware-verified: replugs against wedged/zombie devices no longer abort. Full two-wedge story (QMX-side descriptor wedge #74 = detect+toast only; Tab5-side zombie #75 = UAC-fork root fix + capped auto-replug backstop) in TODO #74/#75 and memory `project_qmx_reenumerate_after_reboot`.
+ESP-IDF v5.4.4's `hub.c` `root_port_req()` feeds `hcd_port_recover()` into `ESP_ERROR_CHECK` — serial-captured 2026-08-03: `usb_replug()`'s root-port power cycle (the TODO #75 zombie-device recovery) raced the hub FSM's queued `PORT_REQ_RECOVER`, the port had already left the RECOVERY state, recover returned `ESP_ERR_INVALID_STATE` → abort() → reboot ("hub.c line 462"). `tools/patches/apply_hub_recover_tolerant.ps1` (idempotent, version-guarded, **5th standing patch script**) downgrades the recover and the follow-on POWER_ON to log-and-continue, mirroring the driver's own "We allow this to fail" precedent on PORT_REQ_DISABLE. Same maintenance model as patch #4: edits the pinned IDF tree, wiped on IDF reinstall, re-apply per build machine. Hardware-verified: replugs against wedged/zombie devices no longer abort. Full two-wedge story in TODO #74/#75 and memory `project_qmx_reenumerate_after_reboot`.
+
+### `cdc_acm_host_close()` abort → retry then tolerate (managed-component patch #6 — must be re-applied)
+Stock `cdc_acm_host.c` ends `cdc_acm_host_close()` with `usb_host_interface_release()` inside `ESP_ERROR_CHECK`. That call returns `ESP_ERR_INVALID_STATE` while **any** endpoint of the interface still has a URB in flight, and it allows the client task exactly `vTaskDelay(10)` to reap them — which at this project's `CONFIG_FREERTOS_HZ=1000` is **10 MILLISECONDS**, not the 100 ms the vendor comment reads like. So a busy port turns a transient into `abort()`, i.e. a reboot. Serial-captured 2026-08-16 while building the QMX terminal (#147): closing a session on the radio's second CDC interface aborted at `cdc_acm_host.c:717` with `0x103`. **`tools/patches/apply_cdc_acm_close_tolerant.ps1`** (idempotent, marker-guarded, **6th standing patch script**) retries the release 16 × 20 ms — that addresses the actual cause, the window simply being too short — and only then logs and continues, leaking the claim rather than killing the firmware. Same precedent as the UAC fork's forced teardown above. ⚠ Edits `managed_components/`, which is **git-ignored and wiped by `fullclean`**, a dependency refresh, and the release process's `rm -r managed_components/` — re-run it after any of those, alongside `apply_esp_hosted_psram.ps1` and `apply_esp_hosted_sdio_recovery.ps1`. If a close ever starts abort()ing at that line again, this patch is missing.
+
+**Two wrong turns on the way, both falsified on hardware — do not re-take them.** (1) *"Fixed by timing"*: a non-blocking RX callback plus a wait-for-quiet made the abort rarer, and it was called fixed off a **single** successful close; a repeat-cycle test then aborted on the fourth. Timing changes the odds of a race, not the race. (2) *"Then never close at all"*: keeping the interface claimed removes that abort by construction and trades it for a worse one — holding a second CDC interface across a QMX power cycle abort()s in IDF's hub layer (`dev_tree_node_dev_gone(NULL, 0)`, `hub.c:435`), and power-cycling the radio is routine. Every abort in this family is also a Tab5 warm reset with the radio attached, i.e. the documented #74 trigger, so each one wedged the QMX until a power cycle — which is why they cost so much bench time.
+
+⚠ **#74 INVESTIGATED PROPERLY 2026-08-11 — SIX approaches FALSIFIED on hardware, recovery AND prevention. The original "needs a QMX power cycle" diagnosis STANDS, and this is now well evidenced rather than assumed.**
+
+The operator refused the QMX-side diagnosis, reasonably: *"Stan and others have numerous examples (windows linux mac) where they can sleep, unplug and replug without the QMX going stale."* So it was re-tested against a really-wedged radio. Every one of these produced the **identical empty data stage** — `Unexpected (8) device response length`, i.e. the setup packet and **zero descriptor bytes**, ~350 ms after port-on:
+
+| Tried | Result |
+|---|---|
+| `RESET_HOLD_MS` 30 → **50** | no change |
+| `RESET_HOLD_MS` → **200** (Linux's `HUB_LONG_RESET_TIME`), recovery 100 | no change |
+| `ENUM_SHORT_DESC_REQ_LEN` 8 → **64** (what Windows and Linux request) | no change — expected 72, got 8 |
+| VBUS off 2 s + root-port power cycle | no change (2 attempts, logged) |
+| Repeated retries | already happened — see below |
+| **Orderly shutdown before flashing** (`usb_shutdown`: TX disarmed, `TA0;RX;`, CDC closed, audio alt-setting 0, port power off) | **no change** — and this had never actually been run before, since esptool resets the chip without invoking it |
+| **Orderly shutdown + PHYSICAL VBUS removal**, held down through the reflash and the entire boot, then restored by the expander (`bsp_set_usb_5v_en`, P3) | **no change** — the closest thing to a physical unplug this board can produce |
+
+**So do not spend another evening on host-side timing.** The radio is not answering address 0 in that state and nothing the host does changes it. All the sdkconfig knobs are back at the IDF defaults deliberately; `sdkconfig.defaults` records the negative result so nobody raises them hoping again.
+
+**Two of my own claims that evening were wrong, in opposite directions — both corrected in place:**
+- *"Our detector never retried once"* — **wrong.** `num_devices` is NON-zero after a failed enumeration, so `usb_replug.c`'s zombie branch does fire on this wedge; it replugged twice and achieved nothing. The enum-failure branch now also replugs (it covers the `num_devices == 0` case the zombie branch cannot see) but that is **a closed hole, not a cure**.
+- *"It is a host-side retry gap and it is fixed"* — **also wrong**, and written under the operator's (fair) pressure. ESP-IDF's missing enum retry IS real (issue **#17918**, open, no fix, same failure class on a HID joystick and USB sticks, diagnosed as timing) and worth knowing, but it is **not** the cause here.
+
+**PREVENTION was tested too, and also fails.** The wedge follows a Tab5 warm reset *with the radio attached mid-session* (a cold boot enumerates fine), so `util/usb_shutdown.c` looked like the answer — and its own comment names why it had never been exercised: *"it cannot cover esptool, which resets the chip from outside with no warning at all."* The handler runs from `esp_restart()`; a flash asserts RTS and nothing runs, and every test to date ran `idf.py flash` directly. So it was run by hand via `/api/cmd`, twice: once as-is, and once with a real VBUS removal added (that function never cut physical 5 V — only `usb_replug.c` does). **Both still wedged.** The VBUS version is reverted: no benefit, and it would leave USB dead until a reboot if the operator pressed the button and changed their mind.
+
+**Conclusion: there is nothing more to try from the host.** Six approaches, covering both recovery and prevention, against a radio that answers `GET_DESCRIPTOR(DEVICE)` at address 0 with an **empty data stage** — setup packet acknowledged, zero descriptor bytes, and the host attempting enumeration repeatedly. The next move is a firmware question for Hans G0UPL, and the draft is in `docs/`.
+
+⚠ **Both branches are now LOG-ONLY — the "power-cycle the QMX" toasts were removed in v1.8.0** at the operator's request ("irritating and for no use"). They fired every few minutes at a QMX that was merely switched off, which is an ordinary state rather than a fault, and the screen already says *"Now turn on or reboot your QMX/+"* whenever CAT is down — the same instruction, in the right place. The `ESP_LOGW` lines in `util/usb_replug.c` are unchanged, so both wedges stay diagnosable from a diag log; the detection and the recovery are untouched. Don't reinstate the toasts; if this ever needs to be visible again, put it in the wait prompt rather than adding a second thing that pops up.
+
+### A channel error without the halt bit abort()s the device (IDF-tree patch #7 — must be re-applied)
+ESP-IDF v5.4.4's `usb_dwc_hal.c` `usb_dwc_hal_chan_decode_intr()` guards its error
+branch with `HAL_ASSERT(chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD)` under the comment
+*"An error should have halted the channel"*. That is an **assumption**, and ESP32-P4
+v1.3 violates it — serial-captured 2026-08-18 during an overnight soak of the
+released v1.8.5, at **1 h 57 m** of a completely healthy FT8 session (radio streaming
+46,806 pairs/s, FT8 mid-capture, 55 KB internal free, 0 SDIO timeouts): a channel
+error interrupt arrived with no CHHLTD and the assert aborted the device.
+
+⛔ **The reboot is not the expensive part.** An abort is a warm reset with the QMX
+attached, which is the documented **#74** trigger — so the radio then failed to
+re-enumerate and stayed dead for the remaining **5 h 26 m** of the night (4 ENUM
+failures, then `RX 0 pairs/s` until morning). One assert cost the whole session, and
+the operator's report was "the QMX wedged during the night" — the QMX was fine.
+**When a QMX wedge is reported after an unattended run, look for a Tab5 abort first.**
+
+**The recovery was already written**, immediately below the assert: the same block
+classifies the error (STALL/BBLEER/BNA/XCS_XACT), clears `flags.active` and returns
+`USB_DWC_HAL_CHAN_EVENT_ERROR`, which the HCD handles — and patch #4 already made
+that layer tolerant. So `tools/patches/apply_usb_dwc_hal_chan_error_tolerant.ps1`
+(idempotent, marker-guarded) just drops the assert and lets the existing path run.
+**No logging inside it** — that code executes in the USB interrupt path (cyan-flash
+rule). Edits the **pinned IDF tree**, so an IDF reinstall wipes it;
+`tools/check_patches.py` now fails the build if it is missing (mutation-tested).
+
+⚠ **This is the THIRD assert of the same family**, after #4 (`hcd_dwc.c` bulk error)
+and #5 (`hub.c` recover in `ESP_ERROR_CHECK`) — and #8 below is the fourth.
+Generalise it: **IDF's USB stack asserts on hardware states it treats as impossible,
+and on this board they happen.** When a new USB abort appears, look for a
+`HAL_ASSERT`/`ESP_ERROR_CHECK`/bare `abort()` guarding a "cannot happen" case with a
+working error path sitting right beside it.
+
+⚠ **v1.8.5 shipped WITHOUT this fix.** Rate is unknown beyond once in ~2 h on this
+bench under FT8 — earlier 10 h+ soaks never showed it, so do not assume a rate from
+one event.
+
+### An "impossible" pipe event abort()s the device (IDF-tree patch #8 — must be re-applied)
+`hcd_dwc.c`'s `_buffer_parse_error()` switches on `status_flags.pipe_event` and its
+`default:` is a bare `abort()` under *"HCD_PIPE_EVENT_URB_DONE and
+HCD_PIPE_EVENT_ERROR_URB_NOT_AVAIL should not occur here"*. Same assumption, same
+outcome: serial-captured **2026-08-18 in a soak of the RELEASED v1.8.6**, at **7 h
+06 m** of a completely healthy FT8 receive session (26 decodes/slot, 49,460 pairs/s,
+53 KB internal free, `idle0` 61 %). And again the reboot was the cheap part — the
+warm reset with the radio attached triggered **#74**, the QMX never re-enumerated,
+and the operator's report was *"the QMX was wedged"*. **That inversion has now
+happened twice in two nights: a QMX wedge after an unattended run means look for a
+Tab5 abort FIRST.**
+
+**How the PC was tied to the line, because it does not read as obvious.**
+`addr2line 0x480f3e31` says `_buffer_parse` **line 2578** — the `default:` of a
+*different* switch, on `pipe->ep_char.type`, which is declared `type : 2` with all
+four enum values cased and is therefore **unreachable by construction**.
+`_buffer_parse_error` is `static inline` into `_buffer_parse`, and the two identical
+bare `abort()`s **fold into one block**, so addr2line reports the surviving line.
+`pipe_event` is `: 8`, so *its* `default:` is reachable. Corroborating:
+`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=2`, so a failing `assert()` prints
+`assert failed: … file:line` — **nothing printed**, which is what proves it was a
+plain `abort()` rather than either `assert()` at the top of `_buffer_parse`.
+**Generalise the method**: when a bare abort's line looks unreachable, check for
+identical folded `abort()` blocks and an inlined static function, and use the field
+widths to eliminate.
+
+Fix follows **patch #4's own precedent in the same file**: `actual_num_bytes` is
+already 0 before the switch, so the `default:` only sets
+`transfer->status = USB_TRANSFER_STATUS_ERROR` — exactly what every other branch
+does — and the class driver retries. `tools/patches/apply_hcd_buffer_parse_error_tolerant.ps1`.
+⚠ **`hcd_dwc.c` now carries TWO of our patches (#4 and #8) with separate markers**;
+applying one does not apply the other, and `check_patches.py` has a row for each.
+
+⚠ **Patches #7 and #8 COUNT rather than log (#189), and the count is the marker.**
+Neither may log (interrupt path, cyan-flash rule), which made both unverifiable: a
+clean log cannot distinguish "never happened" from "happened and was handled", so
+they could only ever be failed-to-be-contradicted. Both now increment a `uint32_t`
+(`main/util/usb_patch_counters.c` — defined in **firmware** and only `extern`-declared
+inside the patched IDF files, deliberately that way round so a missing patch leaves
+the count at 0 instead of failing the link). Reported by
+`usb_patch_counters_report()` from the 10 s heap watchdog **only when a count
+changes**, and in `/api/status` as `usb_patch`. Because a silent-but-tolerant patch
+is as good as no patch for diagnosis, **`check_patches.py`'s marker for both is the
+counter symbol**, not a date comment.
+
+⭐ **BOTH COUNTERS HAVE NOW FIRED, AND THAT SETTLES IT — 2026-09-01, dev bench,
+`/api/status` reading `usb_patch: {chan_err_no_halt: 1, unexpected_pipe_event: 1}`
+in a single ~5 h session.** They are plain RAM globals zeroed at boot, so both
+events happened in that one uptime. On an unpatched build each would have been an
+`abort()`, i.e. a warm reset with the radio attached, i.e. the documented **#74**
+wedge — so this bench would have lost the QMX twice in an afternoon. The earlier
+caveat here (*"neither counter has been observed firing yet — correct-by-
+construction, not hardware-confirmed"*) is retired: patches #7 and #8 are now
+hardware-confirmed, and #189's whole argument — that a silent tolerant patch is
+indistinguishable from a missing one — is what made the confirmation readable at
+a glance instead of needing a reproduction.
+
+### A DMA buffer with no URB abort()s the device (IDF-tree patch #9 — must be re-applied)
+`hcd_dwc.c`'s `_buffer_parse()` opens with
+`assert(buffer_to_parse->urb != NULL)`. Field-observed 2026-09-01: **the operator
+restarted the QMX**, the Tab5 flashed cyan and rebooted. A power cycle with
+isochronous transfers in flight tears the pipe down underneath the parser, so the
+buffer at `fr_idx` can legitimately have been released already — the assert calls
+that impossible, and on this board it happens.
+
+⭐ **The #117 crash record had the entire thing on the next boot with nothing to
+reproduce**, which is exactly what that feature exists for:
+```
+assert failed: _buffer_parse hcd_dwc.c:2573 (buffer_to_parse->urb != NULL)
+task   : USB UAC Host   core 0   after 397.023 s of uptime
+```
+
+⛔ **The reboot is not the expensive part** — an abort is a warm reset with the
+radio attached, i.e. the documented **#74** trigger, so restarting the radio can
+cost the radio. That inversion (a Tab5 abort reported as "the QMX wedged") has
+now happened three ways.
+
+**Fix:** there is nothing to parse into a URB that is not there, so the buffer is
+skipped — but the ring bookkeeping still advances exactly as the tail of
+`_buffer_parse()` advances it (`flags.val = 0`, `fr_idx++`,
+`buffer_num_to_parse--`, `buffer_num_to_fill++`), or `_buffer_flush_all()` spins
+on counts that never drain. On an isochronous stream the cost is one lost audio
+packet. `tools/patches/apply_hcd_buffer_parse_no_urb_tolerant.ps1`. Counts rather
+than logs (#189, interrupt path), reported as `usb_patch.buffer_parse_no_urb`.
+
+⚠ **`hcd_dwc.c` now carries THREE of our patches (#4, #8 and #9)** with separate
+markers; applying one does not apply the others, and `check_patches.py` has a row
+for each. **Eleven standing patches now** — the count in older notes is stale.
+
+⚠ **This is the FIFTH of the family** (#4, #5, #7, #8, #9). The generalisation
+stands and keeps paying: *IDF's USB stack asserts on hardware states it treats as
+impossible, and on this board they happen.*
 
 ### USB mouse — WORKS mouse-alone (hw-verified 2026-07-20); simultaneous-with-QMX blocked by the hub/TT wall
 Frank K4FMH asked for mouse support (USB or BT). **The full USB-mouse stack works and is hardware-verified**: a mouse plugged **directly** into USB-A (no hub, QMX not attached) enumerates, and `main/usb_hid_mouse.c` (HID host, boot-protocol report → cursor accumulation) + the LVGL pointer indev in `ui.c` (`ui_mouse_init()`, `mouse_read_cb`, white-circle cursor on `lv_layer_top()`) give a moving cursor that drives every menu/button/drawer via normal LVGL clicks. The 90° rotation transform (`point.x = ly; point.y = (W-1) - lx`, the inverse of LVGL's own `indev_pointer_proc` ROTATION_90 map) was correct first try — cursor tracks and clicks land accurately. Verified with the mouse as the SOLE USB device.
@@ -192,6 +637,150 @@ The Tab5's USB-A host is the P4's **UTMI PHY = High-Speed only** (`usb_phy.c`: *
 ### LVGL memory pool → PSRAM (`main/util/lv_pool_shim.h`)
 LVGL's builtin tlsf allocator normally reserves a static 256 KB array in internal BSS (`CONFIG_LV_MEM_SIZE_KILOBYTES=256`). `lv_pool_shim.h` is force-included into the `lvgl__lvgl` component build (via `main/CMakeLists.txt`) and defines `LV_MEM_POOL_ALLOC` to call `heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` instead, freeing that 256 KB of internal SRAM for FreeRTOS/SDMMC/USB host/LWIP/the web server. Explicit and harmless — LVGL doesn't care where its pool memory comes from.
 
+### A liveness flag must be claimed by the SPAWNER, never set inside the task (#199, 2026-08-20)
+`s_ft8_task_alive` and `s_decode_task_alive` were each set as their own task's
+**first statement**, so both meant *"this task has begun RUNNING"* — while every
+reader (the single-instance guard in `ft8_self_test()`, and the 1 Hz respawn
+watchdog in `ft8_screen_view.c`) needs *"this task EXISTS"*. Between the two
+sits the whole scheduling delay.
+
+**On this board that delay is long, not a hair's breadth.** Both tasks are
+created at `tskIDLE_PRIORITY + 1` — the **lowest priority in the system** — under
+the capture task, `fft_task` (4), taskLVGL, the feeds (2) and httpd (5). Taking
+over a second to get a first slice is ordinary; the same starvation was measured
+directly the same day in `ft8_screen.c`'s `record_decode`, where a **mutex holder
+went ~190 ms with no CPU** and its own log line surfaced out of order.
+
+So the FT8-entry path spawned the task, the watchdog looked a second later, saw
+a flag still false, logged `respawning` and spawned a **second** one. Both built
+the monitor pool and the second double-freed the shared FFT scratch — almost
+certainly the `tlsf_free` double-free reboot open and unreproduced since v1.3.0.
+
+**The rule:** set the flag *before* `xTaskCreate`, and clear it if creation
+fails — otherwise nothing ever clears it and the subsystem is dead for the
+session with its watchdog refusing to retry. **Do not "fix" this with a grace
+period in the watchdog**: that only makes the race rarer, and this file already
+records two attempts falsified on hardware for exactly that reason (the
+`cdc_acm_host_close()` abort). *Timing changes the odds of a race, not the race.*
+
+A sweep of every task entry point in `main/` found **three** flags of this shape
+and only these two were real. `wifi.c`'s `s_wifi_started` is a **false positive**
+and must stay as it is — it records that `esp_wifi_start()` succeeded and is set
+at each call site right after the call, which is the correct pattern.
+
+⭐ **Exercised on hardware 2026-08-20 with the radio on: 7 FT8 entries, 2 spawns,
+1 legitimate respawn, 5 correct guard refusals, and EXACTLY ONE pool build per
+spawn** — zero `rebuilt with no teardown`, zero crashes. Read as
+*not contradicted*, not as proven: reproducing the original race needs the
+watchdog to look inside the spawn-to-first-run window, which cannot be forced on
+demand. The guard is demonstrably live though — a respawn was immediately
+followed by refusals, i.e. the flag went true at once.
+
+### ⛔ An OTA needs ~14 KB of internal heap it did not have, and the FIRST symptom said so
+Four hardware watchdog resets, always at the end of a long download with the
+radio streaming. Every theory about scheduling was wrong and cost a 6-minute
+download each: the verify measures **894 ms with the FFT running and 890 ms
+with it stood down**, four milliseconds apart. `dsp_set_transfer_quiet()`, a
+quiesce handshake and a feed pause were all built and all failed to fix it.
+
+**The very first symptom was a memory error stating the cause plainly** —
+`ota_update_start()` returning *"Could not start the update task"* is
+`xTaskCreate` failing to find 8 KB of contiguous INTERNAL RAM (the task cannot
+use a PSRAM stack; flash writes run with the cache off). In FT8 with the radio
+streaming, the largest internal block was **6,912 bytes**.
+
+`size` → `size-components` → `nm --size-sort` — the trio this file already
+prescribes — named it in four minutes and no hardware: `s_toc` (9,472 B, the
+manual's contents list) and `s_pub` (4,608 B, a spur map for a feature that
+defaults OFF), both in internal `.bss`. `EXT_RAM_BSS_ATTR` recovered **14,084
+bytes**; largest block 6,912 → 19,456, DMA pool 4,683 → 20,231, and the
+**minimum** internal free over a whole run 2,519 → 10,067.
+
+⭐ **The A/B that settles it:** same mode, same audio load, ~300 s download, one
+variable. Four runs below ~12 KB free took the watchdog; two above ~14 KB
+completed at 304 s and 328 s. **`libmain.a` still owns 153,906 of 170,704 bytes
+of `.bss`** — `s_table` (11,264 B) is the next candidate, and the last audit's
+52 KB has crept back.
+
+⚠ Also fixed on the way, and it is NOT OTA-specific: `fft_task`'s
+transfer-quiet branch read ONE window (1024 pairs) then slept 50 ms — ~20,000
+pairs/s against the ~48,000 the QMX produces — so it fell behind 2:1 and
+overflowed the audio ring for the whole of **every upload**, while its own
+comment claimed it prevented exactly that.
+
+### ⛔ A message must never disable navigation
+The v1.9.3 bar takeover stood down the edge strips and the burger "for the
+duration of the download". The banner then moved to the READY state, which
+persists until the operator decides — so it locked them out of every swipe and
+the drawer INDEFINITELY, with a staged update sitting on the bar. Reported from
+the bench as "no way to swipe away from FT8". The takeover was removed
+entirely; if one ever comes back, it is display-only.
+
+### ⛔ Paint and animate under ONE display_lock()
+`ui_set_update_line_pulsing()` painted text under one `display_lock()` and
+started its animation under a second. When the first timed out and the second
+did not — exactly what to expect right after a flash verify starves taskLVGL —
+the OLD text was left breathing forever and every later tick early-returned on
+"something is already pulsing". Both now happen under one lock, the flag is set
+only if that lock was taken, and the early-out is on CONTENT CHANGED.
+
+⚠ **Two screenshots are not a test for an animation.** I took two ~90 s apart,
+measured identical brightness, and concluded it was not breathing. Ease-in-out
+lingers near full opacity; the operator's eyes were right and my measurement
+was too weak to contradict them.
+
+### ⛔ `/api/cmd` answers an unknown action with `unknown action` and HTTP 200
+So a mistyped action is a **silent no-op**, and if the response is piped to
+`/dev/null` the test looks like it ran and changed nothing.
+
+This cost real time on 2026-08-20. The screen-switch action is **`set_screen`**,
+not `screen`. Twelve "panadapter↔FT8 toggles" sent `{"action":"screen",...}`,
+every one returned `unknown action`, and the resulting perfectly flat heap was
+briefly written up as "#38's leak is gone" — against a predicted ~2 MB. Worse, a
+**mechanism was invented to explain it**: that `ui_request_base_mode()` was
+gated behind `qmx_wait_poll_cb()`'s "Waiting for QMX..." prompt. That claim was
+never tested and is **false**; with the correct action the switch completes
+normally. It had already been committed to this file, TODO.md and memory before
+the typo was found.
+
+**Two rules from it.** Check the BODY of an `/api/cmd` response, never just the
+status. And when a result is surprising, confirm the action executed at all
+before reasoning about why it behaved that way — an invented mechanism for a
+result that never happened is worse than no explanation, because it reads as
+knowledge.
+
+### Task stacks on this board are TINY — a multi-hundred-byte local is a bug until proven otherwise
+Measured stack bounds from real crash dumps: **`sys_evt` 2808 B**, **`settings_flush` 3064 B**. `taskLVGL` is ~8 KB. So a "small" local array is not small here. Instances so far, all the same bug: the v0.20.1 pounce crash (11 KB `ft8_call_t snap[]` on taskLVGL — the compiler reserves the frame at the prologue **unconditionally**, so it fired on every pounce regardless of the code path taken), and three in one sitting on 2026-08-05 while adding the WiFi known-network list — a `wifi_known_t[6]` (~590 B) on `sys_evt` (twice: the GOT_IP log and the backoff probe) and on `settings_flush`, each producing `Guru Meditation: Stack protection fault` and a **crash loop**.
+
+⛔ **AND IT HAPPENED AGAIN IN THE SAME FILE ON 2026-08-31 — a FOURTH time, THIRD
+in `wifi.c`, with the rule already written above.** The static-IP feature (#307)
+added `static_ip_wanted()`, which called `settings_load_all()` — a whole
+**multi-kilobyte `qmx_settings_t`** — and called it from the WiFi/IP event
+handlers, i.e. on `sys_evt`'s 2808 bytes. Stack protection fault at **8.283 s of
+every boot**, the moment WiFi came up: a boot loop, reported from the bench as
+"cyan screen twice looping". Fixed by `settings_get_wifi_static()`, which copies
+the four address strings and **nothing else** — 64 bytes.
+
+**Two things to take from the repeat, because the rule alone plainly is not
+enough:**
+- ⭐ **The struct is the trap, not just arrays.** Every earlier instance was a
+  visible `type name[N]`, so `settings_load_all(&st)` does not *look* like a big
+  local at the call site — the size is off in a header. **Treat any
+  `settings_load_all()` as a multi-kilobyte stack allocation** and check the task
+  before writing one. There is already a precedent to copy:
+  `settings_get_cw_tx_offset_hz()` and `settings_wifi_known_count()` exist for
+  exactly this, and both headers cite this section.
+- ⭐ **`wifi.c` is where this keeps happening**, because event handlers look like
+  ordinary functions and nothing at the call site says which task they are on.
+  Anything new inside `on_wifi_event`/`on_ip_event` gets a narrow accessor, never
+  the whole struct.
+
+⭐ **The crash record (#117) made this a five-minute diagnosis** — it named the
+task, the core and 8.283 s of uptime on the very next boot, so nothing had to be
+reproduced and no backtrace had to be decoded. This is what that feature is for.
+
+**Before adding a local bigger than a couple of hundred bytes, identify which task the code runs on.** Event handlers (`on_wifi_event`, `on_ip_event`) run on `sys_evt`; the settings flush has its own 3 KB task; LVGL callbacks and `lv_timer` callbacks run on taskLVGL. Then pick: a **count-only accessor** if you only need a number (`settings_wifi_known_count()` exists precisely for this), a **file-local `static`** when the callers are single-threaded on one task (the pattern `wifi.c`'s `static wifi_ap_record_t recs[]` already used), or **PSRAM** via `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` for anything genuinely large or shared. Never the stack. A stack-protection fault names the task and prints its bounds — that line is the fastest way to confirm which one you hit.
+
 ### Audit every `malloc()` under ~16 KB on a hot/recurring path — it's silently going to internal RAM
 `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384`: any plain `malloc()`/`calloc()` smaller than 16 KB is forced onto internal SRAM regardless of free PSRAM, because IDF assumes small allocations are DMA/latency-sensitive. Internal RAM is the one truly scarce resource on this device (see the `esp_hosted`/USB-DWC/LVGL-pool fixes above), so a small allocation on a *frequent* path is just as dangerous as one big allocation — it doesn't show up in a one-time heap budget review, only under load. Two confirmed instances (v0.19.2): `config_io_export()`'s 8 KB INI-text buffer in `storage/config_io.c` (one-shot, on config download) and `ft8_find_clear_tone_hz_near()`/`ft8_tx_is_clashing()`'s ~11 KB `ft8_call_t` snapshot buffer in `ft8_tx.c` — the latter far worse, since `ft8_tx_is_clashing()` runs from a **1-second LVGL timer** (`t_clock_cb` in `ui/ft8_screen_view.c`) whenever a TX is armed/active. Both were caught only after a serial-log-confirmed WiFi-co-processor death under load (internal heap measured as low as 6 KB free / 3 KB largest block); both fixed by switching to `heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` (plain `free()` still works on heap_caps allocations, no caller changes needed). If WiFi instability resurfaces, grep for `= malloc(` / `= calloc(` across `main/` first, not just the usual big-buffer suspects — anything under 16 KB that runs on a timer, a poll loop, or per-decode is a candidate.
 
@@ -203,7 +792,152 @@ The display panel is natively portrait; landscape is achieved via `lv_display_se
 
 **Do not enable `CONFIG_LVGL_PORT_ENABLE_PPA=y`.** The PPA driver and the USB host stack (UAC + CDC-ACM) compete for DW-GDMA channels. Enabling PPA silently kills QMX connectivity — audio and CAT both stop. Tested and confirmed broken.
 
-Phase 6.3 (FPS recovery) requires a full native-portrait UI rewrite: LVGL configured as 720×1280, all widget positions transposed (landscape x↔y swap), all canvas drawing code rewritten for portrait orientation. Significant work; not yet done.
+### ⛔ PHASE 6.3 (the "native-portrait rewrite") IS DEAD. Do not start it.
+
+This section used to say FPS recovery "requires a full native-portrait UI
+rewrite: LVGL configured as 720×1280, all widget positions transposed". That
+plan is **wrong twice over**, both established on 2026-08-28. It would have cost
+weeks to arrive at either discovery, so it is recorded here rather than in a
+TODO row.
+
+**1. Transposing coordinates cannot work, because TEXT cannot be transposed.**
+`lv_draw_label.c:339` advances the pen with `pos.x += letter_w + letter_space`
+— along **x only**; y moves solely on a line break. `LV_TEXT_FLAG_*` has no
+vertical mode and LVGL 9.2 has no vertical-text support at all. With the display
+declared 720×1280 and the panel physically landscape on the desk, LVGL's x-axis
+runs *vertically* in front of the operator, so every label — the frequency
+readout, every decode row, the whole UI — would render **sideways**. Positions
+and sizes are a coordinate swap; glyph layout is not. (Pre-rotated glyph
+bitmaps do not help: the pen still advances along x. Per-label
+`transform_rotation` is the thing that already hung taskLVGL once.)
+
+⚠ **"Native portrait" was also a bad name** and confused the operator, fairly:
+nothing turns. The screen stays landscape on the desk. It referred only to the
+panel's scan order (720 wide × 1280 tall, mounted with its long axis across the
+desk). Call it "native scan order" or "no-rotate UI" if it ever comes up again.
+
+**2. The prize is only ~7 points of core 0, which would not have justified it.**
+Measured by neutering `rotate90_rgb565` in `managed_components` so the screen
+showed garbage while widget drawing, invalidation, flush count and DSI transfer
+sizes stayed byte-identical — i.e. isolating exactly what 6.3 deletes:
+
+| panadapter, radio streaming | core-0 idle |
+|---|---|
+| with software rotation | 6.9–7.6 % |
+| **rotation removed entirely** | **14.3–15.4 %** |
+
+Scope for comparison: `main/ui/` is 32,350 lines, `ui.c` alone 11,458, with 883
+coordinate call sites. Seven points of one core is not worth that.
+
+### ⭐ What core 0 is ACTUALLY doing: taskLVGL is 73.9 % of it, and only ~7 of
+### those points are the rotation
+
+The panadapter has sat at 0–7 % core-0 idle for months, and this file called it
+"unexplained" (v1.8.3 note). Measured on demand with
+`/api/cmd {"action":"cpu_owners"}` (per-task `ulRunTimeCounter` over 1 s;
+`CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` was already on):
+
+```
+taskLVGL  73.9%  core 0      render      8.6%  core 0
+IDLE1     89.6%  core 1      audio_task  6.9%  core 0
+fft_task   8.4%  core 1      IDLE0       6.7%  core 0
+```
+Core 0 accounts to 99.2 %, core 1 to 98.6 % — the columns close, so the figures
+are trustworthy. Each number is a share of ONE core; the whole table sums to
+~200 % because there are two.
+
+**So ~66 points of core 0 is LVGL DRAWING, not rotating**, and everything else
+on that core is small change (all USB together is 2.4 %). Generalise the
+consequence, because it reframes every "we are out of resources" question on
+this board: **PSRAM has ~15 MB free, flash 758 KB, MALLOC_CAP_DMA is
+reclaimable, and CORE 1 IS 90 % IDLE.** Nothing is blocked by resources. New
+work — a CW page, CW audio, a decoder — belongs on **core 1, at a priority
+BELOW `fft_task`**, and nothing new may be put on core 0.
+
+⚠ **Unconfirmed hypothesis for the 66 points, flagged as such:** the waterfall
+is a 1280×824 canvas in PSRAM whose *view offset* moves every tick (the
+double-height scroll trick), so LVGL may be re-blitting the whole visible
+1280×370 into the draw buffer every frame — 947 KB/frame, ~12 MB/s at 13 fps —
+with the spectrum canvas on top. If so the fix is not redrawing 947 KB to add
+one row, and it is not a rewrite. **Settle it by measurement** (hide each canvas
+independently and re-sample `cpu_owners`) before acting on it.
+
+⛔ **Three fixes for core 0 were tried on hardware the same day and ALL FAILED.
+Do not re-take them** — each cost a QMX power cycle:
+- **Shrinking the rotation working set** (`display.c` `buffer_size` 36 → 12
+  lines) made it **worse**, 0.4–1.5 % → 0.0 %. Tripling the flush count cost
+  more than the cache residency bought.
+- **Moving taskLVGL to core 1** (`.task_affinity` 0 → 1) **broke the device**:
+  `fft_task` shares core 1 at the same base priority and is the audio ring's
+  only consumer, so within seconds the log read `RX 47766 pairs/s ...
+  DROPPED=48000 (ring full)` every second — USB perfect, 0 badpkt, every sample
+  discarded. WiFi went too. That is #51 by another route. Any retry must fix
+  `fft_task`'s scheduling first, or move the rotation off the LVGL task rather
+  than the task off the core.
+- **Halving the L2 cache** — see the DMA-pool section; it buys 128 KB of
+  DMA-capable RAM and costs core 0 its remaining headroom.
+The reasoning for each is in the comments at the relevant lines in
+`main/display/display.c` and `sdkconfig.defaults`.
+
+### ⭐ The panadapter's load, ACCOUNTED FOR: 10 Hz x a full-canvas invalidate
+`render.c`'s `RENDER_PERIOD_MS` is **100**, so the render task pushes one
+waterfall row 10 times a second - and `ui_push_waterfall_row()` ends with
+`lv_canvas_set_buffer()`, which **invalidates the whole object** (lv_canvas.c).
+So the entire 1280x370 waterfall is redrawn ten times a second in order to add
+one row, and the spectrum canvas the same when it has new data.
+
+The arithmetic and the instrument agree, which is what makes this solid rather
+than another theory:
+
+| | predicted | measured (`inval kpx/s`, radio OFF) |
+|---|---|---|
+| waterfall only, 10 Hz x 1280x370 | 4.74 Mpx/s | **4.7-4.9 Mpx/s** |
+| + spectrum, 10 Hz x 1280x200 (radio ON) | ~7.3 Mpx/s | not yet measured |
+
+With the radio off the spectrum canvas never invalidates (no new DSP data), which
+is exactly why the measured figure lands on the waterfall term alone. `fps` reads
+~28 because small widgets (the clock, the spot lane) refresh in between; the
+EXPENSIVE invalidations happen 10x/s. **So fps alone is useless as a load metric
+on this device** - `idle0`, `fps` and `inval kpx/s` are all three in the periodic
+line for that reason.
+
+⛔ **BUT THE COST PER PIXEL IS NOT YET ESTABLISHED, and neither is any fix.**
+Measured 2026-08-28 with the radio off, core-0 idle swings **47-57%** at a
+constant ~4.7 Mpx/s, purely on background activity - BLE scanning comes in bursts
+(`nimble_host` was 6.6% of core 0 in one sample and absent from the next) and the
+RBN/DX feeds add more. That noise band swallowed a whole experiment: putting the
+LVGL draw buffers in internal RAM instead of PSRAM measured 49-51% against
+57-58%, and **that difference is INSIDE the noise, so it proves nothing either
+way.** It is retracted rather than recorded.
+
+⚠ **So before the next attempt on this, fix the MEASUREMENT first**: quiesce BLE
+and the feeds, take many samples per configuration, and normalise by
+`inval kpx/s` rather than comparing raw idle figures. An effect smaller than
+10 points of core 0 cannot currently be seen at all.
+
+⚠ **Untested idea worth keeping, explicitly a hypothesis:** on the ESP32-P4 the
+L2 cache and the L2MEM heap are the SAME physical SRAM (`memory_layout.c` sizes
+the heap region as `SOC_DRAM_HIGH - CONFIG_CACHE_L2_CACHE_SIZE - ...`). If that
+means data placed in "fast internal RAM" is no faster than PSRAM behind a large
+cache - and costs cache to hold - it would explain both the L2-cache result and
+the draw-buffer result with one mechanism. It would also mean **this board's
+internal RAM is valuable for DMA reach, not for speed.** Nothing here tests that.
+
+⛔ **The draw-buffer location is runtime-selectable and DEFAULTS TO PSRAM:**
+`{"action":"gfx_exp","internal":true,"lines":16}` stores the choice in the
+`devgfx` NVS namespace and reboots. Its pre-flight guard requires **200 KB** of
+`MALLOC_CAP_DMA` free, and the first version requiring 48 KB **took the device
+off the network**: it checked the pool at `display_init()` (~174 KB free) without
+budgeting for WiFi's ~111 KB and the SD mount's ~26 KB later in the same boot.
+The log read `int free=6KB (min=0KB lblk=2KB LOW!)` while LVGL carried on at 27.9
+fps - a unit that looks perfect on its own screen and cannot be reached.
+**A guard on a resource that has not finished being spent must budget for the
+spending still to come.**
+
+⚠ **PPA is the only untried hardware path left** and it was ruled out for a
+GDMA *channel-allocation* conflict with the USB host, not for an inability. If
+core-0 headroom is ever needed badly, re-examine it on the channel counts
+rather than treating the old verdict as final.
 
 ### Hardware revision detection — ST7121 vs ST7123 touch controller
 Newer Tab5 units ship with an **ST7121** touch controller (I2C 0x55, FW version = 1) instead of the original **ST7123** (same address, FW version = 3). Both also differ from the older ST7703/GT911 hardware.
@@ -237,6 +971,81 @@ Measured on hardware, four boots, SD-enabled vs `SD_ARCHIVE_DISABLED` A/B, 230 s
 
 **This is why every previous "internal heap starvation" theory in this file was correctly rejected**: internal free/largest-block genuinely is fine. The exhausted pool is `MALLOC_CAP_DMA`, which nothing was measuring. With ~400 B left, **any runtime DMA allocation should be expected to fail** — the SD remount failures (`0x101 ESP_ERR_NO_MEM`) are one symptom, and the long-documented USB endpoint-alloc failure on a QMX reconnect once WiFi is up is very likely the same root constraint rather than a separate bug. Both standing esp_hosted patches (PSRAM transport, SDIO recovery) were verified applied, so they are **not** the consumer; the ~111 KB is something else and is NOT yet identified.
 
+**⚠ ROOT-CAUSED 2026-08-05 — the missing consumer was OUR OWN `.bss`, not WiFi.** The "~111 KB consumed by WiFi ... NOT yet identified" conclusion above was wrong. `idf.py size` showed `.bss` at 201 KB (45% of DIRAM), `idf.py size-components` put **186,986 B of it in `libmain.a`**, and `nm --size-sort -S` named the arrays: `s_worked` (22.5 KB ADIF worked-call cache), two `static ft8_call_t snap[]` heard-table snapshots (11.25 KB each), `s_rows` (8 KB row-widget pool). Moving those three to PSRAM recovered **52 KB** and took `MALLOC_CAP_DMA` from ~311 B to **40–41 KB with WiFi fully up** — measured, IP acquired, POTA fetching. So our static arrays occupied the DMA-capable region and WiFi's (real) share was merely the last straw. Steady internal free went 22–24 KB → 78 KB and the **watermark 0 KB → 32 KB**; the watermark reaching zero is why any runtime allocation was a coin toss. This reframes the whole #65 family — SD remount `0x101`, USB EP alloc on QMX reconnect, and the device-wide TLS failure (hardware AES could not get DMA descriptors) — as ONE root cause. **Deliberately still internal:** `audio.c`'s `raw[]`/`decoded[]` and the `dsp.c` FFT buffers (~53 KB) — hot paths, and v0.19.4 already proved a PSRAM spill makes the STFT ~10x slower. **Method lesson: `size` → `size-components` → `nm` is the three-command answer to "who owns internal RAM"; it took minutes and had never been run.**
+
+### ⭐ Why "internal free 35–40 KB" and "DMA free 400 B" were both true (2026-08-28)
+This file has carried that contradiction for a year. `heap/port/esp32p4/memory_layout.c`
+resolves it: the internal heap is **not one pool**. Two L2MEM regions carry
+`MALLOC_CAP_DMA` (`RETENT_RAM` + the startup-data region), and two more do
+**not** — **TCM, 8 KB @0x30100000** and **LPRAM, 32 KB @0x50108000**, which match
+`MALLOC_CAP_INTERNAL` only at medium/low priority. So a plain
+`MALLOC_CAP_INTERNAL|8BIT` request goes to L2MEM first and **spills into
+TCM/LPRAM once L2MEM is full** — which is exactly what "35–40 KB internal free"
+was: ~40 KB of non-DMA memory that cannot serve FatFs, USB endpoints or SDIO.
+Caught directly: `nimble_host`'s stack sat at `0x5010c4d4` (LPRAM) on one boot
+and moved back into the DMA region on the next once space existed.
+
+⚠ **Consequence for any reclamation pass:** freeing DMA-capable bytes does not
+raise `dma free` one-for-one, because allocations that had spilled to LPRAM move
+back in. Judge a reclamation by **total demand**, never by the free figure alone.
+
+### ⭐ The DMA pool is mostly TASK STACKS — and the way to prove it is pxStackBase
+`util/dma_owners.c` (#283/#284) matches every block address against each live
+task's `TaskStatus_t.pxStackBase` and `xHandle`, so a block is named "STACK of
+X" or "TCB of X" instead of merely "allocated by whoever called xTaskCreate".
+That distinction is the whole point: `xTaskCreate()` takes the stack from the
+**caller's** context, so every stack created during `app_main()` is filed under a
+handle that no longer resolves. Measured: **24 of the top 34 blocks, 115 KB, are
+task stacks.**
+
+⚠ **Match by CONTAINMENT, not equality.** `CONFIG_HEAP_TASK_TRACKING` stores the
+owning-task handle in the block's first word and hands the caller back
+`address+4`, so a stack pointer can never *equal* a block address on a tracking
+build. The first version compared for equality, reported no stacks at all, and
+read exactly like "none of these are stacks" — which would have sent the whole
+pass down a blind alley. Bound the offset too (≤256 B): plain containment let one
+32,772 B block claim to be the stack of every task at a higher address.
+
+⛔ **`esp_hosted` hardcodes its task stacks and IGNORES its own Kconfig.**
+`host/port/include/os_wrapper.h` sets `DFLT_TASK_STACK_SIZE` and
+`RPC_TASK_STACK_SIZE` to `(5*1024)` literally, while `sdkconfig` carries
+`CONFIG_ESP_HOSTED_DFLT_TASK_STACK=3072` doing nothing. That is the 6 × 5,376 B
+of DMA pool held by `sdio_rx_buf`/`sdio_read`/`sdio_process_rx`/`sdio_write`/
+`rpc_rx`/`rpc_tx`, whose measured peaks are 716–3,044 B. **32 KB is reclaimable
+there** — but it edits the SDIO/WiFi link, this board's most fragile subsystem,
+and would become a 7th standing patch to re-apply after every `fullclean`.
+
+### ⭐ The L2 CACHE is carved out of the DMA-capable heap — 128 KB is one Kconfig line
+`CONFIG_CACHE_L2_CACHE_256KB` vs `_128KB`. `memory_layout.c` sizes the heap
+region as `SOC_DRAM_HIGH - CONFIG_CACHE_L2_CACHE_SIZE - ...`, and the observed
+heap top was exactly `0x4ffc0000 - 256 KB = 0x4ff80000`. Switching to 128 KB
+returns **exactly 128 KB** to `MALLOC_CAP_DMA` — measured: `dma free` 10,071 B →
+~101,000 B, internal free 39 KB (min **2 KB**) → 144 KB (min 68 KB).
+
+⛔ **And it was reverted, because it is not free.** `SPIRAM_FETCH_INSTRUCTIONS`,
+`SPIRAM_RODATA` and `SPIRAM_XIP_FROM_PSRAM` are all on, so code and rodata are
+fetched through that cache. Panadapter core-0 idle collapsed 6.9–7.6 % → 0.1–1.5 %
+with a visibly jerky waterfall; FT8 `dec` went 3018 → 3149 ms (+4.3 %), which does
+not matter, but the waterfall does. Two attempts to buy the headroom back were
+falsified the same day — see the Phase 6.3 section. **Revisit only if core 0 ever
+gets headroom.**
+
+⚠ **Size a stack from the path that runs when the hardware is ABSENT.**
+`tab5_kb` was cut 4096 → 2048 on a measured 1,008 B peak and the next reading came
+back at **52 bytes** of high-water, then crashed the device at 18 minutes
+(`Stack protection fault`, task `tab5_kb`, caught by #117's crash record). The
+1,008 B was measured with a keyboard attached; the deep path is the ABSENT one —
+the 2 s retry loop plus the I2C bus scan, ~2,124 B — and that is what runs on a
+bench with no keyboard. Generalise it: a high-water mark is only evidence about
+the paths that actually ran.
+
+⚠ **The SD symptom is NOT this pool.** Corrected on the day: with the card
+mounted and then failing, the log reads `SDFAIL[slowopen] err=0x5` — **errno 5,
+EIO** — with **135 KB of DMA free and a 65 KB largest block**. That is the
+documented WiFi/GDMA contention in the SD section, where the EIO is recorded as
+permanent, not a memory failure. Do not credit a successful mount to memory
+headroom either; `0x108` at mount time is intermittent.
+
 **Rule:** when a runtime allocation fails on this board, measure `heap_caps_get_free_size(MALLOC_CAP_DMA)` and `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)`, not the INTERNAL pool. `get_free_size` is O(1) and safe on a periodic path (a `dma free=` field is now in the periodic `audio: HEAP` line); `largest_free_block` walks the heap with interrupts off and must stay off periodic paths (cyan-flash rule below) — it appears only on the rare SD failure path, capped at 3 calls (`SDFAIL[...]` lines in `sd_archive.c`).
 
 ### WiFi kills a mounted SD card — the card is fine (2026-07-26)
@@ -251,6 +1060,543 @@ The discriminating experiment CLAUDE.md had wanted since 2026-07-06, finally run
 
 **Release-ordering trap:** the chapter order comes from `mkdocs.yml`'s nav via `mkdocs_reader_export.py`, which runs the packer during `mkdocs build`. So **docs must be finalised BEFORE the release build**, and `main/manual.bin` committed, or the shipped binary carries the previous manual. Verify from the boot log: `manual: built-in manual: N entries, X KB` (N = nav pages + 1 for toc.json). A stale blob is otherwise invisible until an operator notices an out-of-date contents list.
 
+**The packer also verifies the context-help deep links (v1.5.0)**, parsing `main/ui/help_topics.c` and failing the build if a page or heading it points at has gone — the whole reason that check lives at build time is that rotted deep links are otherwise found by users. It prints `pack_manual: N context-help deep link(s) verified`. Two consequences: **renaming a heading in `docs/mkdocs/**` can break the build** (fix the anchor in `help_topics.c`, or pick a shorter distinctive substring), and `mkdocs_reader_export.py` **raises** on a packer failure rather than warning — a failed pack leaves the previous blob in place, so a warning would have shipped a stale manual invisibly. What the check CANNOT catch is an anchor that still exists but is the wrong heading for the question; that judgement stays human.
+
+**Also a firmware input in practice: heading text.** `help_topics.c` anchors are case-insensitive heading *substrings* chosen to survive renumbering and small rewordings, but they are still a coupling between prose and code. Grep `help_topics.c` before renaming any heading in the docs.
+
+### ⛔ The docs live in TWO trees. README is NOT the single source.
+
+The **PDF** is built from `README.md` (between the `USERGUIDE` markers) **plus four
+injected guide files** (`guide/panadapter.md`, `ft8-rx.md`, `ft8-tx.md`,
+`time-sync.md`). The **website** and the **on-device manual** are built from
+`docs/mkdocs/**` and **never touch README**. Fixing a fact in one tree does not
+fix it in the other.
+
+Reading the shipped v1.7.0 PDF (2026-08-09) turned up **~15 wrong statements, all
+of them in `docs/mkdocs/**`** and all shipped to the website, the PDF and the
+embedded manual: the tune-snap grid described as zoom-based (it is **mode**-based),
+the ×1 span called "4 MHz" (it is **48 kHz**), a tappable S-meter peak-hold that
+**has never existed**, `settings → About → Reset` and `Settings → Diagnostic log`
+(**neither control exists**), and "Factory Reset erases the ADIF log" — the exact
+**opposite** of what `factory_reset.c` does. Plus 14 × "new in the next release"
+left from the previous cycle. README was right in *every* conflict, because README
+is the file that actually gets read.
+
+**`tools/check_docs.py` runs from the mkdocs hook.** Forward-looking phrasing is an
+**error that fails the docs build**. Duplicate coverage and PDF-coverage gaps are
+warnings, and those counts are the backlog — **if the duplicate count goes UP, a
+new second copy was just created.** ⚠ It cannot tell whether two copies *agree*;
+that stays human, and is Phase 4.0 of the release process.
+
+**Verify every number and every menu path against the code, never from memory.**
+Plan for collapsing the duplicates: `docs/docs-single-source-plan.md`.
+
+⛔ **A PDF chapter needs a `## Title` IN README, or it ships as a TOC line with no
+body — and `check_docs.py` cannot see it.** `tools/build_userguide_pdf.ps1` holds
+the chapter list, and each entry injects its guide file only where README's
+USERGUIDE section already contains a matching `## <Title>` heading. No heading, no
+injection — but the TOC is built from the chapter LIST, so the entry still appears
+with a page number pointing at nothing.
+
+**Radio menus shipped that way from v1.8.4 to v1.9.6**: nine releases with a
+"9. Radio menus" line in the contents and no chapter behind it. WSPR was about to
+do the same. Both README anchors were added at v1.10.0 and the guide went **107 ->
+116 pages**.
+
+The checker misses it because it reads the **builder's chapter list** to decide
+what is "in the PDF" — the same list that is lying. So when a chapter is added to
+that list, **grep README for its `## Title` in the same commit**, and verify by
+extracting the built PDF's text rather than by reading the TOC:
+
+```bash
+pdftotext docs/QMX-Panadapter-UserGuide-vX.Y.Z.pdf - | grep -n "^9\. WSPR"
+```
+
+Two hits (TOC and body) is correct; one hit is a chapter that does not exist.
+
+
+### LVGL hit-tests children in REVERSE CREATION ORDER and ignores siblings — a foregrounded screen child wins over a full-screen overlay (v1.5.0)
+The Reader's own **Back / Exit / Contents** buttons could not be tapped at all, and it looked like an overlay z-order bug. It is not: the top-bar Band/Mode/BW **hit zones are direct children of the screen** and are `lv_obj_move_foreground()`ed as a keepalive, so they sit above the Reader overlay in the screen's child list — and LVGL walks a parent's children in reverse creation order, taking the first hit, **without comparing siblings' areas or z-intent**. The BW zone therefore swallowed every touch aimed at the overlay's header. Same root cause produced three siblings of the same bug in one screenshot: panadapter edge-swipe strips staying live over the manual, the QMX-wait prompt's own keepalive re-foregrounding itself over the drawer, and the FT8 drawer reflow stacking on itself (that one from a hardcoded `y` under a comment warning it had to be kept in step by hand).
+
+**Rules that came out of it.** (1) Anything that re-foregrounds itself on a timer must ALSO stand down — `ui_help_overlay_changed()` is the single notification, and the hide is re-asserted every second so nothing can get stuck hidden. (2) **Hiding the edge strips is the operation, not clearing `LV_OBJ_FLAG_CLICKABLE`** — the breathing grips are CHILD objects with their own hit areas, and the drawer grip is a separate `s_burger_btn` entirely, so clearing the parent's flag leaves three live targets. (3) `ext_click_area` is clipped to the parent: the Reader's header buttons are children of the OVERLAY, not of the header bar, precisely so their enlarged hit area can reach below the bar.
+
+### `FW;` reports the filter's TOP EDGE in a digital mode, not its width (v1.8.3)
+Samuel W7STF measured a ~250 Hz gap between the dial and the start of the shaded
+passband. `compute_passband_edges_hz()` (`ui.c`) hardcoded `low = 200; high = 200 + w`
+for USB/LSB **and** digital, and that 200 never came from the radio at all.
+
+Two separate errors, and the second is the interesting one:
+- Digital modes do **not** use the selectable SSB filters. The QMX operation manual
+  names one fixed filter for them: the *"default 150-3200Hz wide filter used for
+  Digital modes"*.
+- **In DiGi the radio reports `FW;` = 3200** (measured, 1_04_004). That is the filter's
+  **top edge**, not a width — `150 + 3200` would be 3350 and contradict the manual. So
+  the CAT number is used as the high corner on that path.
+
+Verified by pixel measurement on `/ss.bmp` (37.5 Hz/px axis, dial cursor at x=641,
+tint x=645..727 → +150 to ~+3225 Hz), not by reading the code back.
+
+⚠ **SSB still treats the number as a width, and that is deliberate.** The low corner
+for the selectable SSB filters (2500/2700/2900/3200) is not documented anywhere I can
+find, so `PB_SSB_LOW_HZ` stays at 200 and is marked UNVERIFIED. Do not "make it
+consistent" with the digital figure — that would be a guess wearing evidence's
+clothes. Samuel has been asked for the real number.
+
+### ⛔ The FT8 monitor pool can be built TWICE, and the build path used to double-free the shared FFT scratch
+Serial-captured 2026-08-19 switching into FT8, and it is almost certainly the
+**"one unreproduced `tlsf_free` double-free reboot"** open since v1.3.0 — it now has
+a backtrace and a mechanism.
+
+```
+ft8_task -> build_monitor_pool (ft8_test.c:535) -> free()
+assert failed: tlsf_free ... block already marked as free
+```
+
+All `FT8_NUM_BUFFERS` (2) monitors share ONE FFT scratch buffer. The build loop
+freed `s_mon_pool[i]->fft_work` **unconditionally** before repointing it, so on a
+rebuild that skipped the teardown every monitor still pointed at the OLD shared
+buffer and the same block was freed twice. ⚠ **The two TEARDOWN paths already make
+exactly this check** (`if (fft_work == s_shared_fft_work) fft_work = NULL;` in
+`free_monitor_pool` and `reinit_pool_if_mode_changed`) — only the build path was
+missing it, which is the shape to look for when a shared buffer is introduced.
+
+**What made it build twice**, from the log one second earlier:
+`W ft8_view: t_clock_cb: FT8 view visible but no ft8_task alive - respawning` — the
+respawn watchdog (v0.20.0) raced the normal FT8-entry path. Four `Block size` lines
+where one build emits two confirms it.
+
+**Fixed: the REBOOT, not the double build.** The loop frees only a buffer the monitor
+owns, and an old shared buffer left unreferenced is **LEAKED once** rather than freed —
+a decode may still be reading it on the other core, and a use-after-free would be just
+as fatal and harder to find. ⚠ **It logs a LOUD warning** (`monitor pool rebuilt with
+no teardown`) precisely so the double build stays visible; a silent survival is how
+this stayed open for months. **TODO #199** is the real fix — making the respawn
+watchdog and the FT8-entry path agree on who starts `ft8_task`. That is task
+lifecycle, where the v0.18.1 double-spawn and v0.19.5 worker-join crashes both live,
+so it wants a soak rather than a quick edit. ⚠ **The defensive path has NOT been seen
+firing**: 6 FT8-entry cycles and an FT8→FT4 change were all clean, with 2 respawn
+events survived — which means the fault did not recur, NOT that the fix is proven.
+
+### ⛔ `httpd_ws_send_frame_async()` reports a PARTIAL WRITE as success — never use it for the stream
+Samuel W7STF's "the web panadapter hangs for seconds, and it is worse every
+release" (#193, v1.8.7). Root-caused by MEASURING a 9.6 h capture first, not by
+reading code: **545 session teardowns**, median 14.4 s apart, each costing the
+browser a **median 2.2 s (p90 4.5 s)** blackout while it reconnected — while the
+stream ran at a healthy 10.0 fps in between. Feed activity was enriched in the 2 s
+before a teardown (RBN 8.4x, DX cluster 8.6x, TLS 5.7x, SDIO recovery 4.6x) against
+an 8.1 % base rate. **Socket exhaustion was TESTED AND FALSIFIED** (0 accept/ENFILE
+errors) — do not go looking there again.
+
+**The fault is in IDF, verified by reading the pinned v5.4.4 source.**
+`httpd_ws_send_frame_async()` sends the header and the payload with two bare
+`sess->send_fn()` calls and checks only `< 0`. `httpd_default_send()` is a single
+`send()` returning a BYTE COUNT, so a short count is not negative and **a partial
+TCP write is reported as `ESP_OK`**. The ordinary HTTP path is fine — it uses
+`httpd_send_all()`, which loops. The WS path never got that loop.
+
+⚠ **The freeze fix and this bug are the same line.** `ws_uri_handler()` sets
+`SO_SNDTIMEO` to 400 ms so a stuck send cannot freeze the single httpd worker (the
+2026-07-14 fix), and a send timeout on a socket with bytes already queued is
+precisely how a short count arises. So on a congested link the partial write is the
+EXPECTED outcome, not an edge case.
+
+The result is not a dropped frame but a **corrupt stream**: the browser is told to
+expect `WS_FRAME_LEN` payload bytes, gets fewer, and consumes the next frame's
+header as this frame's tail — every later frame misparses until it sees a protocol
+violation and closes the socket. Hence "freezes for a few seconds and comes back"
+rather than one glitchy frame, and hence "worse every release": feeds have been
+ADDED over time, so there is more congestion to trigger it.
+
+Fixed entirely in our own code — **no 9th standing IDF patch**, since
+`httpd_socket_send()` is public and returns the byte count. `ws_send_all()` loops
+until every byte is out; the WS header is built in front of the payload so the two
+cannot be split; **a frame we are committed to mid-way must be finished or the
+session closed, because abandoning it IS the corruption**; EAGAIN with nothing sent
+is free to drop, since the stream is still in sync. `HTTPD_SOCK_ERR_INVALID` means
+httpd already removed the session, so it closes immediately instead of burning 15
+attempts (~800 ms) on a socket that no longer exists.
+
+**Counted, not silent:** `partial writes healed` on the fps line. Before the fix
+these were indistinguishable from healthy sends, the same unverifiability trap #189
+documents for the USB patches. Hardware-verified: 9.3 min under live feed load gave
+**0 teardowns, 0 ECONNRESET, 8 partial writes healed**.
+
+### dBm gridlines are DERIVED from the dB range, and the arithmetic is host-tested
+`s_grid_dbm[]` was a hardcoded `{ -40, -60, -80, -100, -120 }`, which silently assumed
+the default −130..−30 range: at Samuel's −118/−13 the labels described a scale that was
+not there. `util/db_gridlines.c` now picks the smallest round step that still fits in
+`DB_SCALE_MAX_LBLS` lines, so a narrow range gets FINER lines rather than fewer.
+
+It is a separate portable file **so `test/db_gridlines_harness.c` can link the real
+function**, and that paid twice on the day it was written: the harness caught a wrong
+expectation of mine, and a mutation run showed that **no test reached the case where
+the `n > max_n` clamp is the only thing preventing a write past the caller's
+five-element array**. All four mutations are caught now. The harness also pins the
+default range to the exact old five values — this fix must be invisible to anyone who
+never touched the sliders.
+
+### The band-plan strip is an ABSOLUTE map in band and a RELATIVE control out of it (v1.8.3)
+In band, x is a frequency inside the band. Out of band there is no band to map onto, so
+the same strip becomes centre-detented: the knob (which already carries `<` `>` arrows)
+sits mid-screen, you drag off centre to move the dial, and it springs back on release.
+Full deflection = **half the visible span**, so consecutive drags overlap rather than
+skipping a gap, and it scales with zoom for free.
+
+Two things that are easy to get wrong here:
+- **Deflection is measured from where the finger LANDED, not from screen centre.** Both
+  agree when the knob itself is grabbed, but measuring from centre deflects the control
+  the instant the strip is touched anywhere else — the dial jumps before the finger has
+  moved.
+- **A plain tap out of band does nothing, on purpose.** With no band plan behind it a
+  tapped x has no frequency to mean. In band, tap-to-position is unchanged.
+
+The in-band path rewrites the knob's position AND size every tick, so coming back in
+band restores it with no reset needed.
+
+### `/api/cmd {"action":"drawer","scroll_y":N}` — so a drawer section can be screenshotted
+Same reason `ui_set_drawer_open()` exists. A section below the fold could not be
+captured at all, so its layout could only ever be taken on trust — and a section whose
+height and `y +=` disagree overlaps the one below it, which is exactly the mistake this
+file warns about. Dev action only, no web UI element references it.
+
+### The pointer's colour is a PROMISE, and the tune path must honour it (v1.8.1)
+Tap-to-tune refused every release in the top 200 px outside `x=510..1089`, on the premise
+that the Band/Mode/BW/Zoom hit zones "each span the full top 200px". They stopped doing so
+on 2026-08-05, when their depth was cut to `spots_lane_top_hit_y() - 4` so they would stop
+swallowing taps on the live-spot callsigns. **The check kept the old flat 200**, so a band
+of the spectrum belonged to nobody: no dropdown opened AND no tune happened. The operator
+described it as tuning "only when I get really close to the centre frequency", and fine in
+the waterfall — both exactly what the surviving x-window and the waterfall's position
+predict. Measured with a mouse: every click at `y=123..152` outside that window logged
+`RELEASED in top-bar dropdown deadzone - ignored`.
+
+**Deleted rather than re-derived, and that is the lesson.** `touch_event_cb` is attached to
+`s_spectrum_obj`, so LVGL only calls it when the PRESS landed on the spectrum — if a hit
+zone, a spot callsign, the RIT pill or an edge strip were under the pointer, that object
+would have taken the press. Reaching the tune code already proves nothing clickable owned
+the gesture, which is the same thing as the cursor having been white. **The operator's
+invariant is the right one: green means a click acts on a control, white over the spectrum
+must mean click-to-tune.** Cursor colour and click behaviour now answer one question —
+LVGL's own hit-testing — instead of keeping a second hand-maintained copy of the geometry
+that drifted. Do not add another deadzone.
+
+### The QMX's dual-VFO display is NOT clearable over CAT — and `LC;` is how to see it
+Roy KI0ER reported the QMX still showing both VFOs after the CW transmit offset is switched
+off. The radio answers `SP;`=0, `FR;`=0, `FT;`=0 (and the manual says `FT;`=0 "must be VFO
+Mode A") while its LCD renders both frequencies for the rest of the session.
+
+**`LC;` returns all 32 characters of the 1602 including the VFO indicators**, which is the
+only way to see what the radio is actually showing rather than what it reports. Use it
+before theorising about anything display-related:
+```
+clean boot              LCA14,024,50                 12:12
+split engaged           LCA14,024,50       14,024,56 12:13
+after the stand-down    LCA14,024,50       14,024,50 12:13   <- still dual
+after MU;               LCA14,024,50                 12:15   <- single
+```
+Ruled out on hardware: `FR1;`/`FR0;` and `FT1;`/`FT0;` (the indicator flips A→B→A, so the
+writes are NOT ignored the way SSB-filter writes are — the layout persists anyway),
+re-toggling `SP1;`/`SP0;`, and mode changes. Only `MU;` and a power cycle clear it, so the
+dual layout is runtime state, not EEPROM.
+
+⛔ **`MU;` DROPS IQ MODE — do not use it as a fix.** `Q9` is session state, so after `MU;`
+the QMX keeps streaming USB audio at full rate while it is no longer I/Q: the spectrum goes
+flat. `Q9;` reads 0 and `Q9 1;` restores it. **I approved `MU;` as "safe" on the strength of
+`audio: RX 47763 pairs/s` being unchanged** — that figure proves the stream is flowing and
+says nothing about its content, and the operator's screen showed the truth a minute later.
+An `MM` Set under `MM Effect = Immediate` does **not** drop it (measured), so the two reload
+paths differ deliberately; the 1_04_001 changelog records an earlier fix in exactly this
+area ("CAT MU command and MM ... loaded previously saved state (VFO etc)"). Roy's workaround
+is a band change, which reloads that band's config and redraws without touching session
+state. Reported to QRP Labs via Stan KC7XE.
+
+### ⛔ BLE HID: the report map needs a LONG read, and the report ID is NOT on the wire
+Two facts that each silently broke Bluetooth keyboard support (#273), both found from
+the device's own log rather than by reading code.
+
+**1. `ble_gattc_read()` returns ONE ATT_MTU-1 payload — 22 bytes here.** A HID report
+map is far longer. A Logitech K380's arrived cut off mid-descriptor, immediately before
+its first `Input` item:
+```
+05 01 09 06 a1 01 85 01 95 08 75 01 15 00 25 01 05 07 19 e0 29 e7
+Usage(Keyboard) Collection ReportID ... Usage Min/Max(E0-E7)   <- ends here, 22 bytes
+```
+So the parser saw a keyboard collection containing **no fields** and correctly reported
+"no keyboard in this report map". **Every BLE keyboard would have failed identically**;
+the mouse path only ever worked because a mouse descriptor fits in 22 bytes.
+`ble_gattc_read_long()` (Read Blob) is required — it calls back once per chunk, then a
+final time with `BLE_HS_EDONE`. Full map: **286 bytes**.
+
+⚠ A previous attempt at this was REVERTED for stalling the subscription walk. It is safe
+here because the walk is chained off the **discovery** EDONE in `hid_info_chr_cb()`, not
+off the read completing. **Check that before touching this again.**
+
+**2. A BLE report NEVER carries the report ID byte.** The descriptor can declare
+`Report ID 1` — the K380 does — while the payload begins `00 18 00 ...`, because each
+report has its own characteristic and the ID lives in its *Report Reference* descriptor.
+Matching `p[0]` against the ID can therefore never succeed, and every keystroke fell
+through to the mouse fallback and was decoded as pointer movement. **The report is
+identified by the payload SIZE the descriptor declares** (`key_bit + key_count*key_bits`).
+
+⚠ **Do not assume the 8-byte boot layout.** The K380 has **no reserved byte** — mods at
+bit 0, keycodes from bit 8, 7 bytes total. Read the descriptor.
+
+⚠ **Reports arrive ~2.5 s before the descriptor does** (CONNECT t=79.5 s, map parsed
+t=82.0 s, measured). Anything typed in that window is buffered and replayed once the
+layout is known — a keyboard waking from sleep types into exactly that gap. They are
+deliberately NOT processed meanwhile: decoding them as movement jogs the pointer for
+every key.
+
+### BLE: two devices at once, per-link state, and why the 30 s drop is not a bug
+`CONFIG_BT_NIMBLE_MAX_CONNECTIONS` is **2** — a mouse and a keyboard together.
+Measured before changing it, because the objection was memory and the objection was
+**wrong**: 1 → 2 costs **nothing** statically (`.bss` and `.data` byte-identical), since
+NimBLE is built `MEM_ALLOC_MODE_EXTERNAL` and builds per-connection state at runtime in
+PSRAM. Verified on hardware: `links in use: 2 of 2`, keyboard on handle 0, mouse on
+handle 1, each with its own parsed layout.
+
+⛔ **The layouts are PER-LINK (`hid_link_t`, `EXT_RAM_BSS_ATTR`), and a commit that made
+them global was falsified by hardware in minutes.** It argued *"s_layout is a mouse and
+s_kbd_layout is a keyboard, they never contend"*. They contend: parsing the keyboard's
+descriptor overwrote the shared mouse layout and the pointer froze. **A shared global is
+not made safe by its two users having different intentions.**
+
+⛔ **Scanning must RESUME after a successful connect**, or the second device is never
+found — `ble_gap_disc_cancel()` runs to connect and nothing restarted it, so the log read
+`links in use: 1 of 2` for ever. It restarts once a link's discovery is done, not at
+connect, so it cannot slow the descriptor read everything waits on.
+
+⭐ **The "unexplained" 30 s disconnect was never a fault.** The old comment argued it was
+*"far too repeatable to be a battery-saving timer"* — backwards, since repeatability is
+what a designed timer looks like. **`reason 531` = `BLE_HS_HCI_ERR(0x13)` = "Remote User
+Terminated Connection"**: the peripheral hangs up. Confirmed on two Logitech devices at
+30 s to the second. Nothing to fix; the lever is reconnecting fast (the post-drop burst).
+
+⚠ **Fixing the truncated read EXPOSED a bug hiding under it.** With the map truncated, a
+mouse's parse failed and it ran on `hid_fallback_decode()`, which ignores report IDs. Once
+the descriptor parsed, the mouse path demanded `p[0] == report_id` on a report carrying no
+ID byte and froze the pointer — the same BLE trap as the keyboard, one layer down.
+**When a fix makes a previously-dead code path live, audit that path.**
+
+### A cursor, or a status glyph, must not promise more than it knows
+Two in one session, same shape — a UI element answering an easier question than the one
+being asked of it.
+
+**`lv_obj_add_state(ta, LV_STATE_FOCUSED)` paints a cursor but does NOT send
+`LV_EVENT_FOCUSED`**, which is what records the field as the typing target. Four modals
+pre-focused their first field that way, so it blinked before anything was chosen AND was
+not necessarily where typing would go. The operator found both halves: *"a blinking
+cursor is already blinking at the top line"* and *"its not focused - even if it blinks
+already - i cannot type there yet"*. The helper is deleted with a tombstone. **The rule:
+no cursor on open, a cursor once a field is selected** — the blink is an acknowledgement
+that the touch landed, which matters most with a Bluetooth keyboard where nothing else
+confirms it.
+
+**The bottom-bar Bluetooth glyph was driven by `hid_cursor_present()`, set the instant a
+link came up** — so it went blue ~2.5 s before a keyboard could type, and a keyboard-only
+device claimed a mouse POINTER just by connecting. Presence is now earned: claimed when a
+mouse layout parses, or on the first report that really decodes as movement. Blue means
+**usable**, not connected. Verified against the keyboard's own LED going constant.
+
+⚠ **A bounded 75% scan burst runs for 20 s after a bonded device drops** (a K380 hangs up
+after ~30 s idle; rediscovery took EIGHT seconds at the normal 20% duty). **The 20% is not
+a number to raise globally** — it was chosen after measurement because scanning starved
+the WiFi/SDIO link. If WiFi or audio misbehaves just after a keyboard wakes, this burst is
+the first suspect; its log line says `BURST after a drop`.
+
+### ⛔ An `MM` Set is STORED, not APPLIED — "MM Effect" decides, and ours read "On demand"
+The WSPR PA-voltage guard (#290) set `MMProtection|Max. PA voltage=7.5;`, the write
+succeeded, the CAT read-back said **7.5 V**, and the radio's own Protection menu said
+**7.5 V**. The burst then measured **5.4 W at 0.940 A** — full power. Four independent
+indicators agreed with each other and **all four were describing STORED state**.
+
+The QMX has an **"MM Effect"** parameter (`System config | CAT config`). Asked over CAT,
+this bench radio answered **`MMOn demand;`** — meaning an MM Set is not applied until the
+operator enters/exits a menu **or the host sends `MU;`**. Nothing in our path did either.
+
+**So `MM<path>=<value>;` alone changes nothing you can measure.** The fix is
+`MM` Set → `MU;` → **re-assert `Q9 1;`**, because `MU;` discards IQ mode (already recorded
+above under `MU;`, and it bit again here). Verified: the same 7.5 V setting then measured
+**2.4 W**, which is exactly what (7.5/12)² predicts on a 12 V supply.
+
+⚠ **`MU;` also makes the value PERSIST.** A 11.5 V set without `MU;` evaporated across a
+QMX power cycle; 7.5 V *with* `MU;` survived one. This supersedes the earlier reading of
+that evidence ("MM Sets don't survive a power cycle") — they don't survive **un-reloaded**.
+
+⚠ **Do not read this as "always send MU;".** It reloads the whole configuration and drops
+session state; it is right for a deliberate, twice-a-session settings change and wrong on a
+hot path.
+
+### ⭐ The WSPR PA guard: what it actually buys, measured end to end
+WSPR keys the PA for **~110 s out of every 120**. The radio's OWN Virtual U3S WSPR halves
+its PA voltage for exactly this reason; our WSPR TX is CAT-driven (`TX;`/`TA;`/`RX;`) and
+never enters that mode, so it inherits none of that protection.
+
+Measured on the dev bench, 12 V supply, 20 m, idle 0.099 A, all three points self-labelled
+by the firmware and cross-checked against `PC;`:
+
+| PA voltage | I(tx) | P in | P out | Q507 | **Finals** | Total heat |
+|---|---|---|---|---|---|---|
+| ~12 V (unguarded) | 0.841 A | 10.09 W | 5.4 W | 0 W | **4.69 W** | 4.69 W |
+| 7.5 V | 0.558 A | 6.70 W | 2.4 W | 2.51 W | **1.79 W** | 4.30 W |
+| **6.0 V (shipping)** | 0.454 A | 5.45 W | 1.6 W | 2.72 W | **1.12 W** | 3.85 W |
+
+**The finals drop 4.69 → 1.12 W (76% less). TOTAL heat drops only 18%.** The guard largely
+**moves** heat off the BS170s into Q507, the amplitude-modulator pass transistor, rather
+than removing it. That is still the right trade — the finals are what fail — but it means
+**the guard is not a substitute for running WSPR from a lower supply**, and the manual
+should say so. QRP Labs' own manual agrees: *"High supply voltages can stress the PA
+transistors, particularly when you are using Digi Modes with high duty cycle"*.
+
+**The target is ABSOLUTE (6.0 V), not a fraction.** Halving whatever the operator's limit
+happens to be is meaningless when that limit exceeds the supply: 15.0 on a 12 V rail meant
+the PA really saw ~12 V and "half" gave 62% of it; a 20 V limit would have been halved to
+10 V and changed nothing while the log reported success. 6.0 V is QRP Labs' own figure for
+about 1 W. The guard **never raises** a limit that is already lower.
+
+⚠ **The 9 V vs 12 V QMX matters in principle and is handled by measurement, not by a
+model.** The supply range is **6.0–12.0 V** and the 9 V/12 V variants differ in PA
+transformer winding (RWTST vs WTST). On a 9 V setup, a 6.0 V limit is (6/9)² = 44% of full
+power rather than 25%, and Hans's "6.0 V ≈ 1 W" is presumably a 12 V figure. **Do not build
+a table of radio versions**: `PC;` measures the actual output every burst, which is
+version-, supply- and band-agnostic. The one case the target cannot help is a supply at or
+below 6.0 V, where the limit does nothing — and the measurement says so.
+
+⚠ **A guard that captures "whatever it finds" inherits whatever the last session left.**
+Harmless in normal use, but a bench session that hand-sets the value makes it the
+operator's new normal: on 2026-08-29 a diagnostic left this radio at 7.5 V, the guard
+faithfully "restored" 7.5, and every mode would have been capped at ~2.4 W. The operator
+remembered the true value (11.5) from the FIRST terminal reading, taken before anything had
+written to the radio — later readings had been displaced by un-reloaded state. **The
+earliest observation was the only clean one.**
+
+### The QMX's CW centre is a 25 Hz grid from 500-950, and the radio's value must win
+Two faults in one setting (Samuel W7STF, Roy KI0ER). The operation manual's table of all 54
+filters gives centres of **500-950 Hz in 25 Hz steps**, and which are available depends on
+the CW passband; the slider ran 600-800 snapping to **50**, under a comment asserting 50 was
+the valid spacing. With the 150 Hz passband selected not one value a 50 Hz grid can produce
+is achievable. `cat.c`'s read-back range check had the same 600-800 assumption and would
+have discarded a radio genuinely set to 550. The bounds now live in `ui.h` so both use them.
+
+**And the two numbers could never agree:** our stored value was pushed at ~4.5 s of boot and
+CAT does not open until ~17 s, so that write went nowhere on EVERY boot — measured, with
+timestamps. `ui_seed_cw_pitch_hz()` now adopts the radio's value at link-up and does NOT
+write back. Verified by asking for 525 (unachievable at that passband), rebooting, and
+watching the stored value corrected to the radio's real 700.
+
+⚠ **Reading it ONCE was itself the next bug (#165, Roy KI0ER, v1.8.5).** `s_cw_offset_hz`
+was written in exactly one place — that link-up sequence — and never refreshed, so the
+moment the operator changed CW offset or centre **on the radio** our display compensation
+froze at the link-up value for the session. The dial still agreed with the radio, the
+waterfall did not, and tapping a CW signal tuned ~30 Hz off, i.e. he transmitted off
+frequency as if XIT were on. His errors were non-linear in the value he asked for, which
+is what a **stale constant** looks like — not a scale error, which is why his own formula
+had to be withdrawn. `cw_offset_refresh()` in `poll_task` now re-reads it every 5 s,
+CW/CW-R only. Two things measured before writing it, because the approach depends on both:
+setting `CW center=650` drags **both** `CW offset` and `Sidetone freq.` to 650 (so that is
+the right item and it does track the centre, as `Auto-offset/tone=YES` promises), and
+repeated reads are stable with the passband untouched — **no `FW;`-style re-assert**, which
+is the only reason polling it is safe.
+
+⚠ **`CW offset` and `CW center` are DIFFERENT parameters with different ranges.** The
+operation manual gives `CW offset` as valid **600-800** only ("so as to stay within the
+bandwidth of the CW filter"); the 500-950 25 Hz grid above is `CW center`. Everything in
+this section's first paragraph is about the centre. Do not apply one range to the other.
+
+⚠ **An MM *write* sprays ANSI cursor-positioning bytes onto the CAT port.** Measured:
+`MMCW|CW center=650;` came back as `[1;253H`, `[2;253H`, `[0;0H` and then `FA00014074000;`
+— the radio redraws its menu and the escape codes land in the CAT stream. Our parser
+recovered (the FA was still read), but anything that parses strictly, or a future MM write
+on a hot path, needs to expect this. MM *reads* are clean.
+
+### A clock we set cannot be a witness that the radio has GPS (#173, v1.8.5)
+The bottom bar read `UTC(GPS)` on a QMX with no GPS. `time_sync.c` confirms
+GPS-disciplined when the radio's `TM;` second-tick agrees with SNTP inside
+`QMX_GPS_CONFIRM_MS` (300 ms), and the comment argued a push-set RTC could not pass,
+being *"only whole-second accurate"*. **Wrong:** `cat_set_qmx_time()` sends `TM<hhmmss>;`
+at whatever instant the call happens and the radio starts its second when it parses, so
+the phase WE induce is uniform in **0..1000 ms**. Measured across successive pushes:
+**12 ms, 834 ms, 154 ms, 404 ms** — the same code confirmed GPS or not purely on the draw.
+
+`qmx_sync_once()` does detect before pushing, and its comment claimed that ordering was
+sufficient. It is not: `s_qmx_detect_done` resets on a **Tab5** reboot while the clock we
+pushed lives in the **radio**, which is not rebooted with us. Reflash with the QMX powered
+and the "first" detection reads our own previous push.
+
+**Not just a wrong label** — that is the part to remember. Once confirmed, `push_to_qmx()`
+early-returns, so we **stop maintaining the clock of the one radio with no other source**
+(a QMX's software RTC is explicitly not kept across a power cycle). And the verdict
+persists, so an offline POTA session inherits it and `apply_gps_tick()`'s offline branch
+starts accepting a free-running RTC as authoritative — the same class as Don WB0LQW's
+v1.8.2 bug, pointing the other way.
+
+Fixed with a persisted `qmx_time_pushed` (NVS `qmx_tpush`, dirty bit 90): while set, a
+tight agreement is refused as evidence and logs why; cleared when the radio is >60 s out,
+which is the power-cycle-to-00:00 moment its clock becomes its own again. On upgrade any
+stored verdict is discarded and the flag assumed set — safe direction, since being wrong
+costs a real GPS owner only the label while SNTP still keeps the clock right.
+
+**Both branches hardware-verified**, and the second one needed engineering to reach:
+detection is once-per-boot and the only other trigger is a Tab5 reset, which with the radio
+attached is the #74 wedge (fired on 2 of 2 that day), and recovering from THAT needs a QMX
+power cycle, which resets the radio's clock and destroys the precondition. Hence the dev
+action **`{"action":"time_redetect"}`** → `time_sync_force_redetect()`, plus producing a
+deliberately tight phase by sending `TM<hhmmss>;` through `cat_raw` ~220 ms ahead of a true
+UTC second boundary. Result: `agrees to 154ms, but WE set this radio's clock - not treating
+that as GPS`.
+
+⚠ **Ordering note for anyone re-reasoning about this:** every boot runs SNTP → push →
+detect, so the push that manufactures the agreement normally sets the flag in the same
+boot. Persistence is load-bearing only when CAT is not ready as SNTP lands (`push_to_qmx()`
+early-returns), which is exactly the slow/wedged-radio case that produced the report.
+
+⚠ **Deliberate limitation:** a QMX+ we have already pushed to will not re-confirm until its
+clock is next seen unset. The clean removal is to stop inferring and **ask the radio** —
+`MMGPS & Ser. Ports|GPS source;` reads `Paddle port` vs `QMX+ Internal`. MM Get works and
+returns bare values (verified: `MMSystem config|Real time clock;` → `MMSoftware;`, and the
+`?` form returns the numeric path `MM5|16`). **Do NOT use `Real time clock` for this** — it
+selects software vs CR2032-backed hardware RTC, not GPS. TODO #174.
+
+### A fixed-size array indexed by an enum will be overrun by the next member you add
+Three instances in one session, all the same shape. `N_DRAWER_SECTIONS` was 30 and
+`DRAWER_SEC_*` ids ARE indices into `s_drawer_sections[]`; adding one as id 30 wrote past
+the end into the neighbouring array and the garbage was used as an object pointer — Load
+access fault, `MTVAL 0x6c`, boot loop, black screen, straight after "Settings drawer built".
+`settings_post_handler` read the body into a fixed `char buf[1024]` with a SINGLE
+`httpd_req_recv` and no loop, so one extra checkbox took the form past 1 KB and every save
+failed with `400 "bad json"` and nothing saying the body was truncated. And
+`hid_mouse_layout_t.total_bits` accumulated to the end of the whole descriptor (152 bits)
+instead of the end of the report (56), so a length check against it discarded every report.
+**Raise the bound in the same commit as the new member, and size a receive buffer from
+`content_len` with a loop.**
+
+### The mouse pointer advertises what is clickable — and new controls must opt IN or OUT (v1.8.0)
+A touch UI has no hover states, so a mouse user cannot tell what is live. The pointer (`ui.c`, an arrow rasterised from ASCII art — two bitmaps, white and **bright green**, swapped on hover; recolouring tinted the black outline too and cost the arrow its readable edge) turns green over anything a click would act on. Getting that honest took four rounds of operator feedback, and the rules are load-bearing:
+
+- **`UI_FLAG_NOT_HOT`** (`ui_theme.h`, `LV_OBJ_FLAG_USER_1`) marks a surface you click to **dismiss or drag**, not press: the drawer body and scrim, modal backdrops, the band-plan track, the tone strip, spectrum and waterfall. All are genuinely clickable, so nothing automatic can tell them from a control. **A new drag surface or dismiss target needs this flag**, or the pointer goes green nearly everywhere and means nothing.
+- **A plain `lv_obj` with no event handlers is a background**, and so is any *display-only* widget (`lv_bar`, label, image) without one — that is what excludes section panels, FT8 panes and modal overlays without naming them, and it caught the top bar's S-meter. Classes that act when pressed (button, checkbox, dropdown, slider, switch, textarea, keyboard, roller, buttonmatrix) count regardless, since several here are read at Save time rather than through a callback.
+- **Occlusion matters**: the search stops at the first object LVGL would deliver the press to. Without it the pointer reported things *behind* modal backdrops — the operator saw a "ghost area that reports but is not clickable".
+- **A handle that is not itself clickable is reported by geometry** (`point_on_grip`): the edge grips and the band-plan knob deliberately let presses fall through to the strip that acts, so hit-testing alone would never find them. The tone modal took the other route — its picked cells became clickable and took the strip's own drag callbacks, so the white block is both grabbable and reported.
+- Because the edge strips are full-height clickable objects where only the grip activates, a strip reports **only** on its grip.
+
+⛔ **`clickable_at()` answers ONE question, and it is not "what would be pressed".**
+It returns NULL for every `UI_FLAG_NOT_HOT` surface, which is its whole purpose -
+and the spectrum and the waterfall both carry that flag. Wheel-to-tune (v1.9.6)
+gated on `clickable_at(...) == s_spectrum_obj`, which is **unsatisfiable by
+construction**, so the feature shipped completely inert and the operator found it
+in a minute: *"cannot in any way change the center freq"*. Both questions now share
+one walk - `hit_walk(..., bool hot_only)` - behind two names: **`clickable_at()`**
+for "would a click act on a control?" (the pointer's colour) and
+**`press_target_at()`** for "what object would LVGL deliver this press to?"
+(hit-testing, occlusion). Reach for the second whenever the answer must include a
+drag surface. And note the shape of the mistake: two different questions had one
+implementation, so picking the wrong one compiled, ran, and did nothing.
+
+Two things follow for the swipe gestures: the edge grips accept a **mouse click** (gated on the mouse indev, so a finger still behaves as before — a tap on the bottom strip must stay inert so reaching for it cannot retune), and the drawer and Memory Channels grew tappable handles on their **travelling** edge. The drawer's went on the right first and was wrong: that edge is pinned to the screen, so the handle sat still while the panel appeared from under it.
+
+### No transition animations on this display — 220 ms is three frames (v1.5.0)
+Landscape runs at ~13 fps (every flush goes through the software 90° rotation), so the Reader's 220 ms slide-in was **about three frames**: not motion, just two or three discrete snapshots at intermediate offsets, which reads as a flicker going in and as an unrelated page surfacing coming out. A cross-fade is the same three frames at 33/66/100 % opacity, so animating *differently* is not the answer — **one correct frame in, one out**. Generalise this before adding any transition: at 13 fps the only honest animation is none. (Related, different failure: `transform_rotation`/`transform_scale` on a large object can hang taskLVGL outright — see the watermark and wastebin notes.)
+
 ### No long interrupts-off critical sections — ANYWHERE — or the panel blanks (cyan flash)
 Root-caused 2026-07-13 from an FT4 field observation (one-frame full-screen cyan/white flash every ~15 s–2.5 min): the MIPI-DSI frame-restart ISR runs on core 0, and a multi-ms interrupts-off window delays it past the vertical blanking window → the ST7121/ST7123 panel drops a frame and blanks to light cyan, then recovers. Two housekeeping walkers were doing exactly that every 10 s: `uxTaskGetSystemState()` (byte-walks EVERY task's stack for the watermark inside a kernel-lock critical section — several stacks are 64 KB in PSRAM) and `heap_caps_get_largest_free_block()` (walks every internal-heap block inside the heap spinlock). **Core-pinning does NOT contain the damage — hardware-falsified**: a core-0 task touching the same lock spins with its own interrupts disabled, propagating the stall to core 0 regardless of where the walker runs. Fixes (both hardware-verified clean, 10+ min FT4): `cpu_stats.c` v2 logs per-core idle% from `ulTaskGetIdleRunTimeCounterForCore()` (O(1)) instead of the per-task table; `audio.c`'s heap watchdog logs only O(1) counter queries (`free`/`min`/`psram`), running the `lblk` walk **only** below a 24 KB internal-free emergency threshold. Rules: don't reintroduce `uxTaskGetSystemState`/`heap_caps_get_largest_free_block`/`heap_caps_get_info` (or any full heap/stack walk) on ANY periodic path — on-demand-only diagnostics (the dev `resmon`) may use them, accepting a possible one-frame blink per invocation. The whole *digital* display path was exonerated on hardware along the way: DSI bridge underrun never fired, DSI host PHY/ECC/CRC registers stayed clean through observed flashes, DMA2D off changed nothing (and cost panadapter smoothness — it's back on), D-PHY LDO at 2600 mV changed nothing (back at 2500), and the FT4 decode burst ran flat-out with zero flashes once the walkers were gone. Note in passing: this unit's DSI link shows a standing `dphy_errors_4` (LP contention) on ~25% of 10 ms polls, constant from boot, voltage-independent, harmless as far as observed — don't panic if a future probe sees it. The AXI QoS priority raise for the scanout DW-GDMA (`display.c`, 12/15) predates the root cause, is harmless, and was kept.
 
@@ -263,11 +1609,37 @@ Root-caused 2026-07-13 from an FT4 field observation (one-frame full-screen cyan
 ### USB ISO pipeline depth — do NOT shrink (#51 root cause, SOLVED 2026-07-19)
 `CONFIG_UAC_NUM_ISOC_URBS=8` × `CONFIG_UAC_NUM_PACKETS_PER_URB=40` = **320 ms of queued isochronous transfers** (sdkconfig + sdkconfig.defaults). The Kconfig defaults (3×3 = **9 ms**) were the root cause of the years-long "first FT8 slots decode 60+, then collapse to a fraction" mystery: every post-decode storm (dual-core LDPC + LVGL decode-list rebuild) paused the ISO completion/resubmission pump >9 ms, the IN endpoint ran dry, and **~170–350 ms of QMX audio was lost at the USB wire every slot — zero error status, invisible to every software counter** (`drop=0`, `backlog=0` throughout; isochronous has no retry, a missed service interval is silence nobody logs). The hole clipped every signal's opening Costas sync array → same-station sync scores fell 5–13 pts with SNR unchanged → weak decodes died. Slots 0/1 were pristine only because no decode storm had happened yet. Verified fixed: capture windows tile at 180,027±152 samples (was ~175,656 ≈ −360 ms/slot); sustained 15.8 unique decodes/slot over 22 straight slots (was 6.3). Defense-in-depth shipped with it: UAC driver ringbuf 19,200 B → 288,000 B = 1 s (PSRAM — >16 KB allocs spill there), `audio_task` pri 3→6, and the fork (`components/espressif__usb_host_uac`, hand-patched — patch #2 and #3 now) WARNs+counts its formerly-silent ringbuf-overflow drop and logs 1 Hz `RX xport` ISO stats (~25 xfers/s is the NEW normal — 25×40 = the same 1000 pkts/s). Permanent cheap watchdogs for regressions: the `FT8 arm: start=` log (consecutive deltas must be ~180000 — an alternating/short delta = audio loss), per-slot `slotdiag`, per-decode `dt=`. If FT8 yield ever collapses again, **check window tiling first** — not the band, not the decoder.
 
+### A dead UAC handle used to peg core 0 — and that was what BLOCKED re-enumeration (fixed 2026-08-05)
+`audio_task`'s `if (s_uac_dev) process_rx();` branch deliberately has **no `vTaskDelay`** (a 10 ms tick delay starved the read; #51 is the standing reminder). On a merely *silent* device that is safe, because `uac_host_device_read` honours its 25 ms timeout and the loop self-limits to ~40 Hz. On an **INVALID-STATE** device the read fails **instantly**, so the loop spun flat out at priority 6 → **core 0 at 0% idle**, LVGL starved, UI frozen, and `usbh_devs_open error: ESP_ERR_INVALID_STATE` logged every 50 ms for 100+ seconds with no task free to act on it. A Tab5 reboot was the only way out; the v1.3.6 auto-replug backstop never even ran.
+
+**The spin was starving the very task that delivers `AE_DISCONNECTED`** — a self-sustaining starvation, not merely a symptom. Fix: `process_rx()` returns whether it moved any audio, and `audio_task` yields 5 ms when it did not. Hardware-verified on a QMX power-cycle, before → after: `usbh_devs_open` errors **thousands → 1**, `audio: UAC disconnected, cleaning up` **never → fires 20 ms later**, `USB: All devices freed` **never → yes**, worst `idle0` **0.0% → 7.2%**, and the radio **re-enumerated immediately** when powered back on instead of needing a reboot. Streaming unaffected (~48,000 pairs/s).
+
+⚠ **Trap if this is ever refactored:** "did the last read return data" is the WRONG test — the drain loop always ends on an empty read, so a healthy stream looks idle on every poll and would take the delay 40×/s. Track whether *any* data moved during the call.
+
 ### QMX power cycle doesn't always re-enumerate USB (v0.15.5)
 With the USB cable left connected, power-cycling the QMX often does not trigger `AE_DISCONNECTED`/`AE_RX_CONNECTED` — the UAC device stays open, audio just goes silent for a few seconds then resumes. `process_rx()` in `audio.c` detects this directly: any poll with zero bytes/pairs sets `s_flat_reset_pending`, and the next poll with real samples calls `ui_flat_mode_reset()`. This is what re-seeds the flat-spectrum floor after a power cycle — the old approach (resetting on `AE_RX_CONNECTED` / CAT reconnect) never fired because no reconnect event occurs.
 
 ### Waterfall double-height buffer
 `1280 × 824` RGB565 canvas (2× waterfall height). Each tick writes the new row at `s_wf_head` and `s_wf_head + WATERFALL_H`, then moves the view pointer. Avoids `memmove` (~130 µs vs ~92 ms per tick).
+
+### ⛔ The per-bin adaptive noise floor HAS NEVER RUN — the floors are re-seeded 17×/s
+Measured on hardware 2026-08-11 (`FLATRESET: 90 resets in 5.1 s`, temporary instrumentation in `ui_flat_mode_reset()`, since removed). `audio.c`'s `process_rx()` sets `s_flat_reset_pending` on **any** poll that returns zero pairs, and the drain loop normally **ends** on an empty read — so `ui_flat_mode_reset()`, written for the QMX-power-cycle case (v0.15.5), fires continuously. It re-seeds **both** the flat-spectrum floor (`s_flat_ready = false`) and the waterfall floor (`render_waterfall_floor_reset()`).
+
+So every draw starts from a fresh seed, and what the Tab5 actually shows is:
+
+```
+spectrum:  height = smoothed_bin - MEAN(bins) - FLAT_FLOOR_BIAS_DB   clamped 0..FLAT_RANGE_DB
+waterfall: idx    = (sample - MEDIAN(bins) - black_db) * 255/contrast_db + 32
+```
+
+**Consequences, all real:**
+- The per-bin tracker in `render_waterfall.c` (`floor_arr`, `WF_FLOOR_ATTACK`, `WF_FLOOR_DECAY_SLOW`) and in `ui.c` (`s_flat_floor`, `FLAT_FLOOR_UP_ALPHA`) is inert. It is seeded, updated **once**, and thrown away.
+- **The "Adaptive floor (%)" drawer setting does nothing**, because `floor_arr[bin]` and `floor_global` are always the same value, so the blend has nothing to blend. **Removed from the web settings form entirely (2026-08-11, operator's call)** — a control that cannot change anything is worse than a missing one, since it invites tuning something that is not there. The value is still stored, still in the config export, and `/api/settings` still accepts it, so the row returns and works the day this is fixed. **REMOVED FROM THE TAB5 DRAWER TOO in v1.8.3** (operator's call, after Samuel W7STF asked why the waterfall has so many handles). It lived inside `DRAWER_SEC_WATERFALL` beside black level, contrast and the FFT window, so taking it out meant the reflow this file warns about: everything below moved up 80 px and the section height AND the `y +=` at the end of the block moved with them — those two must always move together or the next section overlaps. Verified on a screenshot rather than by reading the arithmetic, via the new `scroll_y` dev action below. `drawer_slider_wf_blend_cb` and its two statics went with it; `settings_set_wf_floor_blend()` and `render_waterfall_set_floor_blend()` are still live (main.c applies the stored value at boot, webserver.c still sets it), so the row comes straight back the day the tracker runs.
+- `s_flat_smooth`'s own EMA never accumulates either — it is re-seeded to the current value each time. Only `render.c`'s `s_ema_alpha` (the "Spectrum smoothing" setting) and `WF_EMA_ALPHA` actually smooth anything.
+
+**Do not "fix" this casually.** The behaviour above is what the operator knows and likes: responsive, signals always visible. Letting the designed tracker run makes steady carriers **fade into the floor over ~60 s** (a 50 s rise time constant) — verified, because the browser implemented the DESIGN faithfully and that is exactly what it did, which is how this was found. Fixing `audio.c` means re-tuning the floor constants at the same time and getting the operator to judge the result.
+
+The browser mirrors the real behaviour behind one `FLOOR_TRACKING` switch in `index.html`; flip it the same day `audio.c` is fixed so both screens change together.
 
 ### 12 kHz IF offset
 The QMX presents IQ with +12 kHz IF offset — the VFO signal lands at +12 kHz in baseband. Spectrum and waterfall shift bin selection by `n_bins/4` to center the VFO signal visually. Touch-to-tune math uses the raw CAT frequency, so no adjustment needed there.
@@ -287,6 +1659,34 @@ A real QSO log (Dirk DK7CVD, 2026-06-29) showed every reply in an exchange (repo
 ### FT8 double-send FIXED (2026-07-15): hold-for-decode gate — NOT YET FIELD-VERIFIED
 The resend described above is now closed by a **hold-for-decode gate** rather than by making decode faster (impossible: capture deliberately runs TO the boundary, so decode can never finish before it). Root cause quantified from Jonathan KN6LFB's v0.21.0 diag log: every QSO advance lands at boundary +1.6–1.9 s, every armed burst used to fire at boundary +0 ms — the fresh reply missed its own slot by ~1.7 s, every exchange step went out twice, every QSO took double time. Fix (3 files): (1) `ft8_test.c` slot loop — when a TX is due (`ft8_tx_slot_would_run()`, new side-effect-free peek in `ft8_tx.c`), the QSO machine is busy (`ft8_qso_is_busy()`), and the previous RX slot's decode is still in flight (`s_decode_jobs_queued`/`s_decode_jobs_done` counters), the boundary does NOT fire the armed request; the slot falls into the normal RX-capture branch and the existing reply-on-immediate-slot poll (`FT8_REPLY_TX_WINDOW_MS`, on-air validated at +1032 ms) fires once the decode has landed — or at `FT8_TX_HOLD_DEADLINE_MS` (2300 ms) fires whatever is armed, so the worst case is exactly the old resend behaviour, never a skipped slot. (2) `ft8_qso.c` — `arm_current_replacing_armed()`: advance()'s progress paths now replace the still-ARMED stale request with the fresh message immediately (`ft8_tx_arm()` overwrites ARMED, refuses only ACTIVE), instead of waiting for the next `on_tx_complete()`. Net: the burst fires ~1.7–2.0 s into the slot carrying the FRESH message (partner sees DT ≈ +1.4 s, well inside decoder tolerance), and a completed QSO no longer wastes a full stale re-transmission after the partner's RR73. FT8-only (gated `!is_ft4`, same as the late-TX path). Log tells: `holding for fresh reply` at the boundary, then the existing `reply armed mid-slot (+Nms)` line. If a field log ever shows the deadline path firing constantly, decode has slowed past 2.3 s — fix that, don't widen the deadline past `FT8_REPLY_TX_WINDOW_MS`.
 
+### Whitespace is SYNTAX in a 77-bit message — and `encode() == OK` proves nothing about meaning
+Don WB0LQW's CQ presets keyed the radio for the full 12.6 s at 3.2 W and nothing decoded
+at the far end. His preset was stored as `CQ  POTA WB0LQW` — **two spaces**, confirmed byte
+by byte in his own `built text CQ:` log line. Preset 1 had one space and always worked.
+
+With the extra space `ftx_message_encode()` stops seeing a CQ and encodes a **signal report
+to a hashed callsign**, so a perfectly valid frame goes out reading `CQ  <...> +00`. With a
+grid appended it returns rc=5 (`ERROR_TYPE`) and never keys at all — the "Operator Identity
+modal appeared" symptom. All three reproduced from that one character by
+`test/ft8_cq_encode_harness.c`, which links the real `ft8_lib`.
+
+**The same defensive trim existed in BOTH `ft8_cq_modal.c` and `ft8_tx.c`**, both added
+after a 2026-07-15 field hit where a *leading* space broke the same message, and **both
+stripped only the edges**. Fixing the reported instance instead of the class cost a second
+field report a month later.
+
+`main/ft8_msg_guard.c` (portable, no ESP deps, linked by the harness) now holds both halves:
+- `ft8_msg_normalize()` collapses interior runs as well as trimming, used by both call sites
+  and the editor's display path, so a badly-stored preset repairs itself visibly on reopen.
+- `ft8_msg_roundtrip_ok()` decodes the payload back the way the far end will and **refuses
+  to key** if the meaning changed.
+
+⛔ **Do NOT tighten that guard to a byte comparison.** The protocol legitimately drops tokens
+it has no room for — `CQ POTA PJ4/K1ABC` transmits as `CQ PJ4/K1ABC` and `CQ VK9/WB0LQW DN70`
+as `CQ VK9/WB0LQW`. Refusing to key a nonstandard-callsign operator would be worse than the
+fault being guarded against. The invariant is **meaning**: a CQ stays a CQ, and the
+operator's callsign survives. Don's message failed both.
+
 ### Nonstandard/special callsigns ("<...>" three-dots) FIXED (2026-07-15): callsign hash table — NOT YET FIELD-VERIFIED
 Field report (Dirk DK7CVD): long/special callsigns decoded as three dots and their answers to his CQ were never recognized. Root cause: every `ftx_message_decode`/`encode` call passed `NULL` for ft8_lib's `ftx_callsign_hash_interface_t` — FT8 transmits nonstandard calls (PJ4/K1ABC etc.) as 22/12/10-bit hashes and expects the receiver to keep a table of full calls to resolve them; without one they render as `<...>`, and (worse) a special-call station's ANSWER carries **our own call as a 12-bit hash**, so it can't match `s_my_call` either. Fix: new `main/ft8_hash.c/.h` — 256-entry table in PSRAM, mutex-protected (decode runs on two tasks concurrently), auto-populated by ft8_lib on every full call packed/unpacked, own call explicitly seeded at ft8_task start (`ft8_hash_seed()` — our call never appears in anything we decode). **Do not copy ft8_lib's `reference/test_main.c` hashtable**: its `(hash*23)%SIZE` probe is broken for 12/10-bit lookups (those are the TOP bits of n22, so the probe starts at the wrong index) — `ft8_hash.c` does a plain linear scan with round-robin eviction instead. Wired into: both decodes in `ft8_test.c`, the three encodes in `ft8_tx.c` (this also un-breaks ARMING a reply to a nonstandard call — `encode_std` used to fail outright with hash_if=NULL). Resolved calls come back **in `<angle brackets>`** — stripped centrally in `ft8_qso.c`'s `split_msg3()` and `ft8_screen.c`'s `extract_remote_call()` so all matching runs on bare calls. `scan_for_reply_to_me()` also now accepts an **empty third field** (an i3=4 nonstd answer has no room for a grid — previously skipped as "no third field"). Boot self-test `ft8_hash_selftest()` (main.c, inline) round-trips both hash directions.
 
@@ -303,13 +1703,21 @@ Three UI follow-ups shipped same day once the underlying math was confirmed fixe
 +----------------------------------------------------------+
 | Spectrum 200 px — green curve, amber VFO, grey passband  |
 +----------------------------------------------------------+
-| Freq axis 18 px — absolute MHz labels                    |
+| Freq axis 32 px — absolute MHz labels                    |
 +----------------------------------------------------------+
-| Waterfall 412 px — newest row at top, SDR gradient       |
+| Waterfall 370 px — newest row at top, SDR gradient       |
 +----------------------------------------------------------+
-| Bottom bar 30 px — status / span / fps                   |
+| Band-plan 22 px — CW/Digi/Phone + visible-span window    |
++----------------------------------------------------------+
+| Bottom bar 36 px — battery | UTC clock | WiFi (3 zones)  |
 +----------------------------------------------------------+
 ```
+
+Heights are `TOP_BAR_H` / `SPECTRUM_H` / `LABEL_BAR_H` / `BANDPLAN_H` / `BOTTOM_BAR_H`
+in `ui.c`; `WATERFALL_H` is whatever is left. **This block was wrong until
+2026-08-09** (18 / 412 / 30, and no band-plan row at all) and the same wrong
+numbers had been copied into the user manual's layout diagram — read the
+`#define`s, not this picture, if it matters.
 
 Top-right 200×120 of the spectrum is a deadzone (suppresses accidental tunes behind the burger button).
 
@@ -339,7 +1747,15 @@ A field report (Dirk DK7CVD) showed IQ mode reading as disabled in the QMX's own
 
 **AM mode selection + SWR Tune button — implemented 2026-07-03, NOT YET FIELD-VERIFIED.** Both are gated behind `cat_qmx_fw_at_least(1, 4, 0)` (parses `cat_get_qmx_fw()`, the cached `VN;` string) so they're invisible on `1_03_002` — zero risk to existing users. Re-evaluated live via `ui_notify_qmx_fw_known()`, called from `cat.c`'s `VN;` handler, in case the drawer was already built before the firmware string arrived.
 - **AM**: added to the touch mode popup (`mode_popup_open()` in `ui.c`) and the web UI's mode dropdown (`index.html`, gated by a JS port of the same version check against `/api/status`'s `qmx_fw` field). The CAT-layer mapping (`hamlib_mode_to_digit`, digit 5) already existed — this was purely a "no way to tap it" gap. **Unverified: what `FW;` returns in AM mode** — the manual doesn't say, and our passband-width label/overlay could show something wrong if it's unexpected. Check on first real 1_04 contact before trusting the BW display in AM.
-- **SWR Tune**: a dedicated drawer button (`DRAWER_SEC_TUNE` in `ui.c`, panadapter-only, built last so hiding it never leaves a gap or needs reflow — same reasoning as the FT8-only sections). Deliberately NOT folded into the mode popup: Tune keys the radio continuously, so it gets the same "can't trigger by accident, visibly ACTIVE while engaged" treatment as FT8 TX/robot mode, not one-tap access. Entering sends `cat_request_mode("TUNE")` (→ `MD8;`, deferred through the poll task like every other mode write); a live SWR/power readout polls `PC;SW;` via a new poll-task 4th phase (`cat_tune_poll_set_active()`) only while Tune is active. **Exiting deliberately does NOT send a bare `MD0;`** — the CAT manual's own `MD` Set list is `1,2,3,5,6,7,8,9`, and `0` never appears in it (an earlier note claiming "`MD0;` exits" traced back to changelog research, not the manual body — see `docs/qmx-1_04-cat-comparison.md`). Instead the button remembers whatever mode was active before Tune was entered and restores that. A 60 s auto-timeout and detection of the radio's own front-panel exit (still polls `MD;` while tuning) both fall back to the same restore path, so the radio can't be left transmitting indefinitely if a write is ever dropped. **Unverified: whether restoring the prior mode digit actually exits the radio's own Tune UI cleanly** — this is the first thing to test on real 1_04 hardware, per `docs/qmx-1_04-cat-comparison.md` §5.
+- **SWR Tune**: a dedicated drawer button (`DRAWER_SEC_TUNE` in `ui.c`, panadapter-only, built last so hiding it never leaves a gap or needs reflow — same reasoning as the FT8-only sections). Deliberately NOT folded into the mode popup: Tune keys the radio continuously, so it gets the same "can't trigger by accident, visibly ACTIVE while engaged" treatment as FT8 TX/robot mode, not one-tap access. Entering sends `cat_request_mode("TUNE")` (→ `MD8;`, deferred through the poll task like every other mode write); a live SWR/power readout polls `PC;SW;` via a new poll-task 4th phase (`cat_tune_poll_set_active()`) only while Tune is active. **Exiting deliberately does NOT send a bare `MD0;`** — the CAT manual's own `MD` Set list is `1,2,3,5,6,7,8,9`, and `0` never appears in it (an earlier note claiming "`MD0;` exits" traced back to changelog research, not the manual body — see `docs/qmx-1_04-cat-comparison.md`). Instead the button remembers whatever mode was active before Tune was entered and restores that. **There is NO radio-side exit detection, and there cannot be one over `MD;`** — see the `MD8;` readback quirk below; a 60 s auto-timeout is the only automatic exit, so the radio can't be left transmitting indefinitely if a write is ever dropped. **Unverified: whether restoring the prior mode digit actually exits the radio's own Tune UI cleanly** — this is the first thing to test on real 1_04 hardware, per `docs/qmx-1_04-cat-comparison.md` §5.
+
+### `MD;` reports the PRE-Tune mode while the radio is tuning — never treat it as ground truth
+After `MD8;`, a `MD;` Get returns **the mode you were in before**, not `8`. Found here on hardware 2026-07-03 (the QMX echoed the pre-Tune digit for the entire time it was genuinely transmitting a tune carrier) and independently confirmed by Stan KC7XE 2026-08-09: *"when you set `MD8;` if you use `MD;` to read the mode, it will return the prior mode you were in, not the current MD8 mode"* — arguably a feature (the radio is remembering where to return to) rather than a bug, but either way it is the documented behaviour to code against.
+
+Consequences, all already handled — **do not "fix" any of them by trusting the echo**:
+- `tune_modal.c`'s `s_active` is set and cleared **only** by our own button/timeout/Cancel logic. An early version derived it from the `MD;` echo and silently detached the UI from a still-transmitting radio.
+- Mode digit `8` is effectively **unreachable via the poll**, so `kw_modes[]`' `"TUNE"` entry never shows during a CAT-entered tune. Cosmetic, and arguably correct.
+- The CW split maintainer (`cw_split_maintain()`) gates on `s_last_mode_digit` `'3'`/`'7'`, which therefore stays engaged through a tune started from CW — the tune carrier goes out on VFO B, i.e. offset by up to ~600 Hz. Deliberately left alone: that is nowhere near enough to change an SWR reading on an HF band, and standing split down mid-tune would add a state interaction for no gain.
 
 ### `Q9 1;` (IQ mode enable) write success ≠ the QMX actually accepting it
 A successful `cdc_acm_host_data_tx_blocking()` only proves the USB bytes reached the radio, not that the QMX parsed/applied them. `link_task` (`cat.c`, right after `Q9 1;`) also sends `Q9;` and waits up to ~400 ms for the readback, logging "QMX IQ mode confirmed ON" or a warning with the raw response if it doesn't read back `1`. Without this we had zero way to distinguish "IQ mode is on" from "the write silently did nothing" — exactly what happened in the field case above.
@@ -378,10 +1794,146 @@ Fix, in `ft8_qso.c`: `final_resend_if_still_asked()` runs at the TOP of `ft8_qso
 ### Never fabricate a signal report in the ADIF log (v1.3.4)
 `adif_log.c` used to substitute `"599"` for an unknown `RST_SENT`/`RST_RCVD`. Roy KI0ER found it in his own log and asked whether stations really were sending him 599 — they weren't. In CW/SSB that's a harmless convention; in an FT8 log it's a **fabricated measurement that gets uploaded to QRZ, eQSL and LoTW as if real**. Both fields are now **omitted** when empty (ADIF requires neither, LoTW ignores both), every `"599"` placeholder in `ft8_qso.c` is `""`, and the ADIF viewer shows `-`. Don't reintroduce a placeholder for a value that was never exchanged.
 
+**The same rule settled the chase-reference lookup, 2026-08-10 (v1.8.0).** `spots_activation_for_call()` (`net/spots.c`) matches the spotted callsign **EXACTLY**, and a base-callsign fallback was proposed and **rejected by the operator**. It would have recovered real credit — every SOTA spot carries a portable suffix (16 of 16 in a live sample), so a station spotted as `EA2GM/P` and worked as `EA2GM` logs no reference at all. But `EA2GM` at home and `EA2GM/P` on a summit are the same operator in different places, so a loose match can write a summit into a QSO that never was one, and upload it as fact. **A missing field is honest; a wrong one is not.** Don't add the fallback.
+
+Related, and worth knowing before "improving" any of this: `ft8_qso.c` is the **only** writer of ADIF records, so the log holds FT8/FT4 contacts and nothing else. SOTA is almost entirely CW/SSB (0 of 16 spots in a digi mode), so `SIG=SOTA` is nearly unreachable in practice — the SOTA source earns its place as the **spectrum lane**, not as chase logging. The reachable case for the SIG rule is a DX-cluster-sourced spot whose reference is a summit or a WWFF site, worked on FT8: that used to be filed as `SIG=POTA`, a claim nobody could match, and `net/spot_sig.c` now decides it from the reference's shape (covered by `test/spot_sig_harness.c` — which links the real function rather than mirroring it).
+
+### The ADIF file and the LoTW upload disagree about FT4 ON PURPOSE (v1.9.6)
+ADIF is asymmetric: **FT8 is a MODE, FT4 is only a SUBMODE of MFSK.** So
+`adif_log.c` writes FT4 as `MODE=MFSK` + `SUBMODE=FT4` (what WSJT-X writes, and
+what ADIFMaster demands — it refuses to open a file declaring FT4 as a mode at
+all, which is how Don Adams WB0LQW hit this while editing a log before
+submitting it). POTA accepted the old `MODE=FT4`, and eQSL was quietly remapping
+it for us.
+
+⛔ **LoTW has no MFSK mode of its own** — TQSL's config maps (ADIF mode, ADIF
+submode) pairs onto LoTW's own mode list, and MFSK appears only on the ADIF side
+of that map. We sign our own TQ8s instead of handing an ADIF to TQSL, so the
+collapse is ours to do: `lotw_mode_from_adif()` (portable, in `lotw_tq8.c`,
+8 cases in `test/lotw_harness.c`, mutation-tested) turns the pair back into
+`FT4`. **The invariant is byte identity** — an ADIF fix made for POTA and
+ADIFMaster must not change one byte of the verified LoTW path. Anything else
+reading `MODE` out of a record (`adif_view_modal.c`, the web log table) shows the
+SUBMODE when there is one, because "MFSK" names a family, not the mode worked.
+
+⚠ **The legacy duplicate-SUBMODE migration nearly ate this.**
+`repair_legacy_submode_field()` swept the whole file for `<SUBMODE:3>FT4` (a
+2026-06-30 fix for records that wrote SUBMODE as a copy of MODE, which QRZ
+rejects). Unscoped, it would have stripped the new, CORRECT submode off every
+record at the next boot — silently, and only visible in a file the operator
+uploads. It is now line-scoped and fires only when `MODE == SUBMODE`. Whenever a
+migration deletes a field by name, ask what else could legitimately carry that
+name later.
+
+⚠ **The FT4 half is NOT device-verified.** `ft8_sim.c`'s phantoms never engage in
+FT4 (`schedule_cq_answer()` hardcodes `our_slot + 15`, TODO #256), so no FT4 QSO
+could be logged on the bench with the radio wedged. FT8 records, the
+`STATION_CALLSIGN` rename and the whole Park-to-Park path WERE verified on
+hardware.
+
+### Only what was EXCHANGED is editable — and `SIG` is derived, never typed (v1.9.6)
+`POST /api/adif/edit` takes `RST_SENT`, `RST_RCVD` and `SIG_INFO`, and refuses
+everything else with a 400. The boundary is not squeamishness: CALL, BAND, MODE,
+QSO_DATE and TIME_ON are what QRZ, eQSL and LoTW match a contact on, and a LoTW
+record is signed over exactly those — delete and re-log is the correct route for
+those. `SIG`/`SIG_INFO` are read by POTA and SOTA for credit and by nothing that
+matches a QSO, so they sit on the safe side of it.
+
+**`SIG` is decided from the reference's shape** by `spot_sig_for_ref()` — the same
+function that decides it for a chase logged off a spot, exported rather than
+copied — so a typed programme cannot contradict the reference beside it, and it
+is cleared when the reference is cleared. **A reference must contain a dash**:
+`US1241` is refused rather than written, because the value goes out as a claim
+that a specific park was worked. Same rule as never fabricating a signal report —
+a missing field is honest, a wrong one is not.
+
+`adif_log_set_field()` also got the verify-before-commit fix `delete_record()`
+got in v1.9.5 (`ferror`, then `fflush`/`fsync`, then `fclose`, and only then
+replace the file). It was the same latent bug, and this path is now used for a
+whole activation's worth of records rather than the occasional report typo.
+
 ### Tone occupancy is filtered by slot PARITY (v1.3.4)
 Roy KI0ER: "a frequency offset could be entirely available to me, but only if I TX into the correct time window." `build_tone_occupancy()` (`ft8_tx.c`) counted every decoded station regardless of the slot it was heard in, so a tone busy only in the OPPOSITE window read as busy for us — on a crowded band, most of the strip — and `ft8_find_clear_tone_hz_near()` steered away from slots that were in fact free.
 
 Stations whose parity differs from ours are now skipped, using the same nearest-slot rounding as the decode list's E/O column (a bare `/period` truncation flips the parity of anything logged a hair before its slot). Our parity is only knowable via `ft8_tx_get_parity_lock()` — something armed or running; a reply inherits the opposite of theirs, a CQ carries the `TXCQ EVEN/ODD` choice. With `TXCQ ANY` or nothing armed there is no answer, so the mask stays the **union** of both windows. `*n_stations_out` still counts ALL heard stations on purpose: it answers "is the picture known at all", which drives the UI's all-grey "nothing heard yet" state.
+
+### CW transmit offset is SPLIT, because the QMX has no XIT (v1.6.0, Roy KI0ER)
+Roy KI0ER (#176143) asked for a "not zero-beat CW reply" offset: everyone answering a CW CQ zero-beat arrives as one mud-pit, and a QRP station 400–600 Hz off stands out. His manual workaround was the full VFO A/B dance on the radio's own controls.
+
+**There is no XIT to use.** The QMX CAT manual is explicit — `IF;`'s XIT status field is *"always 0 because QMX has no XIT"*. So the offset is implemented as **split**: RX on VFO A, TX on VFO B, with `FB` held at `FA + offset` and `SP1;` on. **`FB`, `FR`, `FT` and `SP` all exist in 1_03_000 as well as 1_04** (checked command-by-command against both cached manuals), so this needs **no `cat_qmx_fw_at_least()` gate** — unlike AM/Tune. Only `RC`/`RR`/`IF` are 1_04-only.
+
+**It lives in `poll_task` (`cw_split_maintain()` in `cat.c`), not in `cat_set_frequency()`.** Two reasons, and the second is the feature: the poll task owns the CDC pipe and this needs two extra writes; and maintaining it there makes the offset follow **every** way the frequency can move — panadapter tap, spot click, memory recall, band change, web UI, *and the radio's own tuning knob* — which is precisely Roy's "change frequency to another station, don't touch anything else, and the offset follows". A hook on our own tune path would have missed the knob.
+
+Rules encoded in the maintainer, each one load-bearing:
+- **CW/CW-R only** (`s_last_mode_digit` `'3'`/`'7'`). Any other mode stands it down — an offset transmit in SSB or a digital mode is a mistake, not a courtesy. This is also what stops it leaking into an FT8 session.
+- **Only clears split if WE engaged it** (`s_split_engaged`). An operator running their own split has not asked us to interfere.
+- **Re-asserts `FB`+`SP1` every 30 s** (`CW_SPLIT_REFRESH_US`) as well as on every base-frequency change. A radio that dropped split on its own (band change, menu visit) would otherwise transmit on top of the DX — silently, which is the worst possible failure for this feature.
+- `FA;` reports **VFO A**, which stays the RX frequency in split, so `s_last_freq_hz` needs no special-casing.
+
+**Unverified, and it needs a human:** no CW contact has been made with it. The CAT round-trip is verifiable on the bench; "does the DX hear me 500 Hz up" is not. Also unknown: whether `SP` survives a QMX power cycle (the manual does not mark it session-only), so a Tab5 powered off mid-CW may leave the radio in split — the operator sees it on the radio's own display, but it is worth a line in the manual.
+
+### RIT is real on the QMX — but `RU`/`RD` are absolute OR relative depending on a menu setting
+Unlike XIT, which the QMX does not have at all (hence the CW transmit offset's split dance), RIT exists in **both 1_03 and 1_04** — `RT` mode, `RU`/`RD` offset, `RC` clear. No firmware gate needed.
+
+⚠ **The trap:** the CAT manual says `RU`/`RD` either set the offset absolutely or move it relatively, depending on the QMX System Config setting **"CAT RU and RD"** — which we cannot read and have no business changing. So every write in `cat.c` sends **`RC;` first** (clear to zero, unambiguous in both firmwares) and **then one `RU`/`RD`**, which lands on exactly the requested value under either setting. **Never send `RU`/`RD` without the `RC`.**
+
+We own the value (`cat_get_rit_hz()`) rather than polling `IF;` for it — the display needs it every frame, and a poll would be both slower and a fifth competitor for the pipe.
+
+**Display compensation lives in `ui_get_if_offset_hz()`** (`total_hz -= cat_get_rit_hz()`), the one documented place defining which baseband frequency the dial maps to, so signals stand still and the marker shows where you are listening. ⚠ **The sign is DERIVED, not verified on a signal** — there is no antenna on the bench. The falsifying test is one steady carrier: engage RIT +200 and the trace must NOT move (a jump of 400 Hz means the sign is inverted). The comment in that function carries the reasoning and the test.
+
+**Tap-to-RIT forces a 10 Hz snap regardless of mode** (`touch_event_cb`'s PRESSING branch). The mode grid exists to land the DIAL tidily; SSB's 250 Hz would leave five usable offsets inside ±500 and DiGi's 500 Hz would leave three. The cursor is drawn from the same snap, so the marker lands where the line was.
+
+**Retuning clears RIT**, inside `cat_set_frequency()` so every path is covered (tap, spot, memory recall, band change, web), and `ui_rit_notify_retune()` stands the armed mode down with it — otherwise the operator's next tap would silently set an offset instead of tuning.
+
+### RF gain (`RG`) is per band and NOT session-only — commit on release, never store a copy
+Stan's suggestion via Samuel W7STF. `RG;` gets, `RG<nnn>;` sets, in **plain dB** — range 0–99, default 54 (operation manual: *"RF gain (dB): 54 is the default. Valid values for the parameter are 0 to 99"*). Present in 1_03 and 1_04.
+
+Three traps, all different from the `AG` volume slider it sits next to:
+- **`RG` is plain dB; `AG` is 0.25 dB steps.** The two commands look alike and are scaled differently. Sending dB to `AG` sets a quarter of what was asked.
+- **It is per BAND.** So the Tab5 stores **nothing** — no NVS key, no config-export field. It reads back on drawer open (and on every `/api/settings` GET) and shows "reading..." until the radio answers. A remembered value would belong to whichever band the operator was on last, and replaying it would silently reconfigure the current one.
+- **It is not marked session-only** in the CAT manual, and it edits the same figure as the Band Configuration terminal app — i.e. a write changes the operator's *stored* configuration. Hence the drawer slider commits on `LV_EVENT_RELEASED` and only moves its label on `VALUE_CHANGED`; a drag must not stream sixty writes into stored config.
+
+Changing it moves the noise floor the panadapter is calibrated against, so both the drawer and the web path call `ui_flat_mode_reset()`.
+
+### "Release radio" (operator pause) — and why the watchdogs had to learn about it
+Stan's second suggestion, and it is not merely a convenience. The QMX's own menu **and its Terminal Applications (Band Configuration)** speak over the *same* CDC pipe we poll `FA;`/`MD;`/`FW;` on every 50 ms, so anything the operator does on the radio is being interrupted continuously. This is also the leading hypothesis for Samuel W7STF's "odd behaviour changing Band config on the QMX+ while the panadapter runs" (#176112, thread not yet read — groups.io needs auth).
+
+`cat_user_pause_set()` / `cat_user_pause_active()`. **Deliberately a separate flag from `s_poll_paused`**: that one belongs to the FT8 TX burst and is cleared at the end of *every* burst, which would silently cancel the operator's pause.
+
+**Three things stand down together, and forgetting any one of them would have been worse than not having the button:**
+1. the CAT poll (the point of the exercise);
+2. the **dead-stream watchdog** (`audio.c`) — a deliberate menu visit produces its exact signature (UAC open, CAT alive, zero audio pairs), and at 120 s it would have cut VBUS under the operator's hands;
+3. the **stuck-decode watchdog** (`ft8_test.c`) — every slot decodes zero while paused, by design.
+
+Resume re-runs the IQ handshake and re-seeds the flat floor. UI: a calm blue banner (not warning-red — nothing is wrong, the operator asked for this), tappable to resume, plus the drawer button and `/api/cmd {"action":"pause"|"resume"}` with `paused` in `/api/status`. **The banner is not decoration**: while paused the spectrum freezes and the decode list empties, which is visually identical to the fault Roy KI0ER reported, so the screen has to say unprompted that this state was asked for and how to leave it.
+
+### The QMX's FRONT-PANEL menus are not isolated from CAT — and the failure is a radio REBOOT (thread #176111, 2026-08-07)
+Samuel W7STF reproduced it precisely on a QMX+ (1.004.03): with the panadapter running, enter the front-panel **Band config** menu and turn the VOL encoder one click to change band → the LCD blanks, backlight off → "Starting processes" → the radio is back at VFO A having restarted. Current draw jumps 0.110 A → 0.180 A. **With USB unplugged it does not happen. Via PuTTY (the terminal menu) it does not happen.**
+
+**Stan Dye KC7XE's analysis, which we should treat as the working model** (he has the deepest QMX-internals knowledge in that thread):
+- The blank + "Starting processes" is **Hans's watchdog reset** — the firmware auto-reboots when the SMPS control loop gets stuck. So the radio genuinely restarts; this is not a display glitch.
+- The **terminal** menu is served over serial and is *well isolated* from the CAT control channel (two terminal sessions even lock each other out of the same menu). The **front-panel** menu is not: it needs the MCU driving the display, "a completely different I/O control loop, not nearly as well isolated from the CAT control channel".
+- He believes it is specific CAT command **types**, not the poll rate or timing.
+- ⚠ **"a somewhat similar issue happens if you enter the Tune SWR menu — in that menu ANY character sent over the CAT interface will lock up the radio controls."**
+
+**This ties three of our own field reports into one mechanism.** Roy KI0ER (#176113) sees FT8 decodes go blank after changing *any* QMX menu item (he used TX-power display type), staying blank "until I restart the QMX radio". Put that next to two facts already in this file — `Q9` IQ mode is **session state**, and a QMX restart with the cable connected **often fires no USB disconnect event at all** (see "QMX power cycle doesn't always re-enumerate USB") — and the whole thing follows: the menu visit trips the watchdog reset, the QMX reboots, IQ mode is wiped, the USB link survives, so **CAT answers normally while no audio arrives**. That is exactly the dead-stream signature, and it is why only a manual QMX restart appeared to fix it (it forced a re-enumeration and a fresh handshake).
+
+**Prediction worth testing on hardware:** the v1.6.0 dead-stream watchdog's new 30 s `Q9 1;` re-assert should now recover Roy's case *automatically*, without the audio reset or the USB replug. If a field log shows `dead stream: 30 s ... re-asserting IQ mode` followed by decodes resuming, that confirms both this model and the fix.
+
+✅ **RESOLVED 2026-08-09 — our own Antenna Tune is NOT affected (Stan KC7XE, asked directly).** The concern was that `tune_modal.c` / `web_tune_start()` enter SWR Tune with `MD8;` and then poll **`PC;SW;` continuously while the radio transmits** (`cat_tune_poll_set_active(true)`), with `MD;` still rotating — i.e. straight into the "any CAT character locks the radio" hazard, if that hazard applied to the CAT-entered mode. It does not: *"This only happens when using the front panel menu to activate Tune SWR. I just tested a few CAT commands, and they work fine while Tune SWR is invoked using `MD8;`."* So the lock-up is a property of the **front-panel menu**, matching Stan's model above (the front-panel menu shares the MCU's display I/O loop and is poorly isolated from the CAT channel; the terminal menu and CAT-entered modes are not). Our poll stands as-is, unchanged. TODO #95 closed.
+
+**This also weakens the Dirk DK7CVD link.** This file records his crash arriving "specifically after using the QMX's SWR Tune submenu then power-cycling" — that was the radio's own *submenu*, not our `MD8;` path, so it is consistent with Stan's front-panel finding and is **not** evidence against our Tune button. Dirk's crash was in any case root-caused separately to the CDC disconnect race (see that section above), which is fixed.
+
+⚠ Still untested on a dummy load: the live W/SWR figures themselves, and whether restoring the prior mode digit cleanly exits the radio's Tune UI (`docs/qmx-1_04-cat-comparison.md` §5). Stan's answer clears the *safety* question, not the *correctness* one.
+
+**What this does NOT justify:** slowing or restructuring our poll. Stan's own reading is that rate is not the issue, and every previous "obvious cause" in this file has been wrong when measured. The shipped answer is the **"Release radio" pause** — which is precisely what Stan independently asked for in the same thread: *"there is no way for the Tab5 to know what menus you are going into - so it would be good to have a 'pause button' on Tab5 for when you want to interact with menus which change the configuration of the radio."*
+
+Also from that thread, and the reason Samuel was in Band config at all: he was adjusting **RF gain to match band conditions**. Stan: RF gain "should be a static setting" in the band table, and `RG;` "should be used for that purpose for on-the-fly changes (and ideally should be accessible via Tab5)" — which is what the RF-gain slider above now provides, removing the reason to open that menu mid-session.
+
+### IQ mode is SESSION state — re-assert it before resetting anything (v1.6.0)
+The QMX's `Q9` (IQ mode) is explicitly *"for the current operating session only and is not written to EEPROM"* — which is how a trip through the radio's own menu leaves the panadapter with a dead audio stream while CAT keeps answering perfectly. That is Roy KI0ER's blank-decode-list report, and the radio in that state is **not** broken: it simply is not being asked for IQ audio any more.
+
+So `iq_mode_handshake(int max_attempts)` was extracted from `link_task` (`cat.c`) and is now callable on a live link via `cat_request_iq_reassert()`, drained by `poll_task` (which owns the pipe). The dead-stream watchdog's escalation gained it as a **new first step at 30 s**, ahead of the 60 s soft audio reset and the 120 s `usb_replug()`. Cheapest-first: it is free, invisible when IQ was already on, and it fixes the menu-visit case outright without touching the USB port. Resume-from-pause queues the same handshake.
 
 ### Cross-thread CAT writes must go through the poll task, not the LVGL thread
 The poll task is the only thing that should write to the CDC pipe at runtime. Writing a CAT/MM command directly from the LVGL/UI thread (e.g. a touch handler) races the `FA;`/`MD;`/`FW;` poll on the same pipe; the two commands interleave and the QMX gets a garble and returns `?;`, so the write lands only intermittently. Pattern: stash the request in a `volatile` and let `poll_task` drain it on its next cycle (see `s_pending_ssb_bw` / `cat_request_ssb_bandwidth()` in `cat.c`). FT8 TX uses the other valid approach — `cat_poll_set_paused(true)` for the burst's whole duration.
@@ -393,7 +1945,7 @@ Setting the QMX SSB RX filter (2500/2700/2900/3200 Hz) from the panadapter took 
 - **`MMSSB|Bandwidth=<hz>;`** — the *live/active* filter. Applies immediately (you see the passband widen), but on its own the QMX reverts it to the committed value.
 - **`FW;` poll** — reads the *active* filter width; **the act of reading it makes the QMX re-assert a stale active width**, snapping any change back. (Proved by freezing the poll for 2 s: the filter holds, then snaps back the instant polling resumes.)
 
-The working recipe (`poll_task` drain of `s_pending_ssb_bw`, set via `cat_request_ssb_bandwidth()`): write **`Filter RX`** (persist) **and** `Bandwidth` (apply live) to the same value, **and** while a width is pinned (`s_ssb_bw_pinned`) and mode is USB/LSB, **drop `FW;` from the poll rotation** so nothing reverts it. The BW label is driven optimistically from the user's selection (`ui_update_passband_width()` in `bw_preset_cb`). Trade-off: while pinned, a filter change made on the radio's own knob won't show on the Tab5 until you switch modes (FW; resumes in CW and on mode change).
+The working recipe (`poll_task` drain of `s_pending_ssb_bw`, set via `cat_request_ssb_bandwidth()`): write **`Filter RX`** (persist) **and** `Bandwidth` (apply live) to the same value, **and** while a width is pinned (`s_ssb_bw_pinned`) and mode is USB/LSB, **drop `FW;` from the poll rotation** so nothing reverts it. The BW label is driven optimistically from the user's selection (`ui_update_passband_width()` in `bw_preset_cb`). Trade-off: while pinned, a filter change made on the radio's own knob won't show on the Tab5 until you switch modes (FW; resumes in CW). ⚠ **The pin is NEVER cleared**, so coming back CW -> SSB the suppression turns straight on again and nothing would repaint the label - it kept the CW width (Samuel W7STF saw 50 Hz in LSB, #214). `cat.c` now repaints from the pin on that transition; do NOT "fix" it by clearing the pin and re-reading, because a bare `FW;` makes the radio revert the live filter, which is the whole reason the pin exists.
 
 Dead ends recorded so MM-token guessing isn't repeated: `MMSSB|Filter RX` *write* alone = persists but silent; `MMSSB|Bandwidth` *write* alone = audible but reverts; Kenwood `FW<nnnn>;` *set* = QMX returns `?;`; re-asserting the **same** mode digit (`MD2` while already USB) does **not** reload the filter (only a *different* mode does, which is why the old CW-bounce "worked" but flickered CW/50 Hz). CW (`MMCW|CW passband=`) commits cleanly on its own and is left untouched.
 
@@ -403,10 +1955,46 @@ Field-diagnostics capture for remote bug reports. **Always-on as of v0.19.x** �
 
 - `diag_log_init()` (called first thing in `app_main`, before any subsystem init) installs an `esp_log_set_vprintf` hook that captures **all** ESP_LOG output into a **5 MB PSRAM ring buffer** (`DIAG_RING_CAP`) and always forwards to the serial console (passthrough — serial output is unchanged).
 - `cat.c` emits gated per-line **CAT RX** (`RX<- ...;`) at INFO so they're captured (INFO is always compiled in; don't switch to `ESP_LOGD` — DEBUG may be compiled out). **Poll de-duplication is essential**: the FA/MD/FW poll runs every ~50 ms (~60 lines/s). `diag_log_rx()` drops identical consecutive FA/MD/FW poll responses (logs them only on *change*; the `Freq=/Mode=/Passband=` change-logs already mark transitions), and the poll TX is not logged per-line — only a `poll heartbeat` line every 10 s. One-off writes (`Sent:`/`SSB filter ->`/`raw cmd:`) and all non-poll RX (MM, VN, ID, ?;, garbles) are logged in full. Net steady-state: ~0 lines/s + a heartbeat, so the 5 MB ring comfortably holds a whole session.
-- Extraction paths: **web** `GET /api/log` (live ring, "Diag ↓"), **web** `GET /api/log/saved` (flash-persisted copy that survives a reboot, "Diag(saved) ↓"), and **USB serial** (`tools/capture_serial_log.ps1`, works with no WiFi — the Travis case).
+- Extraction paths: **web** `GET /api/log` (live ring) and `GET /api/log/saved` (flash-persisted copy that survives a reboot) — both behind the one bottom-bar item **Files -> "Diagnostic download ↓"**, which downloads them as `qmx-log.txt` + `qmx-log-saved.txt` (the separate "Diag ↓"/"Diag(saved) ↓" buttons are gone); and **USB serial** (`tools/capture_serial_log.ps1`, works with no WiFi — the Travis case).
 - The enable header logs Tab5 fw (`esp_app_get_description()`), `qmx_fw=` (from `VN;`), and build stamp, so every captured log is self-identifying.
 - Ring concurrency: short spinlock for appends (lines come from a 256-byte stack buffer, so the critical section is tiny); the snapshot copies **without** the lock (head/count grabbed under it) to avoid a long interrupts-off window — worst case a few oldest bytes garble mid-copy, acceptable for a diagnostic dump. Never take a blocking lock in the vprintf hook (runs pre-scheduler and from arbitrary contexts).
-- **`reset_reason` is ambiguous on this hardware.** The header logs `esp_reset_reason()`, but a deliberate reset-button force-off on the Tab5 comes back as `panic/exception`, not `external-pin`/`power-on`. So that value alone does **not** prove a software crash. The reliable tell for a genuine crash is a `Guru Meditation` / register+backtrace dump in the log immediately *before* the reboot — if there's no backtrace, treat `panic/exception` as "abrupt reset" (there is no app-level clean-shutdown path, so any forced power-off looks like this).
+- **`reset_reason` is ambiguous on this hardware.** The header logs `esp_reset_reason()`, but a deliberate reset-button force-off on the Tab5 comes back as `panic/exception`, not `external-pin`/`power-on`. So that value alone does **not** prove a software crash. Historically the only reliable tell was a `Guru Meditation` / register+backtrace dump in the log immediately *before* the reboot — and **that dump was never on the device** (see below), so in practice a field crash could not be confirmed at all.
+
+### A crash now SURVIVES the reboot — read the record, don't hunt for a backtrace (#117, 2026-08-20)
+`util/panic_hook.c` wraps `esp_panic_handler` (`-Wl,--wrap=`), stashes a compact
+record in **RTC no-init RAM**, and `panic_hook_report_previous()` logs it from
+`app_main` right after `diag_log_init()`. So the **next** boot's log carries
+`=== THE PREVIOUS BOOT CRASHED ===` with the reason, the assert/abort text, the
+**task name**, the uptime it died at, MEPC/MTVAL/MCAUSE/RA/SP, and a ready-made
+`addr2line` command. It reaches `/api/log` **and** `/api/log/saved`.
+
+**This retires the standing "only a serial capture catches a crash" rule for the
+common case.** Before it, a field crash left nothing: verified 2026-08-14 that
+`/api/log/saved`, the SD log and a 5 MB SD archive back to 26 July held **zero**
+asserts and **zero** register dumps, while the serial capture held both of that
+night's. Ask an operator for a diagnostic download now and the crash is in it.
+
+⚠ **A valid record is also POSITIVE proof the reset was a real crash**, which
+`reset_reason` can never be here. `panic/exception` with **no** record = a forced
+power-off or a flash.
+
+**Why it does NOT flush to flash from the handler**, which is the obvious design
+and the one the TODO proposed: a panic handler runs with interrupts off, the
+other core halted and possibly no cache, so a SPIFFS write there can **hang
+instead of rebooting** — turning a diagnosable crash into a dead device. It also
+cannot take diag_log's spinlock or run the 30 s persist task. RTC RAM survives
+every warm reset, and every panic reset is warm.
+
+⚠ **Deliberate limitation:** RTC RAM does **not** survive a full power cycle, so
+a crash followed by pulling the battery is still lost. The serial capture remains
+the record for that, and for anything that hangs without panicking.
+
+**`{"action":"panic_test"}`** crashes on demand so the mechanism stays
+**falsifiable** — a hook that never fires looks exactly like the bug it fixes
+(the #189 lesson). ⚠ Radio-OFF only: a panic reboot is a warm reset, i.e. the
+documented **#74** trigger. Verified end to end on 2026-08-20 — the wrap was
+confirmed in the **disassembly**, and the recorded PC decoded to the exact
+`abort()` line.
 
 ## Tab5 snap-on keyboard (optional)
 
@@ -450,6 +2038,36 @@ Non-GPS QMX: the QMX internal RTC drifts freely (no GPS). Trusting it above SNTP
 
 `DSP_DB_CALIBRATION_OFFSET = -148.0 dB` (measured on dummy load, noise floor → -130 dBm). S9 = -73 dBm. Display range: -130 to -30 dBm.
 
+### The QMX makes its own spurs, and the fix is to MOVE THE LO, not to filter
+Measured 2026-08-13 with the **BNC open** (they are self-generated — no antenna needed to
+reproduce any of this). At 14.074: teeth every **8015.6 Hz**, strongest **+38.6 dB** over
+the noise floor, plus a 2nd harmonic and a mirror image ~9 dB down. The noise floor itself
+is 5–6 dB worse at a bad frequency. **14.074 — the FT8 calling frequency — sits inside the
+only bad window in 20 kHz.**
+
+**The law:** spur offset = **multiplier × (dial − f0)**, aliased into ±24 kHz, multiplier
+**per window** (16.0 and 23.0 solid over several intervals; others aliased at 500 Hz steps
+and unreliable). Windows are 1–3 kHz wide, ~6 per 100 kHz. That sensitivity kills a
+*stored* map (f0 would need ~3 Hz accuracy at ×16) and hands you detection for free: a
+25 Hz nudge moves a spur 8–27 bins and a real signal half of one.
+
+**Things that cost time here — do not re-derive them:**
+- **Deep cancellation is an ACCURACY problem, not an averaging one.** A 0.37 dB error
+  leaves a residual only 10.9 dB down. The ceiling is the spur's own ~0.5 dB wobble; a
+  constant cannot cancel something that moves. The ±1 dB servo is NOT the limit (it settled
+  at −0.11 dB with the bound opened to 6 dB).
+- **Over-subtraction must clamp to the measured floor**, not to near-zero. Dropping a bin
+  to 0.001× reads as a notch gouged into the display, which the operator spotted at once.
+- **Interpolate needs a RAMP from references clear of the skirt.** One constant across a
+  16-bin run gives a flat-topped block that looks like a saturated signal.
+- **Selection must keep the STRONGEST bins, not the first found** — negative offsets are
+  high indices, so first-found silently discarded the biggest spurs on the band.
+- ⚠ **The ± pair asymmetry is NOT proven to be I/Q imbalance.** Symmetric AM/PM sidebands
+  move together under a dial change exactly as an image would, so the sweep does not
+  discriminate. I asserted, retracted and re-asserted this in one session — stop until
+  there is a known single-sideband test signal. The operator's phantom-CW report on low
+  bands stands on its own as evidence that image rejection is poor.
+
 ## I/Q balance correction
 
 `dsp/iq_balance.c` — blind adaptive Gram-Schmidt orthogonaliser applied per sample in `audio.c` before samples enter the ring buffer.
@@ -467,7 +2085,7 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 
 `FT8_TX_SEND_LIVE = 1` in `ft8_tx.c` — this is live TX; the radio keys up for real.
 
-- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error. **FT4 uses 105× `TA<freq>;` at 48 ms cadence** (6.25 Hz tone spacing × symbol period), burst ~5 s on-air vs ~12.7 s FT8. CAT cadence verified on real QMX hardware (v0.19.0): all commands sent cleanly with no timeouts or dropped tones.
+- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error. **FT4 uses 105× `TA<freq>;` at 48 ms cadence**, burst ~5 s on-air vs ~12.7 s FT8. **FT4's tone spacing is ~20.833 Hz, NOT 6.25 Hz** — it is `1 / FT4_SYMBOL_PERIOD` (`FT4_TONE_SPACING_HZ` in `ft8_tx.c`), and 4-FSK rather than FT8's 8. The code has always been right; this line claimed 6.25 Hz until 2026-08-09. CAT cadence verified on real QMX hardware (v0.19.0): all commands sent cleanly with no timeouts or dropped tones.
 - **Tone spacing**: 6.25 Hz per FT8 tone index (0–7). `freq = base_hz + tone * 6.25f`.
 - **Slot parity**: `((unix_sec / 15) % 2) == 0` → EVEN. Reply fires on the opposite parity from the heard slot. CQ fires on any slot unless `use_parity=true` + `want_even_slot` set.
 - **`cat_poll_set_paused(true/false)`** in `cat.c` — cooperative flag; TX burst holds this for its entire duration so the poll task doesn't interleave commands. Do **not** use `vTaskSuspend` — that can deadlock the CDC-ACM driver mutex.
@@ -525,7 +2143,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | **v1.3.6 (2026-08-03) — the USB reconnect saga solved + Dennis's crash fixed + WiFi scan away from home.** Pure fixes release, cut from a REBUILT main (reset to v1.3.5 + 24 cherry-picked non-CW commits — the in-progress CW page lives on `feat/cw-page`, see memory `project_cw_page`). **USB (TODO #74/#75)**: zombie-device wedge root-fixed (UAC fork patch #4 — forced teardown on dead device) + capped auto-replug backstop (`util/usb_replug.c`, VBUS-first ordering, detector never touches a connecting QMX) + IDF patch #5 (`apply_hub_recover_tolerant.ps1`); QMX-side descriptor wedge (8/16 bytes, reproduced 1_03_002+1_04_004, reported to Hans) detected via diag-log ENUM tally → "power-cycle the QMX" toast. **Dennis WN4FLA's crash FIXED** (`ft8_test.c` per-instance worker_ctx_t; teardown waits ordered; spawn gated on decode-task-alive — bench-repro'd from his recipe, torture-verified). **WiFi scan-while-unreachable fixed** (scan-hold + harvest-before-reconnect + backoff-wake + auto-retry; `esp_wifi_connect()` FLUSHES scan results — never connect between SCAN_DONE and get_ap_records). **Web FT8 TX-status banner** (`/api/status` ft8:{st,text}; tab-title red dot). **Diag(saved) serves the flash pair always** (SD preference served empty/stale files). NOT on-air verified: everything carried from v1.3.5. PRIOR: **v1.3.5 (2026-07-31) — managing the log, pacing the CQ, and a way out of the wait.** All of Don WB0LQW's three groups.io asks plus Roy KI0ER's same-week bug. **CQ auto-stop** (`cq_max_calls`, NVS `cq_max`, config `[cq] stop_after`, DIRTY bit 66): top-right "CQ stop" cycle button in the CQ preset editor (never/1-5/10, **commits on tap** — deliberately outside Save/Cancel AND outside the FD lock); engine counts completed bursts in `on_tx_complete`, `rearm_current()` is the single choke point that stops at the limit, advance()'s CQ no-answer path ends the session to IDLE **one listening slot later** (an answer to the final call still starts a QSO); count resets on every fresh CQ sequence incl. all resume paths; TX status shows "call 2 of 4". **Web View/edit-log viewer** (QSO Logs menu): parses `/api/adif` client-side (no listing endpoint), sortable column headers, per-row delete via new `POST /api/adif/delete?idx&call` — **idx AND call must both match or 409**, so a stale browser view can never delete the wrong record; Delete-all behind a typed-DELETE prompt. **Tab5 Delete-all** in the ADIF viewer (bottom strip beside Close, two-tap arm "ALL N?"). **Latent bug fixed**: `adif_log_clear()` never reset the QRZ/eQSL/LoTW upload cursors — post-clear QSOs would silently never upload (unreachable until now: the clear endpoint existed since v0.16.0 with NO web button). **Busy-hold escape** (Roy KI0ER): the v1.3.3 hold disarms TX, which dropped the status label into the dim passthrough branch with no tap action — operator locked into the wait; new label branch for "session alive, TX idle" shows TAP TO CANCEL in ARMED-amber + matching abort branch in `tx_indicator_tap_cb` (**WAIT_DONE deliberately excluded** — final fired, log pending; an abort there loses the entry). **Drawer touch fix** (SCROLL_CHAIN_VER cleared on sliders/checkboxes + knob catch 42→98 px, operator-verified). **QMX volume cap 70→50** (Randy round 3: round 2 was measured antenna-OFF). `max_uri_handlers` 28→30. NOT on-air verified: CQ auto-stop pacing, the busy-hold cancel (needs a live band). Full writeup `docs/version-history.md` v1.3.5. PRIOR: **v1.3.4 (2026-07-29) — finishing the QSO, and a TX frequency you control from the main screen.** Same-day field reports on v1.3.3 (Roy KI0ER, Randy N4OPI). **Completed-QSO final re-send + duplicate-log guard** (see the quirk section above - `final_resend_if_still_asked()` runs before anything can start a new contact). **RST `599` placeholder DELETED** - unknown reports are omitted, never fabricated. **Occupancy filtered by slot parity** (`build_tone_occupancy`), union when `TXCQ ANY`/nothing armed. **QMX volume FIELD-VERIFIED working** (Randy N4OPI) and `CAT_AF_GAIN_DB_MAX` 199 -> 40 (usable range is the bottom ~10%). **TX tone is a permanent left-pane button** (was a chip that hid itself when nothing ran) with a **live mini occupancy strip** under the slot countdown; **TX Hold** (WSJT-X "Hold Tx Freq") persists tone+flag; parity is ONE cycling `TXCQ ANY/EVEN/ODD` button; `Active: N` removed. Picker: white=ours, pink=partner, drag stays light grey (operator's call). **Bottom bar: `-NN dBm` -> WiFi fan icon** (`ui_wifi_fan_*` in `ui/ui_clock.c`), width given to the SSID, IP pinned right, clock stays centred. **Settings dirty set widened past 64 bits** to a 128-bit index array (it was FULL - see the quirk section; `DIRTY_*` are now INDICES, not masks). NOT on-air verified: the re-send budget, the parity map on a real band, and the dB-vs-LCD comparison. Full writeup `docs/version-history.md` v1.3.4. PRIOR: **v1.3.3 (2026-07-29) — TX tone visible + pickable, busy-station hold, QMX volume, LoTW US state/county.** Almost all Roy KI0ER field feedback. **TX tone** now on the TX status line (ARMED + ACTIVE) and changeable via a `TX nnnn Hz` chip → `ui/ft8_tone_modal.c`: live occupancy strip over 200-2800 Hz from `ft8_tx_get_tone_occupancy()` (the SAME bitmask the automatic picker uses, extracted rather than duplicated), touch-and-drag pick, ±50, Find clear slot, verdict in words as well as colour. `ft8_qso_set_tx_tone_hz()` refuses while ACTIVE and preserves parity. **NO numeric entry on purpose** — 50 Hz grid; a freq-pad Hz mode was built and reverted (shared `ui.c` risk for zero reach). **Busy-station hold**: `partner_busy_with()` + gate in `rearm_current()` + `ft8_tx_disarm()` on engage (without the disarm the already-armed burst still fired); a hold does NOT count as a miss, so a popular station is no longer grey-listed — bounded 24 slots. Note the robot picker already couldn't pick a busy station (`is_cq` gate), so the real gap was mid-exchange. **`RRR`** closes a pounce QSO like RR73. **Priority-decode hint FIXED**: `ft8_qso_get_priority_freq()` returned OUR tone, not the partner's — a no-op since v0.18.4; now `s_partner_freq_hz`, seeded at QSO start and refreshed in `scan_for_response()`. **QMX volume** slider (see the `AG` quirk above; dB, matches the radio's LCD, reads back on drawer open, **unverified against a radio**). **LoTW US_STATE/US_COUNTY** + substring success check + cursor-rewind-only-on-cert-change (see the LoTW section). **Decode list cleared** on sim-mode exit and on FT8↔FT4 (`ft8_op_mode_set()` now owns it, guarded on actual change). **Sim fix**: identical re-scheduled messages no longer restart the phantom's reply timer — with Fast pounce OFF (the default) phantoms never replied at all, silently breaking the whole bench-sim workflow. **PSK Reporter field-verified** (6 reporters). Full writeup `docs/version-history.md` v1.3.3. PRIOR: **v1.3.2 (2026-07-26) — PSK Reporter + GRIDSQUARE fix + manual built into the firmware.** **GRIDSQUARE** restored (93106be): the decode table's unguarded `extract_grid_from_text` into `e->last_grid` ran BEFORE the guarded keep-old-grid update, so every post-CQ message (report/RR73/73, none carry a grid) wiped it — `GRIDSQUARE` was missing from ~90% of logged QSOs (John W5JSS: 5 of 60; reproduced 5/34 on the operator's own log, 2/2 after the fix). **PSK Reporter** (`net/pskreporter.c`, default ON): IPFIX/UDP, batched ≥5 min. Two pre-release fixes, both invisible in use because PSK never ACKs — unresolved hashed calls arrive as literal `"..."` and would have been published (guard: needs ≥1 letter + ≥1 digit, `/` allowed, over-long dropped rather than strncpy-truncated into a DIFFERENT call), and an **RFC 7011 §3.3.1 padding violation** (receiver Data Set padded to 4 unconditionally, but its shortest record is 3 octets, so a 3-byte pad was byte-identical to a record of three empty strings; fired iff `len(call)+len(grid)+len(sw) ≡ 2 mod 4` → ~5 of 18 realistic combinations). `pad_data_set()` pads only while the pad stays shorter than the template minimum. Found by decoding the bytes the HARDWARE emits with an independent parser (`test/psk_harness.c`, 9 negative tests incl. a regression vector), not by reading code. **FIELD-VERIFIED 2026-07-27: the collector accepts our datagrams.** `pskreporter.info`'s "Software in use" table lists `QMX Panadapter v1.3.2` with 6 reporters (BD4AHS, KI0ER, VE3OFA, W5JSS, W5NR, W7STF) — so the field combination, the template, and the padding fix are all accepted end-to-end by the real collector, not just by our own parser. FT4 is reported too (`ft8_test.c` sends `"FT4"` when the pool is FT4). Note for future debugging: the first datagram goes out 5–5½ min after boot, so a short trial shows nothing and looks like a failure — and PSK never ACKs, so absence of an entry is the ONLY negative signal available (third-party dashboards like wspr.rocks may not show spots that the collector did accept; W7STF reported "not working" on that basis and was in fact in the reporter list). **Manual built into the binary** (`net/manual_embed.c` + `tools/pack_manual.py`, see the quirk above) — download/SD-mirror/two-stage-save and the green "Save offline" button all DELETED; `reader_net.c` went ~530 → ~110 lines with the reasons recorded at its top. **SD**: WiFi-aware gate (continuous with WiFi off, one boot snapshot with WiFi on), yellow `UI_SD_SNAPSHOT_ONLY` dot state, boot-window mount retries — see the two SD quirks above. **Grey-list** (`ft8_greylist.c`, opt-in) + pileup replies via `ft8_qso_build_manual_reply()` + robot now ticks in the QMX-less sim branch (85487b7, Roy KI0ER). update_check: latest.json before GitHub + retry on transient failure. Full writeup `docs/version-history.md` v1.3.2. PRIOR: **v1.3.1 (2026-07-24) — DT/HZ decode-list columns + UI polish + BSP-info fix.** Decode list gains **DT** (slot-timing offset in s, band-consensus-relative via `ft8_get_last_timing_ms` so on-time reads ~0.0 — a raw display would carry the ~+0.6 s RX-latency bias) and **HZ** (station audio tone) after SNR; country column is 3-letter codes via `dxcc_lookup_alpha3()` (`util/dxcc.c` A3 table keyed on the entity-name strings — keep in step with TBL; `dxcc_lookup()` full names unchanged for ADIF viewer/pileup modal); HZ/KM/BRG values +10 px right (centered under headers). **BSP INFO block** reports the DETECTED panel/touch via new cache-only accessors `bsp_display_panel_name()`/`bsp_touch_controller_name()` (m5stack_tab5.c — never re-probe, second detection probe breaks touch init; reported by Paul VE3PIK, ST7121 units said "ST7123"). **UI**: QMX-wait overlay mode-aware offset (+150 FT8 / centered Panadapter); FT8 left pane uniform grid (right edges at content x=288, 8 px gaps, radius 8; `s_btn_freq_hit` kept in sync with the 288-wide preset box); settings drawer — dropdowns content-width (measured from option text; LV_SIZE_CONTENT collapses an lv_dropdown, hw-observed) + light-grey bg, slider tracks 30→14 px with knob pad 14 + translate_y 8 (same knob size/centre line), Display header removed → "Display brightness: XX%". Full writeup `docs/version-history.md` v1.3.1. PRIOR: **v1.3.0 (2026-07-23) — Roy KI0ER feedback batch: intelligent Transmit + cold-pounce toggle + sim overhaul + mouse + SD file browser.** Headlines: **intelligent Transmit** (tapping a row sends the correct NEXT message WSJT-X-double-click style, `ft8_qso_build_manual_reply()`; manual RR73/73 now LOGS the QSO via `ft8_qso_notify_manual_final()` seeding WAIT_DONE; manual partner tracked via `ft8_qso_note_manual_target()` for amber highlight + pileup exemption; manual Transmit honours Skip-TX1); **reply timing** (`FT8_REPLY_TX_WINDOW_MS` 2500→2800; ARMED requests ride the early-decode cut; `min_scan` clamped to actual fire time in `on_tx_complete()` — the predicted-slot gate was discarding prompt replies); **Fast pounce (early decode) toggle** (`ft8_early_decode` NVS, default ON, drawer row — ⚠ NOT A/B-verified on a live band, released with explicit caveat, operator has no antenna until ~mid-Aug); **pileup/ADIF lockout** (long-press always opens ADIF log; pileup worked-before skip now follows `excl_worked_before` + `DONE_GRACE_TTL_S` just-completed grace; **Auto-work pileup fires from IDLE** too); **reader waits for WiFi** instead of demanding reboot; **sim overhaul** (see the FT8 simulation section — no QMX needed at all now, 6 phantoms, patience/repeats, pre-synthesized instant-landing pending pump, suffix-driven replies, Fast-pounce-aware timing, FT8-reentry clears rows+pileup); **ADIF "Del N test" button** (FREQ==0 records only, hidden otherwise); Filter modal buttons top-right (P4-style) + warning moved; **USB mouse** (`usb_hid_mouse.c`, works mouse-alone only — hub TT missing in IDF, see memory) + **web SD file browser** (`net/filebrowser.c`, `/files`). KNOWN-OPEN: one unreproduced `tlsf_free` double-free reboot ~28 s after boot seen once on the bench. Full writeup `docs/version-history.md` v1.3.0. PRIOR: **v1.2.0 (2026-07-20) — on-device User Manual.** Full tab5.lav.dk docs now read on the Tab5: Settings drawer → **User Manual** opens `ui/reader_view.c` — a full-screen overlay with a markdown-subset renderer (headings/lists/tables/code/quotes; **bold shown as colour** — no bold font; UTF-8 folded to ASCII via a full decoder, box-drawing/arrows/accents/emoji handled; content-hugging code/table boxes). Fetches the SAME source `.md` that builds the site (`net/reader_net.c` → `https://tab5.lav.dk/md/*.md` → `/spiffs/reader.md`), driven by `toc.json` (nav-derived). **Contents** = two newspaper columns split at a section boundary (whole sections per column, no scroll), styled purely by nav `level` (level-0 gold/32, nested white/24, indented), with **drag-to-pick** (highlight bar follows finger, release navigates). Header: **Back** (page history) · **Exit** (leave) · **Contents** · gold H1-sized title (shows "Contents" while the panel is open) · **Save offline** (SD only). Buttons are OVERLAY children (not the header bar) so their `ext_click_area` reaches below the bar — LVGL clips a child's hit area to its parent, which is why in-bar buttons couldn't be tapped from just below. **microSD offline** (`reader_net_save_offline`): mirrors the whole manual to `/sdcard/qmx-panadapter/manual/` under `sd_archive_lock` + WS-pause + `dsp_set_transfer_quiet` (SD-during-WiFi is the wedge-prone combo); read source = WiFi-online, SD-offline. **Update check** (`net/update_check.c`): 6 h GitHub `/releases` poll (pre-releases count) + `latest.json` fallback, semver vs `esp_app_get_description()->version`, banner in the Reader. Site side: `mkdocs_reader_export.py` hook publishes `site/md/**`, `site/md/toc.json`, `site/latest.json` (carried by the normal FTP). Nav is UNCHANGED — left-swipe is still the plain Panadapter↔FT8 toggle; the manual is a drawer destination. **Crash fixed en route**: expanding UTF-8 folds (arrow→"(right)") written IN PLACE overran buffers → heap corruption (`tlsf` store fault); folding is now always into a separate bounded buffer. **Also: FT8 pileup fix (Dirk DK7CVD)** — a worked (or late-answered) station lingered in the pileup; now removed at QSO completion + a worked-before skip in `capture_pileup_callers()` stops a trailing 73/RR73 re-adding them (`ft8_qso.c`). See `docs/version-history.md` v1.2.0. PRIOR: **v1.1.0 (2026-07-19) — FT8 decode collapse (#51) SOLVED + SD station backup.** Headline: the years-old "first FT8 slots decode 60+, then collapse" was USB ISO audio loss at the wire (9 ms pipeline default → 320 ms; ~16 uniq/slot sustained vs 6.3). microSD re-enabled as a full grab-and-go backup (qso.adi/config/LoTW cert+key/README). GPS auto-detect + second-tick phase-lock (~10 ms, no toggle); FT8-derived sync gated offline-only. Band-plan bottom-bar drag (ported from P4), ADIF-viewer crash fix (LVGL pool 256→1024 KB), drawer spacing/slider alignment, LDPC iters 15→30, QRZ count fix. See `docs/version-history.md` v1.1.0. PRIOR: **v1.0.1 (2026-07-17) — pounce TX2 report fix.** When answering a CQ (Skip-TX1 OFF), TX2's `R<rpt>` now carries OUR measured SNR of them (`make_roger(our_rpt)` in `ft8_qso.c` WAIT_RPT), not their report echoed back — field-reported by Steve N0SZ + Jonathan KN6LFB on v1.0.0; the mirror of yesterday's RST_RCVD *logging* fix. Skip-TX1/CQ-run were already correct. PRIOR: **v1.0.0 (2026-07-16) — the 1.0 release, beta label dropped.** All v1.0 gates met. Since v0.21.0 (33 commits): **LoTW upload** (on-device TQ8 signing, guided web setup, live-verified — see the LoTW section above); **display sleep #34** (idle backlight-off, tap-wake swallowed, two-finger double-tap blank); **FT8 exchange batch**: hold-for-decode TX gate + callsign hash table (a4d8564, field-verified on air), RST_RCVD from the partner's numeric roger (51cf92c — R-report is their OWN measurement, NOT an echo), TX-parity row-aging pause + 120 s stale window + our-parity rows hidden during CQ run, **broken-QSO resume** (5-min record, auto + manual — ship-on-faith, watch field reports, `ft8_qso.c` `resume_*`), pileup report-first replies (work-PC branch); **ADIF viewer**: Today/All filter + POTA 10-QSO indicator + single-record delete (upload-cursor-safe); **IDF patch #4** (`apply_hcd_bulk_error_recovery.ps1` — hcd_dwc bulk-error assert → graceful transfer error; re-apply per machine); drawer regroup (setup items top, Antenna-Tune slot closes on 1_03 via dynamic reflow); web bottom-bar menus (QSO Logs/Files/Miscellaneous), WS send cap 400 ms, LoTW WS-pause. Web-audio Phase 1 is CODED but parked on branch `feat/web-audio-phase1` (NOT in v1.0.0 — PSRAM-bus root cause + remaining work in memory `project_web_audio_phase1_parked`). PRIOR: v0.20.1 — **hot-fix: pounce-crash FIXED.** `ft8_qso_start()` declared an ~11 KB `ft8_call_t snap[FT8_CALL_TABLE_SIZE]` on the STACK for the Skip-TX1 scan (added v0.20.0); the compiler reserves that frame at the prologue UNCONDITIONALLY, so it overflowed taskLVGL's ~8 KB stack on EVERY pounce confirm (`pounce_btn_cb`→`ft8_qso_start`, an LVGL callback) → "Stack protection fault" reboot, regardless of the skip_tx1 toggle. Field-reported by Dirk DK7CVD + local serial backtrace (taskLVGL, SP below floor, MEPC→ft8_qso.c:494 prologue). Fixed: heap the snapshot in PSRAM (`ft8_qso.c`, commit 0316866) — same rule ft8_tx.c already follows. Verified on-air (pounce ARMs + transmits with skip_tx1 ON). Bug-class grep-checked: other `ft8_call_t snap[]` arrays are on 64 KB decode/capture tasks (safe), Call CQ has none, ft8_screen_view ones are static. **v0.20.0 as released crashed on pounce → superseded by v0.20.1 (v0.20.0 flasher asset removed from GitHub).** PRIOR: v0.20.0 — **robustness release.** **WiFi permanent-wedge FIXED** (the long-documented esp_hosted/C6 "WiFi dies after N min, reboot-only" — root-caused to the RX_NONE SDIO path giving up on an oversized pending-byte delta (`sdio_get_len_from_slave > ESP_RX_BUFFER_SIZE`) without draining/advancing the counter → livelock → permanent `0x126` RPC timeout; now DRAINS+resyncs and self-heals — vendor patch ships as store/restore `tools/patches/esp_hosted_sdio_drv.c.patched` + `apply_esp_hosted_sdio_recovery.ps1`; hardware-verified recovery, WiFi survived). **Modal-open core-0 freeze FIXED** (the watermark's `transform_rotation` hung taskLVGL on any full-screen invalidate → pre-rotated static A8 image `ui/watermark_img.c`). **FT8 capture anchored to UTC boundary** (`dsp.c` continuous pre-ring + `dsp_ft8_capture_begin(...,backfill)`; late arm no longer discards each slot's opening sync array; `off=` +150→+43 ms; decode-yield gain unconfirmed pending WSJT-X A/B). **CAT poll no longer self-exits** on transient CDC bursts (`cat.c`). **Web UI gated to Panadapter mode / paused in FT8** + `ws_push` pri 5→3 (050c306). **SD → SPI2_HOST** (`m5stack_tab5.c`, off the shared SDMMC/WiFi peripheral, ~120 KB internal freed); **SD auto-archive kept soft-disabled** (`SD_ARCHIVE_DISABLED 1`) — WiFi-safe now but the mount's internal-RAM cost starves FT8 decode (heap largest-block 25→16 KB, `dec` zero-clusters). **LWIP `TCP_SND_BUF` 11520→2880** (internal-DMA-heap headroom). **FT4 soft-disabled** (`FT4_MODE_DISABLED`, ft8_test.h — internal-heap exhaustion/crash; reversible) — **RE-ENABLED 2026-07-13** after the Tier 1 FT8-mode render gate freed core 0 (~70-80% idle in FT8/FT4 mode, was ~14-35%); FT4 hw-verified decoding every slot, 11 slots, no zero-clusters, stft+dec ~2.3s inside the 7.5s slot; internal heap 41KB free / 13KB lblk stable but tight; FT4 TX re-verified same day (real QSOs completed on both FT4 and FT8, S-meter live in both). **FT8 pileup tracker** (`ft8_pileup.c/.h` + `ft8_pileup_modal.c`) + **Skip-TX1** filter option + Filter-modal spacing. **11m/CB band** (cat.c scan, band_from_freq, bandplan, legal_band_edges). **Boot backlight fade-in** + breathing "reboot your QMX" overlay (plain label, no transform_rotation). **Memory** 4 default channels + first-run demo + drag-to-wastebin (opacity fade — transform_scale-to-0 froze LVGL, avoided). **Battery-care charge-limit** (511eca6) + INA226 IR-drop comp (37534fd). **Web UI**: whole-band plan strip + draggable visible-window, split-drag, screenshot popup-composite, freq-keypad drag/10-key, freq-axis + flat-dB-scale fixes. **ADIF viewer** single-pass render (was O(N²)). **Resource monitor** dev-only (hidden POST `/api/cmd {resmon}`, Ctrl+Alt+R web). **FT8 respawn watchdog** (`ft8_task_is_alive`). NOTE: the "Stage 2" FT8 weak-signal residual-decode commits (47dc865…2dcfcee) are **offline test-harness R&D only — NOT wired into device firmware**; exclude from user-facing notes. Full writeup `docs/version-history.md` v0.20.0. KNOWN (post-release, not blocking): FT8 decode has a benign per-parity STFT-time asymmetry (~1830 vs ~720 ms) from capture/decode core-1 timesharing — monitors are provably symmetric in memory, so it's a scheduling artifact, not a buffer bug; doesn't clearly cost decodes (both parities decode similarly, fits the 15 s window). PRIOR: v0.19.5 — UI-polish + bugfix batch. **FT8 mode-exit crash FIXED** (real, serial-captured "Load address misaligned" → `ft8_decode_worker_task`): decode task tore down the core-0 worker's queue/semaphore and returned (freeing its stack) after a fixed 50 ms delay while the worker could still hold a `job` pointer into that stack; now JOINS via new `s_worker_exited` (worker gives it before `vTaskDelete`, teardown waits bounded 12 s) — `ft8_test.c`. **WiFi on/off applies LIVE** (`panadapter_wifi_set_enabled`, `wifi.c` — enable connects, disable disconnects + `s_wifi_user_disabled` suppresses the retry loop; was boot-only) + **WiFi modal pre-fills stored password** so Save doesn't wipe it (the "forgets password/reason=210" bug) + Save honours the on/off toggle (`panadapter_wifi_update_credentials`) + WiFi-setup closes the drawer. **FT8/FT4 freq persisted** (new NVS `ft8_freq_hz` default 14074000; `settings.c/.h`, `apply_freq_preset`, `ui.c` FT8-entry seeds snapshot) so FT8 stops inheriting the panadapter VFO. **Band picker** 2-col when >6 bands + bogus "11" band filtered at the `cat.c` scan. **Band-plan** frame around the visible-span window (`s_bp_knob`, near-transparent) + 6 m segments (`bandplan.c`) + centre snaps to whole kHz + tap uses clean touch-down x. **Point-to-tune** commits `s_target_freq_hz` (cursor value, no lift jitter); waterfall cyan cursor now a trail-free overlay (`s_wf_cursor`) driven from `ui_push_spectrum` (glued to spectrum line). **Drawer sliders** `ADV_HITTEST` (knob-only) + `pad_hor=15` (full knob) + scroll-to-top on open. **Memory recall** DiGi-gated in FT8/FT4 (`memory_modal.c`). **Antenna Tune** own `tune_modal.c` window. **FT4 stuck-watchdog false alarm FIXED** (`ft8_test.c`, Samuel W7STF): the zero-decode audio-reset watchdog hardcoded its toast/log as "FT8" and used a fixed 8-slot threshold = only ~60 s in FT4 (vs ~120 s in FT8), so a merely quiet FT4 band (empty decode list is routine there) tripped a spurious "FT8 stuck — resetting audio" reset; now protocol-labelled and **wall-clock** based (macro renamed `FT8_STUCK_RESET_SLOTS` → `FT8_STUCK_RESET_MS` 120000, divided by `ft8_op_mode_slot_ms()` → 8 FT8 / 16 FT4, same ~120 s dwell in both modes). **AM has no selectable BW** (QMX one fixed 150–3200 Hz filter, `FW;` get-only — `docs/qmx-1_04-cat-comparison.md` §4.5). Full writeup `docs/version-history.md` v0.19.5. PRIOR: v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT4 went from no-decodes/no-QSOs to a completed logged QSO). (1) **shared FFT scratch** — the 2-monitor capture pool gave each monitor its own kiss-FFT buffer; with internal SRAM starved the 2nd spilled to PSRAM → its STFT ~10x slower → every slot on that buffer decoded 0 (FT8's 15 s slot hid it, FT4's 7.5 s didn't). All monitors now share ONE FFT config pinned to internal SRAM (`ft8_test.c` `build_monitor_pool`/`free_shared_fft`). **Safe only because `monitor_process` is capture-task-only, one monitor at a time, strictly sequential (decode works on the pre-built waterfall, never the FFT) — do NOT split back to per-monitor buffers or the PSRAM-spill returns.** Also halved internal-FFT RAM, heap min 6→13 KB. (2) **stuck-decoder watchdog** gated off during TX/QSO + threshold 2→8 (`FT8_STUCK_RESET_SLOTS`) — `cand` is ~always 140, so the real trigger was just "2 zero-decode slots"; its IQ+floor reset wiped the decode list mid-QSO, timing out contacts. (3) **auto-sync per-slot clamp** `FT8_AUTOSYNC_MAX_STEP_MS=20` — FT4's noisy ±800 ms raw offsets × 0.3 gain = ~250 ms clock jumps/slot, visibly shifting the slot boundary; clamp preserves consensus-tracking but caps the visible step. (4) **slot-parity display** (`ft8_screen_view.c` bar/label + per-row E/O) was hardcoded to `/15` (FT8 grid) → E E O O in FT4; now uses `ft8_op_mode_slot_ms()` (per-row rounds whole-sec `last_utc` to nearest slot index). Plus `ui_toast()` now takes `display_lock()` (was corrupting LVGL from the decode task → wedged the pipeline); QMX `Q9;` IQ readback waits 150 ms for the write-echo before checking; freq keypad translucent (top-bar only); settings-drawer declutter (removed Snap-to-signal + FT8-sync-lines, both features force-off via `const` flags; moved Band-plan region under Callsign & Grid; FT8-only sections built last so they don't gap Panadapter mode). Full writeup in `docs/version-history.md`'s v0.19.4 entry. v0.19.3 — QMX IQ-mode handshake retry (up to 4 attempts at link-up, was single-shot) + persistent on-screen warning banner if it never confirms (`cat.c`/`ui.c`, see "`Q9 1;` (IQ mode enable)" section above) — fixes a real field-confusing bug (Dirk DK7CVD, groups.io #172933) where a failed handshake silently left IQ mode off for a whole session, making the spectrum appear shifted/mirrored and tunable across the full 48 kHz window. Full writeup in `docs/version-history.md`'s v0.19.3 entry. NOTE: this branch-state cell's per-version detail stopped being maintained after v0.18.8 (v0.19.0–v0.19.2 shipped but were never backfilled here) — `docs/version-history.md` is the authoritative changelog; treat this cell as a pointer to recent work, not a complete record. v0.18.8 — ARRL Field Day FT8 exchange mode (new `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `components/ft8_lib/ft8/message.c` — bit layout + 86-entry section table verified byte-for-byte against WSJT-X's `packjt77.f90`; `ft8_qso.c` integration; Filter-modal class/section UI with a live always-accurate TX preview and full lock-except-Cancel while the mode is on; `CQ FD` auto-tag on Call CQ, replacing any other modifier; ADIF `CONTEST_ID`/`STX_STRING`/`SRX_STRING`/`ARRL_SECT`/`MY_ARRL_SECT`) plus FT8 simulation mode (new `ft8_sim.c`: two phantom stations CQ and reply via the real encode→GFSK-synth→decode pipeline, `ft8_qso_get_state()`-driven reply content, hard TX interlock in `ft8_tx.c` so a connected QMX is never keyed, breathing red full-screen border while active). Three new self-tests (bit-level ARRL FD round-trip, full GFSK-synthesis-through-real-decoder e2e, plain-CQ synth/decode) all PASS on hardware. Full writeup in `docs/version-history.md`'s v0.18.8 entry. Flasher re-verified safe (unchanged from v0.18.7's 0x0 fix); merged bin/flasher zip deliberately not built/published this release pending manual flash confirmation. v0.18.7 — FT8 decode-yield gap CLOSED (controlled A/B confirms v0.18.6's fix set was sufficient — see below), auto-answer robot un-shelved (live TX, permanent on-screen disclaimer), CQ tone auto-relocation on clash, SNTP/QMX time-priority bug fix + new continuous damped FT8-derived auto-sync, own-call highlight cache now refreshed live (not just on FT8 entry), FT8 Filter modal checkbox-sizing fix (textless-checkbox-plus-separate-label construction, all 8 now uniform) + Priority dropdown restyle, recovery-flasher port auto-detection (was hardcoded COM3 / wrong macOS device glob, hit a real field report from Samuel W7STF). Full writeup in `docs/version-history.md`'s v0.18.7 entry. v0.18.6 — FT8 decode-yield investigation, RST_SENT fix, distance-in-miles, diag-log dot. **FT8 decode-yield**: three real regressions found and fixed between v0.18.0 and v0.18.5, none of which the v0.18.5 band-aid actually closed (it disabled the two things CW audio *does*, but missed the task it spawns). (1) `cw_audio_init()` in `main.c` was never disabled alongside `cw_audio_preopen()` — it unconditionally spawned `cw_audio_task` at **priority 6 on core 1**, above `fft_task` (4, the audio ring's sole consumer for both panadapter and FT8 capture) and both FT8 tasks (1), looping forever on a 120 ms `vTaskDelay` even though `s_codec_ready` could never become true; ~125 preemptions of `fft_task` per 15 s slot, all session, on every release since v0.18.1 — now also commented out. (2) The v0.18.1 emergency revert (4a588fc) threw out 3/4 of a separately-validated fix (`d140485`) along with the actual e07f114 regression it was caught up with; only the FT8 double-spawn guard was ever cherry-picked back (6f878f6). Restored: `cat.c` poll_task tolerates ~20 consecutive transient CDC failures before giving up instead of dying permanently on the first one (was freezing `cat_get_frequency()`/`cat_get_mode_str()` for the rest of the session); FT8-entry DiGi-forcing and mode-restore go through `cat_request_mode()` (poll-task routed, retried) instead of a rate-limit-droppable direct `cat_set_mode()`; `ui_save_snapshot()` captures the freshest UI-commanded freq (`s_last_qmx_freq_hz`) not the lagging poll value; `memory_modal.c` recall uses the same optimistic-display + poll-task-mode pattern instead of a stale timer-based direct write. (3) `ui_push_spectrum()` (10 Hz, core 0, same priority as `audio_task`) did an unconditional `lv_obj_set_style_opa()` call every tick regardless of mode or whether the passband fade was active — LVGL style-sets can trigger an invalidate/redraw even when unchanged, a continuous cost on the core that competes with USB audio drainage; now skips the call unless the value changed. Root-caused via empirical diff against the `v0.18.0` git tag after the user found no v0.18.1+ release matched v0.18.0's sustained yield even with the v0.18.5 band-aid applied. Measured same-night same-band A/B (fading conditions, so absolute numbers are conservative): v0.18.0 ~23 decodes/slot (5-slot sample); HEAD with fix (1) only ~12/slot (8-slot sample); HEAD with all three fixes ~15.2/slot (31-slot sample) — a real ~25% improvement from fix (3), but the gap to v0.18.0 looked **NOT fully closed** at the time. **UPDATE (2026-06-26): CLOSED.** A controlled same-time-of-day A/B (midday, stable high-pressure conditions, 20 m, full chip erase before each flash, v0.18.0 rebuilt in a separate worktree) gave v0.18.0 and HEAD an *identical* 15.38 decodes/slot mean across 60 slots each, with HEAD's distribution if anything tighter (stddev 5.70 vs 6.65) and no decode-collapse cliff in either run. The earlier "gap" was the band-fading confound this section already suspected — different few-minute windows as the band faded through the evening, not a code regression. See memory `project_ft8_sparse_decode_investigation` for full history and the methodology (including an unrelated build-tooling snag: v0.18.0's `main/idf_component.yml` pins `esp_lvgl_port` as `^2.5.0`, which today resolves to 2.8.0~1 — incompatible with the locked LVGL 9.2.2; had to relax it to `~2.5.0` in the throwaway test worktree only to get a clean build of the old tag). **Also shipped**: FT8 CQ-run RST_SENT bug fix (`ft8_qso.c` `cqrun_answer()` — responder sending RR73/73 immediately never set `s_rst_sent`, ADIF logged "599" instead of their actual SNR); FT8 distance-in-miles display toggle (`distance_in_miles` setting, drawer checkbox, `ft8_screen_view.c` conversion); bottom-bar red breathing diag-log dot (anchored to the battery-text's actual right edge via `lv_obj_align_to`, not a fixed offset) + the firmware-version label un-hidden (was hidden in 8d968f3 to avoid clock overlap; the dot+version now coexist). v0.18.5 — band-aid for the FT8 decode regression (see v0.18.6 above: incomplete, did not fully restore yield) + a critical bootloader-corruption hotfix saga. **Band-aid**: `cw_audio_preopen()` (main.c) and `dsp_cw_forward()` (audio.c) disabled — the two hot-path calls e07f114 (v0.18.1) added that degrade FT8 yield 2–3× even when CW audio is off. **FT8 double-spawn crash guard restored** (`6f878f6`): the v0.18.1 revert (`4a588fc`) had also thrown out the `s_ft8_task_alive` single-instance guard, re-enabling the fast-toggle crash it was added to fix — restored standalone (the rest of that commit, `d140485`, stayed missing until v0.18.6 above). **Bootloader corruption hotfix**: the `v0.18.5-hotfix` flasher build wrote the merged firmware to flash address `0x0` instead of `0x10000` (the app partition), overwriting the bootloader on every unit it was used on — caused an 18-hour field outage. Fixed in both `flash.bat`/`flash.command`; a `v0.18.5-hotfix-RECOVERY` release + `tools/QMX-Panadapter flasher/recovery-files/` (full-chip-erase recovery scripts) shipped to recover already-bricked units. v0.18.4 — band-nav + FT8 decode fix + one-finger tuning; `feat/panadapter-bandnav-ft8-robot` merged in (6b31000) with the **robot SHELVED**. **Band-plan strip** (`util/bandplan.c/.h`): CW/Digi/Phone colour strip below the freq axis tracking the VFO; "Band-plan region" drawer selector (Auto/R1/R2/R3). **One-finger pan/stroll** (`ui.c` `pinch_poll_cb`, `npts==1`, `PAN_THRESHOLD_PX=70`): one-finger horizontal drag slides scope+waterfall with a centre-freq readout, retunes on release clamped to band edges; replaced the old two-finger stroll (two fingers = pinch-zoom). **Snap-to-signal** drawer toggle (`s_snap_to_peak`, NVS `snap_to_peak`, default on) gating `dsp_find_peak_hz_around`; **CW snap fix** (`4c8bd56`) — search centres on `ui_get_if_offset_hz()` (12 kHz + CW LO offset + trim) not bare 12 kHz, so it no longer misses the carrier in CW (on-air re-verify still pending). **Band-aware worked-before** (callsign+band, `adif_log.c/.h`). **ROBOT SHELVED** (`ft8_robot.c/.h` complete but live-TX, not soaked): `ft8_robot_tick()` hard-returns at the top — never keys the radio regardless of `robot_en` in NVS/config; `ft8_filter_modal.c` robot checkbox + Priority dropdown greyed (50% opa) + inert (tap → `ui_toast("Work in progress....")` via `robot_wip_cb`), `robot_en` forced false on save + always shown unchecked. `ui_toast()` de-static'd + declared in `ui.h`. To re-enable later: drop the `ft8_robot_tick` guard + un-grey the modal. **Fix A — decoded tone recorded in real Hz** (`decode_candidate_range` in `ft8_test.c`): was storing `cands[i].freq_offset` (coarse FFT bin index relative to `mon->min_bin`, 6.25 Hz/bin) as `ft8_call_t.last_freq`, which every consumer treats as audio Hz → reply tone, CQ clear-tone scan, and TX-clash detection all off by ~`mon->min_bin*6.25` (~200 Hz) + ~6.25× scale error; now `freq_hz = (mon->min_bin + cands[i].freq_offset) / mon->symbol_period` (ft8_lib's own formula). Verified on-air: 45 decodes on busy 20 m, all in 213–2906 Hz, each station stable per cycle. **Fix B — partner's tone decoded first** (`decode_slot` reorder + `ft8_qso_get_priority_freq()` in `ft8_qso.c/.h`): mid-pounce (WAIT_RPT/WAIT_RR73 only) moves candidates within ±25 Hz of the partner's tone to the front of `cands[]` so the reply is found inside the `FT8_REPLY_TX_WINDOW_MS` (2500) immediate-slot window on a crowded band. Fix B's Hz compare depends on Fix A. v0.18.3 — display ergonomics. **Waterfall drawer controls**: new "Waterfall" settings section with live, NVS-persisted Black level (dB above per-bin floor→black, default 9), Contrast (dB span filling the colour ramp, default 45), Adaptive floor (0–100% blend between per-bin and a global mean floor, default 100), and FFT window selector (Blackman-Harris/Hann/Nuttall via `dsp_set_window()` rebuilding `s_window`). The waterfall colorisation constants in `render_waterfall.c` became live statics (`render_waterfall_set_black_level/_contrast_db/_floor_blend`); defaults bumped +6→+9 / 30→45 dB for clearer strong signals; replaces the old compile-time flat-mode constants. **Display 180° flip** (`display_set_flipped()`/`display_is_flipped()` in display.c → `LV_DISPLAY_ROTATION_270`): "Flip 180°" toggle at the TOP of the drawer (centered checkbox so it isn't hit by accident), for upside-down mounting/cable routing; touch follows automatically, only the raw-coord pinch handler in ui.c needed a pan-direction flip; NVS `disp_flip`, applied at boot. **Settings title** bumped to montserrat_48 (body stays 28). **Image rejection — INVESTIGATED, NOT SHIPPED (reverted):** a frequency-domain per-bin image canceller AND a manual by-eye I/Q null were both built and reverted. The ghost the user reported is a **48 kHz sample-rate alias** (= QMX USB-audio rate), a QMX-side anti-aliasing trait NOT removable in our DSP — NOT a within-window I/Q mirror image. Blind per-bin cancellation also actively *amplifies* images when both sidebands carry signal (the normal case here). `iq_balance.c` is back to adaptive-only; do not re-attempt blind FFT image rejection (see memory `project_image_reject_dead_end`). v0.18.2 — stability patch (WiFi/web). **Idle reboot RESOLVED** (the v0.18.1 KNOWN-OPEN): units left running with WiFi up + a browser on the web UI reset after a few min — serial backtrace showed `esp_dma_capable_malloc: Not enough heap memory` → `assert sdio_rx_get_buffer` in ESP-Hosted's `sdio_read_task`. Root cause: SDIO RX ran in **streaming mode** (`H_SDIO_HOST_RX_MODE`), whose `sdio_rx_get_buffer()` re-allocs a fresh contiguous **internal DMA** buffer per larger burst (`MEM_ALLOC`→`esp_dma_capable_malloc`, extra_heap_caps=0, never PSRAM); with ~192 KB internal free, sustained WiFi RX eventually can't get one. Fix = switch SDIO RX to **`RX_NONE`** (`CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_NONE=y` + the `CONFIG_ESP_SDIO_*` alias copy in `sdkconfig`), which uses the recycled fixed-size mempool (`mempool_alloc` SLIST free-list, `CONFIG_ESP_HOSTED_USE_MEMPOOL=y`) — after warm-up zero runtime DMA allocs. Soaked 13+ min w/ browser vs crashes <4.5 min. NOTE: toggling `SPIRAM_TRY_ALLOCATE_WIFI_LWIP` is INEFFECTIVE here (WiFi runs on the C6; host LWIP offload didn't change the 192 KB internal free) AND its Kconfig side-effect silently flipped `ESP_WIFI_TX_BUFFER_TYPE` dynamic→static — reverted, keep it off. **Web UI freeze/reconnect fixed:** `webserver_ws.c` abandoned stale WS sockets without closing them → a few freeze/reconnect cycles exhausted `LWIP_MAX_SOCKETS` (`accept: errno 23 ENFILE`) and the server stopped accepting; and one transient `EAGAIN` send tore the whole session down. Now `httpd_sess_trigger_close()` on takeover + on giving up, tolerate `MAX_FAIL_STREAK=15` (~1.5 s) transient send failures before closing. Plus `sdkconfig`: `LWIP_TCP_MSL` 60000→10000 (TIME_WAIT was holding slots ~120 s — the real connect-storm cause), `LWIP_MAX_SOCKETS` 10→16, `LWIP_TCP_SND_BUF/WND` 5760→11520 (smoother stream), `webserver.c` `config.max_open_sockets=10`. Result: steady 10 fps, no teardown. **BW from web fixed:** web `set_bw` for CW (hz<1000) called `cat_set_passband_hz()` = Kenwood `FW<nnnn>;` which the QMX rejects (`?;`) → did nothing; now new `cat_request_cw_passband()` (`cat.c/.h`) defers `MMCW|CW passband=` through the poll task (same pattern as `s_pending_ssb_bw`), web CW branch + touch `bw_preset_cb` both use it; `cat_request_ssb_bandwidth()` now also calls `ui_update_passband_width()` so the label syncs for the web path (FW; is pinned-off in SSB so no poll response refreshes it). v0.18.1 — config backup/restore + clean-flash + a fast-toggle crash-fix batch. **Config I/O** (`main/storage/config_io.c`): web `GET/POST /api/config` export/import ALL settings + memory channels as an editable INI text file (`qmx-config.txt`; sections `[settings]`/`[cq]`/`[ft8_filters]`/`[memories]`). Import MERGES (only present keys/sections applied, unknown ignored) via the existing `settings_set_*` + `mem_channels_set`, then `settings_flush()`; memory channels live, other settings on restart; includes secrets (wifi_pass/qrz/eqsl) in clear text = full backup. Web UI **Config ↓ / Config ↑** left of Tab5Shot; `max_uri_handlers` 14→16; POST uses a full-body recv loop. **Flasher** (`tools/QMX-Panadapter flasher/` flash.bat + flash.command): optional CLEAN flash — prompts normal vs clean; clean adds esptool `write_flash -e`/`--erase-all` to wipe the whole chip (NVS+SPIFFS), clearing stuck state e.g. WiFi-off (Ian); explicit warning lists what's erased (wifi pw, callsign/grid, memories, ADIF log). **Fixes (Ian G4LXX + a serial-caught crash):** memory recall froze the Tab5 display + then blocked band change — recall did a direct LVGL-thread `cat_set_mode` that raced the FA/MD/FW poll and garbled FA responses; now optimistic `ui_update_frequency` + deferred `cat_request_mode` + forced (non-rate-limited) freq write (`memory_modal.c`). Panadapter↔FT8 sticky freq was lost + FT8 inherited the panadapter mode: the CAT poll task exited on a SINGLE transient TX timeout (froze `cat_get_frequency()`) — now tolerates ~20 in a row (`cat.c`); the sticky snapshot captures the freshest UI freq (`s_last_qmx_freq_hz`, not the lagging poll value); FT8 is force-set to DiGi on every entry via `cat_request_mode` and the restore's mode step now uses the poll task instead of a rate-limit-droppable `cat_set_mode` (`ui.c`). Fast Panadapter↔FT8 toggle could spawn a SECOND `ft8_task` that clobbered the shared `s_decode_queue` → `xQueueReceive(NULL)` assert/reboot — single-instance `s_ft8_task_alive` guard in `ft8_self_test` + NULL-queue check in the decode loop (`ft8_test.c`; see memory `project_ft8_double_spawn_crash`). NOTE: panics print straight to UART and bypass the web `/api/log` ring — only a continuous serial capture catches the backtrace (`scratchpad/cap_serial.ps1`). (The idle/long-uptime reboot that was KNOWN-OPEN on v0.18.1 was root-caused and fixed in v0.18.2 — see the v0.18.2 summary above.) v0.18.0 — FT8 decode rework for timeliness + a batch of field-reported fixes. **Decode:** (1) streaming STFT — the waterfall is built block-by-block during capture (`dsp_ft8_capture_begin/progress/finish` in `dsp.c`), not after the slot; (2) dual-core decode — a core-0 helper (`ft8_dec0`) decodes odd candidates while the decode task takes even (monitor **pool of 2**; each monitor's STFT window relocated to PSRAM to spare internal heap, ~37 KB free vs ~9 KB); (3) **reply-on-immediate-slot** — `ft8_task` polls `ft8_tx_should_run_this_slot` mid-capture during the opening `FT8_REPLY_TX_WINDOW_MS` (2500) and fires a freshly-armed reply on THIS slot instead of a cycle later (can't misfire — only fires a legit correct-parity arm; validated on-air at +1032 ms; fixes the busy-20 m one-cycle lag Dave G4FRE reported). `FT8_FIND_MIN_SCORE` 10→5 (deeper search). **dBm scale** restored on the spectrum (normal = dBm, flat = dB-above-floor) via right-edge centered labels (`update_db_scale`, `s_grid_dbm`/`s_grid_flat`, corner labels hidden) + web spectrum labels. **Fixes:** memory-channel freq (`ui_freq_picker_open` now pre-fills dotted MHz.kHz.Hz — a dotless string made `freq_buf_to_hz` cap at 3 digits, so 14020000 read back as 140; Ian G4LXX); tap-to-tune reversal (`dsp_find_peak_hz_around` aliased once a tap's baseband crossed +24 kHz Nyquist in the display's right quarter → large negative offset → tuned DOWN; now offsets from the tapped center, always within ±radius; Ian G4LXX); band lockout (`band_preset_cb` falls back to band center via `legal_band_edges()` ONLY when the per-band NVS recall freq is out of band — recall otherwise preserved, see [[feedback_per_band_freq_recall]]; Ian G4LXX); web WS stuck on "reconnecting" (`ws_uri_handler` is now last-connection-wins instead of refusing a reconnect while a half-open socket lingers); Roy's WiFi double-STA-start guard; macOS flasher docs (brew/Gatekeeper/`bash flash.command`; John K7JFW). NOTE: magnitude-domain iterative subtraction was prototyped and REVERTED — ineffective (see memory `project_ft8_decode_v0_18_0`); the real more-decodes path is coherent time-domain subtraction (long-term). v0.17.0 — Tab5 snap-on keyboard support (SKU A164, STM32 I2C slave 0x6D, String mode — see "Tab5 snap-on keyboard" section above), WiFi SSID scan-and-pick in the WiFi setup modal (`Scan` button lists nearby networks, tap fills the SSID field exactly — no case mismatch), boot-crash fix (held the LVGL lock across all of `ui_init` to close an intermittent display-layout race during UI construction, hit mostly on newer ST7121 units), and password show/hide reverted from a checkbox back to an eye-icon button under the Scan button. v0.16.2 — QRZ Logbook + eQSL ADIF upload from the web UI (see "QRZ Logbook upload" / "eQSL upload" sections above), plus the mbedtls PSRAM fix that unblocked outbound HTTPS entirely. FT8 sync precision: robust outlier-rejecting average across all decoded candidates in a slot (was a single-candidate value that could be a false sync hit — the "SS run-away" reports), plus a sub-second rounding fix in the time-sync modal's SS display and a brief blue-border flash (`SS_FLASH_MS=30`) on every fresh measurement. FT8 decode list: own-call rows now render inverted (red fill + white text) instead of red-on-black (Ken KF0AYY readability report). QSO override buttons (Re-send/RR73/73) widened to fill the full left-pane width (Re-send 20% wider than RR73/73, since it carries more text). Freq keypad 10-Key/Phone layout now persists across reboots (`freq_kp_calc` NVS key). Web UI: bottom-bar IP address removed, action buttons reordered (ADIF/QRZ/eQSL/Diag/Tab5Shot) and restyled to match the top-bar pills' amber-hover look, new Tab5Shot screenshot link, S-meter scale labels enlarged/brightened, WiFi indicator swapped from emoji to SVG. v0.16.1 — WiFi crash fix on first credential save: `ensure_sta_netif()` defers the WIFI_STA_DEF guard to just before each `esp_wifi_start()` call (old guard ran before SDIO/C6 link was up, causing duplicate default STA handler → `netif_add` assert on new Tab5 units with newer C6 firmware, Roy's case). Context-aware Re-send button label: shows "Re-send / JO45" / "Re-send / -07" / "Re-send / R-07" depending on exchange state (`ft8_qso_get_cur_extra()` + `s_lbl_resend`). FT8 row selection UX: hold threshold 700→250 ms, 80 ms dim preview highlight, 20 px jitter tolerance (Ken KF0AYY POTA field report). FT8 time calibration modal (`main/ui/ft8_time_modal.c`): [HH]:[MM]:[SS] panel accessible from FT8 screen via **Filter → Sync Time**; SS auto-syncs from decoded FT8 signal timing (sub-second correction via `time_sync_apply_correction_ms()`); HH/MM editable via numpad for manual override; blue SS frame = live tracking, tap to lock; Apply calls `time_sync_set_manual()` when HH/MM are edited, `time_sync_apply_correction_ms()` for SS-only; bottom bar shows "UTC(FT8)" after FT8-derived correction; `TIME_SOURCE_FT8` added as 5th time source. v0.16.0 — ADIF QSO logging (`main/adif/adif_log.c`, `/spiffs/qso.adi`, web `/api/adif` download + `/api/adif/clear`); worked-call cache at boot for "Exclude worked-before" filter; SNTP-authoritative time sync (QMX only applied when SNTP stale >10 min); FT8 pounce calls `ft8_find_clear_tone_hz()` instead of the CQ station's own tone; CQ-run holds our CQ tone throughout the exchange (not overwritten with caller's tone); `PC;` power calibration ÷5 (was ÷10); drawer labels montserrat_28. v0.15.18 — TX clash warning: `ft8_tx_is_clashing()` in `ft8_tx.c` scans the heard-station table against our armed TX tone (±1 bin / 50 Hz guard); ARMED/ACTIVE status label turns red-orange (0xFF4010) with "⚠ FREQ BUSY" when a collision is detected, normal amber (0xFFA040) otherwise. Deferred CAT mode write: `cat_request_mode()` in `cat.c` queues a mode change via `s_pending_mode_digit` (same poll-task drain pattern as `s_pending_ssb_bw`), avoids CDC race when mode and frequency writes come from the LVGL thread. WiFi on/off toggle: "WiFi initiated" checkbox in the settings drawer WiFi section, NVS-persisted (`wifi_en`), WiFi is only brought up when this is checked — useful for field/POTA use where WiFi is not needed. Show-password redesign: WiFi modal show/hide converted from an eye-icon button to a "Show password" checkbox below the password field; password textarea widened to 820px (was 700px + button). Drawer checkbox styling: IQ balance, flat-spectrum, diagnostic-log drawer controls converted from LVGL switches to themed square checkboxes via `make_drawer_checkbox()` helper in `ui.c`; consistent visual language across the drawer. FT8 left-pane spacing: `pad_all(16)` replaced with `pad_top(8)/pad_bottom(16)/pad_left(16)/pad_right(16)`; freq label y-pos 80→67, slot count y-pos 148→120, slot bar y-pos 159→131 — tighter layout. v0.15.17 — Global Tab5 RTC time sync: RX8130CE supercap driver (`rtc/rtc.c`), `time_sync` orchestrator, periodic QMX TM; poll, SNTP→RTC write-through; QSO override buttons (Re-send/RR73/73) during active FT8 exchange; "Show only CQ callers" display filter; SWR auto-reset after trip (TX;/RX; latch clear) — see CLAUDE.md RTC section. v0.15.15 — FT8 CQ-run reply filter modal + TX power/SWR readout: new "Filter" button on the FT8 screen opens `ui/ft8_filter_modal.c`, an include/exclude editor for the CQ-run auto-reply picker and the live decode list. Two "include" and two "exclude" fields (each independently toggled via plain checkboxes, not exclusive radios) are matched against the *whole* decoded message text (`ft8_call_t.last_text`) — not just the callsign — via `ft8_filter_match()`/`ft8_filter_contains_any()` in both `ft8_qso.c` (`scan_for_reply_to_me`) and `ui/ft8_screen_view.c` (`rebuild_list`). Each field accepts multiple space-/comma-separated terms (e.g. "POTA SOTA" or "JA, VK"), matching on ANY. Standalone "Exclude plain CQ callers" ORs into the existing `hide_cq` logic; "Exclude worked-before" is UI-only pending the ADIF log (v0.16.0). Persisted as a single `ft8_filters_t` NVS blob (`settings_set_ft8_filters()`). Modal layout iterated for big-finger touch: montserrat_24 throughout, 8px-padded checkbox indicators 16px clear of their textareas, Save/Cancel spread vertically down the right edge, placeholder text in the muted colour. Also added `cat_query_power_swr()` (`PC;`/`SW;` CAT query, valid only while keyed) and `ft8_tx_get_last_power_swr()`; the FT8 status line briefly shows "Last TX: X.XW SWRx.xx [Ns]" after each burst. v0.15.14 — Keyboard shift-label fix: the iPad-style abc/Abc/ABC shift cycle (`ui/ui_theme.h`) relabels the shift key to "Abc" in the pending single-shift state, but LVGL's built-in `lv_keyboard_def_event_cb` types any label it doesn't recognise as a control key ("abc"/"ABC"/"1#"/symbols are recognised, "Abc" is not) and runs *before* our cycle handler — so tapping Abc→ABC inserted literal "Abc" into the field. `ui_theme_keyboard_attach_caps_cycle()` now removes the built-in handler and makes `ui_theme_kb_shift_cb` the sole VALUE_CHANGED handler, calling the built-in explicitly for non-shift keys but never for the shift key. Not a delete-after-type fix: fields set `max_length`, so a full field silently drops LVGL's insert and a blind 3-char delete would eat real input. Reported by Michael KZ4LY. v0.15.13 — FT8 decode throughput fix: `ft8_estimate_snr_db()` recomputed the slot noise floor (a `powf` over the entire decoder waterfall) **per decoded message**, so a busy slot spent 9–18 s — longer than the 15 s slot — re-deriving the same value, overran the slot, and corrupted the *next* slot's concurrent audio capture; the decode list then filled with one slot-parity at a time and flipped/emptied. Split into `ft8_estimate_noise_db(mon)` (once per slot, lazy on first decode) + `ft8_estimate_snr_db(mon, cand, noise_db)` (cheap signal loop). Decode 9–18 s → ~1–2 s; both parities decode; throughput ~2×. Hardened the capture pipeline as defense-in-depth: 4-buffer pool + `s_buf_busy` in-use guard (capture never reuses an in-flight buffer; logs + drops instead of corrupting), `FT8_DECODE_BUDGET_MS=11000` safety net (now never hit), LDPC iters 60→30 (all in `ft8_test.c`). NOT core contention (tried decode→core 0, made it worse) and NOT buffer-reuse corruption — root cause was the per-message noise recompute. Also dynamic per-bin waterfall noise floor with adaptive black level. v0.15.12 — Sticky Panadapter/FT8 settings (switching modes saves/restores band/mode/bandwidth/frequency/zoom for each mode independently via `ui_save_snapshot()`/`ui_restore_snapshot()`, staged CAT writes on a short timer); FT8 "Preset: xx.xxx MHz" swipe-down opens the freq dropdown (screen-level hit area `s_ft8_freq_hit`, shown/hidden with the FT8 view - do NOT also foreground `s_container` on show(), as that's a near-full-screen opaque pane that covers the left/right edge-swipe grip handles when shown at boot in FT8 mode); UI colour theme consolidation (`ui/ui_theme.h` - shared `UI_COLOR_PRIMARY` tokens, single-cursor textarea focus, iPad-style abc/Abc/ABC keyboard shift cycle at montserrat_28) applied to CQ presets/identity/memory/FT8 TX/WiFi modals; WiFi password show/hide toggle; taller memory-grid cells; faint vertical "Stef OZ1LAV" operator-signature watermark drawn last (on top of waterfall/bottom-bar) and non-clickable. v0.15.11 — Diagnostic logging: opt-in **Diagnostic log** switch on the top row of the settings drawer (kept visible in FT8 mode) captures all ESP_LOG output to a 512 KB PSRAM ring (`util/diag_log.c`, vprintf hook installed first in `app_main`), downloadable via web `GET /api/log` ("Diag log ↓" in web UI bottom bar) or USB serial; persisted (`diag_log` NVS key). Rich enable header (Tab5+QMX fw, MAC, chip rev, reset reason, uptime, heap, callsign/grid, WiFi+QMX state). CAT RX logged per-line but **de-duplicated** (`diag_log_rx()` drops repeat FA/MD/FW poll responses; poll TX replaced by a 10s heartbeat) so steady-state is ~0 lines/s. QMX firmware read via `VN;` at link-up (`cat_get_qmx_fw()`, dev bench = `1_03_002`), shown in `/api/status` JSON, boot log, and diag header. `capture_serial_log.ps1` stamps a PC-side session header. README gained a top-of-file "Quick start" (cable/data-cable gotcha, one-finger edge-swipe nav + top-bar taps, required settings, what needs the QMX connected, diag log). Note: `reset_reason=panic/exception` also covers a button force-reset (no clean-shutdown path) — a real crash has a backtrace before it. v0.15.10 — Selectable SSB filter bandwidth in USB/LSB (2.5/2.7/2.9/3.2 kHz): writes BOTH QMX Menu-Manager items `MMSSB|Filter RX=` (committed, shows in radio menu) and `MMSSB|Bandwidth=` (live) to the same value, and drops `FW;` from the poll while a width is pinned (`s_ssb_bw_pinned`, USB/LSB only) since reading the filter makes the QMX revert it — SSB BW writes deferred to the poll task via `cat_request_ssb_bandwidth()`/`s_pending_ssb_bw` to avoid a CDC race; FT8 slot countdown bar glides smoothly (50ms `t_slotbar_cb`, ms range) and turns red during TX (`ft8_tx_get_status()==ACTIVE`); editable CQ presets (long-press Call CQ → `ft8_cq_modal`, 3 fields + radio select + "+ call grid" insert, NVS-persisted `cq_msg[3]`/`cq_sel`, Call CQ button label shows + short-tap transmits the active preset via `ft8_tx_build_request_text()` + general `ftx_message_encode`); freq keypad — top-bar opens empty, MHz/kHz keys replaced by a 10 Key/Phone digit-layout toggle (`s_freq_calc_layout`, digit read from button label at press) + Clear, mode row only shown for the Memory picker (`s_freq_picker_cb != NULL`); `settings_load_all()` now returns the live staged `s_pending` (instant reads, no NVS-flush lag); v0.15.9 — Edge-swipe gesture navigation replaces the burger button (right-edge swipe/grip opens settings drawer, left-edge swipe toggles Panadapter/FT8, bottom-edge swipe opens memory modal, all with "breathing" grip handles); snap-to-grid live tune cursor (cyan drag cursor jumps between absolute-frequency grid points instead of tracking raw touch, anchored independent of touch start); mode-aware snap steps changed (USB/LSB 500→250 Hz, FT8/digi/RTTY 100→500 Hz); fixed zoom>x1 overlay desync after retuning (`ui_update_frequency()` now calls `recompute_zoom_pan()`); top-bar/spectrum colour matching (passband-edge lines match BW label, VFO cursor matches Freq label, passband tint band at ~25% of that colour); v0.15.8 — Zoom-FFT passband centering at zoom>x1 (screen centers on the passband, not the dial, for off-center USB/LSB filters), amber VFO cursor and grey passband-edge lines repositioned to match and auto-recenter on CAT mode/filter-width changes (non-LVGL `recompute_zoom_pan()` to avoid an LVGL-cross-task freeze), per-zoom-level waterfall noise floor restricted to in-passband bins at every zoom level, zoom-FFT now engages on boot for persisted zoom>x1 (re-applied after `dsp_init()`), zoom-FFT EMA smoothing (alpha 0.6) across frames, removed bottom-bar memory-channel indicator, fixed memory recall not applying mode (CAT mode write was silently dropped by the 200ms TX rate-limiter, now sent via a delayed one-shot timer); v0.15.7 — S-meter no longer freezes once "RX: Capturing" starts (compute_and_publish_spectrum() now also runs every ~10 iterations inside the s_ft8_active branch on raw samples[]), FT8 freq preset label reworded to "Preset: xx.xxx MHz"; v0.15.6 S-meter redesigned as a visual tick-scale + bar (replaces "Signal: SX+Y" text), montserrat_22 labels, 0-68 scale (S1..S9+20); v0.15.5 memory-button frequency/mode picker, wider freq keypad with mode row, CAT mode-set-on-Enter rate-limiter fix, flat-spectrum floor reset on QMX power cycle (USB stays connected), S-meter fixed to track the IF-shifted VFO bin instead of the DC bin; v0.15.4 FFT-based FT8 SNR estimation; v0.15.3 top-bar Band/Mode/BW refresh fix + warmup round-trip, tap-to-enter frequency keypad, battery voltage + firmware version in bottom bar, RR73-as-grid fix, QMX RTC time sync for no-WiFi (POTA) FT8 timing, screenshot capture simplified | stable on ST7123 and ST7121 |
+| `main` | **v1.10.5 (2026-09-01) - the display holds still while the VFO moves over it, and a quarter of the x1 view stops lying.** ⭐ **THE STILL DISPLAY (#298)**: `s_still_view` (NVS `still_view`, default ON) plus `still_view_follow_dial()` in `ui.c`. The feature is essentially DELETING `recompute_zoom_pan()`'s auto-recentre on every tune and clamping instead - the code already kept `s_pan_offset_bins` and already drew an arbitrary window. ⛔ **x1 CANNOT be still and the UI must not pretend otherwise**: play is `SR - span`, which at x1 is exactly zero, so `sv_effective()` falls back to the dial-centred view. Clamping into the capture window was tried first and the operator's report was *"we are back to fixed vfo and panning spec/wf"*. ⭐ **The re-framing policy is stated in PASSBAND WIDTHS, not fractions of the view** - trigger when the passband edge reaches the screen edge, push at most one BW further, land the opposite edge on the opposite screen edge. Three tunable percentages (SV_EDGE/SV_PUSHMAX/SV_LAND) and their static assert are DELETED: they were one abstraction away from what the operator does, a bench session was lost tuning them by feel, and a landing value I offered sat inside the opposite trigger band and thrashed the display. The BW cancels, so a page happens every SPAN of tuning whatever filter is in use. ⛔ **Every overlay must read `ui_get_pan_offset_hz()`** - they each re-derived pan from `s_pan_offset_bins`, which is rounded to 46.875 Hz, so they moved in bin-sized jumps over a smoothly-moving trace. **#297**: at x1 the column map wrapped `dial-36..-24 kHz` into the right-hand 320 px and the axis LABELLED it `dial+12..+24`, so tapping there tuned ~48 kHz away; that region is hatched and inert on both screens. **The groups.io batch**: a band change now ends the QSO (`ft8_band_change_stand_down()`, and `apply_freq_preset()` needed it too - a within-band FT8->FT4 move cannot be seen by `topbar_reconcile_cb`'s band-string check), the WSPR TX button moved clear of `EDGE_SWIPE_ZONE_PX`, WSPR spots carry the dial they were HEARD on (carried with the decode job, because hopping retunes before a decode finishes), a WSPR TX cycle marks the carpet, the web FT8 preset dropdown (`/api/status?presets=1`, on request only), LoTW reports the SERVER's verdict rather than our count of what we sent, and static IP. ⛔ **Static IP boot-looped the device** - `settings_load_all()` on `sys_evt`'s 2808-byte stack, the FOURTH instance of that bug class and the THIRD in `wifi.c`; see "Task stacks on this board are TINY". NOT VERIFIED: static IP has been exercised by nobody (testing passed to Randy N4OPI), and nothing in this release has been on the air. PRIOR: **v1.10.0 (2026-08-28) — WSPR launched, TX made live, and the Basic/Advanced split became per SECTION.** **WSPR is a third page** (`UI_MODE_WSPR = 3`, swipe cycles Panadapter -> FT8/FT4 -> WSPR), `wspr_en` defaults ON, the seven-tap unlock is no longer the only way in. ⭐⭐ **`WSPR_TX_SEND_LIVE` was 0 in EVERY COMMITTED BUILD** - TX ran its full timing and CAT sequence and sent ZERO BYTES. Harmless while the page was dark; a lie the moment there is a TX switch anyone can reach. The "ON THE AIR - 50 spots worldwide" commit was built with the flag flipped LOCALLY while the committed source stayed at 0, so the evidence and the default disagreed for weeks. **Generalise it: a ship-dark gate is a second source of truth about whether a feature runs, and it must be checked at the moment the gate comes off, not trusted from the last hardware run.** ⭐ **`/api/cmd {"action":"wspr_tx"}` accepted `call` and `grid` in the body** - an arbitrary callsign on the air from any browser on the LAN. Locked to stored settings only (callsign, grid AND declared power); the empty-string case is refused explicitly, since `wspr_tx_build_request()` only checked for NULL. **Duty cycle and band hopping moved off the page into a drawer group** (they are decisions made once per session, not controls reached while spots arrive); **band hopping has NO on/off switch** because the picker already stores `hop_en = popcount(mask) > 1` - a second control could disagree with it. Declared power dropdown, wsprnet publish, and the **Tab5 now wakes on the page it was left on** (WSPR included, gated on `wspr_feature_enabled()`), so a station left beaconing resumes by itself. **Basic/Advanced (#268 #272):** EXPERT -> ADVANCED, one centred word; membership is per SECTION via two 64-bit masks edited from a **Tab5 config** button beside Save in the web Settings window (`GET/POST /api/drawer_map`). ⛔ **A stored mask cannot express a section that did not exist when it was saved** - the four WSPR sections were absent from the operator's saved layout and absent reads identically to "unticked", so they appeared in NEITHER view; a THIRD mask records which sections were KNOWN at save time, which is the only way to tell "unticked" from "newer than this layout". Generalise it to every future setting. Default Basic is the operator's own OPERATING set - that is the answer to "what is Basic FOR?": not a beginner mode. **Gyula HA3HZ's two field reports:** a recently-worked 30-minute grace the automatic pickers honour regardless of the filter checkbox (`main/ft8_recent.c`, host-tested, 6/6 mutations caught) - the decode list greyed a worked callsign while the engine ignored it unless a filter was ticked, so screen and machine disagreed; and FREQ BUSY graded by SNR and suppressed mid-exchange, where the tone is deliberately locked to the partner. **Docs:** `docs/mkdocs/guide/wspr.md`, PDF chapter 9 - and **the Radio menus chapter had a TOC line but NO BODY in the printable guide since v1.8.4**, because the PDF builder injects a guide file only where README carries a matching `## Title` and README had neither `## WSPR` nor `## Radio menus`. `check_docs.py` cannot see this: it reads the BUILDER's chapter list, not README. Both anchors added; the guide went 107 -> 116 pages. NOT VERIFIED: the web Tab5 config table has never been rendered by a human, the new WSPR drawer sections have not been eyeballed on screen, mid-exchange FREQ BUSY suppression needs a live QSO, and nothing has been transmitted on WSPR since the flag was flipped. PRIOR: **v1.9.6 (2026-08-26)** - POTA/SOTA logging put right (`STATION_CALLSIGN`, P2P/S2S references editable after the fact, FT4 as `MODE=MFSK`+`SUBMODE=FT4`), the mouse wheel tunes, and the phone bottom-bar menus work again; quirk sections above carry the detail. PRIOR: **v1.9.5 (2026-08-25) — a fast-follow patch: two ADIF bugs, one costing real POTA credit, one able to corrupt the log on damaged storage.** **Activation double-count** (Eric, GitHub issue): `adif_log_count_activation()` counted every logged record toward POTA's 10/SOTA's 4 minimum with no dedup by callsign — the ONE function both the Tab5's Activation modal and the web pill read, so both screens overclaimed together. Working KO4JON twice made the device say "10 contacts, activated" while POTA.app credited 9 and rejected it — three parks lost in one outing. Fixed: dedup by callsign alone (not band/mode — the conservative direction, can only ever undercount relative to POTA, never overclaim). **Single-record delete was unsafe, and this bench proved why the hard way.** `adif_log_delete_record()` never checked whether its temp-file rewrite actually succeeded before deleting the original and renaming the (possibly incomplete) temp over it — unlike the QSO-append path in the same file, which already has the `ferror`/`fflush`/`fsync` pattern. Reported as "the delete UI runs through its motion but the record is still there." Every early-return in the function was previously silent; added logging pinned it to `fopen(qso.tmp,"w")` → `ENOSPC` (errno 28) on a partition showing 701KB/934KB used while its real files (qso.adi+diag.0.log+LoTW cert/key) totalled ~170KB — the ~530KB gap plus a directory entry that couldn't `stat()` was orphaned SPIFFS index blocks. `esp_spiffs_check()` reported ESP_OK but reclaimed nothing; `esp_spiffs_gc()` then proved why (`SPIFFS_gc failed`, 0 bytes freed) — a genuinely unrecoverable page, confirmed by a full format + boot-time self-test (write 2, delete 1, verify count: PASS, hardware-verified via a proper `-Reset` capture after two rounds of passive captures missed the first-boot lines entirely). Fixed: the delete path now verifies the rewrite before committing it and toasts on failure instead of lying by omission; `check()`+`gc()` now run once at `adif_log_init()` mount so a merely-fragmented card (a real field unit's long-uptime diag log, not just this bench's dead one) self-heals before anything opens, and the delete path retries once through the same repair live. ⚠ **This bench's own corruption was NOT repairable — only a full format recovered it**, which wipes the ADIF log, diag log, and LoTW cert/private key. That is a one-time hardware-specific recovery I performed manually, NOT an automatic or user-facing action this release ships — the 51-QSO log that was on this bench before is gone (backup attempted over WiFi first; the link was unreachable at the time, a lesson in itself — always confirm the backup landed before a destructive step, not just attempt it). PRIOR: **v1.9.4 (2026-08-25) — the FT8-specific settings got their own home on both screens, and two more field reports landed clean.** **FT8 Options** (Roy KI0ER): Tab5's `Filter` button renamed `Options` — the modal it opens already held real behaviour toggles (Auto-work pileup, grey-listing), not just filters. Web UI (`index.html`) gets the equivalent for real: `FT8_OPTS_GROUPS = ["CQ messages", "FT8 filters"]`, `setBuildForm(cfg, ft8Opts)` renders either the general Settings modal (these two groups excluded) or the new Options panel (only these two), behind a button shown only in FT8 mode next to TX tone. Entry point shows a **count**, not a colour (`ft8OptsSummarize()` — Dirk DK7CVD's "more granular" refined against Roy's objection that a binary colour reads "always on" for anyone running filters permanently) with a hover tooltip naming what's active; inside, an active checkbox gets `border-left:3px solid var(--accent)` via `#set-body div:has(> input:checked)` alongside its own tick (Don N2VGU — colour is never the only channel). **TX tone picker no longer goes stale**: `toneOpen()` fetched `/api/tone` once, on open, with nothing after — `toneRefresh()` now re-polls every 3 s (`setInterval` in `toneOpen()`, cleared in the new `toneClose()`), never touching the operator's own in-progress `toneSel`/`toneHold`. **Web portrait phones fixed** (Randy N4OPI, iPhone Safari): `#top`/`#bot` had `overflow:hidden` and a `max-width:600px` media query that outright `display:none`'d `#top-right` — not clipping, deleting. Now `overflow-x:auto` (same pattern as the decode-list table) plus the narrow-width rule no longer hides anything; a `@media (orientation: portrait)` fallback lets the page itself scroll vertically too. **Battery text simplified**: voltage dropped from both the Tab5 (`status.c`, was `%d%% (%d.%dV)`) and the web (`index.html`'s `.mv` render) — nobody needs the raw cell voltage. New `status_charge_limit_active()` accessor feeds a `"limit"` bool into `/api/status`'s battery object so both screens show `(limit)` once Battery Care's cap trips, instead of reading identical to "not charging for some other reason" (Don N2VGU). **Keyboard hot-plug, three iterations, on real hardware each time**: (1) `tab5_keyboard_init()` used to probe once at boot and tear the I2C bus down on failure — a keyboard snapped on later was invisible for the session; replaced with one persistent `kb_task` that retries every 2 s while absent and detects a genuine detach (5 consecutive failed polls, ~250 ms) so unplug/replug keeps typing working, verified live in the serial log (`no longer answering - treating as detached` at 27.1 s → `Tab5 keyboard detected` at 33.2 s). (2) First LED attempt was a battery-status readout on both RGB LEDs (RGB_MODE=custom) — reverted, the operator's call: LEDs run far brighter than a status glyph needs and the Tab5 screen already shows battery. (3) Second attempt was a plain green "active" left LED — also wrong: reported still showing stock purple/green depending on attach timing after a detach+reattach, because the one-shot claim never re-asserted custom mode. Landed on: both LEDs forced to (0,0,0) via `leds_off()`, reasserted on **every** `claim_keyboard()` call including reattach — the keyboard is equally functional regardless of when it was attached, so a light distinguishing "how" has nothing left to say. Along the way, disproved this file's own earlier assumption that stock "binding" mode (RGB_MODE=0) already handled attach/active correctly for free — measured on hardware it showed purple on a hot attach and green on a boot attach, a richer state machine than the simple pair assumed. **Flasher LF fix**: `flash.command` shipped with CRLF despite `.gitattributes` declaring `eol=lf` — a working-tree copy had drifted (root cause not fully isolated), caught by a user on Fedora rather than by us (Michael K Johnson KZ4LY). `make_flasher_zip.ps1` now strips CR from every `.command` file unconditionally at packaging time. **Repo-wide LF policy** added alongside it (`eol=lf` for `.c/.h/.html/.md/.py/.json/.yml`, matching the `.command`/`.sh` precedent) after the same drift turned up in 84+ other tracked files, unrelated to tonight's edits (confirmed: the one file rewritten from scratch this session, `tab5_keyboard.c`, stayed clean LF throughout; the drifted files were already CRLF before being touched). `git add --renormalize .` found 59 more beyond the extension-based sweep (mostly `test/wav_reference/*.txt`); every file byte-verified EOL-only before inclusion, zero functional change, binary size matched the pre-change baseline on rebuild. NOT VERIFIED: the web-side `(limit)` battery indicator and the web Options-panel tooltip (built, not yet seen by the operator on a live phone/browser). PRIOR: **v1.9.3 (2026-08-23) — updating became one decision, and the crash at 100% was memory all along.** **#239 the whole OTA flow reworked**: quiet background download (`ota_autodl`, default ON, opt-out - 3.3 MB is not free on a POTA hotspot), a centred `ui/ota_modal.c` with named buttons that re-reads live state every 500 ms, and a bar that ANNOUNCES instead of negotiating - breathing while it waits, quiet after Later. **The 700 ms long-press is DELETED**: it existed only so a stray brush could not start a download, and a press that merely opens a dismissible window needs no such defence, so #237 dissolved rather than being reworded. **Band plan gets a 50 px invisible catcher** (22 px was "super difficult to land on"; tap-to-tune gives up the same 50 px, which a 370 px waterfall can spare). ⭐ **The watchdog at 100% was NEVER scheduling** - the verify is 894 ms with the FFT running vs 890 ms quiesced, and three theories died on that. `size`→`size-components`→`nm` named `s_toc` (9,472 B) and `s_pub` (4,608 B) in four minutes; `EXT_RAM_BSS_ATTR` recovered **14,084 B**, min internal free 2,519 → 10,067, and a controlled A/B (same mode, same audio, ~300 s, one variable) went from 4 failures to 2 clean completions at 304 s and 328 s. **The OTA task stack is static and right-sized** (measured 3,216 used of 8,192 → static 6,144), so "Could not start the update task" is impossible by construction. **An audio-ring drain bug affecting EVERY upload** since the flag was written: 1024 pairs per 50 ms against ~48,000/s produced. Plus **TXCQ ANY/EVEN/ODD on the web FT8 page** (Randy N4OPI, one shared state with the Tab5 button) and **SSB snap 250 → 500 Hz** (Dave KX3DX - he asked for 1 kHz, but a 1 kHz grid cannot reach the 0.5 kHz strays he named). New dev actions `verify_test`, `ota_reset`, and `yield_ms`/`pause_feeds` on `ota_install` - built because each hypothesis was costing a 6-minute download to test a 2-second operation. NOT VERIFIED: the SSB snap (needs USB/LSB on a radio), and **#244 the arrow is a compromise** - the chevron reads as ">" and is too heavy, U+2192 is tofu in this font, ASCII "->" renders but the hyphen and ">" do not share a vertical centre. PRIOR: **v1.8.5 (2026-08-17) — mostly the six items users had ALREADY been told were fixed, which were post-v1.8.4 commits, plus two found on the bench.** **Radio menus:** cursor drawn (it was tracked and never rendered), **separate BS/DEL** (0x08 and 0x7F - the manual does not say which the radio wants, so both ship and Randy was asked), the blank-screen nudge **bounded to 8 s after open** so "Exit terminal" stops re-opening the session, the **menu path on screen** when there is no second port, and `find_selected_row()` now discriminates on the **box border** instead of skipping rows 0-1 - which was right for the main menu and wrong three boxes deep, where a submenu's title sits on row 2 (it never bit because the exit walk sends Ctrl-Q three times before looking, i.e. correct by accident). **#173 false `UTC(GPS)`** - we were measuring our own time push; see the quirk section, and note it also STOPPED us maintaining the clock of the only radio with no other source. **#165 CW offset re-read every 5 s in CW** - it was read once at link-up and never again, so Roy KI0ER's tap-to-tune was ~30 Hz off and he transmitted off frequency. **#167** a CQ answered with a report gets `R<report>` (the MANUAL path was always right - second of three manual-right/automatic-wrong instances, #172 is the third and is deliberately not bodged). **#170** dated Today-only ADIF export. **#166** web TX banner was a 99 px panel holding 406 px. New dev actions `{"action":"time_redetect"}`; `/api/term` reports `cur_row`/`cur_col`. NOT VERIFIED: the menu path has not been SEEN (needs a radio with the 2nd port disabled), Gyula's banner is verified by browser measurement not against his screenshot, and Roy's CW **residual** is unsettled - one stale value cannot produce 30/40/140, so either he rebooted between tests or his own `if_cal_hz` trim adds a constant; he was asked to retest rather than have three hand-read points fitted. ⚠ Still open from v1.8.4: **#161** fields over two digits / in a table do not increment (question sent to QRP Labs, NOT guessed), **#118** phantom CW, core 0 at 0-5% idle. PRIOR: **v1.8.4 (2026-08-16) — the radio's own menus on the Tab5** (#147: 80x24 terminal on the radio's SECOND serial port, **interface 5** because audio occupies 2-4; closing walks the radio's own "Exit terminal" by READING THE SCREEN; `util/ansi_term.c` host-tested against the real bytes at all 287 split points), auto-answer stand-downs (#142-145), TX offset honoured mid-QSO (#151), spur Erase offered first (#157, -78% vs -28%), USB mouse read from its report descriptor (#152), esp_hosted TX no longer reboots the P4 (#131), and **standing patch #6** `apply_cdc_acm_close_tolerant.ps1`. PRIOR: **v1.8.3 (2026-08-14) — a field-report release; every fix in it was reported by a user.** **QRZ/eQSL credentials can be re-entered** (Brian WA6JFK): the prompt only fired when nothing was stored, so a mistyped key was unreachable from the page — visible `Change ...` rows now, and the config export/import is the answer for anyone on an older build. **dBm gridlines derived from the dB range** (`util/db_gridlines.c` + host harness; the mutation run found a real `max_n` overrun case no test reached). **Adaptive floor slider REMOVED from the drawer** — the reflow rule bit here, section height and `y +=` must move together. **Passband overlay corrected to the radio's real digital filter, 150-3200** — and `FW;` reports a TOP EDGE, not a width, in DiGi (pixel-measured on `/ss.bmp`). **RF gain read-back repaints when the answer lands** — my first version counted its timeout from drawer open and was FALSIFIED on hardware, since CAT link-up is ~17 s after boot; it now runs only while `cat_is_ready()` and says "radio not connected" rather than a misleading "reading...". **Zoom FIR 31 -> 63 taps** for the dark zoomed edges — measured 1.95-2.02 ms/window at x2 (9.2% of the 21.3 ms budget), and an A/B against x1 proved it lands on core 1, NOT on the pegged core 0. **Out-of-band band strip is now a centre-detented coarse tuner.** **Browser decode list gained KM/BRG** (Tony Abbey), computed on the device so the two screens cannot disagree. New dev action `{"action":"drawer","scroll_y":N}`. NOT VERIFIED: nothing in this release — the operator tested each item on hardware before the replies went out. ⚠ Two things noticed and NOT explained: **core 0 sits at 0-5% idle in panadapter mode** (CLAUDE.md records ~14-35% historically; not caused by the FIR, proven by A/B), and **`FRAME-MISALIGN` has still never fired**, so #118's mirror-image hypothesis remains unconfirmed under load. PRIOR: **v1.8.2 (2026-08-13) — the radio's own spurs, and a POTA clock that stopped being stolen.** All from one day of field reports. **Spur suppression** (`dsp/spur_map.c`, opt-in, DEFAULT OFF): the QMX makes its own comb, +38.6 dB at 14.074 with the BNC open, and a spur's offset moves at **16-50x the dial** — so a 25 Hz nudge is a physical detector, not a guess. Two modes (subtract the measured power, ~12-17 dB and cannot hide a real signal; or interpolate the bins away, +38.6 -> +10 dB but hides anything sharing them while the dial is still), cached per frequency, teal marks on the separator under the frequency labels. Full quirk section above — **the ceiling is the spur's own 0.5 dB wobble**, and the ± pair asymmetry is NOT proven to be I/Q imbalance. **A GPS-less QMX no longer overwrites a trusted clock** (`time_sync.c`): the old guard was "SNTP is fresh" and offline SNTP is NEVER fresh, so it could not help the one case that needed it — Don WB0LQW arrived at a POTA site, switched the radio on, and its power-on 00:00 replaced his RTC. Bench-verified by forcing the offline branch (`TIMESYNC_FORCE_OFFLINE_TEST`, ships 0). **RIT long-press parks and restores the offset** (Roy KI0ER) — a parked offset keeps the pill visible, or it would be invisible AND unreachable. **RIT offset printed on the waterfall** + **band strip reads "Out of band"** instead of vanishing (Samuel W7STF). **The CQ failure path no longer blames the callsign** for any unbuildable message (Don WB0LQW) — and its new `build_request(CQ '%s') failed` log line is what SOLVED the underlying fault the next day: a **doubled space** in the stored preset (see the message-hygiene quirk below). **`usb_replug` no longer power-cycles a wedged radio**: the zombie branch fired on the #74 radio-side wedge (num_devices is non-zero after a failed enum) and cut VBUS for nothing, which the operator saw as his QMX being switched off. NOT VERIFIED: the replug gate (only fires when the radio wedges) and the parked-RIT-with-pill-hidden case. PRIOR: **v1.8.1 (2026-08-12) — the fixes from the first day of v1.8.0 in the field.** Tap-to-tune worked only in a window near the centre of the spectrum: the top-bar hit zones were made shallower on 2026-08-05 and the tune check kept the old flat `y < 200`, leaving a strip owned by nobody (see the pointer-colour quirk above — the deadzone is DELETED, not re-derived, and must not come back). **CW centre** is the radio's real 500-950 Hz on a 25 Hz grid and is now SEEDED FROM THE RADIO at link-up, because our boot-time push ran ~13 s before CAT exists and never arrived. **CW transmit offset** restores VFO B before dropping split and confirms simplex by read-back; the QMX's dual-VFO DISPLAY is not clearable over CAT and `MU;` must not be used for it (it drops `Q9`). **RF/AF gain** read-backs are queued by the poll task's write branch, not the requester, because the loop services queries first. **Settable seconds** (hold SS, release on the minute) — never performed by a human. **Show RIT button** setting, default on, with an engaged offset always visible. Web spot labels only claim ~400 Hz around their own frequency. `settings_post_handler` reads the whole body. ⚠ **BLE mouse decoding REVERTED** — the real fault is that the Report Map was truncated to ATT_MTU-1 (22) bytes without a long read, but the rewrite stalled the subscription walk (continued from inside a GATT completion callback) and had to be pulled; `2b3b4b4` holds it for the redo, which must drive the walk off a timer and never make subscription depend on it. NOT VERIFIED: the seconds gesture, and Samuel W7STF's mouse. PRIOR: **v1.5.0 (2026-08-06) — the manual answers questions now, instead of being a manual.** Context-sensitive help, Layers 1-3 (`ui/help_topics.c` table -> page+heading; `reader_view_open_help()`; the drawer's User Manual button lands on the panadapter / FT8-RX / FT8-TX chapter per live state; the IQ banner and QMX-wait prompt are tappable) plus the **"Need guidance?"** triage panel (`ui/help_triage.c`, symptom rows in the first person, ranked from `cat_is_ready` / IQ flag / `ft8_screen_active_count()` / `panadapter_wifi_is_enabled()`). THREE RULES that must not be broken: the device RANKS and the operator CHOOSES (never auto-navigate on inference); every row must make sense on the screen that offers it; the wording is a promise the anchor has to keep (the packer catches a heading that is GONE, not the wrong heading for the question). `tools/pack_manual.py` fails the build on a rotted deep link and `mkdocs_reader_export.py` now RAISES on a packer failure (it used to warn - which would have shipped a stale `manual.bin` silently). **Manual read STRAIGHT FROM THE BLOB**: the "Could not cache the page" reports were `/spiffs` full (`0 of 12031 bytes`), not a missing page - one `else` covered both and blamed the wrong one; the flash round-trip is deleted (v1.5.0 also retired its four leftover strings - "Downloading...", the offline/cached-copy fallback, the cache-failure message and the long-hold "re-download" toast - all of which described a network fetch that no longer exists). Glyph folding completed (43 codepoints inventoried; `add_label()` set text RAW so headings/quotes bypassed the fold, and Block Elements U+2580-259F were absent entirely - **U+2591 appears 128 times**, so the waterfall sketches were VANISHING, not tofu; link/image label text was copied byte-for-byte in all four walkers). Four overlay/touch faults from one screenshot (FT8 drawer reflow read a hardcoded `y`; the Reader's Back/Exit/Contents lost every touch to the top-bar hit zones - screen children foregrounded above the overlay, and LVGL hit-tests children in reverse creation order without considering siblings; edge strips + breathing grips + the separate `s_burger_btn` are now HIDDEN while a help overlay is up, re-asserted every second; the QMX-wait keepalive stands down for the drawer and panel). **No transition animations on this display** - ~13 fps means 220 ms is three frames, so the Reader slide was two discrete snapshots, not motion; Back is hidden when there is nothing to go back to and Exit slides into its place. **Web Call CQ** (Dennis WN4FLA): `/api/cmd {"action":"cq_start"}` -> `ft8_screen_view_request_cq()` sets a flag drained by the 1 Hz LVGL timer (the QSO machine belongs to that task) and CONSUMED even when FT8 is not up, so a stale request cannot fire minutes later; shares `start_cq_run()` with the Tab5 button so preset/tone/parity cannot drift. **Decode-list pinning** (Don WB0LQW): new top tier in `cmp_cq_then_snr()` above addressed-to-us, matched on the ROW'S CALLSIGN via `ft8_qso_get_pinned_call()` (covers both the engine target and a `MANUAL_TARGET_TTL_S`-bounded hand-typed reply); `s_pin_call` is read ONCE per `rebuild_list()`, never inside the comparator. NOT on-air verified: the pin firing (needs a real QSO; a change-detected log line reports engage/release), the web Call CQ final key-down, and the panel's row wording against how operators describe faults. STILL OPEN: **Layer 4**, the A-Z index - the panel's button says "Open the manual" precisely because it does not exist yet; rename it when it lands. Full writeup `docs/version-history.md` v1.5.0. PRIOR: **v1.4.0 (2026-08-05) — live spots + three instability causes root-caused** (never written up in this cell; see `docs/version-history.md` and memory `project_v140_release`): POTA/RBN spot lane on the spectrum (`net/spots.c`, `net/rbn.c`, `ui/spots_lane.c`), **all device HTTPS was dead** (hardware AES could not get DMA descriptors → software AES/GCM/SHA, memory `project_tls_dma_software_crypto`), **TODO #65 root-caused to our OWN `.bss`** (`size` → `size-components` → `nm`; 52 KB moved to PSRAM, `MALLOC_CAP_DMA` 311 B → 41 KB with WiFi up, memory `project_internal_bss_root_cause`), and the **dead-UAC-handle core-0 spin** that blocked re-enumeration (memory `project_uac_deadhandle_core0_spin`). PRIOR: **v1.3.6 (2026-08-03) — the USB reconnect saga solved + Dennis's crash fixed + WiFi scan away from home.** Pure fixes release, cut from a REBUILT main (reset to v1.3.5 + 24 cherry-picked non-CW commits — the in-progress CW page lives on `feat/cw-page`, see memory `project_cw_page`). **USB (TODO #74/#75)**: zombie-device wedge root-fixed (UAC fork patch #4 — forced teardown on dead device) + capped auto-replug backstop (`util/usb_replug.c`, VBUS-first ordering, detector never touches a connecting QMX) + IDF patch #5 (`apply_hub_recover_tolerant.ps1`); QMX-side descriptor wedge (**precisely: an EMPTY DATA STAGE, not a short descriptor** — the log's "Unexpected (8) ... expected 16" counts ESP-IDF's own 8-byte setup packet in both figures, so actual=8 means setup + **zero** descriptor bytes returned for `GET_DESCRIPTOR(DEVICE, wLength=8)` at address 0, stage `CHECK_SHORT_DEV_DESC`; `enum.c:353` sets `expect = sizeof(usb_setup_packet_t) + ENUM_SHORT_DESC_REQ_LEN` = 8+8. The original "8 of 16 descriptor bytes" phrasing — including in the report sent to Hans — was misleading. Note `util/usb_replug.c` can produce the SAME log line benignly when our own VBUS cut kills a descriptor request mid-flight; the field wedge differs in that it persists indefinitely with no VBUS manipulation. Reproduced 1_03_002+1_04_004) detected via diag-log ENUM tally → "power-cycle the QMX" toast. **Dennis WN4FLA's crash FIXED** (`ft8_test.c` per-instance worker_ctx_t; teardown waits ordered; spawn gated on decode-task-alive — bench-repro'd from his recipe, torture-verified). **WiFi scan-while-unreachable fixed** (scan-hold + harvest-before-reconnect + backoff-wake + auto-retry; `esp_wifi_connect()` FLUSHES scan results — never connect between SCAN_DONE and get_ap_records). **Web FT8 TX-status banner** (`/api/status` ft8:{st,text}; tab-title red dot). **Diag(saved) serves the flash pair always** (SD preference served empty/stale files). NOT on-air verified: everything carried from v1.3.5. PRIOR: **v1.3.5 (2026-07-31) — managing the log, pacing the CQ, and a way out of the wait.** All of Don WB0LQW's three groups.io asks plus Roy KI0ER's same-week bug. **CQ auto-stop** (`cq_max_calls`, NVS `cq_max`, config `[cq] stop_after`, DIRTY bit 66): top-right "CQ stop" cycle button in the CQ preset editor (never/1-5/10, **commits on tap** — deliberately outside Save/Cancel AND outside the FD lock); engine counts completed bursts in `on_tx_complete`, `rearm_current()` is the single choke point that stops at the limit, advance()'s CQ no-answer path ends the session to IDLE **one listening slot later** (an answer to the final call still starts a QSO); count resets on every fresh CQ sequence incl. all resume paths; TX status shows "call 2 of 4". **Web View/edit-log viewer** (QSO Logs menu): parses `/api/adif` client-side (no listing endpoint), sortable column headers, per-row delete via new `POST /api/adif/delete?idx&call` — **idx AND call must both match or 409**, so a stale browser view can never delete the wrong record; Delete-all behind a typed-DELETE prompt. **Tab5 Delete-all** in the ADIF viewer (bottom strip beside Close, two-tap arm "ALL N?"). **Latent bug fixed**: `adif_log_clear()` never reset the QRZ/eQSL/LoTW upload cursors — post-clear QSOs would silently never upload (unreachable until now: the clear endpoint existed since v0.16.0 with NO web button). **Busy-hold escape** (Roy KI0ER): the v1.3.3 hold disarms TX, which dropped the status label into the dim passthrough branch with no tap action — operator locked into the wait; new label branch for "session alive, TX idle" shows TAP TO CANCEL in ARMED-amber + matching abort branch in `tx_indicator_tap_cb` (**WAIT_DONE deliberately excluded** — final fired, log pending; an abort there loses the entry). **Drawer touch fix** (SCROLL_CHAIN_VER cleared on sliders/checkboxes + knob catch 42→98 px, operator-verified). **QMX volume cap 70→50** (Randy round 3: round 2 was measured antenna-OFF). `max_uri_handlers` 28→30. NOT on-air verified: CQ auto-stop pacing, the busy-hold cancel (needs a live band). Full writeup `docs/version-history.md` v1.3.5. PRIOR: **v1.3.4 (2026-07-29) — finishing the QSO, and a TX frequency you control from the main screen.** Same-day field reports on v1.3.3 (Roy KI0ER, Randy N4OPI). **Completed-QSO final re-send + duplicate-log guard** (see the quirk section above - `final_resend_if_still_asked()` runs before anything can start a new contact). **RST `599` placeholder DELETED** - unknown reports are omitted, never fabricated. **Occupancy filtered by slot parity** (`build_tone_occupancy`), union when `TXCQ ANY`/nothing armed. **QMX volume FIELD-VERIFIED working** (Randy N4OPI) and `CAT_AF_GAIN_DB_MAX` 199 -> 40 (usable range is the bottom ~10%). **TX tone is a permanent left-pane button** (was a chip that hid itself when nothing ran) with a **live mini occupancy strip** under the slot countdown; **TX Hold** (WSJT-X "Hold Tx Freq") persists tone+flag; parity is ONE cycling `TXCQ ANY/EVEN/ODD` button; `Active: N` removed. Picker: white=ours, pink=partner, drag stays light grey (operator's call). **Bottom bar: `-NN dBm` -> WiFi fan icon** (`ui_wifi_fan_*` in `ui/ui_clock.c`), width given to the SSID, IP pinned right, clock stays centred. **Settings dirty set widened past 64 bits** to a 128-bit index array (it was FULL - see the quirk section; `DIRTY_*` are now INDICES, not masks). NOT on-air verified: the re-send budget, the parity map on a real band, and the dB-vs-LCD comparison. Full writeup `docs/version-history.md` v1.3.4. PRIOR: **v1.3.3 (2026-07-29) — TX tone visible + pickable, busy-station hold, QMX volume, LoTW US state/county.** Almost all Roy KI0ER field feedback. **TX tone** now on the TX status line (ARMED + ACTIVE) and changeable via a `TX nnnn Hz` chip → `ui/ft8_tone_modal.c`: live occupancy strip over 200-2800 Hz from `ft8_tx_get_tone_occupancy()` (the SAME bitmask the automatic picker uses, extracted rather than duplicated), touch-and-drag pick, ±50, Find clear slot, verdict in words as well as colour. `ft8_qso_set_tx_tone_hz()` refuses while ACTIVE and preserves parity. **NO numeric entry on purpose** — 50 Hz grid; a freq-pad Hz mode was built and reverted (shared `ui.c` risk for zero reach). **Busy-station hold**: `partner_busy_with()` + gate in `rearm_current()` + `ft8_tx_disarm()` on engage (without the disarm the already-armed burst still fired); a hold does NOT count as a miss, so a popular station is no longer grey-listed — bounded 24 slots. Note the robot picker already couldn't pick a busy station (`is_cq` gate), so the real gap was mid-exchange. **`RRR`** closes a pounce QSO like RR73. **Priority-decode hint FIXED**: `ft8_qso_get_priority_freq()` returned OUR tone, not the partner's — a no-op since v0.18.4; now `s_partner_freq_hz`, seeded at QSO start and refreshed in `scan_for_response()`. **QMX volume** slider (see the `AG` quirk above; dB, matches the radio's LCD, reads back on drawer open, **unverified against a radio**). **LoTW US_STATE/US_COUNTY** + substring success check + cursor-rewind-only-on-cert-change (see the LoTW section). **Decode list cleared** on sim-mode exit and on FT8↔FT4 (`ft8_op_mode_set()` now owns it, guarded on actual change). **Sim fix**: identical re-scheduled messages no longer restart the phantom's reply timer — with Fast pounce OFF (the default) phantoms never replied at all, silently breaking the whole bench-sim workflow. **PSK Reporter field-verified** (6 reporters). Full writeup `docs/version-history.md` v1.3.3. PRIOR: **v1.3.2 (2026-07-26) — PSK Reporter + GRIDSQUARE fix + manual built into the firmware.** **GRIDSQUARE** restored (93106be): the decode table's unguarded `extract_grid_from_text` into `e->last_grid` ran BEFORE the guarded keep-old-grid update, so every post-CQ message (report/RR73/73, none carry a grid) wiped it — `GRIDSQUARE` was missing from ~90% of logged QSOs (John W5JSS: 5 of 60; reproduced 5/34 on the operator's own log, 2/2 after the fix). **PSK Reporter** (`net/pskreporter.c`, default ON): IPFIX/UDP, batched ≥5 min. Two pre-release fixes, both invisible in use because PSK never ACKs — unresolved hashed calls arrive as literal `"..."` and would have been published (guard: needs ≥1 letter + ≥1 digit, `/` allowed, over-long dropped rather than strncpy-truncated into a DIFFERENT call), and an **RFC 7011 §3.3.1 padding violation** (receiver Data Set padded to 4 unconditionally, but its shortest record is 3 octets, so a 3-byte pad was byte-identical to a record of three empty strings; fired iff `len(call)+len(grid)+len(sw) ≡ 2 mod 4` → ~5 of 18 realistic combinations). `pad_data_set()` pads only while the pad stays shorter than the template minimum. Found by decoding the bytes the HARDWARE emits with an independent parser (`test/psk_harness.c`, 9 negative tests incl. a regression vector), not by reading code. **FIELD-VERIFIED 2026-07-27: the collector accepts our datagrams.** `pskreporter.info`'s "Software in use" table lists `QMX Panadapter v1.3.2` with 6 reporters (BD4AHS, KI0ER, VE3OFA, W5JSS, W5NR, W7STF) — so the field combination, the template, and the padding fix are all accepted end-to-end by the real collector, not just by our own parser. FT4 is reported too (`ft8_test.c` sends `"FT4"` when the pool is FT4). Note for future debugging: the first datagram goes out 5–5½ min after boot, so a short trial shows nothing and looks like a failure — and PSK never ACKs, so absence of an entry is the ONLY negative signal available (third-party dashboards like wspr.rocks may not show spots that the collector did accept; W7STF reported "not working" on that basis and was in fact in the reporter list). **Manual built into the binary** (`net/manual_embed.c` + `tools/pack_manual.py`, see the quirk above) — download/SD-mirror/two-stage-save and the green "Save offline" button all DELETED; `reader_net.c` went ~530 → ~110 lines with the reasons recorded at its top. **SD**: WiFi-aware gate (continuous with WiFi off, one boot snapshot with WiFi on), yellow `UI_SD_SNAPSHOT_ONLY` dot state, boot-window mount retries — see the two SD quirks above. **Grey-list** (`ft8_greylist.c`, opt-in) + pileup replies via `ft8_qso_build_manual_reply()` + robot now ticks in the QMX-less sim branch (85487b7, Roy KI0ER). update_check: latest.json before GitHub + retry on transient failure. Full writeup `docs/version-history.md` v1.3.2. PRIOR: **v1.3.1 (2026-07-24) — DT/HZ decode-list columns + UI polish + BSP-info fix.** Decode list gains **DT** (slot-timing offset in s, band-consensus-relative via `ft8_get_last_timing_ms` so on-time reads ~0.0 — a raw display would carry the ~+0.6 s RX-latency bias) and **HZ** (station audio tone) after SNR; country column is 3-letter codes via `dxcc_lookup_alpha3()` (`util/dxcc.c` A3 table keyed on the entity-name strings — keep in step with TBL; `dxcc_lookup()` full names unchanged for ADIF viewer/pileup modal); HZ/KM/BRG values +10 px right (centered under headers). **BSP INFO block** reports the DETECTED panel/touch via new cache-only accessors `bsp_display_panel_name()`/`bsp_touch_controller_name()` (m5stack_tab5.c — never re-probe, second detection probe breaks touch init; reported by Paul VE3PIK, ST7121 units said "ST7123"). **UI**: QMX-wait overlay mode-aware offset (+150 FT8 / centered Panadapter); FT8 left pane uniform grid (right edges at content x=288, 8 px gaps, radius 8; `s_btn_freq_hit` kept in sync with the 288-wide preset box); settings drawer — dropdowns content-width (measured from option text; LV_SIZE_CONTENT collapses an lv_dropdown, hw-observed) + light-grey bg, slider tracks 30→14 px with knob pad 14 + translate_y 8 (same knob size/centre line), Display header removed → "Display brightness: XX%". Full writeup `docs/version-history.md` v1.3.1. PRIOR: **v1.3.0 (2026-07-23) — Roy KI0ER feedback batch: intelligent Transmit + cold-pounce toggle + sim overhaul + mouse + SD file browser.** Headlines: **intelligent Transmit** (tapping a row sends the correct NEXT message WSJT-X-double-click style, `ft8_qso_build_manual_reply()`; manual RR73/73 now LOGS the QSO via `ft8_qso_notify_manual_final()` seeding WAIT_DONE; manual partner tracked via `ft8_qso_note_manual_target()` for amber highlight + pileup exemption; manual Transmit honours Skip-TX1); **reply timing** (`FT8_REPLY_TX_WINDOW_MS` 2500→2800; ARMED requests ride the early-decode cut; `min_scan` clamped to actual fire time in `on_tx_complete()` — the predicted-slot gate was discarding prompt replies); **Fast pounce (early decode) toggle** (`ft8_early_decode` NVS, default ON, drawer row — ⚠ NOT A/B-verified on a live band, released with explicit caveat, operator has no antenna until ~mid-Aug); **pileup/ADIF lockout** (long-press always opens ADIF log; pileup worked-before skip now follows `excl_worked_before` + `DONE_GRACE_TTL_S` just-completed grace; **Auto-work pileup fires from IDLE** too); **reader waits for WiFi** instead of demanding reboot; **sim overhaul** (see the FT8 simulation section — no QMX needed at all now, 6 phantoms, patience/repeats, pre-synthesized instant-landing pending pump, suffix-driven replies, Fast-pounce-aware timing, FT8-reentry clears rows+pileup); **ADIF "Del N test" button** (FREQ==0 records only, hidden otherwise); Filter modal buttons top-right (P4-style) + warning moved; **USB mouse** (`usb_hid_mouse.c`, works mouse-alone only — hub TT missing in IDF, see memory) + **web SD file browser** (`net/filebrowser.c`, `/files`). KNOWN-OPEN: one unreproduced `tlsf_free` double-free reboot ~28 s after boot seen once on the bench. Full writeup `docs/version-history.md` v1.3.0. PRIOR: **v1.2.0 (2026-07-20) — on-device User Manual.** Full tab5.lav.dk docs now read on the Tab5: Settings drawer → **User Manual** opens `ui/reader_view.c` — a full-screen overlay with a markdown-subset renderer (headings/lists/tables/code/quotes; **bold shown as colour** — no bold font; UTF-8 folded to ASCII via a full decoder, box-drawing/arrows/accents/emoji handled; content-hugging code/table boxes). Fetches the SAME source `.md` that builds the site (`net/reader_net.c` → `https://tab5.lav.dk/md/*.md` → `/spiffs/reader.md`), driven by `toc.json` (nav-derived). **Contents** = two newspaper columns split at a section boundary (whole sections per column, no scroll), styled purely by nav `level` (level-0 gold/32, nested white/24, indented), with **drag-to-pick** (highlight bar follows finger, release navigates). Header: **Back** (page history) · **Exit** (leave) · **Contents** · gold H1-sized title (shows "Contents" while the panel is open) · **Save offline** (SD only). Buttons are OVERLAY children (not the header bar) so their `ext_click_area` reaches below the bar — LVGL clips a child's hit area to its parent, which is why in-bar buttons couldn't be tapped from just below. **microSD offline** (`reader_net_save_offline`): mirrors the whole manual to `/sdcard/qmx-panadapter/manual/` under `sd_archive_lock` + WS-pause + `dsp_set_transfer_quiet` (SD-during-WiFi is the wedge-prone combo); read source = WiFi-online, SD-offline. **Update check** (`net/update_check.c`): 6 h GitHub `/releases` poll (pre-releases count) + `latest.json` fallback, semver vs `esp_app_get_description()->version`, banner in the Reader. Site side: `mkdocs_reader_export.py` hook publishes `site/md/**`, `site/md/toc.json`, `site/latest.json` (carried by the normal FTP). Nav is UNCHANGED — left-swipe is still the plain Panadapter↔FT8 toggle; the manual is a drawer destination. **Crash fixed en route**: expanding UTF-8 folds (arrow→"(right)") written IN PLACE overran buffers → heap corruption (`tlsf` store fault); folding is now always into a separate bounded buffer. **Also: FT8 pileup fix (Dirk DK7CVD)** — a worked (or late-answered) station lingered in the pileup; now removed at QSO completion + a worked-before skip in `capture_pileup_callers()` stops a trailing 73/RR73 re-adding them (`ft8_qso.c`). See `docs/version-history.md` v1.2.0. PRIOR: **v1.1.0 (2026-07-19) — FT8 decode collapse (#51) SOLVED + SD station backup.** Headline: the years-old "first FT8 slots decode 60+, then collapse" was USB ISO audio loss at the wire (9 ms pipeline default → 320 ms; ~16 uniq/slot sustained vs 6.3). microSD re-enabled as a full grab-and-go backup (qso.adi/config/LoTW cert+key/README). GPS auto-detect + second-tick phase-lock (~10 ms, no toggle); FT8-derived sync gated offline-only. Band-plan bottom-bar drag (ported from P4), ADIF-viewer crash fix (LVGL pool 256→1024 KB), drawer spacing/slider alignment, LDPC iters 15→30, QRZ count fix. See `docs/version-history.md` v1.1.0. PRIOR: **v1.0.1 (2026-07-17) — pounce TX2 report fix.** When answering a CQ (Skip-TX1 OFF), TX2's `R<rpt>` now carries OUR measured SNR of them (`make_roger(our_rpt)` in `ft8_qso.c` WAIT_RPT), not their report echoed back — field-reported by Steve N0SZ + Jonathan KN6LFB on v1.0.0; the mirror of yesterday's RST_RCVD *logging* fix. Skip-TX1/CQ-run were already correct. PRIOR: **v1.0.0 (2026-07-16) — the 1.0 release, beta label dropped.** All v1.0 gates met. Since v0.21.0 (33 commits): **LoTW upload** (on-device TQ8 signing, guided web setup, live-verified — see the LoTW section above); **display sleep #34** (idle backlight-off, tap-wake swallowed, two-finger double-tap blank); **FT8 exchange batch**: hold-for-decode TX gate + callsign hash table (a4d8564, field-verified on air), RST_RCVD from the partner's numeric roger (51cf92c — R-report is their OWN measurement, NOT an echo), TX-parity row-aging pause + 120 s stale window + our-parity rows hidden during CQ run, **broken-QSO resume** (5-min record, auto + manual — ship-on-faith, watch field reports, `ft8_qso.c` `resume_*`), pileup report-first replies (work-PC branch); **ADIF viewer**: Today/All filter + POTA 10-QSO indicator + single-record delete (upload-cursor-safe); **IDF patch #4** (`apply_hcd_bulk_error_recovery.ps1` — hcd_dwc bulk-error assert → graceful transfer error; re-apply per machine); drawer regroup (setup items top, Antenna-Tune slot closes on 1_03 via dynamic reflow); web bottom-bar menus (QSO Logs/Files/Miscellaneous), WS send cap 400 ms, LoTW WS-pause. Web-audio Phase 1 is CODED but parked on branch `feat/web-audio-phase1` (NOT in v1.0.0 — PSRAM-bus root cause + remaining work in memory `project_web_audio_phase1_parked`). PRIOR: v0.20.1 — **hot-fix: pounce-crash FIXED.** `ft8_qso_start()` declared an ~11 KB `ft8_call_t snap[FT8_CALL_TABLE_SIZE]` on the STACK for the Skip-TX1 scan (added v0.20.0); the compiler reserves that frame at the prologue UNCONDITIONALLY, so it overflowed taskLVGL's ~8 KB stack on EVERY pounce confirm (`pounce_btn_cb`→`ft8_qso_start`, an LVGL callback) → "Stack protection fault" reboot, regardless of the skip_tx1 toggle. Field-reported by Dirk DK7CVD + local serial backtrace (taskLVGL, SP below floor, MEPC→ft8_qso.c:494 prologue). Fixed: heap the snapshot in PSRAM (`ft8_qso.c`, commit 0316866) — same rule ft8_tx.c already follows. Verified on-air (pounce ARMs + transmits with skip_tx1 ON). Bug-class grep-checked: other `ft8_call_t snap[]` arrays are on 64 KB decode/capture tasks (safe), Call CQ has none, ft8_screen_view ones are static. **v0.20.0 as released crashed on pounce → superseded by v0.20.1 (v0.20.0 flasher asset removed from GitHub).** PRIOR: v0.20.0 — **robustness release.** **WiFi permanent-wedge FIXED** (the long-documented esp_hosted/C6 "WiFi dies after N min, reboot-only" — root-caused to the RX_NONE SDIO path giving up on an oversized pending-byte delta (`sdio_get_len_from_slave > ESP_RX_BUFFER_SIZE`) without draining/advancing the counter → livelock → permanent `0x126` RPC timeout; now DRAINS+resyncs and self-heals — vendor patch ships as store/restore `tools/patches/esp_hosted_sdio_drv.c.patched` + `apply_esp_hosted_sdio_recovery.ps1`; hardware-verified recovery, WiFi survived). **Modal-open core-0 freeze FIXED** (the watermark's `transform_rotation` hung taskLVGL on any full-screen invalidate → pre-rotated static A8 image `ui/watermark_img.c`). **FT8 capture anchored to UTC boundary** (`dsp.c` continuous pre-ring + `dsp_ft8_capture_begin(...,backfill)`; late arm no longer discards each slot's opening sync array; `off=` +150→+43 ms; decode-yield gain unconfirmed pending WSJT-X A/B). **CAT poll no longer self-exits** on transient CDC bursts (`cat.c`). **Web UI gated to Panadapter mode / paused in FT8** + `ws_push` pri 5→3 (050c306). **SD → SPI2_HOST** (`m5stack_tab5.c`, off the shared SDMMC/WiFi peripheral, ~120 KB internal freed); **SD auto-archive kept soft-disabled** (`SD_ARCHIVE_DISABLED 1`) — WiFi-safe now but the mount's internal-RAM cost starves FT8 decode (heap largest-block 25→16 KB, `dec` zero-clusters). **LWIP `TCP_SND_BUF` 11520→2880** (internal-DMA-heap headroom). **FT4 soft-disabled** (`FT4_MODE_DISABLED`, ft8_test.h — internal-heap exhaustion/crash; reversible) — **RE-ENABLED 2026-07-13** after the Tier 1 FT8-mode render gate freed core 0 (~70-80% idle in FT8/FT4 mode, was ~14-35%); FT4 hw-verified decoding every slot, 11 slots, no zero-clusters, stft+dec ~2.3s inside the 7.5s slot; internal heap 41KB free / 13KB lblk stable but tight; FT4 TX re-verified same day (real QSOs completed on both FT4 and FT8, S-meter live in both). **FT8 pileup tracker** (`ft8_pileup.c/.h` + `ft8_pileup_modal.c`) + **Skip-TX1** filter option + Filter-modal spacing. **11m/CB band** (cat.c scan, band_from_freq, bandplan, legal_band_edges). **Boot backlight fade-in** + breathing "reboot your QMX" overlay (plain label, no transform_rotation). **Memory** 4 default channels + first-run demo + drag-to-wastebin (opacity fade — transform_scale-to-0 froze LVGL, avoided). **Battery-care charge-limit** (511eca6) + INA226 IR-drop comp (37534fd). **Web UI**: whole-band plan strip + draggable visible-window, split-drag, screenshot popup-composite, freq-keypad drag/10-key, freq-axis + flat-dB-scale fixes. **ADIF viewer** single-pass render (was O(N²)). **Resource monitor** dev-only (hidden POST `/api/cmd {resmon}`, Ctrl+Alt+R web). **FT8 respawn watchdog** (`ft8_task_is_alive`). NOTE: the "Stage 2" FT8 weak-signal residual-decode commits (47dc865…2dcfcee) are **offline test-harness R&D only — NOT wired into device firmware**; exclude from user-facing notes. Full writeup `docs/version-history.md` v0.20.0. KNOWN (post-release, not blocking): FT8 decode has a benign per-parity STFT-time asymmetry (~1830 vs ~720 ms) from capture/decode core-1 timesharing — monitors are provably symmetric in memory, so it's a scheduling artifact, not a buffer bug; doesn't clearly cost decodes (both parities decode similarly, fits the 15 s window). PRIOR: v0.19.5 — UI-polish + bugfix batch. **FT8 mode-exit crash FIXED** (real, serial-captured "Load address misaligned" → `ft8_decode_worker_task`): decode task tore down the core-0 worker's queue/semaphore and returned (freeing its stack) after a fixed 50 ms delay while the worker could still hold a `job` pointer into that stack; now JOINS via new `s_worker_exited` (worker gives it before `vTaskDelete`, teardown waits bounded 12 s) — `ft8_test.c`. **WiFi on/off applies LIVE** (`panadapter_wifi_set_enabled`, `wifi.c` — enable connects, disable disconnects + `s_wifi_user_disabled` suppresses the retry loop; was boot-only) + **WiFi modal pre-fills stored password** so Save doesn't wipe it (the "forgets password/reason=210" bug) + Save honours the on/off toggle (`panadapter_wifi_update_credentials`) + WiFi-setup closes the drawer. **FT8/FT4 freq persisted** (new NVS `ft8_freq_hz` default 14074000; `settings.c/.h`, `apply_freq_preset`, `ui.c` FT8-entry seeds snapshot) so FT8 stops inheriting the panadapter VFO. **Band picker** 2-col when >6 bands + bogus "11" band filtered at the `cat.c` scan. **Band-plan** frame around the visible-span window (`s_bp_knob`, near-transparent) + 6 m segments (`bandplan.c`) + centre snaps to whole kHz + tap uses clean touch-down x. **Point-to-tune** commits `s_target_freq_hz` (cursor value, no lift jitter); waterfall cyan cursor now a trail-free overlay (`s_wf_cursor`) driven from `ui_push_spectrum` (glued to spectrum line). **Drawer sliders** `ADV_HITTEST` (knob-only) + `pad_hor=15` (full knob) + scroll-to-top on open. **Memory recall** DiGi-gated in FT8/FT4 (`memory_modal.c`). **Antenna Tune** own `tune_modal.c` window. **FT4 stuck-watchdog false alarm FIXED** (`ft8_test.c`, Samuel W7STF): the zero-decode audio-reset watchdog hardcoded its toast/log as "FT8" and used a fixed 8-slot threshold = only ~60 s in FT4 (vs ~120 s in FT8), so a merely quiet FT4 band (empty decode list is routine there) tripped a spurious "FT8 stuck — resetting audio" reset; now protocol-labelled and **wall-clock** based (macro renamed `FT8_STUCK_RESET_SLOTS` → `FT8_STUCK_RESET_MS` 120000, divided by `ft8_op_mode_slot_ms()` → 8 FT8 / 16 FT4, same ~120 s dwell in both modes). **AM has no selectable BW** (QMX one fixed 150–3200 Hz filter, `FW;` get-only — `docs/qmx-1_04-cat-comparison.md` §4.5). Full writeup `docs/version-history.md` v0.19.5. PRIOR: v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT4 went from no-decodes/no-QSOs to a completed logged QSO). (1) **shared FFT scratch** — the 2-monitor capture pool gave each monitor its own kiss-FFT buffer; with internal SRAM starved the 2nd spilled to PSRAM → its STFT ~10x slower → every slot on that buffer decoded 0 (FT8's 15 s slot hid it, FT4's 7.5 s didn't). All monitors now share ONE FFT config pinned to internal SRAM (`ft8_test.c` `build_monitor_pool`/`free_shared_fft`). **Safe only because `monitor_process` is capture-task-only, one monitor at a time, strictly sequential (decode works on the pre-built waterfall, never the FFT) — do NOT split back to per-monitor buffers or the PSRAM-spill returns.** Also halved internal-FFT RAM, heap min 6→13 KB. (2) **stuck-decoder watchdog** gated off during TX/QSO + threshold 2→8 (`FT8_STUCK_RESET_SLOTS`) — `cand` is ~always 140, so the real trigger was just "2 zero-decode slots"; its IQ+floor reset wiped the decode list mid-QSO, timing out contacts. (3) **auto-sync per-slot clamp** `FT8_AUTOSYNC_MAX_STEP_MS=20` — FT4's noisy ±800 ms raw offsets × 0.3 gain = ~250 ms clock jumps/slot, visibly shifting the slot boundary; clamp preserves consensus-tracking but caps the visible step. (4) **slot-parity display** (`ft8_screen_view.c` bar/label + per-row E/O) was hardcoded to `/15` (FT8 grid) → E E O O in FT4; now uses `ft8_op_mode_slot_ms()` (per-row rounds whole-sec `last_utc` to nearest slot index). Plus `ui_toast()` now takes `display_lock()` (was corrupting LVGL from the decode task → wedged the pipeline); QMX `Q9;` IQ readback waits 150 ms for the write-echo before checking; freq keypad translucent (top-bar only); settings-drawer declutter (removed Snap-to-signal + FT8-sync-lines, both features force-off via `const` flags; moved Band-plan region under Callsign & Grid; FT8-only sections built last so they don't gap Panadapter mode). Full writeup in `docs/version-history.md`'s v0.19.4 entry. v0.19.3 — QMX IQ-mode handshake retry (up to 4 attempts at link-up, was single-shot) + persistent on-screen warning banner if it never confirms (`cat.c`/`ui.c`, see "`Q9 1;` (IQ mode enable)" section above) — fixes a real field-confusing bug (Dirk DK7CVD, groups.io #172933) where a failed handshake silently left IQ mode off for a whole session, making the spectrum appear shifted/mirrored and tunable across the full 48 kHz window. Full writeup in `docs/version-history.md`'s v0.19.3 entry. NOTE: this branch-state cell's per-version detail stopped being maintained after v0.18.8 (v0.19.0–v0.19.2 shipped but were never backfilled here) — `docs/version-history.md` is the authoritative changelog; treat this cell as a pointer to recent work, not a complete record. v0.18.8 — ARRL Field Day FT8 exchange mode (new `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `components/ft8_lib/ft8/message.c` — bit layout + 86-entry section table verified byte-for-byte against WSJT-X's `packjt77.f90`; `ft8_qso.c` integration; Filter-modal class/section UI with a live always-accurate TX preview and full lock-except-Cancel while the mode is on; `CQ FD` auto-tag on Call CQ, replacing any other modifier; ADIF `CONTEST_ID`/`STX_STRING`/`SRX_STRING`/`ARRL_SECT`/`MY_ARRL_SECT`) plus FT8 simulation mode (new `ft8_sim.c`: two phantom stations CQ and reply via the real encode→GFSK-synth→decode pipeline, `ft8_qso_get_state()`-driven reply content, hard TX interlock in `ft8_tx.c` so a connected QMX is never keyed, breathing red full-screen border while active). Three new self-tests (bit-level ARRL FD round-trip, full GFSK-synthesis-through-real-decoder e2e, plain-CQ synth/decode) all PASS on hardware. Full writeup in `docs/version-history.md`'s v0.18.8 entry. Flasher re-verified safe (unchanged from v0.18.7's 0x0 fix); merged bin/flasher zip deliberately not built/published this release pending manual flash confirmation. v0.18.7 — FT8 decode-yield gap CLOSED (controlled A/B confirms v0.18.6's fix set was sufficient — see below), auto-answer robot un-shelved (live TX, permanent on-screen disclaimer), CQ tone auto-relocation on clash, SNTP/QMX time-priority bug fix + new continuous damped FT8-derived auto-sync, own-call highlight cache now refreshed live (not just on FT8 entry), FT8 Filter modal checkbox-sizing fix (textless-checkbox-plus-separate-label construction, all 8 now uniform) + Priority dropdown restyle, recovery-flasher port auto-detection (was hardcoded COM3 / wrong macOS device glob, hit a real field report from Samuel W7STF). Full writeup in `docs/version-history.md`'s v0.18.7 entry. v0.18.6 — FT8 decode-yield investigation, RST_SENT fix, distance-in-miles, diag-log dot. **FT8 decode-yield**: three real regressions found and fixed between v0.18.0 and v0.18.5, none of which the v0.18.5 band-aid actually closed (it disabled the two things CW audio *does*, but missed the task it spawns). (1) `cw_audio_init()` in `main.c` was never disabled alongside `cw_audio_preopen()` — it unconditionally spawned `cw_audio_task` at **priority 6 on core 1**, above `fft_task` (4, the audio ring's sole consumer for both panadapter and FT8 capture) and both FT8 tasks (1), looping forever on a 120 ms `vTaskDelay` even though `s_codec_ready` could never become true; ~125 preemptions of `fft_task` per 15 s slot, all session, on every release since v0.18.1 — now also commented out. (2) The v0.18.1 emergency revert (4a588fc) threw out 3/4 of a separately-validated fix (`d140485`) along with the actual e07f114 regression it was caught up with; only the FT8 double-spawn guard was ever cherry-picked back (6f878f6). Restored: `cat.c` poll_task tolerates ~20 consecutive transient CDC failures before giving up instead of dying permanently on the first one (was freezing `cat_get_frequency()`/`cat_get_mode_str()` for the rest of the session); FT8-entry DiGi-forcing and mode-restore go through `cat_request_mode()` (poll-task routed, retried) instead of a rate-limit-droppable direct `cat_set_mode()`; `ui_save_snapshot()` captures the freshest UI-commanded freq (`s_last_qmx_freq_hz`) not the lagging poll value; `memory_modal.c` recall uses the same optimistic-display + poll-task-mode pattern instead of a stale timer-based direct write. (3) `ui_push_spectrum()` (10 Hz, core 0, same priority as `audio_task`) did an unconditional `lv_obj_set_style_opa()` call every tick regardless of mode or whether the passband fade was active — LVGL style-sets can trigger an invalidate/redraw even when unchanged, a continuous cost on the core that competes with USB audio drainage; now skips the call unless the value changed. Root-caused via empirical diff against the `v0.18.0` git tag after the user found no v0.18.1+ release matched v0.18.0's sustained yield even with the v0.18.5 band-aid applied. Measured same-night same-band A/B (fading conditions, so absolute numbers are conservative): v0.18.0 ~23 decodes/slot (5-slot sample); HEAD with fix (1) only ~12/slot (8-slot sample); HEAD with all three fixes ~15.2/slot (31-slot sample) — a real ~25% improvement from fix (3), but the gap to v0.18.0 looked **NOT fully closed** at the time. **UPDATE (2026-06-26): CLOSED.** A controlled same-time-of-day A/B (midday, stable high-pressure conditions, 20 m, full chip erase before each flash, v0.18.0 rebuilt in a separate worktree) gave v0.18.0 and HEAD an *identical* 15.38 decodes/slot mean across 60 slots each, with HEAD's distribution if anything tighter (stddev 5.70 vs 6.65) and no decode-collapse cliff in either run. The earlier "gap" was the band-fading confound this section already suspected — different few-minute windows as the band faded through the evening, not a code regression. See memory `project_ft8_sparse_decode_investigation` for full history and the methodology (including an unrelated build-tooling snag: v0.18.0's `main/idf_component.yml` pins `esp_lvgl_port` as `^2.5.0`, which today resolves to 2.8.0~1 — incompatible with the locked LVGL 9.2.2; had to relax it to `~2.5.0` in the throwaway test worktree only to get a clean build of the old tag). **Also shipped**: FT8 CQ-run RST_SENT bug fix (`ft8_qso.c` `cqrun_answer()` — responder sending RR73/73 immediately never set `s_rst_sent`, ADIF logged "599" instead of their actual SNR); FT8 distance-in-miles display toggle (`distance_in_miles` setting, drawer checkbox, `ft8_screen_view.c` conversion); bottom-bar red breathing diag-log dot (anchored to the battery-text's actual right edge via `lv_obj_align_to`, not a fixed offset) + the firmware-version label un-hidden (was hidden in 8d968f3 to avoid clock overlap; the dot+version now coexist). v0.18.5 — band-aid for the FT8 decode regression (see v0.18.6 above: incomplete, did not fully restore yield) + a critical bootloader-corruption hotfix saga. **Band-aid**: `cw_audio_preopen()` (main.c) and `dsp_cw_forward()` (audio.c) disabled — the two hot-path calls e07f114 (v0.18.1) added that degrade FT8 yield 2–3× even when CW audio is off. **FT8 double-spawn crash guard restored** (`6f878f6`): the v0.18.1 revert (`4a588fc`) had also thrown out the `s_ft8_task_alive` single-instance guard, re-enabling the fast-toggle crash it was added to fix — restored standalone (the rest of that commit, `d140485`, stayed missing until v0.18.6 above). **Bootloader corruption hotfix**: the `v0.18.5-hotfix` flasher build wrote the merged firmware to flash address `0x0` instead of `0x10000` (the app partition), overwriting the bootloader on every unit it was used on — caused an 18-hour field outage. Fixed in both `flash.bat`/`flash.command`; a `v0.18.5-hotfix-RECOVERY` release + `tools/QMX-Panadapter flasher/recovery-files/` (full-chip-erase recovery scripts) shipped to recover already-bricked units. v0.18.4 — band-nav + FT8 decode fix + one-finger tuning; `feat/panadapter-bandnav-ft8-robot` merged in (6b31000) with the **robot SHELVED**. **Band-plan strip** (`util/bandplan.c/.h`): CW/Digi/Phone colour strip below the freq axis tracking the VFO; "Band-plan region" drawer selector (Auto/R1/R2/R3). **One-finger pan/stroll** (`ui.c` `pinch_poll_cb`, `npts==1`, `PAN_THRESHOLD_PX=70`): one-finger horizontal drag slides scope+waterfall with a centre-freq readout, retunes on release clamped to band edges; replaced the old two-finger stroll (two fingers = pinch-zoom). **Snap-to-signal** drawer toggle (`s_snap_to_peak`, NVS `snap_to_peak`, default on) gating `dsp_find_peak_hz_around`; **CW snap fix** (`4c8bd56`) — search centres on `ui_get_if_offset_hz()` (12 kHz + CW LO offset + trim) not bare 12 kHz, so it no longer misses the carrier in CW (on-air re-verify still pending). **Band-aware worked-before** (callsign+band, `adif_log.c/.h`). **ROBOT SHELVED** (`ft8_robot.c/.h` complete but live-TX, not soaked): `ft8_robot_tick()` hard-returns at the top — never keys the radio regardless of `robot_en` in NVS/config; `ft8_filter_modal.c` robot checkbox + Priority dropdown greyed (50% opa) + inert (tap → `ui_toast("Work in progress....")` via `robot_wip_cb`), `robot_en` forced false on save + always shown unchecked. `ui_toast()` de-static'd + declared in `ui.h`. To re-enable later: drop the `ft8_robot_tick` guard + un-grey the modal. **Fix A — decoded tone recorded in real Hz** (`decode_candidate_range` in `ft8_test.c`): was storing `cands[i].freq_offset` (coarse FFT bin index relative to `mon->min_bin`, 6.25 Hz/bin) as `ft8_call_t.last_freq`, which every consumer treats as audio Hz → reply tone, CQ clear-tone scan, and TX-clash detection all off by ~`mon->min_bin*6.25` (~200 Hz) + ~6.25× scale error; now `freq_hz = (mon->min_bin + cands[i].freq_offset) / mon->symbol_period` (ft8_lib's own formula). Verified on-air: 45 decodes on busy 20 m, all in 213–2906 Hz, each station stable per cycle. **Fix B — partner's tone decoded first** (`decode_slot` reorder + `ft8_qso_get_priority_freq()` in `ft8_qso.c/.h`): mid-pounce (WAIT_RPT/WAIT_RR73 only) moves candidates within ±25 Hz of the partner's tone to the front of `cands[]` so the reply is found inside the `FT8_REPLY_TX_WINDOW_MS` (2500) immediate-slot window on a crowded band. Fix B's Hz compare depends on Fix A. v0.18.3 — display ergonomics. **Waterfall drawer controls**: new "Waterfall" settings section with live, NVS-persisted Black level (dB above per-bin floor→black, default 9), Contrast (dB span filling the colour ramp, default 45), Adaptive floor (0–100% blend between per-bin and a global mean floor, default 100), and FFT window selector (Blackman-Harris/Hann/Nuttall via `dsp_set_window()` rebuilding `s_window`). The waterfall colorisation constants in `render_waterfall.c` became live statics (`render_waterfall_set_black_level/_contrast_db/_floor_blend`); defaults bumped +6→+9 / 30→45 dB for clearer strong signals; replaces the old compile-time flat-mode constants. **Display 180° flip** (`display_set_flipped()`/`display_is_flipped()` in display.c → `LV_DISPLAY_ROTATION_270`): "Flip 180°" toggle at the TOP of the drawer (centered checkbox so it isn't hit by accident), for upside-down mounting/cable routing; touch follows automatically, only the raw-coord pinch handler in ui.c needed a pan-direction flip; NVS `disp_flip`, applied at boot. **Settings title** bumped to montserrat_48 (body stays 28). **Image rejection — INVESTIGATED, NOT SHIPPED (reverted):** a frequency-domain per-bin image canceller AND a manual by-eye I/Q null were both built and reverted. The ghost the user reported is a **48 kHz sample-rate alias** (= QMX USB-audio rate), a QMX-side anti-aliasing trait NOT removable in our DSP — NOT a within-window I/Q mirror image. Blind per-bin cancellation also actively *amplifies* images when both sidebands carry signal (the normal case here). `iq_balance.c` is back to adaptive-only; do not re-attempt blind FFT image rejection (see memory `project_image_reject_dead_end`). v0.18.2 — stability patch (WiFi/web). **Idle reboot RESOLVED** (the v0.18.1 KNOWN-OPEN): units left running with WiFi up + a browser on the web UI reset after a few min — serial backtrace showed `esp_dma_capable_malloc: Not enough heap memory` → `assert sdio_rx_get_buffer` in ESP-Hosted's `sdio_read_task`. Root cause: SDIO RX ran in **streaming mode** (`H_SDIO_HOST_RX_MODE`), whose `sdio_rx_get_buffer()` re-allocs a fresh contiguous **internal DMA** buffer per larger burst (`MEM_ALLOC`→`esp_dma_capable_malloc`, extra_heap_caps=0, never PSRAM); with ~192 KB internal free, sustained WiFi RX eventually can't get one. Fix = switch SDIO RX to **`RX_NONE`** (`CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_NONE=y` + the `CONFIG_ESP_SDIO_*` alias copy in `sdkconfig`), which uses the recycled fixed-size mempool (`mempool_alloc` SLIST free-list, `CONFIG_ESP_HOSTED_USE_MEMPOOL=y`) — after warm-up zero runtime DMA allocs. Soaked 13+ min w/ browser vs crashes <4.5 min. NOTE: toggling `SPIRAM_TRY_ALLOCATE_WIFI_LWIP` is INEFFECTIVE here (WiFi runs on the C6; host LWIP offload didn't change the 192 KB internal free) AND its Kconfig side-effect silently flipped `ESP_WIFI_TX_BUFFER_TYPE` dynamic→static — reverted, keep it off. **Web UI freeze/reconnect fixed:** `webserver_ws.c` abandoned stale WS sockets without closing them → a few freeze/reconnect cycles exhausted `LWIP_MAX_SOCKETS` (`accept: errno 23 ENFILE`) and the server stopped accepting; and one transient `EAGAIN` send tore the whole session down. Now `httpd_sess_trigger_close()` on takeover + on giving up, tolerate `MAX_FAIL_STREAK=15` (~1.5 s) transient send failures before closing. Plus `sdkconfig`: `LWIP_TCP_MSL` 60000→10000 (TIME_WAIT was holding slots ~120 s — the real connect-storm cause), `LWIP_MAX_SOCKETS` 10→16, `LWIP_TCP_SND_BUF/WND` 5760→11520 (smoother stream), `webserver.c` `config.max_open_sockets=10`. Result: steady 10 fps, no teardown. **BW from web fixed:** web `set_bw` for CW (hz<1000) called `cat_set_passband_hz()` = Kenwood `FW<nnnn>;` which the QMX rejects (`?;`) → did nothing; now new `cat_request_cw_passband()` (`cat.c/.h`) defers `MMCW|CW passband=` through the poll task (same pattern as `s_pending_ssb_bw`), web CW branch + touch `bw_preset_cb` both use it; `cat_request_ssb_bandwidth()` now also calls `ui_update_passband_width()` so the label syncs for the web path (FW; is pinned-off in SSB so no poll response refreshes it). v0.18.1 — config backup/restore + clean-flash + a fast-toggle crash-fix batch. **Config I/O** (`main/storage/config_io.c`): web `GET/POST /api/config` export/import ALL settings + memory channels as an editable INI text file (`qmx-config.txt`; sections `[settings]`/`[cq]`/`[ft8_filters]`/`[memories]`). Import MERGES (only present keys/sections applied, unknown ignored) via the existing `settings_set_*` + `mem_channels_set`, then `settings_flush()`; memory channels live, other settings on restart; includes secrets (wifi_pass/qrz/eqsl) in clear text = full backup. Web UI **Config ↓ / Config ↑** left of Tab5Shot; `max_uri_handlers` 14→16; POST uses a full-body recv loop. **Flasher** (`tools/QMX-Panadapter flasher/` flash.bat + flash.command): optional CLEAN flash — prompts normal vs clean; clean adds esptool `write_flash -e`/`--erase-all` to wipe the whole chip (NVS+SPIFFS), clearing stuck state e.g. WiFi-off (Ian); explicit warning lists what's erased (wifi pw, callsign/grid, memories, ADIF log). **Fixes (Ian G4LXX + a serial-caught crash):** memory recall froze the Tab5 display + then blocked band change — recall did a direct LVGL-thread `cat_set_mode` that raced the FA/MD/FW poll and garbled FA responses; now optimistic `ui_update_frequency` + deferred `cat_request_mode` + forced (non-rate-limited) freq write (`memory_modal.c`). Panadapter↔FT8 sticky freq was lost + FT8 inherited the panadapter mode: the CAT poll task exited on a SINGLE transient TX timeout (froze `cat_get_frequency()`) — now tolerates ~20 in a row (`cat.c`); the sticky snapshot captures the freshest UI freq (`s_last_qmx_freq_hz`, not the lagging poll value); FT8 is force-set to DiGi on every entry via `cat_request_mode` and the restore's mode step now uses the poll task instead of a rate-limit-droppable `cat_set_mode` (`ui.c`). Fast Panadapter↔FT8 toggle could spawn a SECOND `ft8_task` that clobbered the shared `s_decode_queue` → `xQueueReceive(NULL)` assert/reboot — single-instance `s_ft8_task_alive` guard in `ft8_self_test` + NULL-queue check in the decode loop (`ft8_test.c`; see memory `project_ft8_double_spawn_crash`). NOTE (**superseded 2026-08-20 by #117** — a crash record now survives the reboot and reaches `/api/log`; see the crash-record section under Diagnostic logging. True as written at the time): panics print straight to UART and bypass the web `/api/log` ring — only a continuous serial capture catches the backtrace (`scratchpad/cap_serial.ps1`). (The idle/long-uptime reboot that was KNOWN-OPEN on v0.18.1 was root-caused and fixed in v0.18.2 — see the v0.18.2 summary above.) v0.18.0 — FT8 decode rework for timeliness + a batch of field-reported fixes. **Decode:** (1) streaming STFT — the waterfall is built block-by-block during capture (`dsp_ft8_capture_begin/progress/finish` in `dsp.c`), not after the slot; (2) dual-core decode — a core-0 helper (`ft8_dec0`) decodes odd candidates while the decode task takes even (monitor **pool of 2**; each monitor's STFT window relocated to PSRAM to spare internal heap, ~37 KB free vs ~9 KB); (3) **reply-on-immediate-slot** — `ft8_task` polls `ft8_tx_should_run_this_slot` mid-capture during the opening `FT8_REPLY_TX_WINDOW_MS` (2500) and fires a freshly-armed reply on THIS slot instead of a cycle later (can't misfire — only fires a legit correct-parity arm; validated on-air at +1032 ms; fixes the busy-20 m one-cycle lag Dave G4FRE reported). `FT8_FIND_MIN_SCORE` 10→5 (deeper search). **dBm scale** restored on the spectrum (normal = dBm, flat = dB-above-floor) via right-edge centered labels (`update_db_scale`, `s_grid_dbm`/`s_grid_flat`, corner labels hidden) + web spectrum labels. **Fixes:** memory-channel freq (`ui_freq_picker_open` now pre-fills dotted MHz.kHz.Hz — a dotless string made `freq_buf_to_hz` cap at 3 digits, so 14020000 read back as 140; Ian G4LXX); tap-to-tune reversal (`dsp_find_peak_hz_around` aliased once a tap's baseband crossed +24 kHz Nyquist in the display's right quarter → large negative offset → tuned DOWN; now offsets from the tapped center, always within ±radius; Ian G4LXX); band lockout (`band_preset_cb` falls back to band center via `legal_band_edges()` ONLY when the per-band NVS recall freq is out of band — recall otherwise preserved, see [[feedback_per_band_freq_recall]]; Ian G4LXX); web WS stuck on "reconnecting" (`ws_uri_handler` is now last-connection-wins instead of refusing a reconnect while a half-open socket lingers); Roy's WiFi double-STA-start guard; macOS flasher docs (brew/Gatekeeper/`bash flash.command`; John K7JFW). NOTE: magnitude-domain iterative subtraction was prototyped and REVERTED — ineffective (see memory `project_ft8_decode_v0_18_0`); the real more-decodes path is coherent time-domain subtraction (long-term). v0.17.0 — Tab5 snap-on keyboard support (SKU A164, STM32 I2C slave 0x6D, String mode — see "Tab5 snap-on keyboard" section above), WiFi SSID scan-and-pick in the WiFi setup modal (`Scan` button lists nearby networks, tap fills the SSID field exactly — no case mismatch), boot-crash fix (held the LVGL lock across all of `ui_init` to close an intermittent display-layout race during UI construction, hit mostly on newer ST7121 units), and password show/hide reverted from a checkbox back to an eye-icon button under the Scan button. v0.16.2 — QRZ Logbook + eQSL ADIF upload from the web UI (see "QRZ Logbook upload" / "eQSL upload" sections above), plus the mbedtls PSRAM fix that unblocked outbound HTTPS entirely. FT8 sync precision: robust outlier-rejecting average across all decoded candidates in a slot (was a single-candidate value that could be a false sync hit — the "SS run-away" reports), plus a sub-second rounding fix in the time-sync modal's SS display and a brief blue-border flash (`SS_FLASH_MS=30`) on every fresh measurement. FT8 decode list: own-call rows now render inverted (red fill + white text) instead of red-on-black (Ken KF0AYY readability report). QSO override buttons (Re-send/RR73/73) widened to fill the full left-pane width (Re-send 20% wider than RR73/73, since it carries more text). Freq keypad 10-Key/Phone layout now persists across reboots (`freq_kp_calc` NVS key). Web UI: bottom-bar IP address removed, action buttons reordered (ADIF/QRZ/eQSL/Diag/Tab5Shot) and restyled to match the top-bar pills' amber-hover look, new Tab5Shot screenshot link, S-meter scale labels enlarged/brightened, WiFi indicator swapped from emoji to SVG. v0.16.1 — WiFi crash fix on first credential save: `ensure_sta_netif()` defers the WIFI_STA_DEF guard to just before each `esp_wifi_start()` call (old guard ran before SDIO/C6 link was up, causing duplicate default STA handler → `netif_add` assert on new Tab5 units with newer C6 firmware, Roy's case). Context-aware Re-send button label: shows "Re-send / JO45" / "Re-send / -07" / "Re-send / R-07" depending on exchange state (`ft8_qso_get_cur_extra()` + `s_lbl_resend`). FT8 row selection UX: hold threshold 700→250 ms, 80 ms dim preview highlight, 20 px jitter tolerance (Ken KF0AYY POTA field report). FT8 time calibration modal (`main/ui/ft8_time_modal.c`): [HH]:[MM]:[SS] panel accessible from FT8 screen via **Filter → Sync Time**; SS auto-syncs from decoded FT8 signal timing (sub-second correction via `time_sync_apply_correction_ms()`); HH/MM editable via numpad for manual override; blue SS frame = live tracking, tap to lock; Apply calls `time_sync_set_manual()` when HH/MM are edited, `time_sync_apply_correction_ms()` for SS-only; bottom bar shows "UTC(FT8)" after FT8-derived correction; `TIME_SOURCE_FT8` added as 5th time source. v0.16.0 — ADIF QSO logging (`main/adif/adif_log.c`, `/spiffs/qso.adi`, web `/api/adif` download + `/api/adif/clear`); worked-call cache at boot for "Exclude worked-before" filter; SNTP-authoritative time sync (QMX only applied when SNTP stale >10 min); FT8 pounce calls `ft8_find_clear_tone_hz()` instead of the CQ station's own tone; CQ-run holds our CQ tone throughout the exchange (not overwritten with caller's tone); `PC;` power calibration ÷5 (was ÷10); drawer labels montserrat_28. v0.15.18 — TX clash warning: `ft8_tx_is_clashing()` in `ft8_tx.c` scans the heard-station table against our armed TX tone (±1 bin / 50 Hz guard); ARMED/ACTIVE status label turns red-orange (0xFF4010) with "⚠ FREQ BUSY" when a collision is detected, normal amber (0xFFA040) otherwise. Deferred CAT mode write: `cat_request_mode()` in `cat.c` queues a mode change via `s_pending_mode_digit` (same poll-task drain pattern as `s_pending_ssb_bw`), avoids CDC race when mode and frequency writes come from the LVGL thread. WiFi on/off toggle: "WiFi initiated" checkbox in the settings drawer WiFi section, NVS-persisted (`wifi_en`), WiFi is only brought up when this is checked — useful for field/POTA use where WiFi is not needed. Show-password redesign: WiFi modal show/hide converted from an eye-icon button to a "Show password" checkbox below the password field; password textarea widened to 820px (was 700px + button). Drawer checkbox styling: IQ balance, flat-spectrum, diagnostic-log drawer controls converted from LVGL switches to themed square checkboxes via `make_drawer_checkbox()` helper in `ui.c`; consistent visual language across the drawer. FT8 left-pane spacing: `pad_all(16)` replaced with `pad_top(8)/pad_bottom(16)/pad_left(16)/pad_right(16)`; freq label y-pos 80→67, slot count y-pos 148→120, slot bar y-pos 159→131 — tighter layout. v0.15.17 — Global Tab5 RTC time sync: RX8130CE supercap driver (`rtc/rtc.c`), `time_sync` orchestrator, periodic QMX TM; poll, SNTP→RTC write-through; QSO override buttons (Re-send/RR73/73) during active FT8 exchange; "Show only CQ callers" display filter; SWR auto-reset after trip (TX;/RX; latch clear) — see CLAUDE.md RTC section. v0.15.15 — FT8 CQ-run reply filter modal + TX power/SWR readout: new "Filter" button on the FT8 screen opens `ui/ft8_filter_modal.c`, an include/exclude editor for the CQ-run auto-reply picker and the live decode list. Two "include" and two "exclude" fields (each independently toggled via plain checkboxes, not exclusive radios) are matched against the *whole* decoded message text (`ft8_call_t.last_text`) — not just the callsign — via `ft8_filter_match()`/`ft8_filter_contains_any()` in both `ft8_qso.c` (`scan_for_reply_to_me`) and `ui/ft8_screen_view.c` (`rebuild_list`). Each field accepts multiple space-/comma-separated terms (e.g. "POTA SOTA" or "JA, VK"), matching on ANY. Standalone "Exclude plain CQ callers" ORs into the existing `hide_cq` logic; "Exclude worked-before" is UI-only pending the ADIF log (v0.16.0). Persisted as a single `ft8_filters_t` NVS blob (`settings_set_ft8_filters()`). Modal layout iterated for big-finger touch: montserrat_24 throughout, 8px-padded checkbox indicators 16px clear of their textareas, Save/Cancel spread vertically down the right edge, placeholder text in the muted colour. Also added `cat_query_power_swr()` (`PC;`/`SW;` CAT query, valid only while keyed) and `ft8_tx_get_last_power_swr()`; the FT8 status line briefly shows "Last TX: X.XW SWRx.xx [Ns]" after each burst. v0.15.14 — Keyboard shift-label fix: the iPad-style abc/Abc/ABC shift cycle (`ui/ui_theme.h`) relabels the shift key to "Abc" in the pending single-shift state, but LVGL's built-in `lv_keyboard_def_event_cb` types any label it doesn't recognise as a control key ("abc"/"ABC"/"1#"/symbols are recognised, "Abc" is not) and runs *before* our cycle handler — so tapping Abc→ABC inserted literal "Abc" into the field. `ui_theme_keyboard_attach_caps_cycle()` now removes the built-in handler and makes `ui_theme_kb_shift_cb` the sole VALUE_CHANGED handler, calling the built-in explicitly for non-shift keys but never for the shift key. Not a delete-after-type fix: fields set `max_length`, so a full field silently drops LVGL's insert and a blind 3-char delete would eat real input. Reported by Michael KZ4LY. v0.15.13 — FT8 decode throughput fix: `ft8_estimate_snr_db()` recomputed the slot noise floor (a `powf` over the entire decoder waterfall) **per decoded message**, so a busy slot spent 9–18 s — longer than the 15 s slot — re-deriving the same value, overran the slot, and corrupted the *next* slot's concurrent audio capture; the decode list then filled with one slot-parity at a time and flipped/emptied. Split into `ft8_estimate_noise_db(mon)` (once per slot, lazy on first decode) + `ft8_estimate_snr_db(mon, cand, noise_db)` (cheap signal loop). Decode 9–18 s → ~1–2 s; both parities decode; throughput ~2×. Hardened the capture pipeline as defense-in-depth: 4-buffer pool + `s_buf_busy` in-use guard (capture never reuses an in-flight buffer; logs + drops instead of corrupting), `FT8_DECODE_BUDGET_MS=11000` safety net (now never hit), LDPC iters 60→30 (all in `ft8_test.c`). NOT core contention (tried decode→core 0, made it worse) and NOT buffer-reuse corruption — root cause was the per-message noise recompute. Also dynamic per-bin waterfall noise floor with adaptive black level. v0.15.12 — Sticky Panadapter/FT8 settings (switching modes saves/restores band/mode/bandwidth/frequency/zoom for each mode independently via `ui_save_snapshot()`/`ui_restore_snapshot()`, staged CAT writes on a short timer); FT8 "Preset: xx.xxx MHz" swipe-down opens the freq dropdown (screen-level hit area `s_ft8_freq_hit`, shown/hidden with the FT8 view - do NOT also foreground `s_container` on show(), as that's a near-full-screen opaque pane that covers the left/right edge-swipe grip handles when shown at boot in FT8 mode); UI colour theme consolidation (`ui/ui_theme.h` - shared `UI_COLOR_PRIMARY` tokens, single-cursor textarea focus, iPad-style abc/Abc/ABC keyboard shift cycle at montserrat_28) applied to CQ presets/identity/memory/FT8 TX/WiFi modals; WiFi password show/hide toggle; taller memory-grid cells; faint vertical "Stef OZ1LAV" operator-signature watermark drawn last (on top of waterfall/bottom-bar) and non-clickable. v0.15.11 — Diagnostic logging: opt-in **Diagnostic log** switch on the top row of the settings drawer (kept visible in FT8 mode) captures all ESP_LOG output to a 512 KB PSRAM ring (`util/diag_log.c`, vprintf hook installed first in `app_main`), downloadable via web `GET /api/log` ("Diag log ↓" in web UI bottom bar) or USB serial; persisted (`diag_log` NVS key). Rich enable header (Tab5+QMX fw, MAC, chip rev, reset reason, uptime, heap, callsign/grid, WiFi+QMX state). CAT RX logged per-line but **de-duplicated** (`diag_log_rx()` drops repeat FA/MD/FW poll responses; poll TX replaced by a 10s heartbeat) so steady-state is ~0 lines/s. QMX firmware read via `VN;` at link-up (`cat_get_qmx_fw()`, dev bench = `1_03_002`), shown in `/api/status` JSON, boot log, and diag header. `capture_serial_log.ps1` stamps a PC-side session header. README gained a top-of-file "Quick start" (cable/data-cable gotcha, one-finger edge-swipe nav + top-bar taps, required settings, what needs the QMX connected, diag log). Note: `reset_reason=panic/exception` also covers a button force-reset (no clean-shutdown path) — a real crash has a backtrace before it. v0.15.10 — Selectable SSB filter bandwidth in USB/LSB (2.5/2.7/2.9/3.2 kHz): writes BOTH QMX Menu-Manager items `MMSSB|Filter RX=` (committed, shows in radio menu) and `MMSSB|Bandwidth=` (live) to the same value, and drops `FW;` from the poll while a width is pinned (`s_ssb_bw_pinned`, USB/LSB only) since reading the filter makes the QMX revert it — SSB BW writes deferred to the poll task via `cat_request_ssb_bandwidth()`/`s_pending_ssb_bw` to avoid a CDC race; FT8 slot countdown bar glides smoothly (50ms `t_slotbar_cb`, ms range) and turns red during TX (`ft8_tx_get_status()==ACTIVE`); editable CQ presets (long-press Call CQ → `ft8_cq_modal`, 3 fields + radio select + "+ call grid" insert, NVS-persisted `cq_msg[3]`/`cq_sel`, Call CQ button label shows + short-tap transmits the active preset via `ft8_tx_build_request_text()` + general `ftx_message_encode`); freq keypad — top-bar opens empty, MHz/kHz keys replaced by a 10 Key/Phone digit-layout toggle (`s_freq_calc_layout`, digit read from button label at press) + Clear, mode row only shown for the Memory picker (`s_freq_picker_cb != NULL`); `settings_load_all()` now returns the live staged `s_pending` (instant reads, no NVS-flush lag); v0.15.9 — Edge-swipe gesture navigation replaces the burger button (right-edge swipe/grip opens settings drawer, left-edge swipe toggles Panadapter/FT8, bottom-edge swipe opens memory modal, all with "breathing" grip handles); snap-to-grid live tune cursor (cyan drag cursor jumps between absolute-frequency grid points instead of tracking raw touch, anchored independent of touch start); mode-aware snap steps changed (USB/LSB 500→250 Hz, FT8/digi/RTTY 100→500 Hz); fixed zoom>x1 overlay desync after retuning (`ui_update_frequency()` now calls `recompute_zoom_pan()`); top-bar/spectrum colour matching (passband-edge lines match BW label, VFO cursor matches Freq label, passband tint band at ~25% of that colour); v0.15.8 — Zoom-FFT passband centering at zoom>x1 (screen centers on the passband, not the dial, for off-center USB/LSB filters), amber VFO cursor and grey passband-edge lines repositioned to match and auto-recenter on CAT mode/filter-width changes (non-LVGL `recompute_zoom_pan()` to avoid an LVGL-cross-task freeze), per-zoom-level waterfall noise floor restricted to in-passband bins at every zoom level, zoom-FFT now engages on boot for persisted zoom>x1 (re-applied after `dsp_init()`), zoom-FFT EMA smoothing (alpha 0.6) across frames, removed bottom-bar memory-channel indicator, fixed memory recall not applying mode (CAT mode write was silently dropped by the 200ms TX rate-limiter, now sent via a delayed one-shot timer); v0.15.7 — S-meter no longer freezes once "RX: Capturing" starts (compute_and_publish_spectrum() now also runs every ~10 iterations inside the s_ft8_active branch on raw samples[]), FT8 freq preset label reworded to "Preset: xx.xxx MHz"; v0.15.6 S-meter redesigned as a visual tick-scale + bar (replaces "Signal: SX+Y" text), montserrat_22 labels, 0-68 scale (S1..S9+20); v0.15.5 memory-button frequency/mode picker, wider freq keypad with mode row, CAT mode-set-on-Enter rate-limiter fix, flat-spectrum floor reset on QMX power cycle (USB stays connected), S-meter fixed to track the IF-shifted VFO bin instead of the DC bin; v0.15.4 FFT-based FT8 SNR estimation; v0.15.3 top-bar Band/Mode/BW refresh fix + warmup round-trip, tap-to-enter frequency keypad, battery voltage + firmware version in bottom bar, RR73-as-grid fix, QMX RTC time sync for no-WiFi (POTA) FT8 timing, screenshot capture simplified | stable on ST7123 and ST7121 |
 
 ## Next up (v1.0.0 SHIPPED 2026-07-16)
 
@@ -548,7 +2166,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 - **Success detection is a SUBSTRING test**, matching TQSL's own check (`strstr(result, "accepted")`, v1.3.3 — was `strcmp`, stricter than the reference and so able to report failure on a decorated-but-successful status). Still matched only against the extracted `<!-- .UPL. -->` comment, never the raw page, so a login/landing page can't false-positive.
 - **The upload cursor only rewinds when the cert actually CHANGED** (v1.3.3). It used to rewind on every import — and since the station-location fields live only in the setup page, which requires re-picking the `.p12`, adding a state/county re-submitted the same cert and would have re-signed and re-sent the entire log for a two-field edit.
 - **`GET /api/lotw_tq8`** returns the whole log signed as a downloadable .tq8 — the offline verification path (gunzip + openssl-verify on a PC) and usable for manual upload at the LoTW website.
-- **LIVE-VERIFIED end-to-end 2026-07-14** (operator OZ1LAV): real TQSL .p12 imported through forge in a real browser, 22 QSOs signed on-device and **accepted by lotw.arrl.org**. Also earlier verified with a throwaway self-signed cert (host harness + on-device openssl signature checks). FT4 note: LoTW mode `FT4` is valid directly (confirmed in current TQSL config data), matching our ADIF `MODE=FT4` records.
+- **LIVE-VERIFIED end-to-end 2026-07-14** (operator OZ1LAV): real TQSL .p12 imported through forge in a real browser, 22 QSOs signed on-device and **accepted by lotw.arrl.org**. Also earlier verified with a throwaway self-signed cert (host harness + on-device openssl signature checks). FT4 note: LoTW mode `FT4` is valid directly (confirmed in current TQSL config data). ⚠ **Our ADIF stopped saying `MODE=FT4` in v1.9.6** — see the ADIF MODE/SUBMODE quirk below; the TQ8 still carries `FT4` because `lotw_mode_from_adif()` collapses `MFSK`+`SUBMODE` back before signing, and that identity is the whole design.
 - **Web-UI setup is a guided 2-page flow** (`#lotw-modal` in index.html): page 1 explains the TQSL "Save the Callsign Certificate" export (most users did it once, years ago) with **Next** opening ARRL's own `lotw-help/save-certificate` page in a new tab + advancing to page 2 (the import form). Button reads "LoTW setup" until configured, then "LoTW ↑"; **Ctrl-click re-runs setup** (cert renews ~every 3 years). Importing a cert **rewinds the upload cursor to 0** (`settings_set_lotw_uploaded_n(0)` in the `/api/lotw_cert` handler) — a new key means the whole log must be re-signed; server-side dupes are harmless.
 - **CRITICAL — LoTW setup must pause the spectrum WebSocket** (`pauseWs()`/`resumeWs()` in index.html, wired into the modal open/close + upload). This board's esp_hosted WiFi link is low-throughput; the ~10 fps spectrum WS saturates the uplink, and the 73 KB forge.min.js fetch landing on top of it **stalled and hard-wedged the single-threaded httpd** (ping still replied, httpd never recovered — reboot only). Diagnosed 2026-07-14 when the operator's first real import wedged the web server repeatedly (`curl` always worked because it held no competing WS stream). Same principle as the upload path quieting itself. Do NOT remove the WS pause, and do NOT reintroduce any large browser-side fetch that runs concurrently with the WS stream on this link.
 
@@ -576,7 +2194,7 @@ Entry point: "eQSL ↑" link in the web UI bottom bar, next to "QRZ ↑". First 
 
 `main/ft8_robot.c`/`.h`. Was shipped SHELVED in v0.18.4 (the `feat/panadapter-bandnav-ft8-robot` branch's Step 6 — see `docs/version-history.md`) pending an on-air soak test that never got scheduled; the operator made the call to ship it un-soaked rather than wait further, accepting that hams are responsible for their own station regardless. `ft8_robot_tick()`'s hard `return` guard is removed; the implementation underneath was never touched while shelved.
 
-**What it does**: when `robot_en` is on and the QSO machine is IDLE, scans the live decode list each slot for CQ callers, applies the same include/exclude filters as CQ-run plus an enforced worked-before skip, ranks survivors by the chosen priority (Strongest SNR / Weakest SNR / Most distant grid), and hands the winner to the existing `ft8_qso_start()` machine — from there it's indistinguishable from a human-initiated pounce (TX1→report→RR73→73→ADIF log).
+**What it does**: when `robot_en` is on and the QSO machine is IDLE, scans the live decode list each slot for CQ callers, applies the same include/exclude filters as CQ-run — **including worked-before, which is NOT enforced: it follows the operator's `excl_worked_before` checkbox like every other filter** (`ft8_robot.c`, the `f->excl_worked_before &&` gate; an earlier version of this note claimed the robot enforced it regardless, which is wrong and produced a field report — BD4AHS, 2026-08-06, robot re-calling already-worked stations, resolved by ticking the box) — ranks survivors by the chosen priority (Strongest SNR / Weakest SNR / Most distant grid), and hands the winner to the existing `ft8_qso_start()` machine — from there it's indistinguishable from a human-initiated pounce (TX1→report→RR73→73→ADIF log).
 
 **Disclaimer, by design not just documentation**: this keys the radio and runs full QSOs with zero per-exchange confirmation. The "Auto-answer CQ (robot)" row in the FT8 Filter modal carries a permanent on-screen warning (`LV_SYMBOL_WARNING " Transmits unattended - never leave running unsupervised"`) every time that row is visible, not a one-time dialog. The operator remains responsible for everything transmitted under their callsign while it's enabled — same as any other unattended FT8 software (WSJT-X's own robot mode, etc.).
 

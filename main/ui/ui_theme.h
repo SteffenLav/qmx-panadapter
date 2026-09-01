@@ -12,6 +12,9 @@
 void ui_kbd_note_focus(lv_obj_t *ta);
 void ui_kbd_note_unfocus(lv_obj_t *ta);
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
+// Let the physical keyboard's arrows / PgUp / PgDn scroll this object while it
+// is the visible one. Register once at build time; deletion deregisters.
+void ui_kbd_add_scrollable(lv_obj_t *obj);
 
 /*
  * Shared colour tokens for the panadapter UI. Goal: collapse the many
@@ -54,11 +57,56 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 /* Accent - semantic split: gold for passive selection/VFO/highlight,
  * a distinct warm colour reserved for TX-on-air-only cues. */
 #define UI_COLOR_ACCENT_GOLD    0xffd700
+// The mouse pointer's "this is clickable" tint. Bright green DELIBERATELY, and
+// deliberately not UI_COLOR_PRIMARY: blue already means button, panel, header and
+// BT-connected in this UI, so one more blue would say nothing (operator, v1.8.0).
+#define UI_COLOR_POINTER_HOT    0x00ff66
+
+// "This surface is clickable, but do NOT tell the operator it is."
+//
+// For the things you click to DISMISS or to DRAG rather than to press: a modal
+// backdrop, the drawer's own body, a band-plan or slider track. They are all
+// genuinely clickable, and reporting them turned the green pointer into a
+// pointer that is green nearly everywhere, which says nothing (operator,
+// v1.8.0). Set it on the surface itself; children are judged on their own.
+#define UI_FLAG_NOT_HOT         LV_OBJ_FLAG_USER_1
 #define UI_COLOR_TX_ACTIVE      0xff6020
 
 /* Text */
 #define UI_COLOR_TEXT           0xffffff
 #define UI_COLOR_TEXT_SECONDARY 0xc0c0c0
+
+// Bluetooth glyph in the bottom bar. Three states, because "the radio is up"
+// and "actually connected to something" are different facts and the operator
+// needs to tell them apart at a glance (operator, 2026-08-28):
+//   OFF   - faint grey, the radio is not running (still drawn, as a landmark)
+//   IDLE  - YELLOW, the radio is up but no mouse is talking to us
+//   ON    - Bluetooth blue, a mouse is connected and driving the cursor
+//
+// IDLE was a white-ish grey and read as another dim glyph beside the OFF one -
+// two states that mean opposite things looked nearly the same. Yellow separates
+// them at a glance and carries the right sense: something is running and
+// waiting.
+//
+// ⚠ IDLE means "no mouse is CONNECTED", which covers a mouse that has gone to
+// sleep (a BLE mouse terminates the link rather than idling on it - see the
+// connect handler in bt_hid_mouse.c), one out of range, and one that was never
+// paired at all. The colour cannot tell those apart and does not claim to.
+//
+// ⛔ The glyph reports the RADIO, never the bt_mouse_en setting (#270, Don
+// N2VGU) - the setting only takes effect at the next boot, so driving the icon
+// from it greys out a radio that is still transmitting. util/status.c and
+// /api/status's bt.en both read bt_hid_mouse_started().
+// The drawer's "BT changed - Please restart" button. Amber, and NOT
+// UI_COLOR_PRIMARY: a blue button is one more control to press, and this is a
+// statement that the switch and the running radio disagree. It breathes for the
+// same reason - the operator's call, 2026-08-28, after a plain blue "Restart
+// now" was judged too easy to walk past.
+#define UI_COLOR_BT_RESTART 0xffb020
+
+#define UI_COLOR_BT_OFF  0x505050
+#define UI_COLOR_BT_IDLE 0xffd040
+#define UI_COLOR_BT_ON   0x3d8cff
 #define UI_COLOR_TEXT_MUTED     0x808890
 
 /* Neutral keyboard/keypad button background (was a mix of 0x2A2A2A
@@ -125,10 +173,11 @@ static inline void ui_theme_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_border_color(ta, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(ta, 1, 0);
 
-    /* Blinking line-cursor, shown only in the focused field (not every
-     * field at once - that was confusing with multiple text entries
-     * on screen). Pair with ui_theme_focus_textarea() to mark the
-     * initially-focused field on modal open. */
+    /* Blinking line-cursor, shown only in the focused field (not every field at
+     * once - that was confusing with multiple text entries on screen), and only
+     * AFTER the operator has selected one. Nothing pre-focuses a field on modal
+     * open any more: the blink is the acknowledgement that a touch landed and
+     * that this is where typing will go. See the tombstone below. */
     lv_obj_set_style_bg_opa(ta, LV_OPA_TRANSP, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_side(ta, LV_BORDER_SIDE_LEFT, LV_PART_CURSOR | LV_STATE_FOCUSED);
     lv_obj_set_style_border_width(ta, 2, LV_PART_CURSOR | LV_STATE_FOCUSED);
@@ -136,12 +185,21 @@ static inline void ui_theme_style_textarea(lv_obj_t *ta)
     lv_obj_set_style_anim_duration(ta, 500, LV_PART_CURSOR | LV_STATE_FOCUSED);
 }
 
-/* Mark a textarea as the initially-focused field when a modal opens, so
- * its cursor blinks immediately without the user tapping in first. */
-static inline void ui_theme_focus_textarea(lv_obj_t *ta)
-{
-    lv_obj_add_state(ta, LV_STATE_FOCUSED);
-}
+/* ⛔ REMOVED - do not bring this back. It used to pre-focus a modal's first
+ * field so "its cursor blinks immediately without the user tapping in first",
+ * and that cursor was a LIE in two ways:
+ *
+ *  - lv_obj_add_state(LV_STATE_FOCUSED) paints the cursor but does NOT send
+ *    LV_EVENT_FOCUSED, which is what records the field as the typing target.
+ *    So the blinking field was not necessarily the one that would receive
+ *    keystrokes.
+ *  - and it blinked before the operator had chosen anything, so it could not
+ *    mean "type here" - which is the one job a cursor has.
+ *
+ * The operator's rule, and it is the right one: no cursor when a modal opens,
+ * a cursor once a field is selected. That makes the blink an acknowledgement
+ * of a touch rather than decoration - which matters most with a Bluetooth
+ * keyboard, where nothing else on screen confirms the tap landed. */
 
 static inline void ui_theme_style_keyboard(lv_obj_t *kb)
 {
@@ -325,3 +383,8 @@ static inline void ui_theme_keyboard_attach_caps_cycle_pending(lv_obj_t *kb)
 }
 
 #endif /* UI_THEME_H */
+
+/* Show a modal's on-screen keyboard, unless a Bluetooth keyboard is connected
+ * and doing the job (#273). Use this instead of clearing LV_OBJ_FLAG_HIDDEN by
+ * hand, so the decision stays in one place. */
+void ui_osk_show(lv_obj_t *kb);

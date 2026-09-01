@@ -9,8 +9,12 @@
 // source markdown, not a purpose-stripped feed.
 
 #include "reader_view.h"
+#include "esp_attr.h"
 #include "reader_net.h"
 #include "ui_theme.h"
+#include "reader_diagram.h"
+#include "ui.h"                 // ui_help_overlay_changed()
+#include "net/manual_embed.h"   // pages are read straight from the embedded manual
 #include "storage/sd_archive.h"
 
 #include "lvgl.h"
@@ -36,7 +40,6 @@ static const char *TAG = "reader_view";
 #define BANNER_H       34
 #define BODY_PAD_X     60
 #define BODY_PAD_Y     22
-#define SLIDE_TIME_MS  220
 
 #define READER_CACHE_PATH  "/spiffs/reader.md"
 #define TOC_CACHE_PATH     "/spiffs/reader_toc.json"
@@ -45,7 +48,13 @@ static const char *TAG = "reader_view";
 // Table of contents (parsed from toc.json published by mkdocs_reader_export.py).
 #define TOC_MAX  64
 typedef struct { char title[48]; char path[96]; int level; } toc_entry_t;
-static toc_entry_t s_toc[TOC_MAX];
+// 9,472 bytes, and COLD - only touched while the Reader overlay is open.
+// It was sitting in internal .bss, which on this board is the scarcest
+// resource there is: measured during an OTA download in FT8 mode, internal
+// free fell to 5 KB and the update could not allocate its own 8 KB task
+// stack. Nothing here needs the speed or the DMA-reachability of internal
+// RAM. See the #239 investigation.
+EXT_RAM_BSS_ATTR static toc_entry_t s_toc[TOC_MAX];
 static int  s_toc_n = 0;
 
 // Drag-to-pick state for the Contents list: the finger drags a highlight bar
@@ -60,12 +69,36 @@ static char s_page_title[64]   = "Documentation"; // title shown when TOC is clo
 // ---- LVGL objects (LVGL thread only) ----
 static lv_obj_t *s_overlay      = NULL;   // full-screen opaque page
 static lv_obj_t *s_title_lbl    = NULL;   // header: page title
+static lv_obj_t *s_back_btn     = NULL;   // hidden when there is nothing to go back to
+static lv_obj_t *s_exit_btn     = NULL;   // slides left into Back's slot when it is hidden
 static lv_obj_t *s_status_lbl   = NULL;   // header: right-aligned status
 static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless set)
 static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
 static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
 static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
+
+// Context help: the heading we were asked to land on, and the rendered label for
+// it once found. Set by reader_view_open_help() before the page loads; consumed
+// (and cleared) by render_markdown(). Empty = land at the top, as before.
+static char      s_want_anchor[80] = {0};
+static lv_obj_t *s_anchor_obj      = NULL;
+
+// Case-insensitive substring search. Deliberately not strcasestr(): that is a
+// GNU extension and not reliably available here. Substring rather than exact
+// match so an anchor survives small heading edits ("Tap to Tune" still finds
+// "### 2. Tap to Tune") - the anchors are checked at build time by
+// tools/pack_manual.py, so a genuinely broken one fails the build rather than
+// silently landing on the page top.
+static bool strcasestr_local(const char *hay, const char *needle)
+{
+    if (!hay || !needle || !needle[0]) return false;
+    size_t nl = strlen(needle);
+    for (const char *p = hay; *p; p++) {
+        if (strncasecmp(p, needle, nl) == 0) return true;
+    }
+    return false;
+}
 static lv_timer_t *s_timer      = NULL;
 
 static bool s_active = false;
@@ -75,6 +108,10 @@ static SemaphoreHandle_t s_lock = NULL;
 static volatile bool s_reload_pending = false;
 static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
+// Whether the "heading not found" warning has already been logged for the current
+// anchor request. One request can render the same page more than once; the operator
+// only needs telling once.
+static bool s_anchor_reported = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
 
@@ -83,8 +120,15 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 // Set the current page's title. Reflected on the top bar only while the TOC
 // panel is closed (when it's open the bar shows "Contents").
+static void fold_copy(char *dst, size_t dstsz, const char *src);   // defined below
+
 static void set_page_title(const char *t)
 {
+    // Folded on the way in: the title comes from the page's own H1, which is as
+    // free to contain a dash or an arrow as any other line.
+    char clean[sizeof(s_page_title)];
+    fold_copy(clean, sizeof(clean), (t && t[0]) ? t : "Documentation");
+    t = clean;
     snprintf(s_page_title, sizeof(s_page_title), "%s", (t && t[0]) ? t : "Documentation");
     if (s_title_lbl && (!s_toc_panel || lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN)))
         lv_label_set_text(s_title_lbl, s_page_title);
@@ -148,12 +192,52 @@ static int fold_seq(const char *s, const char **rep)
         case 0x26A0: case 0x2705: case 0x274C: case 0xFE0F: *rep = ""; return len;
         default: break;
     }
-    // Box Drawing U+2500-257F -> -|+
+    // Box Drawing U+2500-257F -> -|+ , with the two diagonals kept as slashes
+    // (they appear in the manual's antenna/signal sketches, where "+" loses the
+    // sense of the line).
     if (cp >= 0x2500 && cp <= 0x257F) {
-        if      (cp == 0x2500 || cp == 0x2501) *rep = "-";
+        if      (cp == 0x2571)                 *rep = "/";
+        else if (cp == 0x2572)                 *rep = "\\";
+        else if (cp == 0x2500 || cp == 0x2501) *rep = "-";
         else if (cp == 0x2502 || cp == 0x2503) *rep = "|";
         else                                   *rep = "+";
         return len;
+    }
+    // Block Elements U+2580-259F -> ASCII shading. These are the waterfall and
+    // occupancy-strip sketches in the manual (U+2591 alone appears 128 times), and
+    // they used to fall through to the drop-everything default - so the art did not
+    // render as tofu, it silently VANISHED, leaving captioned blank space.
+    if (cp >= 0x2580 && cp <= 0x259F) {
+        if      (cp == 0x2591) *rep = ".";    // light shade
+        else if (cp == 0x2592) *rep = ":";    // medium shade
+        else                   *rep = "#";    // dark shade / full blocks
+        return len;
+    }
+    // Geometric Shapes: the manual uses these as UI pointers and state dots, so a
+    // word or punctuation carries the meaning where dropping them loses it.
+    switch (cp) {
+        case 0x25B2: *rep = "^"; return len;   // up triangle
+        case 0x25BC: *rep = "v"; return len;   // down triangle
+        case 0x25B6: case 0x25BA: *rep = ">"; return len;
+        case 0x25C0: case 0x25C4: *rep = "<"; return len;
+        case 0x25CB: case 0x25E6: *rep = "o"; return len;   // hollow dot
+        case 0x25CF: case 0x25AA: *rep = "*"; return len;   // filled dot
+        case 0x2248: *rep = "~";     return len;   // almost equal
+        case 0x2264: *rep = "<=";    return len;
+        case 0x2265: *rep = ">=";    return len;
+        case 0x2260: *rep = "!=";    return len;
+        case 0x00BD: *rep = "1/2";   return len;
+        case 0x00BC: *rep = "1/4";   return len;
+        case 0x00BE: *rep = "3/4";   return len;
+        case 0x2715: case 0x2716: *rep = "x"; return len;   // multiplication X
+        // Greek used as units/symbols in the docs - spell them, since the font has
+        // no Greek and a dropped tau turns "tau = 1 s" into "= 1 s".
+        case 0x03C4: *rep = "tau";   return len;
+        case 0x03B1: *rep = "alpha"; return len;
+        case 0x03A9: case 0x2126: *rep = "ohm"; return len;
+        case 0x00B2: *rep = "^2";    return len;
+        case 0x00B3: *rep = "^3";    return len;
+        default: break;
     }
     // Latin-1 accented letters -> unaccented base (avoids mangling names into
     // tofu; a docs reader in a proportional font can't show the accents anyway)
@@ -182,6 +266,38 @@ static int fold_seq(const char *s, const char **rep)
     }
     *rep = "";   // anything else: drop rather than render a tofu box
     return len;
+}
+
+// Append the bytes in [from, end) to dst at offset o, FOLDING as it goes; returns
+// the new offset.
+//
+// This exists because both markdown walkers had the same hole: their link and image
+// branches copied the label text out of "[...]" byte-for-byte, bypassing the fold
+// they perform on every other character. So every arrow OUTSIDE a link rendered
+// correctly while "[Web UI -> LoTW Upload]" put a tofu box on screen - which is
+// exactly what the operator found after I had reported the glyphs all handled. The
+// lesson: auditing the fold TABLE's coverage says nothing about code paths that
+// never call it. Any new place that copies source text must come through here.
+// Fold a short string for immediate use. The buffer is a file-local STATIC, not a
+// local: this runs on taskLVGL, where a few hundred bytes of stack is a real hazard
+// on this board. Safe because every caller is on that one task and hands the result
+// straight to lv_label_set_text(), which copies.
+static const char *fold_static(const char *s)
+{
+    static char buf[192];
+    fold_copy(buf, sizeof(buf), s ? s : "");
+    return buf;
+}
+
+static size_t append_folded(char *dst, size_t dstsz, size_t o,
+                            const char *from, const char *end)
+{
+    for (const char *q = from; q < end; ) {
+        const char *r; int a = fold_seq(q, &r);
+        if (a) { while (*r && o + 1 < dstsz) dst[o++] = *r++; q += a; }
+        else   { if (o + 1 < dstsz) dst[o++] = *q; q++; }
+    }
+    return o;
 }
 
 // Fold UTF-8 punctuation/box-drawing to ASCII into a SEPARATE bounded buffer.
@@ -235,7 +351,7 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
                 const char *paren = strchr(close, ')');
                 if (paren) {
                     o += (size_t)snprintf(dst + o, dstsz - o, "[image] ");
-                    for (const char *p = src + i + 2; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    o = append_folded(dst, dstsz, o, src + i + 2, close);
                     i = (size_t)(paren - src) + 1;
                     continue;
                 }
@@ -247,7 +363,7 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
             if (close && close[1] == '(') {
                 const char *paren = strchr(close, ')');
                 if (paren) {
-                    for (const char *p = src + i + 1; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    o = append_folded(dst, dstsz, o, src + i + 1, close);
                     i = (size_t)(paren - src) + 1;
                     continue;
                 }
@@ -279,7 +395,23 @@ static lv_obj_t *add_label(const char *text, const lv_font_t *font,
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
     lv_obj_set_style_pad_top(l, top_gap, 0);
     if (left_indent) lv_obj_set_style_pad_left(l, left_indent, 0);
-    lv_label_set_text(l, text && text[0] ? text : " ");
+
+    // FOLD HERE, not (only) in the callers. Most callers pass text that has already
+    // been through md_inline_clean(), but the heading and blockquote paths passed
+    // their raw slice straight in - so any character the font lacks reached LVGL and
+    // rendered as a tofu box. Folding at the single point where text becomes a label
+    // makes that impossible to get wrong again; re-folding already-folded text is a
+    // no-op, since fold_seq() returns 0 for ASCII.
+    const char *src = (text && text[0]) ? text : " ";
+    size_t need = strlen(src) * 5 + 16;          // folds can EXPAND ("(left/right)")
+    char *folded = heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (folded) {
+        fold_copy(folded, need, src);
+        lv_label_set_text(l, folded[0] ? folded : " ");
+        heap_caps_free(folded);
+    } else {
+        lv_label_set_text(l, src);
+    }
     return l;
 }
 
@@ -324,7 +456,7 @@ static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
                 if (paren) {
                     const char *pfx = "[image] ";
                     while (*pfx && o + 1 < sizeof(seg)) seg[o++] = *pfx++;
-                    for (const char *q = src + i + 2; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    o = append_folded(seg, sizeof(seg), o, src + i + 2, close);
                     i = (size_t)(paren - src) + 1; continue;
                 }
             }
@@ -334,7 +466,7 @@ static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
             if (close && close[1] == '(') {
                 const char *paren = strchr(close, ')');
                 if (paren) {
-                    for (const char *q = src + i + 1; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    o = append_folded(seg, sizeof(seg), o, src + i + 1, close);
                     i = (size_t)(paren - src) + 1; continue;
                 }
             }
@@ -383,6 +515,18 @@ static void add_code_block(const char *text)
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, LV_SIZE_CONTENT);
     lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 24, 0);
+    // REVERTED to montserrat 2026-08-08, same day it was tried. unscii_16 is a
+    // bitmap pixel font and the operator's verdict was "super ugly and not
+    // readable" - and it did NOT fix the drawings anyway.
+    //
+    // Why monospace was never going to be enough: the drawings are built from
+    // UTF-8 box characters, arrows and an emoji, and this reader folds UTF-8 to
+    // ASCII before drawing. Some folds CHANGE THE LENGTH - an arrow becomes
+    // "(right)", one character turning into seven. A line whose character count
+    // grew after the author aligned it cannot line up in any font, monospace or
+    // not, and it overruns the box and wraps.
+    //
+    // The fix is to stop drawing pictures out of characters. See TODO #96.
     lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     // Fold UTF-8 -> ASCII into a PSRAM temp (fold can expand, so not in place);
@@ -544,6 +688,7 @@ static void render_markdown(char *buf)
     char *code    = S->code;    size_t code_len = 0;   // accumulated code-block text
     char *cleaned = S->cleaned;                        // reused per block (single-threaded)
     bool in_code = false;
+    bool in_diagram = false;   // the open fence is a ```qmxdiagram
     bool in_table = false;   // accumulating consecutive '|' rows into `code`
     bool in_frontmatter = false;
     int  block_count = 0;
@@ -584,8 +729,24 @@ static void render_markdown(char *buf)
 
         // fenced code block ``` or ~~~ (pymdownx superfences: language/opts follow)
         if (strncmp(t, "```", 3) == 0 || strncmp(t, "~~~", 3) == 0) {
-            if (in_code) { code[code_len] = '\0'; add_code_block(code); code_len = 0; block_count++; in_code = false; }
-            else         { FLUSH_PARA(); in_code = true; code_len = 0; }
+            if (in_code) {
+                code[code_len] = '\0';
+                // A ```qmxdiagram fence is a drawing, not code - see
+                // ui/reader_diagram.h for why the manual's pictures stopped
+                // being made of characters. If the spec is unusable the
+                // renderer returns NULL and we show the raw text, so a bad
+                // diagram degrades to something readable rather than to a gap.
+                lv_obj_t *drawn = NULL;
+                if (in_diagram) {
+                    drawn = reader_diagram_add(s_body, code, SCR_W - 2 * BODY_PAD_X);
+                }
+                if (!drawn) add_code_block(code);
+                code_len = 0; block_count++; in_code = false; in_diagram = false;
+            } else {
+                FLUSH_PARA();
+                in_code = true; code_len = 0;
+                in_diagram = (strncasecmp(t + 3, "qmxdiagram", 10) == 0);
+            }
             continue;
         }
         if (in_code) {
@@ -614,8 +775,15 @@ static void render_markdown(char *buf)
                                      (level == 3) ? &lv_font_montserrat_24 :
                                                     &lv_font_montserrat_22;
                 uint32_t col = (level <= 3) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
-                add_label(cleaned, f, col, block_count ? 22 : 4, 0);
+                lv_obj_t *hl = add_label(cleaned, f, col, block_count ? 22 : 4, 0);
                 block_count++;
+                // Context help: remember the first heading that matches the
+                // requested anchor, so the render can finish and THEN scroll to
+                // it (its y is only known once the flex column is laid out).
+                if (hl && !s_anchor_obj && s_want_anchor[0] &&
+                    strcasestr_local(cleaned, s_want_anchor)) {
+                    s_anchor_obj = hl;
+                }
                 if (!title[0] && level == 1) { snprintf(title, MD_TITLE_SZ, "%s", cleaned); }
                 continue;
             }
@@ -744,28 +912,62 @@ static void render_markdown(char *buf)
     #undef FLUSH_PARA
 
     set_page_title(title);
-    lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
+    if (s_anchor_obj) {
+        // Lay the flex column out first - a child's y is meaningless until then.
+        lv_obj_update_layout(s_body);
+        lv_coord_t y = lv_obj_get_y(s_anchor_obj);
+        if (y < 0) y = 0;
+        lv_obj_scroll_to_y(s_body, y, LV_ANIM_OFF);
+        ESP_LOGI(TAG, "context help: landed on '%s' (y=%d)", s_want_anchor, (int)y);
+    } else {
+        if (s_want_anchor[0] && !s_anchor_reported) {
+            s_anchor_reported = true;   // once per request, not once per render
+            ESP_LOGW(TAG, "context help: heading '%s' not found on this page - showing the top",
+                     s_want_anchor);
+        }
+        lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
+    }
+    // The anchor stays armed until the PAGE changes (load_page/navigate_to clear
+    // it), rather than being consumed by the first render. A single help request
+    // can produce more than one render of the same page - the immediate one plus
+    // the one reader_net's completion notify triggers - and a one-shot anchor meant
+    // the second render found nothing to aim at and reset the scroll to the top,
+    // undoing the jump a fraction of a second after making it.
+    s_anchor_obj = NULL;
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
     heap_caps_free(S);   // title already copied into the label above
 }
 
 // Read the cache file and render it. LVGL thread only.
+// Render the current page STRAIGHT FROM THE EMBEDDED MANUAL.
+//
+// This used to read /spiffs/reader.md, which reader_net.c had just written from the
+// very same blob - a pointless round-trip through flash that became a real bug on
+// 2026-08-06: /spiffs is 1 MB shared with qso.adi, the LoTW cert+key and the diag
+// log's 256 KB rolling file plus a rotation, so on a well-used device the write
+// returned 0 of 12031 bytes and the manual showed an error for a page that was
+// sitting in the firmware the whole time. Reading the blob cannot fail that way,
+// needs no free space, and is faster.
+//
+// render_markdown() mutates its buffer, so the blob (in flash, const) is copied
+// into PSRAM first rather than cast away.
 static void render_from_cache(void)
 {
-    FILE *f = fopen(READER_CACHE_PATH, "rb");
-    if (!f) {
+    const char *data = NULL;
+    size_t len = 0;
+    if (!manual_embed_get(s_current_path, &data, &len) || !data) {
         lv_obj_clean(s_body);
-        add_label("Downloading documentation from tab5.lav.dk...\n\nThis needs WiFi. "
-                  "If it doesn't appear shortly, check WiFi and swipe out and back in.",
+        add_label("That page is not in this firmware's built-in manual.",
                   &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
-        set_page_title("Documentation");
+        set_page_title("Manual");
+        ESP_LOGW(TAG, "render: '%s' not in the embedded manual", s_current_path);
         return;
     }
+    if (len > MD_MAX_BYTES - 1) len = MD_MAX_BYTES - 1;
     char *buf = heap_caps_malloc(MD_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { fclose(f); ESP_LOGW(TAG, "OOM rendering cache"); return; }
-    size_t n = fread(buf, 1, MD_MAX_BYTES - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+    if (!buf) { ESP_LOGW(TAG, "OOM rendering page"); return; }
+    memcpy(buf, data, len);
+    buf[len] = '\0';
     render_markdown(buf);
     heap_caps_free(buf);
 }
@@ -776,14 +978,17 @@ static void render_from_cache(void)
 // LVGL thread only.
 static void parse_toc_file(void)
 {
+    // Same reasoning as render_from_cache(): the contents list is "toc.json" inside
+    // the embedded manual, so read it there rather than via a SPIFFS copy that can
+    // fail to be written on a full partition.
     s_toc_n = 0;
-    FILE *f = fopen(TOC_CACHE_PATH, "rb");
-    if (!f) return;
+    const char *data = NULL;
+    size_t n = 0;
+    if (!manual_embed_get("toc.json", &data, &n) || !data) return;
+    if (n > 16 * 1024 - 1) n = 16 * 1024 - 1;
     char *buf = heap_caps_malloc(16 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { fclose(f); return; }
-    size_t n = fread(buf, 1, 16 * 1024 - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+    if (!buf) return;
+    memcpy(buf, data, n);
 
     cJSON *root = cJSON_Parse(buf);
     heap_caps_free(buf);
@@ -813,6 +1018,245 @@ static void parse_toc_file(void)
 }
 
 static void navigate_to(const char *rel, const char *title_hint);
+static void index_btn_cb(lv_event_t *e);
+
+// ---- A-Z index (context help, Layer 4) -------------------------------------
+//
+// Built into manual.bin as index.json by tools/pack_manual.py, one entry per
+// heading in the manual, with every anchor verified at build time.
+//
+// Deliberately NOT a generated markdown page of links: this reader renders
+// links as plain TEXT (only the Contents panel navigates), so an index written
+// that way would look correct and do nothing.
+//
+// Two stages, letters then terms, for a reason that is not cosmetic: 256 terms
+// means 256 LVGL objects, and at this display's ~13 fps building that many at
+// once is a visible stall. A letter holds a couple of dozen.
+#define IDX_MAX        320
+#define IDX_CELL_MAX   96
+typedef struct {
+    char term[72];
+    char path[56];
+    char anchor[72];
+} index_entry_t;
+
+static index_entry_t *s_idx = NULL;      // PSRAM; parsed once, kept
+static int   s_idx_n = 0;
+static lv_obj_t *s_idx_panel = NULL;
+static lv_obj_t *s_idx_btn   = NULL;   // header "A-Z" button
+static lv_obj_t *s_idx_cells[IDX_CELL_MAX];
+static int   s_idx_cell_term[IDX_CELL_MAX];  // -1 = a letter cell / the back cell
+static char  s_idx_cell_letter[IDX_CELL_MAX];
+static int   s_idx_cell_n = 0;
+static int   s_idx_hi = -1;
+static char  s_idx_letter = 0;           // 0 = showing the letter grid
+
+// Which bucket a term belongs to: its first letter, or '#' for anything else.
+static char index_bucket(const char *term)
+{
+    for (const char *p = term; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') return *p;
+        if (*p >= 'a' && *p <= 'z') return (char)(*p - 'a' + 'A');
+        if (*p > ' ' && (*p < '0' || *p > '9') && *p != '.') break;
+        if (*p >= '0' && *p <= '9') return '#';
+    }
+    return '#';
+}
+
+// Parse index.json out of the embedded manual into a PSRAM array. Once per
+// boot; ~60 KB, which has no business being on any task stack or in internal
+// RAM (CLAUDE.md, "Audit every malloc under ~16 KB").
+static void parse_index_file(void)
+{
+    if (s_idx || s_idx_n) return;
+    const char *data = NULL;
+    size_t n = 0;
+    if (!manual_embed_get("index.json", &data, &n) || !data) {
+        ESP_LOGW(TAG, "index: no index.json in the embedded manual");
+        return;
+    }
+    char *buf = heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return;
+    memcpy(buf, data, n);
+    buf[n] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!root) { ESP_LOGW(TAG, "index: index.json did not parse"); return; }
+
+    cJSON *terms = cJSON_GetObjectItem(root, "terms");
+    if (cJSON_IsArray(terms)) {
+        int cnt = cJSON_GetArraySize(terms);
+        s_idx = heap_caps_malloc(sizeof(index_entry_t) * IDX_MAX,
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_idx) { cJSON_Delete(root); return; }
+        for (int i = 0; i < cnt && s_idx_n < IDX_MAX; i++) {
+            cJSON *e = cJSON_GetArrayItem(terms, i);
+            cJSON *t = cJSON_GetObjectItem(e, "t");
+            cJSON *p = cJSON_GetObjectItem(e, "p");
+            cJSON *a = cJSON_GetObjectItem(e, "a");
+            if (!cJSON_IsString(t) || !cJSON_IsString(p)) continue;
+            index_entry_t *d = &s_idx[s_idx_n++];
+            snprintf(d->term,   sizeof(d->term),   "%s", t->valuestring);
+            snprintf(d->path,   sizeof(d->path),   "%s", p->valuestring);
+            snprintf(d->anchor, sizeof(d->anchor), "%s",
+                     (cJSON_IsString(a) && a->valuestring) ? a->valuestring : "");
+        }
+    }
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "index: %d terms", s_idx_n);
+}
+
+static void index_cell_highlight(int k)
+{
+    if (k == s_idx_hi) return;
+    if (s_idx_hi >= 0 && s_idx_hi < s_idx_cell_n)
+        lv_obj_set_style_bg_opa(s_idx_cells[s_idx_hi], LV_OPA_TRANSP, 0);
+    s_idx_hi = k;
+    if (k >= 0 && k < s_idx_cell_n)
+        lv_obj_set_style_bg_opa(s_idx_cells[k], LV_OPA_COVER, 0);
+}
+
+static void index_build(char letter);   // forward: the cells rebuild each other
+
+static lv_obj_t *index_make_cell(lv_obj_t *parent, const char *text, int w, int h,
+                                 bool big, int term_idx, char letter)
+{
+    if (s_idx_cell_n >= IDX_CELL_MAX) return NULL;
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);     // highlight paints this
+    lv_obj_set_style_border_width(cell, 0, 0);
+    lv_obj_set_style_radius(cell, 6, 0);
+    lv_obj_set_style_pad_all(cell, 4, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);      // the panel does the picking
+    lv_obj_t *lbl = lv_label_create(cell);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, w - 16);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, big ? &lv_font_montserrat_32 : &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(big ? 0xE8C060 : 0xFFFFFF), 0);
+    lv_obj_center(lbl);
+    s_idx_cell_term[s_idx_cell_n]   = term_idx;
+    s_idx_cell_letter[s_idx_cell_n] = letter;
+    s_idx_cells[s_idx_cell_n++]     = cell;
+    return cell;
+}
+
+// letter == 0 -> the A-Z grid; otherwise that letter's terms.
+static void index_build(char letter)
+{
+    if (!s_idx_panel) return;
+    lv_obj_clean(s_idx_panel);
+    s_idx_cell_n = 0;
+    s_idx_hi = -1;
+    s_idx_letter = letter;
+    lv_obj_scroll_to_y(s_idx_panel, 0, LV_ANIM_OFF);
+
+    if (letter == 0) {
+        // Letter grid. Only buckets that actually hold something are offered -
+        // a dead letter is a promise the index cannot keep.
+        const int CW = 120, CH = 84, COLS = 8, GAP = 12;
+        const char *alphabet = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        int shown = 0;
+        for (const char *L = alphabet; *L; L++) {
+            bool any = false;
+            for (int i = 0; i < s_idx_n; i++)
+                if (index_bucket(s_idx[i].term) == *L) { any = true; break; }
+            if (!any) continue;
+            char txt[2] = { *L, 0 };
+            lv_obj_t *c = index_make_cell(s_idx_panel, txt, CW, CH, true, -1, *L);
+            if (c) lv_obj_set_pos(c, (shown % COLS) * (CW + GAP) + 8,
+                                     (shown / COLS) * (CH + GAP) + 8);
+            shown++;
+        }
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, "Index");
+        return;
+    }
+
+    // Terms for one letter. First cell goes back to the grid, so the way out is
+    // always the same gesture as the way in.
+    const int W = SCR_W - 96, H = 56;
+    int row = 0;
+    lv_obj_t *back = index_make_cell(s_idx_panel, LV_SYMBOL_LEFT "  All letters",
+                                     W, H, false, -1, 0);
+    if (back) lv_obj_set_pos(back, 8, 8);
+    row++;
+    for (int i = 0; i < s_idx_n && s_idx_cell_n < IDX_CELL_MAX; i++) {
+        if (index_bucket(s_idx[i].term) != letter) continue;
+        lv_obj_t *c = index_make_cell(s_idx_panel, s_idx[i].term, W, H, false, i, 0);
+        if (c) lv_obj_set_pos(c, 8, row * (H + 6) + 8);
+        row++;
+    }
+    if (s_title_lbl) {
+        char t[16];
+        snprintf(t, sizeof(t), "Index - %c", letter);
+        lv_label_set_text(s_title_lbl, t);
+    }
+}
+
+// Open (or close) the index. Closing the Contents panel first, since only one
+// of the two may be up.
+static void index_panel_set_open(bool open)
+{
+    if (!s_idx_panel) return;
+    if (open) {
+        parse_index_file();
+        if (s_toc_panel) lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+        index_build(0);
+        lv_obj_clear_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_idx_panel);
+    } else {
+        lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, s_page_title);
+    }
+}
+
+static void index_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    bool up = s_idx_panel && !lv_obj_has_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+    index_panel_set_open(!up);
+}
+
+// Same drag-to-pick as the Contents panel: highlight follows the finger, the
+// release commits. Attached to the panel because the cells are inert.
+static void index_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
+        lv_indev_t *indev = lv_event_get_indev(e);
+        if (!indev) return;
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int hit = -1;
+        for (int k = 0; k < s_idx_cell_n; k++) {
+            lv_area_t a; lv_obj_get_coords(s_idx_cells[k], &a);
+            if (p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2) { hit = k; break; }
+        }
+        index_cell_highlight(hit);
+    } else if (code == LV_EVENT_RELEASED) {
+        int k = s_idx_hi;
+        index_cell_highlight(-1);
+        if (k < 0 || k >= s_idx_cell_n) return;
+        int ti = s_idx_cell_term[k];
+        char lt = s_idx_cell_letter[k];
+        if (ti < 0) {                       // a letter cell, or "All letters"
+            index_build(lt);                // lt == 0 rebuilds the grid
+            return;
+        }
+        if (ti < s_idx_n) {
+            lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+            snprintf(s_want_anchor, sizeof(s_want_anchor), "%s", s_idx[ti].anchor);
+            s_anchor_reported = false;
+            s_anchor_obj = NULL;
+            navigate_to(s_idx[ti].path, NULL);
+        }
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        index_cell_highlight(-1);
+    }
+}
 
 // One TOC entry into column `col`. Style driven purely by nav depth (level):
 //   level 0  -> gold 32 px  (section headers AND top pages read identically)
@@ -834,7 +1278,7 @@ static void make_toc_entry(lv_obj_t *col, int i)
         lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
         lv_obj_set_style_pad_top(l, 10, 0);
         lv_obj_set_style_pad_left(l, 10, 0);   // align with the page cells' text
-        lv_label_set_text(l, e->title);
+        lv_label_set_text(l, fold_static(e->title));
         return;
     }
     // Page cell. Inert (not individually clickable) — the panel drives a
@@ -856,7 +1300,7 @@ static void make_toc_entry(lv_obj_t *col, int i)
     lv_obj_set_width(l, LV_PCT(100));
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_label_set_text(l, e->title[0] ? e->title : e->path);
+    lv_label_set_text(l, fold_static(e->title[0] ? e->title : e->path));
 }
 
 static lv_obj_t *make_toc_column(int w)
@@ -966,6 +1410,23 @@ static void toc_panel_set_open(bool open)
 static char s_hist[16][96];
 static int  s_hist_n = 0;
 
+// Show "Back" only when it would actually do something. With no history and the
+// contents panel closed it is a dead button sitting next to a live "Exit", and the
+// operator is left working out which of the two leaves the manual - the exact
+// confusion reported on 2026-08-06. When hidden, Exit slides into its slot so there
+// is no gap where a button used to be.
+static void nav_buttons_sync(void)
+{
+    const int BTN_Y = (HEADER_H - 46) / 2;
+    bool toc_open  = s_toc_panel && !lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+    bool want_back = (s_hist_n > 0) || toc_open;   // Back also closes the contents panel
+    if (s_back_btn) {
+        if (want_back) lv_obj_clear_flag(s_back_btn, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_back_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_exit_btn) lv_obj_align(s_exit_btn, LV_ALIGN_TOP_LEFT, want_back ? 190 : 40, BTN_Y);
+}
+
 // Load and display a page. `push` records the page we're leaving onto the
 // history stack (Back replays it with push=false). LVGL thread only.
 static void load_page(const char *rel, const char *title_hint, bool push)
@@ -974,11 +1435,20 @@ static void load_page(const char *rel, const char *title_hint, bool push)
     if (push && s_current_path[0] && strcmp(s_current_path, rel) != 0 && s_hist_n < 16)
         snprintf(s_hist[s_hist_n++], sizeof(s_hist[0]), "%s", s_current_path);
     snprintf(s_current_path, sizeof(s_current_path), "%s", rel);
+    // A deliberate navigation (contents pick, in-page link, Back) means "top of
+    // that page" - so retire any context-help anchor still armed from a help jump,
+    // or it would keep yanking the scroll down on an unrelated page.
+    s_want_anchor[0] = 0;
+    s_anchor_reported = false;
     toc_panel_set_open(false);
     lv_obj_clean(s_body);
     add_label("Loading...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
     if (title_hint) set_page_title(title_hint);
-    lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
+    // NOT "Downloading..." - nothing is downloaded. The page comes out of the
+    // embedded manual (render_from_cache), and a status line claiming a network
+    // fetch is exactly the kind of leftover that makes an operator go looking for
+    // a WiFi problem they do not have.
+    lock(); s_status[0] = '\0'; unlock();
     reader_net_fetch(rel, false);
 }
 
@@ -1010,6 +1480,36 @@ static void back_btn_cb(lv_event_t *e)
     }
 }
 
+void reader_view_open_help(const char *page_rel, const char *anchor)
+{
+    if (!page_rel || !page_rel[0]) return;
+    snprintf(s_want_anchor, sizeof(s_want_anchor), "%s", anchor ? anchor : "");
+    s_anchor_reported = false;
+    s_anchor_obj = NULL;
+    ESP_LOGI(TAG, "context help: %s%s%s", page_rel,
+             anchor && anchor[0] ? " -> " : "", anchor ? anchor : "");
+
+    // Point s_current_path at the target BEFORE show(), and let show()'s own
+    // fetch load it. Do NOT show-then-fetch: reader_view_show() already issues
+    // reader_net_fetch(s_current_path, true) for whatever page was last open, and
+    // reader_net_fetch() is a NO-OP while a load is in flight - so a second call
+    // here was silently dropped and every context-help tap landed on the index
+    // page instead (operator-reported, 2026-08-06: "all I have tried send me to
+    // the homepage"). One fetch, of the right page, is the whole fix.
+    snprintf(s_current_path, sizeof(s_current_path), "%s", page_rel);
+    reader_view_show();
+}
+
+// Open the Reader straight onto the A-Z index. This is what the "Need
+// guidance?" panel's bottom button does: the operator already knows the word
+// they are looking for, and the contents list is the wrong shape for that.
+void reader_view_open_index(void)
+{
+    s_want_anchor[0] = '\0';
+    reader_view_show();
+    index_panel_set_open(true);
+}
+
 // Exit: leave the Reader entirely (returns to whatever mode was underneath).
 static void exit_btn_cb(lv_event_t *e)
 {
@@ -1035,13 +1535,16 @@ static void tick_cb(lv_timer_t *t)
 
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
+    nav_buttons_sync();   // history/contents state changes on navigation
 
     // The "Save offline" button is gone: the manual is built into the firmware, so
     // it is always available and there is nothing to save, download or restart
     // for. See net/manual_embed.h.
 
     if (s_status_lbl) {
-        if (do_reload && from_cache && !status[0]) strncpy(status, "Offline - showing cached copy", sizeof(status)-1);
+        // No "Offline - showing cached copy" fallback any more: there is no online
+        // case to be offline from, and no cached copy - every page is read out of
+        // the firmware. Whatever status a caller set (or nothing) is the truth.
         lv_label_set_text(s_status_lbl, status);
     }
 
@@ -1119,6 +1622,7 @@ void reader_view_init(lv_obj_t *parent)
     // Back (previous page in history). Kept clear of the ~30 px left-edge
     // exit-swipe strip.
     lv_obj_t *back_btn = lv_button_create(s_overlay);
+    s_back_btn = back_btn;
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 40, BTN_Y);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(back_btn, 20, 0);
@@ -1131,12 +1635,18 @@ void reader_view_init(lv_obj_t *parent)
 
     // Exit (leaves the Reader). Same style/padding as Back.
     lv_obj_t *exit_btn = lv_button_create(s_overlay);
+    s_exit_btn = exit_btn;
     lv_obj_align(exit_btn, LV_ALIGN_TOP_LEFT, 190, BTN_Y);
     lv_obj_set_style_bg_color(exit_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(exit_btn, 20, 0);
     lv_obj_set_height(exit_btn, BTN_H);
     lv_obj_set_ext_click_area(exit_btn, 44);
     lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
+    // Esc leaves the manual. No Enter: there is nothing here to confirm, and a
+    // reader is exactly where a keyboard user expects Esc to work. Scrolling
+    // with the arrows and PgUp/PgDn is handled in ui.c's kbd_text_cb, which can
+    // see whether this overlay is the thing on screen.
+    ui_kbd_set_buttons(NULL, exit_btn);
     lv_obj_t *exit_lbl = lv_label_create(exit_btn);
     lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(exit_lbl, LV_SYMBOL_CLOSE "  Exit");
@@ -1153,6 +1663,23 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(toc_btn_lbl, "Contents");
+
+    // A-Z index, beside Contents. Contents answers "what is in here"; this one
+    // answers "where is the thing I already know the name of".
+    s_idx_btn = lv_button_create(s_overlay);
+    // Right-hand end, not beside Contents: the gold page title is anchored at
+    // x=520 and a button at 500 lands underneath it. The old "Save offline"
+    // slot over here is free, and Back/Exit/Contents on the left with A-Z on
+    // the right splits "move around the book" from "look something up".
+    lv_obj_align(s_idx_btn, LV_ALIGN_TOP_RIGHT, -40, BTN_Y);
+    lv_obj_set_style_bg_color(s_idx_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_pad_hor(s_idx_btn, 20, 0);
+    lv_obj_set_height(s_idx_btn, BTN_H);
+    lv_obj_set_ext_click_area(s_idx_btn, 44);
+    lv_obj_add_event_cb(s_idx_btn, index_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *idx_btn_lbl = lv_label_create(s_idx_btn);
+    lv_obj_set_style_text_font(idx_btn_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(idx_btn_lbl, "A-Z");
 
     // Save offline (right end, SD only). Label flips to "Saved offline - update?"
     // (The "Save offline" button used to live here, top-right. Removed: the manual
@@ -1175,6 +1702,8 @@ void reader_view_init(lv_obj_t *parent)
 
     // Scrollable body
     s_body = lv_obj_create(s_overlay);
+    // Reading a manual is the clearest case for arrow scrolling there is.
+    ui_kbd_add_scrollable(s_body);
     lv_obj_remove_style_all(s_body);
     lv_obj_set_size(s_body, SCR_W, SCR_H - HEADER_H);
     lv_obj_set_pos(s_body, 0, HEADER_H);
@@ -1214,6 +1743,25 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
 
+    // A-Z index panel (Layer 4). Same surface and same drag-to-pick as Contents,
+    // but absolutely positioned and SCROLLABLE - a busy letter runs past the
+    // bottom of the screen, which the two-column contents never does.
+    s_idx_panel = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(s_idx_panel);
+    lv_obj_set_size(s_idx_panel, SCR_W, SCR_H - HEADER_H);
+    lv_obj_set_pos(s_idx_panel, 0, HEADER_H);
+    lv_obj_set_style_bg_color(s_idx_panel, lv_color_hex(0x0a0d10), 0);
+    lv_obj_set_style_bg_opa(s_idx_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_idx_panel, 40, 0);
+    lv_obj_set_style_pad_ver(s_idx_panel, 20, 0);
+    lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESS_LOST, NULL);
+    lv_obj_set_scrollbar_mode(s_idx_panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+
     // Keep the header bar and its buttons above the body so the buttons' large
     // ext_click_area — which reaches BELOW the bar — wins the touch there
     // instead of the body swallowing it.
@@ -1221,71 +1769,73 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_move_foreground(back_btn);
     lv_obj_move_foreground(exit_btn);
     lv_obj_move_foreground(s_toc_btn);
+    // A-Z too. hdr is raised above the whole overlay two lines up, so any
+    // header control missing from this list is painted over by the bar it
+    // sits in - which is precisely how this one went invisible while
+    // reporting a perfectly good x/y/w/h and hidden=0.
+    if (s_idx_btn) lv_obj_move_foreground(s_idx_btn);
     if (s_banner) lv_obj_move_foreground(s_banner);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);
     ESP_LOGI(TAG, "init");
 }
 
-// Simple x-position animator for the slide.
-static void anim_x_cb(void *var, int32_t v) { lv_obj_set_x((lv_obj_t *)var, v); }
-
-static void slide(int32_t from, int32_t to)
-{
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, s_overlay);
-    lv_anim_set_exec_cb(&a, anim_x_cb);
-    lv_anim_set_values(&a, from, to);
-    lv_anim_set_time(&a, SLIDE_TIME_MS);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
-}
-
 void reader_view_show(void)
 {
     if (!s_overlay) return;
-    // Left-edge swipe drags RIGHT, so the page enters from the LEFT and follows
-    // the finger (matches the Panadapter<->FT8 slide direction).
-    lv_obj_set_x(s_overlay, -SCR_W);
-    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-    s_active = true;
-    slide(-SCR_W, 0);
 
     toc_panel_set_open(false);
     s_hist_n = 0;   // fresh navigation history each time the manual is opened
-    // Render whatever is cached immediately (page + TOC), then kick a refresh of
-    // the current page and the contents list.
+
+    // RENDER BEFORE SHOWING. The overlay used to be made visible and slid in while
+    // s_body still held the PREVIOUS visit's widget tree, with the new page only
+    // arriving on a later timer tick - so opening a help link visibly rendered one
+    // or two wrong pages before settling on the right one. That was a leftover from
+    // when pages came over WiFi and there was genuinely nothing to draw yet; now the
+    // page is in the firmware, so it can be built synchronously here and the very
+    // first visible frame is the correct one.
+    parse_toc_file();
+    rebuild_toc_panel();
+    render_from_cache();
+    nav_buttons_sync();
     lock();
-    s_reload_pending = true; s_from_cache = true;
-    s_toc_reload_pending = true;
-    strncpy(s_status, "Refreshing...", sizeof(s_status)-1);
+    s_reload_pending = false;      // already rendered - do not repaint and lose the anchor
+    s_toc_reload_pending = false;
+    s_status[0] = 0;           // nothing to fetch: the manual is in the firmware
     unlock();
-    reader_net_fetch(s_current_path, true);
+
+    // APPEAR IN ONE FRAME - no slide. Landscape runs at ~13 fps (every flush goes
+    // through the software 90-degree rotation), so the old 220 ms slide was about
+    // THREE frames: not motion, just two or three discrete snapshots of the page at
+    // intermediate offsets. That is what read as a "rendering flicker offset to the
+    // left", and why it varied - it depends where the frames fall in the animation.
+    // A cross-fade would be the same three frames at 33/66/100% opacity, i.e. a
+    // flash rather than a dissolve, so animating differently is not the answer on
+    // this display. One correct frame is.
+    lv_obj_set_x(s_overlay, 0);
+    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    s_active = true;
+
+    // Stand the Panadapter's touch navigation down. Without this the top-bar
+    // Band/Mode/BW hit zones - direct children of the screen, foregrounded above
+    // this overlay - swallow taps aimed at our own Back/Exit/Contents buttons, so
+    // the manual could be opened but not left.
+    ui_help_overlay_changed();
     ESP_LOGI(TAG, "show (page=%s)", s_current_path);
 }
 
-static void hide_done_cb(lv_anim_t *a)
-{
-    (void)a;
-    if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-}
 
 void reader_view_hide(void)
 {
     if (!s_overlay) return;
     s_active = false;
-    lv_anim_t anim;
-    lv_anim_init(&anim);
-    lv_anim_set_var(&anim, s_overlay);
-    lv_anim_set_exec_cb(&anim, anim_x_cb);
-    // Exit slides off to the RIGHT (revealing the Panadapter underneath),
-    // matching the FT8->Panadapter direction on the same rightward swipe.
-    lv_anim_set_values(&anim, lv_obj_get_x(s_overlay), SCR_W);
-    lv_anim_set_time(&anim, SLIDE_TIME_MS);
-    lv_anim_set_path_cb(&anim, lv_anim_path_ease_in);
-    lv_anim_set_ready_cb(&anim, hide_done_cb);
-    lv_anim_start(&anim);
+    ui_help_overlay_changed();   // hand the top bar and edge swipes back
+    // Disappear in one frame, for the same reason show() appears in one (see there).
+    // Sliding out was worse than sliding in: the page being dragged across the
+    // screen at ~13 fps looked like an unrelated page surfacing before the FT8
+    // screen came back.
+    lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_x(s_overlay, 0);
     ESP_LOGI(TAG, "hide");
 }
 

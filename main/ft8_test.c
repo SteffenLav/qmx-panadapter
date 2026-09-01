@@ -37,6 +37,7 @@
 // only way to hear the station we're working (they transmit opposite us).
 
 #include "ft8_test.h"
+#include "ft8_slot_gate.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -72,6 +73,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ft8_robot.h"
+#include "ft8_hound.h"
 #include "net/pskreporter.h"
 #include "ft8_hash.h"
 #include "time_sync.h"
@@ -90,6 +92,12 @@ static const char *TAG = "ft8_test";
 // active sample count (period_ms × 12 samples/ms) and the UTC boundary grid
 // from these at runtime, keyed off the FT8/FT4 sub-mode (ft8_op_mode_get()).
 #define FT8_SLOT_MS           15000
+
+// Below this much free internal RAM the per-slot line pays for a
+// largest-free-block walk; above it, never. See the comment at the call site -
+// that walk runs with interrupts off and is the documented cause of the
+// full-screen cyan flash on this panel.
+#define FT8_SLOT_LBLK_EMERGENCY_KB  24
 #define FT4_SLOT_MS           7500
 #define SNTP_WAIT_TIMEOUT_MS  30000
 #define CAT_STATUS_UPDATE_MS  5000
@@ -193,7 +201,13 @@ int ft8_op_mode_slot_ms(void)
 // would start transmitting outside the range the far end can decode - strictly
 // worse than waiting for the next slot. Do NOT raise further without moving the
 // decoder's +19-block search bound too.
-#define FT8_REPLY_TX_WINDOW_MS 2800
+/* ⛔ RETIRED - do not reinstate. 2800 ms was looser than EITHER protocol's
+ * room (FT8 has 15000-12640 = 2360 ms, FT4 7500-5040 = 2460 ms), so a reply
+ * fired at the window edge overran its own slot. It rarely bit only because
+ * decodes usually land about a second in. The window is now derived per
+ * protocol by ft8_gate_reply_window_ms() as slot - burst - margin: 2260 ms
+ * for FT8, 2360 ms for FT4. Putting 2800 back is a caught mutation. */
+/* #define FT8_REPLY_TX_WINDOW_MS 2800  - see ft8_slot_gate.h */
 
 // Hold-for-decode gate (the "everything goes twice" fix). During an active
 // QSO, the just-ended RX slot's decode is ALWAYS still running at the next
@@ -209,7 +223,7 @@ int ft8_op_mode_slot_ms(void)
 // somehow hasn't landed by this deadline, fire whatever is armed - worst case
 // is exactly the old resend behaviour, never a skipped slot. Must be < the
 // FT8_REPLY_TX_WINDOW_MS poll cutoff or a late decode ends in NO TX at all.
-#define FT8_TX_HOLD_DEADLINE_MS 2300
+/* #define FT8_TX_HOLD_DEADLINE_MS 2300  - now ft8_gate_hold_deadline_ms() */
 
 // Early-decode (the "reply at dt~=0" path, WSJT-X-style). All the hold/reply
 // machinery above ships the fresh reply ~1-2 s late for one reason: the
@@ -327,6 +341,11 @@ static volatile uint32_t s_decode_jobs_done   = 0;
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
 // first finished tearing down; the two clobber the shared s_decode_queue and
 // one decode task ends up calling xQueueReceive(NULL) -> assert/reboot.
+/* Up to ~15 s: wspr_rx frees on its next loop pass, measured at ~2.6 s, and a
+ * WSPR cycle is 120 s so a pathological case wants room. */
+#define FT8_ALLOC_TRIES    16
+#define FT8_ALLOC_WAIT_MS 1000
+
 static volatile bool  s_ft8_task_alive = false;
 
 // Timing error from the last decoded slot: positive = system clock is fast.
@@ -376,6 +395,41 @@ static volatile bool s_buf_busy[FT8_NUM_BUFFERS];
 // are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
 // so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
 static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
+
+// Slot-start UTC of the last slot we actually RECEIVED, per transmit window.
+// Written only where a capture completed, read by the UI to tell "this window is
+// free" from "we were transmitting into this window and have no idea".
+static volatile int64_t s_last_rx_utc_even = 0;
+static volatile int64_t s_last_rx_utc_odd  = 0;
+
+// Slot-start UTC of the last slot we TRANSMITTED in, per window. The counterpart
+// of the pair above, and it exists because their comment names a state nobody was
+// recording: "we were transmitting into this window and have no idea".
+//
+// ⛔ Without this the auto-answer readiness gate could not tell "I have not heard
+// this window" from "I was busy talking in it", and treated our own transmission
+// as a failure to map the band. Roy KI0ER, v1.8.7: after every QSO the robot sat
+// out a cycle or two before answering the next CQ, by which time a POTA activator
+// had moved on - his "waits 30 seconds". See ft8_robot_occupancy_ready().
+static volatile int64_t s_last_tx_utc_even = 0;
+static volatile int64_t s_last_tx_utc_odd  = 0;
+
+int64_t ft8_last_rx_utc_for_parity(bool even)
+{
+    return even ? s_last_rx_utc_even : s_last_rx_utc_odd;
+}
+
+int64_t ft8_last_tx_utc_for_parity(bool even)
+{
+    return even ? s_last_tx_utc_even : s_last_tx_utc_odd;
+}
+
+// Called from both TX paths in the slot loop. `slot_sec` is the slot's start UTC.
+static void note_tx_slot(int64_t slot_sec, int slot_index)
+{
+    if ((slot_index % 2) == 0) s_last_tx_utc_even = slot_sec;
+    else                       s_last_tx_utc_odd  = slot_sec;
+}
 // Single reusable capture scratch buffer (decimated 12 kHz audio). Consumed by
 // the streaming STFT during capture; not needed once the waterfall is built, so
 // one buffer serves every slot (capture is strictly sequential).
@@ -411,6 +465,38 @@ static void free_shared_fft(void)
     if (s_shared_fft_work) { free(s_shared_fft_work); s_shared_fft_work = NULL; }
     s_shared_fft_cfg = NULL;
     s_shared_fft_internal = false;
+}
+
+/* ⛔ DROP OUR REFERENCES TO THE CAPTURE POOL WITHOUT FREEING ANY OF IT.
+ *
+ * For the ONE case where freeing is the crash: the decode task did not exit
+ * within ft8_task's bounded wait, so its core-0 worker may still be reading a
+ * monitor's waterfall. Hardware-captured 2026-09-01 on v1.10.5 - a Load access
+ * fault in estimate_snr_db (ft8_lib decode.c:471) reading block[bin], MTVAL a
+ * garbage pointer, 20 s AFTER `ft8_task exiting` had already logged.
+ *
+ * This is the rule the rest of the teardown already follows and this one path
+ * ignored: reap_pending_tasks() deliberately reaps nothing on a join timeout,
+ * and the worker context is deliberately LEAKED with the comment "a small leak
+ * beats a crash". The pool is the same trade at a larger size - two waterfalls
+ * (163 KB each in FT8, 82 KB in FT4) plus scratch, in PSRAM, where there are
+ * ~15 MB free, and only on a pathological timeout.
+ *
+ * The next FT8 entry builds a fresh pool because every pointer here is NULL.
+ *
+ * ⚠ Do NOT "fix" the underlying starvation by widening the 15 s wait. The
+ * worker is tskIDLE_PRIORITY+1 on core 0, and returning to the panadapter puts
+ * taskLVGL back on that core at ~74 % - the log showed `idle0 0.0%` at the
+ * moment of the fault. A longer bound changes the odds, not the race; this
+ * file already records two fixes falsified for exactly that reasoning. */
+static void forget_capture_pool(void)
+{
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) s_mon_pool[i] = NULL;
+    s_shared_fft_work     = NULL;
+    s_shared_fft_cfg      = NULL;
+    s_shared_fft_internal = false;
+    s_cap_scratch         = NULL;
+    s_pool_proto          = -1;
 }
 
 // Free the monitor pool + capture scratch (idempotent; safe on partial alloc).
@@ -503,6 +589,25 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     // fragmented internal heap can't hold it right now, fall back to PSRAM -
     // that's symmetric and no worse than the old spilled buffer, and it can
     // never fail the pool build.
+    // ⛔ The shared buffer from a PREVIOUS build, captured before it is
+    // overwritten below. On a rebuild that skipped the teardown, every monitor
+    // still points at it - and the loop further down used to free
+    // s_mon_pool[i]->fft_work unconditionally, so the SAME block was freed once
+    // per monitor. That is a tlsf double-free and it reboots the device.
+    //
+    // Serial-captured 2026-08-19 switching into FT8, and it explains the
+    // "one unreproduced tlsf_free double-free" that had been open since v1.3.0:
+    //     W ft8_view: FT8 view visible but no ft8_task alive - respawning
+    //     I ft8_test: monitor pool built for FT8
+    //     assert failed: tlsf_free - block already marked as free
+    // The respawn watchdog raced the normal FT8-entry path and the pool was
+    // built twice with no teardown between.
+    //
+    // The two TEARDOWN paths already make exactly this check before freeing the
+    // shared buffer once (see free_monitor_pool / reinit_pool_if_mode_changed);
+    // only the build path was missing it.
+    void *prev_shared = s_shared_fft_work;
+
     size_t fft_work_size = 0;
     kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
     s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -519,9 +624,29 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
         // Drop the per-monitor FFT scratch monitor_init created (allocated with
         // plain malloc, so free() it) and point at the shared one.
-        free(s_mon_pool[i]->fft_work);
+        //
+        // Free ONLY a buffer this monitor owns. A pointer equal to a shared
+        // buffer belongs to the pool, and freeing it here frees it once per
+        // monitor - see the prev_shared note above.
+        void *w = s_mon_pool[i]->fft_work;
+        if (w && w != prev_shared && w != s_shared_fft_work) free(w);
         s_mon_pool[i]->fft_work = s_shared_fft_work;
         s_mon_pool[i]->fft_cfg  = s_shared_fft_cfg;
+    }
+
+    if (prev_shared) {
+        // The pool was rebuilt without a teardown, which should not happen. The
+        // old shared buffer is now unreferenced, but a decode may still be
+        // running against it on the other core - so it is deliberately LEAKED
+        // once rather than risk a use-after-free, which would be harder to
+        // diagnose than the leak and just as fatal.
+        //
+        // LOUD on purpose: this is the double-build itself, and #199 is about
+        // stopping it happening rather than surviving it. A silent survival
+        // would leave the root cause invisible, which is how it stayed open for
+        // months in the first place.
+        ESP_LOGW(TAG, "monitor pool rebuilt with no teardown - old shared FFT "
+                      "scratch leaked (see #199). Was the ft8_task respawned?");
     }
 
     s_pool_proto = (int)proto;
@@ -600,7 +725,7 @@ typedef struct {
 // live worker. With the handles owned per-instance (worker gets its context as
 // its task arg; decode_slot gets it as a parameter), overlapping instances
 // cannot touch each other's comms. exited: worker gives it just before
-// vTaskDelete; the owning decode task JOINS on it before deleting the handles
+// parks; the owning decode task JOINS on it, then reaps it and deletes the handles
 // (and, on join timeout, deliberately LEAKS the context - a zombie worker may
 // still hold it, and a small leak beats a crash).
 typedef struct {
@@ -609,7 +734,7 @@ typedef struct {
     SemaphoreHandle_t exited;
 } worker_ctx_t;
 
-// True from ft8_decode_task entry until just before its vTaskDelete. The
+// True from ft8_decode_task entry until just before it parks. The
 // ft8_task single-instance guard must cover the DECODE task too - ft8_task's
 // bounded teardown wait can expire with the decode task still finishing, and
 // spawning a new session in that window is what crossed the worker handles.
@@ -888,7 +1013,46 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
     int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
+    // Real decodes are suppressed from the shared decode list while sim mode
+    // is on - otherwise a real QMX still attached and receiving keeps
+    // re-populating the list with genuine stations moments after ft8_sim.c
+    // clears it on entry, which read as "stations flickering back and forth
+    // before finally fading" (they were real, still being decoded, and only
+    // stopped once they aged out or the band moved on). Sim mode's whole
+    // point is a view isolated from whatever is actually on the air right
+    // now, same principle the TX interlock already applies and pskreporter.c
+    // already applies to spot reporting - this closes the matching gap on
+    // the RX/display side. Loaded once per call (both decode-task cores),
+    // not per candidate - settings_load_all() is a cheap RAM-cached read.
+    qmx_settings_t sim_qs;
+    settings_load_all(&sim_qs);
+    bool sim_suppresses_real = sim_qs.sim_mode_en;
     for (int i = start; i < n_cand; i += step) {
+        /* ⭐ ABANDON THE SLOT THE MOMENT WE ARE TEARING DOWN (#312).
+         *
+         * ft8_task clears s_ft8_running BEFORE it sends the stop sentinel, so
+         * by the time a teardown is under way this loop is doing work whose
+         * results nobody will ever see - the decode list is about to be torn
+         * down with the pool.
+         *
+         * Finishing it anyway is what made the teardown overrun its bound:
+         * measured 2026-09-01, ~19.2 s against 15 s, because the worker is
+         * tskIDLE_PRIORITY+2 on core 0 and leaving FT8 puts taskLVGL (priority
+         * 4) back on that core - `idle0 0.0%` at the moment of the fault. The
+         * timeout then leaked the pool (see forget_capture_pool), and at
+         * ~905 KB a time that is not something a station switching modes can
+         * afford to pay repeatedly.
+         *
+         * ⛔ Deliberately NOT a priority raise, which was the obvious fix and
+         * is worse here: the handle belongs to the decode task, which is
+         * itself BLOCKED waiting on this worker at that moment, and reaching
+         * it from ft8_task means republishing a handle across instances -
+         * exactly the cross-instance sharing that caused Dennis WN4FLA's
+         * crash and that worker_ctx_t exists to prevent.
+         *
+         * Costs the final slot's decodes on the way out, which is precisely
+         * what the operator asked for by leaving. */
+        if (!s_ft8_running) break;
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
         }
@@ -944,8 +1108,10 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
-            ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
-                                     (int)lroundf(cand_dt_ms));
+            if (!sim_suppresses_real) {
+                ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
+                                         (int)lroundf(cand_dt_ms));
+            }
             // PSK Reporter spot (REAL decodes only - this path never runs on
             // simulator injections, which bypass the audio pipeline entirely;
             // pskreporter.c additionally refuses spots while sim mode is on).
@@ -966,6 +1132,82 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
 // Persistent core-0 decode helper: waits for one sub-range job, decodes it,
 // signals completion. Only one job is ever in flight (the decode task blocks on
 // ctx->done before issuing the next).
+/* ---------------------------------------------------------------------------
+ * Reaping a WithCaps task (#279)
+ *
+ * Every task in this file is created with xTaskCreatePinnedToCoreWithCaps() so
+ * its 32-64 KB stack comes from PSRAM. Such a task MUST be freed with
+ * vTaskDeleteWithCaps(); a plain vTaskDelete() leaves the stack and TCB
+ * allocated for ever, which IDF says outright in idf_additions.c: "the idle
+ * task will not free the task TCB and stack memories we created statically
+ * during xTaskCreateWithCaps() ... Therefore, it will leak memory."
+ *
+ * That was measured here, not inferred: three Panadapter/WSPR round trips took
+ * PSRAM 15153 -> 14946 -> 14540 -> 14498 KB, about 218 KB per FT8 exit - the
+ * 160 KB of stacks plus the shared FFT scratch. Roughly 70 mode toggles would
+ * exhaust free PSRAM, and the symptom would be FT8 quietly refusing to start.
+ *
+ * ⛔ THE OBVIOUS FIX IS WORSE THAN THE BUG. Calling vTaskDeleteWithCaps(NULL)
+ * on yourself makes IDF spawn a temporary cleanup task to do the freeing, from
+ * INTERNAL RAM, and abort() if it cannot get it. A task-create failure from
+ * internal RAM is not hypothetical on this board - it is what we had just
+ * finished watching happen 390 times - and an abort() is a warm reset, which
+ * with the radio attached is the documented #74 QMX wedge. That trades a slow
+ * leak for a reboot that kills the operator's radio.
+ *
+ * So a finished task PARKS itself and registers its handle here, and an owner
+ * reaps it from an ordinary context. vTaskDeleteWithCaps() called on ANOTHER
+ * task suspends the target, spins until it is provably not eRunning, deletes
+ * it and frees the buffers - no temporary task, no abort, nothing to fail.
+ * ------------------------------------------------------------------------- */
+#define REAP_MAX 4
+static TaskHandle_t  s_reap[REAP_MAX];
+static portMUX_TYPE  s_reap_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* Register, then stop. Registering first is deliberate: if we are preempted
+ * between the two, an owner may reap us here rather than after the suspend -
+ * which is equally safe, because vTaskDeleteWithCaps waits for us to stop
+ * running and we hold nothing at this point. */
+static void task_park_and_reap(void)
+{
+    TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    portENTER_CRITICAL(&s_reap_lock);
+    for (int i = 0; i < REAP_MAX; i++) {
+        if (!s_reap[i]) { s_reap[i] = me; me = NULL; break; }
+    }
+    portEXIT_CRITICAL(&s_reap_lock);
+    /* Full list: fall back to the old behaviour rather than run on. A leak is
+     * survivable; returning from a task function is not. */
+    if (me) vTaskDelete(NULL);
+
+    vTaskSuspend(NULL);
+    for (;;) vTaskDelay(portMAX_DELAY);   /* never return, even if resumed */
+}
+
+/* Safe from any ordinary task context. Never call this from a parked task. */
+static void reap_pending_tasks(void)
+{
+    for (;;) {
+        TaskHandle_t h = NULL;
+        portENTER_CRITICAL(&s_reap_lock);
+        for (int i = 0; i < REAP_MAX; i++) {
+            if (s_reap[i]) { h = s_reap[i]; s_reap[i] = NULL; break; }
+        }
+        portEXIT_CRITICAL(&s_reap_lock);
+        if (!h) break;
+        /* Outside the critical section - this suspends, spins and frees. */
+        size_t before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        vTaskDeleteWithCaps(h);
+        /* SAID OUT LOUD on purpose. A silent leak fix is indistinguishable
+         * from no fix at all - the trap #189 records for the two USB patches -
+         * and the number is the whole claim being made here. */
+        ESP_LOGI(TAG, "reaped a parked task: PSRAM %u -> %u KB (+%u KB)",
+                 (unsigned)(before / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)((heap_caps_get_free_size(MALLOC_CAP_SPIRAM) - before) / 1024));
+    }
+}
+
 static void ft8_decode_worker_task(void *arg)
 {
     // Comms context owned by OUR decode-task instance (task arg, never a
@@ -986,7 +1228,7 @@ static void ft8_decode_worker_task(void *arg)
     // nothing shared (context/job), so the decode task can safely free them
     // once it sees this.
     xSemaphoreGive(ctx->exited);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
@@ -1151,8 +1393,30 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // Low-water mark + largest contiguous block: the SDIO TX path needs an
     // internal DMA buffer, so what matters for the transport_drv crash is the
     // worst-case internal free and whether a single contiguous chunk survives.
+    //
+    // ⛔ BUT largest_free_block WALKS THE HEAP WITH INTERRUPTS OFF, and this is
+    // a PERIODIC path - once per slot, so every 15 s in FT8 and every 7.5 s in
+    // FT4. That is exactly what the 2026-07-13 investigation removed from
+    // cpu_stats.c and audio.c to stop the full-screen cyan flash: the ints-off
+    // window delays the core-0 MIPI-DSI frame-restart ISR past the vertical
+    // blanking window and the panel blanks for a frame. audio.c's heap watchdog
+    // even carries the rule in a comment - "must NEVER go on this periodic path
+    // (that caused the FT4 cyan flash)" - while this call sat two files away
+    // doing it unconditionally, at TWICE the rate in FT4. It was simply missed
+    // when the others were fixed.
+    //
+    // Observed by the operator on 2026-08-28 during an FT4 simulation run, with
+    // internal free at 17-18 KB: below audio.c's 24 KB emergency threshold, so
+    // BOTH walkers were running - its 10 s one and this 7.5 s one.
+    //
+    // Same treatment as audio.c: the walk is fragmentation forensics, worth a
+    // one-frame blink only when the heap is nearly exhausted. Above the
+    // threshold report the O(1) counters and print lblk as 0, which the log
+    // format already distinguishes by the LOW! marker on the emergency line.
     size_t heap_i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024;
-    size_t heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
+    size_t heap_i_lblk = 0;
+    if (heap_i < FT8_SLOT_LBLK_EMERGENCY_KB)
+        heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
@@ -1204,8 +1468,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
                          (ft8_qso_get_state() != FT8_QSO_IDLE);
-        if (tx_or_qso) {
-            s_stuck_slots = 0;   // sparse RX is expected here; never reset mid-exchange
+        if (tx_or_qso || cat_user_pause_active()) {
+            // Sparse RX is expected during an exchange, and GUARANTEED while
+            // the operator has paused CAT to use the radio's own menu - the
+            // radio stops streaming, so every slot decodes zero by design.
+            s_stuck_slots = 0;   // never reset mid-exchange or mid-pause
         } else if (n_cand > 20 && n_decoded == 0) {
             s_stuck_slots++;
             if (s_stuck_slots >= stuck_thresh) {
@@ -1226,6 +1493,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-
     // immediate-slot then fires — same fast path as a human-started pounce.
+    // Fox/Hound automatic mode goes BEFORE the robot: both self-gate to IDLE, so
+    // whichever runs first wins the slot, and a Fox is the rarer opportunity as
+    // well as the one the operator opted into explicitly. The robot separately
+    // refuses to pounce a Fox while Hound is enabled - an ordinary pounce at one
+    // cannot complete, since it never QSYs.
+    ft8_hound_tick(slot_sec);
     ft8_robot_tick(slot_sec);
     ft8_screen_view_request_refresh();
 }
@@ -1237,6 +1510,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 static void ft8_decode_task(void *arg)
 {
     TaskHandle_t notify_target = (TaskHandle_t)arg;
+    // Already claimed by the spawner before xTaskCreate - see there. Kept
+    // (idempotent) so the flag is right whatever route started this task.
     s_decode_task_alive = true;
 
     // Dual-core decode helper: a 1-deep job queue + completion semaphore + a
@@ -1292,7 +1567,7 @@ static void ft8_decode_task(void *arg)
     }
 
     // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
-    // JOIN — wait for the worker to actually reach vTaskDelete (it gives
+    // JOIN — wait for the worker to actually reach its park (it gives
     // ctx->exited first) before deleting the queue/semaphore and returning.
     // The old code waited a FIXED 50 ms, which was not enough if the worker was
     // still holding a job pointer into this task's stack: freeing the stack out
@@ -1304,6 +1579,12 @@ static void ft8_decode_task(void *arg)
         worker_job_t *sentinel = NULL;
         xQueueSend(wctx->jobs, &sentinel, pdMS_TO_TICKS(1000));
         if (xSemaphoreTake(wctx->exited, pdMS_TO_TICKS(12000)) == pdTRUE) {
+            /* The worker has finished and parked, so free its PSRAM stack
+             * before the context it was reading from (#279). On a TIMEOUT we
+             * deliberately do NOT reap - the same reasoning as the ctx leak
+             * below, and vTaskDeleteWithCaps on a task that is still working
+             * would be the use-after-free we are avoiding. */
+            reap_pending_tasks();
             vQueueDelete(wctx->jobs);
             vSemaphoreDelete(wctx->done);
             vSemaphoreDelete(wctx->exited);
@@ -1321,7 +1602,7 @@ static void ft8_decode_task(void *arg)
     ESP_LOGI(TAG, "decode task exiting");
     s_decode_task_alive = false;
     if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // ---------------------------------------------------------------------------
@@ -1331,6 +1612,9 @@ static void ft8_decode_task(void *arg)
 static void ft8_task(void *arg)
 {
     (void)arg;
+    // Already set by ft8_self_test() BEFORE xTaskCreate - see the comment there.
+    // Kept (idempotent) so the flag is still correct if this task is ever
+    // started by some other route.
     s_ft8_task_alive = true;
 
     ft8_status_set("Waiting for QMX...");
@@ -1361,7 +1645,12 @@ static void ft8_task(void *arg)
         if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
             ESP_LOGE(TAG, "No time source (no QMX GPS/RTC, no SNTP) - check WiFi/QMX");
             ft8_status_set("No time source - check WiFi/QMX");
-            vTaskDelete(NULL);
+            /* Every other exit clears this; this one did not, so a boot with no
+             * time source left the flag true for ever with no task behind it -
+             * FT8 dead for the session AND the respawn watchdog refusing to
+             * retry, which is precisely what the spawner's comment warns of. */
+            s_ft8_task_alive = false;
+            task_park_and_reap();
             return;
         }
     }
@@ -1371,18 +1660,44 @@ static void ft8_task(void *arg)
     // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
     // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
     // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
-    s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    /* ⛔ RETRIED, BECAUSE THE PAGE WE JUST LEFT MAY STILL HOLD THE MEMORY.
+     *
+     * Switching WSPR -> FT8 asks for this scratch while wspr_rx is still
+     * holding 11.25 MB: wspr_rx_stop() only sets a flag, and its loop frees on
+     * its next pass - about 2.6 s later, measured. FT8 asked 147 ms after the
+     * mode changed, failed, and deleted itself.
+     *
+     * ⛔ AND THE RECOVERY WAS WORSE THAN THE FAULT. The respawn watchdog then
+     * retried once a SECOND for ever, and by then FT8's own entry had taken
+     * ~34 KB of internal heap it never gave back - so every retry failed on
+     * the TCB (`failed to spawn ft8_task (rc=0)`) with internal free at 4 KB
+     * and a 0 KB largest block. The device was left degraded, which on this
+     * board is the state that also breaks TLS, USB endpoint allocation and SD.
+     *
+     * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
+     * fixing one direction and not asking about the other is what let this
+     * through. The memory genuinely arrives - wait for it. */
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
+        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch) break;
+        if (attempt == 0)
+            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+                          "waiting for the previous page to release",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
+        vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
+    }
     if (!s_cap_scratch) {
         ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     if (!build_monitor_pool(proto_for_mode())) {
         ESP_LOGE(TAG, "initial monitor pool build failed");
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1391,12 +1706,24 @@ static void ft8_task(void *arg)
         ESP_LOGE(TAG, "failed to create decode queue");
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
     // Spawn decode task, passing our handle so it can notify us on exit.
     s_ft8_running = true;
+    // Same defect as #199, second instance: this flag used to be set as
+    // ft8_decode_task's first statement, so it meant "the decode task has begun
+    // RUNNING" while ft8_self_test()'s guard needs "a decode task EXISTS". Both
+    // tasks are tskIDLE_PRIORITY + 1 - the lowest on the board - so the gap
+    // between creating one and its first slice is routinely long.
+    //
+    // The dangerous ordering is real: with the flag still false, ft8_task could
+    // exit and clear s_ft8_task_alive, the 1 Hz respawn watchdog would spawn a
+    // fresh ft8_task, BOTH guards would pass, and the new instance would run
+    // alongside an orphaned decode task - which is precisely the overlap the
+    // guard exists to refuse (Dennis WN4FLA's crash). Claim it before creating.
+    s_decode_task_alive = true;
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_decode_task, "ft8_dec", 65536,
         xTaskGetCurrentTaskHandle(),
@@ -1404,12 +1731,13 @@ static void ft8_task(void *arg)
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "failed to spawn ft8_decode_task (rc=%d)", (int)rc);
+        s_decode_task_alive = false;   // release, or FT8 never starts again
         s_ft8_running = false;
         vQueueDelete(s_decode_queue);
         s_decode_queue = NULL;
         free_capture_pool();
         s_ft8_task_alive = false;
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1446,12 +1774,14 @@ static void ft8_task(void *arg)
         bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
         int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
         int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
-        // FT4 TX is now implemented (ft8_tx.c) but force-routed through the
-        // simulation interlock for ANY FT4 request - the 48 ms CAT cadence is
-        // unverified on real hardware, so ft8_tx_run()/ft8_tx_arm() never let
-        // an FT4 burst reach a connected QMX regardless of this slot loop's
-        // own gating. So the slot loop itself can simply try TX in both
-        // protocols; the real safety boundary lives in ft8_tx.c, not here.
+        // FT4 TX is implemented in ft8_tx.c and DOES key a connected radio.
+        // ⚠ This comment used to say FT4 was "force-routed through the
+        // simulation interlock ... never let an FT4 burst reach a connected
+        // QMX". That interlock does not exist: ft8_tx_run()'s `sim` is
+        // settings' sim_mode_en and nothing else, and CLAUDE.md records real
+        // FT4 QSOs completed on air. The claim was left behind when FT4 TX was
+        // enabled. Corrected 2026-08-09 - do not rely on a protocol-based TX
+        // safety boundary here or in ft8_tx.c, because there isn't one.
 
         ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
@@ -1467,23 +1797,108 @@ static void ft8_task(void *arg)
         // the reply-on-immediate-slot poll fire the FRESH message once
         // ft8_qso_advance() has run (or the deadline passes). FT8-only, same
         // as the late-TX path itself.
-        bool hold_for_fresh = !is_ft4 &&
-                              (s_decode_jobs_done != s_decode_jobs_queued) &&
-                              ft8_qso_is_busy(NULL, 0) &&
-                              ft8_tx_slot_would_run(boundary_ms);
+        /* ⭐ FT4 TOO, and the exclusion was over-cautious (Gyula HA3HZ).
+         *
+         * His report is precisely what this gate exists to prevent: "with FT4,
+         * when the decoded response appeared, my message had already been
+         * transmitted, so it was sent out repeatedly" - and the partner gives up
+         * and answers someone else. The fix was written for exactly that in
+         * v1.0.0 and then switched off for the mode he uses, on the assumption
+         * that a 7.5 s slot has no room to wait.
+         *
+         * The arithmetic says otherwise:
+         *     FT8  15.0 s slot - 12.64 s burst (79 x 160 ms) = 2.36 s of room
+         *     FT4   7.5 s slot -  5.04 s burst (105 x 48 ms) = 2.46 s of room
+         * FT4 has MORE room, not less, because its burst shrinks faster than its
+         * slot does. The existing 2300 ms deadline is that room minus a margin,
+         * and it is comfortably safe for both.
+         *
+         * Safe by construction either way: if the decode has not landed by the
+         * deadline the armed message fires anyway, so the worst case is exactly
+         * today's behaviour - a repeat - and never a skipped slot.
+         *
+         * ⚠ HONEST LIMIT: an FT4 decode measures ~2.3 s, which is right at the
+         * deadline, so this will help on the faster slots and do nothing on the
+         * slower ones. It is not a promise that the repeat disappears. */
+        /* ⛔ THE HOLD AND THE FIRE MUST AGREE ON WHICH PROTOCOLS THEY COVER.
+         * v1.10.2 shipped with the hold enabled for FT4 (the #295 fix) while the
+         * late-fire path below still carried its own `!is_ft4`. So an FT4 burst
+         * was held at the boundary and then NEVER fired: FT4 stopped
+         * transmitting altogether, on CQ and on a reply alike, with the slot
+         * countdown running normally - reported within hours by Gyula HA3HZ.
+         *
+         * `ft8_qso_is_busy()` is true throughout a CQ run, which is why calling
+         * CQ was hit and not just replies.
+         *
+         * One flag now drives BOTH, so the gate cannot be half-removed again.
+         * Holding a burst that nothing is allowed to fire is the whole bug. */
+        /* Both gates come from ft8_slot_gate.c, which is portable and
+         * host-tested (test/ft8_slot_gate_harness.c, 9/9 mutations caught).
+         * They share ONE ft8_gate_late_fire_enabled(), so the pair can no
+         * longer be half-removed - which is exactly what broke FT4 transmit in
+         * v1.10.2 and what the harness's first test now forbids.
+         *
+         * The three inputs are evaluated in the same short-circuit ORDER as
+         * before: the two accessors are side-effect-free peeks, but reading
+         * them only when needed keeps this off the hot path. */
+        ft8_gate_boundary_t bgate = {
+            .is_ft4           = is_ft4,
+            .decode_in_flight = (s_decode_jobs_done != s_decode_jobs_queued),
+            .qso_busy         = false,
+            .tx_would_run     = false,
+        };
+        if (bgate.decode_in_flight) {
+            bgate.qso_busy = ft8_qso_is_busy(NULL, 0);
+            if (bgate.qso_busy) bgate.tx_would_run = ft8_tx_slot_would_run(boundary_ms);
+        }
+        bool hold_for_fresh = ft8_gate_should_hold(&bgate);
         if (hold_for_fresh)
             ESP_LOGI(TAG, "slot %d: TX due but previous slot still decoding - holding for fresh reply",
                      slot_idx);
         // Pass boundary_ms (exact, undistorted) not slot_sec - see the
         // ft8_tx_should_run_this_slot doc comment for why the whole-second
         // truncation breaks FT4 parity.
+        // Set when this slot was spent transmitting. An ABORTED burst hands the
+        // rest of its slot back, and we fall through to the normal RX capture
+        // below rather than sitting idle until the next boundary (#136).
+        bool slot_used_by_tx = false;
         if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
+            note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
-            ft8_status_set("TX done - waiting for next slot");
             ft8_screen_view_request_refresh();
-        } else {
+            slot_used_by_tx = true;
+
+            // Cancelled early? Listen to what is left. Roy KI0ER's point: what
+            // we hear in the remainder is perfectly valid data for the tone
+            // occupancy map, even though it is only part of a slot - and the
+            // alternative is a window we transmitted into for half a second and
+            // then learned nothing from.
+            //
+            // No second capture path is needed: the FT8 pre-ring runs
+            // CONTINUOUSLY in FT8 mode (dsp.c fills it every window regardless
+            // of what this task is doing), so the ordinary RX branch below,
+            // which already backfills from the boundary, reconstructs the slot -
+            // including the fraction we were keyed for. That is the same
+            // machinery the late-arm case uses; it is not a new one.
+            //
+            // Only worth it if enough of the slot remains for a signal to still
+            // decode: FT8's payload is ~12.6 s of a 15 s slot, so a late abort
+            // leaves nothing but the tail. The threshold is deliberately
+            // generous rather than clever - a wasted capture costs one monitor
+            // from the pool and nothing else.
+            int ab_ms = ft8_tx_last_abort_ms();
+            if (ab_ms >= 0 && ab_ms <= (period_ms / 3)) {
+                slot_used_by_tx = false;
+                ESP_LOGI(TAG, "slot %d: TX aborted %d ms in - listening to the rest of the slot",
+                         slot_idx, ab_ms);
+                ft8_status_set("TX cancelled - listening");
+            } else {
+                ft8_status_set("TX done - waiting for next slot");
+            }
+        }
+        if (!slot_used_by_tx) {
             // RX this slot. We capture every non-TX slot, including the
             // parity opposite an armed TX: with ping-pong decode a capture is
             // exactly one slot long (15 s) and ends right on the next
@@ -1615,9 +2030,19 @@ static void ft8_task(void *arg)
                     // ft8_qso_advance() has replaced the armed content) or the
                     // deadline passes (fire whatever is armed = old behaviour).
                     bool decode_landed = (s_decode_jobs_done == s_decode_jobs_queued);
-                    if (!is_ft4 && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
-                        (!hold_for_fresh || decode_landed ||
-                         into_slot_ms >= FT8_TX_HOLD_DEADLINE_MS) &&
+                    /* tx_should_run is set true here and the REAL check is
+                     * left as the last term below, deliberately: unlike the
+                     * peeks above, ft8_tx_should_run_this_slot() fills
+                     * late_txreq and is the commit path, so it must stay behind
+                     * the short circuit and must not be called speculatively. */
+                    ft8_gate_late_t lgate = {
+                        .is_ft4        = is_ft4,
+                        .held          = hold_for_fresh,
+                        .decode_landed = decode_landed,
+                        .tx_should_run = true,
+                        .into_slot_ms  = into_slot_ms,
+                    };
+                    if (ft8_gate_should_late_fire(&lgate) &&
                         ft8_tx_should_run_this_slot(boundary_ms, &late_txreq)) {
                         late_tx = true;
                         break;
@@ -1636,11 +2061,22 @@ static void ft8_task(void *arg)
                 ESP_LOGI(TAG, "slot %d: reply armed mid-slot (+%dms) - TX on immediate slot: %s",
                          slot_idx, (int)((esp_timer_get_time() - t0) / 1000), late_txreq.display_text);
                 ft8_status_set("TX: %s", late_txreq.display_text);
+                note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
                 ft8_tx_run(&late_txreq);          // blocks ~12.7 s; always restores RX
                 ft8_qso_on_tx_complete();
                 ft8_status_set("TX done - waiting for next slot");
                 ft8_screen_view_request_refresh();
             } else if (e == ESP_OK) {
+                // We genuinely LISTENED to this slot, so the occupancy picture
+                // for its parity is current as of now. This is the only honest
+                // source for "do we know what is in that window": a station
+                // count cannot tell an EMPTY window from one we transmitted
+                // into, and both otherwise render as "free" (#135).
+                {
+                    int64_t sidx = boundary_ms / period_ms;
+                    if ((sidx % 2) == 0) s_last_rx_utc_even = slot_sec;
+                    else                 s_last_rx_utc_odd  = slot_sec;
+                }
                 // FFT any remaining whole blocks (late in-flight samples or the
                 // zero-padded dead-air tail -> noise), then queue the decode.
                 while ((processed + 1) * blk <= slot_samples) {
@@ -1695,6 +2131,14 @@ static void ft8_task(void *arg)
                     // no-audio sim slot never reaches, so "Auto-answer CQ"
                     // silently did nothing in QMX-less simulation. Same
                     // ordering as decode_slot(): advance first, robot second.
+                    //
+                    // ⚠ ANY per-slot tick added to decode_slot() needs adding
+                    // HERE as well, or it does nothing in simulation - which is
+                    // the one place the feature can be tested with the radio off.
+                    // Fox/Hound learned this the hard way on 2026-08-10: the
+                    // phantom Fox was decoded perfectly and ft8_hound_tick() was
+                    // never called, so it looked like detection was broken.
+                    ft8_hound_tick(slot_sec);
                     ft8_robot_tick(slot_sec);
                     ft8_screen_view_request_refresh();
                 } else {
@@ -1719,15 +2163,42 @@ static void ft8_task(void *arg)
     // itself dead while the decode task still runs - the overlap window
     // behind Dennis WN4FLA's crash (the 10 s it used to be was shorter than
     // the join bound it was waiting on).
-    xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000));
+    bool joined = (xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000)) == pdTRUE);
 
-    vQueueDelete(s_decode_queue);
-    s_decode_queue = NULL;
-    free_capture_pool();
+    /* The decode task has notified us and parked; free its 64 KB stack (#279).
+     * If the wait TIMED OUT it has not parked and is not on the list, so this
+     * reaps nothing - which is the safe outcome, not a missed one. */
+    reap_pending_tasks();
+
+    if (joined) {
+        vQueueDelete(s_decode_queue);
+        s_decode_queue = NULL;
+        free_capture_pool();
+    } else {
+        /* ⛔ THE TIMEOUT PATH MUST FREE NOTHING. Hardware-captured 2026-09-01:
+         * this branch logged `ft8_task exiting` at 457.114 s and the still-live
+         * core-0 worker took a Load access fault at 477.268 s in
+         * estimate_snr_db, reading a waterfall this function had freed.
+         *
+         * BOTH objects are unsafe here, not just the pool. The decode task
+         * blocks on a LOCAL COPY of the queue handle (`QueueHandle_t q =
+         * s_decode_queue`), so vQueueDelete() under it is the same
+         * use-after-free one layer down; its NULL check only guards the NEXT
+         * iteration. Clearing the global is what makes that iteration exit.
+         *
+         * So: clear the references, free neither, and say so loudly. The
+         * decode task finishes on its own, joins its worker and parks; what it
+         * was reading stays valid the whole time. */
+        s_decode_queue = NULL;
+        forget_capture_pool();
+        ESP_LOGW(TAG, "decode task did not exit in 15 s - LEAKING its queue and "
+                      "the capture pool rather than freeing memory a live worker "
+                      "may still be reading (crash-safe; see forget_capture_pool)");
+    }
 
     ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
     s_ft8_task_alive = false;
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 // ---------------------------------------------------------------------------
@@ -1744,6 +2215,7 @@ static void ft8_task(void *arg)
 // ---------------------------------------------------------------------------
 
 #define FD_E2E_GFSK_BT     2.0f          // FT8 GFSK shaping bandwidth factor
+#define FT4_GFSK_BT        1.0f          // FT4's is narrower (ft8_lib's own demo)
 #define FD_E2E_GFSK_K      5.336446f     // pi * sqrt(2 / log(2))
 
 static bool synth_gfsk_heap(const uint8_t *symbols, int n_sym, float f0,
@@ -1817,7 +2289,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     ftx_message_t msg;
     if (ftx_message_encode_arrl_fd(&msg, NULL, call_to, call_de, extra) != FTX_MESSAGE_RC_OK) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (encode)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1830,7 +2302,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!signal) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (signal alloc)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     memset(signal, 0, SLOT_SAMPLES * sizeof(float));
@@ -1843,7 +2315,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     if (!synth_ok) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (synth alloc)");
         heap_caps_free(signal);
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
 
@@ -1855,7 +2327,7 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     if (!mon) {
         ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor alloc)");
         heap_caps_free(signal);
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     monitor_init(mon, &cfg);
@@ -1897,35 +2369,96 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
     monitor_free(mon);
     heap_caps_free(mon);
     heap_caps_free(signal);
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
                           char *out_text, size_t out_len,
                           int *out_snr_db, int *out_score)
 {
+    // The original, noiseless behaviour. Every boot self-test comes through
+    // here and must keep reading what it always read.
+    return ft8_synth_and_decode_at(msg, tone_hz, FT8_SIM_SNR_CLEAN,
+                                   out_text, out_len, out_snr_db, out_score);
+}
+
+bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
+                             int want_snr_db,
+                             char *out_text, size_t out_len,
+                             int *out_snr_db, int *out_score)
+{
     if (!msg || !out_text || !out_len) return false;
 
-    uint8_t tones[FT8_NN];
-    ft8_encode(msg->payload, tones);
+    // Whichever protocol is running. The simulator used to be FT8-only and said
+    // so - "no concept of the FT8/FT4 sub-mode" - which is why sim mode switched
+    // itself off in FT4 and no FT4 change could be exercised without a partner
+    // on the air (#256). FT4 is 105 symbols of 48 ms with narrower shaping;
+    // everything else about this function is the same.
+    bool  ft4       = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    int   n_sym     = ft4 ? FT4_NN : FT8_NN;
+    float sym_per   = ft4 ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    float gfsk_bt   = ft4 ? FT4_GFSK_BT : FD_E2E_GFSK_BT;
+    int   slot_samp = ft4 ? (int)(SR_HZ * 7.5f) : SLOT_SAMPLES;
 
-    int n_spsym = (int)(0.5f + SR_HZ * FT8_SYMBOL_PERIOD);
-    int n_wave  = FT8_NN * n_spsym;
+    uint8_t tones[FT4_NN];              // FT4_NN (105) > FT8_NN (79)
+    if (ft4) ft4_encode(msg->payload, tones);
+    else     ft8_encode(msg->payload, tones);
 
-    float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    int n_spsym = (int)(0.5f + SR_HZ * sym_per);
+    int n_wave  = n_sym * n_spsym;
+
+    float *signal = heap_caps_malloc((size_t)slot_samp * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!signal) return false;
-    memset(signal, 0, SLOT_SAMPLES * sizeof(float));
+    memset(signal, 0, (size_t)slot_samp * sizeof(float));
+
+    // A NOISE FLOOR TO MEASURE AGAINST (#265). Without it the buffer is silent
+    // and the estimator has nothing but the signal's own leakage to compare to,
+    // which scales with the signal - so every phantom came out at the same
+    // +9/+10 dB however loud it was meant to be.
+    //
+    // Uniform noise is enough here: the estimator averages power in bins, and
+    // what matters is that the floor is flat and independent of the signal.
+    // xorshift32 rather than rand(), to keep this off the C library's global
+    // state - this runs on the FT8 tasks.
+    float amp = 1.0f;
+    if (want_snr_db != FT8_SIM_SNR_CLEAN) {
+        const float sigma = 0.10f;                  // noise RMS
+        uint32_t x = 0x1234567u ^ (uint32_t)(tone_hz * 7.0f) ^ (uint32_t)esp_timer_get_time();
+        if (!x) x = 1;
+        const float scale = sigma * 1.7320508f;     // uniform[-s,s] has RMS s/sqrt(3)
+        for (int i = 0; i < slot_samp; i++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            signal[i] = scale * ((float)(int32_t)x / 2147483648.0f);
+        }
+        // Amplitude for the wanted ratio, in FT8's 2500 Hz reference bandwidth:
+        //   SNR = (a^2 / 2) / (sigma^2 * 2500 / (SR/2))
+        float nb = sigma * sigma * (2500.0f / (SR_HZ / 2.0f));
+        amp = sqrtf(2.0f * nb * powf(10.0f, (float)want_snr_db / 10.0f));
+    }
 
     int start = (int)(0.5f * SR_HZ);
-    if (start + n_wave > SLOT_SAMPLES) start = 0;
-    if (!synth_gfsk_heap(tones, FT8_NN, tone_hz, FD_E2E_GFSK_BT, FT8_SYMBOL_PERIOD, SR_HZ, signal + start)) {
+    if (start + n_wave > slot_samp) start = 0;
+    float *tone_buf = signal + start;
+    if (want_snr_db != FT8_SIM_SNR_CLEAN) {
+        // Synthesise into scratch, then ADD it to the noise at the chosen level.
+        tone_buf = heap_caps_malloc((size_t)n_wave * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (!tone_buf) { heap_caps_free(signal); return false; }
+        memset(tone_buf, 0, (size_t)n_wave * sizeof(float));
+    }
+    if (!synth_gfsk_heap(tones, n_sym, tone_hz, gfsk_bt, sym_per, SR_HZ, tone_buf)) {
+        if (tone_buf != signal + start) heap_caps_free(tone_buf);
         heap_caps_free(signal);
         return false;
+    }
+    if (tone_buf != signal + start) {
+        for (int i = 0; i < n_wave; i++) signal[start + i] += amp * tone_buf[i];
+        heap_caps_free(tone_buf);
     }
 
     const monitor_config_t cfg = {
         .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
-        .time_osr = 2, .freq_osr = 2, .protocol = FTX_PROTOCOL_FT8,
+        .time_osr = 2, .freq_osr = 2,
+        .protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8,
     };
     monitor_t *mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!mon) {
@@ -1979,7 +2512,7 @@ static void ft8_sim_synth_selftest_task(void *arg)
     ftx_message_t msg;
     if (ftx_message_encode_std(&msg, NULL, "CQ", "W1AW", "FN31") != FTX_MESSAGE_RC_OK) {
         ESP_LOGE(TAG, "sim synth selftest: FAIL (encode)");
-        vTaskDelete(NULL);
+        task_park_and_reap();
         return;
     }
     char text[FTX_MAX_MESSAGE_LENGTH];
@@ -1991,11 +2524,12 @@ static void ft8_sim_synth_selftest_task(void *arg)
     } else {
         ESP_LOGE(TAG, "sim synth selftest: FAIL (no candidate decoded)");
     }
-    vTaskDelete(NULL);
+    task_park_and_reap();
 }
 
 void ft8_sim_synth_selftest(void)
 {
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#279) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_sim_synth_selftest_task, "sim_synth_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2007,6 +2541,7 @@ void ft8_sim_synth_selftest(void)
 
 void ft8_arrl_fd_e2e_selftest(void)
 {
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#279) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_arrl_fd_e2e_selftest_task, "fd_e2e_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2082,7 +2617,14 @@ void ft8_self_test(void)
     // s_decode_queue and crash one decode task on xQueueReceive(NULL). The
     // surviving task keeps serving FT8 (its loop re-checks ui_mode each slot).
     if (s_ft8_task_alive) {
-        ESP_LOGW(TAG, "ft8_self_test: an FT8 task is still alive; not spawning a second");
+        /* INFO: this is the ORDINARY case on an FT8 re-entry, not a fault.
+         * Teardown takes ~10 s (measured), so any toggle quicker than that
+         * lands here, and the 1 Hz watchdog in ft8_screen_view.c starts the
+         * new session about a second later. Refusing IS the correct answer -
+         * see the double-spawn history below (#199). It was a WARN, which
+         * made every normal toggle look like a defect (#280). */
+        ESP_LOGI(TAG, "ft8_self_test: previous FT8 session is still tearing "
+                      "down; the watchdog will start the new one");
         return;
     }
     // The decode task can outlive ft8_task (ft8_task's teardown wait is
@@ -2092,14 +2634,52 @@ void ft8_self_test(void)
     // but still refuse the overlap: the old instance also still owns monitor
     // pool buffers and the decode list mutex path.
     if (s_decode_task_alive) {
-        ESP_LOGW(TAG, "ft8_self_test: previous decode task still exiting; not spawning yet");
+        /* Same: routine, and the watchdog retries. See above (#280). */
+        ESP_LOGI(TAG, "ft8_self_test: previous decode task is still exiting; "
+                      "the watchdog will start the new one");
         return;
     }
+    // ⛔ CLAIM THE SLOT BEFORE CREATING THE TASK, NOT INSIDE IT (#199).
+    //
+    // s_ft8_task_alive used to be set as ft8_task's first statement, so the
+    // flag meant "an ft8_task has begun RUNNING" - and the guard above, and the
+    // 1 Hz respawn watchdog in ft8_screen_view.c, both need it to mean "an
+    // ft8_task EXISTS". Between those two readings sits the whole scheduling
+    // delay, and ft8_task is created at tskIDLE_PRIORITY + 1: the LOWEST
+    // priority on the board. On a busy core - capture, fft_task (4), taskLVGL,
+    // the feeds (2) and httpd (5) all above it - taking more than a second to
+    // get its first slice is ordinary, not exceptional. The same starvation is
+    // measured directly in ft8_screen.c's record_decode comment.
+    //
+    // So the FT8-entry path spawned the task, the watchdog looked one second
+    // later, saw a flag still false, logged "no ft8_task alive - respawning"
+    // and spawned a SECOND one. Both then built the monitor pool - four
+    // "Block size" lines where one build emits two - and the second build
+    // double-freed the shared FFT scratch: `assert failed: tlsf_free ... block
+    // already marked as free`, ft8_task -> build_monitor_pool -> free(). That
+    // is almost certainly the unreproduced tlsf_free double-free reboot open
+    // since v1.3.0.
+    //
+    // Setting the flag here closes the window by construction rather than by
+    // timing: a grace period in the watchdog would only have made the race
+    // rarer, and this file's history is emphatic that timing changes the odds
+    // of a race, not the race.
+    /* NOTHING JOINS ft8_task, so its spawner is the owner. The previous
+     * instance parked on its way out and is still holding 64 KB of PSRAM;
+     * free it here, before asking for another 64 KB (#279). Doing it at the
+     * spawn rather than at the exit is what makes it safe - we are on the
+     * LVGL task, an ordinary context, and the target is provably parked. */
+    reap_pending_tasks();
+
+    s_ft8_task_alive = true;
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_task, "ft8", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) {
+        // Nothing will ever clear it, so release the claim here or FT8 is dead
+        // for the rest of the session with the watchdog refusing to retry.
+        s_ft8_task_alive = false;
         ESP_LOGE(TAG, "failed to spawn ft8_task (rc=%d)", (int)rc);
     }
 }

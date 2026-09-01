@@ -311,6 +311,7 @@ static void diag_persist_task(void *arg)
     long pos = ftell(f);
     size_t bytes = (pos > 0) ? (size_t)pos : 0;
     static char buf[2048];
+    int  fail_streak = 0;
 
     for (;;) {
         bool wrote = false;
@@ -318,7 +319,45 @@ static void diag_persist_task(void *arg)
             uint64_t next = s_flash_cursor;
             size_t got = diag_log_read_from(s_flash_cursor, buf, sizeof(buf), &next);
             if (got == 0) break;
-            if (fwrite(buf, 1, got, f) != got) break;   // best-effort; retry next tick
+            if (fwrite(buf, 1, got, f) != got) {
+                // A failed write leaves the stream's ERROR FLAG SET, and every
+                // later fwrite on that handle then fails too - so without the
+                // clearerr() below "retry next tick" retries forever and never
+                // writes another byte. Found 2026-08-09: /spiffs/diag.log had
+                // stopped three days earlier with no error line anywhere, which
+                // is exactly the failure this file is supposed to make
+                // impossible - the flash copy is the ONLY log that survives a
+                // reboot, so its silent death cost the diagnosis of a reboot.
+                // The SD mirror learned the same lesson (see CLAUDE.md); this
+                // path never got the fix.
+                clearerr(f);
+                if (++fail_streak == 1 || (fail_streak % 20) == 0) {
+                    ESP_LOGW(TAG, "flash-persist: write failed (%s) - streak %d, "
+                                  "%u bytes pending; SPIFFS may be full",
+                             strerror(errno), fail_streak,
+                             (unsigned)(diag_log_total() - s_flash_cursor));
+                }
+                // Out of space is not transient: drop the older generation so
+                // the next tick has somewhere to go, rather than waiting for
+                // room that nothing will free.
+                if (errno == ENOSPC) {
+                    fclose(f);
+                    remove(DIAG_FLASH_PATH_0);
+                    rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
+                    f = fopen(DIAG_FLASH_PATH, "w");
+                    bytes = 0;
+                    if (!f) {
+                        ESP_LOGE(TAG, "flash-persist: rotate-on-full failed (%s) - "
+                                      "giving up; /api/log/saved will be stale",
+                                 strerror(errno));
+                        vTaskDelete(NULL);
+                        return;
+                    }
+                    ESP_LOGW(TAG, "flash-persist: rotated to free space");
+                }
+                break;                                  // retry on the next tick
+            }
+            fail_streak = 0;
             s_flash_cursor = next;
             bytes += got;
             wrote = true;

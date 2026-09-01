@@ -3,6 +3,21 @@
 *.command  text eol=lf
 *.sh       text eol=lf
 
+# Firmware source: LF, unconditionally. 84 of 203 .c/.h/.html files were found
+# drifted to CRLF in the working tree in 2026-08-25's session (LF-committed,
+# CRLF on disk) with no policy anywhere forcing them back - so a normal git
+# checkout could silently re-drift them, and every future edit to a drifted
+# file makes `git diff` show the WHOLE file as changed instead of the real
+# one-line edit. This is what .command/.sh already had; source code needs the
+# same guarantee.
+*.c        text eol=lf
+*.h        text eol=lf
+*.html     text eol=lf
+*.md       text eol=lf
+*.py       text eol=lf
+*.json     text eol=lf
+*.yml      text eol=lf
+
 # Windows batch/PowerShell scripts use CRLF.
 *.bat      text eol=crlf
 *.ps1      text eol=crlf

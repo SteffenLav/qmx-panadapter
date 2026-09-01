@@ -6,7 +6,7 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Toggle Panadapter ↔ FT8 view |
+| Swipe → | **Left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 
@@ -23,7 +23,7 @@ Tap any item on the top bar to open its selector:
 | **Bandwidth** | Filter width (SSB) or CW passband |
 | **Band** | Band list (160 m – 10 m + custom) |
 | **S-meter** | Peak-hold toggle |
-| **Zoom** | 1x / 2x / 4x / 8x presets |
+| **Zoom** | x1 / x2 / x4 / x8 / x16 / x24 presets; pinch for anything between |
 
 ## Spectrum / Waterfall
 
@@ -32,8 +32,10 @@ Tap any item on the top bar to open its selector:
 | **Tap** | Tune to that frequency |
 | **Drag (1 finger)** | Pan left/right |
 | **Pinch (2 fingers)** | Zoom in/out |
+| **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
+| **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 
-The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
+Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, 250 Hz in USB/LSB, 500 Hz in the digital modes, 1 kHz in AM.
 
 ## Band-Plan Strip (Panadapter)
 
@@ -114,7 +116,8 @@ In FT8 view, tap **Filter** to open:
 
 Swipe ← from right edge. The drawer is a single scrolling list of sections (they don't collapse — just scroll). It contains:
 
-- **User Manual** (top button) — opens this documentation on the Tab5 itself (see below)
+- **User Manual** (top button) — opens this documentation on the Tab5 itself, at the chapter covering the screen you were on (see below)
+- **Need guidance?** (directly below it) — a list of symptoms and questions in plain words; picking one opens the manual at the answer. See [Getting Help](../getting-help.md)
 - **Text fields** — tap to edit (opens keyboard if needed)
 - **Toggles** — tap to on/off
 - **Buttons** — tap to open modals (Config, Time, etc.)
@@ -128,10 +131,14 @@ The **User Manual** button at the top of the settings drawer opens this whole gu
 
 **It is built into the firmware** (since v1.3.2), so it works immediately and always: no WiFi, no microSD card, no download, no waiting, on the very first boot. It also can never describe a different version than the one you are running, because it ships inside it.
 
+- **It opens in context** — the panadapter chapter, the FT8 *receive* chapter, or the FT8 *transmit* chapter when a transmission is armed or running. Not a contents page you have to search.
 - **Contents** — a two-column list of every page. Press and slide your finger down it: a highlight bar tracks your finger, and lifting opens the highlighted page.
-- **Back** — returns to the previous page you viewed. **Exit** — leaves the manual (back to the panadapter/FT8 screen).
-- **Hold the drawer's User Manual button for 3 s** to clear the reader's page caches — a reset if the display ever looks wrong. The manual itself is untouched; pages are rebuilt from the firmware copy the next time you open one.
+- **Back** — returns to the previous page you viewed (shown only when there is somewhere to go back to). **Exit** — leaves the manual (back to the panadapter/FT8 screen).
+- **Edge swipes and top-bar taps are stood down** while the manual is open, so a stray touch cannot retune or switch view behind it.
+- **Hold the drawer's User Manual button for 3 s** to reset the reader. The manual itself is untouched — it is part of the firmware and cannot be lost or go stale.
 - If a newer firmware version is available, a banner appears at the top — informational only; flashing is always your choice.
+
+The other two ways into the same manual — the **Need guidance?** panel and the tappable warning banners — are covered in [Getting Help](../getting-help.md).
 
 > Earlier firmware downloaded the manual over WiFi and could copy it to a microSD card with a green **"Save offline"** button. That button is gone in v1.3.2 and none of it is needed any more. An old copy left on a card is simply ignored — delete `/qmx-panadapter/manual/` if you want the space back.
 

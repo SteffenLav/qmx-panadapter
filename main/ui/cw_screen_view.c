@@ -48,7 +48,7 @@ static const char *TAG = "cw_screen";
 // Same width as the FT8 page's left pane (LEFT_W in ft8_screen_view.c) so the
 // two pages read as the same grid - operator guidance 2026-08-01: reuse the
 // composition, not just the code ("I already know this page").
-#define PANE_W        320
+#define PANE_W        CW_PANE_W   // exported in cw_screen_view.h - ui.c needs it too
 #define TICKER_H      100
 // The band-plan strip (BANDPLAN_H in ui.c) sits directly above the bottom
 // bar and MUST stay visible and touchable on the CW page - it is how the

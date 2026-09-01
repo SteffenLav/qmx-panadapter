@@ -29,20 +29,49 @@ static bool s_initialised = false;
 // full charge) and LATCH "absent" once it swings more than any pack ever could.
 #define BATT_DET_WINDOW       5      // samples (~5 s at the 1 Hz status poll)
 #define BATT_DET_SPREAD_MV    1000   // window swing a real pack never shows
-#define BATT_DET_STABLE_REQ   15     // consecutive good windows (~15 s) before
-                                      // flipping absent -> present; avoids
-                                      // flicker right after unplugging, where
-                                      // the rail briefly looks stable again
-                                      // before settling into erratic swings
+
+// ⚠ A SLIDING WINDOW ALONE IS DEFEATED BY A SLOW TOGGLE (#194, Randy N4OPI).
+// He runs from USB-C with no NP-F550 fitted and the readout "toggles between
+// 100% (8.4v) and 0% (4.2v)". That report is itself the evidence for how:
+// if the rail alternated every sample, every window would span 4200 mV, the
+// latch would hold, and he would see the struck-through no-battery icon. He sees
+// PERCENTAGES, so each plateau must outlast the 5-sample window - so nearly every
+// window looks perfectly stable, only the few spanning a transition trip the
+// spread test, and BATT_DET_STABLE_REQ then flipped it back to "present" ~15 s
+// later. The detector was oscillating in step with the rail.
+//
+// Two observations a sliding window cannot make, both added below:
+//   * a real pack cannot STEP - between two 1 s samples it moves by IR drop at
+//     most (CHARGE_IR_DROP_MV is ~200 mV), never volts. This catches the jump
+//     however long each plateau lasts.
+//   * the device cannot be RUNNING off a 2S pack reading 4.2 V. Below the floor
+//     is not a flat battery, it is no battery.
+#define BATT_DET_STEP_MV      1000   // impossible move between consecutive samples
+#define BATT_DET_FLOOR_MV     6000   // below this it cannot be a live 2S pack
+                                      // (BATTERY_MIN_MV 6600 with margin)
+
+// Recovery must outlast the toggle, or the latch just flaps in sympathy with it.
+// Raised 15 -> 60 and every sample in the run must now be plausible AND
+// step-free, so a rail that keeps returning to an impossible value can never
+// accumulate a full run. Cost: a pack genuinely inserted at runtime is trusted
+// after ~60 s instead of ~15 s, which is a fair price for not flickering.
+#define BATT_DET_STABLE_REQ   60
 
 static uint32_t s_det_win[BATT_DET_WINDOW];
 static int      s_det_count = 0;
 static int      s_det_head  = 0;
 static int      s_present   = -1;    // -1 unknown, 0 absent, 1 present
-static int      s_stable_n  = 0;     // consecutive good windows while absent
+static int      s_stable_n  = 0;     // consecutive good samples while absent
+static uint32_t s_last_mv   = 0;     // 0 = no previous sample yet
 
 static void battery_track(uint32_t mv)
 {
+    // --- per-sample tests, independent of the window ---
+    uint32_t step = 0;
+    if (s_last_mv) step = (mv > s_last_mv) ? (mv - s_last_mv) : (s_last_mv - mv);
+    bool impossible = (step > BATT_DET_STEP_MV) || (mv < BATT_DET_FLOOR_MV);
+    s_last_mv = mv;
+
     s_det_win[s_det_head] = mv;
     s_det_head = (s_det_head + 1) % BATT_DET_WINDOW;
     if (s_det_count < BATT_DET_WINDOW) s_det_count++;
@@ -53,28 +82,36 @@ static void battery_track(uint32_t mv)
         if (s_det_win[i] < lo) lo = s_det_win[i];
         if (s_det_win[i] > hi) hi = s_det_win[i];
     }
-    if (hi - lo > BATT_DET_SPREAD_MV) {
+    bool erratic = (hi - lo) > BATT_DET_SPREAD_MV;
+
+    if (erratic || impossible) {
         s_stable_n = 0;
         if (s_present != 0) {
-            s_present = 0;           // erratic rail -> no pack
-            ESP_LOGW(TAG, "no battery detected (rail swing %lu mV over window)",
-                     (unsigned long)(hi - lo));
+            s_present = 0;           // erratic/impossible rail -> no pack
+            if (impossible)
+                ESP_LOGW(TAG, "no battery detected (%lu mV, step %lu mV - a pack cannot do this)",
+                         (unsigned long)mv, (unsigned long)step);
+            else
+                ESP_LOGW(TAG, "no battery detected (rail swing %lu mV over window)",
+                         (unsigned long)(hi - lo));
         }
-    } else if (s_det_count >= BATT_DET_WINDOW) {
-        if (s_present == 1) return;  // already present, nothing to do
-        if (s_present == -1) {
-            s_present = 1;           // stable across the full window at startup
-            ESP_LOGI(TAG, "battery present (rail stable, swing %lu mV)",
-                     (unsigned long)(hi - lo));
-            return;
-        }
-        // was absent: require a longer stable run before trusting it again
-        if (++s_stable_n >= BATT_DET_STABLE_REQ) {
-            s_present = 1;
-            s_stable_n = 0;
-            ESP_LOGI(TAG, "battery present (rail stable for %ds, swing %lu mV)",
-                     BATT_DET_STABLE_REQ, (unsigned long)(hi - lo));
-        }
+        return;
+    }
+
+    if (s_det_count < BATT_DET_WINDOW) return;
+    if (s_present == 1) { s_stable_n = 0; return; }   // already present
+    if (s_present == -1) {
+        s_present = 1;               // stable across the full window at startup
+        ESP_LOGI(TAG, "battery present (rail stable, swing %lu mV)",
+                 (unsigned long)(hi - lo));
+        return;
+    }
+    // Was absent. Every sample in this run has been plausible and step-free.
+    if (++s_stable_n >= BATT_DET_STABLE_REQ) {
+        s_present = 1;
+        s_stable_n = 0;
+        ESP_LOGI(TAG, "battery present (rail stable for %ds, swing %lu mV)",
+                 BATT_DET_STABLE_REQ, (unsigned long)(hi - lo));
     }
 }
 

@@ -21,13 +21,17 @@ theme:
 nav:
   - Home: index.md
   - Quick Start: quick-start.md
+  - Getting Help: getting-help.md
   - User Guide:
     - Panadapter: guide/panadapter.md
+    - Live Spots: guide/spots.md
     - Web UI: guide/web-ui.md
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
     - CW: guide/cw.md
     - Time Sync: guide/time-sync.md
+    - WSPR: guide/wspr.md
+    - Radio Menus: guide/radio-menus.md
     - Settings: guide/settings.md
   - Reference:
     - Gestures & Controls: reference/gestures.md

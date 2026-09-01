@@ -1,6 +1,110 @@
 # Settings & Configuration
 
-Swipe ← from the right edge to open the settings drawer. All settings are saved automatically.
+Swipe in from the right edge to open the settings drawer. All settings are saved automatically.
+
+The top two buttons are not settings but the two ways into help: **User Manual**, which
+opens this guide at the chapter for the screen you came from, and **Need guidance?**,
+which lists symptoms and questions in plain words. See [Getting Help](../getting-help.md).
+
+## Basic and Advanced
+
+The drawer is grouped under headings — **Station**, **Device**, **Radio**, **Network**,
+**Display**, **FT8**, **WSPR** and **Spectrum** — and the button beside the **Settings**
+title chooses how much of it you see. It reads **BASIC** or **ADVANCED**; tapping it
+swaps between them. (It said EXPERT until v1.10.0, which described the reader rather
+than the contents.)
+
+Advanced holds everything. Basic holds the sections an operating session actually
+reaches — Activation, QMX volume, RF gain, SWR protection, Antenna Tune, WiFi setup,
+Display brightness, and the FT8 group's distance and reporting options, plus the four
+WSPR sections when you are on the WSPR page. That is what Basic is *for*: it is the
+operating set, not a beginner mode. Nothing is lost in Basic; it is only hidden.
+
+**Which sections appear in which view is yours to set** (v1.10.0). In the web UI, open
+**Settings** and click **Tab5 config** next to Save: every section in the Tab5's drawer
+is listed in drawer order with a **Basic** and an **Advanced** tick. A section can be in
+both, in one, or in neither — neither being a legitimate answer meaning you never want
+to see it. It is deliberately edited from the browser rather than from the Tab5, so it
+stays out of the way of anyone who just wants to operate.
+
+A firmware update that adds a new setting **shows** it rather than hiding it behind a
+layout you saved before it existed — the device records which sections were known when
+you saved, so anything newer than that takes the shipped default instead of reading as
+"unticked".
+
+This layout is stored on the device and is deliberately **not** part of a config backup:
+it is a preference about the menu, not a station or radio setting.
+
+## Radio
+
+These reach the QMX itself over the CAT link.
+
+**QMX volume** — the radio's own AF gain, in decibels, the same number the QMX shows on
+its LCD when you click its volume knob. Read back from the radio when you open the
+drawer, so it agrees with the rig even if you last changed it there.
+
+**QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
+(the QMX default is 54). Because it is **per band**, the Tab5 reads it from the radio
+rather than remembering a number that would belong to whichever band you were on last;
+it shows "reading…" until the radio answers, and **"radio not connected"** if the radio
+is not there at all. Until v1.8.3 it could stick on "reading…" for a whole session:
+the value was only ever repainted when you *next* opened the drawer, so a single
+unanswered query left it stuck (reported by Samuel W7STF). It now fills itself in as
+soon as the radio replies. It writes when you let go of the slider, not
+while you drag, because this is stored configuration rather than a session setting.
+Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
+
+**CW transmit offset** — transmit a little away from the station you are listening to,
+so a QRP call is not buried in the pile of everyone zero-beating the DX (suggested by
+Roy KI0ER). The centre of the slider is off, and the sign chooses whether you transmit
+above or below.
+
+**Keep it small: around 100 Hz or less is typical, and the slider stops at ±300.** The
+point is to land inside the other station's filter, not outside it — most CW operators
+run a 500 Hz filter or narrower, 200 Hz is not unusual, and the passband is not equally
+usable right to its edge: the tone gets muddy and a QRP signal has least energy exactly
+where the filter is already attenuating (Michael KZ4LY). Roy KI0ER uses +60 Hz on his own
+rig. Earlier versions of this page suggested 400–600 Hz, which is outside many operators'
+filters altogether.
+
+!!! note "Your QMX may keep showing two frequencies afterwards"
+
+    The offset works by putting the radio in split — receive on VFO A, transmit on
+    VFO B. When you switch the offset off, the panadapter returns VFO B to VFO A and
+    drops split, and it confirms both by reading the radio back.
+
+    The QMX's own LCD may nevertheless keep showing a second frequency until you
+    change band or power-cycle it. That is a display artifact: nothing repaints the
+    second row of the LCD when the VFO mode returns to A over CAT (confirmed by
+    Stan KC7XE, and known on the QRP Labs list). **You are not transmitting off
+    frequency** — VFO B equals VFO A and split is off.
+
+    Do not use the `MU;` command to tidy it up. It does clear the display, but it
+    also silently drops the radio's I/Q mode, and the panadapter's spectrum goes
+    flat while the radio keeps streaming audio as though nothing had happened.
+
+The QMX has no XIT, so this is done with **split**: you receive on VFO A and transmit on
+VFO B, which the Tab5 holds at your receive frequency plus the offset. Set it once and it
+follows you — a tap on the panadapter, a spot, a memory recall, a band change, the web
+page, and the radio's own tuning knob. It applies in **CW and CW-R only**, and leaving CW
+clears it. If you are running your own split, the Tab5 leaves it alone.
+
+**Let me use the QMX menus** — hands the radio back. The QMX's own menu, and its Band
+Configuration terminal application, talk over the same USB serial port the Tab5 polls
+several times a second, so the two fight over it. Tap this before using the radio's own
+menus: the Tab5 stops sending anything, the spectrum freezes, and a blue bar across the
+top says so and gives the radio back when you tap it. Resuming re-checks IQ mode, which a
+trip through the radio's menu can switch off.
+
+While the radio is released the Tab5 will not transmit — an armed FT8 burst and Antenna
+Tune are both refused rather than keying a radio you are holding.
+
+**Radio menus** — the QMX's own menu system on the Tab5's screen, so you do not have to
+reach the radio at all. Unlike the button above it, this does **not** stop the panadapter:
+it uses the radio's *second* USB serial port, so CAT keeps running while you are in the
+menus. You have to switch that port on once, on the radio — System config → GPS & Ser.
+ports → USB serial ports → 2. For a QMX+ with no control panel this is the only way into
+its menus. See [Radio Menus](radio-menus.md).
 
 ## Operator Info
 
@@ -20,15 +124,40 @@ Tap **WiFi setup** in the settings drawer to open the WiFi window.
 
 Once connected, the settings show your **IP address** — use this to access the web UI from a browser.
 
+**Static IP address / Subnet mask / Gateway / DNS server** — set in the web UI's Settings
+window under **WiFi** (there is no Tab5 equivalent for typing them — four addresses on
+glass is no kindness). **Leave the address empty for DHCP**, which is what every unit does
+by default, so nothing changes unless you fill it in. It takes effect the next time the
+Tab5 connects.
+
+**Leave the mask, gateway and DNS blank unless you have a reason not to.** They are filled
+in from the address the Tab5 currently holds, so on an ordinary network you only have to
+type the address itself — and on anything that is not a plain 255.255.255.0 network, that
+is also the part most easily got wrong by hand.
+
+**An address on the wrong network is refused.** The Tab5 compares what you type against the
+network it is on and will not accept an address that would put it somewhere else, telling
+you both. If you are deliberately setting a unit up for a different network, confirm when
+it asks and it will be stored as typed.
+
+**Use DHCP** — a button in the Tab5's settings drawer, under **WiFi setup**. It appears
+only when a static address is configured. One tap arms it, a second clears the address and
+restarts on DHCP. This is the way back if a static address ever leaves the web page
+unreachable, and it needs nothing but the Tab5 itself. The bottom bar always shows the
+address the unit actually has.
+
 ## Time Sync
 
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
 
-**Set Manual Time** — Manually enter UTC time (hours, minutes, seconds).
+**Setting the time by hand** — there is no control for this in the drawer, despite what
+earlier versions of this guide said. The clock is set from the FT8 screen: **Options →
+Sync Time**. See [Setting the time by hand](time-sync.md#5-setting-the-time-by-hand),
+which also covers setting the seconds — the part that matters with no WiFi and no GPS.
 
 **FT8-Derived Sync** — Estimates the UTC offset from decoded FT8 signal timing. **Offline fallback only**: it is automatically ignored while SNTP or GPS is available (those are authoritative), and only nudges the clock when you're off-grid with no better source. See [Time Sync](../guide/time-sync.md).
 
-**QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source.
+**QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source. A clock the Tab5 has itself pushed into the radio is never accepted as evidence of GPS — see [Time Sync](../guide/time-sync.md#4-qmx-gps-time-sync-auto-detected).
 
 ## Display
 
@@ -54,26 +183,191 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 
 **Accurate charge reading while charging** — the displayed battery percentage (and the charge-limit trigger) now compensate for the voltage rise that occurs while charging current is flowing. Previously this made the reading jump around while plugged in, and made the charge limit either stick just short of the target or oscillate; both are fixed.
 
+**"(limit)" on the battery reading** (v1.9.4) — once the cap trips, the battery text on both the Tab5 and the web UI grows a `(limit)` suffix. Without it, "capped on purpose at 80%" and "not charging for some other reason" looked identical.
+
 ## Waterfall Controls
 
 **Black Level (dB)** — How far above noise floor to show as black (default 9 dB). Lower = more colour detail.
 
 **Contrast (dB)** — Span of the colour ramp (default 45 dB). Lower = more contrast, higher = more gradation.
 
-**Adaptive Floor (%)** — Blend between per-bin noise floor (100%) and global mean floor (0%; default 100%).
-
 **FFT Window** — 
 - **Blackman-Harris** (default) — best frequency resolution
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
 
+**Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
+drawer.
+
+At some dial frequencies the QMX puts a comb of evenly spaced artifacts into the
+spectrum, and this setting was meant to remove them. It only ever worked at zoom
+×1: above that the display is drawn from a second, finer analysis that the
+suppression never reached, so turning it on or off made no difference at all —
+and zooming in is exactly what you do when you are looking at a spur.
+
+It also matters less than the original measurements suggested. Those were taken
+with the antenna disconnected, where the strongest tooth stood nearly 40 dB above
+the noise. With a real antenna on the same radio it measures about 23 dB, because
+band noise rises and buries the weaker teeth.
+
+Nothing is lost by its absence, and the work is kept for a future release.
+
+Wherever something is being removed, the thin line under the frequency labels turns
+teal. You can always see what is being touched.
+
+!!! note "The 25 Hz nudge is real"
+
+    Learning a frequency briefly moves the radio 25 Hz and puts it back. You may
+    hear it on CW. It happens once per frequency, about two seconds after you stop
+    tuning, and not at all on a frequency already learned. This is why the feature
+    is off by default.
+
 ## Panadapter & Zoom
+
+**Still spectrum** *(Radio & display, on by default)* — the spectrum and waterfall hold
+still and the VFO marker moves across them, so a signal stays where you last saw it while
+you tune towards it. Switch it off and the display re-centres on the dial at every step
+with the marker in the middle. Applies from **×2 zoom up**; at ×1 the view is already the
+whole 48 kHz the radio sends, so there is no room to hold it still. The full behaviour,
+including when the view re-frames, is in
+[Panadapter → Still Spectrum](panadapter.md#9-still-spectrum).
 
 **Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
 
 **Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
+
+## Bluetooth mouse and keyboard
+
+A Bluetooth mouse is the one pointer that works **while the QMX is plugged in**.
+A USB mouse cannot: the radio occupies the Tab5's only USB host, and sharing it
+through a hub does not work on this hardware — both devices end up disabled. A
+Bluetooth mouse never touches that port, so the radio keeps its connection.
+
+For anyone operating with cold or unsteady hands, that is the point: every menu,
+button and drawer control becomes a click instead of a precise tap on glass.
+
+!!! warning "The mouse must be Bluetooth 4.0 or later"
+    Only **Bluetooth Low Energy** mice work. The Tab5 gets its Bluetooth from a
+    co-processor that has no Bluetooth Classic radio in it at all, so an older
+    Classic mouse cannot be made to work by any firmware change.
+
+    Most mice sold since about 2014 are Low Energy. Look for **Bluetooth 4.0** or
+    later on the box. A dual-mode mouse works on its Low Energy channel.
+
+    **How to tell which problem you have.** A Classic mouse never appears to the
+    Tab5 at all — the Bluetooth symbol keeps looking and never turns blue, because
+    the Tab5 listens only for mice that announce themselves the Low Energy way. A
+    mouse that *does* connect but moves the pointer oddly is a different matter,
+    and that one is worth reporting.
+
+**Setting it up**
+
+1. Tick **Bluetooth mouse → Enable** in the settings drawer.
+2. **Restart the Tab5.** Bluetooth can only start once the radio link to the
+   wireless co-processor is up, so the switch takes effect on the next boot —
+   the toast says so at the time.
+3. Put the mouse into pairing mode and wait a few seconds. It connects on its own.
+
+You only do this once. The pairing is stored, survives a reboot and a firmware
+update, and the mouse reconnects by itself from then on.
+
+**The Bluetooth symbol in the bottom bar** sits just left of the WiFi indicator
+and has three states:
+
+| Symbol | Meaning |
+|--------|---------|
+| Dim grey | Bluetooth is switched off |
+| Pale | On and looking for a device |
+| **Blue** | A mouse or keyboard is ready to use |
+
+**What works:** moving the pointer, left click, and the scroll wheel — the wheel
+scrolls whatever is under the pointer, so the decode list, the settings drawer
+and the manual all scroll.
+
+!!! note "The pointer disappears when the mouse sleeps"
+    A Bluetooth mouse switches itself off after about half a minute of not being
+    moved, to save its battery. The pointer vanishes with it and comes back the
+    instant you touch the mouse — reconnecting takes under a third of a second.
+    This is the mouse looking after its own battery, not a fault.
+
+### A Bluetooth keyboard
+
+A Bluetooth keyboard works the same way and needs no separate setting — the same
+**Bluetooth → Enable** switch covers both. Pair it and it types into every text
+field, exactly as the snap-on keyboard does: **Enter** presses Save in any
+window, **Esc** presses Cancel, **Tab** moves to the next field, and the arrow
+keys move the cursor.
+
+**A keyboard and a mouse can be connected at the same time**, in either order.
+
+**The on-screen keyboard steps aside** whenever a Bluetooth keyboard is
+connected. That is most of the reason to have one: the on-screen keyboard covers
+a large part of the display, and with a real keyboard you get that space back.
+
+!!! warning "US keyboard layout only for now"
+    A Bluetooth keyboard sends key *positions* rather than characters, and the
+    Tab5 currently reads them through a US layout. Letters, digits, **Enter**,
+    **Tab**, **Esc** and the arrow keys are the same on every layout, so typing a
+    callsign, a grid, a frequency or a password works on any keyboard. Some
+    punctuation on a non-US layout will produce a different character. National
+    layouts are planned.
+
+!!! note "A sleeping keyboard costs you nothing"
+    Like the mouse, a Bluetooth keyboard switches itself off when idle. Pressing
+    any key wakes it, and reconnecting takes a few seconds — but anything you
+    type while it is waking up is held and delivered once the link is back, so
+    you do not lose the first characters.
+
+---
+
+## Firmware updates
+
+**Download updates automatically** *(Network — on by default, v1.9.3)* — when a
+newer release appears, the Tab5 fetches it quietly in the background so that
+the only thing left for you is one decision: restart now, or later. The
+spectrum, waterfall and FT8 decoding keep running while it downloads.
+
+Switch it off if you are on a metered connection — a phone hotspot in a field,
+for example — as each update is about 3.3 MB. With it off nothing is fetched
+until you ask: the bottom bar still offers the update, and the window's button
+reads **Download now**.
+
+⚠ Turning this on never installs anything by itself. Applying an update
+restarts the Tab5, and only you can ask for that — see
+[Keeping It Up To Date](../quick-start.md#step-10-keeping-it-up-to-date).
+
+---
+
+## Live Spots
+
+Draws other stations on the spectrum at the frequency they are operating on. Full
+details, including what the colours mean, in [Live Spots](spots.md).
+
+**Live spots (POTA)** — On by default. Fetches Parks On The Air activations about
+once a minute and draws them over the spectrum. Needs WiFi. Switching it off
+leaves the spectrum completely clean.
+
+**RBN spots (CW skimmers)** — **Off** by default, and deliberately so: RBN is a
+continuous global feed over a persistent connection, unlike POTA's occasional
+fetch. Adds stations the skimmer network is hearing right now, filtered to the
+band you are on. **Requires your callsign** to be set (the feed asks for one on
+connect — it identifies you, it is not a password).
+
+**DX cluster spots (phone)** — **Off** by default, same reasoning: a second
+persistent connection. This is the source that carries **SSB**. Skimmers are
+machines, and no machine recognises a callsign spoken into a microphone, so
+phone activity is structurally invisible to RBN however long you leave it on. A
+cluster is people typing, so it carries voice contacts, and park and summit
+references written into the comment. Mode is worked out from the spotter's
+comment, or from your band plan when the comment does not say. Relayed skimmer
+spots are dropped, so the cluster cannot double what RBN is already showing.
+
+Whatever you switch on, **one station is one entry**: the same callsign within
+2 kHz is merged, an activation spot outranks a plain sighting, and a dropped
+duplicate folds back in as corroboration — drawn brighter, meaning a receiver
+copied them just now rather than someone having typed it an hour ago.
 
 ## FT8 Settings
 
@@ -98,7 +392,62 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 
 **FT8 Filters** — Include/exclude stations, set auto-reply priority, enable robot mode, grey-listing (see [FT8 Receive](ft8-rx.md) for details).
 
-**Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected).
+**Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected). See
+[The snap-on keyboard](#the-snap-on-keyboard) below for everything it can do.
+
+## WSPR
+
+The **WSPR** group appears only while the WSPR page is up, and holds **Allow
+transmitting**, **Declared power**, **Duty cycle**, **Band hopping** and **Publish spots
+to wsprnet**. They are described where they make sense — see [WSPR](wspr.md).
+
+## The snap-on keyboard
+
+If the M5Stack Tab5 70-key snap-on keyboard is attached it is detected and
+needs no configuration. It does considerably more than fill in text fields.
+
+**Snap it on any time** (v1.9.4) — attaching it after boot works too, found
+and ready to type within a couple of seconds; the same is true of taking it
+off and reattaching mid-session. Its two LEDs are deliberately dark once it's
+found - the keyboard works identically regardless of when it was attached, so
+there's nothing left for a light to usefully distinguish.
+
+**Typing.** Any window with text fields takes the keyboard directly — WiFi
+setup, your callsign and grid, CQ messages, FT8 filters, memory channels.
+**Tab** moves between fields, **Enter** saves and **Escape** cancels.
+
+**Getting around.**
+
+| Key | Does |
+|---|---|
+| Arrows | Scroll the settings drawer and the manual. Press repeatedly and it scrolls further each time |
+| Page Up / Page Down | Move a whole screen |
+| Enter | The confirming button of whatever is open — Save, Transmit, Yes |
+| Escape | Closes whatever is in front of you, including the settings drawer and the memory page |
+
+**Shortcuts.** Hold **Ctrl** and press a letter:
+
+| | | | |
+|---|---|---|---|
+| **Ctrl+R** Radio menus | **Ctrl+M** User manual | **Ctrl+H** Need guidance? | **Ctrl+L** QSO log |
+| **Ctrl+K** Memory channels | **Ctrl+P** Panadapter | **Ctrl+F** FT8 | **Ctrl+S** Settings drawer |
+| **Ctrl+D** Display off | | | |
+
+Any key wakes the display again afterwards.
+
+**Changing them.** The web page has a shortcuts editor — **Miscellaneous ▸
+Keyboard shortcuts**. There are 25 actions to choose from, including zoom,
+brightness, releasing the radio to its own front panel, and every setup window.
+**Alt** is left completely unused so you can put your own bindings there without
+disturbing anything. See [The web interface](web-ui.md).
+
+!!! note "Nothing that transmits can be given a shortcut"
+    Deliberately. A button you deliberately press is one thing; a two-key
+    combination that a slipped finger can produce is another. Calling CQ,
+    transmitting and tuning stay where you can see them.
+
+This keyboard has no Shift and no Fn key — **Sym** and **Aa** are handled inside
+the keyboard itself, so **Ctrl** and **Alt** are what shortcuts can use.
 
 ## Audio & DSP
 
@@ -145,6 +494,100 @@ If no card is inserted the dot is absent, which is not an error.
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
 
+## Activation (POTA / SOTA)
+
+When you are activating a park or a summit, every contact you make has to be
+logged as belonging to **that reference** — it is what POTA and SOTA read to
+credit the activation, for you and for the people who worked you.
+
+Open **Activation (POTA/SOTA)** in the settings drawer, pick the scheme, type the
+reference, and tap **Start activation**. From then on every logged QSO carries it
+automatically. There is nothing to remember per contact.
+
+The screen shows your **contact count against the threshold** — ten for POTA,
+four for SOTA — and turns green when you reach it. That number is read from the
+log itself, so it survives a reboot and can never disagree with what was actually
+written.
+
+**Stopping matters as much as starting.** While a session is running the main
+button is a red **Stop activation**, and the drawer button itself shows the live
+reference rather than a generic label. The failure that actually happens is
+driving home with it still switched on, quietly stamping every later contact with
+a park you have left.
+
+The session persists across a restart on purpose — a battery change in the field
+should not lose it — but it is deliberately **not** included in a config backup,
+so restoring an old backup can never re-activate a park you are nowhere near.
+
+**Chasing** works without any setup: if you work a station the panadapter has
+seen spotted at a park or summit, that reference is written into your log entry
+automatically.
+
+**Uploading just one activation:** the web UI's ADIF download can be limited to a
+single reference, so you get that park's log rather than your entire file.
+
+---
+
+## SWR protection
+
+While transmitting, the QMX reports its SWR back over the control link. If the
+reading reaches the limit you set here the transmitter is **latched off** —
+nothing will transmit again until you clear it by tapping the red warning on the
+FT8 screen.
+
+Choose **Off, 2.0:1, 2.5:1, 3.0:1 or 4.0:1**. The default is **3.0:1**.
+
+**In FT8 the burst is cut short**; the SWR is sampled part-way through and the
+transmission stops there. **In FT4 the check happens after the burst**, so the
+one burst completes and every later one is blocked. That is not an oversight:
+FT4 symbols are 48 ms and a control-link query takes about 50 ms, so asking
+mid-burst would disturb the transmission it is trying to protect. A reading is
+only acted on if there is real power behind it — the radio can report a
+meaningless ratio when the amplifier is not actually loaded. That is high enough not to trip on a merely mediocre
+match, and low enough to stop a burst going into a disconnected antenna, a
+wrong-band antenna or a damaged feedline — which is how this usually goes wrong
+in the field. An FT8 transmission is nearly thirteen seconds of continuous
+key-down, so there is real time to save.
+
+The latch is deliberately sticky. A bad antenna does not repair itself, and
+resuming automatically would simply transmit into the same fault on the next
+slot.
+
+!!! note "Set it to Off if you use a tuner"
+    With a matched antenna the protection never fires, but if you are
+    deliberately loading something unusual you may prefer no interference at
+    all.
+
+---
+
+## Propagation feedback — who is hearing me
+
+This asks PSK Reporter which receivers have copied **your** callsign recently.
+It is the reverse of the reports the panadapter *sends*, and the two are
+separate settings — you can have either without the other.
+
+It answers a question no amount of local processing can: **am I actually getting
+out?** The valuable case is the mismatch. Stations you can hear that cannot hear
+you is a transmit-side problem — antenna, power, a bad connector — and from the
+receiving side alone it looks exactly like a dead band.
+
+**This one lives in the browser, not on the Tab5.** There is no drawer control
+for it — the answer is a list of stations with distances and bearings, which
+wants a screen you are already sitting in front of. In the web UI open
+**Settings → Spots & reporting** and tick **Propagation feedback (who is hearing
+me)**, then **Miscellaneous → Who is hearing me** for the list: receiver,
+country, distance, bearing and the signal report they gave you, sorted by
+distance.
+
+It is read-only and asks at most once every five minutes, which is the rate PSK
+Reporter requests.
+
+!!! note "An empty list is the normal answer if you have not transmitted"
+    Nobody can report hearing you until you have been on the air. Give it a few
+    minutes after a CQ run.
+
+---
+
 ## ADIF & Logging
 
 **ADIF Log** — View the QSO log on-device. The viewer shows a proper column table:
@@ -185,11 +628,26 @@ Use this to:
 - Transfer settings to another Tab5
 - Recover from accidental changes
 
-## Advanced / Expert
+## Resets — in the browser, not the drawer
 
-**Reset to Defaults** — Wipe all user settings and return to factory defaults. ADIF log is preserved. Use only if something is stuck.
+**These two live in the browser, not in the drawer** — a reset you can trigger by
+mistake on a touchscreen in the field is a worse idea than one that needs a
+computer. Both are in the web UI's **Miscellaneous ▲** menu.
 
-**Factory Reset (Full)** — Erase everything including ADIF log. Use only as a last resort.
+**Reset settings** — Erases the stored settings and memory channels, returning
+everything to defaults, and reboots. Use if something is stuck in a state you
+cannot get out of. Take a **Config ↓** backup first and you can restore it in
+seconds.
+
+**Reset WiFi** — Erases the WiFi credentials and the stored radio/link state.
+This is the one for a WiFi setup that will not come up no matter what you enter.
+
+**Neither of them touches your QSO log.** The ADIF log lives in a separate area
+of flash that is deliberately left alone, so a reset cannot cost you contacts —
+and neither can a firmware update, which is why a normal flash keeps your log.
+The only things that erase the log are the **Delete all** button in the ADIF
+viewer, the same in the web log viewer, and a **clean/erase flash** from the
+flasher.
 
 ---
 

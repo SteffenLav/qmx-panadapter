@@ -48,8 +48,20 @@ static const char TAG[] = "H_SDIO_DRV";
 // max number of time to try to read write buffer available reg
 #define MAX_WRITE_BUF_RETRIES             50
 
-/* Actual data sdio_write max retry */
-#define MAX_SDIO_WRITE_RETRY              2
+/* Actual data sdio_write max retry.
+ * PATCHED (qmx-panadapter, 2026-08-16): 2 -> 8, with a 2 ms pause between
+ * attempts (see sdio_write_task). Stock made both of its attempts inside 11 ms,
+ * which is not long enough to ride out a transient CMD53 timeout, and then
+ * rebooted the whole device. */
+#define MAX_SDIO_WRITE_RETRY              8
+
+/* PATCHED (qmx-panadapter, 2026-08-16): how many CONSECUTIVE packets may fail
+ * to go out before the link is judged genuinely dead and the host is restarted.
+ * A single dropped frame is normal on a shared bus and TCP handles it; 32 in a
+ * row is not, and at that point a restart really is the only way back. Cleared
+ * by any successful write, so transients cannot accumulate toward a reboot. */
+#define H_SDIO_TX_FAIL_STREAK_MAX         32
+static int sdio_tx_fail_streak = 0;
 
 // this locks the sdio transaction at the driver level, instead of at the HAL layer
 #define USE_DRIVER_LOCK
@@ -485,15 +497,49 @@ static void sdio_write_task(void const* pvParameters)
 					retries, ret, len_to_send, data_left);
 				retries++;
 				if (retries < MAX_SDIO_WRITE_RETRY) {
-					ESP_LOGD(TAG, "retry");
+					/* PATCHED (qmx-panadapter, 2026-08-16): pause between
+					 * attempts. Stock code retried immediately, so its two
+					 * tries were 11 ms apart - not a real attempt at riding
+					 * out a transient CMD53 timeout. */
+					g_h.funcs->_h_msleep(2);
 					continue;
 				} else {
+					/* PATCHED (qmx-panadapter, 2026-08-16): DROP THE PACKET,
+					 * DO NOT REBOOT THE DEVICE.
+					 *
+					 * Stock code calls _h_restart_host() here, which restarts
+					 * the whole P4 to avoid losing one WiFi frame. Captured on
+					 * hardware at ~51 min uptime: two CMD53 timeouts (0x107)
+					 * 11 ms apart, then a full restart. It is a clean
+					 * esp_restart(), so there is NO panic dump and the reset
+					 * reason reads SW_CPU_RESET - a user sees an unexplained
+					 * reboot, a clean log, and has nothing to report.
+					 *
+					 * Dropping the frame is the proportionate response and is
+					 * the precedent this same file already sets on the RX side:
+					 * one frame is lost, TCP/UDP retransmit, the link survives.
+					 *
+					 * The restart is KEPT as a genuine last resort: if writes
+					 * keep failing packet after packet the link really is dead,
+					 * and rebooting is then the only way back. Any successful
+					 * write clears the counter, so a transient can never walk
+					 * the device toward a reboot. */
+					sdio_tx_fail_streak++;
 					SDIO_DRV_UNLOCK();
-					ESP_LOGE(TAG, "Unrecoverable host sdio state, reset host mcu");
-					g_h.funcs->_h_restart_host();
+					if (sdio_tx_fail_streak >= H_SDIO_TX_FAIL_STREAK_MAX) {
+						ESP_LOGE(TAG, "Unrecoverable host sdio state, reset host mcu"
+							" (%d consecutive failed writes)", sdio_tx_fail_streak);
+						g_h.funcs->_h_restart_host();
+						goto done;
+					}
+					ESP_LOGW(TAG, "SDIO TX failed after %d tries - dropping this frame"
+						" (streak %d/%d); the link is left up",
+						retries, sdio_tx_fail_streak, H_SDIO_TX_FAIL_STREAK_MAX);
 					goto done;
 				}
 			}
+			/* A write got through: whatever that was, it was transient. */
+			sdio_tx_fail_streak = 0;
 
 			data_left -= len_to_send;
 			pos += len_to_send;

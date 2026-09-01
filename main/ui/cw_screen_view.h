@@ -8,6 +8,13 @@
 
 #include "lvgl.h"
 
+// Width of the CW page's left keyer pane. Exported because ui.c has to know
+// where the pane ENDS: the pane overlays the spectrum canvas rather than
+// narrowing it, so the frequency-axis labels and the band-plan strip have to
+// be kept clear of the covered pixels. One definition, so the page and the
+// axis can never disagree about where the visible spectrum starts.
+#define CW_PANE_W 320
+
 void       cw_screen_view_init(lv_obj_t *parent);
 void       cw_screen_view_show(void);
 void       cw_screen_view_hide(void);

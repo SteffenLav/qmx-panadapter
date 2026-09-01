@@ -119,8 +119,7 @@ static void ta_focused_cb(lv_event_t *e)
     lv_obj_remove_state(other, LV_STATE_FOCUSED);
 
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 // Hide keyboard when user presses LV_KEY_ESC or LV_KEY_ENTER on the keyboard.
@@ -172,6 +171,23 @@ static void scan_item_cb(lv_event_t *e)
     lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
     if (idx >= 0 && idx < s_aps_n) {
         lv_textarea_set_text(s_ta_ssid, s_aps[idx].ssid);  // exact case from beacon
+
+        // If this is a network we have connected to before, fill its password in
+        // too. Without this the remembered list only ever helped the AUTOMATIC
+        // fallback, so re-selecting a known network by hand still meant typing a
+        // password the device already had - which reads as "it does not remember
+        // my credentials" (operator, 2026-08-05), and fairly so.
+        //
+        // STATIC, not on the stack: this is an LVGL callback on taskLVGL and the
+        // array is ~590 bytes. See the task-stack note in CLAUDE.md.
+        static wifi_known_t known[WIFI_KNOWN_MAX];
+        int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+        for (int k = 0; k < kn; k++) {
+            if (strcmp(known[k].ssid, s_aps[idx].ssid) != 0) continue;
+            lv_textarea_set_text(s_ta_pass, known[k].pass);
+            ESP_LOGI("wifi_cfg", "'%s' is known - password filled in", known[k].ssid);
+            break;
+        }
     }
     // Strong selection confirmation: turn the picked row solid blue with a
     // check mark, then close shortly after so it's clearly seen.
@@ -532,7 +548,6 @@ void wifi_config_modal_show(void)
         if (s_wifi_on) lv_obj_add_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_clear_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
     }
-    ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);

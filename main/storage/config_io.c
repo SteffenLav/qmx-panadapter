@@ -45,11 +45,22 @@ char *config_io_export(size_t *out_len)
     APP("grid               = %s\n", c.my_grid);
     APP("wifi_ssid          = %s\n", c.wifi_ssid);
     APP("wifi_pass          = %s\n", c.wifi_pass);
+    /* Static IP. Empty wifi_ip means DHCP - and an empty value here restores
+       DHCP on import, which is what clearing the field is meant to do. */
+    APP("wifi_ip            = %s\n", c.wifi_ip);
+    APP("wifi_mask          = %s\n", c.wifi_mask);
+    APP("wifi_gw            = %s\n", c.wifi_gw);
+    APP("wifi_dns           = %s\n", c.wifi_dns);
     APP("wifi_enabled       = %s\n", yn(c.wifi_enabled));
     APP("cw_pitch_hz        = %u\n", (unsigned)c.cw_pitch_hz);
     APP("if_cal_hz          = %d\n", (int)c.cw_cal_hz);
     APP("iq_balance         = %s\n", yn(c.iq_enabled));
     APP("flat_spectrum      = %s\n", yn(c.flat_mode));
+    APP("still_spectrum     = %s\n", yn(c.still_view));
+    APP("spots              = %s\n", yn(c.spots_en));
+    APP("spots_rbn          = %s\n", yn(c.rbn_en));
+    APP("spots_sota         = %s\n", yn(c.sota_en));
+    APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -62,6 +73,11 @@ char *config_io_export(size_t *out_len)
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
     APP("display_flip       = %s\n", yn(c.display_flip));
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
+    APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
+    APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
+    APP("bt_mouse_en        = %d\n", c.bt_mouse_en ? 1 : 0);     // BLE mouse
+    APP("cluster_en         = %d\n", c.cluster_en ? 1 : 0);      // DX cluster feed (phone spots)
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
@@ -72,6 +88,9 @@ char *config_io_export(size_t *out_len)
     APP("qrz_key            = %s\n", c.qrz_api_key);
     APP("eqsl_user          = %s\n", c.eqsl_user);
     APP("eqsl_pass          = %s\n", c.eqsl_pswd);
+    APP("cloudlog_url       = %s\n", c.cloudlog_url);
+    APP("cloudlog_key       = %s\n", c.cloudlog_key);
+    APP("cloudlog_station   = %s\n", c.cloudlog_station);
     APP("lotw_dxcc          = %s\n", c.lotw_dxcc);
     APP("lotw_cqz           = %s\n", c.lotw_cqz);
     APP("lotw_ituz          = %s\n", c.lotw_ituz);
@@ -95,6 +114,8 @@ char *config_io_export(size_t *out_len)
     APP("2 = %s\n", c.cq_msg[1]);
     APP("3 = %s\n", c.cq_msg[2]);
     APP("stop_after = %u\n", (unsigned)c.cq_max_calls);   // 0 = keep calling
+    APP("hound_mode = %u\n", (unsigned)c.hound_mode);     // 0 off, 1 guided, 2 auto
+    APP("listen_every = %u\n", (unsigned)c.cq_listen_every);  // 0 = never pause to listen
 
     APP("\n[cw]\n");
     APP("# keyer memories 1-6; {MYCALL} and {PARK} expand at send time\n");
@@ -147,7 +168,7 @@ static bool to_bool(const char *v)
            strcasecmp(v, "yes") == 0  || strcasecmp(v, "on") == 0;
 }
 
-typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_CW, SEC_FILTERS, SEC_MEM } section_t;
+typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_CW, SEC_FILTERS, SEC_MEM, SEC_WIFI_KNOWN } section_t;
 
 int config_io_import(char *text)
 {
@@ -158,6 +179,26 @@ int config_io_import(char *text)
     settings_load_all(&cur);
     ft8_filters_t filt = cur.ft8_filters;
     bool filt_touched = false;
+
+    // Static IP: the four fields are one setting, so they are collected here
+    // and applied once at the end. Seeded from the CURRENT values so a file
+    // carrying only some of them cannot half-erase the rest.
+    char sip[16], smask[16], sgw[16], sdns[16];
+    snprintf(sip,   sizeof sip,   "%s", cur.wifi_ip);
+    snprintf(smask, sizeof smask, "%s", cur.wifi_mask);
+    snprintf(sgw,   sizeof sgw,   "%s", cur.wifi_gw);
+    snprintf(sdns,  sizeof sdns,  "%s", cur.wifi_dns);
+    bool sip_touched = false;
+
+    // Remembered networks, collected across the [wifi_known] section and applied
+    // in one go at the end so the file's order is preserved.
+    // STATIC for the same reason as everywhere else this array appears: ~590
+    // bytes is too much to put on a task stack on this board. Import runs from a
+    // single web request at a time, so a file-local scratch is safe.
+    static wifi_known_t known[WIFI_KNOWN_MAX];
+    memset(known, 0, sizeof(known));
+    int  known_n = 0;
+    bool known_touched = false;
 
     section_t sec = SEC_NONE;
     int applied = 0;
@@ -176,6 +217,7 @@ int config_io_import(char *text)
             else if (strcasecmp(name, "cw") == 0)          sec = SEC_CW;
             else if (strcasecmp(name, "ft8_filters") == 0) sec = SEC_FILTERS;
             else if (strcasecmp(name, "memories") == 0)    sec = SEC_MEM;
+            else if (strcasecmp(name, "wifi_known") == 0)  sec = SEC_WIFI_KNOWN;
             else sec = SEC_NONE;
             continue;
         }
@@ -193,10 +235,22 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wifi_ssid"))         settings_set_wifi_ssid(val);
             else if (!strcasecmp(key, "wifi_pass"))         settings_set_wifi_pass(val);
             else if (!strcasecmp(key, "wifi_enabled"))      settings_set_wifi_enabled(to_bool(val));
+            /* All four are one setting - collected, applied once at the end. */
+            else if (!strcasecmp(key, "wifi_ip"))   { snprintf(sip,   sizeof sip,   "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_mask")) { snprintf(smask, sizeof smask, "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_gw"))   { snprintf(sgw,   sizeof sgw,   "%s", val); sip_touched = true; }
+            else if (!strcasecmp(key, "wifi_dns"))  { snprintf(sdns,  sizeof sdns,  "%s", val); sip_touched = true; }
             else if (!strcasecmp(key, "cw_pitch_hz"))       settings_set_cw_pitch_hz((uint16_t)atoi(val));
             else if (!strcasecmp(key, "if_cal_hz"))         settings_set_cw_cal_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "iq_balance"))        settings_set_iq_enabled(to_bool(val));
             else if (!strcasecmp(key, "flat_spectrum"))     settings_set_flat_mode(to_bool(val));
+            else if (!strcasecmp(key, "still_spectrum"))    { settings_set_still_view(to_bool(val));
+                                                              settings_set_still_notice_done(true); }
+            else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
+            else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
+            else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
+            else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
+            else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));
             else if (!strcasecmp(key, "brightness"))        settings_set_brightness_pct((uint8_t)atoi(val));
@@ -209,6 +263,11 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
+            else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
+            else if (!strcasecmp(key, "bt_mouse_en"))       settings_set_bt_mouse_en(atoi(val) != 0);
+            else if (!strcasecmp(key, "cluster_en"))        settings_set_cluster_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));
@@ -221,6 +280,9 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qrz_key"))           settings_set_qrz_api_key(val);
             else if (!strcasecmp(key, "eqsl_user"))         settings_set_eqsl_user(val);
             else if (!strcasecmp(key, "eqsl_pass"))         settings_set_eqsl_pswd(val);
+            else if (!strcasecmp(key, "cloudlog_url"))      settings_set_cloudlog_url(val);
+            else if (!strcasecmp(key, "cloudlog_key"))      settings_set_cloudlog_key(val);
+            else if (!strcasecmp(key, "cloudlog_station"))  settings_set_cloudlog_station(val);
             else if (!strcasecmp(key, "lotw_dxcc"))         settings_set_lotw_dxcc(val);
             else if (!strcasecmp(key, "lotw_cqz"))          settings_set_lotw_cqz(val);
             else if (!strcasecmp(key, "lotw_ituz"))         settings_set_lotw_ituz(val);
@@ -248,6 +310,13 @@ int config_io_import(char *text)
             } else if (!strcasecmp(key, "stop_after")) {
                 int n = atoi(val);
                 if (n >= 0 && n <= 255) { settings_set_cq_max_calls((uint8_t)n); applied++; }
+            }
+            else if (!strcasecmp(key, "hound_mode")) {
+                int n = atoi(val);
+                if (n >= 0 && n <= 2) { settings_set_hound_mode((uint8_t)n); applied++; }
+            } else if (!strcasecmp(key, "listen_every")) {
+                int n = atoi(val);
+                if (n >= 0 && n <= 255) { settings_set_cq_listen_every((uint8_t)n); applied++; }
             } else {
                 int idx = atoi(key) - 1;        // "1".."3"
                 if (idx >= 0 && idx <= 2) { settings_set_cq_msg((uint8_t)idx, val); applied++; }
@@ -297,11 +366,32 @@ int config_io_import(char *text)
             break;
         }
 
+        case SEC_WIFI_KNOWN: {
+            // ssidN / passN pairs, buffered so the list can be applied in FILE
+            // order at the end. Going straight through remember() would reverse
+            // it (remember() promotes to the front), and the file is written
+            // most-recent-first.
+            int idx = atoi(key + 4) - 1;                 // "ssid3"/"pass3" -> 2
+            if (idx < 0 || idx >= WIFI_KNOWN_MAX) break;
+            if (strncasecmp(key, "ssid", 4) == 0) {
+                snprintf(known[idx].ssid, sizeof(known[idx].ssid), "%s", val);
+            } else if (strncasecmp(key, "pass", 4) == 0) {
+                snprintf(known[idx].pass, sizeof(known[idx].pass), "%s", val);
+            } else break;
+            if (idx + 1 > known_n) known_n = idx + 1;
+            known_touched = true;
+            applied++;
+            break;
+        }
+
         default: break;
         }
     }
 
     if (filt_touched) settings_set_ft8_filters(&filt);
+    if (sip_touched)  settings_set_wifi_static(sip, smask, sgw, sdns);
+    // Applied wholesale, in file order: see the buffer's declaration.
+    if (known_touched) settings_wifi_known_set_all(known, known_n);
     settings_flush();
     ESP_LOGI(TAG, "imported config: %d keys/slots applied", applied);
     return applied;

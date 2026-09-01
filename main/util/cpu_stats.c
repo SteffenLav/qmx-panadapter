@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "display.h"
 #include "esp_timer.h"
 
 #include "psram_task.h"
@@ -46,9 +47,16 @@ static void cpu_stats_task(void *arg)
                 uint32_t p1 = (uint32_t)(((uint64_t)(i1 - prev_idle1) * 1000) / dt);
                 if (p0 > 1000) p0 = 1000;
                 if (p1 > 1000) p1 = 1000;
-                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%%",
+                // fps alongside idle, because they answer different questions and
+                // only one of them is what the operator actually perceives. Both
+                // are O(1) counter reads - no heap or stack walk - so this stays
+                // safe on a periodic path (see the cyan-flash rule in CLAUDE.md).
+                unsigned f10  = display_fps_x10();
+                unsigned kpx  = display_inval_kpx_per_s();
+                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s",
                          (unsigned long)(p0 / 10), (unsigned long)(p0 % 10),
-                         (unsigned long)(p1 / 10), (unsigned long)(p1 % 10));
+                         (unsigned long)(p1 / 10), (unsigned long)(p1 % 10),
+                         f10 / 10, f10 % 10, kpx);
             }
         }
         prev_idle0 = i0;

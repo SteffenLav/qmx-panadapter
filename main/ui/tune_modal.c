@@ -92,6 +92,12 @@ static void action_btn_cb(lv_event_t *e)
         do_stop(NULL);  // status label + button already show the exit; no toast
         return;
     }
+    // Tune keys a steady carrier. Not while the operator has released the radio
+    // to its own menu - the mode write would land in whatever they are doing.
+    if (cat_user_pause_active()) {
+        ui_toast("Radio released - take it back before tuning");
+        return;
+    }
     const char *cur = cat_get_mode_str();
     strncpy(s_prior_mode, (cur && cur[0]) ? cur : "USB", sizeof(s_prior_mode) - 1);
     s_prior_mode[sizeof(s_prior_mode) - 1] = '\0';
@@ -191,6 +197,11 @@ static void modal_build(void)
     lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cancel_lbl);
+
+    // Esc only, deliberately no Enter: this modal keys a carrier, and the
+    // key worth having on a keyboard is the one that STOPS it. Nothing here
+    // should be startable by a stray keypress.
+    ui_kbd_set_buttons(NULL, cancel_btn);
 
     ESP_LOGI(TAG, "Tune modal built");
 }

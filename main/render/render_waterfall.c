@@ -9,6 +9,16 @@
 #include <stdbool.h>
 #include <math.h>
 
+
+/* No-data shading for the region the radio cannot hear (#297). Deliberately
+ * the same slate as the spectrum's hatch so the two panes read as one block,
+ * and deliberately NOT a colour from the waterfall LUT - it must not look like
+ * a signal level. s_wf_row_parity advances once per row so the strokes lean
+ * instead of forming vertical lines.
+ */
+#define WF_NODATA_BG     0x18E3   /* very dark slate */
+#define WF_NODATA_HATCH  0x3186   /* one shade up, the stroke */
+static int s_wf_row_parity;
 static const char *TAG = "render_wf";
 
 // Must match the display canvas width.
@@ -275,9 +285,58 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     float floor_global = (floor_cnt > 0) ? (floor_sum / (float)floor_cnt)
                                          : floor_arr[0];
 
+    /* The half of #297 the waterfall owns. The spectrum above already refuses
+     * to wrap; if this still did, the two panes would disagree and the history
+     * would carry a band of somebody else's spectrum down the screen for the
+     * next minute. A column outside what the radio can hear is hatched with the
+     * same 9-px diagonal the spectrum uses, so the dead area reads as one block
+     * across both panes rather than stopping at the axis. */
+
+    /* The same sub-bin correction the spectrum applies (see ui.c). The zoom FFT
+     * can only be centred to a whole base bin - 46.875 Hz, which is 10 px at x16
+     * - so the remainder is applied to the mapping instead. Without it the
+     * waterfall steps while the spectrum above it does not, and the two panes
+     * disagree by up to half a bin. */
+    int wf_res_bins = 0;
+    if (zoom_spec) {
+        int decim = dsp_get_zoom_decim();
+        if (decim < 1) decim = 1;
+        int64_t pan_q = (int64_t)ui_get_pan_offset_bins() * DSP_SAMPLE_RATE_HZ / n_bins;
+        int64_t r_hz  = ui_get_pan_offset_hz() - pan_q;
+        wf_res_bins   = (int)llround((double)r_hz * (double)n_bins * (double)decim
+                                     / (double)DSP_SAMPLE_RATE_HZ);
+    }
+
+    /* ⛔ THE SAME VIEWPORT THE SPECTRUM IS DRAWN WITH, not one derived here.
+     *
+     * This used to test a signed bin offset against +/- n/2, built on a
+     * wf_center taken MODULO n_bins - a different question from the one the
+     * spectrum asks. With the view panned the two answers had nothing to do
+     * with each other: on the bench, 2026-08-31, the spectrum hatched its left
+     * 13% and the waterfall hatched everything else, burying the signals.
+     * pan_view.h had already written the rule - one mapping, or they drift. */
+    pan_view_cfg_t pvc;
+    pan_view_t     pv;
+    const bool     pv_ok = ui_pan_view_current(&pvc, &pv, n_bins);
+
     for (int x = 0; x < WF_WIDTH; x++) {
-        int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
-        int bin = ((b % n_bins) + n_bins) % n_bins;
+        int bin;
+        if (pv_ok) {
+            bin = pan_view_x_to_bin(&pvc, &pv, x);
+            if (bin == PAN_VIEW_NO_DATA) {
+                row[x] = (((x + s_wf_row_parity) % 9) == 0) ? WF_NODATA_HATCH
+                                                            : WF_NODATA_BG;
+                continue;
+            }
+        } else {
+            /* Zoom FFT: dsp_set_zoom() has mixed the pan target to DC, so these
+             * bins mean something else and pan_view does not apply. The span is
+             * at most 24 kHz and sits inside the capture window by
+             * construction, so this path cannot wrap either. */
+            int b = wf_start + wf_res_bins
+                  + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
+            bin = ((b % n_bins) + n_bins) % n_bins;
+        }
 
         float db = use_spectrum[bin];
         // Blend each bin's own adaptive floor with the single global floor
@@ -294,6 +353,7 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         row[x] = s_lut[idx];
     }
 
+    s_wf_row_parity++;
     ui_push_waterfall_row(s_row);
 }
 

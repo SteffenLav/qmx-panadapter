@@ -21,24 +21,38 @@
 #include "render.h"
 #include "render_waterfall.h"
 #include "settings.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - auto-answer must not survive a boot
 #include "dsp/iq_balance.h"
 #include "mem_channels.h"
 #include "wifi.h"
+#include "util/usb_shutdown.h"
 #include "net/update_check.h"
+#include "net/ota_update.h"
 #include "net/manual_embed.h"  // built-in user manual (boot integrity check)
+#include "net/reader_net.h"    // reader_net_purge_legacy_caches() at boot
 #include "ui/reader_view.h"
 #include "iq_balance.h"
+#include "spur_map.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
 #include "ft8_tx.h"
+#include "wspr_tx.h"
+#include "wspr_spots.h"
+#include "net/wsprnet.h"
 #include "ft8_status.h"
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
 #include "cw_qso.h"
 #include "net/pskreporter.h"
+#include "net/spots.h"
+#include "net/psk_rx.h"
+#include "bt_hid_mouse.h"
+#include "net/rbn.h"
+#include "net/dxcluster.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
+#include "panic_hook.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
 #include "sd_archive.h"
@@ -57,6 +71,14 @@ void app_main(void)
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+
+    // #117: if the last boot crashed, report it NOW - immediately after the log
+    // hook is installed, so the record is captured, and before anything else can
+    // panic and cost us the report. Panics never reach diag_log's vprintf hook,
+    // so before this a field crash left nothing on the device at all: the
+    // operator sent a diagnostic download containing everything except the one
+    // thing needed. No-op on a clean boot.
+    panic_hook_report_previous();
 
     // Apply any pending selective NVS reset requested from the web UI before a
     // reboot. Must run before nvs_flash_init()/settings_init() open handles on
@@ -82,6 +104,14 @@ void app_main(void)
     }
 
     settings_init();
+    // Unattended transmission must never be the state the device powers up in.
+    // If auto-answer was left on at shutdown it used to be on at boot and would
+    // start answering CQs within a cycle or two - before the operator had
+    // checked the antenna, the band, or that they meant to be transmitting at
+    // all (Roy KI0ER). Turning it on is a deliberate act, once per session.
+    // NULL: no toast at boot, the UI does not exist yet and the checkbox will
+    // simply read unchecked, which is the truth.
+    ft8_robot_stand_down(NULL);
     mem_channels_init();
     adif_log_init();
 
@@ -151,10 +181,14 @@ void app_main(void)
     #endif
     // === END BENCH HARNESS =============================================
 
-    // adif_log_init() mounted SPIFFS; now the diag log can persist to flash so
-    // it survives power-off with no SD card (POTA: log in the field, analyse
-    // at home). Background task, 256 KB rolling file, downloadable at
-    // /api/log/saved.
+    // adif_log_init() mounted SPIFFS. Reclaim the reader page/TOC caches an
+    // older firmware left there BEFORE the diag log starts filling the space -
+    // nothing has read those files since 2026-08-06 (see reader_net.c).
+    reader_net_purge_legacy_caches();
+
+    // Now the diag log can persist to flash so it survives power-off with no SD
+    // card (POTA: log in the field, analyse at home). Background task, 256 KB
+    // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
@@ -225,6 +259,9 @@ void app_main(void)
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
+    // Make every firmware-initiated reboot tear the USB link down properly, so
+    // the QMX is told we are going rather than finding out (see usb_shutdown.h).
+    usb_shutdown_install_handler();
 
     // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
     // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
@@ -240,8 +277,17 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
-    ui_set_cw_pitch_hz(cfg.cw_pitch_hz);
+    // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
+    // ~13 s from now), so the MMCW write this used to make went nowhere on every
+    // single boot. The radio tells us its own centre at link-up instead, and that is
+    // the value that wins; this is just what to show until it does.
+    ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
     ui_set_cw_cal_hz(cfg.cw_cal_hz);
+    ui_set_rit_pill_show(cfg.rit_pill_show);   // before the drawer is ever opened
+    /* #298: before the first frame, so nobody sees the wrong one and then a jump.
+     * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
+    ui_set_still_view(cfg.still_view);
+    ui_still_notice_arm(!cfg.still_notice_done);
     render_waterfall_set_colormap(cfg.colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
@@ -282,6 +328,8 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
     ESP_ERROR_CHECK(dsp_init());
+    // After dsp_init: the detector arms dsp_avg_*, which needs the FFT running.
+    spur_map_init();
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
     // but dsp_set_zoom() is a no-op before dsp_init() creates its config
     // mutex - re-apply now so a saved zoom > x1 engages the zoom-FFT
@@ -289,6 +337,11 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+
+    // The drawer opens on whichever half the operator last chose. Applied here
+    // rather than inside ui_init() because it only moves widgets that already
+    // exist, and ui_set_drawer_expert() is a no-op when the value matches.
+    ui_set_drawer_expert(cfg.drawer_expert);
 
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
     render_waterfall_set_black_level(cfg.wf_black_db);
@@ -331,10 +384,20 @@ void app_main(void)
     ft8_screen_init();
     ft8_status_init();
     ft8_tx_init();
+    wspr_tx_init();
+    wspr_spots_init();
+    wsprnet_init();          /* OFF unless the operator enabled it */
     ft8_qso_init();
     ft8_pileup_init();
     ft8_sim_init();
     pskreporter_init();
+    spots_init();          // live POTA spots on the spectrum (WiFi, opt-out)
+    psk_rx_selftest();     // attribute names still match the collector's output
+    psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
+    bt_hid_mouse_init();   // BLE mouse over the C6 (opt-in; Stage 1 = scan only)
+    rbn_init();            // RBN as a second source into the same store (opt-IN)
+    dxcluster_selftest();  // parser vs lines captured from a real cluster node
+    dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
@@ -347,5 +410,13 @@ void app_main(void)
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is
     // down, so it's harmless on offline/POTA units.
     update_check_start();
+
+    // #218: confirm this image so the bootloader stops treating it as on trial.
+    // With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE a freshly OTA'd firmware boots
+    // PENDING_VERIFY and reverts on the next reset unless it says it is good.
+    // Reaching here means display, settings, USB, the UI and the network all
+    // came up, which is the only working definition of "this image is fine"
+    // available from inside it. No-op on a cable-flashed image.
+    ota_update_mark_valid();
 }
 

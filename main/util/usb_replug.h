@@ -8,6 +8,13 @@
 // see an ordinary disconnect. Returns the root-port power-on result.
 esp_err_t usb_replug(uint32_t off_ms);
 
+// Root-port power cycle WITHOUT touching VBUS. This is the stand-in for the
+// enumeration retry ESP-IDF does not do (issue #17918) - and it must not cut
+// VBUS, because on a self-powered radio that is visible as the radio being
+// switched off, and it is proven not to clear the QMX-side descriptor wedge
+// (six approaches falsified on hardware, a 2 s VBUS cut among them).
+esp_err_t usb_replug_port_only(void);
+
 // Background stale-QMX detector: when a USB device is attached but has not
 // become an open QMX (CDC) or mouse (HID) for ~30 s - the signature of the
 // QMX's stale-USB-stack wedge, which no host-side action can clear - log +

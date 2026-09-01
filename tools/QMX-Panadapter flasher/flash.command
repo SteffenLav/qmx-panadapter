@@ -33,7 +33,7 @@ else
 fi
 
 # --- Verify firmware components are available -----
-for file in bootloader.bin partition-table.bin qmx_panadapter.bin; do
+for file in bootloader.bin partition-table.bin qmx_panadapter.bin ota_data_initial.bin; do
     if [ ! -f "$file" ]; then
         echo
         echo "ERROR: $file not found."
@@ -41,6 +41,7 @@ for file in bootloader.bin partition-table.bin qmx_panadapter.bin; do
         echo "  - bootloader.bin"
         echo "  - partition-table.bin"
         echo "  - qmx_panadapter.bin"
+        echo "  - ota_data_initial.bin"
         echo
         read -r -p "Press Enter to close..."
         exit 1
@@ -104,13 +105,13 @@ RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin 0x920000 ota_data_initial.bin; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin 0x920000 ota_data_initial.bin
     RC=$?
 fi
 

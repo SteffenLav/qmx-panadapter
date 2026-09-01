@@ -18,6 +18,7 @@
 #include "ui.h"
 #include "cw_screen_view.h"   // cw_screen_feed_decoded() (TB; RX path)
 #include "diag_log.h"
+#include "settings.h"     // cw_tx_offset_hz - the CW split maintainer reads it live
 
 static const char *TAG = "cat";
 
@@ -69,6 +70,14 @@ static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03
 // decibels"), so dB = this / 4 and the drawer slider works in dB to match the
 // radio's display exactly.
 static volatile int s_af_gain = -1;
+// Last RF gain read back via RG;, in dB (the radio's own unit here - unlike AG
+// there is no quarter-dB scaling). -1 = never read. This is the per-band "RF
+// gain (dB)" from the QMX's Band Configuration, 0-99, default 54.
+static volatile int s_rf_gain = -1;
+// Last SP; (split state) answer: -1 unknown, 0 off, 1 on. Declared up here with
+// the other response state because the RX parser runs long before the CW-split
+// maintainer that consumes it.
+static volatile int s_split_readback = -1;
 static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
 static size_t s_q9_resp_len = 0;
 static volatile bool s_iq_mode_confirmed = false;  // true once Q9; readback confirms IQ mode ON
@@ -80,6 +89,15 @@ static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
+// Which VFO the radio RECEIVES on, from "FR;": 0 = VFO A, 1 = VFO B, 2 = Split.
+// -1 = not asked yet / no answer. We poll and write FA, i.e. VFO A ONLY, so a radio
+// receiving on B makes every frequency the Tab5 sets invisible and inaudible while
+// band select still appears to work - see ensure_rx_vfo_a(). (Markus DL8MBY.)
+static int  s_rx_vfo_mode = -1;
+// Does the radio report a permanently fitted GPS (QMX+ Internal)? Read once at
+// link-up from its GPS & Ser. Ports menu. False until asked, and false on any
+// firmware that does not report the item - the safe direction (#174).
+static bool s_qmx_gps_source_internal = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
@@ -89,6 +107,11 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
     return s_band_list;
 }
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
+// True only while WE hold the radio in split for the CW transmit offset. Lives
+// here rather than beside cw_split_maintain() because cat_request_rit_hz(),
+// further up this file, refuses a RIT offset while it is set - the two controls
+// are mutually exclusive (see that function).
+static bool     s_split_engaged = false;
 static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
 
 // Pending mode digit (Kenwood MD digit '1'-'9') requested from the LVGL thread.
@@ -102,10 +125,31 @@ static char hamlib_mode_to_digit(const char *mode);  // forward declaration
 // raced the FA/MD/FW poll and the QMX got a garbled command (returned ?;),
 // which is why BW changes worked only intermittently. 0 = nothing pending.
 static volatile uint32_t s_pending_ssb_bw = 0;
+/* WSPR PA-voltage guard (#290). Tenths of a volt; 0 = nothing pending.
+ * The QMX's own Virtual U3S WSPR runs the PA at 50% voltage (a quarter of the
+ * power) because ~110 s of key-down out of every 120 cooks the BS170s. Our
+ * WSPR TX is CAT-driven (TX;/TA;/RX;) and therefore does NOT go through that
+ * mode, so it gets none of that protection unless we apply it ourselves. */
+static volatile uint16_t s_pending_pa_mv10 = 0;      /* set request, 0 = none */
+static volatile bool     s_pa_query_pending = false; /* read it back          */
+/* Set when OUR query goes out, cleared by the reply that answers it.
+ * ⛔ WITHOUT THIS THE PARSER STEALS OTHER PEOPLE'S MM REPLIES. s_mm_resp is
+ * shared by every MM user in this file, so an unrelated MM Get that happens
+ * to answer with a number was filed as the PA voltage. Caught on hardware
+ * 2026-08-29: a boot-time MM query answered MM15.0; on a radio whose Max. PA
+ * voltage was 11.5, the guard halved 15.0 and would have RESTORED 15.0 -
+ * turning the operator's PA UP, the one thing its own comment forbids. */
+static volatile bool     s_pa_awaiting_reply = false;
+static volatile int16_t  s_pa_voltage_x10 = -1;      /* -1 = not yet known    */
 // Last SSB filter width the user set. While non-zero and we're in USB/LSB, the
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
 static volatile uint32_t s_ssb_bw_pinned = 0;
+
+// ⛔ "THE RADIO MAY STILL BE TRANSMITTING." Set by ft8_tx when a stop command
+// (TA0; / RX;) could not be delivered, cleared only when RX; actually gets
+// through. See cat_request_force_rx().
+static volatile bool s_force_rx_pending = false;
 // Pending AF gain (QMX volume) write, drained by the poll task. Same
 // poll-task-owns-the-pipe rule as the filter writes above. Stored +1 so that 0
 // can mean "nothing pending" while still allowing a genuine request of AG 0
@@ -118,6 +162,70 @@ static volatile bool s_af_gain_query_pending = false;
 // web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
 // cleanly on its own so no pin is needed - the FW; poll reads the new width back.
 static volatile uint32_t s_pending_cw_passband = 0;
+// Pending RF gain (RG) write / read-back, drained by the poll task. Same
+// poll-task-owns-the-pipe rule as the AF gain above; +1 encoding so a genuine
+// request of 0 dB is distinguishable from "nothing pending".
+static volatile uint32_t s_pending_rf_gain_p1 = 0;
+static volatile bool     s_rf_gain_query_pending = false;
+
+// User-level "release the radio" pause (Stan, via Samuel W7STF): the QMX's own
+// menu and its Terminal Applications (Band Configuration) speak over this very
+// CDC pipe, so our 50 ms FA/MD/FW poll lands in the middle of whatever the
+// operator is doing on the radio. Deliberately a SEPARATE flag from
+// s_poll_paused: that one is owned by the FT8 TX burst and is cleared at the
+// end of every burst, which would silently cancel the operator's pause.
+static volatile bool s_user_paused = false;
+// Set when the IQ-mode handshake should be re-run on a live link (resume from
+// pause, or the dead-stream watchdog's cheapest recovery step). Drained by the
+// poll task, which owns the pipe.
+static volatile bool s_pending_iq_reassert = false;
+
+// ---- RIT (receiver incremental tuning) -------------------------------------
+//
+// Unlike XIT - which the QMX simply does not have, hence the split dance for the
+// CW transmit offset - RIT is real and present in BOTH 1_03 and 1_04, so no
+// firmware gate is needed. RT sets the mode, RU/RD the offset, RC clears.
+//
+// ⚠ RU/RD ARE NOT RELIABLY ABSOLUTE. The CAT manual says they set the offset
+// absolutely OR move it relatively, depending on the QMX's own System Config
+// setting "CAT RU and RD" - which we cannot read and have no business changing.
+// So every write goes RC; FIRST (clear to zero, unambiguous in both firmwares)
+// and THEN a single RU/RD, which lands on exactly the value we asked for under
+// EITHER setting. Never send RU/RD without the RC in front of it.
+//
+// We own the value rather than polling IF; for it - same reasoning as the pinned
+// SSB filter width: the display has to know the offset every frame, and a poll
+// would be both slower and a fifth thing competing for this pipe.
+static volatile int  s_pending_rit_hz  = 0;
+static volatile bool s_rit_pending     = false;
+static int           s_rit_hz          = 0;   // what we last commanded
+
+bool cat_cw_tx_offset_engaged(void) { return s_split_engaged; }
+
+void cat_request_rit_hz(int hz)
+{
+    // RIT and the CW transmit offset are mutually exclusive (Roy KI0ER). The CW
+    // offset is implemented as SPLIT - RX on VFO A, TX on VFO B at A+offset -
+    // because the QMX has no XIT. Adding RIT on top moves the receiver as well,
+    // so the operator is then listening on one frequency, transmitting on a
+    // second, and reading a dial that shows a third. Refusing is the honest
+    // answer; silently accepting it is how someone ends up calling into empty
+    // space and never knowing why.
+    //
+    // Enforced HERE rather than in the UI so the web API is covered by the same
+    // rule. Clearing to zero is always allowed - standing RIT down must never be
+    // the thing that gets refused.
+    if (hz != 0 && s_split_engaged) {
+        ESP_LOGW(TAG, "RIT %+d Hz refused: the CW transmit offset (split) is engaged", hz);
+        return;
+    }
+    if (hz >  CAT_RIT_MAX_HZ) hz =  CAT_RIT_MAX_HZ;
+    if (hz < -CAT_RIT_MAX_HZ) hz = -CAT_RIT_MAX_HZ;
+    s_pending_rit_hz = hz;
+    s_rit_pending    = true;
+}
+
+int cat_get_rit_hz(void) { return s_rit_hz; }
 
 void cat_request_mode(const char *mode)
 {
@@ -130,10 +238,39 @@ void cat_request_cw_passband(uint32_t hz)
     ui_update_passband_width(hz);  // optimistic; FW; poll confirms within ~150 ms
 }
 
+// Same one-read-behind bug as the RF gain below, found by grepping the class
+// rather than waiting for it to be reported: the volume slider and the web
+// settings form both read s_af_gain, which only moved when an AG; answer landed.
+// Nobody had reported it because the drawer is usually the only surface anyone
+// changes volume from.
 void cat_request_af_gain(uint16_t ag)
 {
     if (ag > CAT_AF_GAIN_MAX) ag = CAT_AF_GAIN_MAX;
     s_pending_af_gain_p1 = (uint32_t)ag + 1;
+    // Gated, and the read-back deliberately NOT queued here - see
+    // cat_request_rf_gain() for both reasons.
+    if (cat_is_ready()) s_af_gain = ag;
+}
+
+/* Max. PA voltage, in TENTHS of a volt (115 = 11.5 V). Menu and item spelling
+ * were read off the radio's own Protection menu through the terminal, not
+ * guessed - CLAUDE.md records that guessing MM tokens has cost real time.
+ *
+ * WARNING: an MM Set is written to the QMX's EEPROM, so this must be called
+ * once per session, never per burst. */
+void cat_request_pa_voltage_x10(uint16_t v_x10)
+{
+    s_pending_pa_mv10 = v_x10;
+}
+
+void cat_query_pa_voltage(void)
+{
+    s_pa_query_pending = true;
+}
+
+int16_t cat_get_pa_voltage_x10(void)
+{
+    return s_pa_voltage_x10;
 }
 
 void cat_request_ssb_bandwidth(uint32_t hz)
@@ -149,6 +286,74 @@ void cat_request_ssb_bandwidth(uint32_t hz)
     ui_update_passband_width(hz);
 }
 
+// Optimistic cache update + a queued read-back, and BOTH are load-bearing
+// (Samuel W7STF, v1.8.0: "QMX RF gain doesn't appear to track between Tab5 and
+// Web-UI"). s_rf_gain used to change only when an RG; answer arrived, so every
+// reader of cat_get_rf_gain() - the drawer on open, and /api/settings on every
+// GET - served the value from BEFORE this write. Change it on one surface, open
+// the other, and you saw the old number; the second open was right. Setting the
+// cache here makes the two agree immediately, and the read-back still lets the
+// radio correct us if it clamped or ignored the write, so the radio remains the
+// source of truth.
+void cat_request_rf_gain(uint8_t db)
+{
+    if (db > CAT_RF_GAIN_DB_MAX) db = CAT_RF_GAIN_DB_MAX;
+    s_pending_rf_gain_p1 = (uint32_t)db + 1;
+    // Gated on the link being up, because -1 means "the radio has never told us"
+    // and both UIs render that as "reading..."/unknown rather than as a number.
+    // With no radio attached the write is never going to leave the poll task, so
+    // caching it would turn an honest unknown into a figure nothing ever applied
+    // - the same rule as never writing a signal report we did not exchange.
+    // ⚠ DO NOT queue the read-back here. The poll task services the query branch
+    // BEFORE the write branch, so asking from this side sent RG; first, the radio
+    // answered with its PRE-WRITE value, and that overwrote the optimistic figure -
+    // making a stale read guaranteed instead of merely likely. Measured on hardware
+    // 2026-08-12: wrote 55, read 54, and only the NEXT read said 55. The read-back is
+    // queued by the write branch itself, after the value has gone out.
+    if (cat_is_ready()) s_rf_gain = db;
+}
+
+void cat_query_rf_gain(void)
+{
+    s_rf_gain_query_pending = true;
+}
+
+int cat_get_rf_gain(void) { return s_rf_gain; }
+
+void cat_request_iq_reassert(void)
+{
+    s_pending_iq_reassert = true;
+}
+
+bool cat_user_pause_active(void) { return s_user_paused; }
+
+void cat_user_pause_set(bool paused)
+{
+    if (s_user_paused == paused) return;
+    s_user_paused = paused;
+    if (paused) {
+        // Drop anything queued but not yet sent. These would otherwise flush
+        // the moment we resume - minutes later, describing a radio state the
+        // operator has since changed by hand in the very menu they paused us
+        // to use.
+        s_pending_mode_digit    = 0;
+        s_pending_ssb_bw        = 0;
+        s_pending_cw_passband   = 0;
+        s_pending_af_gain_p1    = 0;
+        s_pending_rf_gain_p1    = 0;
+        s_af_gain_query_pending = false;
+        s_rf_gain_query_pending = false;
+        ESP_LOGI(TAG, "CAT paused by operator - radio released (no polling)");
+    } else {
+        // Coming back: the radio may have been through its own menu, which can
+        // drop IQ mode (Q9 is session state) and stop the audio stream. Re-run
+        // the handshake before trusting the spectrum again - the poll task does
+        // it on its next cycle, since it owns the pipe.
+        s_pending_iq_reassert = true;
+        ESP_LOGI(TAG, "CAT resumed by operator - re-checking IQ mode");
+    }
+}
+
 int cat_get_af_gain(void) { return s_af_gain; }
 
 void cat_query_af_gain(void)
@@ -160,6 +365,7 @@ void cat_query_af_gain(void)
 }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
+bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
 bool cat_get_vox_disabled(void) { return s_vox_disabled; }
@@ -242,6 +448,13 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
     va_end(ap);
     size_t len = strlen(buf);
     ESP_LOGI("cat", "raw cmd: %s", buf);
+    /* A raw command that touches Max. PA voltage invalidates our cached copy.
+     * The reply to a HAND-sent read is correctly refused by the gated parser
+     * (it is not a reply to a query we made), so without this the cache keeps
+     * an old value and the next burst LABELS ITSELF WRONG - which happened on
+     * 2026-08-29: a burst at a hand-set 7.5 V announced PA=15.0 V. A label that
+     * can be stale is worse than one that admits it does not know. */
+    if (strstr(buf, "Max. PA voltage")) s_pa_voltage_x10 = -1;
     return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf, len, 200);
 }
 
@@ -305,6 +518,13 @@ esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
     if (power_w) *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f  : -1.0f;  // see cat_query_power_swr re: /10
     if (swr)     *swr     = (s_sw_resp_len >  3) ? (float)atoi(s_sw_resp + 2) / 100.0f : -1.0f;
     if (s_pc_resp_len == 0 || s_sw_resp_len == 0) return ESP_ERR_TIMEOUT;
+    // Log the RAW strings, not just the scaled result. The /10 divisor is the one
+    // thing about this path that has actually been wrong before (it was /5 in
+    // v0.16.0, changed to /10 on 2026-06-28 after an on-air measurement), and a
+    // field report of "the power reading is always X" cannot be settled without
+    // knowing what the radio actually sent. This is the blocking path only - the
+    // FT8 burst reads it once per transmission, so ~1 line per 15 s.
+    ESP_LOGI(TAG, "pwr/swr raw: pc='%s' sw='%s'", s_pc_resp, s_sw_resp);
     return ESP_OK;
 }
 
@@ -338,7 +558,11 @@ err = cdc_acm_host_install(NULL);
     ESP_LOGI(TAG, "CDC-ACM host driver installed");
 
     BaseType_t ok = xTaskCreatePinnedToCore(
-        link_task, "cat_link", 8192, NULL, 5, NULL, 1);
+        // 5120, not 8192: measured peak use 2,696 B (hwm 6,008 B free of an
+        // 8,704 B block, 2026-08-28, util/dma_owners #284). Leaves ~2.4 KB
+        // spare. ⛔ Stays in INTERNAL RAM on purpose - psram_task.h names cat's
+        // link and poll tasks as ones that must not take a PSRAM stack.
+        link_task, "cat_link", 5120, NULL, 5, NULL, 1);
     if (ok != pdPASS) return ESP_FAIL;
 
     ESP_LOGI(TAG, "CAT link task started, waiting for QMX (VID=0x%04X PID=0x%04X)",
@@ -439,6 +663,11 @@ static void process_cat_message(const char *msg, size_t len)
         // ui_refresh_band_label() is cheap (band_from_freq + label set,
         // no side effects) so call it unconditionally every poll.
         ui_refresh_band_label(freq_hz);
+        // Same reason, for the frequency readout itself: a dropped label write
+        // is permanent otherwise, because the gated branch above will not fire
+        // again for this frequency. Caught with the top bar reading 14.263.000
+        // while the radio and the spectrum were both on 14.074 (2026-08-20).
+        ui_refresh_freq_label(freq_hz);
         ui_refresh_bandplan_strip(freq_hz);
         return;
     }
@@ -461,6 +690,26 @@ static void process_cat_message(const char *msg, size_t len)
             s_last_mode_digit = d;
             ESP_LOGI(TAG, "Mode = %s (raw %c)", mode_str, d);
             ui_update_mode(mode_str);
+
+            // #214 (Samuel W7STF): coming back INTO SSB with a filter pinned,
+            // repaint the width from the pin - nothing else ever will.
+            //
+            // The poll drops FW; whenever a width is pinned AND the mode is
+            // USB/LSB, because reading the filter back makes the QMX revert it.
+            // In CW that suppression is off, so the label happily tracks the CW
+            // passband. Switch CW -> LSB and the suppression turns straight back
+            // on, so the label is frozen at whatever it last showed: he watched
+            // a CW signal on 40 m, moved to LSB, and the bandwidth stayed at
+            // 50 Hz - a CW width, in an SSB mode.
+            //
+            // The pin is the right value to show: setting it wrote BOTH
+            // MMSSB|Filter RX (committed) and MMSSB|Bandwidth (live) to it, so
+            // it IS the radio's SSB filter. Repaint rather than clearing the pin
+            // and re-reading - a bare FW; here would make the radio revert the
+            // filter, which is the whole reason the pin exists.
+            if ((d == '1' || d == '2') && s_ssb_bw_pinned != 0) {
+                ui_update_passband_width(s_ssb_bw_pinned);
+            }
         }
         return;
     }
@@ -528,6 +777,30 @@ static void process_cat_message(const char *msg, size_t len)
         s_mm_resp_len = len;
         memcpy(s_mm_resp, msg, len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1);
         s_mm_resp[len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1] = '\0';
+        /* Max. PA voltage read-back (#290). A Get answers with the bare
+         * value, e.g. MM11.5; - the same shape the GPS-source probe
+         * documents. Parsed into tenths so the guard restores EXACTLY what
+         * was there rather than assuming the 11.5 V factory default: an
+         * operator who has already turned their PA down must never be turned
+         * back UP by us. */
+        if (s_pa_awaiting_reply) {
+            s_pa_awaiting_reply = false;
+            const char *v = s_mm_resp + 2;
+            if (*v >= '0' && *v <= '9') {
+                int whole = atoi(v);
+                int tenth = 0;
+                const char *dot = strchr(v, '.');
+                if (dot && dot[1] >= '0' && dot[1] <= '9') tenth = dot[1] - '0';
+                int x10 = whole * 10 + tenth;
+                /* Sanity: the QMX PA runs single-digit to mid-teens volts.
+                 * Anything else is a different MM reply landing here. */
+                if (x10 > 0 && x10 <= 200) {
+                    s_pa_voltage_x10 = (int16_t)x10;
+                    ESP_LOGI(TAG, "Max. PA voltage read back: %d.%d V",
+                             x10 / 10, x10 % 10);
+                }
+            }
+        }
         return;
     }
     // PC response: "PCnn;" - power output in tenths of a watt, queried via
@@ -569,6 +842,35 @@ static void process_cat_message(const char *msg, size_t len)
         }
         return;
     }
+    // SP response: "SPn;" - split state, 0 = simplex, 1 = split. Read back after
+    // we engage split for the CW TX offset, because a successful CDC write only
+    // proves the bytes reached the radio (the lesson Q9/IQ mode taught us the
+    // hard way). Getting this wrong is silent and costly: we would believe we
+    // are transmitting 500 Hz up while actually sitting on top of the DX.
+    if (len >= 3 && msg[0] == 'S' && msg[1] == 'P') {
+        s_split_readback = (msg[2] == '1') ? 1 : 0;
+        return;
+    }
+    // FR response: "FRn;" - which VFO the radio RECEIVES on. 0 = A, 1 = B,
+    // 2 = Split (the QMX's own three-state VFO Mode, per its CAT manual: "0, 1, 2
+    // correspond to VFO A, VFO B or Split respectively"). Parsed because we can
+    // only tell the operator their radio was on the wrong one if we know what it
+    // was. Deliberately NOT confused with FA: that test is msg[1] == 'A'.
+    if (len >= 3 && msg[0] == 'F' && msg[1] == 'R' && msg[2] >= '0' && msg[2] <= '2') {
+        s_rx_vfo_mode = msg[2] - '0';
+        return;
+    }
+    // RG response: "RGnnn;" - RF gain in dB (manual's own example: "RG; returns
+    // RG063 for 63dB"). Note this is a plain dB number, NOT the 0.25 dB steps AG
+    // uses - the two commands look alike and are not.
+    if (len >= 4 && msg[0] == 'R' && msg[1] == 'G') {
+        int v = atoi(msg + 2);
+        if (v >= 0 && v <= CAT_RF_GAIN_DB_MAX) {
+            s_rf_gain = v;
+            ESP_LOGI(TAG, "RF gain read back: %d dB", v);
+        }
+        return;
+    }
     // VN response: "VN<version>;" — QMX/QDX firmware version string, e.g.
     // "VN1_03_002QMX;". Store the part between "VN" and the trailing ";".
     if (len >= 4 && msg[0] == 'V' && msg[1] == 'N') {
@@ -605,6 +907,139 @@ static void process_cat_message(const char *msg, size_t len)
         ESP_LOGI(TAG, "Radio ID: %s", msg);
         return;
     }
+}
+
+// Does this radio expose more than one CDC interface?
+//
+// The QMX can be configured for THREE virtual COM ports (firmware 1_02_000+, a
+// System config parameter), expressly so a terminal session can run at the same
+// time as CAT. If a second interface is there, the Tab5's terminal can own it
+// outright and never touch the CAT pipe - which removes the entire risk of
+// leaving the radio in terminal mode with CAT dead.
+//
+// Read-only and safe: it opens an interface, says whether that worked, and
+// closes it again. Nothing is written to the radio, so a device with only one
+// interface simply reports a failure and is otherwise untouched.
+int cat_probe_extra_cdc_ports(void)
+{
+    if (!s_cdc_dev) {
+        ESP_LOGW(TAG, "port probe: no QMX open, nothing to probe");
+        return -1;
+    }
+    const cdc_acm_host_device_config_t cfg = {
+        .connection_timeout_ms = 1000,
+        .out_buffer_size = 64,
+        .in_buffer_size  = 64,
+        .event_cb = NULL,
+        .data_cb  = NULL,
+        .user_arg = NULL,
+    };
+    // ⚠ SCAN THE WHOLE RANGE, and do NOT stop at the first gap. The QMX's CDC
+    // functions are NOT contiguous: measured on Windows against a QMX with
+    // "USB serial ports" set to 2 (VID_0483 PID_A34C), the interfaces are
+    //
+    //     MI_00  CDC #1  (COM10)      <- interfaces 0-1
+    //     MI_02  QMX Transceiver      <- the audio function, 2-4
+    //     MI_05  CDC #2  (COM4)       <- the second serial port starts at 5
+    //
+    // An earlier version of this probe tried 1 and 2 and broke out on the first
+    // failure, so it never reached 5 and reported "1 port" for a radio that was
+    // presenting two the whole time. The audio function sits between them; that
+    // is the gap.
+    int found = 1;   // interface 0 is the one we are already using
+    for (int idx = 1; idx <= 7; idx++) {
+        cdc_acm_dev_hdl_t h = NULL;
+        esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, idx, &cfg, &h);
+        if (e == ESP_OK && h) {
+            found++;
+            ESP_LOGW(TAG, "port probe: CDC interface %d EXISTS - a terminal could own it", idx);
+            cdc_acm_host_close(h);
+        } else {
+            ESP_LOGI(TAG, "port probe: interface %d not a CDC port (0x%x)", idx, e);
+        }
+    }
+    // NB `found` counts openable INTERFACES, not ports. A CDC-ACM function is two
+    // interfaces (control + data), so a two-port radio reports 5 and 6 here and
+    // the honest reading is "the second port's function starts at 5" - which is
+    // what Windows shows as MI_05. Do not quote this number as a port count.
+    ESP_LOGW(TAG, "port probe: %d openable CDC interface(s); second port function starts at 5",
+             found);
+    return found;
+}
+
+// ---- Terminal probe (#147) -------------------------------------------------
+// Open the QMX's SECOND serial port, press Enter, and capture what it sends back.
+//
+// The whole point of using port 2 is that CAT on port 1 is never touched, so
+// this cannot take the panadapter down even if the session is left open. That is
+// also what makes the QMX manual's warning survivable: "do not simply close the
+// terminal emulator window ... it will not accept CAT commands" applies to the
+// port hosting the session, and CAT lives on the other one.
+//
+// What we are trying to learn: is the stream ANSI/VT100 escape sequences, or
+// plain re-sent lines? That decides whether the Tab5 needs a small VT100 parser
+// or can simply paint rows.
+#define TERMPROBE_CAP 1024
+static uint8_t  s_termprobe_buf[TERMPROBE_CAP];
+static volatile int s_termprobe_len;
+
+static bool termprobe_rx(const uint8_t *data, size_t len, void *arg)
+{
+    (void)arg;
+    for (size_t i = 0; i < len && s_termprobe_len < TERMPROBE_CAP; i++)
+        s_termprobe_buf[s_termprobe_len++] = data[i];
+    return true;   // buffer consumed
+}
+
+int cat_probe_terminal(void)
+{
+    const cdc_acm_host_device_config_t cfg = {
+        .connection_timeout_ms = 1000,
+        .out_buffer_size = 64,
+        .in_buffer_size  = 512,
+        .event_cb = NULL,
+        .data_cb  = termprobe_rx,
+        .user_arg = NULL,
+    };
+    cdc_acm_dev_hdl_t h = NULL;
+    esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, 5, &cfg, &h);
+    if (e != ESP_OK || !h) {
+        ESP_LOGE(TAG, "terminal probe: cannot open interface 5 (0x%x)", e);
+        return -1;
+    }
+    const cdc_acm_line_coding_t lc = {
+        .dwDTERate = CAT_BAUD_RATE, .bCharFormat = 0, .bParityType = 0, .bDataBits = 8,
+    };
+    cdc_acm_host_line_coding_set(h, &lc);
+    cdc_acm_host_set_control_line_state(h, true, true);
+
+    s_termprobe_len = 0;
+    ESP_LOGW(TAG, "terminal probe: sending CR to port 2");
+    const uint8_t cr = '\r';
+    cdc_acm_host_data_tx_blocking(h, &cr, 1, 200);
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
+    int n = s_termprobe_len;
+    ESP_LOGW(TAG, "terminal probe: %d byte(s) received", n);
+    // Hex + printable, 32 per line. ESC (0x1b) is the byte that answers the
+    // question, so it must be visible as hex rather than swallowed by the log.
+    for (int off = 0; off < n; off += 32) {
+        char hex[32 * 3 + 1], txt[33];
+        int m = (n - off > 32) ? 32 : n - off;
+        for (int i = 0; i < m; i++) {
+            snprintf(&hex[i * 3], 4, "%02x ", s_termprobe_buf[off + i]);
+            uint8_t c = s_termprobe_buf[off + i];
+            txt[i] = (c >= 32 && c < 127) ? (char)c : '.';
+        }
+        txt[m] = '\0';
+        ESP_LOGW(TAG, "  %04d  %s |%s|", off, hex, txt);
+    }
+    // Leave the session as we found it: Ctrl-Q backs out of any nested app.
+    const uint8_t ctrl_q = 0x11;
+    cdc_acm_host_data_tx_blocking(h, &ctrl_q, 1, 200);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    cdc_acm_host_close(h);
+    return n;
 }
 
 static esp_err_t try_open_qmx(void)
@@ -651,6 +1086,320 @@ static esp_err_t try_open_qmx(void)
     return ESP_OK;
 }
 
+// ---- CW transmit offset (Roy KI0ER, 2026-08-07) ----------------------------
+//
+// "It would be quite a luxury to add a menu option to Not Zero-Beat CW Reply
+// ... such that whatever frequency I tune to via the Panadapter for RX, my
+// effective TX frequency will add that predefined offset." The point is QRP
+// courtesy and audibility: everyone answering a CW CQ zero-beat arrives as one
+// mud-pit, and a station slightly off stands out.
+//
+// "SLIGHTLY" IS THE WHOLE POINT, and the figure in this comment used to be
+// 400-600 Hz, which was wrong twice over. Roy KI0ER retracted his own original
+// number ("I forgot to divide by 2") and Michael KZ4LY explained why it cannot be
+// right: you are trying to land INSIDE the other station's filter, and most CW
+// operators run 500 Hz or narrower - 200 Hz is not unusual - with the passband
+// least usable at its edges, exactly where a QRP signal has least energy to
+// spare. Around 100 Hz or less is what actually works; Roy uses +60 on his own
+// rig. The slider stops at CW_TX_OFFSET_MAX_HZ (300) for that reason.
+//
+// The QMX has no XIT (its own CAT manual: "XIT status: always 0 because QMX has
+// no XIT"), so this is done with SPLIT: receive on VFO A, transmit on VFO B,
+// with B held at A + offset. FB/FR/FT/SP all exist in 1_03 as well as 1_04, so
+// no firmware gate is needed.
+//
+// Maintained here, in the poll task, rather than bolted onto cat_set_frequency:
+//   - the poll task owns the CDC pipe, and this needs two more writes;
+//   - it therefore follows EVERY way the frequency can move - a tap on the
+//     panadapter, a spot click, a memory recall, a band change, the web UI, and
+//     the radio's own tuning knob - which is exactly Roy's "I can change
+//     frequency to another station, and not touch anything else, and the offset
+//     will follow".
+//
+// Rules that matter more than the mechanism:
+//   - CW only. Any other mode stands it down: an offset transmit in SSB or a
+//     digital mode would be a mistake, not a courtesy.
+//   - We only ever clear split if WE set it. An operator running their own
+//     split has not asked us to interfere with it.
+//   - Re-asserted whenever the base frequency moves, and every 30 s regardless,
+//     so a radio that dropped split on its own (band change, menu visit) is
+//     brought back into line rather than transmitting on top of the DX.
+//
+// ⚠ We read `SP;` back but deliberately NEVER send `FB;`. The vendor CAT manual
+// documents the FB *Get* as answering with an **FA**-prefixed string ("FB;"
+// returns "FA00007016000;"). Whether that is a manual typo or the radio's real
+// behaviour, querying it is a trap: our FA handler would take VFO B's value as
+// the dial frequency, and since VFO B is computed FROM the dial, the offset
+// would compound on every cycle and walk the radio up the band. One read-back
+// command is worth having; that one is not.
+#define CW_SPLIT_REFRESH_US  30000000LL
+// s_split_engaged is declared up with the other CAT state, because
+// cat_request_rit_hz() needs it and sits earlier in this file.
+static uint32_t s_split_base_hz = 0;       // the RX frequency B was computed from
+static int64_t  s_split_last_us = 0;
+static bool     s_split_warned = false;    // one warning per failed engage, not per poll
+static bool     s_split_verify_pending = false;  // awaiting the SP; answer after a clear
+
+// How often to re-read the radio's CW offset while we are in CW. A human turning
+// a menu knob is slow, so this is deliberately lazy - it costs one MM query and a
+// short bounded wait, and only in CW.
+#define CW_OFFSET_REFRESH_US  (5LL * 1000 * 1000)
+static int64_t s_cw_off_last_us = 0;
+
+// Re-read the QMX's CW offset so the display stops trusting a value that may be
+// hours stale.
+//
+// It used to be read in exactly ONE place - the one-time link-up sequence in
+// link_task - and never again. So the moment the operator changed CW offset or
+// CW centre on the radio (front panel or terminal), our compensation froze at
+// whatever it happened to be when the link came up, for the rest of the session.
+// Reported by Roy KI0ER (#165): the dial agreed with the radio but the waterfall
+// did not, and tapping a CW signal tuned him ~30 Hz off, so he transmitted off
+// frequency as if XIT were on. His errors were non-linear in the value he had
+// asked for, which is what a stale CONSTANT looks like - not a scale error.
+//
+// Measured on the bench before writing this (QMX 1_04_004, Auto-offset/tone=YES,
+// passband 300): setting CW centre to 650 dragged BOTH CW offset and Sidetone
+// freq. to 650, and restoring 700 took all three back - so `CW offset` is the
+// right item to read and it tracks the centre. Four consecutive reads returned
+// the same value with the passband untouched, i.e. reading is stable and has no
+// FW;-style re-assert side effect, which is what makes polling it safe at all.
+//
+// Returns true if it used the pipe this cycle.
+static bool cw_offset_refresh(void)
+{
+    if (s_last_mode_digit != '3' && s_last_mode_digit != '7') return false;
+    int64_t now = esp_timer_get_time();
+    if (s_cw_off_last_us != 0 && (now - s_cw_off_last_us) < CW_OFFSET_REFRESH_US) return false;
+    s_cw_off_last_us = now;
+
+    const char *q = "MMCW|CW offset;";
+    s_mm_resp_len = 0;
+    if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, strlen(q), 200) != ESP_OK) {
+        return true;   // transient; the poll's own error handling owns the link
+    }
+    for (int wi = 0; wi < 10 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_mm_resp_len < 4 || strncmp(s_mm_resp, "MM", 2) != 0) return true;
+
+    int val = atoi(s_mm_resp + 2);
+    if (val < CW_CENTER_MIN_HZ || val > CW_CENTER_MAX_HZ) return true;
+    if (val != s_cw_offset_hz) {
+        // Change-detected: a per-poll log line here would be 12 lines a minute of
+        // nothing happening, and the diag ring is the budget (CLAUDE.md).
+        ESP_LOGI(TAG, "QMX CW offset changed on the radio: %d -> %d Hz",
+                 s_cw_offset_hz, val);
+        s_cw_offset_hz = val;
+        ui_seed_cw_pitch_hz((uint16_t)val);
+    }
+    return true;
+}
+
+// Returns true if it used the pipe this cycle (caller should yield before the
+// next poll command, same as the other drained writes).
+static bool cw_split_maintain(void)
+{
+    // Scalar accessor, NOT settings_load_all() - a qmx_settings_t is ~500 bytes
+    // and this runs every 50 ms on a 4 KB task stack (CLAUDE.md, "Task stacks on
+    // this board are TINY": a wifi_known_t[6] at ~590 B crash-looped sys_evt).
+    int off = (int)settings_get_cw_tx_offset_hz();
+    bool want = (off != 0) && (s_last_mode_digit == '3' || s_last_mode_digit == '7');
+    uint32_t base = s_last_freq_hz;
+
+    if (!want) {
+        if (!s_split_engaged) {
+            // Did the SP0; below actually take? Judged here, on a later cycle, once
+            // the SP; answer has landed. THIS IS THE DANGEROUS DIRECTION and it was
+            // unchecked: engaging split verifies itself and warns loudly, but
+            // clearing did not, so a dropped SP0; would leave the radio in split
+            // with this maintainer stood down - transmitting off frequency in a mode
+            // where nothing is watching any more. Roy KI0ER suspected exactly this
+            // of the FT8 hand-over; measured 2026-08-12, the clear does happen, but
+            // "it worked on the bench" is not the same as verified in the field.
+            if (s_split_verify_pending && s_split_readback >= 0) {
+                s_split_verify_pending = false;
+                if (s_split_readback == 1) {
+                    ESP_LOGE(TAG, "split still ON after clearing it - transmit may be "
+                                  "off frequency");
+                    ui_toast("Radio still in split - check VFO B");
+                } else {
+                    ESP_LOGI(TAG, "split confirmed off");
+                }
+            }
+            return false;
+        }
+        // PUT VFO B BACK **FIRST**, WHILE SPLIT IS STILL ON. SP0; only turns split
+        // off; VFO B keeps whatever we last wrote to it, so the QMX goes on showing
+        // an offset B for the rest of the session - which is what Roy KI0ER saw
+        // after switching to FT8, and reasonably read as "the offset is still
+        // active".
+        //
+        // ⚠ ORDER IS LOAD-BEARING, measured on hardware 2026-08-12: the first
+        // version sent SP0; and then FB, and the radio kept B at A+60 - it will not
+        // take an FB write once split is off. And the log line said "VFO B restored"
+        // while reporting the SP0; return code, so it claimed success for a write
+        // whose result was never looked at. Both are why this now writes FB before
+        // SP0; and reports its OWN result.
+        esp_err_t efb = ESP_OK;
+        if (base != 0) {
+            char fb[20];
+            int n = snprintf(fb, sizeof fb, "FB%011lu;", (unsigned long)base);
+            efb = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fb, (size_t)n, 200);
+            vTaskDelay(pdMS_TO_TICKS(30));
+        }
+        // Now stand down: back to simplex, transmitting where we listen.
+        esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP0;", 4, 200);
+        // ⚠ AND PUT THE VFO MODE BACK, which SP0; does NOT do. The QMX has a single
+        // three-state VFO Mode - A / B / Split - and the CAT manual is explicit that
+        // it is FR/FT that select it: "0, 1, 2 correspond to VFO A, VFO B or Split
+        // respectively ... because in the QMX the VFO mode use does not correspond
+        // exactly to TS-480". SP0; clears split in the Kenwood sense but leaves the
+        // radio's own mode at Split, so the LCD goes on showing both VFOs for the
+        // rest of the session. That is what the operator saw after this had already
+        // been "fixed" twice: B matched A, split read off, and the display was still
+        // A/B. FR0; is what actually returns the radio to plain VFO A.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        esp_err_t efr = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR0;", 4, 200);
+        // The manual says FR and FT both select the same three-state VFO Mode, so send
+        // BOTH - and then ASK, because FR0; alone demonstrably did not clear the A/B
+        // display and I am not going to guess a fourth time. The answers arrive as
+        // plain RX lines in the diag log (our FA parser cannot mistake them: it tests
+        // for "FA"), which is enough to tell whether the mode really is 0 and the
+        // display is driven by something else, or the write is simply not landing.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FT0;", 4, 200);
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FT;", 3, 200);
+        // Ask the radio to confirm simplex, judged on a later cycle above.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        s_split_readback = -1;
+        s_split_verify_pending = true;
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP;", 3, 200);
+        s_split_engaged = false;
+        s_split_warned = false;
+        ESP_LOGI(TAG, "CW TX offset off - VFO B -> %lu (%s), split off (%s), VFO mode A (%s)",
+                 (unsigned long)base, efb == ESP_OK ? "ok" : "fail",
+                 e == ESP_OK ? "ok" : "fail", efr == ESP_OK ? "ok" : "fail");
+        return true;
+    }
+    if (base == 0) return false;   // no FA reading yet; nothing to offset from
+
+    int64_t now = esp_timer_get_time();
+    bool moved = (base != s_split_base_hz);
+    if (s_split_engaged && !moved && (now - s_split_last_us) < CW_SPLIT_REFRESH_US) {
+        // Steady state: check the answer to the SP; we sent when we engaged. If
+        // the radio says it is NOT in split, the operator is about to transmit
+        // on top of the station they are calling - say so loudly, once.
+        if (s_split_readback == 0 && !s_split_warned) {
+            s_split_warned = true;
+            ESP_LOGE(TAG, "CW TX offset: radio reports split OFF after we set it - "
+                          "transmit is NOT offset");
+            ui_toast("CW TX offset not applied - radio refused split");
+        }
+        return false;
+    }
+
+    int64_t tx = (int64_t)base + off;
+    if (tx < 0) tx = 0;
+    char cmd[20];
+    int n = snprintf(cmd, sizeof cmd, "FB%011lld;", (long long)tx);
+    esp_err_t e1 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    // SP1 is re-sent with every FB, not just on the first one: it is one short
+    // command, and it is the difference between "the offset is applied" and
+    // "we quietly transmitted on top of the station" if the radio dropped split
+    // while we were not looking.
+    esp_err_t e2 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP1;", 4, 200);
+    // Ask what actually happened. The answer lands asynchronously in
+    // s_split_readback and is judged on a later cycle, so this costs one short
+    // write and no waiting.
+    vTaskDelay(pdMS_TO_TICKS(30));
+    s_split_readback = -1;
+    s_split_warned = false;
+    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP;", 3, 200);
+    s_split_engaged = true;
+    s_split_base_hz = base;
+    s_split_last_us = now;
+    if (moved || e1 != ESP_OK || e2 != ESP_OK) {
+        ESP_LOGI(TAG, "CW TX offset %+d Hz: RX %lu, TX %lld (FB=%s SP=%s)",
+                 off, (unsigned long)base, (long long)tx,
+                 e1 == ESP_OK ? "ok" : "fail", e2 == ESP_OK ? "ok" : "fail");
+    }
+    return true;
+}
+
+// Enable QMX IQ mode and CONFIRM the radio accepted it, retrying up to
+// max_attempts times. Extracted from link_task in v1.6.0 so the same handshake
+// can be re-run on a live link: leaving the QMX's own menu can drop IQ mode
+// (Q9 is session state, not EEPROM) and stop the audio stream, which is Roy
+// KI0ER's blank-decode-list report. Re-asserting is the cheapest recovery there
+// is - free, invisible, and it does not disturb a working link if IQ was fine.
+//
+// MUST be called from whichever task owns the CDC pipe (link_task before the
+// poll starts, or poll_task itself). Sets s_iq_mode_confirmed and drives the
+// on-screen warning banner.
+static bool iq_mode_handshake(int max_attempts)
+{
+    s_iq_mode_confirmed = false;
+    for (int attempt = 1; attempt <= max_attempts; attempt++) {
+        const char *iq_on = "Q9 1;";
+        esp_err_t terr = cdc_acm_host_data_tx_blocking(
+            s_cdc_dev, (const uint8_t *)iq_on, 5, 200);
+        if (terr == ESP_OK) {
+            ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;) attempt %d/%d",
+                     attempt, max_attempts);
+        } else {
+            ESP_LOGW(TAG, "Failed to enable QMX IQ mode (attempt %d/%d): 0x%x",
+                     attempt, max_attempts, terr);
+        }
+        // Readback: a successful CDC write only proves the bytes reached the
+        // radio, not that it accepted them. Query Q9; and check the radio
+        // actually reports IQ mode on.
+        //
+        // The QMX echoes every write back ("Q91;") asynchronously. Without the
+        // delay below that echo arrives DURING the wait loop for the real Q9;
+        // response and triggers a false "confirmed ON" - IQ mode never actually
+        // turns on, leaving the FT8 decoder with non-IQ audio (140 candidates,
+        // 0 decodes), cleared only by a QMX power cycle. Wait long enough for
+        // the write echo to arrive and be consumed, THEN flush and send the
+        // real query.
+        vTaskDelay(pdMS_TO_TICKS(150));
+        s_q9_resp_len = 0;
+        const char *iq_q = "Q9;";
+        esp_err_t qerr = cdc_acm_host_data_tx_blocking(
+            s_cdc_dev, (const uint8_t *)iq_q, strlen(iq_q), 200);
+        if (qerr == ESP_OK) {
+            for (int wi = 0; wi < 20 && s_q9_resp_len == 0; wi++) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            if (s_q9_resp_len >= 3 && s_q9_resp[2] == '1') {
+                ESP_LOGI(TAG, "QMX IQ mode confirmed ON (%s) on attempt %d/%d",
+                         s_q9_resp, attempt, max_attempts);
+                s_iq_mode_confirmed = true;
+                break;
+            }
+            ESP_LOGW(TAG, "QMX IQ mode NOT confirmed (attempt %d/%d, raw='%s')",
+                     attempt, max_attempts,
+                     s_q9_resp_len ? s_q9_resp : "(no response)");
+        } else {
+            ESP_LOGW(TAG, "Failed to query QMX IQ mode state (attempt %d/%d): 0x%x",
+                     attempt, max_attempts, qerr);
+        }
+        if (attempt < max_attempts) {
+            vTaskDelay(pdMS_TO_TICKS(300));
+        }
+    }
+    if (!s_iq_mode_confirmed) {
+        ESP_LOGE(TAG, "QMX IQ mode NOT confirmed after %d attempts — "
+                 "panadapter will show mirrored/aliased spectrum; "
+                 "check QMX System Config IQ Mode setting or power-cycle the QMX",
+                 max_attempts);
+    }
+    ui_set_iq_mode_warning(!s_iq_mode_confirmed);
+    return s_iq_mode_confirmed;
+}
+
 static void poll_task(void *arg)
 {
     ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
@@ -664,6 +1413,23 @@ static void poll_task(void *arg)
         // deadlocking on the driver's internal mutex mid-transfer).
         if (s_poll_paused) {
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        // Operator pause: the radio has been handed back to its own front panel
+        // (or to a Terminal Application on this same pipe). Send NOTHING - a
+        // poll landing in the middle of the QMX's menu is exactly what this
+        // control exists to prevent. Poll slowly here; nothing is waiting on us.
+        if (s_user_paused) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+        // Re-assert IQ mode: queued on resume-from-pause and by the dead-stream
+        // watchdog. Runs here because this task owns the pipe; it blocks for up
+        // to ~1 s per attempt, which is why it is not on the 50 ms rotation.
+        if (s_pending_iq_reassert) {
+            s_pending_iq_reassert = false;
+            ESP_LOGI(TAG, "re-asserting QMX IQ mode");
+            iq_mode_handshake(2);
             continue;
         }
         // Drain a pending SSB-filter write here (poll-task context owns the
@@ -703,6 +1469,124 @@ static void poll_task(void *arg)
                                                           (size_t)n, 200);
             ESP_LOGI(TAG, "AF gain -> %s (%.2f dB) (%s)", cmd, ag * 0.25,
                      err == ESP_OK ? "ok" : "fail");
+            if (err == ESP_OK) s_af_gain_query_pending = true;   // see the RF gain branch
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_rf_gain_query_pending) {
+            s_rf_gain_query_pending = false;
+            static const char q[] = "RG;";
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, 3, 200);
+            ESP_LOGI(TAG, "RF gain query RG; (%s)", err == ESP_OK ? "sent" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_rit_pending) {
+            s_rit_pending = false;
+            int hz = s_pending_rit_hz;
+            // RC; first, ALWAYS - see the note on s_pending_rit_hz. It also
+            // covers hz == 0 on its own, which is how RIT gets switched off.
+            char cmd[24];
+            int n = snprintf(cmd, sizeof cmd, "RC;");
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                          (size_t)n, 200);
+            if (err == ESP_OK && hz != 0) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                unsigned mag = (unsigned)(hz < 0 ? -hz : hz);
+                n = snprintf(cmd, sizeof cmd, "%s%03u;", hz > 0 ? "RU" : "RD", mag);
+                err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                    (size_t)n, 200);
+                vTaskDelay(pdMS_TO_TICKS(20));
+                n = snprintf(cmd, sizeof cmd, "RT1;");
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+            } else if (err == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                n = snprintf(cmd, sizeof cmd, "RT0;");
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+            }
+            if (err == ESP_OK) s_rit_hz = hz;
+            ESP_LOGI(TAG, "RIT -> %+d Hz (%s)", hz, err == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint32_t rg_p1 = s_pending_rf_gain_p1;
+        if (rg_p1 != 0) {
+            s_pending_rf_gain_p1 = 0;
+            unsigned rg = (unsigned)(rg_p1 - 1);
+            // 3-digit form, matching the shape the radio answers RG; with
+            // ("RG063"). Applies to the CURRENTLY ACTIVE band only - the QMX
+            // keeps RF gain per band in its Band Configuration, so changing
+            // band brings a different value with it (which is why the drawer
+            // re-reads on open rather than replaying a stored number).
+            char cmd[16];
+            int n = snprintf(cmd, sizeof cmd, "RG%03u;", rg);
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                          (size_t)n, 200);
+            ESP_LOGI(TAG, "RF gain -> %s (%s)", cmd, err == ESP_OK ? "ok" : "fail");
+            // Confirm it from HERE, after the value has gone out. Queued from the
+            // requesting side it would be served first (this loop checks the query
+            // ahead of the write) and would read back the old value.
+            if (err == ESP_OK) s_rf_gain_query_pending = true;
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        /* Read Max. PA voltage. Served BEFORE the write below so a
+         * request-then-confirm sequence cannot read the stale value - the
+         * same ordering the RF-gain path documents. */
+        if (s_pa_query_pending) {
+            s_pa_query_pending = false;
+            const char *q = "MMProtection|Max. PA voltage;";
+            s_pa_awaiting_reply = true;
+            if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                              strlen(q), 200) != ESP_OK) {
+                s_pa_awaiting_reply = false;   /* nothing is coming */
+            }
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint16_t pav = s_pending_pa_mv10;
+        if (pav != 0) {
+            s_pending_pa_mv10 = 0;
+            char mm[48];
+            int n = snprintf(mm, sizeof(mm), "MMProtection|Max. PA voltage=%u.%u;",
+                             (unsigned)(pav / 10), (unsigned)(pav % 10));
+            esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
+            ESP_LOGW(TAG, "PA voltage -> %u.%u V (%s)", (unsigned)(pav / 10),
+                     (unsigned)(pav % 10), e == ESP_OK ? "ok" : "fail");
+            /* ⭐ AND NOW MAKE THE RADIO ACTUALLY USE IT.
+             *
+             * The QMX has an "MM Effect" setting (System config | CAT config).
+             * On "On demand" - which is what this bench radio is set to, asked
+             * and answered over CAT - an MM Set is STORED BUT NOT APPLIED until
+             * the operator enters/exits a menu or the host sends MU;.
+             *
+             * Measured 2026-08-29, and it is why the guard was decorative: the
+             * write succeeded, the read-back said 7.5 V, the radio's own
+             * Protection menu said 7.5 V, and PC; measured 5.4 W - full power.
+             * After MU; the same setting measured 2.4 W, which is what (7.5/12)^2
+             * predicts. Every indicator we had agreed with each other and all of
+             * them were describing stored state, not running state.
+             *
+             * ⛔ MU; DROPS IQ MODE. Q9 is session state and a config reload
+             * discards it, which flattens the panadapter until re-asserted -
+             * CLAUDE.md records that being learned the expensive way. So the
+             * handshake follows immediately, in this same task, which owns the
+             * pipe. Cheap here because the guard runs twice a SESSION. */
+            if (e == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(120));
+                const char *mu = "MU;";
+                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mu, 3, 200) == ESP_OK) {
+                    ESP_LOGW(TAG, "PA voltage: MU; sent - config reloaded so the "
+                                  "new limit takes effect (MM Effect may be 'On demand')");
+                    vTaskDelay(pdMS_TO_TICKS(250));
+                    iq_mode_handshake(2);     /* MU; discards Q9 - put it back */
+                }
+            }
+            /* An MM *write* makes the radio redraw its menu and sprays ANSI
+             * cursor-positioning bytes onto the CAT port (measured, CLAUDE.md).
+             * Give them somewhere to land before the poll resumes. */
+            vTaskDelay(pdMS_TO_TICKS(120));
+            if (e == ESP_OK) s_pa_query_pending = true;   /* confirm by reading back */
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -848,11 +1732,27 @@ static void poll_task(void *arg)
                 continue;
             }
         }
+        // Keep the CW transmit offset in step with wherever we are listening.
+        // Cheap when there is nothing to do: it only writes when the frequency
+        // moved, the mode changed, or the 30 s re-assert is due.
+        if (cw_split_maintain()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        // Keep the CW offset we compensate the display by in step with the radio.
+        // Lazy (5 s) and CW-only, so it costs nothing in any other mode. #165.
+        if (cw_offset_refresh()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         // Phase 5.10G: 3-way rotation FA / MD / FW (passband width). A 4th
         // phase (PC;SW;) is added while cat_tune_poll_set_active(true) - live
         // power/SWR readout during QMX SWR Tune mode (1_04+, see
         // docs/qmx-1_04-cat-comparison.md). MD; stays in rotation during Tune
-        // so an exit via the radio's own front panel is still picked up.
+        // only to keep the mode label fresh - it does NOT detect an exit: the
+        // QMX answers MD; with the PRE-Tune digit for the whole time it is
+        // tuning (observed here 2026-07-03, confirmed by Stan KC7XE 2026-08-09),
+        // so digit 8 never comes back and tune_modal.c owns the session state.
         // While an SSB filter is pinned and we're in USB/LSB, skip FW; - the
         // QMX reverts the live filter whenever the filter is read back.
         bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');
@@ -916,6 +1816,31 @@ static void poll_task(void *arg)
                 ESP_LOGI(TAG, "CAT link recovered after %d consecutive failures", poll_fail);
                 poll_fail = 0;
             }
+
+            // ⛔ #146: THE RADIO MAY STILL BE KEYED. A stop command was lost
+            // during a burst, so re-assert RX; now - this send just succeeded,
+            // which is the proof the pipe works again.
+            //
+            // Roy KI0ER's log, 2026-08-19, is exactly this and shows why a
+            // retry inside the burst is not enough on its own:
+            //     2126834  send failed (0x10c): TA0;
+            //     2126866  send failed (0x10c): RX;
+            //     2126879  TX burst complete          <- radio still keyed
+            //     2128963  CAT link recovered after 22 consecutive failures
+            // The link came back about TWO SECONDS after the burst gave up, and
+            // nothing ever re-sent RX;. His QMX transmitted until he power-
+            // cycled it. The burst-local retry covers a brief hiccup; this
+            // covers the case where the pipe is dead for longer than the burst
+            // is willing to wait, which is the one that actually bit.
+            if (s_force_rx_pending) {
+                if (cat_send_raw_cmd("RX;") == ESP_OK) {
+                    s_force_rx_pending = false;
+                    ESP_LOGW(TAG, "RX; re-asserted after a lost stop command - "
+                                  "radio is back in receive");
+                } else {
+                    ESP_LOGW(TAG, "RX; re-assert still failing - radio may be transmitting");
+                }
+            }
         }
         phase = (phase + 1) % n_phases;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
@@ -951,67 +1876,18 @@ static void link_task(void *arg)
             // false and ui_set_iq_mode_warning() raises a persistent on-screen
             // banner so the user isn't left guessing why the spectrum looks
             // wrong.
-            {
-                s_iq_mode_confirmed = false;
-                const int IQ_MODE_MAX_ATTEMPTS = 4;
-                for (int attempt = 1; attempt <= IQ_MODE_MAX_ATTEMPTS; attempt++) {
-                    const char *iq_on = "Q9 1;";
-                    esp_err_t terr = cdc_acm_host_data_tx_blocking(
-                        s_cdc_dev, (const uint8_t *)iq_on, 5, 200);
-                    if (terr == ESP_OK) {
-                        ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;) attempt %d/%d",
-                                 attempt, IQ_MODE_MAX_ATTEMPTS);
-                    } else {
-                        ESP_LOGW(TAG, "Failed to enable QMX IQ mode (attempt %d/%d): 0x%x",
-                                 attempt, IQ_MODE_MAX_ATTEMPTS, terr);
-                    }
-                    // Readback: a successful CDC write only proves the bytes
-                    // reached the radio, not that it accepted them. Query Q9;
-                    // and check the radio actually reports IQ mode on.
-                    //
-                    // The QMX echoes every write back ("Q91;") asynchronously.
-                    // Without the delay below that echo arrives DURING the wait
-                    // loop for the real Q9; response and triggers a false
-                    // "confirmed ON" — IQ mode never actually turns on, leaving
-                    // the FT8 decoder with non-IQ audio (140 candidates, 0
-                    // decodes), cleared only by a QMX power cycle.
-                    // Wait long enough for the write echo to arrive and be
-                    // consumed, THEN flush and send the real query.
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                    s_q9_resp_len = 0;
-                    const char *iq_q = "Q9;";
-                    esp_err_t qerr = cdc_acm_host_data_tx_blocking(
-                        s_cdc_dev, (const uint8_t *)iq_q, strlen(iq_q), 200);
-                    if (qerr == ESP_OK) {
-                        for (int wi = 0; wi < 20 && s_q9_resp_len == 0; wi++) {
-                            vTaskDelay(pdMS_TO_TICKS(20));
-                        }
-                        if (s_q9_resp_len >= 3 && s_q9_resp[2] == '1') {
-                            ESP_LOGI(TAG, "QMX IQ mode confirmed ON (%s) on attempt %d/%d",
-                                     s_q9_resp, attempt, IQ_MODE_MAX_ATTEMPTS);
-                            s_iq_mode_confirmed = true;
-                            break;
-                        } else {
-                            ESP_LOGW(TAG, "QMX IQ mode NOT confirmed (attempt %d/%d, raw='%s')",
-                                     attempt, IQ_MODE_MAX_ATTEMPTS,
-                                     s_q9_resp_len ? s_q9_resp : "(no response)");
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "Failed to query QMX IQ mode state (attempt %d/%d): 0x%x",
-                                 attempt, IQ_MODE_MAX_ATTEMPTS, qerr);
-                    }
-                    if (attempt < IQ_MODE_MAX_ATTEMPTS) {
-                        vTaskDelay(pdMS_TO_TICKS(300));
-                    }
-                }
-                if (!s_iq_mode_confirmed) {
-                    ESP_LOGE(TAG, "QMX IQ mode NOT confirmed after %d attempts — "
-                             "panadapter will show mirrored/aliased spectrum; "
-                             "check QMX System Config IQ Mode setting or power-cycle the QMX",
-                             IQ_MODE_MAX_ATTEMPTS);
-                }
-                ui_set_iq_mode_warning(!s_iq_mode_confirmed);
-            }
+            /* A radio that has just appeared has ALREADY restored its own
+             * Max. PA voltage: an MM Set does not survive a QMX power cycle
+             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0, and
+             * the radio's own Protection menu agrees with CAT throughout).
+             *
+             * So any value the WSPR PA guard was holding to restore is now
+             * STALE, and writing it back would push the operator's ceiling to
+             * a number they never chose. Drop it: the radio has already done
+             * the restore for us. */
+            s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
+            settings_set_wspr_pa_saved_x10(0);
+            iq_mode_handshake(4);
             // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
             // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
             // VOX serves no purpose here. It is disabled defensively: with VOX on
@@ -1120,9 +1996,20 @@ static void link_task(void *arg)
                     // Response is in s_mm_resp — parse MMnnn;
                     if (s_mm_resp_len >= 4 && strncmp(s_mm_resp, "MM", 2) == 0) {
                         int val = atoi(s_mm_resp + 2);
-                        if (val >= 600 && val <= 800) {
+                        // 500-950, the radio's real range - this used to be 600-800,
+                        // which would have thrown away a QMX genuinely set to 550 or
+                        // 900 and silently substituted 700.
+                        if (val >= CW_CENTER_MIN_HZ && val <= CW_CENTER_MAX_HZ) {
                             s_cw_offset_hz = val;
                             ESP_LOGI(TAG, "QMX CW offset: %d Hz", s_cw_offset_hz);
+                            // THE RADIO'S VALUE WINS. Our stored one was pushed at
+                            // ~4.5 s of boot, ~13 s before this link exists, so that
+                            // write never reached anything - the two numbers have
+                            // been free to disagree for the whole session, which is
+                            // what Roy KI0ER reported as the Tab5 "resetting to 700".
+                            // With the QMX's default Auto-offset/tone=YES, CW offset
+                            // and CW centre track each other, so this is the centre.
+                            ui_seed_cw_pitch_hz((uint16_t)val);
                         } else {
                             ESP_LOGW(TAG, "CW offset out of range (%d), using 700", val);
                         }
@@ -1132,6 +2019,124 @@ static void link_task(void *arg)
                     s_rx_len = 0;
                 } else {
                     ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
+                }
+            }
+
+            /* ⭐ MAKE SURE THE RADIO RECEIVES ON VFO A, because everything this
+             * firmware does assumes it. We poll "FA;" and write "FA<freq>;", both of
+             * which are VFO A only.
+             *
+             * Markus DL8MBY, first day with a Tab5 and a QMX+: his radio was on
+             * VFO B, and the failure is a nasty one because it is PARTIAL. Band
+             * select still worked and the Tab5's display looked right, so CAT was
+             * plainly connected - but the frequency never changed on the radio and
+             * the receive frequency did not move, because we were writing a VFO he
+             * was not listening to. He worked it out himself and then had to ask
+             * whether it was his own misconfiguration. It was not.
+             *
+             * "As the VFO indicator is very small in the QMX+ display this could be
+             * easy overseen especially with my old eyes." Quite - and nothing in the
+             * Tab5 said a word about it.
+             *
+             * FR selects the radio's three-state VFO Mode (its CAT manual: "0, 1, 2
+             * correspond to VFO A, VFO B or Split respectively"). We ASK first so we
+             * can tell the operator what it was, then set A only if it needs it.
+             *
+             * ⚠ FR only - deliberately NOT FT or SP. An operator running their own
+             * split receives on A and transmits on B, which works perfectly well
+             * with the panadapter; clearing FT/SP would break that for no reason.
+             * The same restraint the CW-offset maintainer already observes: do not
+             * undo a split we did not engage. */
+            {
+                s_rx_vfo_mode = -1;
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+                for (int wi = 0; wi < 10 && s_rx_vfo_mode < 0; wi++) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+                if (s_rx_vfo_mode < 0) {
+                    ESP_LOGW(TAG, "VFO mode: no answer to FR; - leaving the radio alone");
+                } else if (s_rx_vfo_mode == 0) {
+                    ESP_LOGI(TAG, "VFO mode: receiving on VFO A, as this firmware assumes");
+                } else {
+                    const char *was = (s_rx_vfo_mode == 1) ? "VFO B" : "Split";
+                    ESP_LOGW(TAG, "VFO mode: radio was receiving on %s - the Tab5 only "
+                                  "reads and writes VFO A, so nothing it did would have "
+                                  "been audible. Switching to VFO A.", was);
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR0;", 4, 200);
+                    vTaskDelay(pdMS_TO_TICKS(60));
+                    s_rx_vfo_mode = -1;
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+                    for (int wi = 0; wi < 10 && s_rx_vfo_mode < 0; wi++) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
+                    /* Read back rather than trust the write - the Q9/IQ-mode lesson:
+                     * a successful CDC write only proves the bytes arrived. */
+                    if (s_rx_vfo_mode == 0) {
+                        ESP_LOGI(TAG, "VFO mode: confirmed on VFO A now");
+                    } else {
+                        ESP_LOGW(TAG, "VFO mode: still reads %d after FR0; - the radio "
+                                      "is not taking it", s_rx_vfo_mode);
+                    }
+                    ui_set_vfo_switched_notice(was);
+                }
+            }
+
+            /* ⭐ ASK THE RADIO whether it has a permanently fitted GPS, instead of
+             * inferring it from whether its clock agrees with ours (#174).
+             *
+             * The inference was wrong in a way that mattered: the Tab5 also SETS
+             * that clock on a radio without GPS, so a close agreement could be our
+             * own doing - see the false-UTC(GPS) quirk in CLAUDE.md. #173 stopped
+             * that being believed, at the cost of a real QMX+ not re-confirming
+             * until its clock is next seen unset. This closes that hole.
+             *
+             * "GPS source" is Paddle port (default; the only value that works on a
+             * plain QMX, which must NOT have a GPS left connected - it forces
+             * practice mode) or QMX+ Internal (a QLG3 fitted inside a QMX+, i.e. a
+             * GPS that is always there). Verified on hardware that MM Get answers
+             * bare values: MMSystem config|Real time clock; -> MMSoftware;.
+             *
+             * ⚠ Do NOT use "Real time clock" for this. It selects software vs
+             * CR2032-backed hardware RTC, NOT GPS - checked against the 1_04_001
+             * operation manual, because it looks like the obvious answer. */
+            {
+                /* ⚠ The FULL nested path is required, and both halves of that
+                 * matter - measured, not guessed. "MMGPS & Ser. ports|GPS source;"
+                 * answers "?;" because MM wants the path from the TOP-LEVEL menu,
+                 * and the manual spells the submenu "Ser. Ports" while the radio
+                 * itself spells it "Ser. ports". Verified on 1_04_004:
+                 *   MMSystem config|GPS & Ser. ports|GPS source;  -> MMPaddle port;
+                 * A useful discovery aid: appending "?" to a name resolves it, and
+                 * a submenu answers with a 0|0 address (MMSystem config|GPS & Ser.
+                 * ports?; -> MM0|0|...), which is how a container is told from a
+                 * value. */
+                const char *gq = "MMSystem config|GPS & Ser. ports|GPS source;";
+                s_mm_resp_len = 0;
+                esp_err_t gerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)gq, strlen(gq), 200);
+                if (gerr == ESP_OK) {
+                    for (int wi = 0; wi < 15 && s_mm_resp_len == 0; wi++) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
+                    if (s_mm_resp_len >= 3 && strncmp(s_mm_resp, "MM", 2) == 0 &&
+                        strncmp(s_mm_resp, "MM?", 3) != 0) {
+                        /* Match on "Internal" rather than the whole string: the
+                         * exact wording is the radio's, and a menu label is a
+                         * weaker thing to depend on than the word that carries the
+                         * meaning. Anything else (Paddle port) means no permanent
+                         * GPS, which is the safe default. */
+                        s_qmx_gps_source_internal = (strstr(s_mm_resp, "Internal") != NULL);
+                        ESP_LOGI(TAG, "QMX GPS source: %s%s", s_mm_resp + 2,
+                                 s_qmx_gps_source_internal ? "  (permanent GPS)" : "");
+                    } else {
+                        /* Older firmware may not have the item at all. Not an
+                         * error, and not a reason to claim anything either way. */
+                        ESP_LOGI(TAG, "GPS source not reported by this firmware - "
+                                      "falling back to clock-agreement detection");
+                    }
+                    s_rx_len = 0;
+                } else {
+                    ESP_LOGW(TAG, "Failed to query GPS source: 0x%x", gerr);
                 }
             }
             // Query band list from QMX band config (up to 16 slots).
@@ -1306,6 +2311,30 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
         return err;
     }
     ESP_LOGI(TAG, "Sent: %s (target %lu Hz)", cmd, (unsigned long)freq_hz);
+
+    // RETUNING CLEARS RIT. It is per-caller by nature (Roy KI0ER engages it for
+    // one station and drops it for the next), and RIT left set across a retune is
+    // a classic way to end up listening somewhere you did not intend - the
+    // display would be offset from the dial for a reason nobody remembers. Every
+    // way the frequency can move comes through here: a panadapter tap, a spot, a
+    // memory recall, a band change, the web UI.
+    //
+    // Queued rather than sent inline: this function is called from the LVGL and
+    // HTTP threads, and only the poll task may write to the pipe.
+    if (s_rit_hz != 0 || s_rit_pending) {
+        ESP_LOGI(TAG, "retune -> clearing RIT (was %+d Hz)", s_rit_hz);
+        cat_request_rit_hz(0);   // only worth a CAT write if it is actually set
+    }
+    // ⚠ UNCONDITIONAL, and it used to be inside the branch above. A PARKED
+    // offset (long-press: remembered while RIT is switched off) has s_rit_hz == 0,
+    // so the whole block was skipped and the park SURVIVED the retune - then a
+    // long press on the next band restored an offset belonging to the previous
+    // one, from a number the operator could no longer see. Roy KI0ER reported it
+    // as "a band change does not clear it out either, but should", and he is
+    // right: a fresh frequency is a fresh start. The armed tap-to-RIT mode
+    // stands down here too, or the next tap on the spectrum would silently set
+    // an offset instead of tuning.
+    ui_rit_notify_retune();
     return ESP_OK;
 }
 
@@ -1519,3 +2548,52 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
     return result;
 }
+
+// Orderly CAT shutdown, for when the host is about to stop existing (a reflash)
+// rather than the radio going away. See util/usb_shutdown.h for why.
+//
+// Reuses the EXACT close discipline the EVT_DEV_GONE path uses, and for the same
+// reason: poll_task can be mid-retry on this handle, and two tasks touching one
+// cdc_acm_dev_hdl_t corrupted the host driver's state badly enough to abort the
+// device (Dirk DK7CVD, 2026-06-29). Clear the handle first so poll_task's own
+// `while (s_cdc_dev != NULL)` lets it exit, wait for it, and only then close.
+void cat_usb_shutdown(void)
+{
+    cdc_acm_dev_hdl_t dev = s_cdc_dev;
+    if (!dev) {
+        ESP_LOGI(TAG, "shutdown: no CAT device open");
+        return;
+    }
+
+    // Put the radio back in receive before dropping the link. If a TX burst is
+    // in flight the QMX is keyed, and a host that vanishes mid-burst leaves it
+    // that way - the one outcome worse than a wedged USB port.
+    ESP_LOGI(TAG, "shutdown: returning the radio to RX");
+    const char *rx = "TA0;RX;";
+    cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)rx, strlen(rx), 200);
+
+    s_cdc_dev = NULL;
+    s_cat_ready = false;
+    int wait_ms = 0;
+    while (s_poll_task != NULL && wait_ms < 1500) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        wait_ms += 20;
+    }
+    if (s_poll_task != NULL)
+        ESP_LOGW(TAG, "shutdown: poll_task still running after %dms, closing anyway", wait_ms);
+
+    cdc_acm_host_close(dev);
+    ESP_LOGI(TAG, "shutdown: CAT closed cleanly");
+}
+
+// #146: called by ft8_tx when a burst could not deliver TA0; or RX;. The poll
+// task owns the pipe, so it - not the TX path - is what keeps trying, on every
+// cycle that succeeds, until the radio is demonstrably back in receive.
+void cat_request_force_rx(void)
+{
+    s_force_rx_pending = true;
+    ESP_LOGE(TAG, "⚠ a TX stop command was lost - the radio may still be "
+                  "transmitting; will re-assert RX; as soon as CAT recovers");
+}
+
+bool cat_force_rx_pending(void) { return s_force_rx_pending; }

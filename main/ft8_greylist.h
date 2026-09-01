@@ -24,3 +24,7 @@ bool ft8_greylist_contains(const char *call);
 // wipe the whole list.
 void ft8_greylist_clear(const char *call);
 void ft8_greylist_clear_all(void);
+
+// Snapshot the calls currently being skipped (fail count at the limit), for the
+// web viewer. Returns the number written to out[0..max).
+int ft8_greylist_get_all(char out[][12], int max);

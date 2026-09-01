@@ -280,6 +280,21 @@ static void modal_close(void)
     lv_anim_start(&a);
 }
 
+// Tap the grip handle to close. modal_close() is idempotent (it returns unless
+// s_open), so a gesture that both swipes and clicks cannot close twice.
+static void grip_click_cb(lv_event_t *e)
+{
+    (void)e;
+    modal_close();
+}
+
+// Click on the backdrop - i.e. anywhere outside the window - closes it.
+static void backdrop_click_cb(lv_event_t *e)
+{
+    (void)e;
+    modal_close();
+}
+
 // Swipe down (drag down) anywhere on the modal background closes it,
 // replacing the Close button.
 static void modal_swipe_cb(lv_event_t *e)
@@ -428,8 +443,7 @@ static void action_ta_focused_cb(lv_event_t *e)
 
     if (!s_action_kb) return;
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
-    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_action_kb);
+    ui_osk_show(s_action_kb);
 }
 
 static void action_kb_cb(lv_event_t *e)
@@ -554,10 +568,9 @@ static void show_action_panel(int idx)
         lv_textarea_set_text(s_action_ta, "");
     }
 
-    ui_theme_focus_textarea(s_action_ta);
     lv_obj_clear_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_action_panel);
-    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    ui_osk_show(s_action_kb);
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
     lv_obj_move_foreground(s_action_kb);
     // Reset the shift cycle to "Abc" (capitalize the next letter, then
@@ -887,7 +900,11 @@ static void modal_build(void)
         }
     }
 
-    // Slim grip handle at the top of the panel: swipe down to close.
+    // Slim grip handle at the top of the panel: swipe down to close - or just
+    // TAP it. The handle was already the thing an operator reaches for, and a
+    // swipe-only handle asks them to guess that a gesture is hidden in it; a
+    // pointer cannot perform that gesture at all. ext_click_area gives it a
+    // comfortable target without making it look heavier.
     lv_obj_t *grip = lv_obj_create(s_panel);
     lv_obj_set_size(grip, 120, 10);
     lv_obj_align(grip, LV_ALIGN_TOP_MID, 0, -PAD + 4);
@@ -895,13 +912,31 @@ static void modal_build(void)
     lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
     lv_obj_set_style_border_width(grip, 0, 0);
     lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_set_style_pad_all(grip, 0, 0);
     lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(grip, 14);
+    lv_obj_add_event_cb(grip, grip_click_cb, LV_EVENT_CLICKED, NULL);
 
     // Swipe down anywhere on the modal background (outside the grid) closes it.
     lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
+
+    // A click OUTSIDE the window closes it, the same way the settings drawer's
+    // scrim works. Attached to s_modal, the full-screen backdrop: LVGL does not
+    // bubble child events unless asked (LV_OBJ_FLAG_EVENT_BUBBLE is used nowhere
+    // in this project), so a click that lands on the panel or any cell inside it
+    // is consumed there and never reaches this - which is precisely what makes
+    // it safe to close on.
+    lv_obj_add_event_cb(s_modal, backdrop_click_cb, LV_EVENT_CLICKED, NULL);
+
+    // Both of these are things you click to DISMISS, not controls, so the mouse
+    // pointer must not advertise them - otherwise it is green across the whole
+    // window and means nothing. The cells inside report for themselves.
+    lv_obj_add_flag(s_modal, UI_FLAG_NOT_HOT);
+    lv_obj_add_flag(s_panel, UI_FLAG_NOT_HOT);
 
     /* Action panel for long-press */
     s_action_panel = lv_obj_create(s_panel);
@@ -1013,6 +1048,11 @@ void memory_modal_init(void)
 {
     modal_build();
 }
+
+// Esc from the physical keyboard. There is no Close button to click - this
+// page dismisses by backdrop tap or swipe-down - so ui.c asks directly.
+void memory_modal_close_now(void) { modal_close(); }
+bool memory_modal_is_open(void)   { return s_open; }
 
 void memory_modal_show(void)
 {

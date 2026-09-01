@@ -96,6 +96,14 @@ already in this folder from a previous run - see "If it fails".)
  If it fails
 ------------------------------------------------------------
 
+ - REBOOT THE TAB5 AND TRY AGAIN. Do this first if the flasher can
+   see the COM port but the flash keeps failing - the port still
+   listed in Windows Device Manager, esptool still refusing. The
+   Tab5's USB serial connection is produced by the ESP32-P4 itself,
+   not by a separate chip, so a busy or unhappy running firmware can
+   leave the port visible while it no longer answers. A reboot clears
+   it. Reported by Samuel W7STF after a 7-hour session, and it worked
+   immediately for him.
  - "FLASH FAILED" almost always means a charge-only USB-C cable.
    Try a different cable - it must carry data.
  - Close any serial monitor / Arduino IDE / other app that might

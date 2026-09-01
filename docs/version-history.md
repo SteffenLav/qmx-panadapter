@@ -1262,5 +1262,1814 @@ A pure fixes release — no new operating features, but two of the fixes close p
 
 ---
 
+### Shipped in v1.4.0 — 2026-08-05
+
+**Live spots on the spectrum, and three long-standing instability causes root-caused.**
+
+**Live spots (POTA + RBN).** `main/net/spots.c` fetches `api.pota.app/spot/activator` (~95 spots, ~40 KB) about once a minute into a mutex-protected PSRAM store; `main/net/rbn.c` adds the Reverse Beacon Network telnet feed as a second producer into the SAME store, so the display never knows the source. Drawn by `main/ui/spots_lane.c` as a **see-through overlay on the spectrum** (FlexRadio convention): bright callsign centred on the spectrum's middle, a 2 px line dropping to the frequency axis, amber POTA / green RBN / **grey = already worked on this band**. Opacity fades with age and the spot disappears at 30 minutes. Band-scoped off-screen counters in the bottom corners, tappable, coloured like the spot they lead to. **Press-drag-lift** selection: press a callsign, drag to re-snap to the nearest, lift to tune — frequency **and** mode (CW / DiGi / USB above 10 MHz / LSB below; unknown mode leaves the radio alone). Bandwidth deliberately not forced — the QMX reloads its own per-mode filter on a mode change. Drawer section "Live spots (POTA)" + indented "Add RBN (CW skimmers)"; `spots_en` default ON, `rbn_en` default OFF (a continuous feed on this board's most delicate subsystem); both in the config export. RBN is band-filtered at ingest, deduplicated ~4.75:1, and holds a station for 10 minutes.
+
+**ALL outbound HTTPS was dead — fixed.** Every TLS attempt failed at RNG seeding: `esp-aes: Failed to allocate memory for the array of DMA descriptors` → `mbedtls_ctr_drbg_seed returned -0x0001`, taking QRZ, eQSL, LoTW and the update check with it. On ESP32-P4 `SOC_AES_SUPPORT_DMA=1` and the IDF AES port has no small-buffer fallback, so even ctr_drbg's 16-byte operations allocate a descriptor array from `MALLOC_CAP_DMA|INTERNAL` — impossible with the pool at ~200 B. Diagnosed by measurement (a probe reproducing the exact allocation: succeeds pre-WiFi, fails after), not by adopting the standing theory. Fixed by moving AES/GCM/SHA to software; **MPI and ECC stay hardware**, so RSA/ECDSA — the expensive part of a handshake — is still accelerated. Also fixed: `update_check` was the only network path not pausing the spectrum WebSocket during its transfer.
+
+**52 KB of internal RAM recovered — and it root-causes TODO #65.** Found with three commands never previously run: `idf.py size` (`.bss` = 201 KB, 45 % of DIRAM), `idf.py size-components` (**186,986 B of it in `libmain.a`** — everything outside `main/` was noise), `nm --size-sort -S` (named the arrays). Moved to PSRAM: `s_worked` (22.5 KB ADIF worked-call cache), two 11.25 KB FT8 heard-table snapshots (now one shared buffer), `s_rows` (8 KB row-widget pool). Deliberately left internal: `audio.c`'s `raw[]`/`decoded[]` and the `dsp.c` FFT buffers — hot paths, and v0.19.4 proved a PSRAM spill makes the STFT ~10× slower. Measured: `.bss` 201,108 → 148,056 B; boot internal free 166 → 217 KB; steady 22–24 → 78 KB; **low-water mark 0 → 32 KB**. `MALLOC_CAP_DMA` went from ~311 B to **40 KB with WiFi fully up**, which corrects the long-standing claim that WiFi consumed that pool — our own `.bss` occupied the DMA-capable region and WiFi was merely the last straw. That makes ONE root cause of the SD remount failures, the USB endpoint-alloc failures on a QMX reconnect, the crypto failure above, and reboots under load.
+
+**QMX power-cycle lock-up fixed.** Switching the radio off delivered no `AE_DISCONNECTED` to the audio side (a documented quirk — the UAC handle just goes quiet), so `audio_task` kept polling a dead handle. On a *silent* device the read honours its 25 ms timeout; on an **invalid-state** device it fails instantly, so the loop spun flat out at priority 6 → **core 0 at 0 % idle**, LVGL starved, UI frozen, nothing able to recover. The spin was starving the very task that delivers the disconnect event. `audio_task` now yields 5 ms when a poll moved no audio (zero effect while streaming). Verified: `usbh_devs_open` errors thousands → 1, the disconnect event arrives 20 ms later, `USB: All devices freed`, worst `idle0` 0.0 % → 7.2 %, and the radio **re-enumerates immediately**.
+
+**WiFi remembers several networks (Roy KI0ER).** Up to 6, most-recently-used first, built implicitly from successful connections — nothing to maintain. When the configured network will not come up, it scans after two failed connects and switches to the strongest remembered network on the air; rate-limited to one attempt per 30 s so it keeps looking without hammering the radio. The typed-in SSID stays the *configured* one, so coming home is unchanged. Picking a known network from **Scan** fills its password in. Exported as `[wifi_known]`. Hardware-verified end to end, including the roam, by dropping a phone hotspot.
+
+**Roy KI0ER's FT8 findings — four of five real.**
+- **Finishing a QSO properly.** The re-send budget ran out after 3 attempts in 240 s and we then resumed CQ over a partner still repeating his report. Now 6 re-sends over 300 s, **and** once spent the Tab5 stays SILENT rather than calling CQ — a new hold flag checked in `rearm_current()`, the single choke point for CQ arming, with a disarm so a queued burst cannot fire anyway.
+- **Occupancy strip filling up permanently** (his "turns totally red, cured by restarting"). The parity-aware row-aging *pause* had no upper bound, and during a CQ run we are parity-locked essentially always — so every row on our own transmit window was kept for the whole session, and `build_tone_occupancy()` reads that list filtered to our parity, i.e. exactly those rows. Capped at 10 minutes.
+- **What the strip is showing.** It now carries an **EVEN / ODD / BOTH** tag; the tone picker states which window it describes.
+- **Alternating the hunt window.** Every candidate in one robot tick shares a parity (only stations heard in *this* slot are eligible), so the bias is between QSOs: an exchange takes a fixed number of slots, so finishing one returns you to idle on the same parity. After 3 pounces on one window the robot yields one slot.
+
+**Also:** the **QRZ / eQSL / LoTW setup is no longer hidden** behind having logged a QSO (Brian WA6JFK tried three browsers looking for it); the `SPOTS_MAX` cap was silently truncating the live feed; and a spot-store race that could draw a callsign at another station's frequency is fixed.
+
+**Verification worth recording:** two boot self-tests (`spots_lane_selftest`, `rbn_selftest`) check the overlay geometry, age curve and row packing, and the RBN parser against **verbatim captured feed lines** — plus device spot counts cross-checked against a PC query of the live POTA API (`off L40 R34 / 0 visible` matched 40/0/34 exactly). RBN's parser vectors are real wire data, not invented alongside the parser.
+
+**Still on-air-unverified:** the new final-resend conduct, the parity alternation, and Roy's item 2 (decodes drying up after an hour with the strip going fully green) — that one is a different fault from the stale-state bug and wants a field retest against the recovered memory before anything speculative is changed.
+
+### Shipped in v1.5.0 — 2026-08-06
+
+**The manual answers questions now, instead of being a manual.**
+
+**Context-sensitive help.** The built-in manual can be opened *at the right place* rather than at its contents page. `main/ui/help_topics.c` holds one table mapping a topic to a page and a heading, so exactly one file knows which chapter covers what; `reader_view_open_help()` scrolls to the heading (case-insensitive substring, so renumbering and small rewordings do not break it). The drawer's **User Manual** button now lands where you are — the panadapter chapter, the FT8 *receive* chapter, or the FT8 *transmit* chapter when a burst is armed or active, because someone mid-transmission is asking a different question. Warnings you cannot act on became warnings you can: the IQ-mode banner and the "turn on your QMX" prompt are tappable. **Deep links cannot rot silently** — `tools/pack_manual.py` parses the table and fails the build if a page or heading has gone (and `mkdocs_reader_export.py` now *raises* on a packer failure, which it previously swallowed as a warning; a failed pack leaves the previous `manual.bin` in place, so that would have shipped a stale manual invisibly).
+
+**"Need guidance?" — a short list of symptoms, ranked from what the device can see.** New drawer button beside User Manual, and the QMX-off prompt offers **"Need help?"** (an off radio is often off on purpose, so it does not imply a fault). The panel lists what you *see* — "Nothing appears in the decode list", not "no CAT link" — because a novice cannot map their symptom onto our vocabulary. Rows the firmware can tell are happening *now* are highlighted and float to the top: no CAT link, IQ never confirmed, an empty decode list, WiFi down when it is supposed to be up. **The device ranks, the operator chooses — it never navigates on inference**, however confident. The list scrolls, and every row is scoped to the screen it was opened from (nothing about the spectrum is offered in FT8, where none is drawn). Two supporting accessors added rather than worked around: `ft8_screen_active_count()`, so the decode count needs no ~11 KB snapshot buffer on taskLVGL, and `panadapter_wifi_is_enabled()`, so WiFi switched off for POTA is not reported as a fault.
+
+**The manual is read from the firmware, not from a copy of itself.** Intermittent "Could not cache the page" reports were root-caused by an honest diagnostic rather than a guess: one `else` branch had been claiming "page not in the embedded manual" for *two* different failures, and the log showed the truth — `short write to /spiffs/reader.md: 0 of 12031 bytes`. The page was found; the write failed. `/spiffs` is 1 MB shared with `qso.adi`, the LoTW certificate and key, and the diagnostic log's 256 KB rolling file plus a rotation, so on a used device there is nothing left. Since v1.3.2 the manual is compiled *into* the firmware, so the cache was writing flash in order to read it back — the round-trip is gone, and pages and the contents list come straight from the blob. No free space required and nothing left to fail. That also retired the earlier "page not found" mystery: the same fault, wearing the wrong label.
+
+**Tofu boxes gone, verified against the manual's actual contents.** An inventory of `docs/mkdocs/**` found **43 distinct non-ASCII codepoints**; 37 now fold explicitly and 6 are decorative emoji dropped on purpose. Two causes, neither the one guessed at first: `add_label()` set its text **raw**, so the heading and blockquote paths reached LVGL unfolded — folding now happens at the single point where text becomes a label, so no caller can bypass it. And the Block Elements range was not in the table at all: **U+2591 appears 128 times**, so the waterfall and occupancy sketches were not drawing boxes, they were silently *vanishing* and leaving captioned blank space. Also added: box-drawing diagonals as `/` and `\`, geometric shapes as `^ v > < o *`, `1/2`, `~`, and spelled-out `tau`/`alpha`/`ohm`. A last box survived that sweep and was found by the operator: both markdown walkers copied **link and image label text byte-for-byte**, bypassing the fold they applied to everything else — so an arrow in prose rendered fine while the same arrow inside `[...]` drew a box. All four copy sites now go through one helper.
+
+**A help overlay owns the screen.** One operator screenshot produced five complaints and four distinct faults, all the same mistake in different places — a widget that puts itself on top and never stands down. The FT8 drawer stacked on itself because its reflow started sections at a hardcoded `y`, above a comment warning it had to be kept in step by hand (the next person to add a button did not); it now reads where the sections actually begin. The Reader's own **Back/Exit/Contents** could not be tapped at all: the top-bar Band/Mode/BW hit zones are direct children of the screen, foregrounded above the overlay, and LVGL hit-tests children in reverse creation order without considering siblings — so the BW zone won every touch aimed at them. Panadapter navigation stayed live over the manual: the edge-swipe strips, their breathing grips *and* the separate drawer-grip button are now hidden while a help overlay is up, re-asserted every second so they can never get stuck hidden. And the QMX-wait prompt, which re-foregrounds itself as a keepalive, now stands down for the drawer and the panel too.
+
+**No more transition animations, and the reason generalises.** Landscape runs at ~13 fps because every flush goes through the software 90° rotation, so the Reader's 220 ms slide was about **three frames** — not motion, just two or three discrete snapshots at intermediate offsets, which read as a flicker going in and as an unrelated page surfacing coming out. A cross-fade would be the same three frames at 33/66/100 % opacity, so animating differently was not the answer: one correct frame in, one out. **Back** is also hidden when there is nothing to go back to, with **Exit** sliding into its place — two buttons where one is dead just makes the operator guess which one leaves.
+
+**Call CQ from the browser (Dennis WN4FLA).** A CQ run that has timed out or reached its call limit needed a walk back to the Tab5. The button sits under the web page's TX status banner, confirms first (it keys the radio, and a mis-click from another room should not put a carrier on the air), and shares one code path with the Tab5's own Call CQ button so the two cannot drift over the TX-hold tone, the EVEN/ODD parity or the active preset. Deferred to the LVGL task via a flag — the QSO state machine belongs to that task — and the flag is consumed even when FT8 is not up, so a stale request cannot fire minutes later.
+
+**The station you are working stays at the top of the decode list (Don WB0LQW).** During an exchange the partner's replies sorted down-screen where they had to be hunted for: "there is no station that I am as interested in as the one I am trying to contact." Part of it already worked — anything containing your own callsign sorted first — but not the partner's CQ while you are mid-exchange, nor a message to a third station (exactly when you most want to see it), nor a manual reply before anything has come back addressed to you. A new top tier handles all three, matched on the row's **callsign** rather than its text so a third station merely mentioning your partner is not promoted, and covering both a live engine-driven exchange and a hand-typed reply. It releases the moment the QSO completes, because their closing 73 contains your callsign and the existing tier already holds it up there. **Deliberately ranked above messages addressed to you:** mid-exchange they are the same row anyway, and where a third station calls at the same time, the contact in progress is still what you are looking at.
+
+**Smaller things.** Live-spot off-screen counters read **"< spots (3)"** rather than a bare "<3" — a number against the edge of the spectrum says neither what it counts nor that it can be tapped. The raw `PC`/`SW` strings are now logged, not just the scaled watts, after a field report of the FT8 TX power reading (BD4AHS — resolved on his unit by 1.4.0, cause unexplained; the divisor has been wrong in each direction before, and a report like that cannot be settled without the bytes the radio actually sent).
+
+**Two documentation corrections worth their own line, because both had produced field reports.** The FT8 robot's worked-before skip is **not** enforced — it follows the operator's *Exclude worked before* checkbox like every other filter, and the notes claiming otherwise are exactly why a user expected duplicates to be skipped without ticking it. And the QMX USB descriptor wedge is **an empty data stage, not a short descriptor**: the logged "Unexpected (8) … expected 16" counts ESP-IDF's own 8-byte setup packet in both figures, so the radio returned **zero** descriptor bytes for `GET_DESCRIPTOR(DEVICE, wLength=8)`. The earlier "8 of 16 bytes" phrasing — including in the report sent to Hans — would have sent someone hunting a truncated descriptor that does not exist.
+
+**Still on-air-unverified:** **Don's decode-list pinning** — the mechanism is confirmed present and provably inert with no contact in progress, but the pin actually firing needs a real QSO; a change-detected log line reports it engaging and releasing so the first operator to make a contact can confirm it from the diagnostic log without watching the screen. Also unverified on the air: the web **Call CQ** button's final key-down (the endpoint, the thread hand-off, the preset/tone/parity reuse and the error path are all hardware-confirmed; "the radio transmits when pressed" is inferred from sharing the button's code), and the wording of the guidance panel's rows against how operators actually describe these faults.
+
+### Shipped in v1.6.0 — 2026-08-09
+
+**The browser became a second operating position, and the manual stopped being made of characters.**
+
+**Full web/Tab5 parity.** The web page could show you the band; it could not work it. It now can. The **decode list** arrives ordered by the device rather than re-sorted in the browser, so the two screens cannot disagree about who is at the top. **Replying to a station is the same tap** it is on the Tab5 — the same intelligent-Transmit path that decides which message comes next, with a confirmation step and the outcome reported back, because a mis-click from another room should not put a carrier on the air. Added with it: **live spots on the browser spectrum**, the **TX tone picker** over a live occupancy strip, **memory channels**, **settings you can type** (callsign, grid, the three CQ messages, the FT8 filters), the **pileup and grey-list views**, the **robot toggle carrying the same permanent unattended-TX warning** it has on the Tab5, **Antenna Tune** with its 60-second safety, the **time-source label**, and **help plus the entire manual served by the Tab5 itself** — no internet, and always the manual that matches the running firmware.
+
+**`qmx.local`.** The WiFi layer picks its own network from up to six remembered, so the IP changes without anyone deciding it should — and the only place it was shown is the Tab5's own bottom bar, which is useless when the Tab5 is in the shack and you are not. An mDNS responder now answers to `qmx.local`. It cost internal RAM until the cause was measured rather than assumed: the component sizes its **static tables** for three interfaces and ten services, and we have exactly one of each — cutting those took the internal low-water mark from ~9 KB back to 22 KB. The PSRAM task settings tried first made **no measurable difference**; they are kept only because they match this project's standing rule for background tasks.
+
+**Do not zero-beat the DX (Roy KI0ER).** Everyone answering a CW CQ zero-beat arrives as one mud-pit, and a QRP station 400–600 Hz off stands out. The QMX has no XIT — its own CAT manual says so — so this is **split**: receive on VFO A, transmit on VFO B held at A plus your offset. It is maintained in the CAT poll task rather than hooked onto our own tune path, which is what makes it follow **every** way the frequency can move: a tap on the panadapter, a spot click, a memory recall, a band change, the web page, and the radio's own tuning knob. CW and CW-R only; leaving CW clears it; it only ever clears split if the Tab5 set it, so an operator running their own split is left alone; and it re-asserts every 30 seconds so a radio that dropped split cannot quietly transmit on top of the DX. `FB`/`FR`/`FT`/`SP` are all in the 1.03 manual, so this needs no firmware gate. **Not verified on the air** — the CAT round-trip is confirmed on the bench, "does the DX hear me 500 Hz up" is not.
+
+**RF gain, and a way to hand the radio back (Stan KC7XE, via Samuel W7STF).** RF gain is now a slider under the QMX volume, in dB, 0–99. Two things it does differently from the volume, both deliberate: it is a **per-band** value — the same figure the Band Configuration screen edits — so the Tab5 reads it from the radio instead of remembering a number that would belong to whichever band you were on last; and it writes on release rather than continuously, because unlike volume this is stored configuration. **Release radio** stops all CAT traffic so the QMX's own menu and its Terminal Applications have the port to themselves. That turned out to be more than a convenience: it also stands down the watchdogs, which read a deliberate menu visit as a fault and would eventually have cut USB power under the operator's hands.
+
+**A radio that stopped sending audio now recovers itself (Roy KI0ER).** Decode lists went blank while transmit still worked, and only a QMX restart fixed it. Chasing it produced the mechanism, with Stan's analysis in a separate thread supplying the missing half: a trip through the QMX's front-panel menu can trip its own watchdog reset, the radio restarts, and **`Q9` IQ mode is session state**, so it is switched off — while the USB link survives the restart without the Tab5 seeing any disconnect. The result is a radio that answers every CAT command perfectly and sends no audio. The watchdog now escalates cheapest-first: at 30 s it simply **asks for IQ mode again** (free, invisible, and it fixes that case outright), at 60 s a soft audio reset, at 120 s the USB power-cycle you would otherwise perform by hand — capped so a genuinely dead radio cannot loop it.
+
+**FT8 transmit-window fixes (Roy KI0ER).** Every occupancy strip — the mini strip on the FT8 pane, the full picker, and the web page's — now shows **both time windows, EVEN above ODD, always**. Your marker sits on your own window once a transmission has fixed it, and on both before that, because until then the tone is chosen but the window is not. The **"FREQ BUSY" warning never received the parity filter** the occupancy map got in v1.3.4, so it was counting stations in the window that cannot collide with you — which is exactly why it contradicted the green strip. The **auto-answer robot** now abandons a pick that turns out to be mid-QSO with somebody else and chooses another caller, rather than waiting through a contact it was never part of; a deliberate pounce still holds, because a willing pounce means you want that station. And a **listening slot** can be spent every N calls during a CQ run, so the picture of your own window stays current — off by default, since it changes on-air cadence.
+
+**The manual's drawings are drawn now.** They were built from UTF-8 box characters, and the Reader folds UTF-8 to ASCII with **some folds changing the length of the line** — an arrow becomes `(right)`, one character into seven — so a line the author had aligned overran its box and wrapped. No font fixes that (a monospace font was tried and reverted the same day). Instead a fenced `qmxdiagram` block carries a **semantic** spec — what the parts are, never where they go — and it is rendered twice: by the Tab5 with its own widgets and colours, and to SVG at build time for the website, so the two surfaces cannot drift. All **12 drawings** converted, four diagram types, every spec validated by the packer at build time.
+
+Redrawing them was an audit, and **seven statements turned out to be untrue**. The FT8 slot timeline claimed the receive window both ran to 14.999 s and closed at 4.5 s, and put the transmit opportunity at 4.0–4.5 s; the code cuts capture at **13.2 s** and puts the reply window in the **first 2.8 s** — the opposite end of the slot. The candidate cap is 140, not "~10". The CQ preset drawing still showed radio buttons for a dialog that has checkboxes. And the status bar has never had the **FPS readout** three separate documents claimed — the only frame rate in the tree is the WebSocket stream rate, which is why it appears on the web page and nowhere on the device.
+
+**An A–Z index (context help, Layer 4).** 256 terms, one per heading, generated into the manual and sorted on the first real word — "6. Tap to Reply" files under T, where you would look for it. Deliberately data rather than a page of links: the Reader renders links as plain text, so an index written that way would have looked right and done nothing. Letters first, then that letter's terms, because 256 terms is 256 widgets and at ~13 fps building them all at once is a visible stall. The guidance panel's bottom button finally says **"Look it up (A–Z)"** — it read "Open the manual" precisely because this did not exist.
+
+**The drawer is grouped.** Twenty-five sections had accumulated in build order, so the two QMX gain controls sat together but CW pitch was nine sections from the CW transmit offset. They are now **Station / Device / Radio / Network / Display / FT8 / Spectrum** under headings, with a **Basic/Expert** toggle beside the Settings title that says both where you are and what a tap gives you. Sections are positioned by a layout pass rather than rebuilt, and heights come from the sections themselves — the parallel table that had to be kept in step by hand had already fallen out of step twice.
+
+**Web fixes found by using it.** Every manual page in a subdirectory returned **404 in the browser** — 15 of 19 — because the handler never URL-decoded its query and the browser sends `guide%2Fpanadapter.md`. Spots were not failing to stack, they were being **deleted**: all labels shared one row and any that would overlap was dropped along with its line, so a busy patch showed fewer spots than the counter claimed. The memory page could not reach its own bottom rows, and its instruction to "click a channel to tune to it" was never wired to anything but the buttons; channels can now be dragged to another slot or onto a bin. Save/Cancel/Close carry the Tab5's colour language instead of all being the same grey pill.
+
+**Spots settle instead of jumping.** The store replaced its whole POTA slice every 60 seconds, so a station the API happened to omit from one response vanished and returned a minute later — and the order changed wholesale, which re-shuffled which spots got a label at all. It now merges: a fetch refreshes what it mentions and leaves the rest to age out. The Tab5 and the browser were also reading **different pools** — the browser scoped to the current band, the Tab5 taking every spot on every band — which is why their off-screen counts never agreed.
+
+**Still unverified on the air:** the CW transmit offset (bench-verified over CAT, never keyed), the CQ listening slot's cadence, and the dead-stream watchdog's 30-second IQ re-assert against a real field occurrence.
+
+---
+
+### Shipped in v1.7.0 — 2026-08-09
+
+**A Bluetooth mouse, phone spots, and knowing who can hear you.**
+
+- **Bluetooth mouse.** A pointer that works *while the QMX is connected* — the
+  case a USB mouse can never serve, because the radio owns the Tab5's only USB
+  host and sharing it through a hub does not work on this hardware. Pair once;
+  it reconnects by itself from then on, across reboots and firmware updates.
+  Move, left click, and a scroll wheel that scrolls whatever is under the
+  pointer. A Bluetooth symbol in the bottom bar shows off / scanning /
+  connected, mirrored in the web UI. Off by default; enabling it needs a
+  restart, because Bluetooth can only start once the link to the wireless
+  co-processor is up. Costs about 5 KB of memory — the pools live in external
+  RAM and the stack is sized for exactly one mouse, which is what keeps it
+  affordable on this board.
+- **DX cluster spots — the phone spots that were missing.** RBN is automated
+  skimmers, and no machine can recognise a callsign spoken into a microphone,
+  so every SSB station on the band was invisible. A cluster is people typing.
+  Third source into the same lane, with mode worked out from the spotter's
+  comment or your band plan, park/summit references picked out of the text, and
+  relayed skimmer spots dropped so they cannot double what RBN already shows.
+  Off by default.
+- **Activation logging (POTA / SOTA).** Start an activation and every logged
+  contact carries the reference automatically — with the contact count shown
+  against the threshold, read from the log itself. Chases are tagged too, from
+  spots the panadapter has already seen. The ADIF download can be limited to a
+  single reference, so you upload that park's log rather than your whole file.
+  Stopping is as prominent as starting, because the failure that actually
+  happens is driving home with it still on.
+- **SWR protection while transmitting.** The QMX reports SWR over the control
+  link; above your limit (3.0:1 by default) the transmission is cut short and
+  the transmitter latched off until you clear it. An FT8 burst is thirteen
+  seconds of key-down, so a disconnected or wrong-band antenna has real time to
+  do damage.
+- **Propagation feedback — "who is hearing me".** Asks PSK Reporter which
+  receivers have copied *your* call, listing distance, bearing and the report
+  they gave you. The valuable case is the mismatch: stations you can hear that
+  cannot hear you is a transmit-side fault, and from the receiving side alone it
+  looks exactly like a dead band.
+- **Spot lane de-duplication.** An activator spotted on POTA *and* heard by RBN
+  was drawn twice, in two colours, at almost the same place; RBN also doubled
+  itself where two skimmers rounded the same signal differently. One station is
+  now one entry, and the RBN sighting is folded in as corroboration — a
+  brighter marker meaning a receiver actually copied them just now, rather than
+  a self-spot typed an hour ago.
+- **Clock said GPS with no radio attached** (Don N2VGU). Once a QMX+ has been
+  seen to be GPS-disciplined that is remembered, so an offline start keeps GPS
+  timing without re-detecting it — but the clock label trusted that memory
+  without checking the radio was still there, and kept claiming GPS while NTP
+  was actually keeping the time. The Tab5 has no GPS of its own. The time was
+  always correct; only the label was wrong.
+- **Fixes.** A tune started from the web UI now says so on the Tab5 instead of
+  transmitting silently. Antenna Tune no longer cancels itself after a second
+  and leave the radio keyed — it was reading a mode value the QMX deliberately
+  does not report while tuning. Manual corrections: the panadapter page
+  documented an FPS readout and a colour-map label that have never existed.
+
+### Shipped in v1.7.1 — 2026-08-10
+
+**Tried a Bluetooth mouse on v1.7.0? Install this patch so your WiFi doesn't go flaky.**
+
+- **The Bluetooth mouse was making WiFi unstable, and nothing said so.** Turning
+  the mouse on could leave the web UI flapping between Connected and
+  Disconnected, with the connection dropping and recovering for as long as it
+  stayed on. The two look completely unrelated, which is why it took days to
+  find: WiFi and Bluetooth share one link to the wireless co-processor, and the
+  Tab5 was listening for *every* Bluetooth device in the building, continuously,
+  forever. In a busy room that is thousands of advertisements a minute, and WiFi
+  was left fighting for the same pipe. It now listens in short bursts, and once
+  your mouse is paired the co-processor is told to ignore everything else — so
+  the traffic never reaches the Tab5 at all. Measured on the bench: the
+  underlying link errors went from about five a minute to **none**, with the
+  mouse still connecting by itself and working normally. If you have not used a
+  Bluetooth mouse, nothing changes for you.
+- **The settings drawer would not close.** Swiping it away worked only if your
+  finger happened to start on bare background — anywhere on a slider, a checkbox
+  or a label and nothing happened, which felt random because it was. **Tap
+  anywhere outside the drawer to close it.** (Michael KZ4LY)
+- **CW transmit offset is settable by the hertz.** The slider covers 2000 Hz in
+  10 Hz steps, which is about two pixels a step — fine for a rough setting,
+  hopeless for an exact one. There are now **−50 / −10 / +10 / +50** buttons
+  under it. The range is unchanged, deliberately: it runs to ±1 kHz because a
+  station calling CQ wants to stand out, while someone breaking a pileup rarely
+  moves more than 100 Hz. (Michael KZ4LY)
+- **DX cluster spots stopped disappearing.** A cluster that simply had nobody
+  typing was treated as a dead connection and dropped, roughly every 70 seconds
+  — losing the spots it was holding each time. Quiet is normal on a cluster; it
+  now stays connected.
+- **The browser said GPS with no radio attached.** The same fault Don N2VGU
+  reported in the clock, fixed on the Tab5 in v1.7.0 but missed in the web page.
+- **A failed WiFi scan now says why.** "Scan failed — tap Scan to try again"
+  used to leave nothing in the diagnostic log to explain it, and a scan that
+  never came back would sit on "Scanning..." indefinitely.
+
+
+### Shipped in v1.7.2 — 2026-08-10
+
+**A Bluetooth mouse could stop reconnecting until you restarted the Tab5.**
+
+- If a reconnection attempt failed part-way — which happens routinely, because
+  the mouse powers itself down after about half a minute to save its battery —
+  the Tab5 stopped trying. The pointer never came back, even with the mouse
+  awake and right beside it, and only a restart fixed it. Verified over 14
+  sleep/wake cycles: fourteen disconnects, fourteen reconnects, none missed.
+
+Nothing else changed. If you do not use a Bluetooth mouse there is no reason to
+install this.
+
+
+### Shipped in v1.8.0 — 2026-08-11
+
+- **SOTA spots.** Summit activations now appear on the spectrum alongside POTA, RBN
+  and the DX cluster, fetched from [spothole.app](https://spothole.app) — Ian Renton
+  M0TRT's aggregator, used with his permission. **Off by default**: it is a
+  volunteer-run server, so nobody polls it who has not asked. Fetched once every two
+  minutes, and when it is unreachable the spots already on screen simply stay until
+  they age out — no banner, no error, nothing to dismiss.
+  - Two silent bugs fell out of it, both older than this feature: a 12-character
+    portable callsign (`HB0/HB9BXQ/P`) lost its last character, and a 10-character
+    summit reference (`EA1/AT-125`) was logged as `EA1/AT-12` — a *different*
+    summit. DX-cluster spots were affected too.
+  - A chase is now logged with the right award programme: a summit worked via a
+    cluster spot no longer goes into the log as POTA.
+- **Fox/Hound (DXpedition) mode — hound side.** See the FT8 Transmit chapter. Off /
+  Guided / Automatic. The Tab5 calls from above 1000 Hz, moves onto the Fox's own
+  frequency when answered, and stops on its `RR73` without sending a `73`.
+  Recognises a Fox by watching it work a queue rather than by frequency alone, and
+  the transmit window says "as HOUND — will QSY onto NNN Hz" before you commit.
+  **Validated in simulation only — no real DXpedition has seen it yet.** The Tab5
+  cannot act as a Fox: that needs five simultaneous signals and the QMX is keyed one
+  tone at a time.
+- **Mouse and pointer.** A proper arrow instead of a dot, which turns **bright
+  green** over anything a click would act on — a touch UI has no hover states, so
+  what is live was previously invisible to a mouse user. The edge grips accept a
+  click (a pointer cannot swipe), and the settings drawer and Memory Channels grew
+  handles you can simply tap. The scroll wheel no longer jams when the pointer
+  passes over a dropdown.
+- **Spot mode filter.** "Mode filter the spots" hides spots you cannot work in the
+  mode you are in — tapping a spot sets the mode as well as the frequency, so an
+  unfiltered lane could drop a CW operator into FT8.
+- **CW transmit offset narrowed to ±300 Hz**, and a stored wider value from v1.7.1
+  is clamped on the next start. **The guidance was wrong too, and is corrected
+  everywhere**: v1.6.0 and v1.7.x suggested 400–600 Hz, which is outside many
+  operators' filters altogether. Around 100 Hz or less is what actually works — the
+  aim is to land *inside* the other station's passband, most CW operators run 500 Hz
+  or narrower (200 Hz is not unusual), and a QRP signal has least energy exactly
+  where the filter is already attenuating (Michael KZ4LY). Roy KI0ER, who asked for
+  the feature, uses +60 Hz.
+- **Fixes.** The flash-persisted diagnostic log could stop writing silently and stay
+  stopped (it now reports the failure and recovers by rotating); the "power-cycle the
+  QMX" pop-up is gone, since it fired at a radio that was merely switched off and the
+  screen already says so; the "Now turn on or reboot your QMX" prompt now stands down
+  whenever any window is open instead of drawing across it.
+
+- **RIT — receive off your transmit frequency, by tapping.** Asked for by Roy KI0ER,
+  and shaped with Michael KZ4LY and Bill Carver: while you are running a frequency, a
+  caller answering slightly off it can be pulled in without moving transmit. A **RIT**
+  button at the top right of the spectrum arms it; a tap on the spectrum or waterfall
+  then sets the receive offset onto whatever you tapped instead of retuning, and it
+  stays armed so the next caller is another tap. A dashed magenta marker shows where
+  you are listening, in the spectrum and down the waterfall, while the gold line goes
+  on meaning the dial — and therefore transmit. The filter window moves onto the caller
+  too. Retuning clears it, from every path. Available from the browser as well.
+  - The QMX has real RIT in both 1_03 and 1_04, so unlike the CW transmit offset this
+    needs no split trickery. ⚠ `RU`/`RD` are absolute *or* relative depending on a QMX
+    menu setting the Tab5 cannot read, so every write clears to zero first and then
+    moves once — which lands correctly under either setting.
+  - Tap-to-RIT uses a 10 Hz grid whatever the mode. The normal tuning grid exists to
+    land the *dial* on a tidy frequency; SSB's 250 Hz would have left five usable
+    offsets inside the ±500 Hz limit.
+  - ⚠ **The display sign is derived, not verified on a signal** — there is no antenna
+    on the bench. If a steady carrier jumps when you engage RIT instead of standing
+    still, say so and it is a one-character fix.
+
+- **The browser caught up with the Tab5.** A control-by-control comparison, 87 commits
+  after the last one. RIT and its marker; starting and stopping a POTA/SOTA activation,
+  with a badge that appears while one is running so it cannot be forgotten; CW pitch,
+  IF calibration, the battery charge limit, the 180° screen flip, Fox/Hound, simulation
+  mode and the spot mode filter; and a "Prepare for flashing" item for an action that
+  had existed since v1.6.0 with nothing to call it. The only thing still Tab5-only is
+  the clock-sync window.
+
+- **SWR protection could not be saved from the browser — check yours.** The field was
+  shown, accepted your value, reported success, and the device discarded it. It has
+  been that way on every v1.7.x build, so anyone who set it there and did not check the
+  Tab5 has been transmitting without it. The browser now offers the same four
+  thresholds the Tab5 does rather than asking for a number.
+
+- **The browser's spectrum and waterfall now look like the Tab5's.** Samuel W7STF asked
+  whether the black-level and contrast settings reached the browser. They did not, and
+  chasing that found four separate faults:
+  - the spectrum was quantised for transmission with its floor at **−130 dBm**, which is
+    exactly where this receiver's own noise sits, so a quarter of the band arrived
+    flattened against the bottom of the scale and the browser had nothing to measure a
+    noise floor against. Widened to −150 dBm;
+  - the browser was not applying the smoothing stage the Tab5 applies before drawing, so
+    the **Spectrum smoothing** setting did nothing there;
+  - it used its own colour ramp and its own floor arithmetic instead of the Tab5's;
+  - and the Tab5 **re-seeds its noise floor about seventeen times a second**, so the
+    per-bin adaptive floor has never actually run on any version. What the Tab5 draws is
+    each bin measured against the average across the band, refreshed constantly — which
+    is why it settles instantly and never lets a signal fade. The browser now does the
+    same. **Consequence: the "Adaptive floor" setting does nothing and never has**, so it
+    has been removed from the browser's settings page. The behaviour is deliberately left
+    alone — the alternative is what it was designed for, where a steady carrier sinks out
+    of sight over about a minute.
+
+- **Spot labels stopped stealing clicks.** Samuel W7STF's "tuning oddity": clicking a
+  signal in the browser put the VFO on a plausible nearby frequency where nothing could
+  be heard. Clicking a callsign takes you to that station, which is intended — but the
+  label's clickable area was as wide as the callsign and sat at the same height as the
+  trace, so `OK/DL4ROB/P` owned **3.8 kHz** of band in which every click went to that
+  station. The label no longer claims space above and below its text, so a click
+  elsewhere in the same column tunes where you clicked, and hovering a label now shows a
+  marker at the station's real frequency with its callsign, so nothing happens silently.
+  Two more found in the same code: in CW every spot was drawn **700 Hz to the left** of
+  its own signal, and the browser rounded clicks to a different grid than the Tab5
+  (500 Hz in SSB where the Tab5 uses 250).
+
+- **Bluetooth mice that are not the one on the bench.** The Tab5 assumed a single byte
+  layout for movement — the 12-bit one a Logitech here sends. A mouse using 16-bit
+  movement decoded to a vertical value about **sixteen times too large**, which drove the
+  cursor into the top edge and held it there while horizontal still worked: exactly what
+  Samuel W7STF reported. It now reads the descriptor every HID mouse publishes and
+  decodes accordingly, with the old fixed layouts kept as a fallback. Tested against
+  three real descriptors on the host; **not yet confirmed against his mouse**, and the
+  log now records both the descriptor and what was made of it.
+
+- **Two browsers no longer fight over the live view.** The Tab5 streams the spectrum to
+  one browser at a time and the newest connection wins — but the displaced one used to
+  retry after two seconds and take it back, so a second tab, a phone or a laptop left
+  open made both flap between "reconnecting" forever. One session here logged **340**
+  handovers. The displaced browser is now told, stops retrying, and says "another browser
+  took the live view — click to take it back".
+
+- **"Release radio" reworded** (Samuel W7STF: "not too helpful, in fact confusing"). It
+  described what the software does to the radio; it now says what you are trying to do —
+  **"Let me use the QMX menus"**, and **"Done - Tab5 takes over again"** while it is
+  handed over. The pause and play icons are gone; a gear points at where you are headed.
+
+### Shipped in v1.8.1 — 2026-08-12
+
+A fixes release, almost all of it from field reports the day v1.8.0 landed.
+
+- **The spectrum is tunable again wherever you can see it.** Most of the spectrum had
+  stopped responding to tap-to-tune: only a window in the middle worked, so it felt like
+  tuning only worked near the centre frequency, and the waterfall was fine. A change the
+  week before had made the top-bar Band/Mode/BW/Zoom touch areas shallower so they would
+  stop swallowing taps on the spot callsigns — but the tune code still assumed the old,
+  deeper areas, leaving a band of the spectrum that belonged to nobody. Nothing opened and
+  nothing tuned. The rule now is simply that **if the mouse pointer is white, clicking
+  tunes**, and a finger behaves identically. Found with a mouse; a fingertip lands lower
+  and rarely met it.
+
+- **CW centre could not reach the value your radio uses** (Samuel W7STF, Roy KI0ER). It is
+  the sidetone: with the QMX default, the filter centre moves the CW offset and sidetone
+  with it. The radio offers **500 to 950 Hz in 25 Hz steps** — which of them you can pick
+  depends on the CW filter width you have chosen — while the slider ran 600 to 800 in
+  50 Hz steps. Wrong at both ends and on the wrong grid.
+  - It also could not agree with the radio. The Tab5 pushed its stored value about four
+    seconds into boot, and CAT does not exist until about seventeen, so that write never
+    arrived on any boot. The Tab5 now **reads the centre from the radio** when the link
+    comes up, which is what Roy asked for.
+
+- **The CW transmit offset now clears up after itself** (Roy KI0ER). Switching it off did
+  return the radio to simplex, so FT8 was never transmitting off frequency — but VFO B was
+  abandoned at A plus the offset for the rest of the session, which is what the radio was
+  showing. VFO B is now written back to match VFO A *before* the split is dropped (the QMX
+  will not take it afterwards), and simplex is confirmed by reading it back.
+  - **Still outstanding, and it is on the radio's side:** the QMX goes on displaying both
+    VFOs even though it reports VFO A mode and simplex. Only a configuration reload or a
+    power cycle clears it, and the reload also switches off the radio's IQ mode, which
+    would cost you the spectrum — too high a price for a display. Reported to QRP Labs.
+    Roy's workaround: switch band and back.
+
+- **RF gain and volume disagreed between the Tab5 and the web page** (Samuel W7STF). Both
+  read a cached value that only updated when the radio answered a query, so whichever
+  screen you opened second showed the number from before your change.
+
+- **Spot labels no longer claim kilohertz they do not own** (Samuel W7STF). In the browser
+  each label was a click target across its whole width — a callsign can be 3 to 4 kHz wide
+  on screen — with the spot's real frequency somewhere in the middle, so clicking a signal
+  a couple of kHz from a spotted station took you to the station instead. A label is now a
+  target only close to the frequency it marks.
+
+- **The seconds can be set again** (Don WB0LQW, gesture by Roy KI0ER). Hours and minutes
+  were editable and the seconds were not, so with no WiFi and no GPS there was no way to
+  get the clock inside the second FT8 needs — which is exactly where Don was on a POTA
+  activation. **Hold the SS box and release on the minute.** The clock is set on release,
+  not when you tap Save, because the release is the measurement.
+
+- **A "Show RIT button" setting** (Samuel W7STF), in the drawer under Radio and in the web
+  settings, on by default. Turn it off if you never use RIT and would rather have the
+  corner. If RIT is actually engaged the button appears anyway — a radio listening off
+  frequency with nothing on screen saying so is not a tidy screen.
+
+- **Saving settings from the web page could fail with "HTTP 400"**. The handler read the
+  form into a fixed 1 KB buffer with a single read and no loop, so it worked only while the
+  form stayed under that size. One more checkbox took it over and the whole save failed
+  with nothing to say the body had been cut short.
+
+- **The manual now states that a Bluetooth mouse must be BLE 4.0 or later.** The Tab5's
+  Bluetooth comes from a co-processor with no Bluetooth Classic radio, so an older Classic
+  mouse can never work and no firmware change can help — it never appears at all. Roy
+  KI0ER's two Microsoft mice are that case; his MX Master is Low Energy and works.
+
+- **Bluetooth mouse decoding is unchanged in this release.** The real fault was found — the
+  Tab5 was reading only the first 22 bytes of the layout description every mouse publishes,
+  so the description never made sense and it fell back to guessing — but the rewrite broke
+  the mouse another way and was reverted. It will be redone properly. Samuel W7STF's
+  symptom does not match the fault that was found, so there is likely a second one.
+
+- **The QMX USB wedge (#74) was investigated properly and the diagnosis stands.** Six
+  approaches were tried against a genuinely wedged radio, covering both recovery and
+  prevention, including an orderly shutdown and holding USB power off through an entire
+  reboot. All produced the identical failure: the radio acknowledges the setup packet and
+  returns **zero** descriptor bytes. Nothing the Tab5 does changes it and only a QMX power
+  cycle clears it. The sdkconfig records the negative results so nobody raises those
+  timings again hoping.
+
+## v1.8.2 — 2026-08-13
+
+A field-report release. Everything here came from an operator's message this week.
+
+### The radio's own spurs can now be removed from the display (new, off by default)
+
+At some dial frequencies the QMX puts a comb of evenly spaced artifacts into the IQ
+stream. They hold their position whatever you do, they do not move when you tune, and
+they are still there with the antenna disconnected. Measured on the bench at 14.074 —
+the FT8 calling frequency — the strongest sat **38.6 dB above the noise floor**, with a
+second harmonic and a mirror image, and the noise floor itself was 5–6 dB worse there
+than 6 kHz away.
+
+A frequency sweep found the law behind them: a spur's baseband offset moves at
+**16–50× the dial** (16.0 and 23.0 measured over several intervals). That is what makes
+them findable without any calibration. Nudge the dial 25 Hz and a spur jumps 8–27 FFT
+bins while a real signal moves half of one — a physical discriminator with an order of
+magnitude of margin, not a statistical guess. Three measurements at *f*, *f*+25 and *f*
+again identify bins that are strong and steady at *f* but collapse when the local
+oscillator moves. Baseband DC is handled separately, because bin 0 cannot move when the
+oscillator does.
+
+**Settings → Waterfall → Spur suppression**, three positions:
+
+- **Off** (default) — nothing is touched, and the marker code does not draw a pixel.
+- **Subtract spur power** — removes the measured artifact in the power domain, so a real
+  signal sharing a bin keeps its own contribution. Limited to about 12–17 dB: the spur's
+  own level wobbles a few tenths of a dB, and a constant cannot cancel something that
+  moves.
+- **Erase spur bins** — interpolates the affected bins away. The comb disappears (+38.6
+  dB → about +10 dB, below the waterfall's black level). A real signal sitting exactly on
+  one is hidden while the dial sits still; nudging the dial slides the blind spot off it.
+
+Results are cached per frequency, so returning to a frequency already learned needs no
+nudge at all — which matters because FT8 sits on one frequency for hours. Detection takes
+about 1.9 s and only fires 600 ms after the dial stops, so it never runs while tuning.
+Suppressed bins are marked in teal on the line under the frequency labels, so what the
+firmware is touching is always visible.
+
+### A QMX without GPS no longer overwrites an accurate clock (Don WB0LQW)
+
+Set the Tab5's RTC accurately at home, arrive at a POTA site, switch the radio on — and
+the accurate UTC was replaced by the radio's power-on 00:00, after which FT8 stopped
+decoding.
+
+The clock was only ever protected from the radio while SNTP was fresh, and **offline SNTP
+is never fresh**, so the protection could not help the one case that needed it. A QMX
+without GPS is not a time reference: its RTC free-runs and restarts at 00:00 after any
+power-off, while the Tab5's supercap RTC holds seconds-accurate UTC for 30–40 hours. The
+radio is now refused whenever the Tab5 holds a clock it trusts, and the Tab5 sets the
+radio instead — only when the radio is more than 3 seconds out. If the Tab5 has no good
+time either, a QMX reading is still used, because something beats nothing.
+
+### RIT can be parked and restored (Roy KI0ER)
+
+**Long-press the RIT button** and the offset is remembered while RIT switches off;
+long-press again and it comes back unchanged. Short press still clears it outright. The
+button reads `RIT (+250)` in brackets while an offset is parked, so there is always
+something on screen saying an offset is waiting — including when the button itself has
+been switched off in settings. A parked offset is discarded when you retune, because it
+belonged to the station that was off frequency.
+
+This is for a round robin or a net where one station is off frequency: the offset comes
+and goes as the turn passes, without re-dialling it each time.
+
+### The RIT offset is shown on the waterfall (Samuel W7STF)
+
+The offset now prints beside its own marker, as `+250 Hz`, so it can be read off the
+spectrum rather than from the corner.
+
+### The band strip stays visible out of band (Samuel W7STF)
+
+It used to hide its contents entirely and leave an empty row, which reads as a fault. It
+now fills with one flat block reading **"Out of band"** and returns to the CW/Digi/Phone
+colours as soon as you are back inside a band. The marker and visible-span block stay
+hidden while out, because there is no band plan to position them against. The strip
+staying put also keeps the coarse-tune drag where the thumb expects it.
+
+### The Operator Identity window no longer appears for unrelated faults (Don WB0LQW)
+
+Calling CQ with a message that would not build popped the Operator Identity editor
+whatever the actual cause, so an operator whose callsign and grid were perfectly fine was
+sent to check them. The real error is now reported, and the identity editor is only
+offered when the error is genuinely about identity.
+
+Investigating that report also produced `test/ft8_cq_encode_harness.c`, which runs CQ
+presets through the real encoder on a PC. It cleared the encoder of the underlying
+report: `CQ POTA <call>` and `CQ QRP <call>` encode and round-trip correctly with and
+without a grid. That fault is still open and needs a diagnostic log from the field.
+
+### The panadapter no longer power-cycles a wedged radio for nothing
+
+After certain Tab5 restarts the QMX answers every USB enumeration with an empty data
+stage, and only a QMX power cycle clears it. The recovery that watches for a stuck USB
+port was firing at this, cutting the port's 5 V for two seconds — which switches the
+radio off in front of the operator and, as six falsified approaches on the bench already
+showed, achieves nothing against this particular fault. It now recognises the radio-side
+signature and leaves the radio alone, logging what is actually wrong. A genuinely stuck
+port still gets its recovery, which is the case where it works.
+
+### Documentation
+
+- The offline/POTA section now covers switching the radio on, which is where Don lost his
+  clock.
+- A second frequency left on the QMX's own LCD after the CW transmit offset stands down
+  is documented as a display artifact of the radio, confirmed by Stan KC7XE and known on
+  the QRP Labs list. VFO B equals VFO A and split is off, both verified by read-back.
+  `MU;` clears the display but silently drops I/Q mode, and the manual now says so.
+- **"Adaptive floor" is documented as having no effect.** The per-bin floor it blends
+  towards is re-seeded many times a second, so both ends of the slider produce the same
+  picture. It was already absent from the browser's settings form for that reason; now
+  the manual says it plainly rather than describing a control that does nothing.
+
+## v1.8.3 — 2026-08-14
+
+**A field-report release. Every fix in it was found by someone using the radio, and
+most of them by one person.**
+
+### QRZ and eQSL credentials can be re-entered (Brian WA6JFK)
+
+The prompt for an API key or login only ever appeared when **nothing** was stored, so
+a key typed wrongly — or one the service later reissued — could not be replaced from
+the web page at all. The remaining routes were editing the config file by hand or a
+full erase-and-reflash, which is what Brian asked whether he needed. He did not.
+
+There are now visible **Change QRZ API key** and **Change eQSL login** rows under the
+upload links, which appear once something is stored. LoTW already had Ctrl-click for
+this, but a hidden gesture was not the answer either — Brian is the same operator who
+could not find the QRZ setup at all in August, which is why that menu stopped hiding
+itself.
+
+**Works today on any build:** Files → Config download, edit the `qrz_key`, `eqsl_user`
+and `eqsl_pass` lines, Files → Config upload. The new details are used by the very next
+upload with no restart. That file holds your WiFi password in plain text too.
+
+### The dB scale labels follow the range you set (Samuel W7STF)
+
+They were hardcoded `-40 / -60 / -80 / -100 / -120`, which silently assumed the default
+−130..−30 range. Set Min/Max to anything else — Samuel ran −118/−13 — and the labels
+described a scale that was no longer there.
+
+Now derived: the firmware picks the smallest round step that still fits in five labels,
+so a **narrow range gets finer lines rather than fewer**. At the default range the
+result is byte-for-byte the old five values, so this is invisible to anyone who never
+touched the sliders.
+
+The arithmetic lives in `util/db_gridlines.c`, deliberately portable so
+`test/db_gridlines_harness.c` can link the real function rather than a copy. It earned
+that immediately: the harness caught a wrong expectation, and a mutation run found that
+no test reached the case where the `n > max_n` clamp is the only thing preventing a
+write past the caller's five-element array.
+
+### The Adaptive floor slider is gone (Samuel W7STF)
+
+He asked why the waterfall has so many handles. The answer was that one of them did
+nothing at all: the per-bin noise floor it blends towards is re-seeded many times a
+second, so both ends of the slider produce the same picture. It had already been
+removed from the browser for that reason. A control that cannot change anything is
+worse than a missing one.
+
+The stored value is kept, still exported with your configuration and still accepted by
+the API, so the row returns the day the underlying floor tracking runs.
+
+### The shaded passband is drawn where the radio actually filters (Samuel W7STF)
+
+He measured a gap of about 250 Hz between the dial frequency and the start of the
+shaded region. That edge was a fixed 200 Hz that never came from the radio.
+
+Two errors, and the second is the one worth remembering. Digital modes do **not** use
+the selectable SSB filters — the QMX operation manual names one fixed *"150-3200Hz wide
+filter used for Digital modes"*. And in DiGi the radio reports `FW;` as **3200**, which
+is the filter's **top edge, not a width**: 150 + 3200 would be 3350 and contradict the
+manual. So the shading was drawn at 200–2900 where the radio is 150–3200.
+
+Corrected and then measured on the screen: with a 37.5 Hz/px axis and the dial cursor
+at x=641, the tint runs x=645–727, i.e. +150 Hz to about +3225 Hz.
+
+The low corner for the **SSB** filters is not documented anywhere findable, so that one
+is deliberately left at 200 and marked unverified rather than made tidy on an inference.
+
+### RF gain no longer sticks on "reading…" (Samuel W7STF)
+
+It asked the radio for the value and then painted the answer to the **previous** ask, so
+on the first drawer open after boot there was nothing to paint — and nothing repainted
+it when the reply landed. It cleared only on the *next* open, and a single unanswered
+query left it stuck for the whole session. Since the gain is stored per band, it
+returned on every band change.
+
+It now fills itself in as soon as the radio replies, and says **"radio not connected"**
+when the radio is not there, instead of a "reading…" that implied a conversation was in
+progress.
+
+*(The first version of this fix was falsified on hardware and rewritten: it counted its
+10 s budget from drawer open, but CAT link-up is ~17 s after boot, so opening settings
+early — the normal thing to do — expired the wait before the radio could possibly
+answer. The budget now runs only while the CAT link is up.)*
+
+### The dark bands at the edges of a zoomed view are about half as wide (Samuel W7STF)
+
+Zooming filters the signal before re-analysing it, and that filter began rolling off
+just inside the edge of what is drawn, so the outer part of a zoomed view was
+attenuated — measured at −16.6 / −10.3 / −8.0 dB at ×2 / ×4 / ×8. Samuel's own estimate
+of the affected width was accurate. It has behaved this way since zoom was added.
+
+The filter is now twice as long (31 → 63 taps), which roughly halves the width of the
+darkened band. Widening it instead was rejected deliberately: that trades a dark edge
+for energy above Nyquist aliasing back in as **false signals**, which is worse. A dark
+edge is honest.
+
+Cost was measured rather than assumed, because this runs on the task that is the audio
+ring's sole consumer: 1.95–2.02 ms per window at ×2 against a 21.3 ms window period,
+1.10 ms at ×4, 0.64 ms at ×8. An A/B against zoom ×1 confirmed it lands on core 1
+(84–90% idle → 56–85%), not on core 0.
+
+### Out of band, the band strip is a coarse tuner (Samuel W7STF)
+
+v1.8.2 made the strip stay visible out of band instead of leaving an empty row, and his
+fair objection was that it then earned nothing — `Band: ---` in the top-left already
+says as much.
+
+Inside a band the strip is a **map**: where you touch is the frequency you get. Outside
+one there is nothing to map, so it works the other way round. A handle sits in the
+middle; drag it off centre and the dial moves, let go and it springs back. A full pull
+to either edge moves by **half of what is on screen**, so two drags overlap instead of
+skipping a gap, and it gets finer as you zoom in — his "contiguous as we scroll".
+
+A plain tap out of band deliberately does nothing: with no band plan behind it, a tapped
+position has no frequency to mean. In band, tap-to-position is unchanged.
+
+### The browser's decode list shows distance and bearing (Tony Abbey)
+
+**KM** and **BRG** columns after the audio tone, in the same order the Tab5 uses, with
+the header reading **MI** when *Distance in miles* is ticked. The Tab5 works the
+distance out and sends it, rather than the browser calculating its own, so the two
+screens cannot disagree. Both fields are **omitted entirely** when either grid is
+missing and the browser shows a dash — never a distance that cannot be stood behind.
+
+### Also in this release
+
+- New hidden dev action `{"action":"drawer","scroll_y":N}` so a drawer section below the
+  fold can be screenshotted instead of its layout being taken on trust.
+
+### Known and not explained
+
+- **Core 0 sits at 0–5% idle in panadapter mode**, where this project's notes record
+  ~14–35% historically. Not caused by the longer zoom filter — an A/B against zoom ×1,
+  with the filter entirely off, showed the same figure. Not investigated.
+- **The `FRAME-MISALIGN` counter added in v1.8.2 has still never fired**, across a full
+  session with the radio streaming. That is not a refutation of the phantom-CW
+  mirror-image hypothesis — the session ran with no antenna and with the Bluetooth mouse
+  off, i.e. none of the load suspected as the trigger — but the cause remains
+  **unconfirmed** and should not be described as found.
+
+---
+
+### Shipped in v1.8.2 — 2026-08-13
+
+*(Backfilled 2026-08-16 — this entry and v1.8.3's were missed at the time.)*
+
+- **Spur suppression** (`dsp/spur_map.c`, opt-in, default OFF). The QMX makes its own comb: +38.6 dB at 14.074 with the BNC open. A spur's baseband offset moves at **16–50× the dial**, so a 25 Hz nudge is a physical discriminator rather than a statistical guess. Two modes — subtract the measured power (~12–17 dB, can never hide a real signal) or interpolate the bins away. Cached per frequency, so a revisit needs no nudge. Teal marks under the frequency labels show what is being touched.
+- **A GPS-less QMX no longer overwrites a trusted clock.** The old guard was "SNTP is fresh", and offline SNTP is never fresh — so it could not help the one case that needed it. Don WB0LQW arrived at a POTA site, switched the radio on, and its power-on 00:00 replaced his RTC.
+- **RIT long-press parks and restores the offset** (Roy KI0ER); the offset is printed on the waterfall; the band strip reads "Out of band" instead of vanishing (Samuel W7STF).
+- **The CQ failure path no longer blames the callsign** for an unbuildable message (Don WB0LQW) — and its new log line is what solved the underlying fault the next day.
+- **`usb_replug` no longer power-cycles a wedged radio**, which the operator saw as his QMX being switched off.
+
+### Shipped in v1.8.3 — 2026-08-14
+
+*(Backfilled 2026-08-16.)*
+
+A field-report release — every fix in it was reported by a user.
+
+- **QRZ/eQSL credentials can be re-entered** (Brian WA6JFK): the prompt only fired when nothing was stored, so a mistyped key was unreachable.
+- **dBm gridlines derived from the dB range** (`util/db_gridlines.c` + host harness). The mutation run found a real `max_n` overrun no test reached.
+- **Adaptive-floor slider removed from the drawer** — it could not change anything, because the tracker it fed is re-seeded 17×/s.
+- **Passband overlay corrected to the radio's real digital filter, 150–3200 Hz** — and `FW;` reports a *top edge*, not a width, in DiGi. Pixel-measured on `/ss.bmp`.
+- **RF gain read-back repaints when the answer lands.** My first version counted its timeout from drawer open and was falsified on hardware, since CAT link-up is ~17 s after boot.
+- **Zoom FIR 31 → 63 taps** for the dark zoomed edges; **out-of-band band strip became a centre-detented coarse tuner**; **browser decode list gained KM/BRG** (Tony Abbey), computed on the device so the two screens cannot disagree.
+
+### Shipped in v1.8.4 — 2026-08-16
+
+**The radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.**
+
+**Radio menus (#147 — Randy N4OPI, seconded by Michael KZ4LY).** The QMX's own 80×24 terminal, on the Tab5 (Settings → Radio → Radio menus) and in the browser. For a QMX+ with no control panel this is the only way into the menu system at all.
+- It runs on the radio's **second** USB serial port — interface 5, which is *not* contiguous with CAT's interface 0 because the audio function occupies 2–4. Measured: CAT frequency, mode and the S-meter keep running for the whole session. Enable it once on the radio: System config → GPS & Ser. ports → USB serial ports → 2.
+- Closing walks the radio out through its own *Exit terminal* item, found by **reading the screen** rather than counting keypresses, so it works however deep you are. A two-minute idle watchdog and a browser-close handler are the backstops.
+- The screen model (`util/ansi_term.c`) is host-tested against the **real bytes the radio sent**, re-fed at every one of 287 byte-split points. Reverse video is load-bearing: it is the only thing marking the selected item.
+- Font is JetBrains Mono (OFL) at size 25 — a correctness constraint, not taste: the highlight is drawn at `col*CELL_W`, so only a size giving a whole-pixel advance works.
+
+**Auto-answer safety (#142–#145 — Roy KI0ER), all four hardware-verified.** It waits until both transmit windows are mapped before its first call; cancelling a transmission also switches it off; a band change switches it off **by any route**; and it is off at every startup. The band case was genuinely broken — the stand-down existed only on the band-button path, so the web page, a spot, a memory recall and the radio's own knob all left it running into an untuned antenna.
+
+**A TX offset chosen mid-QSO is honoured (#151 — Roy KI0ER).** The plumbing was always right; the *refusal* was the bug. A burst covers ~12.6 s of a 15 s slot and a QSO transmits every other slot, so roughly 40% of attempts were rejected outright, leaving the exchange on its starting offset. Now queued and applied the instant the burst ends.
+
+**Spur suppression offers the mode that works first (#157 — Samuel W7STF).** Measured before changing anything: the detector finds 87 bins, strongest 38.5 dB over the floor, exactly as designed. But the menu offered the weaker treatment first — on the waterfall, Subtract is −28% and Erase −78%. Erase now comes first, leaves no dark notches, and its ~3 s learn is cached per frequency.
+
+**USB mouse decoded from its report descriptor (#152 — Kevin KW6E).** A 16-bit X read as 8-bit made the horizontal axis wrap every 256 counts and the vertical axis nearly dead. Deliberately **no** speed setting was added: a scale factor cannot make one axis wrap while the other stands still, so it would have hidden the fault.
+
+**A WiFi hiccup can no longer reboot the device (#131).** esp_hosted's transmit path gave up after two CMD53 timeouts 11 ms apart and restarted the whole P4 rather than drop one frame — a clean `esp_restart()`, so no panic dump and `reset_reason` reads `SW_CPU_RESET`. Now 8 attempts with a pause, then the frame is dropped and the link stays up; the restart survives only behind 32 *consecutive* failures.
+
+**Smaller, all field-reported:**
+- **ADIF viewer Close was red** — brighter red than "Delete all" (Gyula HA3HZ). Now neutral; in that panel red means only "this deletes your log".
+- **A QSO that could not be written was reported as logged** — found while answering Gyula's question about log capacity. The write path checked neither `fprintf` nor `fclose`. It now refuses to count a contact it could not save and names the station on screen.
+- **A top-bar label that lost the display lock stayed wrong forever** — the caller only fired on change, so one missed lock left the screen disagreeing with the radio indefinitely.
+- **`ft8_status_set()` aborted the device if called before init** — `xSemaphoreTake(NULL)` is an immediate abort, and the FT8 screen could reach it while the QMX-wait prompt was up.
+
+**Standing patch #6** — `tools/patches/apply_cdc_acm_close_tolerant.ps1`. `cdc_acm_host_close()` fed `usb_host_interface_release()` into `ESP_ERROR_CHECK` while allowing the client task only 10 ms to reap URBs, so a busy port turned a transient into a reboot. Retries the release, then logs and continues.
+
+⚠ **Not verified in this release:** Kevin's mouse (no Surface Arc here — the new report-map log line will settle it), the ADIF Close colour on screen, the failed-write path (needs a full filesystem), and the SDIO drop path (needs a soak). **#118, the phantom CW mirror, remains open** — the IQ-mode explanation was falsified on hardware in Roy's exact configuration.
+
+### Shipped in v1.8.5 — 2026-08-17
+
+**Mostly the things people were already told were fixed, plus a batch more found the same evening — including a WiFi fault that turned out to be three patches quietly missing from the build.**
+
+Six of these had been described as done in replies posted before v1.8.4 went out, which meant anyone who took those replies at face value went looking for them in a build that did not contain them. That is the main reason this release exists.
+
+**Radio menus: you can now see what you are typing (#161, #162, #163 — Randy N4OPI, Michael KZ4LY).**
+- **A block cursor is drawn.** It was tracked internally the whole time and simply never rendered, so editing a Messages field meant guessing where you were.
+- **BS deletes leftward, and it took two goes to get right.** Randy N4OPI answered the open question from PuTTY — *"landing in a numerical field puts the cursor at the right most digit, Backspace deletes leftward and then you can type in the desired values, Del does nothing"* — and v1.8.5 first shipped that as 0x08, the byte a Backspace key "obviously" sends. It does nothing on the radio. **PuTTY's Backspace sends 0x7F by default**, so Randy's Backspace was 0x7F all along and his "Del" was PuTTY's Delete key sending an escape sequence. Every word he wrote was accurate; the translation into a byte was not. Measured on the radio with ▲▼ as a control to prove the key path worked: 0x08, ◀, ▶ and Enter do **nothing**, while 0x7F turns `11.5` into `11.` into `11`, and typing then appends. There is now one key, labelled **BS**, sending 0x7F.
+- **An on-screen QWERTY**, on a keyboard button in the top row. It types straight into whatever field the radio has open — there is no local text box, because the radio's own menu owns the field and its cursor. Styled like every other keyboard in the app, and every button in the header row is now the same size, both after the operator used it and said so. *(Randy N4OPI, Michael KZ4LY)*
+- **The fields that "would not increment" were never an increment problem.** Values longer than two digits, and values in tables, are backspace-and-retype; the arrows moving between columns in a table is the radio's own intended behaviour. So Randy's whole list — Max. PA voltage, the band config columns, CAT timeout, TCXO, the Virtual U3S values — is explained by one wrong byte rather than a missing feature.
+- **Correcting a report by hand.** The web log viewer is called *View / edit log* and could not edit anything, only delete. The two report columns are now click-to-edit, and leaving one empty records that no report was exchanged. Deliberately narrow: only the reports can change, because callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on. An edit corrects the Tab5's log only — a copy a logbook already holds cannot be amended by re-uploading, and the page says so. *(Gyula HA3HZ)*
+- **Reports are logged only if they were transmitted.** `RST_SENT` was recorded when a message was *armed*, and an armed message can be replaced before it reaches the air — which happens deliberately whenever the partner is re-heard with a fresher signal. So the log could carry a report that never went out, which is the same dishonesty as the fabricated `599` removed in v1.3.4. It is now latched from the burst that actually fired. *(Gyula HA3HZ)*
+- **Leaving Radio menus hands the radio back properly.** Roy KI0ER found the waterfall misbehaving after a menu visit, cleared only by pausing and resuming by hand — which is the tell, because that path re-runs the IQ handshake and re-seeds the noise floor, and closing the terminal did neither. A QMX's IQ mode is session state that a trip through its own menus can drop.
+- **The station you are working is never hidden by a display filter.** With *Show only CQ callers* on, an exchange with your own callsign vanished from the list — two filters were stacking, one hiding other people's CQs during a CQ run and one hiding everything that is not a CQ. The contact in progress is now exempt from all of them. *(Roy KI0ER)*
+- **A pileup caller is answered from what they actually sent.** The automatic drain always sent a bare report, which is right for someone who sent a grid and wrong for someone who reported you. It now builds through the same code the manual **Transmit** button uses — the third and last instance of a bug family where the manual path was right and the automatic one lagged.
+- **"Exit terminal" no longer re-opens the session.** This was mine: choosing Exit clears the screen, and a recovery meant for a lost opening character saw a blank screen and helpfully woke the radio back up. It is now bounded to the first 8 s after opening, where it belongs.
+- **The menu path is on screen** when the radio has no second port — `System config → GPS & Ser. ports → USB serial ports → 2`, in both the Tab5 panel and the browser, rather than a toast that disappears. Michael's point was that the person needing that instruction is the one who never read the announcement.
+- Also fixed while testing: the code that finds the highlighted row **skipped rows 0–1**, which is right for the main menu but wrong three boxes deep, where a submenu's own title sits on row 2 — so inside a submenu it returned the *title* instead of the selection. It now discriminates on the box border itself, which holds at any depth. It had never bitten because the exit walk sends Ctrl-Q three times before looking, i.e. it was correct by accident.
+
+⚠ **Still not fixed, deliberately:** values over two digits, and values in a table, do not increment with ◀ ▶ — Max PA Voltage, the band-config columns, CAT timeout, TCXO, the U3S fields. Randy's own pattern is the lead. These need some key other than left/right, and the question has gone to QRP Labs rather than a guess going into a release.
+
+**The clock no longer claims GPS it does not have (#173).** A QMX with no GPS at all was showing `UTC(GPS)`. The detector confirms GPS when the radio's second-tick agrees with SNTP inside 300 ms, and its reasoning said a clock the Tab5 had pushed could never pass, being "only whole-second accurate". It is not: the time is sent at whatever instant the call happens and the radio starts its second when it parses, so the phase we induce lands **anywhere in 0..1000 ms** — measured across successive pushes at **12 ms, 834 ms, 154 ms and 404 ms**. The same code confirmed GPS or not purely on the draw.
+
+It was not just a wrong label. Once confirmed, the Tab5 **stops maintaining that radio's clock** — and a QMX's clock is not kept across a power cycle, so the one radio that needed the correction stopped getting it. The verdict also persisted, so an offline POTA session inherited it and began trusting a free-running RTC as authoritative. A clock the Tab5 has set is now never accepted as evidence about itself; the flag clears when the radio's clock is plainly its own again. Both branches were verified on hardware, including the exact case that used to lie: `agrees to 154ms, but WE set this radio's clock - not treating that as GPS`.
+
+**The CW display follows the offset you actually set (#165 — Roy KI0ER).** The dial agreed with the radio but the waterfall did not, and tapping a CW signal tuned about 30 Hz off — so he transmitted off frequency as if XIT were on. The radio's CW offset was read in exactly **one** place, the one-time link-up sequence, and never again; the moment he changed it on the radio, the display's compensation froze at the link-up value for the rest of the session. A stale constant is what "not linear in the value I asked for" looks like, which is why his own formula had to be withdrawn. It is now re-read every 5 s while in CW, and nothing at all in any other mode. Verified by changing the radio under a running session and watching the value follow 700 → 650 → 800.
+
+Measured first rather than assumed, because the approach depended on both: setting CW centre to 650 drags **both** CW offset and sidetone to 650 (so that is the right item to read, and it does track the centre), and repeated reads are stable with no `FW;`-style re-assert side effect — which is what makes polling it safe at all.
+
+**A caller who answers your CQ with a report is followed (#167 — Gyula HA3HZ).** An operator who already knows they have you often skips the grid and reports you straight away. The correct answer is `R` plus your report, which acknowledges theirs and gives yours in one message; the automatic run sent another bare report instead and lost a cycle. The information was already there — the same function detected this case a few lines earlier to capture their report for the log, and the reply branch just did not use it. Tapping **Transmit** by hand always did the right thing, which makes this the second of three instances of the same manual-right/automatic-wrong split; the third was found by grepping for the class and is not bodged.
+
+**Daily ADIF export with the date in the filename (#170 — Gyula HA3HZ).** A **Today only, dated file** link under the ADIF download gives that day's contacts as `qso-YYYY-MM-DD.adi`, so a daily file is self-identifying once saved instead of something to rename by hand.
+
+**The red transmitting banner no longer covers the text under it (#166 — Gyula HA3HZ).** Measured in a browser rather than eyeballed, and worse than it looked: a 99-pixel panel holding 406 pixels of content with nothing to contain it. It can now shrink and scroll, and the status line no longer wraps to three lines.
+
+⚠ **Not verified in this release:** the menu path on screen has not been *seen* — it needs a radio with the second port disabled; and Gyula's banner fix is verified by measurement in a browser, not against his screenshot. Roy's CW residual is also unsettled: a single stale value predicts an error of *requested − stale*, and his 30/40/140 would need three different stale values, so either he rebooted between tests or a second component remains — his own IF-calibration trim is the obvious candidate. He has been asked to retest rather than have three hand-read points fitted to a curve.
+
+### Shipped in v1.8.6 — 2026-08-18
+
+**A same-day fix release. v1.8.5 shipped with the browser interface completely dead, and that is the headline.**
+
+**The web UI works again (#183 — Randy N4OPI, Michael KZ4LY).** One unterminated string literal in the page stopped the *entire* script running, so the browser drew its controls and then did nothing at all: no spectrum, no waterfall, no working buttons, "disconnected" in the corner, in both Chrome and Firefox. Anyone who used the browser had nothing.
+
+It was not a typo. The literal was written by a script whose shell collapsed a `
+` into a real newline before it was ever saved — the same collapsing that produced a NUL byte in one C file and a stray control byte in another on the same evening. The compiler caught both of those instantly; nothing caught this one, because the firmware build had no reason to parse HTML. **It does now**: the build extracts the page's script and refuses to compile if it does not parse, and that check was tested by re-breaking the literal exactly the way it shipped.
+
+**A crash that was blamed on the radio (#182).** An overnight soak of v1.8.5 aborted at 1 h 57 m of a completely healthy FT8 session on `usb_dwc_hal.c`'s assertion that "an error should have halted the channel" — an assumption ESP32-P4 silicon does not honour. The reboot is the cheap part: an abort is a warm reset with the QMX attached, which is the one condition that leaves the radio unable to re-enumerate, so it then stayed dead for the remaining 5 h 26 m. The morning's report was "the QMX wedged during the night". The QMX was fine. This is now **standing patch #7**, and it reports the error instead of aborting — the recovery path was already written directly beneath the assertion.
+
+**CW frequency display and tap-to-tune (#165 — Roy KI0ER).** A signal transmitted on 7.060.000 showed at 7.060.040, and tapping it tuned him 40 Hz off, so the far station heard him shifted. Two separate faults added up to that figure:
+
+- The per-unit CW trim defaulted to **−60 Hz**. It arrived with the commit that first read the CW offset from the radio over CAT, so it was calibrated *before* that reading existed and never revisited. Worth a flat +60 Hz.
+- The display offset was **rounded to a whole FFT bin**. A bin is 46.88 Hz, so that alone can misplace everything by up to 23 Hz — and by an amount that changes with the CW offset you choose, which is why the errors looked non-linear in the value set.
+
+The trim now defaults to 0 (the slider stays, for real per-unit trimming) and the rounding remainder is compensated where it matters: a tap converts screen position to frequency correctly, and the dial marker is drawn on the signal rather than beside it. The arithmetic reproduces **both** of Roy's measurements — 650 Hz predicts +41, 700 Hz predicts +44, against his reported +40 — and both go to zero.
+
+✅ **CONFIRMED ON A REAL SIGNAL** (Roy KI0ER, 2026-08-18, v1.8.6 + QMX 1.04.007): *"an incoming CW signal's peak on the waterfall aligns properly with the actual frequency now. If it is off a tad, it appears it's within 5 Hz."* Tested at his 650 Hz CW centre; other centre/offset/tone settings not re-tested. This shipped verified only by arithmetic matching his earlier numbers - the measurement has now caught up with it.
+
+**Radio menus, all from Michael KZ4LY using it:**
+
+- **You can see what you are typing past message 9.** The keyboard covers the lower half of the screen, so tall menus were edited blind. He suggested making the keyboard transparent; the screen now scrolls instead so the radio's cursor row stays above it — two layers of overlapping text are readable only if you already know what they say.
+- **The no-second-port help says to power-cycle the radio.** He put the naive-user hat on deliberately and found the setting alone is not enough.
+- **The two-finger blank actually works.** It was succeeding fewer than one try in ten, with the tune cursor stealing the gesture. Two fingers never leave the glass on the same instant, so a normal lift was measured as lasting until the *second* finger left — over the time limit nearly every time — and the finger left behind looked like a deliberate one-finger touch to both the pan handler and the tuning handler. ⚠ Not verified here; it needs two real fingers.
+
+**Also documented (Stan Dye KC7XE):** in the band config table the Enable/Disable entries accept **E** and **D** as characters, and because those fields use the arrows to change the value, the arrows will not move you between columns while you are on one — step onto a numeric column first. That is the radio's own behaviour, and it explains something that otherwise reads as the arrows being broken in tables.
+
+**Not a bug (Brian WA6JFK, answered by Roy KI0ER):** auto-answer is off after every restart by design. A radio that began transmitting the moment the Tab5 powered on might be feeding an antenna that is not tuned yet. WSJT-X requires arming transmit per startup for the same reason.
+
+---
+
+## v1.8.7 — 2026-08-19
+
+**The browser panadapter stops freezing, your logs can go to your own Cloudlog, and the radio's menus show the radio's colours.**
+
+### The web panadapter freezing for seconds at a time (Samuel W7STF, #177196)
+
+His report was that it *"hangs from time to time, and then several seconds later it begins to animate again"*, and that it had been getting worse with every release.
+
+Measured before anything was changed, because every "obvious cause" in this project's history has been wrong when measured. Over 9.6 hours on the bench the browser session was torn down **545 times**, roughly every 14 seconds in bursts, each costing a **median 2.2 seconds** of frozen display while the browser reconnected, worst case 4.5 seconds. Between the drops the stream ran at its full 10 frames per second. Feed traffic was heavily implicated — RBN 8.4x and the DX cluster 8.6x more likely in the two seconds before a teardown than at a random moment. Socket exhaustion was tested and ruled out.
+
+But the feeds were the trigger, not the fault. **ESP-IDF's WebSocket send writes the frame with a single call and only treats a negative result as an error — and a partial write is not negative.** A frame that went out half finished was reported as sent. The browser then read the next frame's header as the tail of the previous one, saw a protocol violation, and closed the connection. That is why it froze for seconds rather than glitching one frame, and why it got worse as more background feeds were added: more congestion, more partial writes.
+
+The July fix that stopped a stuck send freezing the whole web server made it more likely. That fix put a 400 ms timeout on the socket, and a send timeout with bytes already queued is exactly how a short write happens. **The freeze fix and this bug were the same line of code.**
+
+Now the send loops until every byte is out, the frame header is built in front of the payload so the two cannot be split, and a frame that cannot be finished closes the session rather than leaving the browser reading rubbish. Congestion with nothing yet sent simply drops a frame, which costs nothing. The repairs are counted and reported, so the fix can be seen working rather than merely assumed.
+
+**Verified on hardware:** 9.3 minutes under live feed load gave **0 teardowns** where the old build predicted about 9, **0 connection resets** where the old build logged over a thousand, and **8 partial writes caught and completed** — each one a stream that would previously have been corrupted.
+
+### Upload to your own Cloudlog or Wavelog (Mark G4MEM)
+
+The fourth logbook, and the only self-hosted one. Because the address is yours rather than compiled in, this is the first time the firmware sends credentials somewhere it does not already know.
+
+Mark runs his on his home network with no certificate, and asked whether plain `http://` could be allowed when the server is on the same subnet the Tab5 is connected to. It can, and it is. That is not the same as an "ignore the certificate" switch, which was refused: the subnet test is a fact the firmware can check, and on your own network the packets never leave equipment you own.
+
+Two deliberate limits. The check runs **on every upload, never cached at setup**, because the whole point is that you configure at home and then operate from a field site where the same name could be answered by anything. And plain HTTP needs a numeric address, since a name has to be looked up and what answers the lookup can differ from what answers the connection. Use `https://` for a hostname.
+
+Records go in batches, Cloudlog does its own duplicate checking, and Wavelog works identically. If your server is on your own network this is the only upload that needs no internet at all, which suits POTA and SOTA better than the other three.
+
+### The radio's menus in the radio's colours (Samuel W7STF)
+
+Radio menus rendered everything white while PuTTY showed the same screens in red and green. The colour was being parsed and stored all along; both renderers simply discarded it. Fixed on the Tab5 and in the browser, from the same palette so the two cannot disagree. The selected-item highlight still wins wherever both apply, since losing it would cost you your place in the menus.
+
+### Battery showing 100% then 0% with no battery fitted (Randy N4OPI)
+
+On a Tab5 run from USB-C with no NP-F550, the readout alternated between 100% (8.4 V) and 0% (4.2 V). A no-battery detector already existed and was flapping in time with the rail rather than latching: it watched a five-sample window, so while the voltage sat at either value the window looked perfectly steady and the detector decided a pack was present again.
+
+It now also checks two things a real pack cannot do — moving several volts between one-second readings, and running the device at 4.2 V. The web page is told as well, so it shows "USB" instead of inventing a percentage.
+
+### Pick callers myself, while running CQ (Eric K3FNB)
+
+> "When I am activating a park, I sometimes like to be a bit more engaged. If it is possible, could you have an option where I have to tap on a caller/hunter in order to initiate the exchange? I don't mind the firmware automating the rest of the exchange, I just would like to have the option to not auto-pounce on hunters."
+
+New option in the FT8 Filter modal. With it on, a station answering your CQ does not start the exchange — they wait in the pile-up until you tap them, and the exchange then runs itself exactly as before. Only the *choice* becomes manual.
+
+It deliberately keeps calling CQ rather than standing down. An activator wants the pile-up building while they pick, and a radio that went quiet would look like it had stopped. It also overrides "Auto-work pileup", because both settings decide who to work next and someone who asked to choose has not asked to have the strongest caller chosen for them a moment later.
+
+Off unless you turn it on.
+
+⚠ Verified in simulation mode, both ways — with the option on, a caller waits in the pile-up and no exchange starts; with it off, the same caller is answered automatically. Not yet used on the air, so if it misbehaves during a real activation please say so.
+
+### A Bluetooth mouse whose pointer moved erratically (Kevin KW6E)
+
+His Microsoft Surface Arc connected and scrolled perfectly but the pointer jumped about. Two things were wrong. The mouse fix that shipped in v1.8.4 went into the **USB** path, and his mouse is **Bluetooth** — so it never touched the code he was running.
+
+The rest came out of the diagnostic log he attached, without needing his hardware. His mouse sends nine-byte reports with 16-bit movement; the firmware treated any report of five bytes or more as the layout of a Logitech M240, where the two axes share a nibble. His own report `00 06 00 0b 00 ff ff 00 00` is X=+6, Y=+11, and that arithmetic turned it into X=−1280, Y=0 — a large jump the wrong way with no vertical movement. Scrolling survived because the wheel byte lands in the same place either way.
+
+The decode now picks between layouts that have each been captured off real hardware, and the same routine serves both the USB and Bluetooth paths — the USB one had the matching assumption waiting for the next mouse. The mouse's own report descriptor remains the preferred answer; this is only what happens when it cannot be read.
+
+### A warning that blamed the wrong thing (Samuel W7STF)
+
+After swapping cables he once got "is the radio set to 2 USB serial ports?" on a radio that was already set to two. The second port was opened exactly once, and any failure produced that message — so a radio still re-enumerating after a cable swap was reported as a configuration mistake. It now retries, and only names the setting when the radio is demonstrably present.
+
+### Also in this release
+
+- **A radio receiving on VFO B is put back on A**, and told you about it (Markus DL8MBY). Frequency writes go to VFO A only, so with the radio on B every tune went to a VFO he was not listening to while band select still worked — which is exactly why it looks like your own mistake rather than a fault.
+- **Waking from the screensaver no longer acts on the tap that woke it** (Randy N4OPI). Sleep disabled the mouse pointer and left the touchscreen live.
+- **The browser's spot and frequency labels are readable on a high-resolution display** (Randy N4OPI). They were being drawn at roughly half size.
+- **A crash after about seven hours is fixed** — a bare `abort()` in ESP-IDF's USB driver on a state it treats as impossible. This is the fourth of that family. As with the last one the reboot was not the expensive part: it happens with the radio attached, so the QMX then could not reconnect for the rest of the night.
+- **The flash-persisted diagnostic log no longer stops writing.** It reported "no space left" with 400 KB free — not a capacity problem but a garbage-collection one, caused by deleting a 256 KB file every 11 minutes. The boot log now lists every file with its size.
+- **Two silent USB patches now count what they catch.** They cannot log, because they run in an interrupt, so a clean log could not distinguish "never happened" from "happened and was handled". Neither has fired yet, which is now a statement of fact rather than an inference from silence.
+- **Entering FT8 could reboot the device.** All the decoder's monitors share one FFT scratch buffer, and the code that set that up freed each monitor's old buffer without checking whether it was already the shared one — so if the pool was ever built twice without being torn down in between, the same block was freed twice and the device rebooted. Caught on the bench while testing this release, and it is almost certainly the unexplained heap crash that had been on the list since v1.3.0. The reboot is fixed; the underlying double build is not, and now logs a loud warning instead of being survived in silence.
+
+### Investigated, no change
+
+**The first entry into Radio menus after a flash drawing blank** (Samuel W7STF) could not be reproduced: the first open after flashing plus six more were all clean. Randy N4OPI sees the same thing in PuTTY, which points at the radio's own redraw rather than at the Tab5.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
+
+## v1.8.8 — 2026-08-20
+
+Diagnostics + field reports.
+
+- **#117 a crash now survives the reboot.** `util/panic_hook.c` wraps
+  `esp_panic_handler` (`-Wl,--wrap=`) and stashes a record in RTC no-init RAM;
+  the next boot logs it through the ordinary path, so it reaches `/api/log` AND
+  `/api/log/saved` with reason, assert text, task name, uptime, registers and an
+  `addr2line` line. Deliberately NOT a flash write from panic context — that can
+  hang instead of rebooting. A valid record is also positive proof the reset was
+  a real crash, which `reset_reason` never was here. Hardware-verified end to
+  end: the wrap confirmed in the disassembly, and a deliberate crash decoded to
+  the exact `abort()` line. Dev action `{"action":"panic_test"}` keeps it
+  falsifiable (radio-OFF only — a panic reboot is the #74 trigger).
+- **#199 the FT8 monitor pool could be built twice — root cause found.** The
+  liveness flag was set inside the task, so it meant "has begun running" while
+  both readers needed "exists"; these tasks are the lowest priority on the board,
+  so the watchdog could look during the gap and spawn a second. Almost certainly
+  the `tlsf_free` double-free open since v1.3.0. Fixed by claiming the slot
+  before `xTaskCreate`; a sweep found a second instance (the decode task) and one
+  false positive left alone.
+- **record_decode dropped 0.18 % of decodes** (99 of 54,142, measured). Cause was
+  CPU starvation, not lock contention — the holder went ~190 ms with no CPU,
+  visible as an out-of-order log timestamp. Writer timeout 50 ms → 2 s; readers
+  unchanged.
+- **#214 BW label stuck on a CW filter after CW → LSB** (Samuel W7STF). The SSB
+  pin is never cleared, so `FW;` stays suppressed on re-entry to SSB and nothing
+  repainted the label. Repaint from the pin. Hardware-verified.
+- **#216 out-of-band tuner on the web UI** (Samuel W7STF). Mirrors `ui.c`:
+  centre-detented, full deflection = half the visible span, deflection measured
+  from where the pointer landed, tap does nothing. Browser-verified.
+- **#217 the takeover notice was a MALFORMED websocket frame.** RFC 6455 §5.2
+  requires the minimal length encoding; the 1-byte notice used the 16-bit form,
+  so browsers failed the connection instead of standing down and took the view
+  straight back. Measured 16 takeovers/10 s → 2/25 s.
+- **#215 made measurable, not guessed.** Colour was never missing (per-cell `fg`
+  since day one, shipped on both screens in v1.8.7); the parser implements only
+  0/7/27/30-37 and the Diagnostics screen sends more. Unhandled SGR codes are now
+  reported via `/api/term` as `unk`. Harness mutation-tested. Needs one reading
+  from a radio with two serial ports enabled.
+- **Frequency label could stick.** A dropped `display_lock` write was permanent
+  because the FA path is change-gated; the poll now re-asserts it.
+- **#154 mutex-init audit** — `dsp.c` had six unguarded takes with `ui_init()` at
+  main.c:202 and `dsp_init()` at 312; `ft8_greylist.c` had an unguarded site and
+  a lazy-create race across two tasks. Three other files verified safe.
+- **WS health counters** in `/api/status`.
+
+## v1.8.9 — 2026-08-20
+
+- **#146 the radio could be left transmitting, and now cannot.** Roy KI0ER's log
+  is the whole mechanism: `cdc_acm: TX transfer timeout` mid-burst, then every
+  write returning `0x10c`, so **both** `TA0;` and `RX;` were lost; the burst
+  declared itself complete and the QMX transmitted until he power-cycled it,
+  with the Tab5 UI normal throughout. ⚠ **The link recovered ~2 s later and
+  nothing re-sent `RX;`** — which is why a burst-local retry (8 x 20 ms) is not
+  sufficient on its own. `tx_cmd_critical()` retries the stop commands, and on
+  failure `cat_request_force_rx()` hands it to the poll task, which re-sends
+  `RX;` on every cycle whose send SUCCEEDS (the proof the pipe is alive) until
+  it gets through. The poll task owns the pipe and is the first code to learn
+  the link is back; ft8_tx has no business blocking a slot boundary for seconds.
+- **#218 one-tap firmware update.** Three 4 MB app slots with `user_nvs` and
+  `storage` at unchanged offsets and `factory` kept as a permanent known-good
+  fallback; rollback enabled; refuses while transmitting or mid-QSO. Long-press
+  to confirm ("release to confirm"), never automatic — an OTA reboot is a warm
+  reset, i.e. the #74 trigger. Tab5 and browser share one vocabulary. Awareness
+  was the bigger half: the update check had run since v1.1 with **zero callers**
+  outside its own module, announcing itself only inside the Reader.
+- **#117 crash records survive the reboot** (RTC no-init RAM, `-Wl,--wrap`), so
+  a field crash is diagnosable from a diagnostic download for the first time.
+- **#153 the SD diagnostic log continues while WiFi is on.** Previously a boot
+  snapshot only — proven from Roy's own log, where `qmx-log.txt` never appears.
+- **#220 flasher 44 MB -> 2.9 MB** (Gyula HA3HZ). The zip was built with a
+  wildcard over a directory holding 27 historical flasher archives.
+  `tools/make_flasher_zip.ps1` now packs an explicit list.
+- **#219 mid-QSO tone relocation, nearest slot only.** Roy KI0ER established
+  that decoders match on callsign not tone, so the old "never mid-exchange"
+  justification was false; Gyula HA3HZ established the limit, that a narrowed
+  receive window may not hear a big jump. Capped at 250 Hz and 3 moves.
+- **#214 BW stuck on a CW filter after CW -> LSB** (Samuel W7STF): the SSB pin is
+  never cleared, so `FW;` stays suppressed on re-entry and nothing repainted.
+- **#216 out-of-band tuner in the browser**, mirroring ui.c exactly.
+- **#217 browser stalls**: the takeover notice used the 16-bit length form for a
+  1-byte payload, violating RFC 6455's minimal-encoding rule, so browsers failed
+  the connection instead of standing down. 16 takeovers/10 s -> 2/25 s.
+- **#222 spur suppression parked.** `dsp_get_zoom_spectrum()` bypasses
+  `spur_map_apply()`, so it only ever worked at zoom x1. Code kept, drawer row
+  removed. With an antenna the strongest tooth is 22.7 dB over the floor against
+  38.6 dB with the BNC open.
+- **#221 API audit**: 37 actions documented (14 were), and the error semantics
+  corrected — `/api/cmd` answers an unknown action with **HTTP 200**, not 400.
+- Frequency label re-asserted from the FA poll; `#154` mutex-init audit;
+  `#199` FT8 monitor-pool double-build root-caused.
+
+### Shipped in v1.9.0 — 2026-08-21
+
+**The web page is fast again, the snap-on keyboard drives the whole app, and
+updating from the device can finally be seen working.**
+
+**Web UI performance — three separate faults, all measured rather than guessed.**
+
+- **The page was served UNCOMPRESSED**: 263 KB with `Cache-Control: no-store`,
+  so every visit re-downloaded all of it, on a link the 10 fps spectrum stream
+  already shares. Now gzipped at build time to 83 KB (3.2x) with an **ETag =
+  the running firmware's ELF hash**, so a reload of unchanged firmware is a 304.
+  A cold load went **~95 s → 1.5 s**. The compression is a CMake step, not a
+  committed artifact — `main/manual.bin` is the cautionary tale of a derived
+  file shipping stale.
+- **`esp_wifi_set_ps()` was never called**, so WiFi ran at IDF's default
+  `WIFI_PS_MIN_MODEM`. Outbound traffic was unaffected (the spot feeds always
+  worked), while inbound depended on the AP buffering for a sleeping radio.
+  Measured over 494/252 samples: HTTP failures **14.4% → 0.4%**, TCP **15.2% →
+  0.8%**, p90 latency **1137 ms → 543 ms**, with the router as a 0%-failure
+  control throughout. Now `WIFI_PS_NONE`, set from the `STA_START` handler so
+  all four `esp_wifi_start()` call sites are covered by one line.
+- **⛔ The page was evicting the spectrum WebSocket.** `httpd` closes its
+  least-recently-used session when the socket table fills, and
+  `httpd_sess.c` refreshes `lru_counter` in exactly ONE place — when a request
+  is **received** on that socket. `httpd_sess_update_lru_counter()` is a public
+  helper the component never calls. Our WS only ever *sends* and deliberately
+  never receives, so its position froze at the handshake and it was permanently
+  bottom of the pile; the browser's own `/api/status` and `/api/decodes` polling
+  was enough to get it purged. Measured session lifetimes **~10 s → ~28 s** from
+  the one-line fix, plus the counter refreshed while paused and
+  `max_open_sockets` 10 → 13.
+
+⚠ **An adaptive WS frame rate was built and REMOVED the same day.** Its premise
+was a "~12.7 KB/s link" measured while the page was still uncompressed and power
+save still on; re-measured afterwards, six identical 86 KB fetches ran at min
+9.9 / median 32.5 / max 74.7 KB/s. A **7.5x spread on identical work** means the
+link is LOSSY, not narrow, and rate control cannot help that. Its own telemetry
+confirmed it never engaged. The reasoning is kept as a comment in
+`webserver_ws.c` — measure the spread before reaching for it again.
+
+**The Tab5 snap-on keyboard (#233).**
+
+- Enter/Esc wired into the five modals that had buttons and no keyboard: FT8 TX
+  confirm, Antenna Tune (Esc only — it keys a carrier), the Reader, the guidance
+  panel and onboarding. Esc also backs out of the memory page and the drawer,
+  neither of which has a Cancel button.
+- ⛔ **A latent bug found on the way**: `ui_kbd_set_buttons()` stored ONE pair,
+  but these modals are built at boot and shown/hidden rather than created and
+  destroyed — so the LAST MODAL BUILT owned Enter and Esc for the whole session,
+  including while hidden. It is a registry now, and dispatch picks the entry
+  whose button is actually visible.
+- Arrows and PgUp/PgDn scroll the drawer and the manual, accelerating on
+  repeated presses. **True long-press repeat is impossible**: String mode reports
+  characters, never press/release, and holding a key produced two events 765 ms
+  apart. Normal mode (reg 0x20, bit7) would give key-up at the cost of
+  reimplementing the whole keymap — deliberately not taken.
+- **Shortcuts, built on measured bytes.** The driver had been receiving a
+  modifier byte with every keystroke and discarding it. Measured: **Ctrl = 0x01,
+  Alt = 0x04**, key in the first byte, payload `[char, modifier]`; Sym and Aa are
+  applied inside the keyboard's MCU. 25 actions, 9 bound by default, all Ctrl,
+  with Alt left free. **Nothing that transmits can be bound** — a chord may open
+  something, never key the radio.
+- **User-defined shortcuts**: NVS-persisted, edited from the web page. A binding
+  stores an ACTION ID, never a table position — appending an action is safe,
+  renumbering one silently repoints somebody's saved shortcut.
+
+**Update checking (#218).** 6 h → **30 min**, plus `update_check_now()` reachable
+three ways: long-press the Tab5 version (which did nothing when up to date —
+i.e. nearly always), tap it in the web page, or `/api/cmd
+{"action":"update_check"}`. The check task sleeps in 500 ms slices so a forced
+check does not wait out the interval. The **GitHub fallback is rate-limited to
+hourly** and keeps its WS pause — measured at 48,764 B and 3.7 s against
+latest.json's **139 B and 0.09 s**, which is why the small check no longer
+pauses the stream at all.
+
+**Field reports.**
+
+- **Randy N4OPI ×5.** TX power/SWR hidden behind the exchange status — that
+  whole strip rebuilt to lay out ACROSS rather than down, with the figures shown
+  only while transmitting. TX tone picker off by 1–2 slots (the draw reserved
+  34 px for the E/O letters, the click handler did not; error 0 at the left edge
+  and 1.83 slots at the right). "Busy: working …" and "QSO cancelled" never
+  clearing (a command outcome rendered as current state; now expires in 20 s).
+  A worked station staying green (`get_pinned_call()` gated on `s_target[0]`,
+  which deliberately survives completion for the final re-send; both accessors
+  now share one predicate — verified through a real QSO, released 84 ms after
+  the ADIF write). And **"Who is hearing me" silently truncating** at a 16 KB
+  response buffer and a 64-report cap, neither logged — now 64 KB/128 with both
+  limits reported, and **reproduced on the bench** hours later at exactly 128.
+- **COUNTRY replaces GRID** in the web decode list, spelled out.
+- **Don N2VGU**: the keyboard in Radio Menus, above.
+- Confirmation dialogs removed from ordinary operating actions (Call CQ, mid-QSO
+  Cancel, working a station, Antenna Tune). Destructive actions still ask.
+- Mid-QSO buttons equalised; the bottom-bar version colour 0x808080 → 0xC0C0C0.
+
+### Shipped in v1.9.1 — 2026-08-21
+
+**A hotfix for the OTA download path announced in v1.9.0. It never worked
+against a real download, on any version, ever, until this fix.**
+
+Two bugs, both in the same `esp_http_client_config_t` block, both found on
+hardware in the FIRST real attempt to download an actual release over OTA
+since the feature shipped in v1.8.9.
+
+- **The connection could never open.** `esp_http_client`'s response buffer
+  defaults to 512 bytes; `github.com`'s own 302 redirect carries 5,159 bytes
+  of headers (measured with `curl -I` against the real release URL, dominated
+  by a large Content-Security-Policy header). Every download failed instantly
+  with "could not reach the download (0xffffffff)" — the offer in v1.9.0
+  worked correctly, the download it pointed at could not. Fixed with
+  `buffer_size = 8192`. That alone was not enough: `http_client_prepare_first_line()`
+  builds the outgoing request line into a SEPARATE buffer sized by
+  `buffer_size_tx`, and after the redirect the request's own path+query for
+  the second hop IS the entire signed CDN URL (~930 bytes, also measured) —
+  overflowing a 512-byte tx buffer on the send side. Fixed with
+  `buffer_size_tx = 8192`.
+- **Once that was fixed, a genuine hardware watchdog reset appeared right at
+  100%.** `esp_https_ota.c` sizes its own per-call image chunk as
+  `MAX(http_config->buffer_size, DEFAULT_OTA_BUF_SIZE)`, so the same fix also
+  made every download chunk 8192 bytes instead of a few hundred — ~400
+  continuous read+decrypt+flash-write bursts back to back over a 3.2 MB
+  image, with no yield point anywhere in the loop. Continuous, severe audio-ring
+  overflow (tens of thousands of samples/s dropped, every second) ran for the
+  entire download, escalating to `rst:0x7 (HP_SYS_HP_WDT_RESET)` — the same
+  "interrupts/cache disabled too long" mechanism this board's documented
+  cyan-flash bug already describes, sustained for minutes instead of one
+  frame. Fixed with one `vTaskDelay(1)` per chunk.
+
+**Verified on hardware, twice, against the real published release asset**: a
+full download completed 0 → 100% in ~4m18s with zero crashes and zero audio
+drops for the entire capture, printing the code's own success line. A second
+run confirmed the fix survives a fresh boot.
+
+⚠ **Consequence for already-deployed units**: this is client-side, so no
+future release can OTA-update a unit that does not already have this fix — its
+own currently-running code performs the (broken) download regardless of
+target version. Every v1.8.9/v1.9.0 unit needs one cable flash to reach code
+that can OTA at all; every update after that works normally.
+
+⚠ Also recorded for the release process: `esp_https_ota_finish()` calls
+`esp_ota_set_boot_partition()` unconditionally on success, so a bench OTA test
+against a partially-fixed build silently repoints the next boot at the
+just-downloaded (possibly older/unfixed) image via `otadata` — a plain reflash
+of `factory` does not undo this. Recovery: `esptool erase_region <otadata
+offset> <size>`, which returns it to blank and falls back to `factory`.
+
+### Shipped in v1.9.2 — 2026-08-22
+
+A field-report release: five things fixed or added, three of them from Randy
+N4OPI.
+
+**A stuck exchange that never logged (#234, Roy KI0ER, working K7FD).** His
+diagnostic log showed `K7FD KI0ER R-17` retransmitted every slot for over ten
+minutes while K7FD kept sending RRR, and the contact never logged. Root cause:
+`ft8_qso_start()`'s only special-case for "this request already skips past
+TX1" checked `kind == FT8_TX_KIND_REPLY` (a bare report reply). A
+`FT8_TX_KIND_ROGER_RPT` request — built whenever the partner's own last
+message to us was already a numeric report, so we reply with `R<report>`, not
+a fresh grid — fell through to the unconditional default, `FT8_QSO_WAIT_RPT`.
+That state expects THEIR FIRST report and has no "they already rogered us"
+branch, only an explicit `got_rr73`/`got_73` skip-ahead, so every later decode
+from that partner — including a bare RRR — was re-treated as a fresh report
+and answered with another R-report, forever. `WAIT_RR73`'s handler already had
+the correct bare-RRR handling (fixed for a different callsign, NH6L, back on
+2026-07-27) and would have closed the exchange normally had the start state
+been right. Fixed by adding a matching branch for `FT8_TX_KIND_ROGER_RPT` that
+starts in `FT8_QSO_WAIT_RR73` instead — the single choke point all three ways
+of starting this kind of exchange share (the auto-pileup drain, the pileup
+modal, and a decode-row Transmit/Auto Pounce), so one fix covers all three.
+Regression-tested in FT8 simulation mode: a full QSO through the exact
+`WAIT_RPT`/`WAIT_RR73` transition this touches completed and logged normally.
+Not yet reproduced against the specific 3-message sequence from Roy's report —
+that needs a partner whose first message to us is already a report, which
+sim's phantoms don't organically produce.
+
+**The SWR-protection fault is visible from the web page now (Randy N4OPI).**
+Before this the web UI had no visibility into a latched SWR trip at all — the
+abort behind it read through as a bare "QSO Cancelled", and clearing it
+required walking over to the Tab5 and tapping its prompt. `/api/status`'s
+`ft8` block now reports `"swr_fault"` above every other TX/QSO state, same
+wording as the Tab5's own left-pane label (`SWR X.X:1 - TX STOPPED - check
+antenna - tap to clear`), and the banner is tappable in the browser exactly
+like the Tab5 prompt — new `/api/cmd` action `clear_swr` calls the same
+`ft8_tx_clear_swr_trip()` the Tab5 button does.
+
+**"Who is hearing me" gets time windows and sortable columns.** The device
+always answers with its fixed 24 h query, and every report carries its own
+heard-at timestamp, so 15 min / 30 min / 6 h / 24 h chips and per-column
+sorting are both pure client-side re-slices of that one fetch — no extra
+device round trip per window or per column click. Summary figures (receiver
+count, furthest distance) are recomputed per window rather than always
+showing the full-24h totals. The FT8/FT4 decode list in the browser gets the
+same sortable, clickable column headers, with a "↺ CQ callers on top" link
+that appears once a column click has replaced the device's own
+`ft8_screen_sort_rows` ordering, so nothing is lost getting back to it.
+
+**Working an older pileup caller from the web page now actually works (Randy
+N4OPI).** Clicking a "Calling you:" entry used to refuse outright —
+`"%s is no longer in the decode list"` — the moment the caller's row had aged
+out of the live decode table (`FT8_ROW_STALE_SEC`), even though the Tab5's own
+pileup modal has always had a working fallback for exactly this case
+(`ft8_pileup_modal.c`'s `row_work_cb`, added earlier for Roy KI0ER and Ken
+KF0AYY field reports). `web_reply_drain()` (`ft8_screen_view.c`) now falls
+back the same way: when the caller isn't in the live decode snapshot, look
+them up in the pileup list instead and build a report-first reply from the
+pileup entry's own cached SNR — the same shape `cqrun_answer()` and the Tab5's
+pileup modal already use. Genuinely gone from both lists still refuses, which
+is still correct (nothing to reply to).
+
+Pileup entries now show their age too, on both screens: the web page's
+"Calling you:" line gets `"Xs ago"`/`"Xm ago"` next to each caller (the
+backend already sent `age` in `/api/decodes`' pileup array; only the frontend
+was missing it — the Tab5's own pileup modal has shown this since it was
+built). And the Tab5's main decode list's HRD (heard-count) column is now
+**AGE**, in seconds since last heard — a more useful number for judging how
+much to trust a row than how many times it's been seen, and matches what the
+browser's decode list already showed.
+
+Since that number now genuinely matters, **how long a row survives is
+operator-tunable**: a new "Max age:" dropdown in the Filter modal (same row as
+"Show only CQ callers"), 30/45/60/75/90 seconds, defaulting to 90 — the value
+`FT8_ROW_STALE_SEC` has held since 2026-07-19. Stored as `ft8_filters_t`'s
+appended `max_age_sec` byte; 0 (an NVS blob written before this field existed)
+reads as "use the 90 s default," never as "expire instantly." The pileup list
+is deliberately **not** covered by this setting — it has no expiry of its own
+by design, which is the entire reason the report-first fallback above exists.
+
+**Simulation mode no longer leaves real stations flickering on screen.**
+Turning sim mode ON now clears the decode list and pileup immediately,
+mirroring the existing clear on turning it OFF (previously only the OFF
+transition did this). That alone wasn't enough with a real QMX still attached
+and receiving: real decodes were never gated by `sim_mode_en` at all, so a
+genuine station decoded moments after the entry-clear would silently
+repopulate the list — reported as "some of the previous stations is
+reappearing on and off... then finally disappear" (they were real, still
+being decoded normally, and only stopped once they aged out or the band
+moved on). Root cause confirmed by reading `decode_candidate_range()`
+(`ft8_test.c`): its call to `ft8_screen_record_decode()` for a real decoded
+candidate was unconditional, with no sim-mode check anywhere in the path —
+unlike PSK Reporter spotting, which `net/pskreporter.c` already refuses while
+sim mode is on, and unlike TX, which `ft8_tx.c`'s hard interlock already
+blocks. Fixed by gating that one call on `sim_mode_en`, loaded once per
+decode-candidate-range call (both decode-task cores) rather than per
+candidate. Verified on hardware: with sim mode on and a real QMX attached and
+streaming, all 7 phantom stations reached the decode list over multiple
+cycles, each one paired with its own `ft8_sim: injected` log line, and zero
+unlabeled (real) decodes appeared.
+
+---
+
+### Shipped in v1.9.3 — 2026-08-23
+
+**The update flow stopped being a thing you had to learn.**
+
+#### Updating, rewritten
+
+Don N2VGU pointed out that "tap to update" described the wrong action at the
+wrong moment: by the time it appeared the download was already on the device
+and what remained was a restart. He was right about the cause rather than the
+wording — the whole conversation lived in a ~264 px slot between the SD text
+and the clock, so every state had to fit about twenty characters, and there was
+no room to say what was actually happening.
+
+- **The update now downloads quietly in the background** when one is available,
+  so the only thing left for the operator is one decision. On by default, with
+  **Settings → Network → Download updates automatically** to switch it off —
+  each update is 3.3 MB, which is not free on the phone hotspot a POTA operator
+  is using in a field. Downloading never applies anything; only a restart does,
+  and only the operator can ask for that.
+- **A window in the middle of the screen** (`ui/ota_modal.c`) carries the
+  conversation in readable type with named buttons: *Restart now* / *Later*, or
+  *Download now* / *Try again* / *Check now* depending on the state. It re-reads
+  the live state every 500 ms, so a download that completes while it is open
+  turns "Downloading" into "Restart now" by itself.
+- **The bottom bar announces and no longer negotiates.** The line breathes
+  gently while an update waits for a decision, and goes quiet once *Later* has
+  been pressed — a pulse that never stops stops being a signal.
+- **The 700 ms long-press is gone.** It existed only so that a stray brush from
+  the 22 px band-plan strip directly above could not start a download or reboot
+  a radio. Now that a press only opens a *dismissible window*, a stray brush
+  costs nothing, so a plain tap is safe and the label saying "tap" is finally
+  true. #237 dissolved rather than being reworded.
+- **The band plan is much easier to hit.** It is 22 px with the bottom bar hard
+  against it below and the waterfall hard above, all three doing different
+  things with a tap. An invisible 50 px catcher above the strip gives it 72 px
+  of touch while it still draws as 22; tap-to-tune gives up the same 50 px,
+  which a 370 px waterfall can spare.
+
+#### Internal memory headroom, which is what made background download possible
+
+Background download is only safe if the device has room to do it while
+everything else keeps running, and it did not. `ota_update_start()` needs 8 KB
+of *contiguous internal* RAM for its task stack — it cannot use PSRAM, because
+flash writes run with the cache off — and in FT8 with the radio streaming the
+largest internal block measured **6,912 bytes**.
+
+`size` → `size-components` → `nm --size-sort` named the two worst offenders in
+four minutes: **`s_toc`** (9,472 B, the manual's contents list, touched only
+while the Reader is open) and **`s_pub`** (4,608 B, a spur map for a feature
+that defaults off), both sitting in internal `.bss` for no reason.
+`EXT_RAM_BSS_ATTR` moved them, recovering **14,084 bytes**.
+
+Measured in FT8 with the radio streaming ~48,000 pairs/s:
+
+| | before | after |
+|---|---|---|
+| largest internal block | 6,912 | **19,456** |
+| DMA pool free | 4,683 | **20,231** |
+| minimum internal free | 2,519 | **10,067** |
+
+The **OTA task's stack is now static and right-sized**: measured use is 3,216
+bytes, so the 8,192 it asked the heap for was a round number rather than a
+figure — and asking for it at the moment an operator presses "update" is asking
+at the worst possible time. A static 6,144-byte `.bss` stack is 2 KB smaller
+*and* cannot fail to allocate.
+
+⚠ Engineering detail, including the falsified theories and the controlled A/B
+that settled it, is in `CLAUDE.md` rather than here.
+
+#### A real bug in every upload, not just updates
+
+`fft_task`'s transfer-quiet branch read **one window (1,024 pairs) then slept
+50 ms** — about 20,000 pairs/s against the ~48,000 the QMX produces. It fell
+behind more than 2:1 and overflowed the audio ring for the whole of *every*
+upload and every download, while its own comment claimed it prevented exactly
+that. Measured as `DROPPED=17904 (ring full)` then `DROPPED=28128` a second
+later. It now drains until the backlog is gone. This has been wrong since the
+flag was written and affects QRZ, eQSL and LoTW uploads too.
+
+Related: the download loop no longer stands the FFT down at all — the spectrum,
+waterfall and FT8 decoding keep running throughout, with the quiet period
+reduced to the ~1.9 s image verify at the end.
+
+#### Also in this release
+
+- **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* — the browser
+  could start a CQ but not choose which 15-second window it went out in. It
+  drives the same single piece of state as the Tab5's own button and re-renders
+  from the device, so the two surfaces cannot drift apart.
+- **SSB tune snap 250 → 500 Hz** *(Dave KX3DX)* — he asked for 1 kHz, noting
+  that stations which stray sit at 0.5 kHz; 500 Hz was chosen because a 1 kHz
+  grid cannot land on the very exception he named, and it halves the number of
+  stops across a drag.
+- The bottom-bar version line no longer collides with the SD text and the
+  clock: `short_ver()` existed for exactly that and had never been applied to
+  the *running* version, so a development build rendered its full
+  `-N-gHASH-dirty` string in a shrunken font. Shortened in the composite update
+  lines only — the idle bar still shows the full string, which is deliberate.
+
+#### Known limitation
+
+The arrow between the two versions is plain ASCII `->`. LVGL's symbol-font
+arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
+in this font and renders as a tofu box. A real arrow needs `montserrat_24`
+regenerated with `lv_font_conv` — logged as #244.
+
+### Shipped in v1.9.4 — 2026-08-25 20:46 UTC
+
+A feedback-batch release: the FT8-specific settings get their own home on
+both screens, the TX tone picker stops going stale while you decide, and the
+web page finally works on a phone held upright.
+
+**FT8 Options — one place for everything that's only meaningful in FT8
+mode.** The Tab5's left-pane button was renamed **Filter → Options** (Roy
+KI0ER): the modal it opens already held real behaviour toggles — Auto-work
+pileup, grey-listing — not just filters, so the old name undersold it. The
+web UI gets the equivalent concept properly for the first time
+(`main/net/www/index.html`): CQ message presets and the FT8 filters group,
+previously scattered through one long general Settings list behind the
+bottom bar, now live behind a dedicated **Options** button next to **TX
+tone**, rendered only in FT8 mode (`FT8_OPTS_GROUPS`, `setBuildForm(cfg,
+ft8Opts)`). The entry button carries a **count** of currently-active
+settings rather than a binary colour — a colour would always read "active"
+for an operator who runs filters permanently, telling them nothing new each
+time (Dirk DK7CVD's "a more granular approach" refined against Roy's
+objection to a plain on/off indicator) — and hovering it lists which ones by
+name (`ft8OptsSummarize`). Inside the panel, an active checkbox gets an
+amber border/fill in addition to its own tick mark (Don N2VGU's
+accessibility point: colour alone is unreadable to colour-blind users, so
+the checkbox's own shape carries the signal too, the colour is redundant on
+top of it, never the only channel).
+
+**The TX tone picker no longer goes stale while you're deciding.**
+`toneOpen()` fetched `/api/tone` exactly once, on open, with no refresh
+until Apply or Cancel — so a slow decision (reading the E/O strip, weighing
+which window to use) could cross a 15-second FT8 boundary for free, and a
+station that landed on the slot you were about to pick stayed invisible the
+whole time. `toneRefresh()` now re-polls every 3 s while the modal is open,
+via `setInterval`/`clearInterval` on `toneOpen()`/`toneClose()`; the
+operator's own in-progress pick (`toneSel`/`toneHold`) is never touched by a
+refresh, only the busy/partner colouring redraws under it.
+
+**The web page works on a phone held upright.** `html, body { overflow:
+hidden }` combined with a `@media (max-width: 600px)` rule that outright set
+`#top-right { display: none }` meant a narrow portrait screen didn't clip
+overflowing controls, it deleted them from layout with no way back — landscape
+never hit this because there was room for the same content at its natural
+size (Randy N4OPI, iPhone Safari). Fixed in two parts: `#top`/`#bot` now
+scroll horizontally (`overflow-x: auto`) instead of clipping, the same
+pattern the decode-list table already used, and the narrow-width media query
+no longer hides `#top-right` at all — swiping reaches it instead. A
+`@media (orientation: portrait)` rule also allows the page itself to scroll
+vertically as a fallback for the rare case the fixed-viewport grid still
+doesn't fit.
+
+**Battery display simplified, and now says when charging is capped on
+purpose.** Cell voltage (`main/util/status.c`'s `%d.%dV`, and the matching
+`.mv` render in `index.html`) is dropped from both the Tab5 and the web
+page's battery readout — the percentage already carries the level, and
+nobody reading the bar needs the raw voltage underneath it. In its place:
+once the Battery Care charge limit trips (`s_charge_cutoff_active`), the
+reading now appends `(limit)` on **both** screens — a new
+`status_charge_limit_active()` accessor feeds `/api/status`'s `battery.limit`
+field so the web page can show the same thing. Before this, "capped on
+purpose at 80%" and "not charging for some other reason" read identically
+(Don N2VGU).
+
+**The snap-on keyboard can be attached — or reattached — any time, not just
+at boot.** `tab5_keyboard_init()` used to probe once at startup and, on
+failure, tear the I2C bus down entirely; a keyboard snapped on after boot
+was never found for the rest of the session. Replaced with a single
+persistent lifecycle task (`kb_task`) that keeps retrying every 2 s while
+absent and detects a genuine detach (5 consecutive failed polls, ~250 ms —
+long enough to ride out a transient bus glitch, short enough to notice a
+real unplug quickly) by watching for the STM32 to stop acking, so unplug and
+reattach mid-session both keep typing working without a Tab5 reboot —
+verified live on hardware, caught mid-cycle in the serial log (`no longer
+answering - treating as detached` at 27.1 s, `Tab5 keyboard detected` at
+33.2 s). The keyboard's two RGB LEDs are forced dark (`REG_RGB_MODE` =
+custom, both channels zero) on every claim, including a reattach — an
+earlier attempt at this release tried a battery-status readout on the LEDs,
+then a plain "active" green, and both were reverted: the LEDs run far
+brighter than any status glyph needs, the Tab5 screen already shows battery
+state, and stock "binding" mode turned out to be a richer state machine than
+assumed (purple on a hot attach, green on a boot attach, contradicting the
+simple attach/active pair this project's own notes originally described) —
+so once the keyboard is claimed, there is nothing left for a light to
+usefully distinguish, and it says nothing rather than something misleading.
+
+**The macOS/Linux flasher script works on more systems.** `flash.command`
+could ship with Windows line endings despite `.gitattributes` declaring
+`eol=lf` for it — a working-tree copy had drifted to CRLF, which some
+shells refuse outright (`bad interpreter: ...^M`) — caught and diagnosed by
+a user on Fedora rather than by us (Michael K Johnson KZ4LY).
+`tools/make_flasher_zip.ps1` now strips CR from every `.command` file
+unconditionally at packaging time, regardless of what state the working
+tree happens to be in on whatever machine builds the release.
+
+#### Also in this release
+
+- **Line-ending policy fixed repo-wide.** The same class of drift that hit
+  `flash.command` turned out to affect 84+ other tracked `.c`/`.h`/`.html`
+  files (LF-committed, CRLF on disk) with nothing in `.gitattributes`
+  preventing it from recurring. Added `eol=lf` for `.c/.h/.html/.md/.py/
+  .json/.yml`, matching the existing `.command`/`.sh` rule, and normalized
+  every currently-drifted tracked file (`git add --renormalize .` found 59
+  more beyond the initial extension-based sweep, mostly `test/wav_reference/
+  *.txt` fixtures) — every file individually byte-verified as EOL-only
+  before being included, zero functional change, rebuilt and binary-size-
+  matched twice to confirm. Developer-only; no user-visible effect.
+
+### Shipped in v1.9.5 — 2026-08-25 23:20 UTC
+
+A fast-follow patch: two ADIF logging bugs, both able to cost real credit or
+real data. No UI or feature changes.
+
+**POTA/SOTA activation count double-counted duplicate contacts (Eric,
+GitHub issue).** `adif_log_count_activation()` counted every logged record
+toward POTA's 10-QSO (SOTA's 4-QSO) minimum, with no dedup by callsign - it's
+the one function both the Tab5's Activation modal and the web UI's
+activation pill read from, so both screens showed the inflated number.
+Working the same station twice (Eric: KO4JON) made the device say "10
+contacts, park activated" while POTA.app credited 9 unique stations and
+rejected the activation - happened on three parks in one outing before he
+worked around it by ignoring the on-device count entirely. Fixed by
+deduping on callsign alone, not band/mode: the conservative direction, since
+it can only ever show a number at or below what POTA would actually credit,
+never claim activation early the way the old count could.
+
+**Single-record delete could silently fail, or corrupt the log on a card
+with damaged storage.** `adif_log_delete_record()`'s rewrite-to-temp-and-
+rename never checked whether the write actually succeeded before deleting
+the original file and renaming the (possibly incomplete) temp file over it
+- unlike the QSO-append path in the same file, which already has this exact
+`ferror`/`fflush`/`fsync`-checked pattern. Reported as "the delete UI runs
+through its whole motion but the record is still there afterwards."
+Root-caused on the dev bench down to the byte: `fopen("/spiffs/qso.tmp",
+"w")` returning `ENOSPC` (errno 28), on a partition reporting 701 KB used of
+934 KB while its actual files (`qso.adi` + `diag.0.log` + LoTW cert/key)
+only added up to ~170 KB - the ~530 KB gap, plus a directory entry that
+couldn't even be `stat()`'d, was orphaned/inconsistent SPIFFS index blocks,
+not legitimate usage. `esp_spiffs_check()` (ESP-IDF's own consistency
+check/repair) reported success but reclaimed nothing; `esp_spiffs_gc()`
+then confirmed why (`SPIFFS_gc failed`, 0 bytes reclaimed) - that bench's
+partition had a genuinely unrecoverable page, proved by a full format +
+hardware self-test (write two records, delete one, verify the count: PASS).
+
+Fixed two ways: `adif_log_delete_record()` now verifies the rewrite
+actually succeeded before touching the original file, and surfaces a toast
+instead of failing silently either way - so a real write failure is never
+mistaken for "it worked." And since `esp_spiffs_check()` + `esp_spiffs_gc()`
+together are far cheaper than asking an operator to reboot, both now run
+once at mount (`adif_log_init()`), and the delete path retries once through
+the same repair if it still hits `ENOSPC` live - so a real field unit whose
+diag log has fragmented storage over a long uptime self-heals instead of
+needing a power cycle, which is the case this bench's *un*recoverable page
+was standing in for.
+
+⚠ The dev bench's own corruption was NOT repairable in the end - it took a
+full SPIFFS format (which wipes the partition: the ADIF log, the diag log,
+and the LoTW certificate/private key) to recover the bench itself. That is
+a one-time, hardware-specific recovery, not something this release does to
+anyone's device automatically or ships as a user-facing action.
+
+### Shipped in v1.9.6 — 2026-08-26
+
+A POTA/SOTA logging release, all of it from a seven-page report Don Adams
+WB0LQW wrote after four real park activations, comparing what the Tab5 writes
+against what POTA, SOTA and the ADIF specification actually ask for.
+
+**Your callsign is now `STATION_CALLSIGN`, the field POTA reads.** We wrote it
+as `MY_CALL`, which POTA accepts and then warns about on every single upload:
+*"No station_callsign field, assuming operator WB0LQW"*. It was guessing - it
+happened to guess right, from his account, but a log should say who made the
+contact rather than leave it to be inferred. `STATION_CALLSIGN` is the
+spec-correct field and is what the log now writes. Records logged before this
+release keep the old field name; POTA still accepts them, with the warning.
+
+**Park-to-Park and Summit-to-Summit contacts can be entered afterwards.** The
+web log editor (**QSO Logs -> View / edit log**) has a new **P2P ref** column.
+This is the one piece of a park-to-park contact that no radio can tell you:
+while you are operating, the other activator's park number is on the POTA spots
+page on your phone, and nothing in the FT8 exchange carries it. So you note it
+down, and when you get home you click that cell and type the reference -
+`US-1241`, `G/LD-049`, `DLFF-0123`. The Tab5 works out the programme from the
+reference's shape and writes both `SIG` and `SIG_INFO`, which is what POTA reads
+to award the P2P; clearing the reference clears both again. A chase that was
+logged from a spot already carried these fields automatically - this is for the
+contacts made without one.
+
+A reference must contain a dash to be accepted. `US1241` is refused rather than
+written, because that value goes out as a claim that a specific park was worked,
+and a missing reference is honest where a wrong one is not.
+
+**FT4 contacts are logged the way the ADIF specification defines them:**
+`MODE=MFSK` with `SUBMODE=FT4`, instead of `MODE=FT4`. ADIF makes FT8 a mode in
+its own right but FT4 only a submode of MFSK - an asymmetry, but the standard
+is the standard, and it is what WSJT-X writes and what other software expects to
+read. POTA accepted our old form, but ADIFMaster - the free editor Don uses to
+prepare a log before submitting it - refuses to open a file that declares FT4 as
+a mode at all. FT8 records are unchanged.
+
+LoTW uploads are unaffected: LoTW keeps its own list of modes and has no MFSK in
+it, so the pair is turned back into `FT4` before a QSO is signed, and the file
+that goes to LoTW is byte-for-byte what it was before. eQSL and QRZ both prefer
+the new form. As with the callsign field, FT4 QSOs logged before this release
+keep `MODE=FT4`; a **Today** download after upgrading gives you a file in the
+new form.
+
+**Also fixed:** editing a record verifies the rewrite before replacing the log,
+the same protection single-record delete got in v1.9.5 - on a filesystem that
+has filled up, an edit now fails cleanly and says so instead of risking the log
+it was rewriting.
+
+Two of Don's suggestions were deliberately not implemented. Dropping
+`FREQ`/`RST_SENT`/`RST_RCVD`/`GRIDSQUARE`/`MY_GRIDSQUARE` would tidy the file
+for POTA, which ignores them, at the cost of QRZ, eQSL, LoTW and your own record,
+which do not. And SOTA's own `MY_SOTA_REF`/`SOTA_REF` fields are still not
+written - `SIG`/`SIG_INFO` is valid ADIF for a summit too, but whether SOTA's
+uploader reads it needs a SOTA activator to confirm before anything is changed.
+
+Alongside the ADIF work, this release carries the first reports off v1.9.4 and
+v1.9.5.
+
+**The bottom-bar menus work again on an iPhone.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside,
+which either clips them away or drops them behind the page. That line is gone,
+and the menus have been moved out of the bar entirely so no future change to the
+bars can reach them.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press, so you were told "Up to date, you are running v1.9.3" about a release
+that already existed — then the offer appeared on its own a moment later, by
+which point it read as the button having failed *(Michael KZ4LY, Samuel W7STF)*.
+Both now say **checking** until the answer actually arrives.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** — fine enough to zero-beat a CW
+signal by ear — and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*. It now
+stops at the ends, and hands the click to whatever is behind when there is
+nothing left to move.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something — Hardware Tests → Diagnostics, say — could leave the
+radio on 160 m whatever band you started on *(Randy N4OPI)*. Closing the session
+now puts the frequency and mode back if they moved, alongside the I/Q-mode
+re-enable that was already there. If you changed band deliberately while you were
+in there, that gets put back as well: the Tab5 cannot tell the two apart.
+
+The rest of this release came from the first days of v1.9.4 and v1.9.5 in the
+field.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** - fine enough to zero-beat a CW
+signal by ear - and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*.
+
+**The bottom-bar menus work on an iPhone again.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside.
+That line is gone, and the menus have been moved out of the bars entirely so no
+future change to the bars can reach them. Travis confirmed the diagnosis from the
+other end - broken in Safari on macOS, iOS and iPadOS; fine in Edge and Chrome.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press *(Michael KZ4LY, Samuel W7STF)*. Both now say **checking** until the
+answer actually arrives.
+
+**Background downloading is a switch.** It always was a setting, but it had no
+control anywhere - the config file was the only way to reach it, which is not an
+opt-out in any useful sense. It is now a checkbox in the Tab5's Settings under
+**Network**, and a row in the web Settings under **Updates**. Turn it off and the
+Tab5 still checks and still tells you a new version exists; it simply waits for
+you to ask before spending 3.3 MB, which matters on a phone hotspot *(Michael
+KZ4LY, Samuel W7STF, Steve N9SZ)*. Applying an update is a deliberate press
+either way - nothing installs itself.
+
+An automatic download now also waits until the Tab5 has been up for five minutes
+and has memory to spare. Steve N9SZ saw one start moments after boot, appear to
+finish, and then reboot the device back onto the old version - twice - while the
+same update started by hand worked. The download is verified before it is made
+bootable, so a reset during that step loses the download rather than anything
+else, but starting 30 seconds into boot is the worst moment on this hardware.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something could leave the radio on 160 m whatever band you
+started on *(Randy N4OPI)*. Closing the session now puts the frequency and mode
+back if they moved. If you changed band deliberately while you were in there,
+that is put back too - the Tab5 cannot tell the two apart.
+
+**Basic/Expert is remembered** across a reboot *(Samuel W7STF)*, and switching
+FT8/FT4 from the web API lands on that mode's calling frequency instead of
+staying on the other one's.
+
+**Under the bonnet**, the built-in station simulator can now run FT4 - it had
+three separate places that assumed FT8's 15-second slots - and its practice
+stations now have signal levels that vary instead of every one reading the same.
+That is bench equipment rather than a feature, but it is how FT4 and
+signal-report behaviour get tested without putting a real station on the air.
+
+### Shipped in v1.10.0 — 2026-08-28
+
+**WSPR.** The Tab5 gains a third page, alongside the panadapter and FT8/FT4.
+WSPR is a propagation beacon rather than a contact mode: you transmit a very
+slow, very weak signal carrying only your callsign, grid and power, and stations
+worldwide report hearing it. Over an evening you get a picture of where your
+antenna and your band actually reach, at power levels where nothing else would
+be heard at all. Nobody replies, and nothing goes in your log.
+
+Swipe → now cycles **Panadapter → FT8/FT4 → WSPR**. The page shows the stations
+heard in each two-minute cycle with distance and bearing, the furthest of the
+session, a per-cycle history so an opening band looks different from a closing
+one, and the captured 200 Hz window. Receiving is the default and is worth doing
+on its own; transmitting is opt-in and, like FT8, refuses to key without your
+callsign and grid.
+
+**Its settings live in the drawer**, under WSPR, and appear only on that page:
+allow transmitting, declared power, duty cycle, band hopping and whether to
+publish what you hear to wsprnet.org. Duty cycle and band hopping used to be
+buttons on the page itself; both are decisions made once for a session rather
+than controls reached while watching spots arrive, so the page keeps only the TX
+switch. Ticking two or more bands in the picker is what turns hopping on.
+
+**Declared power is a claim, not a measurement** — the Tab5 cannot know what
+your radio delivers, and every spot publishes that number worldwide into a
+database other operators reason from. Set it to what your transmitter really
+produces.
+
+**The Tab5 now wakes up on the page you left it on**, including after a firmware
+update. If that page is WSPR with transmitting enabled, the station resumes
+beaconing on power-up — which is what a beacon is for, but worth knowing before
+you leave the shack.
+
+**Basic and Advanced.** The settings drawer's EXPERT button is now **ADVANCED**,
+which names the contents rather than the reader. More usefully, which settings
+appear in which view is no longer fixed: the web UI's Settings window has a
+**Tab5 config** button opening a table of every setting with Basic and Advanced
+ticks. Basic now holds the eight things an operating session actually reaches;
+everything remains in Advanced. A firmware update that adds a setting will show
+it rather than hiding it behind a layout saved before it existed.
+
+**Two field reports from Gyula HA3HZ**, both fixed. A station you had just
+worked could be called again within minutes — the decode list greyed the
+callsign while the engine ignored it unless a filter was ticked, so the screen
+and the machine disagreed. The automatic pickers now leave a station alone for
+30 minutes after working it, whatever the filter says. And the red **FREQ BUSY**
+warning had no signal-strength test at all, so a barely-audible station on the
+other side of the world raised the same alarm as a loud neighbour; it is now
+graded by strength, and hidden entirely during an exchange, where your transmit
+tone is deliberately locked to your partner and moving is the wrong thing to do.
+
+**The printable User Guide gains two chapters** — WSPR, and **Radio menus**, which
+had a line in the contents but no chapter behind it since v1.8.4. The PDF builder
+only injects a chapter where the README carries a matching heading, and neither had
+one; the guide is 116 pages now rather than 107.
+
+**Also:** the Tab5's frame rate and redraw load are now in the diagnostic log,
+Bluetooth's host task moved off the display core, several task stacks were
+returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to
+the WSPR frequency.
+
+### Shipped in v1.10.1 — 2026-08-29
+
+**WSPR now protects your radio's finals, and the declared power stops being a
+guess.**
+
+A WSPR transmission keys the radio for about **110 seconds out of every 120**.
+Nothing else the Tab5 does comes close — an FT8 burst is about 12 seconds — and
+running a QMX flat out on that cycle puts sustained heat through the PA
+transistors. QRP Labs warn about exactly this case in the QMX manual, and the
+radio's own built-in WSPR beacon turns its PA down for the same reason. The
+Tab5's WSPR transmit is driven over CAT and never enters that mode, so it
+inherited none of that protection.
+
+**Protect finals**, on by default, turns the radio down for as long as WSPR
+transmit is enabled — it sets the QMX's own *Max. PA voltage* to about 6 V and
+restores your setting afterwards. Measured on a QMX at 12 V: output falls from
+**5.4 W to 1.6 W**, and the heat in the PA transistors falls **76%**.
+
+It is a full-width button that states which state it is in — green *"ON - about
+1 W"*, or red *"OFF - FULL POWER, finals at risk"*. Turning protection off takes
+two deliberate taps; turning it back on takes one. While it is off, the TX block
+on the WSPR page reads **FULL PWR** in red, so a station cannot be left running
+unprotected without it being visible.
+
+⚠ **Protection reduces the heat in the finals; it does not remove it from the
+radio.** The QMX limits PA voltage with a pass transistor, so the difference is
+dropped inside the radio instead — total heat fell only 18% in the same
+measurements. If you intend to beacon for hours, **feed the QMX from a lower
+supply**: it accepts 6.0–12.0 V, and around 9 V leaves far less to throw away.
+That is the one thing no firmware setting can do for you, and it is now in the
+manual.
+
+**Declared power is advised by measurement.** During each transmission the Tab5
+asks the radio what it is actually producing and shows the answer under the
+setting — *"radio measured 1.6 W last burst = 32 dBm"*. Switching protection on
+or off also moves the declared figure to the value that setting normally gives.
+Both are suggestions; the number is a statement about your station and stays
+yours to choose. The list now runs to **37 dBm (5 W)** again: a declared power
+never commanded the radio, so limiting it could only have prevented an honest
+declaration.
+
+**Also fixed:** the checkboxes in the FT8 **Options** window were very hard to
+hit *(Don WB0LQW)* — the touch target was the small box alone, a tap that
+drifted a few pixels was swallowed by the panel behind it, and the word beside
+each box did nothing. The touch area is now much larger, the tap cannot be
+stolen, and **tapping the word toggles the setting**. The WSPR settings are also
+reachable from the browser for the first time, and the web and Tab5 lists agree.
+
+### Shipped in v1.10.2 — 2026-08-30
+
+**Bluetooth keyboards work, and two logging faults are fixed.**
+
+- **A Bluetooth keyboard now types into every field** *(Don N2VGU)*. Pair one and it works everywhere the snap-on keyboard already did: every text field, Enter and Esc in every window, Tab to move between fields, and the arrow keys. The on-screen keyboard steps aside while a Bluetooth keyboard is connected, which is the point of having one - it gives you back the screen space it was covering.
+- **A keyboard and a mouse can be connected at the same time.** Either one first, the other after, and both keep working. If your keyboard sleeps, it reconnects on the first keypress and anything you typed while it was waking is delivered rather than lost.
+- ⚠ **US keyboard layout only for now.** A Bluetooth keyboard reports key *positions* rather than characters, so letters, digits, Enter and the arrows are correct on any keyboard, but punctuation on a non-US layout will not be. National layouts are coming.
+- **A logged contact could be missing the received signal report** *(Gyula HA3HZ)*. If the other station's message already carried their report of you, the Tab5 replied and moved straight to the roger step - and their report, which was sitting in that very message, was never written to the log. It is recorded now. Contacts already in your log are unaffected; this applies to new ones.
+- **FT4 replies no longer go out a cycle late** *(Gyula HA3HZ)*. FT8 waits for the current slot to finish decoding before it transmits, so a fresh reply lands in the right slot. That had never been switched on for FT4, which is why FT4 exchanges took roughly twice as long as they should. Now on for both.
+- **The RIT indicator says what it is doing** *(Don N2VGU)*. With no offset engaged it read simply "RIT", which is easy to mistake for switched on. It now reads **RIT OFF** in grey with a line through it, so all four states - off, armed, engaged, and parked - state what they are rather than naming the feature.
+- **Declared WSPR power set from the browser now shows on the Tab5.** The Tab5's own dropdown kept the value it was built with, so the two screens could disagree about a figure that is published with every spot.
+
+### Shipped in v1.10.3 — 2026-08-30
+
+**FT4 transmits again — update if you use FT4.**
+
+- **FT4 would not transmit at all** *(Gyula HA3HZ)*. In v1.10.2 an FT4 transmission was held back at the start of its slot and then never sent: the countdown ran normally, the message was armed, and nothing went on the air — on a CQ and on a call alike. FT8 was unaffected throughout. Fixed, and FT4 now transmits at the start of its slot as it did in v1.10.1.
+- **The FT4 reply timing from v1.10.2 is withdrawn with it.** That release made FT4 wait for the current slot to finish decoding before transmitting, so a reply landed in the right slot instead of a cycle later — and that is exactly the change that broke transmitting. FT4 replies can again be a cycle late. It needs a transmit window sized for FT4's shorter slot, which is being done properly rather than quickly.
+
+### Shipped in v1.10.4 — 2026-08-30
+
+**FT4 replies are quick again, and the Tab5 stops inventing an FT4 power reading.**
+
+- **FT4 answers in the right slot** *(Gyula HA3HZ)*. FT4 now waits for the current slot to finish decoding before it transmits, the same rule FT8 has used since v0.21.0, so a reply goes out in the slot it belongs to instead of a cycle later. It should feel at least as quick as FT8. This was tried in v1.10.2, broke FT4 transmit entirely, and was withdrawn in v1.10.3 — it is back, this time with the transmit timing checked by an automatic test rather than by eye.
+- **FT4 no longer reports a made-up 5.0 W** *(Gyula HA3HZ)*. An FT4 symbol is 48 ms and asking the radio for its power can take 50 ms, so the power cannot be sampled during an FT4 transmission the way it is in FT8 — and the display was filling that gap with a fixed 5.0 W. The radio's own reading was the correct one. **FT4 now shows no power rather than a wrong one**; FT8 is unaffected and still measures properly.
+- **Auto-work pileup leaves busy stations alone** *(Gyula HA3HZ)*. A station who had called you could be answered a couple of minutes later, by which time they were already in a contact with somebody else — and then called repeatedly. If their last message shows them working another station, they are now skipped until they are free.
+
+### Shipped in v1.10.5 — 2026-09-01
+
+**The spectrum holds still while you tune across it, and a quarter of the ×1 view stops lying about where signals are.**
+
+- **A still spectrum and waterfall.** The panadapter now behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO marker moves over them, so a signal stays put on screen while you tune towards it. It also makes the waterfall readable as history — a signal's past sits directly above its present, under the frequency it belongs to, instead of the whole picture sliding sideways every time you touch the dial. The view re-frames only when you tune far enough to need it: a dead band where nothing moves, a small push so a station sitting at the screen edge can still be worked, then a page carrying part of the old screen across so you can see where you came from. What triggers it is **your filter passband reaching the edge of the screen** rather than a fixed percentage of the view — the passband is not centred on the dial, so a percentage rule re-frames too early at one edge and too late at the other, and mirrors itself in LSB. On by default; switch it off under **Settings → Radio & display → Still spectrum**.
+- ⚠ **At ×1 the display stays centred on the dial**, whatever that setting says. Holding a view still needs somewhere for it to stay while the capture window slides underneath, and at ×1 the view is already the whole 48 kHz the radio sends. Zoom to ×2 or beyond for the still display.
+- **The right-hand quarter of the ×1 view was showing real signals at the wrong frequency.** The QMX's local oscillator sits 12 kHz below the dial, so the 48 kHz it delivers covers dial−36 kHz to dial+12 kHz and there is nothing at all above dial+12. The display filled that quarter by wrapping the bottom of the band into it, and the frequency scale labelled it as dial+12 to +24 — so the signals shown there were real, but about 48 kHz from where the scale claimed, and **tapping one tuned you to the wrong place entirely**. That region is now hatched and inert on the Tab5 and in the browser, with a caption saying why it is empty.
+- **Leaving FT8 or FT4 could reboot the device a few seconds later.** Switching back to the panadapter tore down the decoder while one of its two decode tasks was still working on the last slot, and the memory it was reading was freed underneath it. The window is easy to hit precisely because you are going back to the panadapter: that puts the display work back on the same processor core the decoder shares, so the decode finishes more slowly at exactly the moment the teardown is waiting for it. The decoder now abandons the final slot's work as soon as you leave — those decodes were about to be discarded anyway — and the teardown refuses to free anything it cannot prove is finished with. **This bug is older than v1.10.5**; it was found while testing this release.
+- **Changing band ends a contact in progress** *(Randy N4OPI)*. Switching bands used to stop the automatic picker choosing a new station but leave any exchange already running untouched — so it kept sending its next message on the new band, to a station no longer there. Changing band now ends the contact as well.
+- **The WSPR transmit button has moved clear of the left edge** *(Randy N4OPI)*. It overlapped the edge-swipe strip used to reach the panadapter, so a swipe that started a little high could land on a control that keys the radio for about 110 seconds.
+- **WSPR spots show the band they were heard on** *(Roy KI0ER)*, in a new **M** column. With band hopping on, a list of spots from several bands could not be read otherwise.
+- **The WSPR waterfall marks a transmit cycle** *(Dirk)*. On a cycle you transmit, the receiver is stood down for the whole two minutes and there is nothing to draw — so the previous cycle's picture used to sit there looking frozen. The display now lays down its cycle-boundary marker and keeps the last received image below it.
+- **The browser gets the FT8/FT4 band preset list** *(Randy N4OPI)* that the Tab5 has always had.
+- **A LoTW upload now shows LoTW's own reply** *(Randy N4OPI)*. The count reported before was our count of what was *sent* — LoTW accepts a file and processes the contacts afterwards — so an upload could report success while nothing appeared in the log. The server's own message is now shown, which is what says whether anything was actually rejected.
+- **The LoTW certificate can be replaced from a visible button.** Re-importing it used to need a Ctrl-click nobody would guess at, and a certificate expires about every three years.
+- **A static IP address** can be set under **Settings → WiFi** — address, mask, gateway and DNS. Leave the address empty for DHCP, which is what every unit does today, so nothing changes unless you fill it in. ⚠ Get the subnet right: an address that is valid but on the wrong subnet leaves the Tab5 unreachable, and the web page is the only place to change the setting back.
+
+### Shipped in v1.10.6 — 2026-09-01
+
+**A release of things users found. Almost every item below came from a report on the air.**
+
+**WSPR**
+
+- **The waterfall no longer goes blank for two cycles around a transmission** *(Dirk DK7CVD)*. Only the transmitting cycle itself is dark now, which is the one that cannot be helped. The transmitter was being armed as much as two minutes before its slot, and the receiver stood down for that entire wait as well as for the transmission — so on a 50% duty cycle the band was going unheard about half the time it appeared to be listening. It now keeps receiving until the burst is actually due.
+- **The TX button stops a transmission immediately** *(Roy KI0ER)*. Tapping it mid-burst used to do nothing visible until the end of the two-minute cycle. It now keys down at once.
+- **Leaving WSPR gives the radio its power back** *(Roy KI0ER)*. With "Protect finals" on, WSPR reduces the QMX's maximum PA voltage to 6 V for the duration. That reduction was being left behind when you switched to CW or FT8, so those modes ran at a quarter power with nothing on the Tab5 to say so — it was visible only on the radio's own Protection menu. Leaving WSPR now stops any transmission first, waits for the radio to unkey, and only then restores the voltage.
+- **The spot list fits the screen.** The right-hand column was running off the edge, so bearing was invisible and distance partly so. Every heading now sits directly over its own column, **M** is headed **BAND**, and a country name too long for its column is shortened rather than replaced by a two-letter code.
+
+**Panadapter**
+
+- **Picking a spot brings it into view** *(Roy KI0ER)*. With the still display on, a spot could land right at the screen edge — reliably, because the view only re-frames when something reaches an edge. Choosing a spot or a callsign now re-frames on it.
+- **The still display holds completely still, then jumps** *(Dirk DK7CVD)*. It used to hold, then be dragged along by the tuning for a while, then jump — so the empty area at the edge kept changing size. The dragging is gone. At most half your filter width slides off the edge before the display re-frames.
+
+**Network**
+
+- **A static IP address that would lock you out is refused.** The Tab5 compares what you type against the network it is on and rejects an address on a different subnet, naming both. A blank mask, gateway or DNS is filled in from the current DHCP lease instead of assuming the usual home-network defaults — which is where this most often went subtly wrong. Setting one up in advance for a different network still works; it asks you to confirm.
+- **A "Use DHCP" button on the Tab5** *(Michael KZ4LY)*. It appears in the settings drawer only when a static address is configured, and clears it. Until now the only way back was the web page that a wrong address had just made unreachable.
+
+**Reliability**
+
+- **A QMX restart could reboot the Tab5.** A power cycle while audio was streaming could catch the USB driver mid-teardown, and it stopped the device rather than carrying on. Worth knowing if you have seen this: the reboot also disturbs the radio, so what looks like the QMX wedging can be the Tab5 restarting underneath it.
+- **The microSD card is handled better in three ways.** Its first write no longer collides with WiFi starting up; a failed background write no longer unmounts a card that is working; and the card is retried for an hour after start-up instead of being given up on. That last one also means **a card inserted while the Tab5 is running is now picked up**, within about five minutes, instead of being ignored until the next restart.
+
+**Smaller things**
+
+- A warning in the diagnostic log about the FT8 decoder "respawning" was describing entirely normal behaviour and made ordinary mode switches look like faults. It no longer does.
+- The diagnostic log now says so if the device ever runs out of network connections — a state in which the web page stops answering while everything else keeps working.

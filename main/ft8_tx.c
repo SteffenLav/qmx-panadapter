@@ -5,6 +5,7 @@
 
 #include "ft8_tx.h"
 #include "ft8_hash.h"
+#include "ft8_msg_guard.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode
 
@@ -52,11 +53,17 @@ static const char *TAG = "ft8_tx";
 #define FT4_TONE_SPACING_HZ      (1.0f / FT4_SYMBOL_PERIOD)                // ~20.833 Hz
 #define FT8_TX_KEYUP_TONE_HZ     0.0f       // "any value < 10 Hz" keys up (CAT manual)
 #define FT8_TX_ENVELOPE_SETTLE_MS  5        // wait after TA0; before RX; (CAT manual sequence)
+// How many times to re-send the commands that STOP transmission before giving
+// up. 8 x 20 ms = ~160 ms, which is nothing against a 12.6 s burst and is far
+// more than a transient CDC hiccup needs. See tx_cmd_critical().
+#define FT8_TX_STOP_RETRIES        8
 #define FT8_TX_MODE_POLL_MS      100
 #define FT8_TX_MODE_POLL_TRIES   10         // ~1s worst case; MD; refreshes ~every 150ms
 
-// Placeholder PWR/SWR shown for any SIMULATED burst (general sim mode or
-// FT4's forced-sim) - there is no real transmitter output to query when sim
+// Placeholder PWR/SWR shown for any SIMULATED burst (i.e. settings' sim mode;
+// there is NO separate "FT4 forced sim" - an earlier version of this comment
+// claimed one and no such interlock exists in this file) - there is no real
+// transmitter output to query when sim
 // is on, but the UI's live PWR/SWR line should still appear (same code path,
 // same layout) rather than silently differ from a real FT8 burst. Fixed,
 // plausible QRP values; tagged in the log as a placeholder, never claimed to
@@ -104,11 +111,23 @@ static SemaphoreHandle_t s_lock = NULL;
 static ft8_tx_state_t    s_state = FT8_TX_IDLE;
 static ft8_tx_request_t  s_armed;                 // valid when s_state != IDLE
 static volatile bool     s_abort_requested = false;
+// Milliseconds into the burst at which the last run was aborted, or -1 if that
+// run was not aborted. Reset at the top of every ft8_tx_run(), so it always
+// describes the MOST RECENT burst and nothing older.
+static volatile int      s_last_abort_ms   = -1;
 
 // Last PC;/SW; reading taken at the tail of a TX burst (see ft8_tx_run).
 static float    s_last_power_w = -1.0f;
 static float    s_last_swr     = -1.0f;
 static int64_t  s_last_pwr_swr_us = -1;  // esp_timer_get_time() at capture, -1 if never
+
+// SWR protection latch. Set when a burst is cut short for high SWR; blocks
+// every subsequent arm until the operator clears it. Deliberately STICKY: the
+// fault that trips this (disconnected antenna, wrong band, bad feedline) does
+// not heal on its own, and an automatic re-arm would just key into the same
+// mismatch every 15 s. The operator has to look at the radio and say so.
+static volatile bool  s_swr_tripped   = false;
+static volatile float s_swr_trip_value = 0.0f;
 
 float ft8_tx_get_last_power_swr(float *power_w, float *swr)
 {
@@ -116,6 +135,21 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr)
     if (swr) *swr = s_last_swr;
     if (s_last_pwr_swr_us < 0) return -1.0f;
     return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
+}
+
+bool ft8_tx_swr_tripped(float *swr_out)
+{
+    if (swr_out) *swr_out = s_swr_trip_value;
+    return s_swr_tripped;
+}
+
+void ft8_tx_clear_swr_trip(void)
+{
+    if (!s_swr_tripped) return;
+    ESP_LOGW(TAG, "SWR protection latch cleared by operator (was %.2f:1)",
+             (double)s_swr_trip_value);
+    s_swr_tripped    = false;
+    s_swr_trip_value = 0.0f;
 }
 
 // DT-follow-partner offset (see ft8_tx_run). ft8_qso sets this to the partner's
@@ -247,58 +281,75 @@ int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // everything looks free - worth saying out loud in the UI rather than
 // implying the band is empty). Returns 0 on OOM, which reads as "all clear";
 // callers that care should treat n_stations 0 as "unknown", not "empty".
-static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
+// One snapshot pass, BOTH windows (Roy KI0ER, 2026-08-07: "the operator can now
+// see which offset to choose BEFORE arming, because only the operator knows
+// which time window they are going to pounce on"). Two stations only collide if
+// they transmit in the SAME slot, so the honest picture is one mask per parity -
+// the old single strip could only show our own window once something was armed,
+// which left the operator reactive with ~15 s to re-pick.
+//
+// A station whose slot cannot be determined (no last_utc) lands in BOTH masks:
+// claiming a window is free on missing evidence is how you transmit over someone.
+static void build_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                       int *n_slots_out, int *n_stations_out)
 {
     const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ)
                         / FT8_AUDIO_SLOT_HZ;
     if (n_slots_out)    *n_slots_out    = n_slots;
     if (n_stations_out) *n_stations_out = 0;
+    if (even_out) *even_out = 0;
+    if (odd_out)  *odd_out  = 0;
 
     ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!calls) return 0;
+    if (!calls) return;
 
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
-
-    // Slot-parity filter (Roy KI0ER, 2026-07-29: "a frequency offset could be
-    // entirely available to me, but only if I TX into the correct time window").
-    // Two stations only collide if they transmit in the SAME slot, so a station
-    // heard on the opposite parity to ours does not occupy our tone at all -
-    // counting it made the picker (and the automatic scan) reject slots that
-    // were in fact free for us, which on a busy band is most of them.
-    //
-    // Our parity is only knowable when something is armed or running
-    // (ft8_tx_get_parity_lock: a reply inherits the opposite of theirs, and a
-    // CQ carries the operator's TXCQ EVEN/ODD choice). With TXCQ ANY, or nothing
-    // armed at all, there is no answer - and then the honest view is the union of
-    // both windows, exactly as before.
-    bool our_even = false;
-    bool parity_known = ft8_tx_get_parity_lock(&our_even);
     const int period_ms = ft8_op_mode_slot_ms();
 
-    // Guard bands: mark the signal's own slot plus one slot on each side,
-    // giving 150 Hz of clearance around active signals.
-    uint64_t occupied = 0;
+    uint64_t ev = 0, od = 0;
     for (int i = 0; i < n; i++) {
-        if (parity_known && calls[i].last_utc > 0) {
-            // Same nearest-slot rounding as the decode list's E/O column: the
-            // stored last_utc is a whole second, so a bare /period truncation
-            // would flip the parity of anything logged a hair before its slot.
-            int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
-            bool station_even = ((sidx % 2) == 0);
-            if (station_even != our_even) continue;   // opposite window - no clash
-        }
         int bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ)
                   / FT8_AUDIO_SLOT_HZ;
-        for (int g = bin - 1; g <= bin + 1; g++) {
-            if (g >= 0 && g < n_slots)
-                occupied |= (1ULL << g);
+        // Guard bands: the signal's own slot plus one each side - 150 Hz of
+        // clearance around active signals, same as always.
+        uint64_t bits = 0;
+        for (int g = bin - 1; g <= bin + 1; g++)
+            if (g >= 0 && g < n_slots) bits |= (1ULL << g);
+
+        if (calls[i].last_utc > 0) {
+            // Nearest-slot rounding, same as the decode list's E/O column: the
+            // stored last_utc is a whole second, and a bare /period truncation
+            // flips the parity of anything logged a hair before its slot.
+            int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
+            if ((sidx % 2) == 0) ev |= bits; else od |= bits;
+        } else {
+            ev |= bits; od |= bits;
         }
     }
     free(calls);
+    if (even_out) *even_out = ev;
+    if (odd_out)  *odd_out  = od;
     if (n_stations_out) *n_stations_out = n;
-    return occupied;
+}
+
+void ft8_tx_get_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                     int *n_slots_out, int *n_stations_out)
+{
+    build_tone_occupancy_split(even_out, odd_out, n_slots_out, n_stations_out);
+}
+
+// The our-parity view the automatic pickers use: our window's mask when the
+// parity is knowable (something armed/running, or a TXCQ EVEN/ODD choice), the
+// union of both otherwise - unchanged semantics, now derived from the split.
+static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
+{
+    uint64_t ev = 0, od = 0;
+    build_tone_occupancy_split(&ev, &od, n_slots_out, n_stations_out);
+    bool our_even = false;
+    if (ft8_tx_get_parity_lock(&our_even)) return our_even ? ev : od;
+    return ev | od;
 }
 
 uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out)
@@ -372,12 +423,12 @@ int ft8_tx_pick_tone_hz(void)
     return ft8_find_clear_tone_hz_near(s_tone_pref_hz);
 }
 
-bool ft8_tx_is_clashing(void)
+ft8_clash_t ft8_tx_clash_level(void)
 {
     // Grab the armed freq and target call under the lock, then release before
     // calling ft8_screen_get_all() (which takes its own mutex).
     lock();
-    if (s_state == FT8_TX_IDLE) { unlock(); return false; }
+    if (s_state == FT8_TX_IDLE) { unlock(); return FT8_CLASH_NONE; }
     int our_hz      = s_armed.audio_freq_hz;
     ft8_tx_kind_t kind = s_armed.kind;
     char target[FT8_CALL_MAX_LEN];
@@ -389,14 +440,26 @@ bool ft8_tx_is_clashing(void)
     // armed/active, far too frequent for an ~11 KB internal-RAM allocation.
     ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!calls) return false;
+    if (!calls) return FT8_CLASH_NONE;
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
 
     const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
     int our_bin = (our_hz - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
 
+    // Parity filter (Roy KI0ER field report, 2026-08-07: "FREQ BUSY appeared even
+    // though the ODD strip showed my offset in green"): this check predates the
+    // v1.3.4 occupancy parity fix and never received it, so a station heard only
+    // in the OPPOSITE window still raised the warning - which is exactly when it
+    // is wrong, because that station cannot collide with us.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
+    const int period_ms = ft8_op_mode_slot_ms();
+
+    // Track the STRONGEST colliding station rather than stopping at the first:
+    // one loud neighbour must outrank three faint ones for the display's sake.
     bool clash = false;
+    int  worst_snr = -128;
     if (our_bin >= 0 && our_bin < n_slots) {
         for (int i = 0; i < n; i++) {
             // For a REPLY, the target station IS expected at this frequency —
@@ -404,15 +467,30 @@ bool ft8_tx_is_clashing(void)
             if (kind == FT8_TX_KIND_REPLY && target[0] &&
                 strncmp(calls[i].call, target, sizeof(calls[i].call)) == 0)
                 continue;
+            if (parity_known && calls[i].last_utc > 0) {
+                int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
+                if ((((sidx % 2) == 0)) != our_even) continue;   // opposite window
+            }
             int their_bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
             if (abs(their_bin - our_bin) <= 1) {
                 clash = true;
-                break;
+                if (calls[i].last_snr_db > worst_snr) worst_snr = calls[i].last_snr_db;
+                // No early break any more - the loudest collider decides the
+                // level, and the table is already in hand.
             }
         }
     }
     free(calls);
-    return clash;
+    if (!clash) return FT8_CLASH_NONE;
+    return (worst_snr >= FT8_CLASH_STRONG_SNR_DB) ? FT8_CLASH_STRONG : FT8_CLASH_WEAK;
+}
+
+// Unchanged contract for the ENGINE: any collision at all. relocate_cq_tone_if_
+// clashing() must keep moving a CQ off an occupied slot however weak the
+// occupant, so grading belongs to the display and nowhere else.
+bool ft8_tx_is_clashing(void)
+{
+    return ft8_tx_clash_level() != FT8_CLASH_NONE;
 }
 
 // ---------------------------------------------------------------------------
@@ -572,18 +650,18 @@ bool ft8_tx_build_request_text(const char *message_text,
         return false;
     }
 
-    // Defensive trim: a stray leading/trailing space makes ftx_message_encode
-    // fail (it breaks "CQ" detection), which silently aborts a TX. Trim into a
-    // local copy so every caller is protected regardless of where the text came
-    // from (field-hit: a CQ preset saved as " CQ JP ...", 2026-07-15).
+    // Defensive normalisation: whitespace is SYNTAX in a 77-bit message, not
+    // formatting. A stray leading space breaks "CQ" detection outright (field-hit:
+    // a preset saved as " CQ JP ...", 2026-07-15), and a doubled interior space
+    // is worse - it encodes cleanly as a DIFFERENT message and keys the radio
+    // (field-hit: Don WB0LQW's "CQ  POTA WB0LQW" went out as "CQ  <...> +00",
+    // 2026-08-14). Normalise into a local copy so every caller is covered
+    // regardless of where the text came from.
     char trimmed[32];   // matches out_req->display_text; FT8 messages are short
     {
-        const char *p = message_text;
-        while (*p == ' ' || *p == '\t') p++;
-        strncpy(trimmed, p, sizeof(trimmed) - 1);
+        strncpy(trimmed, message_text, sizeof(trimmed) - 1);
         trimmed[sizeof(trimmed) - 1] = '\0';
-        size_t n = strlen(trimmed);
-        while (n > 0 && (trimmed[n - 1] == ' ' || trimmed[n - 1] == '\t')) trimmed[--n] = '\0';
+        ft8_msg_normalize(trimmed);
         if (!trimmed[0]) {
             if (out_err) snprintf(out_err, out_err_len, "Empty message");
             return false;
@@ -597,6 +675,34 @@ bool ft8_tx_build_request_text(const char *message_text,
         if (out_err) snprintf(out_err, out_err_len,
                               "Can't encode '%s' (rc=%d)", message_text, (int)rc);
         return false;
+    }
+
+    // Decode the payload back the way the far end will, and refuse to key if it
+    // no longer means what the operator typed. ftx_message_encode() succeeding
+    // proves only that SOMETHING encoded - Don's message encoded perfectly and
+    // transmitted for 12.6 s as a signal report to a hashed callsign. The check
+    // is deliberately about meaning, not bytes: the protocol legitimately drops
+    // tokens it has no room for ("CQ POTA PJ4/K1ABC" goes out as "CQ PJ4/K1ABC"),
+    // and refusing those would be worse than the fault being guarded against.
+    {
+        char seen[64] = "";
+        ftx_message_offsets_t offs;
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (ftx_message_decode(&msg, ft8_hash_if(), seen, &offs) != FTX_MESSAGE_RC_OK) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would not survive transmission", message_text);
+            ESP_LOGW(TAG, "round-trip guard: '%s' encoded but will not decode", message_text);
+            return false;
+        }
+        if (!ft8_msg_roundtrip_ok(message_text, seen, s.my_callsign)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would go out as '%s' - not transmitted",
+                                  message_text, seen);
+            ESP_LOGW(TAG, "round-trip guard REFUSED: '%s' -> receivers would see '%s'",
+                     message_text, seen);
+            return false;
+        }
     }
 
     out_req->kind          = FT8_TX_KIND_CQ;
@@ -625,6 +731,24 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
     unlock();
     if (already_active) {
         if (out_err) snprintf(out_err, out_err_len, "Transmission already in progress");
+        return false;
+    }
+
+    // SWR protection latched by an earlier burst. Refuse everything - including
+    // the QSO machine's automatic re-arms - until the operator clears it.
+    if (s_swr_tripped) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "SWR protection tripped at %.1f:1 - check the antenna",
+                              (double)s_swr_trip_value);
+        return false;
+    }
+
+    // The operator has released the radio to its own front panel. Arming here
+    // would key it from under their hands mid-menu: the TX burst writes TX;/TA;
+    // straight to the CDC pipe and does NOT go through the paused poll task, so
+    // the pause has to be enforced at this end too.
+    if (cat_user_pause_active()) {
+        if (out_err) snprintf(out_err, out_err_len, "Radio released - take it back first");
         return false;
     }
 
@@ -752,6 +876,12 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
 {
     if (!out) return false;
 
+    // Belt and braces against a pause that arrived AFTER something was armed:
+    // ft8_tx_arm() already refuses while the radio is released, but a request
+    // armed a slot earlier is still sitting there waiting for its boundary, and
+    // that boundary must not key a radio the operator is holding.
+    if (cat_user_pause_active()) return false;
+
     lock();
     bool fire = false;
     // Fire when: no parity requirement, OR parity matches.
@@ -837,6 +967,51 @@ static void tx_cmd(int64_t t0, bool sim, const char *fmt, ...)
 #endif
 }
 
+// ⛔ THE ONE CAT WRITE WHOSE FAILURE HAS A PHYSICAL CONSEQUENCE.
+//
+// tx_cmd() logs a failed send and carries on, which is right for the 79 tone
+// updates - a dropped tone is one bad symbol. It is NOT right for the command
+// that STOPS TRANSMITTING. A single transient CDC failure there leaves the
+// radio KEYED, with nothing in the firmware ever trying again, and this project
+// already documents that transient CDC TX failures happen (cat.c's poll task
+// tolerates ~20 in a row before giving up).
+//
+// Roy KI0ER, 2026-08-19: "the QMX Panadapter told the QMX radio that it should
+// stop TX, but the QMX radio did not stop TX" - his radio stayed keyed until he
+// power-cycled it, with the Tab5 UI running normally throughout. That is
+// exactly the shape of one dropped RX; and no retry. Not confirmed from his log
+// (the ring had rotated past the event), so this is a real gap being closed on
+// its own merits rather than a proven diagnosis.
+//
+// Retries hard and says so loudly if it never gets through - a silent failure
+// here is the operator transmitting without knowing.
+static bool tx_cmd_critical(int64_t t0, bool sim, const char *cmd)
+{
+    if (sim) { ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd); return true; }
+#if FT8_TX_SEND_LIVE
+    for (int i = 0; i < FT8_TX_STOP_RETRIES; i++) {
+        esp_err_t err = cat_send_raw_cmd("%s", cmd);
+        if (err == ESP_OK) {
+            if (i) ESP_LOGW(TAG, "%s succeeded on attempt %d - radio is back in receive", cmd, i + 1);
+            return true;
+        }
+        ESP_LOGW(TAG, "%s FAILED (0x%x), attempt %d/%d - retrying",
+                 cmd, err, i + 1, FT8_TX_STOP_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    // Hand it to the poll task, which owns the pipe and keeps trying on every
+    // cycle that succeeds. Roy KI0ER's log shows why this matters more than the
+    // retries above: his link came back ~2 s AFTER the burst had given up, and
+    // nothing re-sent RX;, so the radio transmitted until he power-cycled it.
+    ESP_LOGE(TAG, "⚠ %s NEVER GOT THROUGH - handing to CAT to re-assert", cmd);
+    cat_request_force_rx();
+    return false;
+#else
+    ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
+    return true;
+#endif
+}
+
 // Sleep until t0 + offset_us, if that's still in the future. Anchoring every
 // target to the fixed t0 (rather than chaining vTaskDelay calls) keeps 79
 // sends from drifting cumulatively over the ~12.6s burst.
@@ -849,10 +1024,13 @@ static void sleep_until(int64_t t0, int64_t offset_us)
     }
 }
 
+int ft8_tx_last_abort_ms(void) { return s_last_abort_ms; }
+
 void ft8_tx_run(const ft8_tx_request_t *req)
 {
     if (!req) return;
     s_abort_requested = false;
+    s_last_abort_ms   = -1;   // describes THIS run from here on
 
     // FT8 simulation-mode hard interlock (see ft8_sim.h): when on, this
     // function still runs its full real-time-accurate sequence (so
@@ -931,12 +1109,24 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // Result populates s_last_* so the "TRANSMITTING:" line shows the CURRENT
         // burst's reading from ~2 s in. Skipped in sim mode (no real link).
         bool ps_sent = false, ps_have = false;
+        int  ps_read_at = 0;
+        // SWR protection limit, sampled once per burst so a settings change
+        // mid-transmission cannot alter the rules half way through.
+        float swr_limit = 0.0f;
+        {
+            uint8_t lim_x10 = settings_get_swr_limit_x10();
+            if (lim_x10 > 0) swr_limit = (float)lim_x10 / 10.0f;
+        }
 
         bool aborted = false;
         for (int i = 0; i < nn; i++) {
             if (s_abort_requested) {
                 ESP_LOGW(TAG, "TX abort requested at symbol %d/%d - keying up now", i, nn);
                 aborted = true;
+                // How far into the burst we got, so the slot loop can decide
+                // whether enough of the slot is left to be worth listening to
+                // (see ft8_tx_last_abort_ms and #136).
+                s_last_abort_ms = (int)((esp_timer_get_time() - t0) / 1000);
                 break;
             }
             // Update status every ~10 symbols so the UI shows TX progress.
@@ -950,11 +1140,26 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             // 160 ms symbol slack at symbols 6/14); skipped for FT4 (forced sim
             // anyway - !sim is always false here when is_ft4).
 #if FT8_TX_SEND_LIVE
-            if (!sim) {
-                if (!ps_sent && i == 6) {
+            // FT8 only. FT4's symbol period is 48 ms and a CDC write is bounded
+            // at 50 ms, so a mid-burst query does not fit in the slack and would
+            // shift symbol timing. FT4 relies on the post-burst check below,
+            // which still latches the transmitter off for every LATER burst -
+            // the fault is caught one burst later, not never.
+            // (Comments here and in ft8_test.c used to claim FT4 TX was
+            // force-routed through the simulation interlock. It is not - `sim`
+            // is settings' sim_mode_en and nothing else - so this branch really
+            // did run for live FT4 bursts. Corrected 2026-08-09.)
+            if (!sim && !is_ft4) {
+                // Sample repeatedly, not once: with SWR protection armed this
+                // reading is a safety input, and one sample 2 s into a 12.7 s
+                // burst would let a fault run for the other 10 s. The cycle is
+                // send at symbol N, read at N+8 (~1.3 s), repeat - each step
+                // still fits the 160 ms inter-symbol slack, same as before.
+                if (!ps_sent && i >= 6) {
                     cat_pwr_swr_async_send();
                     ps_sent = true;
-                } else if (ps_sent && !ps_have && i >= 14) {
+                    ps_read_at = i + 8;
+                } else if (ps_sent && i >= ps_read_at) {
                     float pw = -1.0f, sw = -1.0f;
                     if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK && pw >= 0.0f && sw >= 0.0f) {
                         s_last_power_w   = pw;
@@ -962,11 +1167,43 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                         s_last_pwr_swr_us = esp_timer_get_time();
                         ps_have = true;
                         ESP_LOGI(TAG, "live TX power=%.1fW SWR=%.2f", (double)pw, (double)sw);
+                        // Trip: cut the burst short and latch. Only a reading
+                        // with real power behind it counts - SW; can report a
+                        // meaningless ratio when the PA is not actually loaded.
+                        if (swr_limit > 0.0f && sw >= swr_limit && pw > 0.1f) {
+                            ESP_LOGE(TAG, "SWR PROTECTION: %.2f:1 >= %.1f:1 limit at symbol %d/%d "
+                                          "- aborting burst and latching TX off",
+                                     (double)sw, (double)swr_limit, i, nn);
+                            s_swr_trip_value = sw;
+                            s_swr_tripped    = true;
+                            aborted = true;
+                            break;
+                        }
                     }
+                    ps_sent = false;   // re-arm the next send/read cycle
                 }
-            } else if (!ps_have && i == nn / 4) {
-                // Simulated burst (general sim mode, or FT4's always-forced
-                // sim): no real PA to query, so populate the same s_last_*
+            } else if (sim && !ps_have && i == nn / 4) {
+                /* ⛔ THIS USED TO CATCH LIVE FT4 AND INVENT A POWER READING.
+                 *
+                 * The condition above is `!sim && !is_ft4`, so its `else` is
+                 * `sim || is_ft4` - and a LIVE FT4 burst therefore wrote the
+                 * simulation placeholder (5.0 W / 1.20) into the live
+                 * s_last_power_w / s_last_swr, on a radio that was really
+                 * keyed. Gyula HA3HZ, 2026-08-30: "on Tab5 the max. power is
+                 * always 5.0W - while QMX indicates higher. This only happens
+                 * with FT4." His log has zero "radio not keyed" lines and shows
+                 * `sim TX power=5.0W (placeholder, not measured)` on bursts that
+                 * were genuinely on the air, while his FT8 bursts logged real
+                 * `live TX power=5.3..5.5W`.
+                 *
+                 * Same rule as never writing 599 into an ADIF record: a number
+                 * nobody measured must not be presented as a measurement. FT4
+                 * genuinely cannot be sampled mid-burst (48 ms symbols, a CDC
+                 * write is bounded at 50 ms), so the honest answer is no
+                 * reading at all - see #300 for why the post-burst query is not
+                 * a substitute either. */
+                // Simulated burst (settings' sim mode): no real PA to query,
+                // so populate the same s_last_*
                 // fields with a fixed placeholder reading at roughly the same
                 // point in the burst a real reading would land, so the UI's
                 // live PWR/SWR line behaves identically either way.
@@ -988,7 +1225,11 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // Either way - whether all symbols played or we broke out early
         // on an abort request - key up immediately now. This is the part
         // that must ALWAYS run: the radio must never be left transmitting.
-        tx_cmd(t0, sim, "TA%.0f;", (double)FT8_TX_KEYUP_TONE_HZ);
+        {
+            char keyup[24];
+            snprintf(keyup, sizeof(keyup), "TA%.0f;", (double)FT8_TX_KEYUP_TONE_HZ);
+            tx_cmd_critical(t0, sim, keyup);   // drops the envelope
+        }
         vTaskDelay(pdMS_TO_TICKS(FT8_TX_ENVELOPE_SETTLE_MS));
 
         // Query power/SWR while still keyed - SW; returns no reading once
@@ -1005,11 +1246,21 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                 s_last_power_w = power_w;
                 s_last_swr = swr;
                 s_last_pwr_swr_us = esp_timer_get_time();
+                // Post-burst trip. Catches what the mid-burst sampler could not:
+                // an FT4 burst (no mid-burst query at all), a fault that only
+                // appeared near the end, or a burst too short to sample. The
+                // burst is already over, so this protects every LATER one.
+                if (swr_limit > 0.0f && swr >= swr_limit && power_w > 0.1f && !s_swr_tripped) {
+                    ESP_LOGE(TAG, "SWR PROTECTION: post-burst %.2f:1 >= %.1f:1 limit "
+                                  "- latching TX off", (double)swr, (double)swr_limit);
+                    s_swr_trip_value = swr;
+                    s_swr_tripped    = true;
+                }
             }
         }
 #endif
 
-        tx_cmd(t0, sim, "RX;");
+        tx_cmd_critical(t0, sim, "RX;");   // back to receive - must not be a single try
 
 #if FT8_TX_SEND_LIVE
         if (!sim && power_w >= 0.0f && swr > 4.0f) {

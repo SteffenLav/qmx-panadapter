@@ -31,3 +31,13 @@ void display_fade_in_backlight(int target_percent);
 // true = flipped). Persisted by the caller; safe to call at boot or at runtime.
 void display_set_flipped(bool flipped);
 bool display_is_flipped(void);
+
+// Frames per second x10 since the previous call (LV_EVENT_REFR_READY count).
+// The only numeric measure of panadapter smoothness this project has - added
+// 2026-08-28 because the operator was being asked to judge 2-point differences
+// by eye, which is not something eyes can do.
+unsigned display_fps_x10(void);
+
+// Thousands of invalidated pixels per second since the previous call. Read
+// together with the fps figure: frames say how OFTEN, this says how MUCH.
+unsigned display_inval_kpx_per_s(void);

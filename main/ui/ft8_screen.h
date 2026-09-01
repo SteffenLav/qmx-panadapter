@@ -46,6 +46,30 @@ void ft8_screen_record_decode(const char *text,
 // caller may sort.
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
 
+// Look one station up by callsign (case-insensitive), so a caller needing what
+// that station last SENT does not have to snapshot the whole ~11 KB table.
+// Does NOT expire stale rows - see the note on the implementation.
+bool ft8_screen_find_call(const char *call, ft8_call_t *out);
+
+// How many stations are currently live, without needing a snapshot buffer. Use
+// this instead of ft8_screen_get_all() when only the number is wanted: the table
+// is ~11 KB and callers on taskLVGL cannot put that on the stack. Read-only -
+// unlike get_all() it never purges expired rows.
+int ft8_screen_active_count(void);
+
+// Sort decode rows into the order the operator wants them, most wanted first:
+// the station being worked, then anything addressed to us, then CQ calls, then
+// strongest signal. ONE implementation for both the Tab5's list and the web
+// UI's - two copies would drift, and the first symptom would be the two screens
+// disagreeing about which station is on top mid-QSO.
+//
+// Safe from any task (it owns a mutex; qsort takes no context pointer, so the
+// comparison keys are file statics held across the sort). Pass the operator's
+// own callsign and the pinned call from ft8_qso_get_pinned_call(); either may be
+// NULL or empty, which simply drops that tier.
+void ft8_screen_sort_rows(ft8_call_t *rows, int n,
+                          const char *my_call, const char *pin_call);
+
 // Clear the entire decode table (on mode/band switch).
 // Takes mutex internally.
 void ft8_screen_clear(void);

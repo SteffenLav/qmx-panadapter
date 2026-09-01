@@ -8,6 +8,7 @@
 #include "ft8_cq_modal.h"
 #include "ui_theme.h"
 #include "ft8_screen_view.h"
+#include "ft8_msg_guard.h"
 #include "settings.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -38,6 +39,13 @@ static lv_obj_t *s_stop_btn  = NULL;
 static lv_obj_t *s_stop_lbl  = NULL;
 static uint8_t   s_stop_val  = 0;
 static const uint8_t s_stop_vals[] = { 0, 1, 2, 3, 4, 5, 10 };
+// Listening slot (Roy KI0ER): spend one slot receiving after every N CQ calls,
+// so the occupancy picture for your OWN time window stays current. Same
+// commit-on-tap behaviour as the stop button beside it.
+static lv_obj_t *s_listen_btn = NULL;
+static lv_obj_t *s_listen_lbl = NULL;
+static uint8_t   s_listen_val = 0;
+static const uint8_t s_listen_vals[] = { 0, 3, 5, 10 };
 // While true (Field Day mode on), the whole editor is locked - everything
 // except Cancel is both visually dimmed/disabled AND ignored by its handler,
 // so there's no path to edit/save/select a preset while it's in effect,
@@ -53,13 +61,12 @@ static void to_upper_inplace(char *s)
 // ftx_message_encode's "CQ" detection, so a preset saved as " CQ JP ..."
 // silently failed to transmit and fell through to the identity modal
 // (field-hit on the 3rd preset, 2026-07-15).
+// Interior runs matter as much as the edges - see ft8_msg_guard.h. Don WB0LQW's
+// preset was stored as "CQ  POTA WB0LQW" (two spaces) and transmitted as a
+// signal report to a hashed callsign for as long as it was saved that way.
 static void trim_inplace(char *s)
 {
-    char *p = s;
-    while (*p == ' ' || *p == '\t') p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    size_t n = strlen(s);
-    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = '\0';
+    ft8_msg_normalize(s);
 }
 
 // Build "CQ <call> <grid>" from stored identity (or "CQ" if unset).
@@ -227,6 +234,26 @@ static void stop_btn_cb(lv_event_t *e)
     stop_btn_update_label();
 }
 
+static void listen_btn_update_label(void)
+{
+    if (!s_listen_lbl) return;
+    if (s_listen_val == 0) lv_label_set_text(s_listen_lbl, "Listen: never");
+    else                   lv_label_set_text_fmt(s_listen_lbl, "Listen every %u",
+                                                 (unsigned)s_listen_val);
+}
+
+static void listen_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    uint8_t next = 0;
+    for (size_t i = 0; i < sizeof(s_listen_vals); i++) {
+        if (s_listen_vals[i] > s_listen_val) { next = s_listen_vals[i]; break; }
+    }
+    s_listen_val = next;
+    settings_set_cq_listen_every(s_listen_val);
+    listen_btn_update_label();
+}
+
 static void radio_clicked_cb(lv_event_t *e)
 {
     if (s_fd_locked) return;
@@ -259,8 +286,7 @@ static void ta_focused_cb(lv_event_t *e)
     update_fd_preview();
     if (!s_keyboard) return;
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 static void keyboard_event_cb(lv_event_t *e)
@@ -341,7 +367,9 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 424);   // +44 vs pre-Field-Day-hint height
+    // +40 again for the Listen button, which sits under CQ stop: the message
+    // rows share the buttons' horizontal band, so they start BELOW both.
+    lv_obj_set_size(panel, 1040, 464);
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -373,6 +401,22 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_stop_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(s_stop_lbl);
 
+    // Listening-slot cycle button, directly under CQ stop. Same commit-on-tap,
+    // same exemption from the Field Day lock.
+    s_listen_btn = lv_btn_create(panel);
+    lv_obj_set_size(s_listen_btn, 290, 56);
+    lv_obj_align(s_listen_btn, LV_ALIGN_TOP_RIGHT, 0, 64);
+    lv_obj_set_style_bg_color(s_listen_btn, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(s_listen_btn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_listen_btn, 2, 0);
+    lv_obj_set_style_radius(s_listen_btn, 8, 0);
+    lv_obj_add_event_cb(s_listen_btn, listen_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_listen_lbl = lv_label_create(s_listen_btn);
+    lv_label_set_text(s_listen_lbl, "Listen: never");
+    lv_obj_set_style_text_color(s_listen_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_listen_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_listen_lbl);
+
     // Field Day status note - text/visibility set in show() from live
     // settings, since this modal can be reopened without rebuilding it.
     s_fd_hint = lv_label_create(panel);
@@ -399,7 +443,7 @@ static void modal_build(void)
     }
 
     for (int i = 0; i < N_CQ; i++) {
-        int y = 100 + i * 72;
+        int y = 136 + i * 72;   // clear of the two stacked cycle buttons above
 
         // Text area first, so the checkbox can be vertically centred against it.
         s_ta[i] = lv_textarea_create(panel);
@@ -507,6 +551,8 @@ void ft8_cq_modal_show(void)
     settings_load_all(&s);
     s_sel = (s.cq_sel <= 2) ? s.cq_sel : 0;
     s_stop_val = s.cq_max_calls;
+    s_listen_val = s.cq_listen_every;
+    listen_btn_update_label();
     stop_btn_update_label();
 
     // Quick-insert button shows the actual call+grid (or a hint if unset).
@@ -526,11 +572,18 @@ void ft8_cq_modal_show(void)
             build_default_cq(def, sizeof(def));
             lv_textarea_set_text(s_ta[0], def);
         } else {
-            lv_textarea_set_text(s_ta[i], s.cq_msg[i]);
+            // Show the NORMALISED text, so a preset already stored with a
+            // doubled space repairs itself visibly the next time the editor is
+            // opened rather than being quietly corrected on the way to the
+            // radio. What is on screen is then what actually goes out.
+            char shown[28];
+            strncpy(shown, s.cq_msg[i], sizeof(shown) - 1);
+            shown[sizeof(shown) - 1] = '\0';
+            trim_inplace(shown);
+            lv_textarea_set_text(s_ta[i], shown);
         }
     }
     apply_radio_state();
-    ui_theme_focus_textarea(s_ta[0]);
 
     // Field Day mode: dim the presets (their modifier word is overridden
     // either way) and show a live, always-accurate preview of what Call CQ

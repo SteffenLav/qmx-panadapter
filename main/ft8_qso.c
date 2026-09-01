@@ -26,14 +26,17 @@
 // "arm refused, burst already in progress" race that previously left CQ stuck.
 
 #include "ft8_qso.h"
+#include "ft8_robot.h"   // ft8_band_change_stand_down also stands the robot down
 #include "ft8_pileup.h"
 #include "ft8_greylist.h"
+#include "ft8_hound.h"  // Fox/Hound (DXpedition) rules - see the s_hound_active notes
 #include "ft8_tx.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
 #include "ft8_status.h"
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
+#include "net/spots.h"  // spots_activation_for_call() - tag a chase with SIG/SIG_INFO
 #include "cat/cat.h"
 
 #include <string.h>
@@ -68,6 +71,32 @@ static ft8_qso_state_t    s_state          = FT8_QSO_IDLE;
 static char               s_target[FT8_CALL_MAX_LEN];   // their callsign
 static char               s_my_call[FT8_CALL_MAX_LEN];  // our callsign (uppercased)
 static int                s_freq_hz;                    // OUR AF tone for our own replies
+// #201: has THIS exchange put anything on the air yet? Until it has, our tone
+// is nobody's reference and may still be re-picked; from the first burst
+// onwards the partner is tracking it and it must not move. Set by
+// ft8_qso_on_tx_complete(), cleared wherever an exchange begins.
+static bool s_tx_sent = false;
+
+// #219: relocations made AFTER our first transmission, i.e. mid-exchange.
+// Bounded so a busy band cannot make us wander up and down the waterfall while
+// the partner is trying to find us. Reset with every new exchange.
+static int s_midqso_moves = 0;
+
+// How far a MID-QSO move may go, and how many are allowed.
+//
+// Roy KI0ER established that moving mid-QSO is legitimate at all: decoders work
+// the whole passband and match on callsign, so the partner is not following our
+// tone. Gyula HA3HZ established the limit: a station who has NARROWED their
+// receive bandwidth (MSHV does this to keep decode inside the reply window) may
+// simply not hear someone who jumped far away, and his own conclusion was that
+// you therefore cannot say flatly that changing frequency mid-QSO is right.
+//
+// Both are satisfied by moving as LITTLE as possible: far enough to clear the
+// station on top of us, near enough to stay inside a narrowed window. 250 Hz is
+// five 50 Hz slots - comfortably clear of a neighbour, and well inside any
+// plausible narrowed passband.
+#define QSO_MIDQSO_MOVE_MAX_HZ  250
+#define QSO_MIDQSO_MOVE_LIMIT   3
 // The PARTNER's AF tone - where THEIR next message will arrive. Deliberately
 // NOT s_freq_hz: for a pounce we answer on a clear slot chosen by
 // ft8_find_clear_tone_hz() (see ft8_screen_view.c "not the CQ station's own
@@ -78,6 +107,29 @@ static int                s_freq_hz;                    // OUR AF tone for our o
 // wrong one. Seeded at QSO start from the decode table, refreshed every slot we
 // hear them in scan_for_response().
 static int                s_partner_freq_hz;
+
+// ---- Fox/Hound (DXpedition) session state ----------------------------------
+//
+// Set when a contact is started against something that looks like a Fox while
+// Hound mode is enabled (see ft8_hound.h for the protocol and for why the Fox
+// side cannot exist on this radio). It changes four things, all of them in
+// ft8_qso.c and each marked with a comment naming this flag:
+//
+//   1. our R-report is sent AFTER QSY'ing onto the Fox's own frequency;
+//   2. the Fox's RR73 ends the QSO - a hound never sends 73;
+//   3. the busy-station hold stands down (a Fox is always working somebody, so
+//      holding for a free frequency means never calling);
+//   4. the final re-send and the grey-list stand down (the Fox never asks
+//      again, and being ignored in a pileup is not a station that never
+//      answers).
+//
+// s_hound_tone_hz remembers the up-band tone we called from, so the QSY is
+// reversible: after the contact we go back there for the next Fox.
+static bool               s_hound_active;
+static int                s_hound_tone_hz;
+// A tone the operator chose while a burst was on the air. Applied by
+// on_tx_complete() the moment the burst ends - see ft8_qso_set_tx_tone_hz().
+static int                s_pending_tone_hz;
 static int64_t            s_min_scan_utc;               // pounce: don't scan before TX1 fires
 static int                s_missed_slots;
 static bool               s_from_cq;                    // session started as CQ-run
@@ -94,6 +146,9 @@ static bool               s_have_cq_saved;
 // Every fresh CQ sequence - Call CQ, a timeout resume, a post-QSO resume -
 // starts the count over.
 static int                s_cq_calls_sent;
+// Which cq_calls_sent value we last spent a listening slot at, so the pause
+// fires once per multiple of cq_listen_every instead of latching there.
+static int                s_cq_listen_done_at = -1;
 static bool               s_cq_exhausted;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
@@ -128,13 +183,25 @@ static int64_t            s_last_done_ts;
 // if the just-worked station addresses us again with a report (not RR73/73/RRR,
 // which would mean they DID hear us) inside the window, re-send our final once
 // more - bounded, and without logging again.
-#define FINAL_RESEND_WINDOW_SEC 240
-#define FINAL_RESEND_MAX          3
+// Raised from 240 s / 3 on a field report (Roy KI0ER, 2026-08-05): a partner who
+// never heard our final repeats every cycle for minutes, and 3 tries inside 4
+// minutes ran out while he was still asking - at which point we went back to
+// calling CQ over the top of him. A human would simply keep answering, so the
+// budget is now 6 inside 5 minutes.
+#define FINAL_RESEND_WINDOW_SEC 300
+#define FINAL_RESEND_MAX          6
 static char               s_final_call[FT8_CALL_MAX_LEN];  // who we owe a final to ('\0' = nobody)
 static int                s_final_freq_hz;                 // our tone for it
 static ft8_tx_kind_t      s_final_kind;                    // 73 (pounce) or RR73 (CQ-run)
 static char               s_final_extra[16];               // the final's third field (matches ft8_tx_request_t)
 static int                s_final_resends;
+
+// True while a just-worked partner is still asking for our final. Set once per
+// RX slot by advance(); read by rearm_current(), which is the single choke point
+// for CQ arming. This is what stops us calling CQ over somebody who is waiting
+// on us even after the re-send budget is spent - staying silent is the polite
+// answer, and it was Roy KI0ER's own suggestion.
+static bool s_final_hold = false;
 
 // Duplicate-log guard. The log is written once at WAIT_DONE -> DONE, but that
 // state can legitimately be entered twice for one contact - most easily by
@@ -145,6 +212,56 @@ static int                s_final_resends;
 static char               s_logged_call[FT8_CALL_MAX_LEN];
 static uint32_t           s_logged_freq_hz;
 static int64_t            s_logged_ts;
+
+// ---------------------------------------------------------------------------
+// RECENTLY-WORKED GRACE (Gyula HA3HZ, 2026-08-28; BD4AHS said the same on
+// 2026-08-06 and was told to tick a checkbox)
+//
+// The decode list greys a row whenever adif_log_contains_call_on_band() says we
+// have logged that station on this band - UNCONDITIONALLY. Every ENGINE path
+// skipped the same station only `if (excl_worked_before && ...)`. So on the
+// default the screen said "worked" in dim grey and the machine called them
+// again anyway: *"When I finish a QSO and his callsign turns gray, he calls
+// again shortly after - as if there was no previous completed QSO."*
+//
+// Two field reports of one behaviour is evidence the default is wrong, not that
+// two operators misconfigured it. But the checkbox is not simply wrong either -
+// an operator may legitimately want to re-work a station later, after a band
+// opening changes. So the fix is bounded in TIME rather than absolute: the
+// UNATTENDED pickers never re-work a station logged on this band within
+// RECENT_WORKED_GRACE_SEC, whatever the checkbox says, and beyond that window
+// the checkbox rules exactly as before.
+//
+// ⭐ There is a second, harder reason this must be unconditional. The duplicate
+// guard above REFUSES TO LOG a repeat inside QSO_DUP_LOG_WINDOW_SEC - so
+// without this, the machine transmits a complete exchange, keys the radio for
+// ~12.6 s per burst, and then throws the result away. Working a contact we have
+// already decided not to log is worse than declining to work it.
+//
+// ⚠ RAM-only, deliberately. It answers "did we work them in this session,
+// recently", which is exactly the reported symptom; the ADIF log (via the
+// checkbox) still covers everything older. A reboot clearing it is harmless
+// because the grace is minutes, not days. A ring rather than one slot because
+// the existing s_logged_* is a single entry - fine for the dup guard, useless
+// here the moment one other station is worked in between.
+// Extracted to main/ft8_recent.c so test/ft8_recent_harness.c can link the real
+// functions and step the clock at will. That was not gold-plating: the on-device
+// route needs a completed QSO, and in FT8 simulation mode on 2026-08-28 the
+// decode ran 15.4 s against a 15 s slot, so slots overran 2x and the robot never
+// saw a decode whose slot matched the current one. Six mutations of the logic are
+// caught by the harness, one of which exposed a hole in the tests themselves.
+#include "ft8_recent.h"
+
+static void note_worked_now(const char *call, uint32_t freq_hz)
+{
+    ft8_recent_note(call, adif_log_band_for_freq(freq_hz), (int64_t)time(NULL));
+}
+
+bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
+{
+    return ft8_recent_worked(call, adif_log_band_for_freq(freq_hz), (int64_t)time(NULL));
+}
+
 // Signal reports captured during the exchange for ADIF logging.
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2
@@ -159,6 +276,10 @@ static int64_t            s_logged_ts;
 //   uploaded to QRZ/eQSL/LoTW as if real (Roy KI0ER, 2026-07-29).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
+/* Their numeric report of us, lifted from the message a manual/pileup reply
+ * was built from, so the R-report entry can record it as RST_RCVD (#292). */
+static char               s_heard_their_rpt[8];
+static char               s_heard_their_rpt_call[16];
 // ARRL Field Day: their class+section, captured when their roger/exchange
 // message is recognized (WAIT_RPT pounce path, WAIT_ROGER cqrun path). Empty
 // when the QSO isn't a Field Day exchange.
@@ -381,6 +502,31 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
             make_roger(myrpt, extra_buf, sizeof(extra_buf));
             kind  = FT8_TX_KIND_ROGER_RPT;
             extra = extra_buf;
+            /* ⭐ THIS is RST_RCVD - their own measurement of us - and it was
+             * being thrown away (#292, Gyula HA3HZ).
+             *
+             * A QSO entered here skips straight to TX2 because, as #234's own
+             * comment puts it, "the partner's OWN last message already reported
+             * us". WAIT_RPT - the state that normally records their report -
+             * therefore never runs, and if they then jump to RR73, WAIT_ROGER
+             * never runs either. The QSO logs with RST_SENT and an empty
+             * RST_RCVD, which the viewer shows as a dash.
+             *
+             * From his log: decoded 'HA3HZ UN6GO -02' ... "Logged QSO #157:
+             * UN6GO (-09/)". Their -02 was in the very message that started the
+             * QSO. 2 of his 24 logged QSOs lost it this way.
+             *
+             * The identical fix already existed on the CQ-RUN entry, with the
+             * same reasoning written out - and was never applied to this
+             * sibling path. */
+            strncpy(s_heard_their_rpt, rest, sizeof(s_heard_their_rpt) - 1);
+            s_heard_their_rpt[sizeof(s_heard_their_rpt) - 1] = '\0';
+            /* Tagged with WHOSE report it is: this is a file-static read a
+             * moment later by ft8_qso_start(), and a preview build for a
+             * different row in between would otherwise hand the wrong
+             * station's number to the log. */
+            strncpy(s_heard_their_rpt_call, heard->call, sizeof(s_heard_their_rpt_call) - 1);
+            s_heard_their_rpt_call[sizeof(s_heard_their_rpt_call) - 1] = '\0';
         } else {
             fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf)); // grid -> our report
             kind  = FT8_TX_KIND_REPLY;
@@ -579,6 +725,10 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         // the robot applies to CQ callers). Band-aware: a new band is a new slot.
         if (qs.ft8_filters.excl_worked_before &&
             adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
+        // ...and never inside the grace window, checkbox or not: the duplicate
+        // guard would refuse to LOG the result, so answering would key the radio
+        // through a whole exchange and throw it away (Gyula HA3HZ, 2026-08-28).
+        if (ft8_qso_worked_recently(tok2, cat_get_frequency())) continue;
         if (snap[i].last_snr_db > best_snr) {
             best_snr = snap[i].last_snr_db;
             best_idx = i;
@@ -699,6 +849,15 @@ static void rearm_current(void)
     // advance()'s no-answer path sees s_cq_exhausted and ends the session.
     // This is the single choke point for ALL CQ arming (on_tx_complete and
     // the arm_current_if_idle safety nets both come through here).
+    // Somebody we just worked is still asking for our final: do not start
+    // calling CQ over the top of him. advance() sets this once per RX slot and
+    // clears it as soon as he stops (or the window closes), at which point the
+    // CQ resumes through the normal arm_current_if_idle() safety net.
+    if (st == FT8_QSO_CQ && s_final_hold) {
+        ESP_LOGI(TAG, "holding CQ: %s is still asking for our final", s_final_call);
+        return;
+    }
+
     if (st == FT8_QSO_CQ) {
         qmx_settings_t qs;
         settings_load_all(&qs);
@@ -706,6 +865,20 @@ static void rearm_current(void)
             lock(); s_cq_exhausted = true; unlock();
             ft8_status_set("CQ %d of %d sent - listening", cq_sent, qs.cq_max_calls);
             ESP_LOGI(TAG, "CQ auto-stop: %d of %d sent - not re-arming", cq_sent, qs.cq_max_calls);
+            return;
+        }
+        // Listening slot (Roy KI0ER): while transmitting we are deaf to our own
+        // time window, so its occupancy picture goes stale exactly where we need
+        // it to be fresh. Every N calls, skip one transmission and listen.
+        //
+        // The guard matters: cq_calls_sent does NOT advance on a slot we skip,
+        // so without remembering which count we already paused at, the run would
+        // stop at N and never call again.
+        if (qs.cq_listen_every > 0 && cq_sent > 0 &&
+            (cq_sent % qs.cq_listen_every) == 0 && s_cq_listen_done_at != cq_sent) {
+            lock(); s_cq_listen_done_at = cq_sent; unlock();
+            ft8_status_set("listening (after %d CQ calls)", cq_sent);
+            ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);
             return;
         }
     }
@@ -840,13 +1013,72 @@ static void refresh_our_report(int fresh_snr, bool as_roger,
     arm_current_replacing_armed();
 }
 
-// Another station has drifted onto our locked CQ tone since we started
-// calling (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear
-// 50 Hz slot and move there instead of just flagging "FREQ BUSY" and
-// continuing to transmit over whoever is legitimately there. Only called
-// from the CQ no-answer path - never mid-exchange, where the partner is
-// tracking our specific tone.
-static void relocate_cq_tone_if_clashing(void)
+// The partner was not heard ADDRESSING US this slot, but we may well have heard
+// them anyway - calling CQ again, or working somebody else - and that decode
+// carries a newer measurement of their signal than the one baked into the
+// message we are about to re-send.
+//
+// Operator, 2026-08-26: "answering a CQ'ing station sends the SNR report
+// alright - but if the station does not reply immediately then I should call
+// with a new fresh (and often different) SNR report. Now it stays on the
+// original." Quite right: a report is a measurement, and re-sending a stale one
+// every 15 seconds means the number that eventually gets through - and into both
+// stations' logs - describes a signal from minutes ago.
+//
+// refresh_our_report() covers the case where they answer us and repeat
+// themselves; this covers the case where they say nothing to us at all, which is
+// the one that actually persists, because that is what a station working down a
+// pileup looks like from here.
+//
+// ⛔ Only acts when our outgoing message ALREADY carries a report. A plain
+// pounce TX1 is our GRID, and turning that into a report because we re-heard
+// them would change which message we are sending rather than just its number.
+// s_rst_sent is exactly that flag: set when we sent a report, empty otherwise.
+static void refresh_report_from_heard(bool as_roger, const char *target,
+                                      int freq, int64_t slot_sec)
+{
+    if (!s_rst_sent[0] || !target || !target[0]) return;
+    ft8_call_t heard;
+    if (!ft8_screen_find_call(target, &heard)) return;
+    // Only a decode from THIS slot is news. An older row would re-assert the
+    // number we already sent, and refresh_our_report() would drop it anyway -
+    // this just says so where it is cheap.
+    if (heard.last_utc != slot_sec) return;
+    refresh_our_report(heard.last_snr_db, as_roger, target, freq, slot_sec);
+}
+
+// Another station has drifted onto our tone since we picked it
+// (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear 50 Hz slot
+// and move there instead of just flagging "FREQ BUSY" and transmitting over
+// whoever is legitimately there.
+//
+// Called from TWO places, and the distinction is the whole point (#201):
+//
+//   is_cq=true  - the CQ no-answer path, as before.
+//   is_cq=false - a POUNCE that has not transmitted yet, i.e. TX1 only.
+//
+// ⚠ THE ORIGINAL REASON FOR "NEVER MID-EXCHANGE" IS FALSE, and it was mine to
+// repeat. Roy KI0ER (2026-08-20): "The other station's software is not and
+// should not be tracking my offset tone. It does not matter where in the
+// waterfall I show up; their software is decoding and matching the TEXT of my
+// message to their callsign." He is right - FT8 decoders work the whole
+// passband and match on callsign, so each message in a QSO may ride a different
+// tone. Operators move deliberately in WSJT-X to escape QRM or QSB mid-QSO.
+//
+// ⚠ But there IS a real constraint, from Gyula HA3HZ in the same thread: a
+// partner who has NARROWED their receive bandwidth (MSHV does this to keep
+// decode time inside the reply window) may simply not hear a station that
+// jumped far away. So "move freely" is wrong too - what is safe is moving as
+// LITTLE as possible, which is exactly what ft8_find_clear_tone_hz_near() does.
+//
+// The one hard rule both agree on: never change tone DURING a burst. Roy KI0ER hit exactly that hole - answering a CQ, TX HOLD off, fresh
+// EVEN+ODD maps with green slots visible, and the reply still went out on an
+// occupied offset showing "FREQ BUSY", because the tone was chosen once when
+// the reply was armed and nothing could move it in the ~15 s before the burst.
+//
+// The caller owns the "have we transmitted yet" test (s_tx_sent), not this
+// function - it is also reached from the CQ path, where the rule is different.
+static void relocate_tone_if_clashing(bool is_cq)
 {
     if (!ft8_tx_is_clashing()) return;
 
@@ -855,6 +1087,11 @@ static void relocate_cq_tone_if_clashing(void)
     // status line - it just isn't acted on behind their back.
     if (ft8_tx_get_tone_hold()) return;
 
+    // Never move a burst that is already on the air. disarm/re-arm cannot
+    // recall a keyed transmission, and half-moving one would put the tone and
+    // the armed request out of step.
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return;
+
     lock();
     int old_freq = s_freq_hz;
     unlock();
@@ -862,16 +1099,45 @@ static void relocate_cq_tone_if_clashing(void)
     int new_freq = ft8_find_clear_tone_hz_near(old_freq);
     if (new_freq == old_freq) return;   // band fully packed - nowhere clearer to go
 
+    // #219: mid-exchange, the move must be SMALL and it must not repeat
+    // forever. Before our first burst neither limit applies - nobody is
+    // listening for us yet, so the best available slot is simply the best one.
+    const bool mid_qso = (!is_cq && s_tx_sent);
+    if (mid_qso) {
+        int delta = new_freq - old_freq;
+        if (delta < 0) delta = -delta;
+        if (delta > QSO_MIDQSO_MOVE_MAX_HZ) {
+            // Staying put and showing FREQ BUSY beats going somewhere the
+            // partner may not be listening (Gyula HA3HZ).
+            ESP_LOGI(TAG, "clash at %d Hz: nearest clear slot is %d Hz away - "
+                          "too far to move mid-QSO, staying put", old_freq, delta);
+            return;
+        }
+        if (s_midqso_moves >= QSO_MIDQSO_MOVE_LIMIT) {
+            ESP_LOGI(TAG, "clash at %d Hz: already moved %d times this QSO - staying put",
+                     old_freq, s_midqso_moves);
+            return;
+        }
+        s_midqso_moves++;
+    }
+
+    ESP_LOGI(TAG, "%s tone %d Hz is busy - moving to %d Hz",
+             is_cq ? "CQ" : mid_qso ? "mid-QSO" : "TX1", old_freq, new_freq);
+
     lock();
     s_freq_hz               = new_freq;
     s_cur_req.audio_freq_hz = new_freq;
-    s_cq_saved.audio_freq_hz = new_freq;   // so a later QSO-timeout resume-CQ keeps the new tone
+    // CQ only: s_cq_saved is the CQ to resume after a QSO times out. A pounce
+    // must not rewrite it, or a later resume-CQ would come back on a tone that
+    // was picked for somebody else's exchange.
+    if (is_cq) s_cq_saved.audio_freq_hz = new_freq;
     unlock();
 
     ft8_tx_disarm();   // cancel the stale-frequency ARMED request
     arm_current_if_idle();
-    ft8_status_set("CQ: moved off busy tone -> %d Hz", new_freq);
-    ESP_LOGI(TAG, "CQ tone clash at %d Hz - relocated to %d Hz", old_freq, new_freq);
+    ft8_status_set("%s: moved off busy tone -> %d Hz", is_cq ? "CQ" : "TX", new_freq);
+    ESP_LOGI(TAG, "%s tone clash at %d Hz - relocated to %d Hz",
+             is_cq ? "CQ" : "TX", old_freq, new_freq);
 }
 
 // --- Broken-QSO resume (operator request 2026-07-16) -----------------------
@@ -1007,10 +1273,14 @@ static void register_miss(const char *waiting_for)
     // auto-work pileup) stop re-calling it (Roy KI0ER: the robot re-tried the
     // same deaf station all night). Manual pounces stay possible after an
     // explicit "Clear from grey-list".
+    // HOUND (rule 4): no strike against a Fox. Going unanswered for many slots is
+    // the ordinary experience of a pileup - hundreds of hounds, one Fox, five
+    // contacts a slot - and grey-listing the DXpedition you are trying to work
+    // would be the exact opposite of what the operator wants.
     {
         qmx_settings_t gq;
         settings_load_all(&gq);
-        if (gq.greylist_en && tgt[0]) ft8_greylist_note_timeout(tgt);
+        if (gq.greylist_en && tgt[0] && !s_hound_active) ft8_greylist_note_timeout(tgt);
     }
 
     if (from_cq && s_have_cq_saved) {
@@ -1021,7 +1291,7 @@ static void register_miss(const char *waiting_for)
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
-        s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+        s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // resumed CQ = fresh sequence for the auto-stop count
         s_cq_exhausted  = false;
         unlock();
         ft8_tx_disarm();
@@ -1054,12 +1324,28 @@ void ft8_qso_init(void)
     s_fd_their_exch[0] = '\0';
 }
 
+// Whether the CURRENT QSO was started by the auto-answer robot rather than a
+// human tap. The busy-station hold treats the two differently (Roy KI0ER,
+// 2026-08-07): a deliberate pounce means the operator wants THAT station and
+// will happily wait out their other QSO - but the robot picked its target off a
+// list, so when that target turns out to be mid-QSO with someone else, waiting
+// is pure loss: move on and let the robot pick another CQ caller.
+static bool s_robot_started = false;
+
+void ft8_qso_mark_robot_started(void)
+{
+    s_robot_started = true;
+}
+
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 {
+    s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
+    s_midqso_moves = 0;  // #219
     if (!tx1_req || !tx1_req->target_call[0]) {
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
     }
+    s_robot_started = false;   // set again by the robot AFTER a successful start
     // Any explicitly-started QSO (manual tap, robot) ends pileup-drain tracking;
     // try_start_pileup_pounce() re-sets it right after this returns for the
     // pileup case. Scopes the timed-out-pileup auto-advance to pileup pounces
@@ -1127,6 +1413,22 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // first reply. Every other builder passes extra=NULL for REPLY (grid),
     // so this can't misfire on a decode-list or robot pounce.
     int partner_hz = 0;   // their AF tone, for the decode-priority hint
+
+    // Is the target a Fox? Decided here, before the Skip-TX1 branch below, because
+    // it has to VETO it. Fox/Hound's exchange is fixed - grid, their report, our
+    // R-report ON THEIR FREQUENCY, their RR73 - and Skip TX1 replaces the opening
+    // grid with a report, which puts the contact on the CQ-run ladder instead: no
+    // QSY step exists there, so our closing message goes out from the calling tone
+    // where the Fox is not listening.
+    //
+    // Not theoretical. On the bench (2026-08-10) a hound contact with the phantom
+    // Fox ran to completion and logged, entirely from 1350 Hz, having never
+    // QSY'd - a green result that was not F/H at all. Skip TX1 was on, which many
+    // operators will have.
+    int  fox_probe_hz = partner_tone_hz(tx1_req->target_call);
+    bool hound = ft8_hound_enabled(ft8_hound_mode()) &&
+                 fox_probe_hz > 0 && fox_probe_hz < FT8_HOUND_FOX_MAX_HZ;
+
     size_t pre_rpt_len = strnlen(tx1_req->extra_field, sizeof(tx1_req->extra_field));
     if (tx1_req->kind == FT8_TX_KIND_REPLY &&
         (tx1_req->extra_field[0] == '+' || tx1_req->extra_field[0] == '-') &&
@@ -1135,6 +1437,39 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         first_rpt[pre_rpt_len] = '\0';
         start_state  = FT8_QSO_WAIT_ROGER;
         skip_applied = true;
+    } else if (tx1_req->kind == FT8_TX_KIND_ROGER_RPT &&
+               tx1_req->extra_field[0] == 'R' &&
+               (tx1_req->extra_field[1] == '+' || tx1_req->extra_field[1] == '-') &&
+               pre_rpt_len - 1 < sizeof(first_rpt)) {
+        // #234 (Roy KI0ER, working K7FD): a pre-built ROGER-REPORT request -
+        // ft8_qso_build_manual_reply()/the auto-pileup drain skip straight to
+        // TX2 because the partner's OWN last message already reported us, so
+        // there is nothing left to wait for at TX1 - fell all the way through
+        // to the unconditional default below, WAIT_RPT. WAIT_RPT is "waiting
+        // for THEIR FIRST report"; it has no branch for "they already
+        // rogered us", only an explicit got_rr73/got_73 skip-ahead. So the
+        // very next decode from K7FD - a bare "RRR", carrying no report at
+        // all - fell into WAIT_RPT's default case, which re-measures OUR
+        // current SNR of them and re-sends ANOTHER R-report, forever. WSJT-X
+        // sends 73 after an RRR; ours just kept saying R-<latest SNR> every
+        // slot for 10+ minutes, and the QSO never logged.
+        //
+        // The correct next state, same as the REPLY/WAIT_ROGER branch above,
+        // is the one that already expects RR73/RRR/73 and already replies
+        // with "73" - WAIT_RR73's handler has carried this exact fix for a
+        // BARE "RRR" since 2026-07-27 (Roy KI0ER, NH6L). Skip the leading
+        // 'R' so first_rpt matches the plain numeric form ("-20", not
+        // "R-20") that ADIF's RST_SENT and every other caller of first_rpt
+        // already expect.
+        memcpy(first_rpt, tx1_req->extra_field + 1, pre_rpt_len - 1);
+        first_rpt[pre_rpt_len - 1] = '\0';
+        start_state  = FT8_QSO_WAIT_RR73;
+        skip_applied = true;
+    } else if (qs.ft8_filters.skip_tx1 && hound) {
+        // Skip TX1 vetoed - see the note above. Say so, or this looks like the
+        // toggle being ignored at random.
+        ESP_LOGI(TAG, "Skip TX1 ignored for %s: a Fox needs the standard "
+                      "grid -> report -> R-report exchange", tx1_req->target_call);
     } else if (qs.ft8_filters.skip_tx1) {
         // The decode-table snapshot is ~11 KB (FT8_CALL_TABLE_SIZE * sizeof(
         // ft8_call_t)) and MUST NOT be a stack local here: ft8_qso_start() runs
@@ -1206,12 +1541,23 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     int64_t tx1_slot = next_slot_sec(req_to_arm.use_parity, req_to_arm.want_even_slot,
                                      req_to_arm.protocol);
 
+    // `hound` was decided above (it had to veto Skip TX1). Re-check against the
+    // tone we finally settled on, in case partner_hz came from somewhere other
+    // than the probe - the flag must agree with the frequency we will QSY onto.
+    if (hound && !(partner_hz > 0 && partner_hz < FT8_HOUND_FOX_MAX_HZ)) {
+        ESP_LOGW(TAG, "hound: %s no longer looks like a Fox (tone %d Hz) - "
+                      "running an ordinary exchange", tx1_req->target_call, partner_hz);
+        hound = false;
+    }
+
     lock();
     s_state         = start_state;
     strncpy(s_target, tx1_req->target_call, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
     s_freq_hz       = req_to_arm.audio_freq_hz;
     s_partner_freq_hz = partner_hz;
+    s_hound_active  = hound;
+    s_hound_tone_hz = hound ? req_to_arm.audio_freq_hz : 0;
     s_min_scan_utc  = tx1_slot + 15;
     s_missed_slots  = 0;
     s_busy_holds    = 0;    // a fresh pounce is never mid-hold
@@ -1228,7 +1574,18 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         // inventing a value.
         strncpy(s_rst_sent, first_rpt, sizeof(s_rst_sent) - 1);
         s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
-        s_rst_rcvd[0] = '\0';
+        /* If we got here because they had ALREADY reported us (the #234
+         * R-report entry), that is their measurement of us and belongs in
+         * the log NOW: WAIT_RPT never runs to collect it, and a partner who
+         * jumps straight to RR73 skips WAIT_ROGER too (#292). Still empty for
+         * a genuine skip-TX1 start, where they have told us nothing yet. */
+        if (start_state == FT8_QSO_WAIT_RR73 && s_heard_their_rpt[0] &&
+            strcmp(s_heard_their_rpt_call, tx1_req->target_call) == 0) {
+            strncpy(s_rst_rcvd, s_heard_their_rpt, sizeof(s_rst_rcvd) - 1);
+            s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+        } else {
+            s_rst_rcvd[0] = '\0';
+        }
     } else {
         // Normal pounce: we receive their report (RST_RCVD); we never give our
         // own numeric report in TX1/TX2, so RST_SENT stays empty and is omitted.
@@ -1247,7 +1604,17 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // (where we listen, and the decode-priority hint). They are DIFFERENT by
     // design - conflating them was the 2026-07-28 priority-hint bug - so a log
     // showing only one number cannot tell you whether the hint is sane.
-    if (skip_applied) {
+    if (skip_applied && start_state == FT8_QSO_WAIT_RR73) {
+        // #234: the ROGER_RPT-triggered start above - we've already been
+        // given their report, so what we sent is R<report>, and what we're
+        // waiting for is RR73/RRR/73, not "a roger". Distinct wording so a
+        // future log-reader isn't misled the same way this bug's own log
+        // line ("started QSO (pounce)") gave no hint anything was off.
+        ft8_status_set("QSO %s: sent R%s - waiting for RR73", tx1_req->target_call, first_rpt);
+        ESP_LOGI(TAG, "started QSO (pounce, R-report): %s our_tone=%d Hz their_tone=%d Hz report=R%s, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz, first_rpt,
+                 (long long)(tx1_slot + 15));
+    } else if (skip_applied) {
         ft8_status_set("QSO %s: sent report %s - waiting for roger", tx1_req->target_call, first_rpt);
         ESP_LOGI(TAG, "started QSO (pounce, skip-TX1): %s our_tone=%d Hz their_tone=%d Hz report=%s, min_scan=%lld",
                  tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz, first_rpt,
@@ -1266,6 +1633,8 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 
 bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
 {
+    s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
+    s_midqso_moves = 0;  // #219
     if (!cq_req) {
         if (err) snprintf(err, err_len, "No CQ request");
         return false;
@@ -1293,13 +1662,14 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_target[0]     = '\0';
     s_freq_hz       = req_copy.audio_freq_hz;
     s_partner_freq_hz = 0;     // no partner yet; don't leak a previous pounce's tone
+    s_hound_active  = false;   // calling CQ is never a hound flow
     s_cur_req       = req_copy;
     s_have_cur      = true;
     s_cq_saved      = req_copy;
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
-    s_cq_calls_sent = 0;       // fresh CQ sequence - auto-stop count restarts
+    s_cq_calls_sent = 0; s_cq_listen_done_at = -1;       // fresh CQ sequence - auto-stop count restarts
     s_cq_exhausted  = false;
     s_pileup_active = false;   // starting CQ is not part of a pileup drain
     clear_dt_follow();         // no partner yet - transmit CQ on the UTC/GPS beat
@@ -1373,6 +1743,34 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
         ok = send_next_fd(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, exch,
                           FT8_QSO_WAIT_ROGER);
         if (ok) ft8_status_set("QSO %s: answered - sending %s", caller, exch);
+    } else if (report && (report[0] == '+' || report[0] == '-') &&
+               report[1] >= '0' && report[1] <= '9') {
+        // ⭐ THEY SKIPPED THE GRID AND REPORTED US STRAIGHT AWAY, so the ladder
+        // is one rung further on than the plain case below: answer with
+        // R<our report>, which both acknowledges theirs and gives ours, and wait
+        // for RR73 rather than for a roger we have already been sent.
+        //
+        // Gyula HA3HZ: "When the partner replies to a CQ, he does not send a
+        // Grid, but a report (because he is already familiar), then my reply is
+        // also a report and not an acknowledgement of the report. This happened
+        // twice." Sending a bare report back reads as ignoring what they said,
+        // and costs a whole cycle.
+        //
+        // Note the block above ALREADY recognised this case to capture RST_RCVD -
+        // the information was there and the reply simply did not use it. And
+        // ft8_qso_build_manual_reply() has always got this right, so the manual
+        // Transmit behaved correctly while the automatic CQ-run did not: the same
+        // manual-right/automatic-wrong split as the pileup grid bug (#134).
+        char roger[16];
+        make_roger(rpt, roger, sizeof(roger));
+        ok = send_next(FT8_TX_KIND_ROGER_RPT, caller, our_freq, slot_sec, roger,
+                       FT8_QSO_WAIT_RR73);
+        if (ok) {
+            strncpy(s_rst_sent, rpt, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+            ft8_status_set("QSO %s: they reported %s - sending %s", caller,
+                           report, roger);
+        }
     } else {
         ok = send_next(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, rpt,
                        FT8_QSO_WAIT_ROGER);
@@ -1393,7 +1791,7 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
-        s_cq_calls_sent = 0;   // fresh sequence for the auto-stop count
+        s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // fresh sequence for the auto-stop count
         s_cq_exhausted  = false;
         unlock();
     }
@@ -1472,6 +1870,11 @@ static bool try_start_pileup_pounce(void)
     qmx_settings_t qs;
     settings_load_all(&qs);
     if (!qs.ft8_filters.auto_pileup)            return false;
+    // Manual pick wins over auto-work-pileup. Both decide WHO to work next, and
+    // an operator who asked to choose has not asked to have the strongest caller
+    // chosen for them a moment later - leaving both live would quietly defeat the
+    // setting they just turned on.
+    if (qs.ft8_filters.cq_manual_pick)          return false;
     if (!qs.my_callsign[0] || !qs.my_grid[0])   return false;
 
     ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
@@ -1485,9 +1888,56 @@ static bool try_start_pileup_pounce(void)
         // rule the robot enforces, so auto-work never re-calls a logged station.
         if (qs.ft8_filters.excl_worked_before &&
             adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+        // ...and never inside the grace window, checkbox or not. Deliberately
+        // NOT applied to capture_pileup_callers() above: a recently-worked
+        // caller stays VISIBLE in the pileup so the operator can still pick
+        // them by hand - this only stops the machine doing it unattended.
+        if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
         // Grey-listed (repeated failed pounces) - don't auto-drain into them.
         if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
         if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+    }
+
+    /* ⛔ AND NOT WHILE THEY ARE MID-QSO WITH SOMEBODY ELSE (Gyula HA3HZ,
+     * 2026-08-30: "I did not call and did not mark YL3PK before, but the
+     * software called him").
+     *
+     * He HAD been called - 'HA3HZ YL3PK KO27', legitimately putting YL3PK in the
+     * pileup - but the drain reached him 129 s later, by which time he was
+     * working ER1SKI/P. We then called him five times over.
+     *
+     * The information was right there and was used for the wrong thing: the
+     * drain reads their last message to CHOOSE THE MESSAGE FORMAT, logging
+     * "last heard '...' is not to us - report-first", and never asks whether that
+     * means it should call at all. partner_busy_with() already existed and was
+     * consulted once a QSO was RUNNING; it was never consulted when picking.
+     *
+     * ⚠ CHECKED ON THE WINNER, NOT INSIDE THE SELECTION LOOP. partner_busy_with()
+     * allocates ~11 KB of PSRAM and snapshots the whole call table under the
+     * screen mutex; calling it for every one of up to FT8_PILEUP_MAX entries
+     * would do that twelve times in a burst on the decode task, which is the
+     * shape CLAUDE.md warns about for the cyan flash. Exclude-and-repick costs
+     * ONE call in the ordinary case and never more than it would have.
+     *
+     * The deeper cause is a premise that stopped being true: ft8_pileup.h has no
+     * expiry and justifies it as "nothing in this module ever arms a TX", which
+     * was sound while a human chose from the list and could see they were busy.
+     * Auto-work-pileup was built on top later without revisiting that. */
+    while (best >= 0) {
+        char busy_with[FT8_CALL_MAX_LEN] = {0};
+        if (!partner_busy_with(pile[best].call, busy_with, sizeof busy_with)) break;
+        ESP_LOGI(TAG, "auto-pileup: skipping %s - busy with %s",
+                 pile[best].call, busy_with);
+        pile[best].call[0] = '\0';          /* take them out of THIS pass only */
+        best = -1;
+        for (int i = 0; i < n; i++) {
+            if (!pile[i].call[0]) continue;
+            if (qs.ft8_filters.excl_worked_before &&
+                adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+            if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
+            if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
+            if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+        }
     }
     if (best < 0) return false;
 
@@ -1497,16 +1947,120 @@ static bool try_start_pileup_pounce(void)
     int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
-    if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
-                              pile[best].last_seen_utc, NULL, &req, err, sizeof(err))) {
-        ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
-        return false;
+    // REPORT-FIRST, not grid. Everyone in the pileup CALLED US - they already
+    // have our grid from the CQ that put them there - so they are waiting for a
+    // signal report, and sending "<them> <me> <grid>" makes their software give
+    // up on the contact. Roy KI0ER lost QSOs to exactly this: the first caller
+    // worked fine, the second (picked up from the pileup after that QSO logged)
+    // was answered with a grid.
+    //
+    // Passing the report as `extra` is the whole fix: ft8_qso_start() already
+    // detects a REPLY whose third field is a "+NN"/"-NN" token, arms it
+    // unchanged and starts in WAIT_ROGER - the same shape and state
+    // cqrun_answer() uses. That path was added for the pileup MODAL (Ken
+    // KF0AYY, 2026-07-15) and this automatic drain was never moved onto it.
+    // ⭐ BUILD THE REPLY FROM WHAT THEY ACTUALLY SENT, through the one builder
+    // that has been right every time (#172).
+    //
+    // This used to always send a BARE report and start in WAIT_ROGER. That is
+    // correct for a caller who sent a grid, and wrong for the experienced
+    // operator who reported US instead - he needs R<report> and WAIT_RR73. It
+    // could not be a one-line branch either, because ft8_pileup_entry_t records
+    // call/snr/freq/last_seen and NOT what they sent, so the drain had no way to
+    // tell the two apart.
+    //
+    // So look them up in the heard table and hand it to
+    // ft8_qso_build_manual_reply(), which derives the whole ladder from
+    // last_text. This removes the SECOND message-building path rather than
+    // patching it a third time - the same shape had already been fixed in the
+    // pileup modal (#134, sent a grid) and in cqrun_answer() (#167, sent a bare
+    // report), and each fix left the others standing. One path cannot disagree
+    // with itself.
+    //
+    // Safe from the decode task: that function touches no LVGL objects (its
+    // header note describes its original caller, not a hard constraint) and its
+    // one qmx_settings_t is the same load this function already does.
+    // ⚠ ONLY build from the heard text if it is ADDRESSED TO US - found by testing
+    // this in sim, where it was masked by a setting.
+    //
+    // The pileup exists because these stations called US. But the heard table
+    // holds their LATEST message, and a caller who gave up has usually gone back
+    // to calling CQ - so building from last_text would answer a pileup caller
+    // with a grid TX1, which is exactly the #134 bug the report-first logic was
+    // written to prevent ("Roy KI0ER lost QSOs to exactly this"). The sim run
+    // showed 'auto-pileup N5XYZ: replying to CQ N5XYZ EM12' and still produced a
+    // report - but only because Skip-TX1 happened to be ON, which turns a CQ
+    // answer into a report anyway. With it off the grid would have gone out.
+    //
+    // So: their message to us decides the rung (grid -> report, report ->
+    // R-report, which is the whole point of #172); anything else falls through to
+    // report-first, which is the right default for someone who called us.
+    ft8_call_t heard;
+    bool heard_to_us = false;
+    if (ft8_screen_find_call(pile[best].call, &heard)) {
+        char h1[16], h2[16], hrest[FT8_FD_EXCH_LEN];
+        heard_to_us = split_msg3(heard.last_text, h1, sizeof(h1), h2, sizeof(h2),
+                                 hrest, sizeof(hrest)) &&
+                      s_my_call[0] && strcmp(h1, s_my_call) == 0;
+        if (!heard_to_us) {
+            ESP_LOGI(TAG, "auto-pileup %s: last heard '%s' is not to us - "
+                          "report-first", pile[best].call, heard.last_text);
+        }
     }
+    if (heard_to_us) {
+        if (!ft8_qso_build_manual_reply(&heard, reply_freq_hz, &req, NULL, err, sizeof(err))) {
+            ESP_LOGW(TAG, "auto-pileup build_manual_reply(%s) failed: %s",
+                     pile[best].call, err);
+            return false;
+        }
+        ESP_LOGI(TAG, "auto-pileup %s: replying to '%s'", pile[best].call, heard.last_text);
+    } else {
+        // Aged out of the heard table (60 s) while still queued in the pileup,
+        // which is normal for a station waiting several minutes. Fall back to
+        // report-first: everyone in the pileup CALLED US, so they already have
+        // our grid and are waiting on a report. Roy KI0ER lost QSOs to a grid
+        // being sent here.
+        char pile_rpt[8];
+        fmt_report(pile[best].snr_db, pile_rpt, sizeof(pile_rpt));
+        if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
+                                  pile[best].last_seen_utc, pile_rpt, &req, err, sizeof(err))) {
+            ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
+            return false;
+        }
+        ESP_LOGI(TAG, "auto-pileup %s: not in heard table, report-first fallback",
+                 pile[best].call);
+    }
+    // Carry the CQ-run context ACROSS the start, the same way s_pileup_active is
+    // re-set below, because ft8_qso_start() clears all of it (it cannot know an
+    // automatic drain from a manual pounce).
+    //
+    // Without this, draining the pileup ENDED the CQ run: every drained contact
+    // was marked "not from CQ", so when the pileup finally emptied the machine
+    // fell to IDLE and stopped calling. During an activation that is the wrong
+    // default - the operator decides when to stop calling, or the "CQ stop
+    // after N calls" setting does. Nothing should silently stop the run just
+    // because the queue drained. (Operator's call, 2026-08-15.)
+    //
+    // Only restored when we WERE in a CQ run: a pileup drained from IDLE must
+    // not invent a CQ to resume into.
+    lock();
+    bool             was_from_cq   = s_from_cq;
+    bool             had_cq_saved  = s_have_cq_saved;
+    ft8_tx_request_t cq_ctx        = s_cq_saved;
+    unlock();
+
     if (!ft8_qso_start(&req, err, sizeof(err))) {   // clears s_pileup_active
         ESP_LOGW(TAG, "auto-pileup ft8_qso_start(%s) refused: %s", pile[best].call, err);
         return false;
     }
+    lock();
     s_pileup_active = true;   // set AFTER ft8_qso_start (which clears it)
+    if (was_from_cq && had_cq_saved) {
+        s_from_cq       = true;
+        s_cq_saved      = cq_ctx;
+        s_have_cq_saved = true;
+    }
+    unlock();
     ESP_LOGI(TAG, "auto-pileup: working %s (snr=%d, %d waiting)",
              pile[best].call, pile[best].snr_db, n);
     ft8_status_set("Pileup: working %s", pile[best].call);
@@ -1592,9 +2146,32 @@ void ft8_qso_advance(int64_t slot_sec)
         lock();
         ft8_qso_state_t stf = s_state;
         unlock();
-        if ((stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) &&
-            final_resend_if_still_asked(slot_sec))
-            return;
+        if (stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) {
+            // Is a just-worked partner STILL asking for our final? Evaluated
+            // regardless of whether we have re-sends left, because the answer
+            // also decides whether we are allowed to start talking to anyone
+            // else this slot.
+            int64_t now_s = (int64_t)time(NULL);
+            bool asking = s_final_call[0] &&
+                          (now_s - s_last_done_ts) <= FINAL_RESEND_WINDOW_SEC &&
+                          partner_still_awaiting_final(slot_sec, s_final_call);
+            s_final_hold = asking;
+
+            if (asking) {
+                if (final_resend_if_still_asked(slot_sec)) return;
+
+                // Budget spent, but he is still calling. Say nothing rather than
+                // call CQ over him: disarm anything queued (an ARMED burst fires
+                // on its own otherwise - the lesson from the v1.3.3 busy-station
+                // hold) and give the slot up. rearm_current() will not arm a new
+                // CQ while s_final_hold is set.
+                if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ft8_tx_disarm();
+                ft8_status_set("%s still asking - holding TX", s_final_call);
+                return;
+            }
+        } else {
+            s_final_hold = false;      // mid-exchange with someone else
+        }
     }
 
     // Comeback auto-resume: a partner we abandoned recently decoded THIS slot
@@ -1637,8 +2214,44 @@ void ft8_qso_advance(int64_t slot_sec)
         // doesn't stall the whole drain. A human/robot pounce timeout is left
         // sticky (s_pileup_active is false for those).
         if (s_pileup_active) {
+            // ft8_qso_abort() also clears the CQ-run context, so without this a
+            // single caller who wandered off would quietly end the whole CQ run
+            // once the rest of the queue drained. Same rule as the completion
+            // path: nothing automatic stops the operator calling CQ.
+            lock();
+            bool             was_from_cq  = s_from_cq;
+            bool             had_cq_saved = s_have_cq_saved;
+            ft8_tx_request_t cq_ctx       = s_cq_saved;
+            unlock();
+
             ft8_qso_abort();                       // TIMEOUT -> IDLE, clears s_pileup_active
+
+            if (was_from_cq && had_cq_saved) {
+                lock();
+                s_from_cq       = true;
+                s_cq_saved      = cq_ctx;
+                s_have_cq_saved = true;
+                unlock();
+            }
             if (try_start_pileup_pounce()) return; // next waiting station
+
+            // Queue empty after a dead caller: fall back to the CQ we were
+            // running rather than going idle.
+            if (was_from_cq && had_cq_saved) {
+                lock();
+                s_cur_req       = cq_ctx;
+                s_have_cur      = true;
+                s_state         = FT8_QSO_CQ;
+                s_target[0]     = '\0';
+                s_missed_slots  = 0;
+                s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
+                s_cq_exhausted  = false;
+                unlock();
+                arm_current_if_idle();
+                ft8_status_set("CQ: calling - listening for answers");
+                ESP_LOGI(TAG, "pileup drained (last caller timed out) - resuming CQ @ %d Hz",
+                         cq_ctx.audio_freq_hz);
+            }
         }
         return;
     }
@@ -1677,7 +2290,7 @@ void ft8_qso_advance(int64_t slot_sec)
             s_state        = FT8_QSO_CQ;
             s_target[0]    = '\0';
             s_missed_slots = 0;
-            s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+            s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // resumed CQ = fresh sequence for the auto-stop count
             s_cq_exhausted  = false;
         } else {
             s_state    = FT8_QSO_IDLE;
@@ -1720,13 +2333,25 @@ void ft8_qso_advance(int64_t slot_sec)
             s_last_done_ts = time(NULL);
             // Remember the final we just sent, so it can be re-sent if they turn
             // out not to have decoded it (see final_resend_if_still_asked).
-            strncpy(s_final_call, target, sizeof(s_final_call) - 1);
-            s_final_call[sizeof(s_final_call) - 1] = '\0';
-            s_final_freq_hz = s_freq_hz;
-            s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
-            snprintf(s_final_extra, sizeof(s_final_extra), "%s",
-                     s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
-            s_final_resends = 0;
+            //
+            // HOUND (rule 4): except after a hound contact, where there is no
+            // final to re-send - the Fox's RR73 closed it and we deliberately
+            // stayed quiet. Leaving s_final_call set would have us transmitting
+            // "73" into a Fox's frequency for up to three slots simply because it
+            // is still calling other hounds, which it always is.
+            if (s_hound_active) {
+                s_final_call[0] = '\0';
+                s_final_resends = 0;
+                s_hound_active  = false;   // session over; the next start decides afresh
+            } else {
+                strncpy(s_final_call, target, sizeof(s_final_call) - 1);
+                s_final_call[sizeof(s_final_call) - 1] = '\0';
+                s_final_freq_hz = s_freq_hz;
+                s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
+                snprintf(s_final_extra, sizeof(s_final_extra), "%s",
+                         s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
+                s_final_resends = 0;
+            }
             unlock();
 
             // A completed QSO with this call supersedes any older resumable
@@ -1770,6 +2395,15 @@ void ft8_qso_advance(int64_t slot_sec)
                 }
             }
 
+            // Were they activating a park/summit? Resolved now, while the
+            // contact is fresh - the spot can age out of the store long before
+            // anyone exports the log, and a chase with no SIG_INFO earns no
+            // credit for either side. Empty for an ordinary QSO.
+            char their_sig[8] = "", their_ref[16] = "";
+            spots_activation_for_call(target, cat_get_frequency(),
+                                      their_sig, sizeof(their_sig),
+                                      their_ref, sizeof(their_ref));
+
             adif_qso_t qso = {
                 .their_call = target,
                 .my_call    = s_my_call,
@@ -1784,6 +2418,8 @@ void ft8_qso_advance(int64_t slot_sec)
                 .my_arrl_section    = have_fd_exch ? qs.fd_section : NULL,
                 .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
                 .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
+                .their_sig      = their_sig[0] ? their_sig : NULL,
+                .their_sig_info = their_ref[0] ? their_ref : NULL,
             };
             // Duplicate guard (see QSO_DUP_LOG_WINDOW_SEC): the same call on the
             // same band inside the window is this same contact reaching DONE a
@@ -1804,6 +2440,10 @@ void ft8_qso_advance(int64_t slot_sec)
                 s_logged_freq_hz = qso.freq_hz;
                 s_logged_ts      = (int64_t)time(NULL);
             }
+            // Grace ring: note it on BOTH branches. A contact reaching DONE a
+            // second time is still one we have just worked, and it is precisely
+            // the case the unattended pickers must not pick up again.
+            note_worked_now(target, qso.freq_hz);
             s_fd_their_exch[0] = '\0';
         }
         return;
@@ -1821,6 +2461,24 @@ void ft8_qso_advance(int64_t slot_sec)
                                  report, sizeof(report), &got_rr73, &got_73)) {
             ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
                      caller, caller_freq, caller_snr, got_rr73, got_73);
+
+            // MANUAL PICK (Eric K3FNB): the operator chooses who to work rather
+            // than the first answer winning. Only the CHOICE is manual - a tapped
+            // caller runs the normal automated exchange from there.
+            //
+            // Deliberately keeps calling CQ instead of standing down. An activator
+            // wants the pile-up to keep building while they pick, and going silent
+            // would look like the radio had stopped. capture_pileup_callers() has
+            // already recorded this caller at the top of advance(), so they are
+            // tappable in the pile-up list without anything extra here.
+            qmx_settings_t mp;
+            settings_load_all(&mp);
+            if (mp.ft8_filters.cq_manual_pick) {
+                ESP_LOGI(TAG, "CQ: manual pick is on - %s is waiting in the pile-up, "
+                              "not answering automatically", caller);
+                return;
+            }
+
             ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
             cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
         } else {
@@ -1838,7 +2496,7 @@ void ft8_qso_advance(int64_t slot_sec)
                 s_have_cur      = false;
                 s_have_cq_saved = false;
                 s_cq_exhausted  = false;
-                s_cq_calls_sent = 0;
+                s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
                 unlock();
                 ft8_tx_disarm();
                 ft8_status_set("CQ stopped after %d calls - no answer", sent);
@@ -1849,7 +2507,7 @@ void ft8_qso_advance(int64_t slot_sec)
             // since we started calling, and move off it if so. Otherwise
             // on_tx_complete keeps the CQ armed at the same tone; idle
             // fallback only.
-            relocate_cq_tone_if_clashing();
+            relocate_tone_if_clashing(true);
             arm_current_if_idle();
         }
         return;
@@ -1882,9 +2540,37 @@ void ft8_qso_advance(int64_t slot_sec)
     // partner answered us, so one wandering off is a lost QSO that should time
     // out normally. Bounded: past the cap we fall through to the usual
     // miss/timeout path so a vanished station still gives up.
-    if (!found && !from_cq && target[0] &&
+    // HOUND (rule 3): never hold for a busy Fox. A Fox is working somebody in
+    // every single slot - that is what a Fox IS - so the hold below would engage
+    // immediately and keep us silent for its whole budget, i.e. we would join the
+    // pileup by not calling. Being ignored while it works its queue is the normal
+    // hound experience, and the ordinary miss/timeout path handles it.
+    if (!found && !from_cq && target[0] && !s_hound_active &&
         (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73)) {
         char with[FT8_CALL_MAX_LEN] = {0};
+        if (s_robot_started && partner_busy_with(target, with, sizeof with)) {
+            // Robot pick turned out busy: abandon, do not wait (Roy KI0ER). The
+            // robot's next tick chooses another CQ caller - and it cannot
+            // re-pick this one immediately, because their last message is a
+            // reply, not a CQ, so the is_cq gate excludes them until they call
+            // again. Deliberately NOT a grey-list strike: busy is not
+            // unresponsive, and the hold never counted a miss either.
+            ESP_LOGI(TAG, "robot pick %s is working %s - moving on instead of waiting",
+                     target, with[0] ? with : "someone");
+            ft8_status_set("%s busy with %s - robot moving on",
+                           target, with[0] ? with : "someone");
+            lock();
+            s_state         = FT8_QSO_IDLE;
+            s_target[0]     = '\0';
+            s_have_cur      = false;
+            s_from_cq       = false;
+            s_partner_freq_hz = 0;
+            s_robot_started = false;
+            unlock();
+            ft8_tx_disarm();          // the re-armed burst must not fire either
+            clear_dt_follow();
+            return;
+        }
         if (partner_busy_with(target, with, sizeof with) &&
             s_busy_holds < QSO_BUSY_HOLD_MAX_SLOTS) {
             lock();
@@ -1927,7 +2613,26 @@ void ft8_qso_advance(int64_t slot_sec)
         // POUNCE: we sent our grid; expect their signal report (normal mode)
         // or their class+section (Field Day - sent without "R", since this is
         // their first FD-specific message to us).
-        if (!found) { register_miss("waiting for report"); return; }
+        if (!found) {
+            // #201 (Roy KI0ER): TX1 is armed but has not gone out yet, so our
+            // tone is still nobody's reference - if someone has landed on it in
+            // the meantime, move before we key rather than transmitting on top
+            // of them and merely showing "FREQ BUSY".
+            //
+            // #219: no longer gated on !s_tx_sent. Moving mid-QSO is legitimate
+            // - the partner matches on callsign, not on tone (Roy KI0ER) - and
+            // this is the no-progress path, so it only fires when we are being
+            // stepped on and getting nowhere, which is exactly when a WSJT-X
+            // operator would move by hand. The bounds live in
+            // relocate_tone_if_clashing(): at most QSO_MIDQSO_MOVE_MAX_HZ, at
+            // most QSO_MIDQSO_MOVE_LIMIT times, never during a burst.
+            relocate_tone_if_clashing(false);
+            // Skip-TX1 opens with a report, so this message can carry one
+            // even here; refresh it if we re-heard them this slot.
+            if (!fd_mode) refresh_report_from_heard(false, target, freq, slot_sec);
+            register_miss("waiting for report");
+            return;
+        }
 
         // Our own locally-measured SNR of their signal. This is what TX2's
         // "R<report>" must carry - our measurement of THEM, NOT an echo of the
@@ -1966,6 +2671,28 @@ void ft8_qso_advance(int64_t slot_sec)
             // 8-byte bound (real content is tiny, e.g. "R-04").
             char roger[16];
             make_roger(our_rpt, roger, sizeof(roger));
+
+            // HOUND (rule 1): QSY DOWN onto the Fox before answering. This is the
+            // whole point of Fox/Hound - the Fox listens only to its own narrow
+            // slice, so an R-report sent from our up-band calling tone is never
+            // heard and the contact dies one message short.
+            //
+            // Applied to s_freq_hz as well as to this message, so every re-send
+            // (rearm_current) stays down there until the Fox rogers us. The
+            // partner's tone comes from their decodes and is real Hz, not a bin
+            // index - the v0.18.4 fix, without which this would QSY to nonsense.
+            if (s_hound_active && s_partner_freq_hz > 0) {
+                int fox_hz = s_partner_freq_hz;
+                if (fox_hz < FT8_TX_TONE_MIN_HZ) fox_hz = FT8_TX_TONE_MIN_HZ;
+                if (freq != fox_hz) {
+                    ESP_LOGI(TAG, "HOUND: QSY %d -> %d Hz (onto %s) for the R-report",
+                             freq, fox_hz, target);
+                    ft8_status_set("Hound: QSY to %d Hz - answering %s", fox_hz, target);
+                }
+                freq = fox_hz;
+                lock(); s_freq_hz = fox_hz; unlock();
+            }
+
             ESP_LOGI(TAG, "WAIT_RPT: %s reported us %s, we heard them %s -> TX2 %s",
                      target, report, our_rpt, roger);
             ok = send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
@@ -1987,7 +2714,17 @@ void ft8_qso_advance(int64_t slot_sec)
 
     if (st == FT8_QSO_WAIT_ROGER) {
         // CQ-RUN: we sent a report; expect their R<report> (then we send RR73).
-        if (!found) { register_miss("waiting for roger"); return; }
+        if (!found) {
+            // #219: same as WAIT_RPT - stepped on and getting nowhere is when a
+            // WSJT-X operator moves, so do it here too, under the same bounds.
+            relocate_tone_if_clashing(false);
+            // THE reported case: we answered their CQ with a report and
+            // they have not come back to us. Re-send with this slot's
+            // measurement rather than the one from when we first called.
+            if (!fd_mode) refresh_report_from_heard(false, target, freq, slot_sec);
+            register_miss("waiting for roger");
+            return;
+        }
 
         if (got_rr73 || got_73) {
             if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
@@ -2045,9 +2782,36 @@ void ft8_qso_advance(int64_t slot_sec)
             // refresh our R<report> to this slot's fresh SNR before re-sending,
             // same WSJT-X behaviour as the CQ-run WAIT_ROGER path above.
             if (found && !fd_mode) refresh_our_report(snr_db, true, target, freq, slot_sec);
+            // Not addressed to us this slot, but still heard: our R<report>
+            // gets the same treatment.
+            else if (!fd_mode) refresh_report_from_heard(true, target, freq, slot_sec);
+            relocate_tone_if_clashing(false);   // #219, same bounds
             register_miss("waiting for RR73");
             return;
         }
+        // HOUND (rule 2): the Fox's RR73 ENDS it. A hound does not send 73 - the
+        // Fox's frequency is the scarcest thing on the band and a courtesy 73
+        // there is pure clutter, on top of the pileup F/H exists to thin out.
+        //
+        // Completing without a final message: go to WAIT_DONE with nothing armed,
+        // and its handler (which waits for TX_IDLE) logs the QSO, clears the
+        // pileup and posts "complete" exactly as it does for any other contact -
+        // no second completion path to keep in step. Also hop back to the hound
+        // tone now, so the next Fox call goes out up-band where it belongs.
+        if (s_hound_active) {
+            ESP_LOGI(TAG, "HOUND: %s sent %s - complete, no 73 (Fox frequency stays clear)",
+                     target, got_rrr ? "RRR" : "RR73/73");
+            ft8_tx_disarm();          // the re-armed R-report must not fire again
+            lock();
+            s_state    = FT8_QSO_WAIT_DONE;
+            s_have_cur = false;
+            if (s_hound_tone_hz > 0) s_freq_hz = s_hound_tone_hz;
+            unlock();
+            ft8_status_set("Hound: %s worked - back on %d Hz", target,
+                           s_hound_tone_hz > 0 ? s_hound_tone_hz : freq);
+            return;
+        }
+
         ESP_LOGI(TAG, "WAIT_RR73: %s sent %s - arming TX3", target,
                  got_rrr ? "RRR" : "RR73/73");
         if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
@@ -2063,6 +2827,8 @@ void ft8_qso_advance(int64_t slot_sec)
 
 void ft8_qso_on_tx_complete(void)
 {
+    // #201: from here on the partner may be tracking our tone - stop moving it.
+    s_tx_sent = true;
     // Clamp the scan gate to when our message ACTUALLY fired. s_min_scan_utc
     // is predicted at start (next_slot_sec) assuming the burst waits for the
     // next matching boundary - but the reply-window path (FT8_REPLY_TX_WINDOW_MS)
@@ -2091,6 +2857,58 @@ void ft8_qso_on_tx_complete(void)
         }
     }
     unlock();
+
+    // ⭐ RST_SENT is what we actually TRANSMITTED, not what we last armed.
+    //
+    // Gyula HA3HZ reported logged report values being wrong. s_rst_sent was
+    // written at ARM time in three places, and an armed request can be replaced
+    // before it ever reaches the air - refresh_our_report() does exactly that,
+    // deliberately, whenever we re-hear the partner with a fresher SNR. So the
+    // log could carry a report that was never sent, which is the same class of
+    // dishonesty as the fabricated "599" removed in v1.3.4: a value in the log
+    // that nothing on the air supports.
+    //
+    // We are called immediately after the burst and ft8_tx_arm() refuses while a
+    // burst is ACTIVE, so s_cur_req here IS the message that just went out.
+    // Latching from its extra_field makes RST_SENT track reality; if a fresher
+    // report is armed afterwards it will overwrite this on ITS own completion.
+    //
+    // Guarded to reports only: a Field Day exchange carries class+section in the
+    // same field and a TX1 carries a grid, and neither is a signal report.
+    lock();
+    if (s_have_cur && (s_cur_req.kind == FT8_TX_KIND_REPLY ||
+                       s_cur_req.kind == FT8_TX_KIND_ROGER_RPT)) {
+        const char *e = s_cur_req.extra_field;
+        if (e[0] == 'R' && (e[1] == '+' || e[1] == '-')) e++;   /* "R-10" -> "-10" */
+        if ((e[0] == '+' || e[0] == '-') && e[1] >= '0' && e[1] <= '9') {
+            if (strcmp(e, s_rst_sent) != 0) {
+                ESP_LOGI(TAG, "RST_SENT <- %s (as transmitted; was '%s')", e, s_rst_sent);
+            }
+            strncpy(s_rst_sent, e, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+        }
+    }
+    unlock();
+
+    // The operator picked a new TX offset while this burst was on the air.
+    // Apply it now, BEFORE the re-arm below, so the very next transmission uses
+    // it - that is the whole point of queueing it rather than refusing.
+    lock();
+    int pending = s_pending_tone_hz;
+    if (pending > 0) s_pending_tone_hz = 0;
+    bool running = (s_state != FT8_QSO_IDLE);
+    if (pending > 0 && running) {
+        s_freq_hz = pending;
+        // Parity untouched, exactly as in the immediate path: the partner
+        // tracks our slot, not our tone.
+        if (s_have_cur)      s_cur_req.audio_freq_hz  = pending;
+        if (s_have_cq_saved) s_cq_saved.audio_freq_hz = pending;
+    }
+    unlock();
+    if (pending > 0 && running) {
+        ft8_status_set("TX tone -> %d Hz", pending);
+        ESP_LOGI(TAG, "TX tone applied after the burst: %d Hz", pending);
+    }
 
     // Re-arm whatever we're currently sending for its next matching slot. This
     // gives the CQ loop its 30 s cadence and keeps exchange messages repeating
@@ -2160,14 +2978,28 @@ void ft8_qso_note_manual_target(const char *target_call)
     unlock();
 }
 
+// "An exchange is under way with s_target." The one predicate both accessors
+// below ask, because they used to ask different questions and disagreed:
+// get_working_target() tested the STATE (so it released at completion) while
+// get_pinned_call() tested s_target[0] - which is deliberately NOT cleared when
+// a QSO completes, because final_resend_if_still_asked() needs it afterwards.
+// So the browser's decode list kept the finished station highlighted as "being
+// worked" until the next QSO overwrote the name (Randy N4OPI: "that call also
+// does not change from green text to grey in the decode list until a new QSO
+// starts"). Route any future "are we working someone" test through here.
+static inline bool qso_state_is_live(ft8_qso_state_t st)
+{
+    return st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
+           st == FT8_QSO_WAIT_RR73 || st == FT8_QSO_WAIT_DONE;
+}
+
 bool ft8_qso_get_working_target(char *buf, size_t len)
 {
     if (!buf || !len) return false;
     buf[0] = '\0';
     lock();
     ft8_qso_state_t st = s_state;
-    if (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
-        st == FT8_QSO_WAIT_RR73 || st == FT8_QSO_WAIT_DONE) {
+    if (qso_state_is_live(st)) {
         strncpy(buf, s_target, len - 1);
         buf[len - 1] = '\0';
     } else if (s_manual_target[0] &&
@@ -2240,6 +3072,33 @@ void ft8_qso_notify_manual_final(const char *target_call)
              target_call, rst_sent, rst_rcvd);
 }
 
+/* ⭐ A BAND CHANGE MUST END THE QSO, not just stop the robot picking a new one.
+ *
+ * Every band-change path called ft8_robot_stand_down(), which stops the AUTO
+ * PICKER. A QSO already in progress was untouched: it kept re-arming its next
+ * message on every slot and transmitting the exchange ON THE NEW BAND, to a
+ * station that is no longer there. Reported by Randy N4OPI, 2026-08-31 - "if I
+ * give up on a response from a CQ caller and switch bands, the app will
+ * continue with the previous auto call sequence on the new band."
+ *
+ * He blamed himself for not cancelling first. He should not have to: the
+ * operator changed band, which says plainly that the previous contact is over,
+ * and nothing else on the radio would carry on regardless.
+ *
+ * ⛔ Deliberately NOT gated on "was the robot running". A hand-started pounce
+ * transmits on the wrong band just as readily as an automatic one, and the
+ * on-air consequence is identical. */
+void ft8_band_change_stand_down(const char *why)
+{
+    char who[16];
+    if (ft8_qso_is_busy(who, sizeof who)) {
+        ESP_LOGW(TAG, "%s - abandoning the QSO with %s rather than "
+                      "transmitting its next message on the new band", why, who);
+        ft8_qso_abort();
+    }
+    ft8_robot_stand_down(why);
+}
+
 void ft8_qso_abort(void)
 {
     lock();
@@ -2257,9 +3116,15 @@ void ft8_qso_abort(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
-    s_cq_calls_sent = 0;
+    s_pending_tone_hz = 0;   // never carry a queued tone into the next contact
+    s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
     s_pileup_active = false;   // an abort ends any pileup drain
+    // An aborted hound contact must not leave us parked on the Fox's frequency
+    // (we may have QSY'd down for the R-report), and the next contact decides
+    // hound-ness afresh from its own partner.
+    if (s_hound_active && s_hound_tone_hz > 0) s_freq_hz = s_hound_tone_hz;
+    s_hound_active  = false;
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();
     ft8_tx_disarm();
@@ -2271,6 +3136,12 @@ ft8_qso_state_t ft8_qso_get_state(void)
 {
     lock(); ft8_qso_state_t st = s_state; unlock();
     return st;
+}
+
+bool ft8_qso_is_hound_active(void)
+{
+    lock(); bool h = s_hound_active; unlock();
+    return h;
 }
 
 int ft8_qso_get_cq_calls_sent(void)
@@ -2286,6 +3157,28 @@ void ft8_qso_get_target(char *buf, size_t len)
     if (!buf || !len) return;
     lock();
     strncpy(buf, s_target, len - 1);
+    buf[len - 1] = '\0';
+    unlock();
+}
+
+void ft8_qso_get_pinned_call(char *buf, size_t len)
+{
+    if (!buf || !len) return;
+    buf[0] = '\0';
+    lock();
+    if (s_target[0] && qso_state_is_live(s_state)) {
+        // A live exchange, engine-driven (pounce or CQ-run answer). The state
+        // test is load-bearing: s_target survives completion on purpose (the
+        // final re-send reads it), so testing the name alone kept a logged
+        // station pinned and green - see qso_state_is_live().
+        strncpy(buf, s_target, len - 1);
+    } else if (s_manual_target[0] &&
+               ((int64_t)time(NULL) - s_manual_target_ts) < MANUAL_TARGET_TTL_S) {
+        // Tapped a row and replied by hand without the state machine taking over.
+        // Same TTL the pileup exemption uses, so the two agree on "still working
+        // this station".
+        strncpy(buf, s_manual_target, len - 1);
+    }
     buf[len - 1] = '\0';
     unlock();
 }
@@ -2308,14 +3201,34 @@ bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len)
         return false;
     }
 
-    // Never mid-burst. ft8_tx_disarm() is a no-op while ACTIVE and
-    // ft8_tx_arm() refuses outright, so attempting a move now would update our
-    // bookkeeping while the engine kept transmitting on the old tone - a
-    // half-applied change, which is worse than refusing. Roy KI0ER's request
-    // was explicitly "changeable mid-QSO but not mid-burst".
+    // Never mid-burst: ft8_tx_disarm() is a no-op while ACTIVE and ft8_tx_arm()
+    // refuses outright, so moving now would update our bookkeeping while the
+    // engine kept transmitting on the old tone - half-applied, which is worse
+    // than not applying.
+    //
+    // ⭐ BUT DO NOT REFUSE - REMEMBER IT. An FT8 burst is ~12.6 s of a 15 s slot
+    // and a QSO transmits every other slot, so roughly 40% of attempts landed
+    // mid-burst and were rejected. The exchange then carried on at the tone it
+    // started on, which is exactly what Roy KI0ER reported: "it does not honor
+    // my new choice, but instead remembers the offset my station transmitted on
+    // at the start of the qso". Measured on the bench: the FIRST attempt at a
+    // mid-QSO move came back "Transmitting - try again after this burst".
+    //
+    // Making the operator's choice depend on their timing is the bug. The burst
+    // still finishes on the old tone (it must), and on_tx_complete() applies
+    // this at the first legal moment.
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
-        if (err) snprintf(err, err_len, "Transmitting - try again after this burst");
-        return false;
+        lock();
+        bool running = (s_state != FT8_QSO_IDLE);
+        if (running) s_pending_tone_hz = hz;
+        unlock();
+        if (!running) {
+            if (err) snprintf(err, err_len, "No CQ or QSO running");
+            return false;
+        }
+        ft8_status_set("TX tone -> %d Hz after this burst", hz);
+        ESP_LOGI(TAG, "TX tone %d Hz queued - applying when the burst ends", hz);
+        return true;
     }
 
     lock();
@@ -2348,10 +3261,9 @@ bool ft8_qso_is_busy(char *target_buf, size_t len)
 {
     lock();
     ft8_qso_state_t st = s_state;
-    if (target_buf && len) {
-        strncpy(target_buf, s_target, len - 1);
-        target_buf[len - 1] = '\0';
-    }
+    // snprintf, not strncpy: it always terminates, and the strncpy form made GCC
+    // warn about a truncated copy that the following assignment already handled.
+    if (target_buf && len) snprintf(target_buf, len, "%s", s_target);
     unlock();
     return st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT;
 }

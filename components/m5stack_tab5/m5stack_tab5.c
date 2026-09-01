@@ -1966,7 +1966,10 @@ esp_err_t bsp_usb_host_start(bsp_usb_host_power_mode_t mode, bool limit_500mA)
     BSP_ERROR_CHECK_RETURN_ERR(usb_host_install(&host_config));
 
     // Create a task that will handle USB library events
-    if (xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, 10, &usb_host_task) != pdTRUE) {
+    // 2560, not 4096: measured peak use 920 B (hwm 3,432 free of a 4,352 B
+    // block, 2026-08-28, #284). Internal RAM on purpose - this is the USB host
+    // library event task.
+    if (xTaskCreate(usb_lib_task, "usb_lib", 2560, NULL, 10, &usb_host_task) != pdTRUE) {
         ESP_LOGE(TAG, "Creating USB host lib task failed");
         abort();
     }

@@ -38,6 +38,11 @@ void panadapter_wifi_set_enabled(bool enabled);
 // Returns true once the station has an IP address.
 bool wifi_is_connected(void);
 
+// Is WiFi even meant to be running? False after the operator turned it off (the
+// drawer switch / POTA use). Lets callers tell "WiFi is broken" apart from "WiFi
+// is off on purpose" - the context-help triage must not flag the second as a fault.
+bool panadapter_wifi_is_enabled(void);
+
 // Currently-connected SSID; empty string if not connected.
 const char *wifi_get_ssid(void);
 
@@ -47,6 +52,14 @@ int wifi_get_rssi_dbm(void);
 // Currently-assigned IP address as a dotted-quad string.
 // Returns empty string if not connected or no IP yet.
 const char *wifi_get_ip(void);
+
+// The live address/mask/gateway/DNS, as four dotted-quad strings. Returns false
+// (and blanks all four) when there is no address yet. Every pointer may be NULL.
+//
+// This is the reference a proposed STATIC configuration is judged against - see
+// util/ip_guard.h. Read live, never cached.
+bool panadapter_wifi_get_lease(char ip[16], char mask[16],
+                               char gw[16], char dns[16]);
 
 // Returns true once SNTP has set the system time at least once.
 bool wifi_time_is_valid(void);

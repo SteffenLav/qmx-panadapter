@@ -70,8 +70,7 @@ static void ta_focused_cb(lv_event_t *e)
     lv_obj_remove_state(other, LV_STATE_FOCUSED);
 
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 static void keyboard_event_cb(lv_event_t *e)
@@ -219,7 +218,6 @@ void identity_config_modal_show(void)
     settings_load_all(&s);
     lv_textarea_set_text(s_ta_call, s.my_callsign);
     lv_textarea_set_text(s_ta_grid, s.my_grid);
-    ui_theme_focus_textarea(s_ta_call);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

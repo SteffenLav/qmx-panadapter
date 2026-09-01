@@ -34,8 +34,25 @@ static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
+static lv_obj_t *s_dd_hound         = NULL;  // Fox/Hound: off / guided / automatic
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
 static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
+static lv_obj_t *s_cb_manual_pick   = NULL;  // running CQ: never auto-answer, wait for a tap
+static lv_obj_t *s_dd_max_age       = NULL;  // "Max age in list" - how long a row survives with no fresh decode
+
+// Options for s_dd_max_age, index -> seconds. The pileup list is deliberately
+// NOT covered by this - see ft8_filters_t.max_age_sec's comment in settings.h.
+static const uint8_t MAX_AGE_OPTS[] = { 30, 45, 60, 75, 90 };
+#define MAX_AGE_OPTS_N (sizeof(MAX_AGE_OPTS) / sizeof(MAX_AGE_OPTS[0]))
+#define MAX_AGE_DEFAULT_IDX 4   // 90 s - today's fixed FT8_ROW_STALE_SEC
+
+// X of the right-hand checkbox column. It has to clear the "Auto-answer CQ with
+// priority:" dropdown on the left, which is anchored to the right of a long label
+// and so reaches further across than any other row. ONE constant because all three
+// checkboxes must move together - at 540 the last of them was drawn on top of the
+// dropdown. The panel is 1040 wide and the longest label here is "Pick callers
+// myself", so this is as far right as they can go.
+#define RIGHT_COL_X 700
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
@@ -56,8 +73,7 @@ static void ta_focused_cb(lv_event_t *e)
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 // Field Day class/section row sits near the bottom of the panel - the
@@ -71,8 +87,7 @@ static void ta_focused_top_cb(lv_event_t *e)
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_TOP_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
-    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_keyboard);
+    ui_osk_show(s_keyboard);
 }
 
 static void keyboard_event_cb(lv_event_t *e)
@@ -113,9 +128,15 @@ static void save_btn_cb(lv_event_t *e)
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
     f.auto_pileup        = lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED);
+    f.cq_manual_pick     = lv_obj_has_state(s_cb_manual_pick, LV_STATE_CHECKED);
+    {
+        uint32_t idx = lv_dropdown_get_selected(s_dd_max_age);
+        f.max_age_sec = MAX_AGE_OPTS[idx < MAX_AGE_OPTS_N ? idx : MAX_AGE_DEFAULT_IDX];
+    }
 
     settings_set_ft8_filters(&f);
     settings_set_greylist_en(lv_obj_has_state(s_cb_greylist, LV_STATE_CHECKED));
+    settings_set_hound_mode((uint8_t)lv_dropdown_get_selected(s_dd_hound));
 
     {
         char cls[8], sect[8];
@@ -223,7 +244,31 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent, const char *text)
     lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_add_style(cb, &style_ind, LV_PART_INDICATOR);
     lv_obj_add_style(cb, &style_ind_checked, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    /* The indicator is 31x32 px and, until now, was the ENTIRE touch target in
+     * this modal - the drawer's checkboxes were given both of these lines after
+     * Don WB0LQW reported the same thing on 2026-07-29 and this modal was never
+     * brought into line. He reported it again on v1.9.6, about these ones.
+     *
+     * ext_click_area grows the hittable region on all sides without changing
+     * how it looks; clearing SCROLL_CHAIN_VER stops a tap that wanders a few px
+     * being reinterpreted as a scroll of the panel underneath, which is what
+     * made them feel intermittent rather than simply small. */
+    lv_obj_set_ext_click_area(cb, 28);
+    lv_obj_clear_flag(cb, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
     return cb;
+}
+
+/* Tapping the LABEL toggles its checkbox. The label is a separate object here
+ * (see make_labeled_checkbox below), so without this the operator must hit a
+ * 31 px box while a perfectly good ~200 px word sits beside it doing nothing.
+ * This is the single biggest thing that makes these rows easy to hit. */
+static void label_toggles_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = (lv_obj_t *)lv_event_get_user_data(e);
+    if (!cb || lv_obj_has_state(cb, LV_STATE_DISABLED)) return;
+    if (lv_obj_has_state(cb, LV_STATE_CHECKED)) lv_obj_clear_state(cb, LV_STATE_CHECKED);
+    else                                        lv_obj_add_state(cb, LV_STATE_CHECKED);
+    lv_obj_send_event(cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
 // A textless checkbox plus a separate label object placed beside it.
@@ -248,6 +293,12 @@ static lv_obj_t *make_labeled_checkbox(lv_obj_t *panel, const char *text, int x,
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_align_to(lbl, cb, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    /* Make the WORD a target too, not just the box beside it. A label is not
+     * clickable by default, so this needs the flag as well as the handler. */
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    lv_obj_set_ext_click_area(lbl, 12);
+    lv_obj_add_event_cb(lbl, label_toggles_cb, LV_EVENT_CLICKED, cb);
     if (lbl_out) *lbl_out = lbl;
     return cb;
 }
@@ -344,6 +395,28 @@ static void modal_build(void)
     s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 450, &lbl_incl_cq_only);
     lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
+    // --- Max age in list — same row, in the gap before the right column ---
+    // How long a station stays in the LIVE decode list with no fresh decode.
+    // Was a fixed 90 s (ft8_screen.c's FT8_ROW_STALE_SEC); the pileup list is
+    // deliberately NOT covered by this - it has no expiry of its own by
+    // design, so someone who called a while ago can still be worked from
+    // there after their row here has gone.
+    lv_obj_t *lbl_max_age = lv_label_create(panel);
+    lv_label_set_text(lbl_max_age, "Max age:");
+    lv_obj_set_style_text_font(lbl_max_age, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl_max_age, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align_to(lbl_max_age, lbl_incl_cq_only, LV_ALIGN_OUT_RIGHT_MID, 40, 0);
+
+    s_dd_max_age = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_max_age, "30s\n45s\n60s\n75s\n90s");
+    lv_obj_set_width(s_dd_max_age, 110);
+    lv_obj_align_to(s_dd_max_age, lbl_max_age, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_obj_set_style_text_font(s_dd_max_age, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_dd_max_age, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_max_age, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_max_age, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_max_age, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+
     // Pounce shortcut: first TX is a signal report (skip the grid exchange),
     // going straight into the roger/RR73 wait - see ft8_qso_start(). Does not
     // affect CQ-run, which already answers with a report first by default.
@@ -362,7 +435,9 @@ static void modal_build(void)
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
     s_dd_robot_pri = lv_dropdown_create(panel);
     lv_dropdown_set_options(s_dd_robot_pri, "Strongest\nWeakest\nMost distant");
-    lv_obj_set_width(s_dd_robot_pri, 280);
+    // Narrow: it only ever shows Strongest / Weakest / Most distant, and the
+    // right-hand checkbox column sits beside it - 280 ran underneath them.
+    lv_obj_set_width(s_dd_robot_pri, 200);
     lv_obj_align_to(s_dd_robot_pri, lbl_robot, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
     lv_obj_set_style_text_font(s_dd_robot_pri, &lv_font_montserrat_24, 0);
     lv_obj_set_style_bg_color(s_dd_robot_pri, lv_color_hex(UI_COLOR_KEY_BG), 0);
@@ -389,7 +464,7 @@ static void modal_build(void)
     // unattended-TX warning below. Placed in the right column so the packed
     // left checkbox stack doesn't need a reflow.
     lv_obj_t *lbl_auto_pileup;
-    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", 540, 450, &lbl_auto_pileup);
+    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", RIGHT_COL_X, 450, &lbl_auto_pileup);
     lv_obj_set_style_text_color(lbl_auto_pileup, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_add_event_cb(s_cb_auto_pileup, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -398,8 +473,23 @@ static void modal_build(void)
     // it; its rows recolour and a tap offers "Clear from grey-list". The
     // tracked list is RAM-only (reboot clears it). Roy KI0ER field request.
     lv_obj_t *lbl_greylist;
-    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
+    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", RIGHT_COL_X, 510, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    // --- Pick callers myself (Eric K3FNB) -----------------------------
+    // Running CQ, a caller answering does NOT start the exchange - they wait in
+    // the pile-up until tapped. Only the CHOICE becomes manual; a tapped caller
+    // runs the normal automated exchange afterwards, which is exactly what he
+    // asked for: "I don't mind the firmware automating the rest of the exchange,
+    // I just would like to have the option to not auto-pounce on hunters."
+    //
+    // Deliberately NOT next to the two unattended-TX rows above it in meaning:
+    // this one REDUCES what happens without you, so it carries no warning. It
+    // also overrides Auto-work pileup, which would otherwise pick for you a
+    // moment later.
+    lv_obj_t *lbl_manual_pick;
+    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", RIGHT_COL_X, 570, &lbl_manual_pick);
+    lv_obj_set_style_text_color(lbl_manual_pick, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
@@ -431,6 +521,53 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_ta_fd_section, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_event_cb(s_ta_fd_section, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
 
+    // --- Fox/Hound (DXpedition) ---------------------------------------
+    // A ladder, not a switch, so it is a dropdown: off / guided / automatic.
+    // See ft8_hound.h - it suspends three of our politeness rules (the
+    // busy-station hold, the final re-send, the grey-list), which is exactly why
+    // it is a mode the operator turns on deliberately rather than something
+    // inferred from a low-frequency CQ.
+    // Placed on the FIELD DAY row's right-hand side, not at (540,578) where it
+    // first went: the "Auto-answer CQ with priority:" label plus its 280 px
+    // dropdown reach to about x=712, so the two overlapped on screen (operator
+    // caught it immediately - the labels ran into each other). The usable gap
+    // here is x 545..840, because the right-edge buttons start at 840
+    // (1040 panel - 20 pad - 180 button), hence the short label and a 150 px
+    // dropdown with short options.
+    // Aligned to the Field Day row and anchored to the SECTION box rather than to
+    // absolute coordinates, so it stays level with that row and clear of the box
+    // even if either moves. Two absolute-position attempts got this wrong: (540,
+    // 578) landed on the priority dropdown, and (545, 648) ran into the "EMA" box.
+    //
+    // There is room to the right here because the Save/Cancel/Sync Time buttons
+    // only occupy y 38..324 - below that the panel's full width is free.
+    lv_obj_t *lbl_hound = lv_label_create(panel);
+    lv_label_set_text(lbl_hound, "Fox/Hound:");
+    lv_obj_set_style_text_font(lbl_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    // Order MUST match ft8_hound_mode_t (OFF=0, GUIDED=1, AUTO=2).
+    s_dd_hound = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_hound, "Off\nGuided\nAutomatic");
+    lv_obj_set_width(s_dd_hound, 200);
+
+    // The DROPDOWN is aligned to the section box, and the LABEL hangs off the
+    // dropdown - not the other way round. Aligning the label first centred the
+    // dropdown on the LABEL'S text height instead of on the box, which is why it
+    // still sat a few pixels low (operator, twice). Box and dropdown centres now
+    // coincide by construction.
+    // -5 on the vertical: OUT_RIGHT_MID centres the two objects' boxes, but the
+    // dropdown and the textarea have different borders and padding, so their
+    // visible middles are not their box middles. The operator's eye is the
+    // authority here, and it said five pixels.
+    lv_obj_align_to(s_dd_hound, s_ta_fd_section, LV_ALIGN_OUT_RIGHT_MID, 190, -5);
+    lv_obj_align_to(lbl_hound, s_dd_hound, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_hound, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_hound, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+
+
     // --- Save / Cancel / Sync Time on the right edge, stacked at the top.
     // Same placement as the Waveshare P4 port: Save lines up with the first
     // include text field (y=38) and the three stack down 120 px apart - this
@@ -442,11 +579,32 @@ static void modal_build(void)
             { "Cancel",    0x962020, cancel_btn_cb     },
             { "Sync Time", UI_COLOR_PRIMARY, sync_time_btn_cb },
         };
+        // Tied to the FOUR text rows rather than evenly spaced (the even 120 px
+        // spacing left them looking unrelated to anything).
+        //
+        // MEASURED FROM THE WIDGETS, not from numbers typed here. Two rounds of
+        // hand arithmetic off the row constants were still visibly out by a few
+        // pixels - the operator spotted both - because the constants are the
+        // textareas' align OFFSETS, and the panel's own padding and the widgets'
+        // real heights also count. lv_obj_update_layout() forces LVGL to compute
+        // the geometry so we can just read it, which cannot be off by anything.
+        //   Save      top edge level with the first row
+        //   Cancel    centred on the whole four-row block
+        //   Sync Time bottom edge level with the last row
+        lv_obj_update_layout(panel);
+        const int blk_top = lv_obj_get_y(s_ta_incl[0]);
+        const int blk_bot = lv_obj_get_y(s_ta_excl[1]) + lv_obj_get_height(s_ta_excl[1]);
+        const int bh      = 64;
+        const int btn_y[3] = {
+            blk_top,
+            (blk_top + blk_bot) / 2 - bh / 2,
+            blk_bot - bh,
+        };
         lv_obj_t *save_b = NULL, *cancel_b = NULL;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 38 + i * 120);
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, btn_y[i]);
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -526,6 +684,16 @@ void ft8_filter_modal_show(void)
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
     apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
     apply_checkbox_state(s_cb_greylist, s.greylist_en);
+    apply_checkbox_state(s_cb_manual_pick, f->cq_manual_pick);
+    {
+        // 0 = never written (pre-existing NVS blob) - show the same 90 s the
+        // firmware falls back to, not an arbitrary index.
+        uint32_t idx = MAX_AGE_DEFAULT_IDX;
+        for (uint32_t i = 0; i < MAX_AGE_OPTS_N; i++)
+            if (MAX_AGE_OPTS[i] == f->max_age_sec) { idx = i; break; }
+        lv_dropdown_set_selected(s_dd_max_age, idx);
+    }
+    lv_dropdown_set_selected(s_dd_hound, s.hound_mode <= 2 ? s.hound_mode : 0);
     update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);

@@ -25,6 +25,10 @@ static const char *TAG = "settings";
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
 #define KEY_WIFI_PASS   "wifi_pass"
+#define KEY_WIFI_IP     "wifi_ip"
+#define KEY_WIFI_MASK   "wifi_mask"
+#define KEY_WIFI_GW     "wifi_gw"
+#define KEY_WIFI_DNS    "wifi_dns"
 #define KEY_LAST_VFO   "last_vfo"
 #define KEY_FT8_FREQ   "ft8_freq"
 #define KEY_CW_PITCH   "cw_pitch"
@@ -42,10 +46,13 @@ static const char *TAG = "settings";
 #define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites
 #define KEY_CW_PARK    "cw_park"
 #define KEY_CW_SIM     "cw_sim"
+#define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
+#define KEY_KBD_BIND   "kbd_bind"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
+#define KEY_QMX_TPUSH    "qmx_tpush"
 #define KEY_FREQ_KP_CALC "freq_kp_calc"
 #define KEY_FREQ_KP_DX   "freq_kp_dx"
 #define KEY_FREQ_KP_DY   "freq_kp_dy"
@@ -56,6 +63,10 @@ static const char *TAG = "settings";
 #define KEY_EQSL_USER    "eqsl_user"
 #define KEY_EQSL_PSWD    "eqsl_pswd"
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
+#define KEY_CL_URL       "cl_url"
+#define KEY_CL_KEY       "cl_key"
+#define KEY_CL_STATION   "cl_stn"
+#define KEY_CL_UPLOADED  "cl_upl_n"
 #define KEY_CW_AUD_EN    "cw_aud_en"
 #define KEY_CW_AUD_VOL   "cw_aud_vol"
 #define KEY_WF_BLACK     "wf_black"
@@ -64,12 +75,30 @@ static const char *TAG = "settings";
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
-#define KEY_SNAP_PEAK    "snap_peak"
+#define KEY_CW_TX_OFF    "cw_tx_off"
+#define KEY_CQ_LISTEN    "cq_listen"
+#define KEY_SWR_LIMIT    "swr_lim"
+#define KEY_ACT_TYPE     "act_type"
+#define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_RIT_PILL_SHOW  "rit_pill"
+#define KEY_STILL_VIEW     "still_vw"
+#define KEY_STILL_NOTICE   "still_note"
+#define KEY_SPUR_SUP       "spur_sup"
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
 #define KEY_PSKREP_EN      "pskrep_en"
+#define KEY_PSK_RX_EN      "pskrx_en"
+#define KEY_BT_MOUSE_EN    "btmouse_en"
+#define KEY_CLUSTER_EN     "cluster_en"
+#define KEY_SPOTS_MODE_FLT "spot_modeflt"
+#define KEY_SPOTS_EN       "spots_en"
+#define KEY_RBN_EN         "rbn_en"
+#define KEY_SOTA_EN        "sota_en"
+#define KEY_OTA_AUTODL     "ota_autodl"
+#define KEY_DRAWER_EXPERT  "drw_expert"
+#define KEY_WIFI_KNOWN     "wifi_known"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
@@ -77,6 +106,17 @@ static const char *TAG = "settings";
 #define KEY_FD_CLASS       "fd_class"
 #define KEY_FD_SECTION     "fd_sect"
 #define KEY_SIM_MODE       "sim_mode"
+#define KEY_WSPR_DIAL      "wspr_dial"
+#define KEY_WSPR_TX_EN     "wspr_tx_en"
+#define KEY_WSPR_DUTY      "wspr_duty"
+#define KEY_WSPR_DBM       "wspr_dbm"
+#define KEY_WSPR_PARED     "wspr_pared"
+#define KEY_WSPR_PASAVE    "wspr_pasave"
+#define KEY_WSPR_DUMP      "wspr_dump"
+#define KEY_WSPR_HOPM      "wspr_hopm"
+#define KEY_WSPR_HOPE      "wspr_hope"
+#define KEY_WSPR_EN        "wspr_en"
+#define KEY_WSPR_NET       "wspr_net"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
 #define KEY_CHARGE_LIM_EN  "chg_lim_en"
 #define KEY_CHARGE_LIM_PCT "chg_lim_pct"
@@ -98,7 +138,13 @@ static const char *TAG = "settings";
 #define DEF_IQ_ENABLED  (true)
 #define DEF_FLAT_MODE   (true)
 #define DEF_CW_PITCH    (700)
-#define DEF_CW_CAL      (-60)
+/* Per-unit CW display trim. Was -60, which came in with the commit that first
+ * read the CW offset from the radio over CAT - i.e. it was calibrated BEFORE
+ * that reading existed, and then never revisited. It is now measurably wrong:
+ * with it, a signal on Roy KI0ER's 7.060.000 shows at 7.060.040 (see the CW
+ * display-offset quirk in CLAUDE.md, which does the arithmetic). Zero is the
+ * honest default - the slider stays, for genuine per-unit trimming. */
+#define DEF_CW_CAL      (0)
 #define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
 #define DEF_BRIGHTNESS  (100)
@@ -211,6 +257,11 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_EQSL_USER     29
 #define DIRTY_EQSL_PSWD     30
 #define DIRTY_EQSL_UPLOADED 31
+/* Cloudlog / Wavelog (#171) - self-hosted upload target */
+#define DIRTY_CL_URL        91
+#define DIRTY_CL_KEY        92
+#define DIRTY_CL_STATION    93
+#define DIRTY_CL_UPLOADED   94
 #define DIRTY_CW_AUD_EN     32
 #define DIRTY_CW_AUD_VOL    33
 #define DIRTY_WF_BLACK      34
@@ -218,14 +269,30 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WF_BLEND      36
 #define DIRTY_WF_WINDOW     37
 #define DIRTY_DISP_FLIP     38
-#define DIRTY_SNAP_PEAK     39
 #define DIRTY_BP_REGION     40
 #define DIRTY_DISTANCE_MILES 41
+#define DIRTY_RIT_PILL_SHOW  88
+#define DIRTY_SPUR_SUP       89
+#define DIRTY_QMX_TPUSH      90
 #define DIRTY_FT8_SYNC_LINES 42
 #define DIRTY_FIELD_DAY_EN   43
 #define DIRTY_FD_CLASS       44
 #define DIRTY_FD_SECTION     45
 #define DIRTY_SIM_MODE       46
+/* WSPR. ⚠ This comment used to read "96 was the highest index in use", which
+ * was true when this branch was cut and stopped being true when main took 97
+ * for DIRTY_DRAWER_EXPERT. A hand-maintained note about what is free is
+ * exactly the thing that goes stale across a merge - the build check is the
+ * authority now, not this line. */
+#define DIRTY_WSPR_DIAL      97
+#define DIRTY_WSPR_TX_EN     98
+#define DIRTY_WSPR_DUTY      99
+#define DIRTY_WSPR_DBM      100
+#define DIRTY_WSPR_DUMP     101
+#define DIRTY_WSPR_HOPM     102
+#define DIRTY_WSPR_HOPE     103
+#define DIRTY_WSPR_EN       105   /* 104 is DIRTY_DRAWER_EXPERT */
+#define DIRTY_WSPR_NET      106
 #define DIRTY_FT8_OP_MODE    47
 #define DIRTY_FREQ_KP_POS    48
 #define DIRTY_FREQ_KP_SMALL  49
@@ -246,11 +313,44 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // --- past the old 64-bit ceiling (the whole point of DIRTY_WORDS) ---
 #define DIRTY_TX_TONE_HZ     64
 #define DIRTY_TX_TONE_HOLD   65
+// 67..74 are RESERVED for the CW page on branch feat/cw-page (CW_MSG0..5,
+// CW_PARK, CW_SIM). Do not reuse them here or the two branches collide on
+// merge and settings land in the wrong fields.
+#define DIRTY_SPOTS_EN       75
+#define DIRTY_RBN_EN         76
+#define DIRTY_WIFI_KNOWN     77
 #define DIRTY_CQ_MAX_CALLS   66
 #define DIRTY_CW_MSG0        67   // ..72 = slots 0..5 (contiguous, indexed math below)
 #define DIRTY_CW_MSG5        72
 #define DIRTY_CW_PARK        73
 #define DIRTY_CW_SIM         74   // not config-exported, same as sim_mode_en
+// 78 and up: after the CW-page reservation above. The CW TX offset lives on
+// main (it is a tuning behaviour, not part of the CW page), so it deliberately
+// does NOT take one of the reserved 67..74.
+#define DIRTY_CW_TX_OFFSET   78
+#define DIRTY_CQ_LISTEN      79
+#define DIRTY_SWR_LIMIT      80
+// One bit for both activation fields: they are only ever written together by
+// settings_set_activation(), so a second bit would buy nothing.
+#define DIRTY_ACTIVATION     81
+#define DIRTY_PSK_RX_EN      82
+#define DIRTY_BT_MOUSE_EN    83
+#define DIRTY_CLUSTER_EN     84
+#define DIRTY_SPOTS_MODE_FLT 85
+#define DIRTY_SOTA_EN        86
+#define DIRTY_HOUND_MODE     87
+#define DIRTY_KBD_BIND       95   /* #233 user-defined keyboard shortcuts */
+#define DIRTY_OTA_AUTODL     96   /* #239 quiet background download of a new release */
+/* ⛔ 104, NOT 97. It WAS 97 on main, and the WSPR block below had already
+ * taken 97 on its own branch - so merging the two produced two settings
+ * sharing one bit, silently: both defines survive a merge, the compiler is
+ * happy, and nothing at runtime complains. tools/check_dirty_bits.py now
+ * fails the build on this, because nothing else was ever going to notice. */
+#define DIRTY_DRAWER_EXPERT 104   /* Basic/Expert drawer choice, remembered */
+#define DIRTY_WSPR_PA       107   /* #290 WSPR PA-voltage guard + the value to restore */
+#define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
+#define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
+#define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -263,6 +363,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // every-15-seconds SD write was a standing, unintentional trigger for that
 // same hazard. Keep this list in sync with config_io_export()'s fields.
 static const uint8_t s_config_export_bits[] = {
+    DIRTY_OTA_AUTODL,
     DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
     DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
     DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_CW_CAL,
@@ -270,6 +371,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
     DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
+    DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT,
@@ -277,9 +379,21 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_CW_MSG0, DIRTY_CW_MSG0 + 1, DIRTY_CW_MSG0 + 2, DIRTY_CW_MSG0 + 3,
     DIRTY_CW_MSG0 + 4, DIRTY_CW_MSG5, DIRTY_CW_PARK,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
+    DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
+    DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
+    DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
+    DIRTY_STILL_VIEW,   /* #298 - config_io_export() carries still_spectrum */
 };
 
 // ---- Module state ------------------------------------------------------
+
+// Known WiFi networks, most-recently-used first. Deliberately outside
+// qmx_settings_t / s_pending so the hot settings_load_all() copies do not carry
+// it; see settings.h. Loaded in settings_init(), written on DIRTY_WIFI_KNOWN.
+static wifi_known_t s_known[WIFI_KNOWN_MAX];
+static int          s_known_n = 0;
+
 static bool             s_ready          = false;
 static nvs_handle_t     s_nvs            = 0;
 static SemaphoreHandle_t s_mutex         = NULL;
@@ -385,10 +499,14 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap.cw_park);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap.cw_sim_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap.hound_mode);
+        if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap.cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_KP_CALC)) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_KP_POS)) {
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
@@ -401,6 +519,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
         if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
         if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap.cloudlog_url);
+        if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap.cloudlog_key);
+        if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap.cloudlog_station);
+        if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap.cloudlog_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
         if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
@@ -409,12 +531,46 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
-        if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
+        if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
+            nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
+            nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
+        }
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap.spur_mode);
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap.psk_rx_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap.bt_mouse_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CLUSTER_EN))    nvs_set_u8(s_nvs, KEY_CLUSTER_EN,    snap.cluster_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
+        // Known-network list: not part of s_pending (see settings.h), so take a
+        // consistent copy under the mutex before writing it out.
+        // STATIC: this runs on the settings_flush task, whose stack is 3 KB, and
+        // this array is ~590 bytes. Only that one task reaches this code, so a
+        // file-local scratch is safe. (Learned the hard way on 2026-08-05: the
+        // stack version crash-looped with a stack-protection fault here AND in
+        // the system event task.)
+        static wifi_known_t kn[WIFI_KNOWN_MAX];
+        uint8_t kn_n;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        memcpy(kn, s_known, sizeof(kn));
+        kn_n = (uint8_t)s_known_n;
+        xSemaphoreGive(s_mutex);
+        nvs_set_blob(s_nvs, KEY_WIFI_KNOWN, kn, (size_t)kn_n * sizeof(wifi_known_t));
+    }
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
@@ -422,6 +578,19 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FD_CLASS))     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
         if (dirty_test(&dirty_local, DIRTY_FD_SECTION))   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
         if (dirty_test(&dirty_local, DIRTY_SIM_MODE))     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DIAL))    nvs_set_u32(s_nvs, KEY_WSPR_DIAL, snap.wspr_dial_hz);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
+            nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
+            nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, snap.wspr_pa_saved_x10);
+        }
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap.wspr_dump_cycles);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap.wspr_hop_mask);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap.wspr_hop_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap.wspr_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_NET))     nvs_set_u8(s_nvs, KEY_WSPR_NET,  snap.wspr_net_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
@@ -438,6 +607,15 @@ static void flush_task(void *arg)
             nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap.lotw_dxcc);
             nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap.lotw_state);
             nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap.lotw_county);
+        }
+        // One bit for all four: they are only ever set together, and a
+        // partially-applied network configuration is not a state worth being
+        // able to reach.
+        if (dirty_test(&dirty_local, DIRTY_WIFI_STATIC)) {
+            nvs_set_str(s_nvs, KEY_WIFI_IP,   snap.wifi_ip);
+            nvs_set_str(s_nvs, KEY_WIFI_MASK, snap.wifi_mask);
+            nvs_set_str(s_nvs, KEY_WIFI_GW,   snap.wifi_gw);
+            nvs_set_str(s_nvs, KEY_WIFI_DNS,  snap.wifi_dns);
         }
         if (dirty_test(&dirty_local, DIRTY_LOTW_CQZ))      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
         if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
@@ -515,6 +693,16 @@ static void load_from_nvs(qmx_settings_t *out)
     out->ft8_freq_hz = 14074000;   // 20m FT8 — sane default so FT8 never opens on an inherited odd VFO
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
+    out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
+    /* #298: the still display is the DEFAULT. Anyone who prefers the old
+     * dial-centred view turns it off in the drawer, and is told once that they
+     * can - see the notice in ui.c. still_notice_done stays false so an
+     * upgrading unit shows that notice exactly once. */
+    out->still_view = true;      // opt-OUT, same reason as the line above
+    // Spur suppression is opt-IN for now: it nudges the dial 25 Hz to learn a
+    // frequency, which is a visible side effect, and it is out with the beta
+    // testers before it can be a default.
+    out->spur_mode = 0;
     out->zoom_factor = DEF_ZOOM;
     out->colormap_idx = DEF_COLORMAP;
     out->brightness_pct = DEF_BRIGHTNESS;
@@ -536,9 +724,12 @@ static void load_from_nvs(qmx_settings_t *out)
     strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
     out->cw_park[0] = '\0';
     out->cw_sim_en = false;
+    out->hound_mode   = 0;   // off: Hound changes TX behaviour, so it is opt-in
+    out->cq_listen_every = 0;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
+    out->qmx_time_pushed = false;
     out->freq_kp_calc = false;
     out->freq_kp_dx = 0;
     out->freq_kp_dy = 0;
@@ -549,6 +740,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->eqsl_user[0] = '\0';
     out->eqsl_pswd[0] = '\0';
     out->eqsl_uploaded_n = 0;
+    out->cloudlog_url[0] = '\0';
+    out->cloudlog_key[0] = '\0';
+    out->cloudlog_station[0] = '\0';
+    out->cloudlog_uploaded_n = 0;
     out->cw_audio_en  = DEF_CW_AUD_EN;
     out->cw_audio_vol = DEF_CW_AUD_VOL;
     out->wf_black_db    = DEF_WF_BLACK;
@@ -557,7 +752,6 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
-    out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
     // ON by default: contributing reception reports is the norm for FT8
@@ -565,14 +759,61 @@ static void load_from_nvs(qmx_settings_t *out)
     // inherently public ham activity. Disclosed in the release notes + manual;
     // the FT8 drawer checkbox turns it off. Inert until callsign+grid are set.
     out->pskreporter_en = true;
+    out->psk_rx_en      = false;   // opt-in, see settings.h
+    out->bt_mouse_en    = false;   // opt-in, see settings.h
+    out->cluster_en     = false;   // opt-in, see settings.h
+    out->spots_mode_filter = true;  // ON by default, see settings.h
+    // Spots on by default: it is read-only use of a public API, and a feature
+    // that draws on the spectrum has to be visible to be discovered. Costs
+    // nothing until WiFi is up.
+    out->spots_en = true;
+    out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
+    out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
+    // #239: ON, and the repeat runs are in. Under the exact failing recipe -
+    // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
+    // the verify took the hardware watchdog 4 times out of 4 while internal
+    // free at verify sat between 8.5 and 11.7 KB. After 14 KB of cold buffers
+    // moved to PSRAM it passed twice at 304 s and 328 s with 14.8 and 14.5 KB
+    // free, and the MINIMUM free over the whole run went from 2.5 KB to over
+    // 10 KB. Same conditions, one variable, opposite result, repeated.
+    //
+    // Still a real setting, and it must stay one: this pulls 3.3 MB, which is
+    // not free on the phone hotspot a POTA operator is using.
+    out->ota_autodl = true;
+    out->drawer_expert = false;   // a new operator starts on Basic
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
+    // SWR protection ON by default at 3.0:1. The QMX has no SWR foldback of
+    // its own on a digital burst, and an FT8 transmission is 12.7 s of key-down
+    // into whatever is connected - a disconnected or wrong-band antenna is the
+    // normal way this goes wrong in the field. 3.0 is high enough not to trip
+    // on a merely mediocre match; the drawer can raise it or turn it off.
+    out->swr_limit_x10 = 30;
+    out->act_type   = 0;          // not activating anything
+    out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
+    // n = 0 means "never configured", which ui.c takes as "use the built-in
+    // defaults" rather than "the operator deleted every shortcut".
+    memset(&out->kbd_bindings, 0, sizeof(out->kbd_bindings));
     out->field_day_en = false;
     out->fd_class[0]  = '\0';
     out->fd_section[0] = '\0';
     out->sim_mode_en = false;
+    out->wspr_dial_hz  = 14095600u;   /* 20 m, the busiest WSPR band */
+    out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
+    out->wspr_duty_pct = 20;          /* the conventional WSPR fraction */
+    out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
+    out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
+    out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
+    out->wspr_dump_cycles = 0;        /* never dump unless asked */
+    out->wspr_hop_mask = 0;           /* nothing ticked until the operator does */
+    out->wspr_hop_en   = false;
+    /* LAUNCHED 2026-08-28: the WSPR page is in the swipe cycle by default.
+     * It shipped dark behind a seven-tap unlock while the bug rate had not
+     * flattened; that is over. Transmitting is still opt-in (wspr_tx_en). */
+    out->wspr_en       = true;
+    out->wspr_net_en   = false;       /* nothing is published unasked */
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
@@ -641,10 +882,19 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
+    nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
+    nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
+    nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
+    nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
+    out->act_ref[0] = '\0';
+    sz = sizeof(out->act_ref);
+    nvs_get_str(s_nvs, KEY_ACT_REF, out->act_ref, &sz);
+    if (!out->act_ref[0]) out->act_type = 0;   // a reference-less activation is none
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_QMX_TPUSH,    &u8v) == ESP_OK) out->qmx_time_pushed = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FREQ_KP_CALC, &u8v) == ESP_OK) out->freq_kp_calc = (u8v != 0);
     {
         int16_t i16v;
@@ -667,6 +917,16 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->eqsl_pswd);
     nvs_get_str(s_nvs, KEY_EQSL_PSWD, out->eqsl_pswd, &sz);
     nvs_get_u32(s_nvs, KEY_EQSL_UPLOADED, &out->eqsl_uploaded_n);
+    out->cloudlog_url[0] = '\0';
+    sz = sizeof(out->cloudlog_url);
+    nvs_get_str(s_nvs, KEY_CL_URL, out->cloudlog_url, &sz);
+    out->cloudlog_key[0] = '\0';
+    sz = sizeof(out->cloudlog_key);
+    nvs_get_str(s_nvs, KEY_CL_KEY, out->cloudlog_key, &sz);
+    out->cloudlog_station[0] = '\0';
+    sz = sizeof(out->cloudlog_station);
+    nvs_get_str(s_nvs, KEY_CL_STATION, out->cloudlog_station, &sz);
+    nvs_get_u32(s_nvs, KEY_CL_UPLOADED, &out->cloudlog_uploaded_n);
 
     if (nvs_get_u8(s_nvs, KEY_CW_AUD_EN, &u8v) == ESP_OK) out->cw_audio_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CW_AUD_VOL, &out->cw_audio_vol);
@@ -679,18 +939,58 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->wf_window > 2)        out->wf_window = 0;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
-    if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
+    {
+        int16_t i16v;
+        if (nvs_get_i16(s_nvs, KEY_CW_TX_OFF, &i16v) == ESP_OK) {
+            if (i16v >  1000) i16v =  1000;
+            if (i16v < -1000) i16v = -1000;
+            out->cw_tx_offset_hz = i16v;
+        }
+    }
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPUR_SUP, &u8v) == ESP_OK) out->spur_mode = (u8v <= 2) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_PSK_RX_EN, &u8v) == ESP_OK) out->psk_rx_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_BT_MOUSE_EN, &u8v) == ESP_OK) out->bt_mouse_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_CLUSTER_EN, &u8v) == ESP_OK) out->cluster_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
     if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+    sz = sizeof(out->kbd_bindings);
+    nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
+    if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
+
+    // Known-network list. Stored as a blob of exactly the used entries, so the
+    // returned size gives the count back. A short/absent blob just means "none
+    // remembered yet" - never an error worth reporting.
+    {
+        size_t ksz = sizeof(s_known);
+        memset(s_known, 0, sizeof(s_known));
+        s_known_n = 0;
+        if (nvs_get_blob(s_nvs, KEY_WIFI_KNOWN, s_known, &ksz) == ESP_OK) {
+            int n = (int)(ksz / sizeof(wifi_known_t));
+            if (n > WIFI_KNOWN_MAX) n = WIFI_KNOWN_MAX;
+            // Drop anything with an empty SSID: a truncated or hand-edited blob
+            // must not leave a blank entry that the roam scan would try to match.
+            for (int i = 0; i < n; i++)
+                if (s_known[i].ssid[0]) s_known[s_known_n++] = s_known[i];
+        }
+    }
 
     if (nvs_get_u8(s_nvs, KEY_FIELD_DAY_EN, &u8v) == ESP_OK) out->field_day_en = (u8v != 0);
     out->fd_class[0] = '\0';
@@ -701,6 +1001,17 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_FD_SECTION, out->fd_section, &sz);
 
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
+    { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
+    if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) out->wspr_duty_pct = u8v;
+    { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_PARED, &u8v) == ESP_OK) out->wspr_pa_reduce = (u8v != 0); }
+    { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_PASAVE, &u16v) == ESP_OK) out->wspr_pa_saved_x10 = u16v; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
+    { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_HOPM, &u16v) == ESP_OK) out->wspr_hop_mask = u16v; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_HOPE, &u8v) == ESP_OK) out->wspr_hop_en = (u8v != 0); }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_EN,   &u8v) == ESP_OK) out->wspr_en   = (u8v != 0); }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_NET,  &u8v) == ESP_OK) out->wspr_net_en = (u8v != 0); }
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
     if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
@@ -720,6 +1031,11 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->lotw_county);
     nvs_get_str(s_nvs, KEY_LOTW_COUNTY, out->lotw_county, &sz);
     nvs_get_u32(s_nvs, KEY_LOTW_UPLOADED, &out->lotw_uploaded_n);
+    out->wifi_ip[0] = out->wifi_mask[0] = out->wifi_gw[0] = out->wifi_dns[0] = '\0';
+    sz = sizeof(out->wifi_ip);   nvs_get_str(s_nvs, KEY_WIFI_IP,   out->wifi_ip,   &sz);
+    sz = sizeof(out->wifi_mask); nvs_get_str(s_nvs, KEY_WIFI_MASK, out->wifi_mask, &sz);
+    sz = sizeof(out->wifi_gw);   nvs_get_str(s_nvs, KEY_WIFI_GW,   out->wifi_gw,   &sz);
+    sz = sizeof(out->wifi_dns);  nvs_get_str(s_nvs, KEY_WIFI_DNS,  out->wifi_dns,  &sz);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -1035,6 +1351,17 @@ void settings_set_cw_sim_en(bool v)
     mark_dirty(DIRTY_CW_SIM);
 }
 
+void settings_set_hound_mode(uint8_t m)
+{
+    if (!s_ready) return;
+    if (m > 2) m = 2;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.hound_mode == m) { xSemaphoreGive(s_mutex); return; }
+    s_pending.hound_mode = m;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_HOUND_MODE);
+}
+
 void settings_set_onboarded(bool v)
 {
     if (!s_ready) return;
@@ -1075,6 +1402,15 @@ void settings_set_ft8_filters(const ft8_filters_t *f)
     mark_dirty(DIRTY_FT8_FILT);
 }
 
+void settings_set_kbd_bindings(const kbd_bindings_t *b)
+{
+    if (!s_ready || !b) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.kbd_bindings = *b;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_KBD_BIND);
+}
+
 void settings_set_wifi_enabled(bool v)
 {
     if (!s_ready) return;
@@ -1091,6 +1427,15 @@ void settings_set_qmx_gps(bool v)
     s_pending.qmx_gps = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_QMX_GPS);
+}
+
+void settings_set_qmx_time_pushed(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.qmx_time_pushed = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QMX_TPUSH);
 }
 
 void settings_set_freq_kp_calc(bool v)
@@ -1217,6 +1562,62 @@ void settings_set_eqsl_uploaded_n(uint32_t n)
     mark_dirty(DIRTY_EQSL_UPLOADED);
 }
 
+/* ---- Cloudlog / Wavelog (#171) --------------------------------------------
+ * The URL is the operator's own server, so unlike every other upload target it
+ * is stored rather than compiled in. util/net_guard.c decides, per upload,
+ * whether that address may be spoken to in the clear. */
+void settings_set_cloudlog_url(const char *url)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (url) {
+        strncpy(s_pending.cloudlog_url, url, sizeof(s_pending.cloudlog_url) - 1);
+        s_pending.cloudlog_url[sizeof(s_pending.cloudlog_url) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_url[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_URL);
+}
+
+void settings_set_cloudlog_key(const char *key)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (key) {
+        strncpy(s_pending.cloudlog_key, key, sizeof(s_pending.cloudlog_key) - 1);
+        s_pending.cloudlog_key[sizeof(s_pending.cloudlog_key) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_key[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_KEY);
+}
+
+void settings_set_cloudlog_station(const char *station_id)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (station_id) {
+        strncpy(s_pending.cloudlog_station, station_id, sizeof(s_pending.cloudlog_station) - 1);
+        s_pending.cloudlog_station[sizeof(s_pending.cloudlog_station) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_station[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_STATION);
+}
+
+void settings_set_cloudlog_uploaded_n(uint32_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cloudlog_uploaded_n == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cloudlog_uploaded_n = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_UPLOADED);
+}
+
 void settings_set_wf_black_db(float db)
 {
     if (!s_ready) return;
@@ -1278,6 +1679,236 @@ void settings_set_qmx_vol_db(uint8_t db)
     mark_dirty(DIRTY_QMX_VOL);
 }
 
+void settings_set_cw_tx_offset_hz(int16_t hz)
+{
+    if (!s_ready) return;
+    if (hz >  1000) hz =  1000;
+    if (hz < -1000) hz = -1000;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_tx_offset_hz == hz) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_tx_offset_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_TX_OFFSET);
+}
+
+void settings_set_cq_listen_every(uint8_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cq_listen_every == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cq_listen_every = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CQ_LISTEN);
+}
+
+void settings_set_cluster_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cluster_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cluster_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CLUSTER_EN);
+}
+
+void settings_set_spots_mode_filter(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spots_mode_filter == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spots_mode_filter = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTS_MODE_FLT);
+}
+
+void settings_set_bt_mouse_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.bt_mouse_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.bt_mouse_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_BT_MOUSE_EN);
+}
+
+void settings_set_psk_rx_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.psk_rx_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.psk_rx_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PSK_RX_EN);
+}
+
+void settings_set_activation(uint8_t type, const char *ref)
+{
+    if (!s_ready) return;
+    char clean[16];
+    clean[0] = '\0';
+    if (ref) {
+        // Trim and upper-case: references are case-insensitive in both schemes
+        // but the log should carry the canonical form, and an operator typing
+        // on glass in a field leaves stray spaces.
+        while (*ref == ' ') ref++;
+        size_t n = 0;
+        while (*ref && n < sizeof(clean) - 1) {
+            char c = *ref++;
+            clean[n++] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        while (n > 0 && clean[n - 1] == ' ') n--;
+        clean[n] = '\0';
+    }
+    if (type > 2 || !clean[0]) { type = 0; clean[0] = '\0'; }
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = (s_pending.act_type == type) && (strcmp(s_pending.act_ref, clean) == 0);
+    if (same) { xSemaphoreGive(s_mutex); return; }
+    s_pending.act_type = type;
+    strncpy(s_pending.act_ref, clean, sizeof(s_pending.act_ref) - 1);
+    s_pending.act_ref[sizeof(s_pending.act_ref) - 1] = '\0';
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_ACTIVATION);
+}
+
+uint8_t settings_get_activation_type(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t t = s_pending.act_type;
+    bool has_ref = s_pending.act_ref[0] != '\0';
+    xSemaphoreGive(s_mutex);
+    return has_ref ? t : 0;
+}
+
+bool settings_get_activation_ref(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return false;
+    out[0] = '\0';
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool on = (s_pending.act_type != 0) && (s_pending.act_ref[0] != '\0');
+    if (on) snprintf(out, out_sz, "%s", s_pending.act_ref);
+    xSemaphoreGive(s_mutex);
+    return on;
+}
+
+const char *settings_activation_sig_name(void)
+{
+    switch (settings_get_activation_type()) {
+        case 1:  return "POTA";
+        case 2:  return "SOTA";
+        default: return NULL;
+    }
+}
+
+void settings_set_swr_limit_x10(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v != 0 && v < 15) v = 15;    // below 1.5:1 nothing real would ever pass
+    if (v > 99) v = 99;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.swr_limit_x10 == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.swr_limit_x10 = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SWR_LIMIT);
+}
+
+uint8_t settings_get_swr_limit_x10(void)
+{
+    if (!s_ready) return 30;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.swr_limit_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+int16_t settings_get_cw_tx_offset_hz(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int16_t v = s_pending.cw_tx_offset_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+/* ⛔ THIS EXISTS BECAUSE ITS CALLERS RUN ON `sys_evt`, WHOSE STACK IS 2808 B.
+ *
+ * The static-IP code is driven from the WiFi and IP event handlers, and the
+ * first version called settings_load_all() there - a whole qmx_settings_t on a
+ * 2808-byte stack. It crashed the device with a Stack protection fault at 8.3 s
+ * of every boot, i.e. a boot loop, the moment WiFi came up (2026-08-31).
+ *
+ * That is the third time this exact bug has been written in wifi.c: CLAUDE.md
+ * records a wifi_known_t[6] doing it TWICE on `sys_evt` on 2026-08-05, which is
+ * why settings_wifi_known_count() exists. Four 16-byte strings is 64 bytes.
+ *
+ * Any future event-handler code wanting a setting gets an accessor like this
+ * one - never the whole struct. */
+void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16])
+{
+    if (ip)   ip[0]   = '\0';
+    if (mask) mask[0] = '\0';
+    if (gw)   gw[0]   = '\0';
+    if (dns)  dns[0]  = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (ip)   memcpy(ip,   s_pending.wifi_ip,   sizeof(s_pending.wifi_ip));
+    if (mask) memcpy(mask, s_pending.wifi_mask, sizeof(s_pending.wifi_mask));
+    if (gw)   memcpy(gw,   s_pending.wifi_gw,   sizeof(s_pending.wifi_gw));
+    if (dns)  memcpy(dns,  s_pending.wifi_dns,  sizeof(s_pending.wifi_dns));
+    xSemaphoreGive(s_mutex);
+}
+
+// Default ON: the RIT pill is a v1.8.0 feature and hiding it by default would make
+// it invisible to everyone who never opens the drawer. This is opt-OUT, for
+// operators who do not use RIT and do not want the top-right corner spent on it
+// (Samuel W7STF).
+void settings_set_rit_pill_show(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.rit_pill_show == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rit_pill_show = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RIT_PILL_SHOW);
+}
+
+void settings_set_still_view(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.still_view == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.still_view = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_STILL_VIEW);
+}
+
+void settings_set_still_notice_done(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.still_notice_done == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.still_notice_done = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_STILL_NOTICE);
+}
+
+// Opt-IN. See spur_map.h: enabling it lets the firmware nudge the dial 25 Hz
+// when it meets a frequency it has not learned yet, which is a real (if brief)
+// side effect on the operator's radio - not something to switch on for people
+// without asking.
+void settings_set_spur_mode(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v > 2) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spur_mode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spur_mode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPUR_SUP);
+}
+
 void settings_set_distance_in_miles(bool v)
 {
     if (!s_ready) return;
@@ -1316,6 +1947,154 @@ void settings_set_pskreporter_en(bool v)
     s_pending.pskreporter_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_PSKREP_EN);
+}
+
+void settings_set_spots_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spots_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spots_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTS_EN);
+}
+
+void settings_set_rbn_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.rbn_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rbn_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RBN_EN);
+}
+
+void settings_set_sota_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.sota_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.sota_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SOTA_EN);
+}
+
+void settings_set_ota_autodl(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ota_autodl == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ota_autodl = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_OTA_AUTODL);
+}
+
+void settings_set_drawer_expert(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.drawer_expert == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.drawer_expert = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DRAWER_EXPERT);
+}
+
+// ---- Known WiFi networks ---------------------------------------------------
+//
+// Kept in its own small array rather than in qmx_settings_t, so the hot
+// settings_load_all() copies do not have to carry it (see settings.h). Loaded
+// once in settings_init(), persisted through the normal dirty/flush path.
+
+int settings_wifi_known_count(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int n = s_known_n;
+    xSemaphoreGive(s_mutex);
+    return n;
+}
+
+int settings_wifi_known_get(wifi_known_t *out, int max)
+{
+    if (!out || max <= 0 || !s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int n = s_known_n < max ? s_known_n : max;
+    memcpy(out, s_known, (size_t)n * sizeof(wifi_known_t));
+    xSemaphoreGive(s_mutex);
+    return n;
+}
+
+void settings_wifi_known_remember(const char *ssid, const char *pass)
+{
+    if (!s_ready || !ssid || !ssid[0]) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    // Already known? Move it to the front, refreshing the password in case it
+    // changed. Otherwise insert at the front and push the rest down, dropping
+    // the least-recently-used entry when the list is full.
+    int at = -1;
+    for (int i = 0; i < s_known_n; i++)
+        if (strcmp(s_known[i].ssid, ssid) == 0) { at = i; break; }
+
+    bool changed = false;
+    if (at == 0) {
+        // Front already: only a password change is worth a write.
+        if (strcmp(s_known[0].pass, pass ? pass : "") != 0) {
+            snprintf(s_known[0].pass, sizeof(s_known[0].pass), "%s", pass ? pass : "");
+            changed = true;
+        }
+    } else {
+        int from = (at > 0) ? at : (s_known_n < WIFI_KNOWN_MAX ? s_known_n : WIFI_KNOWN_MAX - 1);
+        for (int i = from; i > 0; i--) s_known[i] = s_known[i - 1];
+        snprintf(s_known[0].ssid, sizeof(s_known[0].ssid), "%s", ssid);
+        snprintf(s_known[0].pass, sizeof(s_known[0].pass), "%s", pass ? pass : "");
+        if (at < 0 && s_known_n < WIFI_KNOWN_MAX) s_known_n++;
+        changed = true;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_set_all(const wifi_known_t *list, int n)
+{
+    if (!s_ready) return;
+    if (n < 0) n = 0;
+    if (n > WIFI_KNOWN_MAX) n = WIFI_KNOWN_MAX;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    memset(s_known, 0, sizeof(s_known));
+    s_known_n = 0;
+    for (int i = 0; i < n && list; i++) {
+        if (!list[i].ssid[0]) continue;      // skip blanks from a hand-edited file
+        s_known[s_known_n++] = list[i];
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_forget(const char *ssid)
+{
+    if (!s_ready || !ssid || !ssid[0]) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = false;
+    for (int i = 0; i < s_known_n; i++) {
+        if (strcmp(s_known[i].ssid, ssid) != 0) continue;
+        for (int j = i; j < s_known_n - 1; j++) s_known[j] = s_known[j + 1];
+        memset(&s_known[--s_known_n], 0, sizeof(s_known[0]));
+        changed = true;
+        break;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_clear(void)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    memset(s_known, 0, sizeof(s_known));
+    s_known_n = 0;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_KNOWN);
 }
 
 void settings_set_tx_tone_hz(uint16_t v)
@@ -1395,6 +2174,116 @@ void settings_set_sim_mode_en(bool v)
     s_pending.sim_mode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SIM_MODE);
+}
+
+void settings_set_wspr_dial_hz(uint32_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_dial_hz == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_dial_hz = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_DIAL);
+}
+
+void settings_set_wspr_tx_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_tx_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_tx_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_TX_EN);
+}
+
+void settings_set_wspr_duty_pct(uint8_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_duty_pct == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_duty_pct = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_DUTY);
+}
+
+void settings_set_wspr_dump_cycles(uint8_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_dump_cycles == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_dump_cycles = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_DUMP);
+}
+
+void settings_set_wspr_hop_mask(uint16_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_hop_mask == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_hop_mask = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_HOPM);
+}
+
+void settings_set_wspr_hop_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_hop_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_hop_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_HOPE);
+}
+
+void settings_set_wspr_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_EN);
+}
+
+void settings_set_wspr_net_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_net_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_net_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_NET);
+}
+
+void settings_set_wspr_tx_dbm(int8_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_tx_dbm == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_tx_dbm = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_DBM);
+}
+
+void settings_set_wspr_pa_reduce(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_pa_reduce == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_pa_reduce = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_PA);
+}
+
+void settings_set_wspr_pa_saved_x10(uint16_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_pa_saved_x10 == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_pa_saved_x10 = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_PA);
 }
 
 void settings_set_ft8_op_mode(uint8_t v)
@@ -1498,6 +2387,15 @@ void settings_set_lotw_state(const char *state)
 void settings_set_lotw_county(const char *county)
 {
     set_lotw_str(s_pending.lotw_county, sizeof(s_pending.lotw_county), county, DIRTY_LOTW_DXCC);
+}
+
+void settings_set_wifi_static(const char *ip, const char *mask,
+                              const char *gw, const char *dns)
+{
+    set_lotw_str(s_pending.wifi_ip,   sizeof(s_pending.wifi_ip),   ip,   DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_mask, sizeof(s_pending.wifi_mask), mask, DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_gw,   sizeof(s_pending.wifi_gw),   gw,   DIRTY_WIFI_STATIC);
+    set_lotw_str(s_pending.wifi_dns,  sizeof(s_pending.wifi_dns),  dns,  DIRTY_WIFI_STATIC);
 }
 
 void settings_set_lotw_uploaded_n(uint32_t n)

@@ -10,9 +10,92 @@ capabilities worth utilising. This is TODO item **#22** (and unblocks **#3**, on
 | QMX CAT programming manual, fw **1_03_000** | the 1_03 baseline | `docs/qmx-reference/QMX_CAT_programming_manual_1.03.000.pdf` (local cache, gitignored) |
 | QMX CAT programming manual, fw **1_04_001** | all 1_04 CAT changes (rev history: "Added new CAT commands and features for 1_04_001 (MD, MU, TR, RR, PS, AI commands)") | `docs/qmx-reference/QMX_CAT_manual_1.04.001.pdf` |
 | QMX operating manual, fw **1_04_001** | non-CAT features | `docs/qmx-reference/QMX_operation_manual_1.04.001.pdf` |
-| qrp-labs.com/qmx changelog | 1_04_000 (08-May-2026), 1_04_001 (12-Jun-2026), 1_04_002 (18-Jun-2026) | web |
+| qrp-labs.com/qmx changelog | 1_04_000 (08-May-2026), 1_04_001 (12-Jun-2026), 1_04_002 (18-Jun-2026), **1_04_004**, **1_04_005 (06-Aug-2026)**, **1_04_006 (12-Aug-2026)** | web |
 
-**Status of 1_04 (as of 2026-07-03):** still **BETA**, no GA. Three betas so far.
+**⚠ Betas kept coming — checked again 2026-08-12.** This document was written against
+`1_04_002`; the bench radio has been on **`1_04_004`** for a while and **`1_04_005`** and
+**`1_04_006`** have since appeared. I only noticed because the operator saw the release
+post, having assumed 004 was current — so check the changelog before concluding anything
+is unfixed. Entries since 1_04_002 that touch us:
+
+| Version | Entry | Why it matters here |
+|---|---|---|
+| **1_04_006** (12-Aug-2026) | "Bug fix: TX underlines the correct VFO indicator character now in B and Split mode" | Same area as the dual-VFO display that survives our split stand-down (see the report drafted for Stan KC7XE). **Our finding was measured on 1_04_004** — re-test on 006 before pursuing it. Not the same bug on its face: ours is the second frequency remaining on screen after split is cleared, not the underline |
+| **1_04_006** | "Show S-meter in Digi mode" | Radio-side display only. Nothing for us |
+| **1_04_006** | "Protection disabled when not in CW mode or when internal GPS (QLG3 in QMX+) selected" | The GPS/paddle-port protection that drops the radio into practice mode with a `G`. From 006 it applies only in CW **and** with the external GPS selected, so a QMX+ using its internal QLG3 is unaffected. Any user-facing note about practice mode while a GPS is connected is now version-dependent |
+| **1_04_005** (06-Aug-2026) | "Bug fix: CAT `GP` command had reversed longitude sign" | We do not use `GP`. Noted so nobody re-derives it |
+| **1_04_005** | first-dit spike, PA mod test, key-down current spike | Radio-side. Nothing for us |
+| **1_04_001** | "Bug fix: CAT MU command and MM (when auto update enabled) loaded previously saved state (VFO etc)" | Directly relevant, and found late. "MM when auto update enabled" is **MM Effect = Immediate**. So `MU;` and MM-with-auto-reload mishandling saved VFO state is a KNOWN, already-fixed bug class. It also fits what we measured on 1_04_004: `MU;` discards session state (IQ mode `Q9` — the spectrum goes flat while USB audio keeps flowing at full rate) while an `MM` Set with MM Effect = Immediate does **not**. The two reload paths behave differently on purpose |
+
+### ⭐ 2026-08-29: the CAT surface DID change — six new commands, and we had the wrong manual
+
+This document was written against the **1_04_001** CAT manual, and §1's command diff is
+therefore two revisions stale. QRP Labs has published a **CAT programming manual for
+firmware 1_04_004 and above** (`cat_1_04_004.pdf`, 23-Jul-2026), now cached as
+`docs/qmx-reference/QMX_CAT_manual_1.04.004.pdf` with a `pdftotext -layout` extract at
+`cat_104_004.txt`. It covers 004 **through 008**, so it is authoritative for everything
+current.
+
+⚠ **Its page footers still read "firmware 1_04_003"** — Hans did not update them. The
+document revision history is the authority; you have the right file.
+
+Its own revision history is unambiguous:
+
+| Manual revision | Date | Added |
+|---|---|---|
+| **1_04_003** | 18-Jul-2026 | commands **BD, BN, BU, UI** |
+| **1_04_004** | 23-Jul-2026 | commands **GP** and **SR** |
+
+Diffed mechanically (command headings from both extracts): **6 added, 0 removed, 53 → 58
+documented commands.**
+
+⚠ **A first pass reported `IF` as REMOVED. It is not** — the line is preceded by a
+form-feed page break in the extract, so a `^[A-Z][A-Z0-9]:` anchor skipped it. `IF` is
+present in both (1_04_001 line 110, 1_04_004 line 163). Standing lesson, already in
+CLAUDE.md's serial-capture rules and equally true here: **a regex over extracted text
+invents changes.** Confirm any apparent removal by grepping for the command itself.
+
+#### What each one means for us
+
+| Cmd | From | What it does | Impact here |
+|---|---|---|---|
+| **SR** | 1_04_004 | Get/Set SWR-protection lock. `SR;` returns 0/1; `SR<any digit>;` resets the latch | ⭐ **HIGH — replaces a workaround we still ship.** We clear the SWR latch with a `TX;`/`RX;` dance (v0.15.17) and *infer* the state; v1.9.2 put that inferred state on the web page for Randy N4OPI. `SR;` reads the truth and `SR0;` is the documented reset |
+| **GP** | 1_04_004 | `GP;` → `GP+DD.DDDDDD+DDD.DDDDDD+YYYYMMDDHHMMSS;` — GPS position **and** date/time. Used by DL2MAN's Winlink app | ⭐ **HIGH — this is the clean answer to #173/#174.** Those are stuck because a clock we pushed is indistinguishable from a GPS-disciplined clock. **A POSITION is not**: we never push one, so a valid fix is positive proof of GPS in a way no timestamp can be. It would also let a GPS-equipped QMX+ fill in the operator's Maidenhead grid. ⚠ **Gate at ≥1_04_005, not 004** — the changelog records the longitude sign as reversed until 005. An earlier row in this document says "we do not use `GP`"; that stands as a statement of today's code and is **no longer the recommendation** |
+| **BN** | 1_04_003 | Get/Set band by **index** into the Band Configuration table (`BN2;` = 40 m on an 80–20 QMX; Get returns the current index) | **MEDIUM.** We tune by frequency and let the radio pick the band, so we do not need the Set. The **Get** is the interesting half: `RG` (RF gain) is **per band**, which is exactly why we refuse to store it — `BN;` names the slot the radio is actually on |
+| **BU / BD** | 1_04_003 | Band up / band down, equivalent to double-clicking the Volume knob and rotating one click | **LOW.** We set frequency directly, which is strictly more precise |
+| **UI** | 1_04_003 | 96-bit STM32 unique ID as 24 hex chars | **LOW.** A stable per-radio identity. Nothing needs it today |
+
+All six need a version gate. `cat_qmx_fw_at_least()` already exists (it parses the cached
+`VN;` string) and is the mechanism used for AM and SWR Tune: **1,4,3** for BD/BN/BU/UI,
+**1,4,5** for GP (not 4 — see the sign bug), **1,4,4** for SR.
+
+**The dev bench is already on `1_04_004`**, so BD/BN/BU/UI/SR can be exercised today; GP
+wants 005 or later.
+
+### Changelog since 1_04_006
+
+| Version | Entry | Why it matters here |
+|---|---|---|
+| **1_04_008** (27-Aug-2026) | "Added all remaining U3S modes to Virtual U3S" and **"Added RTTY to Virtual U3S (not available in real U3S)"** | The radio can now beacon RTTY itself. `JS8 / RTTY` sits in our roadmap behind `docs/rtty-feasibility.md`, where the cost was always the **transmit** side. If the QMX will key RTTY natively, the Tab5's part shrinks to choosing the frequency, showing the waterfall and driving it over CAT. Also worth thinking about against the WSPR page we shipped in v1.10.0: the radio's Virtual U3S is a standalone beacon, ours is receive + spots + reporting + transmit. Not a conflict; a question about what each is for. **No CAT change** — Virtual U3S is configured from the radio's own menus |
+| **1_04_007** (14-Aug-2026) | **"Bug fix: Fixed the 160m image rejection (90-degree quad LO phase relationship on 160m)"** | ⚠ **Do NOT file this as the cause of #118.** #118's phantom CW is reproducible on demand by a front-panel menu visit and cured by re-asserting IQ mode, which points at `Q9` session state, not LO phase — and it is not 160m-specific. What it *does* do is **weaken one piece of our own supporting evidence**: CLAUDE.md's spur section says the phantom-CW reports on low bands "stand on their own as evidence that image rejection is poor". On 160 m that was a known radio-side defect, fixed in 007, so it is no longer independent evidence |
+| **1_04_007** | Stored-CW-message fixes (frequency written as 00,000,000; continuous key-down between repeats), leading-edge CW RF spikes reintroduced in 006 | Radio-side. Relevant only to the CW page work on `feat/cw-page` |
+| **1_04_007** | "Image Sweep screen had incorrect result first time it ran" | Radio-side display |
+
+**Is 1_04 GA yet? Not established — and be careful how this is phrased.** The changelog
+labels **1_04_000** and **1_04_002** explicitly "Beta firmware version"; entries for
+**1_04_003 through 1_04_008 carry no such label**. That is the *absence* of a beta marker,
+not an announced general release, and a summarising fetch reading it as "not labelled
+BETA" is how that turns into a false claim. Our quick-start still recommends `1_03_002`.
+Changing that recommendation needs a positive statement from QRP Labs, or the §5 hardware
+checks actually run — not an inference from a missing word.
+
+**Also newer than our cache:** an **operating manual for 1_04_004 and above** (23-Jul-2026)
+and a **Virtual U3S manual for 1_04_008a and above** (28-Aug-2026). Note "**008a**" — a
+revision beyond 008 exists or is imminent. Neither is downloaded yet.
+
+---
+
+**Status of 1_04 (as of 2026-07-03, superseded above):** still **BETA**, no GA. Three betas so far.
 `1_04_000` was QMX+-only (hung on QMX — fixed in `1_04_001`). `1_04_002` is one unified
 image for QMX and QMX+, and **installing it executes a Factory Reset** (all radio settings
 wiped; the user must re-select their firmware variant at the post-reset prompt).
@@ -42,7 +125,7 @@ until the items in §5 are verified on real 1_04 hardware.
 
 | Cmd | 1_03_000 manual | 1_04_001 manual | Impact on our code |
 |---|---|---|---|
-| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — now shows `"TUNE"` (shipped). ⚠️ **How to *exit* Tune via CAT is NOT documented**: the manual's own Set list for `MD` is `1,2,3,5,6,7,8,9` — `0` never appears in it. The "`MD0;` exits" claim in earlier project notes traces to the original changelog summary, not the manual body — treat it as unverified until tested on hardware. The safe fallback is setting `MD` back to whatever digit was active before Tune was entered |
+| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — now shows `"TUNE"` (shipped). ⚠️ **How to *exit* Tune via CAT is NOT documented**: the manual's own Set list for `MD` is `1,2,3,5,6,7,8,9` — `0` never appears in it. The "`MD0;` exits" claim in earlier project notes traces to the original changelog summary, not the manual body — treat it as unverified until tested on hardware. The safe fallback is setting `MD` back to whatever digit was active before Tune was entered. ⚠️ **`MD;` Get lies while tuning**: after `MD8;` a Get returns the **prior** mode, not `8` (found on hardware 2026-07-03, confirmed by Stan KC7XE 2026-08-09 — "either a feature or a bug", the radio remembering where to return to). Digit `8` is therefore unreachable via the poll, and there is **no CAT signal for "the radio left Tune"** — `tune_modal.c` owns the session state itself |
 | **PC** | "power output in tenths of a watt", e.g. `PC45;` = 4.5 W | Same manual text, but the changelog adds: **returns 3 digits when power ≥ 10 W** | Already handled — `cat_query_power_swr()`/`cat_pwr_swr_async_read()` were re-calibrated for the 3-digit case (see CLAUDE.md) ✓ |
 | **MM** (semantics) | MM Set stores to EEPROM; when the new value takes effect is undocumented | New **"MM Effect"** config parameter (System config → CAT config): **"Immediate"** = every MM Set auto-reloads config and takes effect at once; **"On demand"** = takes effect only on menu enter/exit or on `MU;` | Directly relevant to the hard-won SSB-filter recipe (§4.3). Also `1_04_001` changelog: "CAT MU command and MM loaded previously saved state" bug was fixed |
 
@@ -193,6 +276,11 @@ Run against a real `1_04_002` unit, in this order — each item independent:
    real hardware, this needs a different exit mechanism entirely). Also let the 60 s
    auto-timeout fire once on purpose to confirm it recovers cleanly. Separately confirm AM
    in the mode selector — Set works, and check what `FW;` reports once in AM.
+   **Do this on a dummy load**, and note two things already settled by Stan KC7XE
+   (2026-08-09) so they don't get re-tested here: CAT commands are safe while Tune is
+   entered via `MD8;` (the lock-up is front-panel-menu only), and `MD;` will report the
+   pre-Tune mode throughout — that is expected, not a failed entry. Judge "did it enter
+   Tune" from the radio transmitting and the SWR/power readout, never from `MD;`.
 6. **`AI` modes** — last, on an expendable session: `AI2;`, watch for unsolicited `IF;`
    frames, then `AI0;` and confirm normal polling still works. If anything corrupts,
    power-cycle and record it — that alone decides whether §4.2 is viable.

@@ -29,6 +29,20 @@
 
 static const char *TAG = "usb_replug";
 
+// Root port only. Keeps VBUS up, so a self-powered radio never sees its supply
+// disappear. Same port sequence as usb_replug()'s tail.
+esp_err_t usb_replug_port_only(void)
+{
+    ESP_LOGW(TAG, "replug: root port only (VBUS left up)");
+    esp_err_t err_off = usb_host_lib_set_root_port_power(false);
+    if (err_off != ESP_OK)
+        ESP_LOGW(TAG, "root port power off: %s", esp_err_to_name(err_off));
+    vTaskDelay(pdMS_TO_TICKS(50));
+    esp_err_t err_on = usb_host_lib_set_root_port_power(true);
+    ESP_LOGW(TAG, "replug: done (port on: %s)", esp_err_to_name(err_on));
+    return (err_on == ESP_ERR_INVALID_STATE) ? ESP_OK : err_on;
+}
+
 esp_err_t usb_replug(uint32_t off_ms)
 {
     if (off_ms < 200)  off_ms = 200;
@@ -179,6 +193,36 @@ static void usb_stale_detect_task(void *arg)
             } else if (++zombie_checks >= 3 &&
                        now - last_replug_us > 60000000LL) {
                 zombie_checks = 0;
+
+                // Is this actually a stuck PORT, or is it the RADIO refusing to
+                // enumerate? Rising enum failures say the latter - #74, the
+                // QMX-side descriptor wedge - and a replug against that is proven
+                // useless: six approaches were falsified on hardware against a
+                // really-wedged radio, this exact VBUS cut among them, and every
+                // one got back the same empty data stage.
+                //
+                // Firing it anyway cuts VBUS for 2 s and visibly power-cycles the
+                // operator's radio for no benefit. That happened on 2026-08-13 -
+                // "it hooked the qmx off" - and it is the only thing this branch
+                // achieved. num_devices is NON-zero after a failed enumeration,
+                // which is why the wedge reaches a branch written for a zombie.
+                //
+                // So: leave the radio alone and say what is actually wrong. The
+                // operator has to power-cycle the QMX either way, and the screen
+                // already tells them so whenever CAT is down.
+                if (fails > baseline) {
+                    if (now - last_toast_us > (int64_t)DET_RETOAST_MS * 1000) {
+                        ESP_LOGW(TAG, "USB device present but enumeration keeps failing "
+                                      "(%lu since boot) - RADIO-side wedge, not a stuck "
+                                      "port. Not replugging: it does not help and it "
+                                      "power-cycles the radio. Power-cycle the QMX.",
+                                 (unsigned long)fails);
+                        last_toast_us = now;
+                    }
+                    prev_devices = info.num_devices;
+                    continue;
+                }
+
                 if (replug_attempts < 3) {
                     replug_attempts++;
                     ESP_LOGW(TAG, "USB device present but never opened for %d s - "
@@ -196,7 +240,13 @@ static void usb_stale_detect_task(void *arg)
                     ESP_LOGW(TAG, "USB port stuck after %d replug attempts - "
                                   "needs a QMX power cycle (or Tab5 reboot)",
                              replug_attempts);
-                    ui_toast("USB stuck - power-cycle the QMX (reboot Tab5 if that fails)");
+                    // NO on-screen toast (operator, v1.8.0: "irritating and for no
+                    // use"). It fired every few minutes at a QMX that was simply
+                    // switched off - an ordinary state, not a fault - and the
+                    // screen already says "Now turn on or reboot your QMX/+"
+                    // whenever CAT is down, which is the same instruction in the
+                    // right place. The log line above keeps this diagnosable, and
+                    // the recovery behaviour is unchanged.
                     last_toast_us = now;
                 }
             }
@@ -206,17 +256,63 @@ static void usb_stale_detect_task(void *arg)
             prev_devices = 0;
         }
 
-        // QMX-side descriptor-wedge branch: enumeration failed and nothing
-        // usable connected - only the QMX's own restart clears it.
+        // ENUMERATION-FAILURE BRANCH - a hole worth closing, but NOT a fix for #74.
+        //
+        // ⚠ READ THIS BEFORE BELIEVING THE PARAGRAPH BELOW. On 2026-08-11 I told the
+        // operator this branch's log-only behaviour was "the whole bug". It was not:
+        // measured on hardware the same evening, the ZOMBIE branch above fires on this
+        // wedge (num_devices is NON-zero after a failed enumeration - my reasoning that
+        // it could not fire was simply wrong) and it replugged twice, and the QMX
+        // answered both attempts with the same empty data stage. So the retry already
+        // existed and does not help.
+        //
+        // This branch is still worth having: it covers an episode where num_devices IS
+        // zero, which the zombie branch genuinely cannot see. It is a closed hole, not a
+        // cure - do not cite it as one.
+        //
+        // What IS true: ESP-IDF's enum.c has no retry of its own - any error jumps to
+        // ENUM_STAGE_CANCEL, frees the device and gives up. Linux retries up to three
+        // times with escalating resets, and Espressif issue #17918 (open, no fix)
+        // reports this failure class on other devices as timing-related. That is a real
+        // robustness gap and this replug is our stand-in for it.
+        //
+        // What is NOT true is that it rescues a wedged QMX. Falsified on hardware, five
+        // ways, against a really-wedged radio: reset hold 50 ms, reset hold 200 ms
+        // (Linux's long-reset value), requesting 64 descriptor bytes instead of 8 the
+        // way Windows and Linux do, VBUS off for 2 s plus a port power cycle, and
+        // repeated retries. Every one produced the same answer - an EMPTY data stage, no
+        // descriptor bytes at all, ~350 ms after port-on. The radio is not answering
+        // address 0 in that state and no host-side timing changes that.
+        //
+        // Capped and backed off regardless, because a QMX that is merely switched off is
+        // an ordinary state and must not cause endless port cycling.
         if (fails <= baseline) { wedge_checks = 0; continue; }
         if (++wedge_checks < 2) continue;
-        if (now - last_toast_us < (int64_t)DET_RETOAST_MS * 1000) continue;
-
-        ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
-                      "connected - stale QMX USB state, needs a QMX power cycle",
-                 (unsigned long)fails);
-        ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
         wedge_checks = 0;
+
+        if (replug_attempts < 3 && now - last_replug_us > 60000000LL) {
+            replug_attempts++;
+            ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and nothing is "
+                          "connected - retrying the port (%d/3). ESP-IDF does not retry "
+                          "enumeration itself; this stands in for that.",
+                     (unsigned long)fails, replug_attempts);
+            // PORT ONLY - no VBUS cut. Cutting VBUS here switched the operator's
+            // radio off during the v1.8.2 release verification, from THIS branch,
+            // after the zombie branch had already been gated for the same reason.
+            // The port cycle is the part that stands in for ESP-IDF's missing enum
+            // retry; the VBUS cut only ever added a power-cycled radio, and it is
+            // proven not to clear the QMX-side wedge.
+            usb_replug_port_only();
+            last_replug_us = now;
+            baseline = diag_log_usb_enum_failures();   // judge the NEXT attempt on its own
+            continue;
+        }
+
+        if (now - last_toast_us < (int64_t)DET_RETOAST_MS * 1000) continue;
+        ESP_LOGW(TAG, "USB enumeration still failing after %d port retries (%lu failures "
+                      "since boot) - needs a QMX power cycle",
+                 replug_attempts, (unsigned long)fails);
+        // Log only, no toast - see the reason on the zombie branch above.
         last_toast_us = now;
     }
 }

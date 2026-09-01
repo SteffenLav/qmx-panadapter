@@ -9,8 +9,13 @@
 
 #include "cat.h"
 #include "dsp.h"
+#include "ui.h"          // ui_pan_view_current - the viewport carried in the frame
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
+// Sent to a client that is about to be displaced by a newer one, so it can stop
+// reconnecting and say what happened instead of flapping. There is only ever ONE
+// live spectrum client - see the takeover note in ws_uri_handler().
+#define WS_FRAME_TYPE_TAKEOVER  0x02
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
 // WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
@@ -22,16 +27,80 @@
 // saturation (with core 1 ~94% idle) is the thing to fix — by rebalancing to
 // core 1 / cutting the rotation cost — not here.
 #define WS_PUSH_PERIOD_MS       100        // ~10 fps
-#define WS_HEADER_LEN           2
+// ⛔ AN ADAPTIVE FRAME RATE WAS TRIED HERE AND REMOVED (#232, 2026-08-21). It
+// raised the period when a frame needed more than one socket write and lowered
+// it again when frames went cleanly. Recorded rather than forgotten, because it
+// is an obvious idea to have twice:
+//   * it NEVER ENGAGED - its own telemetry reported "target 10.0" throughout
+//     the period the operator described the display as "very erratic".
+//   * its premise was a WRONG NUMBER. It was built on a measured "~12.7 KB/s
+//     link", of which 1026 B x 10 fps looked like 79%. That figure was taken
+//     while the page was still uncompressed AND WiFi power save was still on.
+//     Re-measured after both were fixed: six identical 86 KB fetches ran at min
+//     9.9, median 32.5, max 74.7 KB/s. The stream is 13% of the good case, and
+//     the 7.5x spread on IDENTICAL work says the link is LOSSY, not narrow.
+//     Rate control cannot help a link that is dropping packets.
+//   * its first form made things visibly worse, backing off x1.5 on a single
+//     hard frame and swinging 10 fps -> 3 fps and back within seconds.
+// Before reaching for this again, measure the SPREAD: a bandwidth ceiling gives
+// consistent throughput, and this link does not.
+/* ⭐ THE FRAME CARRIES THE STATE IT WAS CAPTURED WITH (#298 phase 5).
+ *
+ * The viewport and the dial used to reach the browser only through /api/status
+ * at 1 Hz, while frames arrive at 10. So for up to a second after the radio
+ * moved, every frame was located with a stale dial: the spectrum slid by the
+ * pending delta and - since each waterfall row carried a different stale value
+ * - the history smeared into a diagonal. Two channels describing one instant
+ * cannot be kept in step by hoping.
+ *
+ * byte[1] already worked this way for the payload layout, and the reasoning is
+ * the same: a frame that describes itself cannot be raced by its own data.
+ *
+ * Header, little-endian:
+ *   [0]      frame type
+ *   [1]      zoom decimation (1 = raw base bins, >1 = fftshifted zoom FFT)
+ *   [2..5]   dial Hz            - what the radio was on for THIS capture
+ *   [6..9]   view_lo Hz         - left edge of what is drawn
+ *   [10..13] span Hz
+ *   [14..17] cap_lo Hz          - what the radio can hear
+ *   [18..21] cap_hi Hz
+ *   [22..23] if_offset Hz       - signed, fits comfortably in 16 bits
+ * 22 extra bytes on a 1026-byte frame, 10 times a second: 1.8 kbit/s. */
+#define WS_HEADER_LEN           24
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
 
+static inline void ws_put_u32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
 // Quantization range: -130 dBm (q=0) .. -30 dBm (q=255). ~0.39 dB/step.
-#define WS_DB_MIN   (-130.0f)
+// The quantisation window for the spectrum bytes. The FLOOR matters more than it
+// looks: everything below it arrives as byte 0, and the browser's waterfall tracks a
+// per-bin noise floor out of these bytes exactly as render_waterfall.c does out of
+// floats. At -130 a QUARTER of the band was pinned at 0 on a quiet 20 m (measured
+// 2026-08-11: 24.7 % of bins at exactly 0, 44.7 % below byte 10), because -130 dBm
+// is where this receiver's own noise floor sits - see DSP_DB_CALIBRATION_OFFSET. A
+// floor tracker cannot find a floor it cannot see, so the browser's black level had
+// nothing to gate against and the waterfall came out as blue speckle where the Tab5
+// showed black.
+//
+// -150 puts 20 dB of headroom under the noise. The cost is resolution, 0.39 -> 0.47
+// dB per count, which is invisible next to a 24 dB contrast span - and the EMA the
+// browser applies before colouring interpolates between counts anyway.
+//
+// ⚠ WIRE FORMAT. The browser derives its own counts-per-dB from these two numbers
+// (WS_DB_MIN/WS_DB_MAX in index.html) - change one side and you must change the
+// other, or every dB figure in the browser is silently wrong.
+#define WS_DB_MIN   (-150.0f)
 #define WS_DB_MAX   (-30.0f)
 
 // Must match IF_OFFSET_HZ inside main/ui/ui.c (QMX dial sits at +12 kHz baseband).
-#define WS_IF_OFFSET_HZ 12000
+/* WS_IF_OFFSET_HZ is gone with the rotation - the browser gets if_offset_hz
+ * from /api/status now, which also carries the CW pitch and the per-unit trim
+ * that this constant never did. */
 
 static const char *TAG = "ws";
 
@@ -47,8 +116,31 @@ static int            volatile s_ws_fd    = -1;
 static volatile bool           s_session_active = false;
 
 static float          s_spec[DSP_FFT_SIZE];
-static uint8_t        s_payload[WS_FRAME_LEN];
-static httpd_ws_frame_t s_ws_frame;  // static, NOT stack-local
+
+// WS wire buffer: the RFC 6455 header is built directly IN FRONT of the payload
+// so header and body leave as ONE contiguous send. A split between them is one of
+// the two ways the stream can desynchronise (see ws_send_all below).
+// Layout: [0..3] = 4-byte header for a 126-length frame, [4..] = our payload.
+#define WS_WIRE_HDR_LEN 4
+static uint8_t        s_txbuf[WS_WIRE_HDR_LEN + WS_FRAME_LEN];
+static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
+
+// Frames that needed more than one send() to go out, i.e. instances of the
+// partial write that used to silently corrupt the stream. Reported on the fps
+// line. This is the ONLY evidence that the fix is doing something: before it,
+// these were indistinguishable from healthy sends (IDF returned ESP_OK), which
+// is the same trap #189 documents for the silent USB patches.
+static uint32_t       s_partial_writes = 0;
+// #217 (Samuel W7STF): he reports occasional 3-6 s PSD stalls after the #193
+// fix and is careful to say it may be his PC. It might well be - but nobody
+// could tell, because every number that would settle it lived in a periodic
+// LOG LINE the operator never sees. These are reported in /api/status so a
+// stall becomes attributable instead of arguable: if a stall lines up with a
+// teardown the device caused it, and if these do not move during one, it is
+// the network or the browser.
+static uint32_t       s_sessions   = 0;   // WS sessions accepted
+static uint32_t       s_takeovers  = 0;   // a new client displacing a stale one
+static uint32_t       s_closes     = 0;   // sessions ended device-side
 
 static TaskHandle_t   s_push_task = NULL;
 
@@ -62,6 +154,137 @@ static volatile bool s_ws_paused = false;
 void webserver_ws_set_paused(bool paused)
 {
     s_ws_paused = paused;
+}
+
+bool webserver_ws_is_paused(void) { return s_ws_paused; }
+
+// ---------------------------------------------------------------------------
+// Sending a WS frame WITHOUT the partial-write bug in IDF's own helper.
+//
+// ⛔ Do NOT go back to httpd_ws_send_frame_async() for the spectrum stream.
+// Verified by reading the PINNED IDF v5.4.4 source
+// (components/esp_http_server/src/httpd_ws.c), not inferred: it sends the header
+// and the payload with two BARE calls to sess->send_fn() and checks only "< 0".
+// httpd_default_send() is a single send() that RETURNS A BYTE COUNT, and a short
+// count is not negative - so a PARTIAL TCP WRITE IS REPORTED TO US AS ESP_OK.
+// The ordinary HTTP path does not have this bug: it uses httpd_send_all(), which
+// loops until the buffer is drained. The WS path simply never got that loop.
+//
+// This bites here harder than it would anywhere else, because ws_uri_handler()
+// deliberately sets SO_SNDTIMEO to 400 ms (so a stuck send cannot freeze the
+// single httpd worker - the 2026-07-14 fix). A send timeout on a socket that has
+// already queued some bytes is EXACTLY how a short count arises, so on a
+// congested link the partial write is not a rare edge case, it is the expected
+// outcome. The freeze fix and this bug are the same line of code.
+//
+// The consequence is not a dropped frame, it is a CORRUPT STREAM. The browser has
+// been told to expect WS_FRAME_LEN payload bytes; it gets fewer, so it consumes
+// the NEXT frame's header as the tail of this one and every frame afterwards is
+// misparsed. The browser then sees a protocol violation and closes the socket -
+// which is why the symptom is "the panadapter freezes for a few seconds and then
+// comes back", not "one glitchy frame".
+//
+// MEASURED on a 9.6 h capture of v1.8.6-7-g7f387ab, before this fix:
+//   * 545 session teardowns, median 14.4 s apart
+//   * each costing the browser a median 2.2 s (p90 4.5 s) blackout while it
+//     reconnected - matching Samuel W7STF's "several seconds later it begins to
+//     animate again" (#177196)
+//   * feed activity enriched in the 2 s before a teardown: RBN 8.4x, DX cluster
+//     8.6x, TLS handshake 5.7x, SDIO recovery 4.6x, against an 8.1 % base rate
+// Socket exhaustion was TESTED AND FALSIFIED as the cause (0 accept/ENFILE
+// errors), so do not go looking there again.
+// ---------------------------------------------------------------------------
+typedef enum {
+    WS_TX_OK = 0,    // the whole frame reached the socket
+    WS_TX_SKIPPED,   // nothing was sent; frame abandoned cleanly, stream still in sync
+    WS_TX_DEAD,      // session gone, or the frame could not be completed
+} ws_tx_result_t;
+
+// Send every byte or report why not. The invariant this exists to keep: once ANY
+// byte of a frame is on the wire we are committed - abandoning it mid-frame is
+// what desynchronises the stream, so the only honest outcomes from that point are
+// "finished it" or "closed the session".
+static ws_tx_result_t ws_send_all(httpd_handle_t hd, int fd,
+                                  const uint8_t *buf, size_t len,
+                                  uint32_t budget_ms)
+{
+    size_t     off   = 0;
+    int        sends = 0;
+    TickType_t start = xTaskGetTickCount();
+
+    while (off < len) {
+        int r = httpd_socket_send(hd, fd, (const char *)buf + off, len - off, 0);
+        if (r > 0) {
+            off += (size_t)r;
+            sends++;
+            continue;
+        }
+        // The session has already been removed from httpd's table. This is not a
+        // transient condition and never becomes one, so waiting on it is pure
+        // added blackout - close now. (Same reading as httpd_ws_send_frame_async
+        // returning ESP_ERR_INVALID_ARG, which is what we used to burn 15
+        // attempts on.)
+        if (r == HTTPD_SOCK_ERR_INVALID) return WS_TX_DEAD;
+        if (r == HTTPD_SOCK_ERR_FAIL)    return WS_TX_DEAD;
+
+        // HTTPD_SOCK_ERR_TIMEOUT (EAGAIN: the TCP send buffer is full).
+        // Nothing sent yet => the stream is still perfectly in sync, so dropping
+        // this frame is free and the session survives the congestion.
+        if (off == 0) return WS_TX_SKIPPED;
+
+        // Committed mid-frame. Keep trying inside a bounded budget rather than
+        // leaving the browser parsing garbage.
+        if ((uint32_t)((xTaskGetTickCount() - start) * portTICK_PERIOD_MS) >= budget_ms)
+            return WS_TX_DEAD;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    if (sends > 1) s_partial_writes++;   // would have been silent corruption before
+    return WS_TX_OK;
+}
+
+// Build an unmasked binary frame header in front of `payload_len` bytes that are
+// already sitting at buf + WS_WIRE_HDR_LEN, then send the lot in one go.
+static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
+                                     uint8_t *buf, size_t payload_len,
+                                     uint32_t budget_ms)
+{
+    // ⛔ RFC 6455 §5.2 requires the MINIMAL length encoding: the 7-bit field for
+    // 0..125, and the 126 + 16-bit form ONLY for 126..65535. The old code used
+    // the 16-bit form unconditionally under the comment "126 is valid for
+    // anything <= 65535" - which is wrong, and it mattered for exactly one
+    // frame: the 1-byte TAKEOVER notice.
+    //
+    // That notice exists so a displaced browser can stand down instead of
+    // retrying, and the ping-pong it prevents is documented right where it is
+    // sent (340 takeovers in one session). But the notice itself was malformed,
+    // so a strict client - i.e. every browser - failed the connection rather
+    // than reading it, reconnected, and took the slot straight back. The cure
+    // was re-creating the disease.
+    //
+    // Measured on the bench 2026-08-20 with two tabs open: 19 sessions and
+    // **16 takeovers** in about ten seconds, each costing the displaced tab a
+    // reconnect. That is very likely the residual "PSD stalls for 3-6 s" report
+    // (#217, Samuel W7STF) whenever a second browser or phone is left open.
+    //
+    // The header is still built IN FRONT of the payload so the two can never be
+    // split across sends (the #193 rule); a 2-byte header simply starts two
+    // bytes later in the same buffer.
+    uint8_t *frame;
+    size_t   hdr;
+    if (payload_len <= 125) {
+        hdr   = 2;
+        frame = buf + WS_WIRE_HDR_LEN - hdr;
+        frame[1] = (uint8_t)payload_len;
+    } else {
+        hdr   = 4;
+        frame = buf;
+        frame[1] = 126;
+        frame[2] = (uint8_t)((payload_len >> 8) & 0xFF);
+        frame[3] = (uint8_t)(payload_len & 0xFF);
+    }
+    frame[0] = 0x80 | HTTPD_WS_TYPE_BINARY;    // FIN + opcode 0x2
+    return ws_send_all(hd, fd, frame, hdr + payload_len, budget_ms);
 }
 
 // httpd worker has 1 task, so this URI handler runs in the only worker.
@@ -91,9 +314,34 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     // (LWIP_MAX_SOCKETS exhausted) and the server stops accepting connections.
     if (s_session_active && s_ws_fd != fd && s_ws_fd >= 0) {
         ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d (closing stale)", fd, s_ws_fd);
+        s_takeovers++;
+        // TELL THE DISPLACED CLIENT WHY, before closing it. Without this the old
+        // browser only sees its socket close, retries after 2 s, takes the slot
+        // back, and the two ping-pong forever - 340 takeovers in one session while
+        // both showed nothing but "reconnecting", which reads as a network fault and
+        // sent an hour of debugging in the wrong direction. A browser that knows it
+        // was displaced can stand down and say so.
+        //
+        // One byte, sent synchronously to the OTHER fd before the close is queued. A
+        // browser that predates this frame type ignores any frame whose first byte
+        // is not WS_FRAME_TYPE_SPECTRUM, so it is backward compatible; the failure
+        // mode if the stale socket is genuinely dead is that this send fails and the
+        // close proceeds exactly as before.
+        {
+            uint8_t bye[WS_WIRE_HDR_LEN + 1];
+            bye[WS_WIRE_HDR_LEN] = WS_FRAME_TYPE_TAKEOVER;
+            httpd_handle_t h = s_server ? s_server : req->handle;
+            // Same all-or-nothing send as the stream: a half-written notice would
+            // desynchronise the very socket we are about to close, and the stale
+            // browser would report a protocol error instead of the reason.
+            if (ws_send_binary(h, s_ws_fd, bye, 1, 200) != WS_TX_OK)
+                ESP_LOGD(TAG, "takeover notice to fd=%d did not go out (closing anyway)",
+                         s_ws_fd);
+        }
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
     s_ws_fd = fd;
+    s_sessions++;
     s_session_active = true;
 
     // Bound how long a single WS send may block. On a weak/congested link
@@ -119,10 +367,6 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
 static void ws_push_task(void *arg)
 {
     (void)arg;
-    s_ws_frame.final   = true;
-    s_ws_frame.type    = HTTPD_WS_TYPE_BINARY;
-    s_ws_frame.payload = s_payload;
-    s_ws_frame.len     = WS_FRAME_LEN;
     s_payload[0] = WS_FRAME_TYPE_SPECTRUM;
 
     const int   N     = DSP_FFT_SIZE;
@@ -157,6 +401,14 @@ static void ws_push_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
 
+        // Keep the socket fresh WHILE PAUSED too. The refresh below only runs
+        // after a successful send, so a stream paused for an upload stops being
+        // refreshed for the whole transfer and drifts back to the bottom of the
+        // LRU pile - which is exactly the eviction this is meant to prevent,
+        // reappearing during the one operation that already stresses the link.
+        if (s_session_active && s_server && s_ws_fd >= 0 && s_ws_paused)
+            httpd_sess_update_lru_counter(s_server, s_ws_fd);
+
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not
             // log stale stats on reconnect, and yield the link to the transfer.
@@ -170,10 +422,9 @@ static void ws_push_task(void *arg)
         // Select spectrum source. When zoom-FFT is active the DSP has already
         // mixed the zoom center down to DC; only an fftshift is needed and the
         // browser gets higher-resolution bins. When inactive (or not ready yet),
-        // fall back to the base 1024-bin spectrum with a full IF shift.
+        // fall back to the base 1024-bin spectrum, sent RAW - see the loop below.
         int decim = dsp_get_zoom_decim();
         const float *spec_data = NULL;
-        int if_shift = 0;
 
         if (decim > 1) {
             spec_data = dsp_get_zoom_spectrum();  // NULL if accumulation still filling
@@ -182,24 +433,75 @@ static void ws_push_task(void *arg)
             decim = 1;
             if (dsp_get_spectrum(s_spec) != ESP_OK) continue;
             spec_data = s_spec;
-            // CW mode: add CW pitch on top of base 12 kHz IF so the browser
-            // centers on the audio tone, matching the Tab5 display.
-            int total_if_hz = WS_IF_OFFSET_HZ;
-            const char *mode = cat_get_mode_str();
-            if (mode && strcmp(mode, "CW") == 0) {
-                total_if_hz += cat_get_cw_offset_hz();
-            }
-            if_shift = (total_if_hz * N + DSP_SAMPLE_RATE_HZ / 2) / DSP_SAMPLE_RATE_HZ;
+            /* The IF shift that used to be applied here is GONE. It existed to
+             * centre the payload on the dial - including the CW pitch, so the
+             * browser landed on the audio tone - and the browser now gets
+             * if_offset_hz in /api/status and does that itself, through the same
+             * mapping the Tab5 uses. One rotation fewer between the FFT and the
+             * screen is one fewer place for the two to disagree. */
         }
 
         // byte[1] carries the decimation factor so the browser can apply
         // residual zoom instead of full zoom when rendering zoom-FFT data.
         s_payload[1] = (uint8_t)decim;
 
-        // fftshift (+ IF shift for base spectrum path)
+        /* The rest of the header: everything needed to locate THIS payload,
+         * sampled here so it cannot disagree with the bins below it. Zeroed on
+         * the zoom path, where pan_view does not apply and the browser keeps its
+         * own centred mapping - a browser must check span before trusting any of
+         * it. */
+        {
+            pan_view_cfg_t pvc; pan_view_t pv;
+            bool have = (decim == 1) && ui_pan_view_current(&pvc, &pv, N);
+            ws_put_u32(&s_payload[2],  have ? (uint32_t)pvc.dial_hz  : 0);
+            ws_put_u32(&s_payload[6],  have ? (uint32_t)pv.lo_hz     : 0);
+            ws_put_u32(&s_payload[10], have ? (uint32_t)pv.span_hz   : 0);
+            ws_put_u32(&s_payload[14], have ? (uint32_t)pv.cap_lo_hz : 0);
+            ws_put_u32(&s_payload[18], have ? (uint32_t)pv.cap_hi_hz : 0);
+            int16_t ifo = have ? (int16_t)pvc.if_offset_hz : 0;
+            s_payload[22] = (uint8_t)ifo;
+            s_payload[23] = (uint8_t)(((uint16_t)ifo) >> 8);
+        }
+
+        /* ⭐ RAW BINS ON THE BASE PATH - the rotation is gone (#298 phase 5).
+         *
+         * This used to fftshift AND apply the IF shift before sending, so the
+         * payload arrived centred on the dial. Two things were wrong with that:
+         *
+         *  - The browser then had to know the rotation to locate anything, and
+         *    it did not - it assumed dial-at-centre and derived its own pan from
+         *    the BIN-ROUNDED pan_bins. When the page was moved onto the device's
+         *    real viewport the two orderings disagreed by 256 bins, which folded
+         *    to 768 and showed up on the bench as the spectrum sitting exactly
+         *    36 kHz low.
+         *
+         *  - The `% N` WRAPPED. The rotated payload spans dial +/-24 kHz, but the
+         *    radio hears dial-36k..dial+12k, so the top 12 kHz of every frame was
+         *    somebody else's spectrum and the bottom 12 kHz of real signal was
+         *    never sent anywhere recoverable. That is #297, alive in the wire
+         *    format long after the Tab5 stopped doing it.
+         *
+         * Sending raw bins lets the browser run the SAME mapping the Tab5 does -
+         * viewBinAt() mirrors pan_view_x_to_bin() - so both screens locate a
+         * signal identically and the browser can reach the whole capture window.
+         *
+         * ⚠ This is a WIRE FORMAT CHANGE. It is safe because the page is served
+         * BY the device, so the two can never be out of step; but a browser tab
+         * left open across a firmware update must be reloaded, and byte[1] is
+         * not enough to tell it so.
+         *
+         * ⛔ The ZOOM path still fftshifts. dsp_set_zoom() has already mixed the
+         * target to DC, pan_view deliberately does not describe it, and the
+         * browser keeps its old centre-based path there. Do not "make it
+         * consistent" without giving the browser a viewport for that path too. */
+        const bool raw_bins = (decim == 1);
         for (int i = 0; i < N; i++) {
-            int bin = (i < half) ? (i + half) : (i - half);
-            if (if_shift) bin = ((bin + if_shift) % N + N) % N;
+            int bin;
+            if (raw_bins) {
+                bin = i;                        /* untouched FFT order */
+            } else {
+                bin = (i < half) ? (i + half) : (i - half);
+            }
             float db = spec_data[bin];
             if (db < WS_DB_MIN) db = WS_DB_MIN;
             else if (db > WS_DB_MAX) db = WS_DB_MAX;
@@ -207,19 +509,56 @@ static void ws_push_task(void *arg)
             s_payload[WS_HEADER_LEN + i] = (uint8_t)q;
         }
 
-        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fd, &s_ws_frame);
-        if (err != ESP_OK) {
+        // Budget for finishing a frame we are already committed to. Deliberately
+        // longer than one push period: dropping the session costs the browser a
+        // ~2 s reconnect, so riding out a congestion burst is much cheaper than
+        // being strict here.
+        ws_tx_result_t tx = ws_send_binary(s_server, s_ws_fd, s_txbuf, WS_FRAME_LEN, 1500);
+
+        if (tx == WS_TX_OK) {
+            // ⛔ KEEP THIS SOCKET OUT OF THE LRU BIN. Without it httpd closes the
+            // spectrum stream every few seconds and the browser shows
+            // "reconnecting" - measured session lifetimes of 5.8-14.1 s on the
+            // bench, with NO device-side close logged anywhere, which is what
+            // sent this hunting through the network for a fault that was here.
+            //
+            // Verified by reading the PINNED IDF v5.4.4 source rather than
+            // inferred: components/esp_http_server/src/httpd_sess.c updates
+            // session->lru_counter in exactly ONE place, at the end of
+            // httpd_sess_process(), i.e. when a request is RECEIVED on that
+            // socket. httpd_sess_update_lru_counter() is a public helper that
+            // the component itself never calls - it exists for cases like ours.
+            // httpd_socket_send(), which this stream uses, does not touch it.
+            //
+            // Our socket only ever SENDS and never receives (control frames are
+            // not subscribed), so its counter is frozen at the handshake while
+            // every other request bumps the global one. It is therefore ALWAYS
+            // the least-recently-used session, and with max_open_sockets=10 and
+            // lru_purge_enable=true it is the one httpd evicts whenever the
+            // table fills. The browser's own /api/status and /api/decodes polls
+            // are enough to fill it, so the stream was being killed by the page
+            // that was watching it.
+            httpd_sess_update_lru_counter(s_server, s_ws_fd);
+        }
+
+        if (tx == WS_TX_SKIPPED) {
+            // Nothing went out and the stream is still in sync. Count it, so a
+            // link that is congested for a sustained period still ends the
+            // session rather than showing a frozen page forever.
             TickType_t now_fail = xTaskGetTickCount();
             if (++fail_streak == 1) fail_streak_at = now_fail;
             uint32_t streak_ms = (uint32_t)(now_fail - fail_streak_at) * portTICK_PERIOD_MS;
-            if (fail_streak < MAX_FAIL_STREAK && streak_ms < (uint32_t)MAX_FAIL_STREAK_MS) {
-                // Transient: skip this frame, keep the session, retry next tick.
+            if (fail_streak < MAX_FAIL_STREAK && streak_ms < (uint32_t)MAX_FAIL_STREAK_MS)
                 continue;
-            }
-            ESP_LOGW(TAG, "async send failed fd=%d: %s (%d in a row, %ums); closing session",
-                     s_ws_fd, esp_err_to_name(err), fail_streak, (unsigned)streak_ms);
+            ESP_LOGW(TAG, "send blocked fd=%d (%d in a row, %ums); closing session",
+                     s_ws_fd, fail_streak, (unsigned)streak_ms);
+            tx = WS_TX_DEAD;
+        }
+
+        if (tx == WS_TX_DEAD) {
             // Close the socket so its LWIP slot is freed (see takeover note above).
             int dead = s_ws_fd;
+            s_closes++;
             s_session_active = false;
             s_ws_fd = -1;
             fail_streak = 0;
@@ -234,7 +573,12 @@ static void ws_push_task(void *arg)
         TickType_t now = xTaskGetTickCount();
         if ((now - fps_at) >= pdMS_TO_TICKS(5000)) {
             float fps = (float)sent * 1000.0f / (float)pdTICKS_TO_MS(now - fps_at);
-            ESP_LOGI(TAG, "tx %.1f fps", fps);
+            // `partial` counts frames that needed more than one send() to go out.
+            // Every one of those was, before this fix, a silently corrupted stream
+            // and therefore a browser-side disconnect a moment later. A non-zero
+            // count here is the fix working, NOT a fault.
+            ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
+                     fps, (unsigned)s_partial_writes);
             sent = 0;
             fps_at = now;
         }
@@ -271,7 +615,10 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // capture. At priority 5 this task could preempt it every 100 ms
         // whenever a browser tab is open, the same hazard class that
         // regressed FT8 decode yield via cw_audio_task (see CLAUDE.md).
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
+        // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
+        // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
+        // names ws_push_task as latency-critical.
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 3072, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;
@@ -291,4 +638,16 @@ void webserver_ws_stop(void)
     s_server = NULL;
     // Leave the push task running idle -- it will pick up the next start cleanly.
     ESP_LOGI(TAG, "WS stopped");
+}
+
+// #217: the WS health counters, for /api/status. Read-only snapshot; a torn
+// read is harmless here because these only ever increase and are for eyeballing
+// against a reported stall, not for control flow.
+void webserver_ws_stats(uint32_t *sessions, uint32_t *takeovers,
+                        uint32_t *closes, uint32_t *partial)
+{
+    if (sessions)  *sessions  = s_sessions;
+    if (takeovers) *takeovers = s_takeovers;
+    if (closes)    *closes    = s_closes;
+    if (partial)   *partial   = s_partial_writes;
 }

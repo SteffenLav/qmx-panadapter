@@ -1,5 +1,10 @@
 # Troubleshooting
 
+> **On the Tab5 itself:** swipe in from the right edge and tap **Need guidance?**.
+> It lists these symptoms in plain words, highlights the ones it can see are
+> happening right now, and opens this chapter at the matching section. See
+> [Getting Help](../getting-help.md).
+
 ## Common Issues
 
 ### Spectrum is flat, no signal
@@ -17,7 +22,7 @@
 1. Try a **different USB cable** — use one you know works for data (USB stick, phone file transfer, etc.)
 2. Power cycle the QMX (off 5 seconds, back on)
 3. Power cycle the Tab5
-4. Check QMX firmware version is v1.03.002 or newer (the v1.04.002 beta also works)
+4. Check QMX firmware version is v1.03.002 or newer (the v1.04 betas also work)
 
 If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-diagnostics).
 
@@ -52,7 +57,7 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 
 **Fix:**
 
-1. Verify QMX firmware is v1.03.002 or newer (see Step 1 in [Quick Start](../quick-start.md); the v1.04.002 beta also works)
+1. Verify QMX firmware is v1.03.002 or newer (see Step 1 in [Quick Start](../quick-start.md); the v1.04 betas also work)
 2. Try a shorter/higher-quality USB cable
 3. Restart both devices
 
@@ -85,18 +90,37 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 
 **Symptoms:** Decode list isn't updating, or only 1–2 decodes per slot.
 
-**Causes:**
+**First: check your firmware version.** The long-standing version of this — the
+first slots of a session decoding well, then collapsing to a fraction and never
+recovering — was **fixed in v1.1.0**. The cause was audio being lost at the USB
+wire itself: the transfer pipeline held only 9 ms of queued audio, so any pause
+longer than that (a decode burst, redrawing the list) let the stream run dry, and
+roughly 170–350 ms of every slot went missing with no error reported anywhere.
+The pipeline now holds 320 ms. If you are on an earlier version, update; nothing
+else on this page will help.
 
-1. WiFi interference (WiFi and USB host compete for DMA on the C6)
-2. CPU overload (rare; usually other tasks eating CPU)
-3. Audio USB disconnection (hidden; spectrum still updates, but FT8 decode silently stalls)
+**On v1.1.0 or later, the likely causes are:**
 
-**Fix:**
+1. **The QMX stopped sending audio without disconnecting** — a trip through the
+   radio's own menus can do this, because IQ mode is session state the QMX
+   forgets. CAT keeps answering normally, so everything looks connected while
+   the decode list sits empty. The Tab5 re-asserts IQ mode by itself after 30 s
+   of silence; if it does not recover, power-cycle the QMX.
+2. **A cable that is not carrying data properly** — intermittent is worse than
+   dead, because the spectrum can still look alive.
+3. **Your clock is wrong.** FT8 needs UTC within about a second; see *Time is
+   wrong* below. Candidates stay high while decodes go to zero — that pattern is
+   a timing problem, not a signal one.
 
-1. **Turn WiFi off** temporarily and see if decodes improve
-2. Restart the panadapter (go Panadapter → settings → About → Reset)
-3. Check USB cable is firmly connected
-4. Download the diagnostic log after a session (web UI **Files** menu → **Diagnostic download ↓**) and post it on GitHub
+**What to do:**
+
+1. Check the clock in the bottom bar, and what it says it is synced from
+2. Try the QMX on a different USB cable, connected directly — not through a hub
+3. Turn WiFi off for a few minutes and see whether decodes change
+4. Download the diagnostic log after a session (web UI **Files** menu →
+   **Diagnostic download ↓**) and post it on GitHub — it records the per-slot
+   decode counts and capture timing, which says immediately which of the above
+   it is
 
 ### FT8 transmit doesn't key the QMX
 
@@ -186,6 +210,45 @@ For POTA/portable operation without WiFi:
 1. Re-enter your settings
 2. If they disappear again, download the diagnostic log (web UI **Files** menu → **Diagnostic download ↓**) and report on GitHub
 3. As a last resort: export your config via the web UI (**Files** menu → **Config download ↓**), then do a full factory reset, then re-import
+
+### A Bluetooth mouse never connects
+
+**Symptoms:** Bluetooth is enabled, you have restarted the Tab5 and put the mouse into
+pairing mode, and nothing happens. The Bluetooth symbol in the bottom bar keeps looking
+and never turns blue.
+
+**Most likely cause: the mouse is Bluetooth Classic, not Bluetooth Low Energy.** Only
+Low Energy mice work. The Tab5's Bluetooth comes from a co-processor with no Bluetooth
+Classic radio in it, so a Classic mouse cannot be made to work by any firmware change,
+and it never appears to the Tab5 at all — the Tab5 listens only for mice that announce
+themselves the Low Energy way.
+
+Check the box or the maker's specification for **Bluetooth 4.0 or later**. Most mice
+sold since about 2014 qualify. A dual-mode mouse works on its Low Energy channel.
+
+If the mouse *does* connect — the symbol turns blue — but the pointer moves oddly or
+jumps to the edges of the screen, that is a different problem and worth reporting with
+a diagnostic log, since the Tab5 records what the mouse tells it about its own layout.
+
+### Flashing keeps failing, but the COM port is still listed
+
+**Symptoms:** the flasher runs, the Tab5's COM port is visible in Windows Device
+Manager, and yet esptool fails again and again — often after the Tab5 has been
+running for a long time.
+
+**Fix: reboot the Tab5 and flash again.** Do this before changing cables or
+reinstalling anything.
+
+**Why it happens:** unlike most dev boards, the Tab5 has no separate USB-to-serial
+chip. The serial port you flash over is produced by the **ESP32-P4 itself**, so it
+only exists while the firmware is running. A busy or unhappy firmware can leave the
+port enumerated — Windows still lists it — while it no longer responds to the
+flasher's request to enter download mode. Restarting the Tab5 restarts that serial
+endpoint with it.
+
+Reported by Samuel W7STF after a seven-hour session; a reboot fixed it immediately.
+If a reboot does *not* fix it, the usual causes are a charge-only USB-C cable or a
+serial monitor still holding the port.
 
 ### Clearing a stuck configuration (web-based reset, new in v0.21.0)
 

@@ -20,6 +20,12 @@ typedef struct {
     const char *my_arrl_section;  // our section, e.g. "EMA"
     const char *their_arrl_class; // their class, e.g. "3A"
     const char *their_arrl_section; // their section, e.g. "NNJ"
+    // THEIR activation, when we are the chaser: the park/summit the station we
+    // worked was activating. Written as SIG/SIG_INFO. NULL/empty for an
+    // ordinary QSO. OUR OWN activation is NOT here on purpose - it comes from
+    // settings inside adif_log_record(), so no caller can forget it.
+    const char *their_sig;        // "POTA" / "SOTA"
+    const char *their_sig_info;   // their reference, e.g. "DL-0123"
 } adif_qso_t;
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.
@@ -57,6 +63,19 @@ void adif_log_clear(void);
 // worked-call cache. Returns false if idx is out of range or I/O fails.
 bool adif_log_delete_record(int idx);
 
+// Replace, add or remove one field in one record. value NULL/"" removes the
+// field, which is the honest representation of "never exchanged" - so an
+// operator can get a report back to absent, not only to a different number.
+// Does NOT touch upload cursors: the remote copy of an already-uploaded QSO is
+// unchanged, and rewinding a cursor would re-upload the whole log.
+bool adif_log_set_field(int idx, const char *field, const char *value);
+
+// How many logged QSOs carry this MY_SIG_INFO - i.e. how many contacts the
+// current activation has. POTA wants 10 for a valid activation, so this is the
+// number an activator is actually counting in the field. One pass over the
+// file; case-insensitive on the reference.
+int adif_log_count_activation(const char *sig_info);
+
 // Read the idx-th completed QSO record (0-based, in log order) as a single
 // ADIF line with no trailing newline. Returns false if idx is out of range
 // or the file can't be read. out must be sized generously - a record line
@@ -66,7 +85,7 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz);
 // Extract an ADIF field value (<FIELD:len>value) from a single record line as
 // returned by adif_log_get_record(). Returns false if the field is absent or
 // doesn't fit in out_sz. The "<FIELD:" tag is '<'-anchored, so e.g. "CALL"
-// never matches inside "MY_CALL".
+// never matches inside "STATION_CALLSIGN".
 bool adif_log_extract_field(const char *line, const char *field,
                             char *out, size_t out_sz);
 

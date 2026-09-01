@@ -5,7 +5,11 @@
 #include "update_check.h"
 #include "ui/reader_view.h"
 #include "wifi/wifi.h"
+#include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
+#include "net/ota_update.h"
+#include "net/net_quiet.h"
+#include "storage/settings.h"
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -31,12 +35,49 @@ static const char *TAG = "update_check";
 
 #define RESP_MAX_BYTES      (48 * 1024)
 #define FIRST_DELAY_MS      30000              // let WiFi/SNTP settle first
-#define CHECK_INTERVAL_MS   (6 * 60 * 60 * 1000)   // 6 h (pending operator confirm)
+// 30 MINUTES, down from 6 hours. Six hours meant a unit left switched on before
+// a release might not notice until the next day, which made the OTA offer close
+// to useless - and untestable.
+//
+// Cheap because of what is actually fetched. MEASURED: latest.json is 139 BYTES
+// and takes 0.09 s, so this is ~280 bytes an hour per device and 50 hits an hour
+// across 25 devices. Five minutes was tried first and is unnecessary now that
+// update_check_now() exists: anyone who has just read the announcement can force
+// a check from the version number in the footer, so the timer only has to catch
+// the people who have not.
+#define CHECK_INTERVAL_MS   (30 * 60 * 1000)       // 30 min
+// ⛔ THE GITHUB FALLBACK IS A DIFFERENT ANIMAL AND MUST NOT RUN AT THAT RATE.
+// MEASURED: /releases?per_page=5 is 48,764 BYTES and takes 3.7 s - 350x the
+// traffic, several seconds of a marginal WiFi link, and GitHub's unauthenticated
+// limit is 60 requests/hour per IP. If latest.json ever went down, every device
+// on a site would start pulling 48 KB every five minutes and would rate-limit
+// themselves out. So it is tried at most this often, and the cheap check keeps
+// running in between.
+#define GITHUB_MIN_GAP_MS   (60 * 60 * 1000)       // 1 h
 #define RETRY_WHEN_DOWN_MS  (10 * 60 * 1000)   // WiFi down: retry sooner
+
+// An AUTOMATIC download waits for both of these; see the guards in check_task().
+// 5 minutes clears WiFi bring-up, USB enumeration and the first FT8 slots. The
+// heap figure is a margin, not a measured cliff: the verify has been seen to die
+// with 10 KB free, and a healthy idle device here sits at 50 KB+, so 32 KB says
+// "there is room to spare" without waiting for a quiet moment that may never
+// come. A held-off download simply tries again at the next check.
+#define AUTODL_MIN_UPTIME_MS      (5 * 60 * 1000)
+#define AUTODL_MIN_INTERNAL_FREE  (32 * 1024)
 
 static SemaphoreHandle_t s_lock = NULL;
 static char s_latest[24]  = {0};
 static bool s_available   = false;
+static volatile bool s_force = false;   // set by update_check_now()
+// A check takes SECONDS (TLS to GitHub), and until this existed nothing
+// could tell 'we asked, wait' from 'we asked, and the answer is no'. Both
+// screens rendered the previous verdict half a second after the press, so a
+// tester who had just read the release announcement was told "Up to date -
+// you are running v1.9.3" and only saw the offer appear seconds later, by
+// which time it read as the button having failed (Michael KZ4LY, Samuel
+// W7STF, 2026-08-26). Set at the REQUEST, not when the task wakes, or the
+// same gap reopens at 500 ms wide.
+static volatile bool s_checking = false;
 static bool s_started     = false;
 
 // ---- version compare -------------------------------------------------------
@@ -166,6 +207,8 @@ static void publish(const char *latest, bool newer)
     s_available = newer;
     if (s_lock) xSemaphoreGive(s_lock);
     reader_view_set_update_available(newer ? latest : "");
+    // #218: the bottom bar is painted by status.c's 1 Hz refresh, which also
+    // has to show live OTA progress - one writer for one label.
 }
 
 static bool do_check(void)
@@ -188,14 +231,41 @@ static bool do_check(void)
     // request inherently carries, and nothing is stored on the device.
     // DISCLOSED in the release notes + manual; see also the PSK Reporter
     // "Software in use" table, which counts on-air users of this firmware.
+    // Keep the spectrum WebSocket off the link for the duration, the same
+    // courtesy every other network path here pays (spots.c, the QRZ/eQSL/LoTW
+    // uploads, the log and file-browser transfers). This board's esp_hosted link
+    // is low-throughput and the ~10 fps WS stream saturates the uplink; a fetch
+    // landing on top of it is the documented wedge-prone combination.
+    //
+    // This was MISSING until 2026-08-05 and had never mattered, because all
+    // outbound TLS failed at RNG seeding - so this function could never actually
+    // reach the network. Fixing TLS turned it into the one network consumer on
+    // the board not following the house rule.
+    // ⚠ The WS pause is NOT taken for latest.json. The house rule exists because
+    // a big fetch landing on the ~10 fps spectrum stream is the documented
+    // wedge-prone combination - but this fetch is 139 bytes and 0.09 s, and at
+    // one every five minutes a stutter that often would be a worse bug than the
+    // one the rule prevents. The GitHub fallback is 48 KB and DOES pause.
     size_t len = 0;
     int status = http_get(LATEST_JSON_URL, buf, RESP_MAX_BYTES, &len);
     if (status == 200 && parse_latest_json(buf, tag, sizeof(tag))) {
         got = true;
     } else {
-        ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
-        status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
-        if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
+        static int64_t s_last_github_us = 0;
+        int64_t now = esp_timer_get_time();
+        if (s_last_github_us &&
+            (now - s_last_github_us) < (int64_t)GITHUB_MIN_GAP_MS * 1000) {
+            ESP_LOGW(TAG, "latest.json failed (status=%d); GitHub tried %lld min ago "
+                          "- waiting rather than hammering it", status,
+                     (long long)((now - s_last_github_us) / 60000000));
+        } else {
+            ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
+            s_last_github_us = now;
+            webserver_ws_set_paused(true);        // 48 KB: this one yields
+            status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
+            webserver_ws_set_paused(false);
+            if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
+        }
     }
     heap_caps_free(buf);
 
@@ -219,10 +289,98 @@ static void check_task(void *arg)
         // the full 6 h, or one unlucky boot costs the whole day's check
         // (hardware-observed: both URLs failed at 36.8 s uptime while WiFi
         // came up at ~38.5 s; neighbouring boots succeeded at 37-38 s).
-        bool ok = wifi_is_connected() && do_check();
-        vTaskDelay(pdMS_TO_TICKS(ok ? CHECK_INTERVAL_MS : RETRY_WHEN_DOWN_MS));
+        // Not while an update is downloading: do_check()'s GitHub fallback
+        // pulls 48 KB over TLS, and the thing it would be checking for is
+        // already in flight. See net_quiet.h.
+        s_checking = true;
+        bool ok = wifi_is_connected() && !net_quiet_active() && do_check();
+        s_checking = false;
+
+        // #239: fetch it quietly, so the operator is only ever asked the one
+        // question that matters - "restart into it?" - instead of starting a
+        // download and then waiting on it. This DOWNLOADS ONLY. Applying still
+        // needs a deliberate press, which is the standing rule at the top of
+        // ota_update.h and the reason it exists: a warm reset with the radio
+        // attached is the #74 trigger, so an unattended RESTART would kill
+        // someone's QMX. An unattended download cannot.
+        //
+        // Opt-out, because it is not free: 3.3 MB saturates this link
+        // (~12.7 KB/s measured) for over a minute and costs real money on the
+        // phone hotspot a POTA operator is using. ota_update_start() refuses
+        // by itself while transmitting or mid-QSO, so those need no gate here.
+        //
+        // Retried on the next check rather than immediately: gating on "not
+        // RUNNING and not DONE" means a failure is re-attempted at the normal
+        // CHECK_INTERVAL_MS cadence (30 min), which is the right amount of
+        // persistence for something nobody asked for.
+        if (ok && s_available) {
+            qmx_settings_t cfg;
+            settings_load_all(&cfg);
+            ota_state_t st = ota_update_get_state(NULL, NULL, 0);
+            // ⛔ TWO GUARDS, AND ONLY ON THE AUTOMATIC PATH.
+            //
+            // Steve N9SZ, 2026-08-26: booting his Tab5 started an automatic
+            // update, it "appeared to download fully", the device rebooted by
+            // itself and came back on the OLD version. Twice. Then the same
+            // update, started BY HAND minutes later, worked.
+            //
+            // That shape is explained by where esp_https_ota_finish() sits: it
+            // both verifies the image AND sets the boot partition, so a reset
+            // during the verify leaves the old image bootable and loses the
+            // download - precisely "it downloaded and I am still on the old
+            // version". And the verify is the memory-hungry end of the job:
+            // this file's own instrumentation records it dying inside segment 0
+            // with the internal heap at 10 KB free / 4 KB largest.
+            //
+            // The automatic download fired 30 s after boot, which is the worst
+            // moment on this board - WiFi bring-up has just taken ~100 KB of
+            // internal RAM, USB is enumerating, and the DMA pool is at its
+            // lowest. So: wait until the device has settled, and do not start
+            // when internal RAM is already tight. A missed window costs 30
+            // minutes; a watchdog reset costs the download and confuses the
+            // operator about which version they are running.
+            //
+            // ⚠ The MANUAL path keeps neither guard, deliberately. Someone who
+            // presses the button is watching, can retry, and must not be told
+            // "no" by a heuristic - and it was the manual path that worked for
+            // Steve.
+            //
+            // ⚠ HYPOTHESIS UNTIL HIS LOG ARRIVES. It fits the reported
+            // behaviour and the failure mode this code already documents, but
+            // the crash record (#117) from his device is what would confirm it.
+            int64_t up_ms = esp_timer_get_time() / 1000;
+            size_t  ifree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE &&
+                up_ms < AUTODL_MIN_UPTIME_MS) {
+                ESP_LOGW(TAG, "auto-download held: only %lld s since boot, waiting for the "
+                              "device to settle (a manual update is unaffected)",
+                         (long long)(up_ms / 1000));
+            } else if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE &&
+                       ifree < AUTODL_MIN_INTERNAL_FREE) {
+                ESP_LOGW(TAG, "auto-download held: internal heap %u B, want %u B - the image "
+                              "verify needs room at the END of the download",
+                         (unsigned)ifree, (unsigned)AUTODL_MIN_INTERNAL_FREE);
+            } else if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE) {
+                char aurl[192], oerr[96];
+                update_check_get_asset_url(aurl, sizeof(aurl));
+                if (aurl[0] && ota_update_start(aurl, oerr, sizeof(oerr)))
+                    ESP_LOGW(TAG, "auto-download of %s started (quiet)", s_latest);
+                else
+                    ESP_LOGI(TAG, "auto-download held off: %s", oerr);
+            }
+        }
+        // Sleep in slices so a forced check does not wait out the interval.
+        // Even at 5 minutes that is too long when the operator has just
+        // published a release and wants to SEE the offer appear.
+        int slept = 0, want = ok ? CHECK_INTERVAL_MS : RETRY_WHEN_DOWN_MS;
+        while (slept < want && !s_force) { vTaskDelay(pdMS_TO_TICKS(500)); slept += 500; }
+        if (s_force) { s_force = false; ESP_LOGI(TAG, "check forced"); }
     }
 }
+
+void update_check_now(void) { s_checking = true; s_force = true; }
+
+bool update_check_in_progress(void) { return s_checking; }
 
 void update_check_start(void)
 {
@@ -242,3 +400,15 @@ void update_check_get_latest(char *out, int out_sz)
 }
 
 bool update_check_available(void) { return s_available; }
+
+#define RELEASE_ASSET_URL_FMT     "https://github.com/SteffenLav/qmx-panadapter/releases/download/%s/qmx_panadapter.bin"
+
+void update_check_get_asset_url(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_available && s_latest[0])
+        snprintf(out, out_sz, RELEASE_ASSET_URL_FMT, s_latest);
+    if (s_lock) xSemaphoreGive(s_lock);
+}

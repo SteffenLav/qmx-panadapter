@@ -33,6 +33,44 @@ lv_obj_t *ft8_screen_view_get_container(void);
 // Safe to call from any task. Just sets a volatile flag.
 void ft8_screen_view_request_refresh(void);
 
+// Ask for a fresh CQ run to start, exactly as the Call CQ button does (same preset,
+// same TX-hold tone choice, same EVEN/ODD parity). Safe to call from ANY task: it
+// only raises a flag that the FT8 view's 1 Hz timer drains on the LVGL thread, since
+// the QSO state machine belongs to that task. Ignored, with a log line, if FT8 mode
+// is not up - there would be nothing to transmit on.
+/* The conventional FT8/FT4 calling frequencies, so the WEB can offer the same
+ * list the Tab5 does instead of keeping a second copy that drifts. One table,
+ * one set of numbers - the rule pan_view.h states for geometry applies just as
+ * well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31). */
+typedef struct { const char *band; uint32_t freq_hz; } ft8_preset_t;
+const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count);
+
+void ft8_screen_view_request_cq(void);
+
+// CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
+// TXCQ button and the web page drive the SAME state - set is deferred to the
+// LVGL task, get is a plain read.
+void ft8_screen_view_set_cq_parity(int parity);
+int  ft8_screen_view_get_cq_parity(void);
+
+// Reply to a decoded station from the web UI. Thread-safe request; the LVGL
+// timer builds the correct next message (WSJT-X double-click semantics) and
+// either starts the full auto-QSO (their fresh CQ) or arms the one next message
+// (mid-exchange). The outcome lands in ft8_screen_view_get_web_reply_result(),
+// surfaced through /api/status - a Tab5 toast is invisible from another room.
+void ft8_screen_view_request_reply(const char *call);
+
+// Mid-QSO override from the browser (#205): 1=resend 2=RR73 3=73 4=cancel.
+// Deferred to the LVGL task and consumed even when FT8 is not up, so a stale
+// request cannot key the radio minutes later.
+void ft8_screen_view_request_override(int what);
+
+// #221: switch FT8/FT4 (and optionally retune) from the API. Deferred to the
+// LVGL task, because the switch also retunes the radio, clears stale decodes
+// and repaints labels. freq_hz 0 keeps the current frequency.
+void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4);
+const char *ft8_screen_view_get_web_reply_result(void);
+
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
 // Called by the CQ preset modal after a save. LVGL-thread only.
 void ft8_screen_view_refresh_cq_label(void);

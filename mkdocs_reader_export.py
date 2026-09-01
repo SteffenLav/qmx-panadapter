@@ -26,6 +26,28 @@ import sys
 
 log = logging.getLogger("mkdocs.reader_export")
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
+try:
+    import diagram_svg
+except Exception as _e:            # pragma: no cover - the site still builds
+    diagram_svg = None
+    log.warning("reader_export: diagram_svg unavailable (%s); qmxdiagram fences "
+                "will render as raw spec text on the site", _e)
+
+
+def on_page_markdown(markdown, page=None, config=None, files=None, **kwargs):
+    """Turn ```qmxdiagram fences into inline SVG for the website.
+
+    Only the RENDERED site is affected. The .md mirrored to site/md/ and the
+    copy packed into manual.bin keep the spec, because that is what the Tab5's
+    own renderer reads - one source, two renderers.
+
+    Without this the site would show the spec as a code block, which is worse
+    than the character drawings it replaced."""
+    if diagram_svg is None or "```qmxdiagram" not in markdown:
+        return markdown
+    return diagram_svg.substitute(markdown)
+
 REPO = "SteffenLav/qmx-panadapter"
 
 
@@ -121,9 +143,20 @@ def on_post_build(config, **kwargs):
         if r.returncode == 0:
             log.info("reader_export: %s", (r.stdout or "").strip())
         else:
-            log.warning("reader_export: pack_manual.py failed: %s",
-                        (r.stderr or r.stdout or "").strip())
-    except Exception as e:  # noqa: BLE001
+            # HARD FAIL, not a warning. Two reasons this must stop the build:
+            #
+            # 1. main/manual.bin is a FIRMWARE INPUT. A failed pack leaves the
+            #    previous blob in place, so the next build silently ships the old
+            #    manual - invisible until an operator notices a stale chapter list.
+            # 2. The packer verifies the context-help deep links. Letting that
+            #    through as a warning defeats the point of checking them at all:
+            #    the whole reason the check lives at build time is that rotted
+            #    deep links are otherwise found by users, not by us.
+            msg = (r.stderr or r.stdout or "").strip()
+            log.error("reader_export: pack_manual.py FAILED: %s", msg)
+            raise RuntimeError("pack_manual.py failed - manual.bin not regenerated:\n" + msg)
+    except FileNotFoundError as e:
+        # Genuinely absent tooling: warn, do not break an unrelated docs build.
         log.warning("reader_export: pack_manual.py could not run: %s", e)
 
     # 3) latest.json (update-check fallback) -> site/latest.json
@@ -142,3 +175,37 @@ def on_post_build(config, **kwargs):
             log.warning("reader_export: no git tag; left latest.json untouched")
     except Exception as e:  # noqa: BLE001
         log.warning("reader_export: latest.json failed: %s", e)
+
+    # 4) documentation consistency (tools/check_docs.py)
+    #
+    # Errors RAISE, for the same reason the packer's failure does: a docs build
+    # that only warns will be ignored, and the thing being checked here is text
+    # that shipped wrong to the website, the PDF and the on-device manual and
+    # stayed wrong for releases at a time. Warnings are printed, not fatal -
+    # they measure the README/mkdocs overlap, which is a known backlog rather
+    # than a regression.
+    try:
+        # Load by path rather than by name. mkdocs runs hooks with a sys.path
+        # that does not reliably keep the entry added at import time, and the
+        # broad except below would then turn "the check never ran" into a
+        # single warning line - which is exactly how a check quietly stops
+        # protecting anything. Verified failing that way before this change.
+        import importlib.util  # noqa: PLC0415
+        _cd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "tools", "check_docs.py")
+        _spec = importlib.util.spec_from_file_location("check_docs", _cd_path)
+        check_docs = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(check_docs)
+        errors, warnings = check_docs.run(verbose=False)
+        for w in warnings:
+            log.warning("check_docs: %s", w)
+        if errors:
+            for e in errors:
+                log.error("check_docs: %s", e)
+            raise RuntimeError(
+                "check_docs found %d documentation error(s) - see above" % len(errors))
+        log.info("check_docs: no errors, %d warning(s)", len(warnings))
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning("reader_export: check_docs could not run: %s", e)

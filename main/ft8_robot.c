@@ -4,14 +4,19 @@
 
 #include "ft8_robot.h"
 #include "ft8_greylist.h"
+#include "ft8_hound.h"   // Fox/Hound: a Fox is never a robot target
 #include "ft8_qso.h"
 #include "ft8_tx.h"
 #include "ft8_status.h"
+#include "ft8_test.h"   // ft8_op_mode_slot_ms() - FT8 vs FT4 slot grid
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
 #include "util/maidenhead.h"
 #include "cat/cat.h"
+#include "ui/ui.h"       // ui_toast - standing auto-answer down must be VISIBLE
+#include <stdio.h>
+#include <time.h>
 
 #include <string.h>
 
@@ -37,6 +42,12 @@ static double grid_distance_km(const char *a, const char *b)
 // ---------------------------------------------------------------------------
 // Target selection
 // ---------------------------------------------------------------------------
+
+// Parity-alternation state for the run-limiter in ft8_robot_tick(). See the
+// comment there for why hunting drifts onto one slot window and stays.
+#define ROBOT_PARITY_RUN_MAX 3
+static int s_last_parity = -1;   // parity of our last pounce (-1 = none yet)
+static int s_parity_run  = 0;    // consecutive pounces on that same parity
 
 // Is `text` a general CQ (starts with the "CQ" token)? We only auto-answer
 // CQs, never tail-end someone else's exchange.
@@ -64,6 +75,64 @@ static double rank_score(const ft8_call_t *c, ft8_robot_priority_t pri,
     }
 }
 
+bool ft8_robot_occupancy_ready(void)
+{
+    int slot_s = ft8_op_mode_slot_ms() / 1000;
+    if (slot_s <= 0) slot_s = 15;
+    int64_t e = ft8_last_rx_utc_for_parity(true);
+    int64_t o = ft8_last_rx_utc_for_parity(false);
+    if (e <= 0 || o <= 0) return false;          // never heard one of them at all
+    // Each window comes round every SECOND slot, so hearing both inside four
+    // slot periods is Roy's "wait two full cycles" expressed as a condition
+    // rather than a timer - which also covers startup, a decoder backlog, or
+    // any other gap, not just a band change.
+    int64_t now = (int64_t)time(NULL);
+    int64_t max_age = (int64_t)slot_s * 4;
+
+    // ⛔ A window we were TRANSMITTING in is not a window we failed to map.
+    //
+    // Roy KI0ER, v1.8.7: after a QSO the robot sat out a cycle or two before
+    // answering the next CQ - "it waits 30 seconds, by then the POTA CQ station
+    // has likely moved on" - while both occupancy strips on his screen were
+    // freshly mapped with green slots. His log shows exactly that: every
+    // "auto-answer holding: both transmit windows not mapped yet" follows OUR OWN
+    // transmission, two of them 30 s apart right after a completed QSO.
+    //
+    // The cause is that we cannot receive in a window we are transmitting in, so
+    // our own TX made that parity look unheard and this gate read it as "the band
+    // is not mapped". It is the right test at STARTUP, which is what #142 added
+    // it for, and the wrong one after a QSO. The strips he was looking at are
+    // built from the same accumulated data and quite correctly still showed it.
+    //
+    // So a window counts as known if we heard it recently OR we were the one
+    // using it recently. Deliberately NOT a blanket relaxation of max_age: a
+    // window that is genuinely quiet still holds the robot off, which is the
+    // safety property #142 exists for.
+    int64_t tx_e = ft8_last_tx_utc_for_parity(true);
+    int64_t tx_o = ft8_last_tx_utc_for_parity(false);
+    bool e_known = (now - e) <= max_age || (tx_e > 0 && (now - tx_e) <= max_age);
+    bool o_known = (now - o) <= max_age || (tx_o > 0 && (now - tx_o) <= max_age);
+    return e_known && o_known;
+}
+
+void ft8_robot_stand_down(const char *reason)
+{
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    if (!qs.ft8_filters.robot_en) return;        // already off - say nothing
+
+    ft8_filters_t f = qs.ft8_filters;
+    f.robot_en = false;
+    settings_set_ft8_filters(&f);
+    s_robot_qso = false;
+    ESP_LOGW(TAG, "auto-answer switched OFF: %s", reason ? reason : "startup");
+    if (reason) {
+        char b[64];
+        snprintf(b, sizeof(b), "Auto-answer off: %s", reason);
+        ui_toast(b);
+    }
+}
+
 void ft8_robot_tick(int64_t slot_sec)
 {
     qmx_settings_t qs;
@@ -71,6 +140,22 @@ void ft8_robot_tick(int64_t slot_sec)
     const ft8_filters_t *f = &qs.ft8_filters;
 
     if (!f->robot_en) { s_robot_qso = false; return; }
+
+    // Never transmit into a band we have not listened to yet. Straight after a
+    // band change or a startup the occupancy map is empty, so the tone would be
+    // chosen from no information at all - and the strip the operator is looking
+    // at is blank for the same reason (Roy KI0ER). Throttled log, because this
+    // is normal for the first couple of cycles and should not fill the ring.
+    if (!ft8_robot_occupancy_ready()) {
+        static int64_t last_log;
+        int64_t now = (int64_t)time(NULL);
+        if (now - last_log >= 15) {
+            last_log = now;
+            ESP_LOGI(TAG, "auto-answer holding: both transmit windows not mapped yet");
+        }
+        ft8_status_set("Auto-answer: listening before first call");
+        return;
+    }
 
     ft8_qso_state_t st = ft8_qso_get_state();
 
@@ -96,6 +181,31 @@ void ft8_robot_tick(int64_t slot_sec)
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
+    // Deliberately let the OTHER slot window have a turn now and then.
+    //
+    // Every candidate in a single tick necessarily shares one parity (the loop
+    // below only accepts stations heard in THIS slot), so the choice is never
+    // within a slot - it is across them. And it is biased: an exchange takes a
+    // fixed number of slots, so completing a QSO tends to drop us back to idle on
+    // the SAME parity every time, and we can sit on one window for a long stretch.
+    // Roy KI0ER (2026-08-05) saw exactly that, and pointed out the cost: the
+    // occupancy picture for the window we never transmit in is never refreshed,
+    // so the automatic tone picker is working from a stale half of the band.
+    //
+    // After ROBOT_PARITY_RUN_MAX consecutive pounces on one parity, give up ONE
+    // slot so the next tick lands on the other one. Bounded on purpose: the run
+    // counter resets on the skip, so we can never skip twice running and go deaf.
+    const int64_t period_ms = ft8_op_mode_slot_ms();
+    int this_parity = (int)((((int64_t)slot_sec * 1000 + period_ms / 2) / period_ms) % 2);
+    if (s_parity_run >= ROBOT_PARITY_RUN_MAX && this_parity == s_last_parity) {
+        ESP_LOGI(TAG, "yielding this %s slot after %d pounces on it - sampling the other window",
+                 this_parity ? "odd" : "even", s_parity_run);
+        s_parity_run = 0;
+        return;
+    }
+
+    const bool hound_on = ft8_hound_enabled(ft8_hound_mode());
+
     int    best_idx   = -1;
     double best_score = 0;
     for (int i = 0; i < n; i++) {
@@ -105,11 +215,26 @@ void ft8_robot_tick(int64_t slot_sec)
         if (strcmp(snap[i].call, qs.my_callsign) == 0) continue;  // our own echo
         if (f->excl_worked_before &&
             adif_log_contains_call_on_band(snap[i].call, cat_get_frequency())) continue;
+        // ...and never inside the recently-worked grace window, checkbox or not.
+        // The decode list greys a worked station UNCONDITIONALLY, so calling it
+        // again is the machine contradicting its own screen - reported twice
+        // (BD4AHS 2026-08-06, Gyula HA3HZ 2026-08-28: "his callsign turns gray,
+        // he calls again shortly after - as if there was no previous completed
+        // QSO"). Beyond the window the checkbox rules exactly as before, so an
+        // operator who wants a later re-work still gets one.
+        if (ft8_qso_worked_recently(snap[i].call, cat_get_frequency())) continue;
         // Grey-listed after repeated failed pounces - stop re-calling them
         // every time their CQ reappears (gated by the same greylist_en the
         // timeout tracker uses).
         if (qs.greylist_en && ft8_greylist_contains(snap[i].call)) continue;
         if (!ft8_filter_match(snap[i].last_text, f)) continue;   // include/exclude terms
+        // A Fox belongs to the Hound path, never to the robot. A Fox calls CQ, so
+        // it passes every test above - but an ordinary pounce at one cannot
+        // complete: it never QSYs onto the Fox's frequency, so our R-report is
+        // sent where the Fox is not listening and the contact dies one message
+        // short, having transmitted for nothing. ft8_hound_tick() runs first and
+        // takes it if automatic mode is on; in guided mode the operator taps it.
+        if (hound_on && ft8_hound_looks_like_fox(&snap[i])) continue;
 
         double score = rank_score(&snap[i], (ft8_robot_priority_t)f->robot_priority, qs.my_grid);
         if (best_idx < 0 || score > best_score) {
@@ -120,6 +245,10 @@ void ft8_robot_tick(int64_t slot_sec)
     if (best_idx < 0) return;   // nobody eligible this slot
 
     const ft8_call_t *t = &snap[best_idx];
+
+    // Remember which window this pounce used, for the run-limiter above.
+    if (this_parity == s_last_parity) s_parity_run++;
+    else { s_last_parity = this_parity; s_parity_run = 1; }
 
     // Build TX1 exactly like the manual row_activate() path: our reply goes on a
     // clear tone (not the caller's own), parity derived from their last_utc.
@@ -132,7 +261,11 @@ void ft8_robot_tick(int64_t slot_sec)
         ESP_LOGW(TAG, "robot build_request(%s) failed: %s", t->call, err);
         return;
     }
-    if (!ft8_qso_start(&req, err, sizeof(err))) {
+    if (ft8_qso_start(&req, err, sizeof(err))) {
+        // Robot-started QSOs abandon a busy target instead of holding for it -
+        // the robot picked from a list, so there is nothing to be loyal to.
+        ft8_qso_mark_robot_started();
+    } else {
         ESP_LOGW(TAG, "robot ft8_qso_start(%s) refused: %s", t->call, err);
         return;
     }

@@ -1,6 +1,7 @@
 ﻿#include "dsp.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,13 +15,9 @@
 #define DSP_DC_BLOCKER 1
 #endif
 
-// Phase 5.8: dBm calibration offset. Added to every dB value before display so
-// readings match real-world signal strength. Procedure: with QMX on dummy load,
-// log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
-// the offset is then -130 - median.
-#ifndef DSP_DB_CALIBRATION_OFFSET
-#define DSP_DB_CALIBRATION_OFFSET -148.0f  /* measured against QMX on dummy load (-130 dBm floor target) */
-#endif
+// DSP_DB_CALIBRATION_OFFSET moved to dsp.h - spur_map.c has to undo it to get
+// back to raw FFT power, and two copies of a calibration constant is exactly
+// the kind of thing that drifts apart.
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -33,6 +30,31 @@
 
 #include "audio.h"
 #include "ui_mode.h"
+#include "iq_balance.h"
+#include "spur_map.h"
+
+
+/* The dial the CURRENT spectrum's samples were captured under (#298). Set in
+ * the FFT loop from audio_dial_for_last_read(), which indexes by sample number
+ * rather than wall time - the pipeline latency was measured varying better than
+ * 2:1, so no time-based constant can stand in for this. */
+static volatile uint32_t s_spec_dial_hz = 0;
+uint32_t dsp_get_spectrum_dial_hz(void) { return s_spec_dial_hz; }
+
+// Linear-power averaging for spur_map.c's dial-nudge detector. Accumulated on
+// the FFT task; armed and collected from the detection task.
+static float   *s_avg_acc    = NULL;
+static uint32_t s_avg_want   = 0;
+static volatile uint32_t s_avg_have = 0;
+static volatile bool s_avg_active = false;
+static volatile bool s_avg_done   = false;
+
+// The 2026-08-13 spur investigation's DCPROBE instrumentation lived here: a 1 Hz
+// power-averaged spectrum with a top-N peak list, which is what identified the
+// comb and its 16x-per-Hz sweep law. Removed now that spur_map.c ships and logs
+// what it learns. If it is ever needed again, the shape that mattered was
+// accumulating LINEAR power per bin over ~1 s before ranking - a single FFT frame
+// is +/-13 dB Rayleigh-noisy and cannot tell a spur from luck.
 
 static const char *TAG = "dsp";
 
@@ -100,7 +122,23 @@ static int64_t  s_period_start_us = 0;
 #endif
 
 // ----- v0.16.0 Zoom-FFT --------------------------------------------------
-#define ZOOM_FIR_LEN 31
+// 63 taps, was 31. The decimation filter cuts at 0.45/D while the display draws
+// the whole decimated span out to 0.5/D, so the outer edge of every zoomed view
+// is drawn from inside the filter's transition band - which is why both ends go
+// dark when you zoom. Samuel W7STF measured it and read it correctly ("about
+// 1000 Hz" at x4); computed from the 31-tap design the edge sat -16.6/-10.3/-8.0
+// dB down at x2/x4/x8 over 1846/1237/928 Hz per side.
+//
+// Transition width goes as 1/N, so doubling the taps roughly halves it and pulls
+// the corner in close to the drawn edge. ⛔ Do NOT "fix" this by moving the
+// cutoff toward 0.5/D instead: that trades a dark edge for energy above Nyquist
+// aliasing back in as FALSE SIGNALS, which is far worse. A dark edge is honest.
+//
+// Cost is bounded and was measured rather than assumed - see the ZOOMFIR log
+// line below. dsps_fird_init_f32 needs exactly N delay floats (the +4 quirk is
+// the non-decimating dsps_fir_init_f32), and the multiple-of-4/alignment
+// constraints in that init are ESP32-S3-only, so an odd 63 is fine on the P4.
+#define ZOOM_FIR_LEN 63
 
 static SemaphoreHandle_t s_zoom_cfg_mtx  = NULL;
 
@@ -133,6 +171,9 @@ static float *s_zoom_workbuf  = NULL;  // interleaved I/Q, DSP_FFT_SIZE complex
 static float *s_zoom_spectrum[2] = { NULL, NULL };
 static volatile int s_zoom_ready_idx = -1;
 static int    s_zoom_acc_idx  = 0;
+// Zoom-FIR cost accounting (see the ZOOMFIR log line). fft_task-only.
+static uint32_t s_zoomfir_us = 0;
+static uint32_t s_zoomfir_n  = 0;
 
 // Windowed-sinc lowpass, Hamming window. fc_norm = cutoff / sample_rate.
 static void zoom_design_lpf(float *taps, int n_taps, float fc_norm)
@@ -200,7 +241,22 @@ static volatile bool s_ft8_active = false;
 // set, fft_task drains the ring and idles, freeing the core for the transfer.
 // Stopping the FFT also stops FT8 capture/decode (they're fed from here).
 static volatile bool s_xfer_quiet = false;
-void dsp_set_transfer_quiet(bool quiet) { s_xfer_quiet = quiet; }
+// True once fft_task has ACTUALLY observed the quiet flag and drained the ring
+// down. Callers that follow a quiet request with something the system must be
+// idle for (esp_https_ota_finish()'s 1.4 MB verify) have to wait for this -
+// setting the flag and proceeding immediately does nothing, because the flag is
+// cooperative and fft_task may be mid-window when it is set. Learned the hard
+// way: a verify started microseconds after the flag went up took the hardware
+// watchdog twice.
+static volatile bool s_xfer_quiet_settled = false;
+
+void dsp_set_transfer_quiet(bool quiet)
+{
+    if (quiet && !s_xfer_quiet) s_xfer_quiet_settled = false;   // must be re-earned
+    s_xfer_quiet = quiet;
+}
+
+bool dsp_transfer_quiet_settled(void) { return s_xfer_quiet && s_xfer_quiet_settled; }
 
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
 static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
@@ -322,6 +378,20 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
 
 static void fft_task(void *arg);
 
+// ⛔ xSemaphoreTake(NULL, t) is not a failed take - it is an immediate abort(),
+// and a timeout argument does not save you (#154). dsp_init() runs at main.c:312
+// but ui_init() is at 202, so there is a window of well over a hundred lines in
+// which the UI and its LVGL timers are live and these mutexes do not exist yet.
+// That is precisely the shape that rebooted the device through ft8_status.c.
+//
+// Treating "not created yet" as "could not take" is always safe here: every
+// caller already has a failure path for a busy mutex, and pre-init there is by
+// definition no concurrency to protect against.
+static inline bool dsp_take(SemaphoreHandle_t m, TickType_t ticks)
+{
+    return m && xSemaphoreTake(m, ticks) == pdTRUE;
+}
+
 esp_err_t dsp_init(void)
 {
     ESP_LOGI(TAG, "DSP init (Phase 4.2 - real-time FFT on audio ring buffer)");
@@ -408,7 +478,7 @@ esp_err_t dsp_init(void)
 esp_err_t dsp_get_spectrum(float *dst)
 {
     if (!s_spectrum_mtx || !dst) return ESP_ERR_INVALID_ARG;
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -428,7 +498,7 @@ esp_err_t dsp_get_spectrum(float *dst)
 esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float *peak_dbm)
 {
     if (!s_spectrum_mtx || !peak_dbm) return ESP_ERR_INVALID_ARG;
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -445,69 +515,6 @@ esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float
     }
     *peak_dbm = peak;
     xSemaphoreGive(s_spectrum_mtx);
-    return ESP_OK;
-}
-
-// Snap-to-peak — see dsp.h for contract.
-esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t if_offset_hz, int32_t *out_hz)
-{
-    if (!s_spectrum_mtx || !out_hz) return ESP_ERR_INVALID_ARG;
-    if (radius_hz <= 0) { *out_hz = center_hz; return ESP_OK; }
-
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    if (!s_have_spectrum) {
-        xSemaphoreGive(s_spectrum_mtx);
-        *out_hz = center_hz;
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    // Convert "Hz from dial" to "DSP bin index".
-    // DSP bin 0 = audio DC; the QMX dial maps to if_offset_hz in baseband (+12 kHz
-    // IF in SSB/data, +12 kHz + CW LO offset + trim in CW — the same value the
-    // display centers on). A touch at center_hz from dial maps to baseband freq
-    // (center_hz + if_offset_hz) Hz → bin (.../bin_width). Negative bins wrap to N - |bin|.
-    // Using the bare 12 kHz here in CW left the search window ~640 Hz off the tapped
-    // carrier, so snap silently failed in CW (worst when zoomed in, where the window
-    // is narrow). Passing the mode-aware offset keeps the window centered on the tap.
-    const float bin_width = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;  // 46.875 Hz
-    const int N = DSP_FFT_SIZE;
-
-    int center_bin = (int)((center_hz + if_offset_hz) / bin_width);  // truncation OK; we search a window
-    int radius_bins = (int)(radius_hz / bin_width);
-    if (radius_bins < 1) radius_bins = 1;
-
-    // Search [center_bin - radius_bins, center_bin + radius_bins], wrapping mod N.
-    // Track the peak's offset (in bins) FROM the search center, not its absolute
-    // bin, so the result is always within ±radius_hz of the tapped position.
-    float peak_db = -1e9f;
-    int   peak_d  = 0;
-    float sum_db = 0.0f;
-    int   count = 0;
-    for (int d = -radius_bins; d <= radius_bins; d++) {
-        int b = ((center_bin + d) % N + N) % N;  // positive modulo
-        float v = s_spectrum[b];
-        sum_db += v;
-        count++;
-        if (v > peak_db) { peak_db = v; peak_d = d; }
-    }
-    float mean_db = (count > 0) ? (sum_db / (float)count) : -120.0f;
-    xSemaphoreGive(s_spectrum_mtx);
-
-    // Only snap if the peak is meaningfully above local mean (avoids snapping to noise).
-    if (peak_db - mean_db < 3.0f) {
-        *out_hz = center_hz;
-        return ESP_OK;
-    }
-
-    // Return the peak relative to the tapped position. The old code unwrapped the
-    // peak's *absolute* bin to a signed frequency, which aliased once
-    // center_hz+12 kHz crossed the +24 kHz Nyquist edge (taps in the right ~quarter
-    // of the 48 kHz display) — wrapping to a large NEGATIVE frequency, so a tap to
-    // the RIGHT tuned DOWN (reported by Ian G4LXX). Offsetting from center_hz keeps
-    // the snap inside ±radius_hz by construction, so direction is always preserved.
-    *out_hz = center_hz + (int32_t)lroundf((float)peak_d * bin_width);
     return ESP_OK;
 }
 
@@ -564,22 +571,37 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
     float sum_db = 0.0f;
     float min_db = +1e9f;
     float max_db = -1e9f;
+
+    // Linear power first, so the spur subtraction can work in the domain where
+    // powers add. Subtracting in dB would remove the wrong amount from any bin
+    // that also carries a real signal.
     for (int i = 0; i < DSP_FFT_SIZE; i++) {
         float re = s_workbuf[2*i];
         float im = s_workbuf[2*i + 1];
-        float mag2 = re*re + im*im;
+        float m = re*re + im*im;
+        tmp_spectrum[i] = (m < floor_mag2) ? floor_mag2 : m;
+    }
+    spur_map_apply(tmp_spectrum, DSP_FFT_SIZE);
+
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float mag2 = tmp_spectrum[i];
         if (mag2 < floor_mag2) mag2 = floor_mag2;
+        if (s_avg_active) s_avg_acc[i] += mag2;
         float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
         tmp_spectrum[i] = db;
         sum_db += db;
         if (db < min_db) min_db = db;
         if (db > max_db) max_db = db;
     }
+    if (s_avg_active && ++s_avg_have >= s_avg_want) {
+        s_avg_active = false;
+        s_avg_done   = true;
+    }
     *last_min = min_db;
     *last_max = max_db;
     *last_mean = sum_db / (float)DSP_FFT_SIZE;
 
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
+    if (dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         memcpy(s_spectrum, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
         s_have_spectrum = true;
         xSemaphoreGive(s_spectrum_mtx);
@@ -587,6 +609,31 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
 
     s_frames_this_period++;
     log_stats(*last_min, *last_max, *last_mean);
+}
+
+void dsp_avg_start(uint32_t frames)
+{
+    if (!s_avg_acc) {
+        s_avg_acc = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_avg_acc) return;
+    }
+    if (frames == 0) frames = 1;
+    s_avg_done = false;
+    memset(s_avg_acc, 0, DSP_FFT_SIZE * sizeof(float));
+    s_avg_have = 0;
+    s_avg_want = frames;
+    s_avg_active = true;      // set last: the FFT task tests this to start
+}
+
+bool dsp_avg_ready(float *dst)
+{
+    if (!s_avg_done || !dst || !s_avg_acc) return false;
+    float inv = 1.0f / (float)((s_avg_have > 0) ? s_avg_have : 1);
+    for (int i = 0; i < DSP_FFT_SIZE; i++)
+        dst[i] = 10.0f * log10f(s_avg_acc[i] * inv) + DSP_DB_CALIBRATION_OFFSET;
+    s_avg_done = false;
+    return true;
 }
 
 static void zoom_run_fft(void)
@@ -631,7 +678,7 @@ static void zoom_process(const int16_t *samples)
     int D;
     int gen;
     float fshift;
-    if (xSemaphoreTake(s_zoom_cfg_mtx, 0) != pdTRUE) return;
+    if (!dsp_take(s_zoom_cfg_mtx, 0)) return;
     D = s_zoom_decim;
     gen = s_zoom_gen;
     fshift = s_zoom_fshift_hz;
@@ -681,8 +728,21 @@ static void zoom_process(const int16_t *samples)
     }
 
     int n_out_target = DSP_FFT_SIZE / D;
+    // Measured, not assumed: this runs on fft_task, the audio ring's SOLE
+    // consumer, and #51 is the standing reminder of what starving it costs. The
+    // window period is 1024/48000 = 21.3 ms, so what matters is this figure
+    // against that. Silent unless zoomed (D > 1), i.e. never in normal use.
+    int64_t t0 = esp_timer_get_time();
     int n_out_i = dsps_fird_f32(&s_zoom_fir_i, s_zoom_mix_i, s_zoom_dec_i, n_out_target);
     int n_out_q = dsps_fird_f32(&s_zoom_fir_q, s_zoom_mix_q, s_zoom_dec_q, n_out_target);
+    s_zoomfir_us += (uint32_t)(esp_timer_get_time() - t0);
+    if (++s_zoomfir_n >= 47) {   // ~1 s of windows at 46.9 Hz
+        ESP_LOGI(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
+                 (unsigned)ZOOM_FIR_LEN, D,
+                 (double)s_zoomfir_us / (double)s_zoomfir_n / 1000.0);
+        s_zoomfir_us = 0;
+        s_zoomfir_n  = 0;
+    }
     int n_out = (n_out_i < n_out_q) ? n_out_i : n_out_q;
 
     for (int i = 0; i < n_out; i++) {
@@ -715,7 +775,7 @@ void dsp_set_zoom(float zoom_factor, int pan_offset_bins, int if_bin_shift)
     float fshift_hz = (float)signed_bin * (float)DSP_SAMPLE_RATE_HZ / (float)N;
 
     if (!s_zoom_cfg_mtx) return;
-    if (xSemaphoreTake(s_zoom_cfg_mtx, portMAX_DELAY) == pdTRUE) {
+    if (dsp_take(s_zoom_cfg_mtx, portMAX_DELAY)) {
         s_zoom_decim     = D;
         s_zoom_residual  = residual;
         s_zoom_fshift_hz = fshift_hz;
@@ -799,18 +859,47 @@ static void fft_task(void *arg)
     float last_min = 0, last_max = 0, last_mean = 0;
 
     while (1) {
-        // While a network transfer is in flight, give up the CPU: drain a window
-        // from the ring (so it doesn't overflow) but skip all FFT/FT8 work, then
-        // sleep. This stops fft_task (pri 4) from preempting the upload (pri 3),
-        // and cascades to halt FT8 capture/decode. Resumes the instant the flag
-        // clears; the audio producer keeps the ring fresh meanwhile.
+        // While a network transfer is in flight, give up the CPU: drain the
+        // ring but skip all FFT/FT8 work. This stops fft_task (pri 4) from
+        // preempting the transfer, and cascades to halt FT8 capture/decode.
+        // Resumes the instant the flag clears.
+        //
+        // ⚠ THE OLD DRAIN COULD NOT KEEP UP, and its comment claimed it could.
+        // It read ONE window (1024 pairs) and then slept 50 ms - about 20,000
+        // pairs/s against the ~48,000 pairs/s the QMX actually produces. So it
+        // fell behind more than 2:1 and the ring overflowed continuously for
+        // the whole of every upload and every OTA download: measured on
+        // hardware 2026-08-23 as "DROPPED=17904 (ring full)" then "DROPPED=28128"
+        // one second apart. That in turn keeps audio_task (pri 6, core 0,
+        // polling with no delay) in a discard loop it was never meant to run.
+        //
+        // Drain until the backlog is actually gone, then sleep briefly. The
+        // guard bounds the loop in case production genuinely outruns us, so a
+        // fast producer can never turn this into a spin.
         if (s_xfer_quiet) {
-            audio_read_samples(samples, DSP_FFT_SIZE, 10);
+            uint32_t guard = 0;
+            while (audio_ring_backlog_pairs() >= DSP_FFT_SIZE && guard++ < 64) {
+                audio_read_samples(samples, DSP_FFT_SIZE, 0);
+            }
+            s_xfer_quiet_settled = true;   // observed the flag, ring is down
+            // ⚠ 50 ms, NOT 5. Draining properly is the fix; waking 200x/s to
+            // check is a regression - "quiet" has to mean IDLE, and fft_task
+            // shares core 1 with the OTA task. A first version of this fix used
+            // 5 ms and made the quiet state ten times busier than the one it
+            // replaced, while reporting itself settled because the ring was
+            // empty. Emptying the ring and being idle are not the same claim.
+            //
+            // 50 ms is safe with a real drain behind it: ~48,000 pairs/s makes
+            // ~2,400 pairs in that window, so the loop above does two reads and
+            // stops, where the old single-read version fell behind 2:1 forever.
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
         // Block until we have a full FFT window of stereo pairs (1024 pairs).
+        /* #298: taken BEFORE the window is consumed, so it describes THIS
+         * spectrum rather than the next one. */
+        s_spec_dial_hz = audio_dial_for_last_read();
         // audio_read_samples may return less than requested - loop until full.
         size_t got = 0;
         while (got < DSP_FFT_SIZE) {
@@ -834,7 +923,10 @@ static void fft_task(void *arg)
         // the first, on-time slot. The gap audio now lives in the ring and
         // dsp_ft8_capture_begin() backfills it. dsp_ft8_capture_progress()
         // (consumer task) copies the ring into the caller's dst.
-        if (ui_mode_get() == UI_MODE_FT8) {
+        // WSPR needs this identical chain - IF to DC, /4 to 12 kHz, pre-ring -
+        // and differs only in window length and what decodes it, so the branch
+        // is shared rather than duplicated. See ui_mode_uses_iq_capture().
+        if (ui_mode_uses_iq_capture(ui_mode_get())) {
             // FT8-mode entry edge: reset the decimation FIR + ring so a stale
             // delay line / old sample counter can't leak into slot 0.
             if (!s_ft8_in_mode) {

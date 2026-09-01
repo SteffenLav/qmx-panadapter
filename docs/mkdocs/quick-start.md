@@ -12,7 +12,7 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04.002 beta** work with the panadapter; on v1.04.002 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04 betas** work with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
 
 ## Step 2: Flash the Tab5
 
@@ -41,7 +41,7 @@ Download the latest flasher from the [Releases page](https://github.com/SteffenL
     4. Press **Enter** for normal flash
     5. Wait for `SUCCESS`
 
-The flasher automatically downloads the latest firmware from GitHub. If you're offline, place a `qmx_panadapter_merged_*.bin` file next to the flasher and it will use that instead.
+The firmware is already inside the zip — the three `.bin` files next to the script are what get flashed. The only thing fetched from the internet is `esptool`, once, if your computer doesn't already have it, so after the first successful run the flasher works offline.
 
 ## Step 3: Connect the Cables
 
@@ -95,7 +95,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Toggle Panadapter ↔ FT8/FT4 view |
+| Swipe → from **left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
@@ -128,9 +128,73 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 
 If you set up WiFi:
 
-1. Open your browser to `http://<ip-address>` (Tab5 displays its IP in the settings)
+1. Open your browser to **`http://qmx.local`** (or the IP shown in the Tab5's bottom bar, if your network blocks `.local` names)
 2. You'll see a remote spectrum, waterfall, and control panel — plus QSO log downloads and uploads to QRZ, eQSL, and LoTW
 3. No installation or configuration needed — just open and go
+
+## Step 10: Keeping It Up To Date
+
+From v1.8.9 the Tab5 can update itself over WiFi. You do not need the cable
+again unless something goes badly wrong. **From v1.9.3 it also fetches the
+update quietly in the background**, so by the time it says anything, the work
+is already done and only one decision is left.
+
+When a newer release has been downloaded and is waiting for you, the version at
+the bottom of the screen changes to show it, in light green, and breathes
+gently so you notice it:
+
+```
+v1.9.2 -> v1.9.3 ?
+```
+
+Tap the bar — anywhere along it — and a window opens in the middle of the
+screen with the version, what will happen, and two buttons:
+
+- **Restart now** — the screen goes dark and the Tab5 comes back on the new
+  firmware, about 20 seconds.
+- **Later** — the window closes and the bar stops breathing. The line stays,
+  quietly, and tapping it opens the window again whenever you are ready.
+
+Nothing restarts on its own. You choose when, so it can never interrupt a
+contact.
+
+While a download is running the line is amber and counts up, and the spectrum,
+waterfall and FT8 decoding all keep working — expect a slight stutter and one
+brief pause right at the end while the new firmware is verified:
+
+```
+v1.9.2 -> v1.9.3  42%
+```
+
+The same window is available from the web page, in the same words.
+
+### If you would rather it did not download by itself
+
+The background download is **on by default** and can be switched off in
+**Settings → Network → Download updates automatically**. Turn it off if you
+are on a metered connection — a phone hotspot in a field, for instance — since
+each update is about 3.3 MB. With it off, the bar offers the update and the
+window's button reads **Download now** instead.
+
+Downloading never applies anything on its own. Only the restart does that, and
+only you can ask for it.
+
+### Checking straight away
+
+The Tab5 looks for a new release **every 30 minutes**, so an announcement can
+take that long to show up. If you have just read that a release is out and want
+to see it now, **tap the version even while it says you are up to date**. The
+window offers **Check now**. Tapping the version in the web page does the same.
+
+That is also the quickest way to satisfy yourself the whole mechanism works
+before you ever need it.
+
+Your settings, QSO log, LoTW certificate and memories are untouched by an
+update. The previous firmware is also kept, so a failed update falls back to it
+by itself.
+
+⚠ Restarting the Tab5 with the QMX connected usually means switching the radio
+off and on again afterwards — the screen will tell you if so.
 
 ## Troubleshooting
 
@@ -140,8 +204,12 @@ If you set up WiFi:
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04.002 beta also works)
+- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04 betas also work)
 - Try a different USB cable
+
+**Flashing keeps failing, but the COM port is there?**
+- **Reboot the Tab5 and try again — do this first.** The Tab5's USB serial connection is produced by the ESP32-P4 itself rather than by a separate chip, so a busy running firmware can leave the port listed in Windows Device Manager while it no longer answers the flasher. A reboot clears it.
+- Then the usual suspects: a charge-only USB-C cable, or a serial monitor still holding the port.
 
 **WiFi won't connect?**
 - Check your SSID and password spelling
@@ -149,6 +217,7 @@ If you set up WiFi:
 - See [Troubleshooting](reference/troubleshooting.md) for more
 
 **Still stuck?**
+- **Ask the Tab5 first.** Open the settings drawer (swipe in from the right edge) and tap **Need guidance?** — pick the symptom in plain words and it opens the manual at the answer. Anything the device can see for itself is highlighted at the top of that list. See [Getting Help](getting-help.md)
 - The **diagnostic log is always on** — nothing to enable. Download it via the web UI: open the **Files** menu in the web page's bottom bar and click **Diagnostic download ↓** (downloads both the live log and the saved pre-reboot copy), or pull `qmx-log.txt` from an inserted microSD card
 - Report the issue on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643) and attach the log
 

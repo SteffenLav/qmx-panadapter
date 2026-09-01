@@ -16,6 +16,15 @@
 static const char *TAG = "time_sync";
 
 // UTC epoch bounds for sanity checks
+// Bench switch for the OFFLINE (POTA) time path - see time_sync_notify_qmx().
+// Ships as 0. Set to 1 to exercise the no-WiFi branch on a bench that has WiFi;
+// actually disabling WiFi persists to NVS and strands the device offline with no
+// way back except the Tab5's own drawer. Used to verify the fix for Don WB0LQW's
+// lost-UTC report 2026-08-13.
+#ifndef TIMESYNC_FORCE_OFFLINE_TEST
+#define TIMESYNC_FORCE_OFFLINE_TEST 0
+#endif
+
 #define EPOCH_SANE_MIN  1700000000LL  // 2023-11-14
 #define EPOCH_SANE_MAX  2208988800LL  // 2040-01-01 — anything beyond is garbage
 
@@ -26,12 +35,22 @@ static const char *TAG = "time_sync";
 
 // AUTO-DETECT tolerance (ms). Online, we mark a QMX as GPS-disciplined only when
 // its tick agrees with SNTP this tightly - a real GPS second boundary lands
-// within ~tens of ms, while a non-GPS RTC (even one we push-set, which is only
-// whole-second accurate) is off by more, so this cleanly tells them apart and
-// removes any need to ask the operator. Detection runs ONCE per CAT connect, on
-// the QMX's OWN clock BEFORE we push ours into it (see time_sync_task) - so a
-// small QMX with an unset/stale RTC reads as "not GPS", the QMX+ as "GPS".
+// within ~tens of ms - AND only when that agreement is not something we caused
+// ourselves (see s_qmx_time_pushed below).
+//
+// ⚠ The original reasoning here was WRONG and produced a false "UTC(GPS)" on a
+// radio with no GPS at all (operator's own bench unit, 2026-08-17). It claimed a
+// push-set RTC "is only whole-second accurate" and so would miss this window.
+// It is not: cat_set_qmx_time() sends TM<hhmmss>; at whatever moment the call
+// happens, and the radio starts its second when it parses that - so the tick
+// phase we induce is uniform in 0..1000 ms, and lands inside 300 ms a good third
+// of the time on its own. The measured case agreed to 12 ms.
 #define QMX_GPS_CONFIRM_MS 300
+
+// How far off makes the radio's clock plainly ITS OWN again rather than the one
+// we set. A QMX's software RTC is not persisted through a power cycle (it starts
+// at 00:00), so a disagreement this large means our push is gone.
+#define QMX_CLOCK_LOST_SEC 60
 
 // FT8 auto-sync leash (OFFLINE only). When there is no SNTP/GPS reference, the
 // FT8 consensus tracker (ft8_test.c) is the only time source, and it nudges the
@@ -54,6 +73,22 @@ static time_sync_source_t s_source           = TIME_SOURCE_NONE;
 // offline/POTA session (no SNTP to re-verify) remembers the last verdict.
 static bool              s_qmx_gps_confirmed = false;
 
+// Have we push-set the connected radio's clock? Persisted, because the state it
+// describes lives in the RADIO and outlives a Tab5 reboot - which is precisely
+// how the false-GPS bug happened. qmx_sync_once() is careful to detect BEFORE
+// pushing within one boot, but reflash the Tab5 with the radio left powered and
+// the NEXT boot's detection measures a clock we set in the PREVIOUS one. Its
+// agreement with us then says nothing about GPS, so it must not be counted as
+// evidence. A clock we set cannot be a witness for itself.
+static bool              s_qmx_time_pushed = false;
+
+static void set_qmx_time_pushed(bool v)
+{
+    if (v == s_qmx_time_pushed) return;
+    s_qmx_time_pushed = v;
+    settings_set_qmx_time_pushed(v);
+}
+
 static void set_qmx_gps_confirmed(bool v)
 {
     if (v == s_qmx_gps_confirmed) return;
@@ -67,9 +102,23 @@ bool time_sync_qmx_gps_confirmed(void) { return s_qmx_gps_confirmed; }
 // The source actually MAINTAINING the clock right now, for the UI label - not
 // the last one-off writer. A manual/FT8 nudge stamps s_source, but if SNTP or a
 // confirmed GPS is up they are the ongoing authority, so report that instead.
+// GPS is only a live reference while the RADIO CARRYING IT IS ATTACHED.
+//
+// s_qmx_gps_confirmed is restored from NVS at boot so an offline POTA start
+// keeps GPS discipline without re-detecting - but on its own it says only
+// "this QMX had GPS the last time we looked", not "there is a GPS clock here
+// now". Reported by Don N2VGU (2026-08-09): his Tab5 showed UTC(GPS) with the
+// QMX+ unplugged and WiFi connected, so the label claimed GPS accuracy while
+// SNTP was actually keeping the clock. The Tab5 has no GPS chip of its own -
+// if the radio is not there, neither is the GPS.
+static bool gps_is_live(void)
+{
+    return s_qmx_gps_confirmed && cat_is_ready();
+}
+
 time_sync_source_t time_sync_get_effective_source(void)
 {
-    if (s_qmx_gps_confirmed)                              return TIME_SOURCE_QMX;   // GPS
+    if (gps_is_live())                                    return TIME_SOURCE_QMX;   // GPS
     if (wifi_is_connected() && wifi_time_is_valid())      return TIME_SOURCE_SNTP;
     return s_source;   // offline: FT8 / manual / RTC / naive-QMX
 }
@@ -91,6 +140,41 @@ static bool epoch_is_sane(int64_t t)
     return t > EPOCH_SANE_MIN && t < EPOCH_SANE_MAX;
 }
 
+// Do we already hold a clock worth defending against a GPS-less QMX? Anything
+// but "nothing" and "the QMX told us" counts: the Tab5 RTC, SNTP, an FT8-derived
+// correction and a manual set are all better references than a radio RTC that
+// restarts at 00:00. Deliberately requires the system clock to be sane too, so a
+// stale s_source cannot veto a genuinely useful QMX reading.
+static bool clock_is_trusted(void)
+{
+    if (!epoch_is_sane((int64_t)time(NULL))) return false;
+    switch (s_source) {
+    case TIME_SOURCE_RTC:
+    case TIME_SOURCE_SNTP:
+    case TIME_SOURCE_MANUAL:
+    case TIME_SOURCE_FT8:
+        return true;
+    default:
+        return false;   // NONE, or the QMX itself
+    }
+}
+
+static const char *trusted_source_name(void)
+{
+    switch (s_source) {
+    case TIME_SOURCE_RTC:    return "Tab5 RTC";
+    case TIME_SOURCE_SNTP:   return "SNTP";
+    case TIME_SOURCE_MANUAL: return "manual";
+    case TIME_SOURCE_FT8:    return "FT8";
+    case TIME_SOURCE_QMX:    return "QMX";
+    default:                 return "none";
+    }
+}
+
+// Only correct the radio when it is meaningfully wrong. Its RTC has 1 s
+// resolution over CAT, so a couple of seconds of disagreement is just rounding.
+#define QMX_PUSH_THRESHOLD_SEC 3
+
 // Push UTC time-of-day to the QMX's onboard RTC so it stays in sync for
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
 // better time than anything the Tab5 carries). Never called when the QMX is
@@ -108,6 +192,9 @@ static void push_to_qmx(time_t utc)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Tab5→QMX time push failed: 0x%x", err);
     } else {
+        // Remember it: from here on, this radio's clock agreeing with ours is
+        // our own doing and can never confirm GPS.
+        set_qmx_time_pushed(true);
         ESP_LOGI(TAG, "Tab5→QMX time push: %02d:%02d:%02d UTC",
                  tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
     }
@@ -226,6 +313,13 @@ bool time_sync_notify_qmx(int h, int m, int s)
 
     int64_t now_ms    = esp_timer_get_time() / 1000;
     bool wifi_sntp_ok = wifi_is_connected() && wifi_time_is_valid();
+#if TIMESYNC_FORCE_OFFLINE_TEST
+    // TEMP: pretend we are offline so the POTA path can be exercised on a bench
+    // that has WiFi. Disabling WiFi for real would persist to NVS and strand the
+    // device offline with no way back except the Tab5's own drawer.
+    wifi_sntp_ok = false;
+    s_last_sntp_sync_ms = 0;
+#endif
     bool sntp_fresh   = wifi_sntp_ok ||
                         (s_last_sntp_sync_ms > 0 &&
                          (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS);
@@ -236,6 +330,38 @@ bool time_sync_notify_qmx(int h, int m, int s)
                  h, m, s, (int)wifi_sntp_ok);
         return false;
     }
+
+    // A QMX WITHOUT GPS is not a time reference. Its RTC free-runs and comes up
+    // at 00:00 after any power-off, so offline it must never overwrite a clock we
+    // already trust. The Tab5's supercap RTC, set from SNTP before leaving home,
+    // holds seconds-accurate UTC for 30-40 h - that is the entire basis of the
+    // offline POTA workflow in the manual.
+    //
+    // Don WB0LQW lost his accurate UTC to exactly this: RTC good, turn the radio
+    // on in the field, and the first poll pulled the clock back to the QMX's
+    // 00:00. Offline SNTP is NEVER fresh, so the guard above cannot help him -
+    // it only ever protected the WiFi case.
+    //
+    // The right direction is the opposite one, which is what he asked for: push
+    // OUR time to the radio. Only done when the radio is actually wrong, so a
+    // healthy pair does not trade CAT writes every five minutes.
+    if (!s_qmx_gps_confirmed && clock_is_trusted()) {
+        time_t  now_utc = time(NULL);
+        struct tm tm_now;
+        gmtime_r(&now_utc, &tm_now);
+        int ours   = tm_now.tm_hour * 3600 + tm_now.tm_min * 60 + tm_now.tm_sec;
+        int theirs = h * 3600 + m * 60 + s;
+        int off    = ours - theirs;
+        if (off < 0) off = -off;
+        if (off > 43200) off = 86400 - off;   // wrap at midnight
+
+        ESP_LOGI(TAG, "QMX TM; %02d:%02d:%02d ignored - radio has no GPS and our "
+                      "clock is trusted (%s, %d s apart)",
+                 h, m, s, trusted_source_name(), off);
+        if (off > QMX_PUSH_THRESHOLD_SEC) push_to_qmx(now_utc);
+        return false;
+    }
+
     apply_and_persist(utc, "QMX");
     s_source = TIME_SOURCE_QMX;
     return true;
@@ -252,7 +378,11 @@ static int apply_ft8_correction(int delta_ms, bool leash, time_t *out_utc)
     int applied = delta_ms;
 
     if (leash) {   // leash == the auto-sync path (manual Apply passes false)
-        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || s_qmx_gps_confirmed;
+        // Same correction: a remembered GPS verdict is not an absolute
+        // reference when the radio is unplugged, and suppressing the FT8
+        // nudge on the strength of it would leave such a unit with NO
+        // discipline at all.
+        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || gps_is_live();
         if (ref_ok) {
             // A real absolute reference (SNTP or GPS) exists -> do NOT let FT8
             // touch the clock. Root-caused 2026-07-18: the FT8 timing offset is
@@ -377,7 +507,23 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
         int64_t d_ms   = llabs(utc_now_us - sys_us) / 1000;
         if (d_ms > 43200000) d_ms = 86400000 - d_ms;   // midnight-wrap safe
         if (d_ms > QMX_GPS_CONFIRM_MS) {
+            // Far enough off that our own push cannot be what we are looking at.
+            // A QMX loses its software RTC on power-down, so this is the moment
+            // the radio's clock becomes its own again - and the only moment a
+            // later-fitted GPS could be detected. Forget the push.
+            if (d_ms > (int64_t)QMX_CLOCK_LOST_SEC * 1000) set_qmx_time_pushed(false);
             ESP_LOGW(TAG, "QMX tick %02d:%02d:%02d off SNTP by %lldms - not GPS-disciplined",
+                     h, m, s, (long long)d_ms);
+            return false;
+        }
+        // Tight agreement - but if we are the reason for it, it proves nothing.
+        // UNLESS the radio itself says it has a GPS permanently fitted, which is
+        // its own answer rather than our inference and so settles it outright
+        // (#174). This is what stops a genuine QMX+ we have pushed to from being
+        // stuck as "not GPS" until its clock is next seen unset.
+        if (s_qmx_time_pushed && !cat_qmx_gps_source_internal()) {
+            ESP_LOGW(TAG, "QMX tick %02d:%02d:%02d agrees to %lldms, but WE set this "
+                          "radio's clock - not treating that as GPS",
                      h, m, s, (long long)d_ms);
             return false;
         }
@@ -400,11 +546,25 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
 // a hot-swap keeps the prior verdict until reboot (acceptable - swaps are rare).
 static bool s_qmx_detect_done = false;
 
+void time_sync_force_redetect(void)
+{
+    s_qmx_detect_done = false;
+    ESP_LOGW(TAG, "GPS auto-detect re-armed - will run on the next periodic pass");
+}
+
 // One QMX time sync + one-time GPS auto-detection (replaces the manual flag).
-// Detection runs on the QMX's OWN clock and requires SNTP as ground truth; it
-// happens BEFORE any Tab5->QMX push (pushing a correct time into a non-GPS RTC
-// would masquerade as GPS). A GPS QMX's tick agrees tightly -> confirmed; a
-// small/unset QMX is far off -> rejected, and we push our time to set its RTC.
+// Detection runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS
+// QMX's tick agrees tightly -> confirmed; a small/unset QMX is far off ->
+// rejected, and we push our time to set its RTC.
+//
+// ⚠ Ordering within one boot is NOT sufficient protection, though this comment
+// used to say it was ("happens BEFORE any Tab5->QMX push, so a push cannot
+// masquerade as GPS"). s_qmx_detect_done is reset by a TAB5 reboot; the clock we
+// pushed lives in the RADIO, which is not rebooted with us. Reflash the Tab5 with
+// the QMX left powered and this "first" detection reads a clock we set in an
+// earlier session. That is a real false positive, seen on a GPS-less bench unit.
+// The durable guard is s_qmx_time_pushed, which crosses boots the same way the
+// radio's clock does.
 static void qmx_sync_once(void)
 {
     int h, m, s;
@@ -484,6 +644,32 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     qmx_settings_t icfg;
     settings_load_all(&icfg);
     s_qmx_gps_confirmed = icfg.qmx_gps;
+    s_qmx_time_pushed   = icfg.qmx_time_pushed;
+
+    // Discard any verdict reached by the old, broken test, and assume we had set
+    // this radio's clock. Both halves are deliberate:
+    //
+    //  - The stored verdict cannot be trusted: the test that produced it accepted
+    //    our own push as proof of GPS. Keeping it would suppress the time pushes
+    //    the radio actually needs, and be believed offline where there is no SNTP
+    //    to re-check it.
+    //  - We have no record of whether we pushed (the flag is new), and a one-shot
+    //    phase comparison cannot tell a GPS tick from a clock we set. Assuming we
+    //    pushed is the safe direction: being wrong costs a genuine GPS owner the
+    //    "GPS" label while SNTP still keeps their clock correct, whereas the other
+    //    way round we would keep asserting GPS accuracy we do not have.
+    //
+    // ⚠ Cost of that choice, and it is a real limitation: a QMX+ whose GPS we had
+    // already pushed to will not re-confirm until its clock is next seen unset.
+    // The clean removal is to ask the radio instead of inferring - "GPS source" in
+    // its GPS & Ser. Ports menu reads QMX+ Internal for a permanently fitted GPS,
+    // and MM can Get it over CAT. Not done here; see TODO.
+    if (s_qmx_gps_confirmed) {
+        ESP_LOGW(TAG, "stored QMX-GPS verdict discarded: it could have come from "
+                      "measuring our own time push - re-detecting");
+        set_qmx_gps_confirmed(false);
+        set_qmx_time_pushed(true);
+    }
 
     psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
 }

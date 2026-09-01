@@ -1,3 +1,4 @@
+#include <stddef.h>   // offsetof - the layout assert below
 #include "ft8_screen_view.h"
 #include "ui_theme.h"
 #include "ft8_screen.h"
@@ -6,11 +7,13 @@
 #include "ft8_tone_modal.h"
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
 #include <stdbool.h>
+#include "esp_timer.h"
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -27,11 +30,13 @@
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
 #include "ft8_pileup.h"
 #include "ft8_pileup_modal.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
 #include "ft8_greylist.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - cancelling a TX stops the automatics
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 #include "adif/adif_log.h"
@@ -51,7 +56,7 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | HRD
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | AGE
 // SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
 // the pre-v1.3.1 layout; the country column shrank from full entity names
 // (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
@@ -68,7 +73,7 @@ static const char *TAG = "ft8_view";
 #define COL_HZ_X        669
 #define COL_KM_X        739
 #define COL_BRG_X       817
-#define COL_HEARD_X     885
+#define COL_AGE_X       885
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
@@ -80,7 +85,7 @@ static const char *TAG = "ft8_view";
 #define COL_HZ_W        64
 #define COL_KM_W        72
 #define COL_BRG_W       62
-#define COL_HEARD_W     (COL_RIGHT_EDGE - COL_HEARD_X  - 16)
+#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
 // Combined with shared lv_style_t (below), per-row local styles drop
@@ -116,7 +121,7 @@ static lv_style_t s_style_col_dt;       // DT (dim, right)
 static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
 static lv_style_t s_style_col_brg;      // BRG (dim, right)
-static lv_style_t s_style_col_heard;    // HRD (dim, right)
+static lv_style_t s_style_col_age;      // AGE (dim, right)
 static lv_style_t s_style_header;       // column header row
 static lv_style_t s_style_header_label; // column header text
 static bool s_styles_inited = false;
@@ -132,7 +137,7 @@ typedef struct {
     lv_obj_t *l_hz;
     lv_obj_t *l_km;
     lv_obj_t *l_brg;
-    lv_obj_t *l_heard;
+    lv_obj_t *l_age;
     // Dirty-tracking cache: skip lv_label_set_text when unchanged.
     char prev_call[16];
     char prev_msg[40];
@@ -142,7 +147,7 @@ typedef struct {
     char prev_hz[12];
     char prev_km[12];
     char prev_brg[12];
-    char prev_heard[12];
+    char prev_age[12];
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
     int8_t  prev_slot_parity;    /* -1=unset 0=odd 1=even */
@@ -167,10 +172,22 @@ static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_coun
 // is the way in), so a stray finger near the countdown can't open a modal.
 #define MINI_SLOTS_MAX  64
 #define MINI_STRIP_W    288      // full left-pane content width
-#define MINI_STRIP_H     26
+// 40, was 26. Operator, 2026-08-08: the two rows "cannot be observed other than
+// with young eyes - the majority of my users are 60+". Rows go 10 -> 17 px and
+// the E/O letters follow (14 -> 20). Everything below in the left pane shifts
+// down by the same 14 px; that real estate is the price, and it was agreed.
+#define MINI_STRIP_H     40
+// TWO rows - EVEN on top, ODD below - ALWAYS both (Roy KI0ER, 2026-08-07). The
+// single strip could only show the operator's own window once something was
+// armed; before that it showed the union ("BOTH"), which on a busy band is
+// nearly all red and useless for planning. Only the operator knows which window
+// they are about to pounce into, so both pictures must be on screen BEFORE the
+// choice. The old EVEN/ODD/BOTH tag is gone - the rows are the label.
 static lv_obj_t *s_mini_strip   = NULL;
-static lv_obj_t *s_mini_cells[MINI_SLOTS_MAX];
-static uint8_t   s_mini_prev[MINI_SLOTS_MAX];  // last colour class per cell, see mini_paint()
+static lv_obj_t *s_mini_cells_e[MINI_SLOTS_MAX];
+static lv_obj_t *s_mini_cells_o[MINI_SLOTS_MAX];
+static uint8_t   s_mini_prev_e[MINI_SLOTS_MAX];
+static uint8_t   s_mini_prev_o[MINI_SLOTS_MAX];
 static int       s_mini_n_slots = 0;
 static void mini_paint(void);
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
@@ -197,12 +214,43 @@ static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button - swaps to "Pileup
 static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
-static row_widgets_t s_rows[MAX_ROWS];
+// PSRAM (allocated in the init path below): 8 KB of internal .bss as an array,
+// and it holds nothing but LVGL widget pointers touched from the LVGL thread.
+static row_widgets_t *s_rows;
+
+// One shared snapshot of the whole heard-station table, in PSRAM.
+//
+// There used to be TWO `static ft8_call_t snap[FT8_CALL_TABLE_SIZE]` locals in
+// this file, 11.25 KB each, 22.5 KB of internal .bss between them. They are
+// static rather than automatic on purpose - an 11 KB frame on taskLVGL's ~8 KB
+// stack is exactly what crashed v0.20.0 - but internal RAM is the scarcest pool
+// on this board, so PSRAM is where they belong.
+//
+// Sharing one buffer is safe because every caller runs on the LVGL thread and
+// none of them reenters another: row_activate() is a touch callback and
+// rebuild_list() is called from the refresh timer and from touch callbacks, all
+// on the same task.
+static ft8_call_t *table_snapshot(void)
+{
+    static ft8_call_t *buf;
+    if (!buf) {
+        buf = heap_caps_malloc((size_t)FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
+                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buf) ESP_LOGE(TAG, "no PSRAM for the heard-table snapshot");
+    }
+    return buf;
+}
 
 static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
 static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
+/* The station we are working, held at the top of the list while the exchange runs
+   (Don WB0LQW). Refreshed ONCE per rebuild_list(), immediately before the sort -
+   never from inside the comparator, which qsort calls O(n log n) times and which
+   must not take the QSO lock. Empty when no contact is in progress, and the
+   comparator then behaves exactly as it did before this existed. */
+static char         s_pin_call[16] = {0};
 // Station currently mid-exchange in a CQ-run session (empty when none) -
 // refreshed once per rebuild_list() and consumed by update_row() so the
 // operator can tell, at a glance, who's actively being worked vs. who else
@@ -242,6 +290,12 @@ static volatile bool s_active = false;  // true while the FT8 screen is showing 
 #define ROW_HOLD_SELECT_MS   250   // hold this long to enter selection mode
 #define ROW_PREVIEW_MS        80   // show dim highlight this many ms into the hold
 #define ROW_SCROLL_CANCEL_PX  20   // finger movement beyond this cancels selection
+// Hold this long, then release on a CQ row, to pounce WITHOUT the confirmation
+// modal (Roy KI0ER, #137). Comfortably clear of ROW_HOLD_SELECT_MS so the
+// ordinary hold-and-drag selection is unaffected: that gate is 250 ms and this
+// one is nearly three times it, so a touch that is merely being dragged across
+// rows does not reach it by accident.
+#define ROW_POUNCE_HOLD_MS   700
 
 static int      s_row_hover         = -1;
 static int      s_row_preview       = -1;  // dim pre-activation highlight
@@ -308,7 +362,7 @@ static void styles_init(void)
     INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
     // Column header bar.
@@ -328,22 +382,9 @@ static void styles_init(void)
 
 // ---------------- helpers ----------------
 
-static int cmp_cq_then_snr(const void *a, const void *b)
-{
-    const ft8_call_t *ca = (const ft8_call_t *)a;
-    const ft8_call_t *cb = (const ft8_call_t *)b;
-    // Messages directed at us (red rows) always sort first, regardless of CQ.
-    bool a_me = s_my_call[0] && strstr(ca->last_text, s_my_call);
-    bool b_me = s_my_call[0] && strstr(cb->last_text, s_my_call);
-    if (a_me != b_me) return b_me ? 1 : -1;
-    bool a_cq = (strncmp(ca->last_text, "CQ ", 3) == 0);
-    bool b_cq = (strncmp(cb->last_text, "CQ ", 3) == 0);
-    if (a_cq != b_cq) return b_cq ? 1 : -1;  // CQ rows first
-    // Within same category: strongest SNR first
-    if (cb->last_snr_db > ca->last_snr_db) return  1;
-    if (cb->last_snr_db < ca->last_snr_db) return -1;
-    return 0;
-}
+/* The decode-list ORDER now lives in ft8_screen.c (ft8_screen_sort_rows), so the
+   Tab5 and the browser cannot disagree about it. It was here; the tiers and the
+   reasoning moved with it. */
 
 // Set label text only if it differs from cache (avoid redundant invalidate).
 static void set_text_if_changed(lv_obj_t *lbl, char *cache, size_t cap, const char *txt)
@@ -380,6 +421,7 @@ static lv_obj_t *make_label_styled(lv_obj_t *row, const lv_style_t *style)
 // hold gate fires.  List is still scrollable while preview is active.
 static void row_clear_preview(void)
 {
+    if (!s_rows) return;
     if (s_row_preview >= 0 && s_row_preview < MAX_ROWS && s_rows[s_row_preview].row)
         lv_obj_set_style_bg_opa(s_rows[s_row_preview].row, LV_OPA_0, 0);
     s_row_preview = -1;
@@ -402,6 +444,7 @@ static void row_set_preview(int idx)
 // previous row and any preview highlight first.
 static void row_set_hover(int new_idx)
 {
+    if (!s_rows) return;
     if (new_idx == s_row_hover) return;
     row_clear_preview();
     // Clear previous highlight
@@ -518,8 +561,30 @@ static void grey_modal_show(const char *call)
     }
 }
 
-static void row_activate(int idx)
+// Is this row a plain CQ? The long-press-to-pounce shortcut is limited to those:
+// answering a CQ is the case where the next message is never in doubt, and it is
+// the case where the next 15 s cycle is worth catching.
+static bool row_is_cq(int idx)
 {
+    if (!s_rows || idx < 0 || idx >= MAX_ROWS) return false;
+    row_widgets_t *r = &s_rows[idx];
+    if (!r->row || !r->l_msg || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return false;
+    const char *msg = lv_label_get_text(r->l_msg);
+    return msg && strncmp(msg, "CQ ", 3) == 0;
+}
+
+static void row_activate_ex(int idx, bool direct);
+
+static void row_activate(int idx) { row_activate_ex(idx, false); }
+
+// Long-press release: same target resolution and same message construction as a
+// normal activation, but hands the request straight to the QSO machine instead
+// of the confirmation modal.
+static void row_pounce_direct(int idx) { row_activate_ex(idx, true); }
+
+static void row_activate_ex(int idx, bool direct)
+{
+    if (!s_rows) return;
     if (idx < 0 || idx >= MAX_ROWS) return;
     row_widgets_t *r = &s_rows[idx];
     if (!r->row || !r->l_call || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return;
@@ -541,7 +606,8 @@ static void row_activate(int idx)
 
     s_confirmed_row_idx = idx;
 
-    static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) return;
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     const ft8_call_t *match = NULL;
@@ -557,6 +623,17 @@ static void row_activate(int idx)
     // unoccupied 50 Hz slot to the current preference when it's off.
     int reply_freq_hz = ft8_tx_pick_tone_hz();
 
+    // Tapping a FOX while Fox/Hound is enabled: call from the hound region
+    // instead. The ordinary picker searches the whole 200-2800 Hz passband and
+    // could hand us a tone inside the Fox's own region, which is the one place a
+    // hound must never call from - the Fox is listening there for the hound it
+    // already answered, not for new callers. See ft8_hound.h.
+    if (ft8_hound_enabled(ft8_hound_mode()) && ft8_hound_looks_like_fox(match)) {
+        reply_freq_hz = ft8_hound_pick_tx_tone();
+        ESP_LOGI(TAG, "row activate: %s is a Fox - calling from the hound region (%d Hz)",
+                 match->call, reply_freq_hz);
+    }
+
     ESP_LOGI(TAG, "row activate: reply to %s (their_freq=%d Hz -> our_freq=%d Hz, last_utc=%lld)",
              match->call, (int)match->last_freq, reply_freq_hz, (long long)match->last_utc);
 
@@ -568,7 +645,24 @@ static void row_activate(int idx)
     ft8_tx_request_t req;
     char err[64];
     if (ft8_qso_build_manual_reply(match, reply_freq_hz, &req, NULL, err, sizeof(err))) {
-        ft8_tx_modal_show(&req);
+        if (direct) {
+            // Straight into the auto-sequencer, exactly what the modal's own
+            // "Auto Pounce" button does - so the shortcut and the button cannot
+            // drift apart.
+            char serr[64];
+            if (ft8_qso_start(&req, serr, sizeof(serr))) {
+                ft8_qso_note_manual_target(req.target_call);
+                char tb[48];
+                snprintf(tb, sizeof(tb), "Pouncing %s", match->call);
+                ui_toast(tb);
+                ESP_LOGI(TAG, "long-press pounce: %s (no modal)", match->call);
+            } else {
+                ui_toast(serr);
+                ESP_LOGW(TAG, "long-press pounce refused for %s: %s", match->call, serr);
+            }
+        } else {
+            ft8_tx_modal_show(&req);
+        }
     } else {
         ESP_LOGW(TAG, "build manual reply to %s failed: %s", match->call, err);
         identity_config_modal_show();
@@ -577,6 +671,7 @@ static void row_activate(int idx)
 
 void ft8_screen_view_nudge_confirm(int delta)
 {
+    if (!s_rows) return;
     if (s_confirmed_row_idx < 0) return;
     int idx = s_confirmed_row_idx + delta;
     if (idx < 0 || idx >= MAX_ROWS || !s_rows[idx].row
@@ -680,7 +775,23 @@ static void row_touch_cb(lv_event_t *e)
         } else if (was_selection_mode) {
             // Held long enough to lock scroll, optionally dragged across
             // rows - whatever's currently highlighted fires.
-            if (confirm >= 0) row_activate(confirm);
+            //
+            // Held a good deal LONGER than that, and released on a plain CQ?
+            // Skip the confirmation modal and pounce immediately. Roy KI0ER:
+            // "by the time I click the station, then respond to the modal
+            // window in order to click the Pounce button, too much time has
+            // passed so I cannot respond into the very next 15 second cycle" -
+            // and that next cycle is the whole point of answering a CQ.
+            //
+            // It fires on RELEASE, not when the threshold is reached, so the
+            // existing drag-to-reselect still cancels it: slide onto another
+            // row, or off the list, and nothing is sent. And it is gated to
+            // rows that are CQs, because skipping a confirmation mid-exchange
+            // would be skipping it on a message whose content matters more.
+            uint32_t held = lv_tick_elaps(s_press_start_ms);
+            if (confirm >= 0 && held >= ROW_POUNCE_HOLD_MS && row_is_cq(confirm))
+                row_pounce_direct(confirm);
+            else if (confirm >= 0) row_activate(confirm);
         } else {
             // A tap that never crossed the hold-to-drag gate, but also
             // never moved far enough to be a scroll - fire immediately on
@@ -709,6 +820,7 @@ static void row_touch_cb(lv_event_t *e)
 
 static void build_row(int i)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
 
     r->row = lv_obj_create(s_list);
@@ -742,7 +854,7 @@ static void build_row(int i)
     r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
     r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
-    r->l_heard   = make_label_styled(r->row, &s_style_col_heard);
+    r->l_age     = make_label_styled(r->row, &s_style_col_age);
 
     // SNR colour starts white; per-row local override on update.
     if (r->l_snr) {
@@ -755,7 +867,7 @@ static void build_row(int i)
     r->prev_snr[0]     = '\0';
     r->prev_km[0]      = '\0';
     r->prev_brg[0]     = '\0';
-    r->prev_heard[0]   = '\0';
+    r->prev_age[0]     = '\0';
     r->prev_snr_db       = -127;
     r->prev_color        = -1;
     r->prev_slot_parity  = -1;
@@ -763,6 +875,7 @@ static void build_row(int i)
 
 static void update_row(int i, const ft8_call_t *src)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
@@ -770,9 +883,18 @@ static void update_row(int i, const ft8_call_t *src)
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_heard[12];
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_age[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
-    snprintf(b_heard, sizeof(b_heard), "%u",  (unsigned)src->heard_count);
+    // Seconds since last heard, not heard_count - the browser's decode list
+    // already shows this (Randy N4OPI asked for parity between the two, and
+    // it's the more useful number: how stale is this row, not how many times
+    // has it been seen). Rows age out of the table entirely at the max-age
+    // setting below, so this never needs more than 2-3 digits.
+    {
+        int64_t age = (int64_t)time(NULL) - src->last_utc;
+        if (age < 0) age = 0;
+        snprintf(b_age, sizeof(b_age), "%us", (unsigned)age);
+    }
 
     // DT: the station's slot-timing offset in seconds, relative to the band
     // consensus - the consensus carries our common RX audio latency, so
@@ -836,7 +958,7 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
-    set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
+    set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     b_age);
 
     /* Colour scheme: AMBER=actively working now, RED=own call heard,
        GREY=worked before, GREEN=CQ, WHITE=other */
@@ -889,6 +1011,7 @@ static void update_row(int i, const ft8_call_t *src)
 
 static void hide_row(int i)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
     if (!lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) {
@@ -905,10 +1028,26 @@ static void hide_row(int i)
 
 static void rebuild_list(void)
 {
-    static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) return;              // retried on the next refresh tick
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
-    qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
+    /* Who to hold at the top - read once, here, for the reasons at s_pin_call. */
+    char prev_pin[sizeof(s_pin_call)];
+    snprintf(prev_pin, sizeof(prev_pin), "%s", s_pin_call);
+    ft8_qso_get_pinned_call(s_pin_call, sizeof(s_pin_call));
+    /* Log only the CHANGES - this runs about once a second. Nobody can watch the
+       screen on the night this shipped, so the log is the evidence that the pin
+       engaged and released at the right moments. */
+    if (strcmp(prev_pin, s_pin_call) != 0) {
+        if (s_pin_call[0]) ESP_LOGI(TAG, "decode list: holding %s at the top", s_pin_call);
+        else               ESP_LOGI(TAG, "decode list: released %s from the top", prev_pin);
+    }
+    /* Order via the shared implementation in the data layer, so the browser's
+       list (net/webserver.c /api/decodes) cannot drift from this one. The keys
+       are handed in rather than read from statics inside the comparator, which
+       is what makes it safe to call from the HTTP task too. */
+    ft8_screen_sort_rows(snap, n, s_my_call, s_pin_call);
 
     qmx_settings_t qs;
     settings_load_all(&qs);
@@ -967,14 +1106,33 @@ static void rebuild_list(void)
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
-        if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
-        if (cq_hide_our_parity) {
-            // Same nearest-slot parity rounding as the per-row E/O indicator.
-            int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
-            if (((sidx % 2) == 0) == cq_tx_even) continue;
+        // THE STATION WE ARE WORKING IS NEVER HIDDEN BY A DISPLAY FILTER (#176).
+        // Roy KI0ER, on "Show only CQ callers": "if there is an active QSO
+        // occurring with my callsign, the message display should also show all
+        // relevant messages associated with that exchange ... even though they
+        // are not CQ messages". He is right, and it generalises: every filter
+        // here answers "who is worth looking at", and the answer can never
+        // exclude the contact in progress. Applying the exemption to ALL of them
+        // rather than only to the filter he happened to be using is what stops
+        // this arriving again as a report about the include/exclude terms.
+        //
+        // s_qso_active_target covers a machine QSO's partner AND a manually
+        // stepped one (ft8_qso_note_manual_target), so a hand-run exchange
+        // behaves the same - it is the same string the "currently working" row
+        // highlight uses, so the row that is highlighted can no longer be the row
+        // that is hidden.
+        bool is_partner = s_qso_active_target[0] &&
+                          strcasecmp(snap[i].call, s_qso_active_target) == 0;
+        if (!is_partner) {
+            if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+            if (cq_hide_our_parity) {
+                // Same nearest-slot parity rounding as the per-row E/O indicator.
+                int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
+                if (((sidx % 2) == 0) == cq_tx_even) continue;
+            }
+            if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
+            if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         }
-        if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
-        if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         update_row(row++, &snap[i]);
     }
     for (int i = row; i < MAX_ROWS; i++) {
@@ -1030,9 +1188,332 @@ static void t_slotbar_cb(lv_timer_t *t)
     lv_obj_set_style_bg_color(s_bar_slot, col, LV_PART_INDICATOR);
 }
 
+static void start_cq_run(bool interactive);          // defined below
+static volatile bool s_web_cq_pending;               // set from the HTTP task
+// Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
+// browser operator could start a CQ but not say which window it went out in.
+// -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
+// button that displays it belong to taskLVGL, so the HTTP task only leaves a
+// value behind and the 1 Hz timer applies it.
+static volatile int  s_web_parity_pending = -2;
+static void update_parity_btns(void);   // defined with the button, used by the 1 Hz drain above it
+
+// Web reply-to-station request (Phase 6 of web parity: the operator explicitly
+// wanted TX from the browser). Same deferral as the CQ flag: the HTTP task only
+// writes the request; the 1 Hz LVGL timer builds and arms it, because
+// ft8_qso_build_manual_reply() and everything downstream are LVGL-thread-only.
+// s_web_reply_result carries the outcome back to the browser via /api/status -
+// a toast on the Tab5 is invisible from another room.
+static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
+static volatile bool s_web_reply_pending;
+// Mid-QSO override requested from the browser (#205, Randy N4OPI: operating FT8
+// "from another room or location", where the Tab5's Re-send / RR73 / 73 buttons
+// and its tap-to-cancel are out of reach). Same deferral as the reply flag - the
+// QSO machine belongs to the LVGL task - and consumed even when FT8 is down, so
+// a stale request can never fire minutes later unasked.
+//   0 = none, 1 = resend, 2 = RR73, 3 = 73, 4 = abort
+static volatile int s_web_override_pending;
+
+// #221: FT8/FT4 preset requested over the API. Switching sub-mode is not just a
+// setting - apply_freq_preset() also retunes the radio, clears stale decodes and
+// repaints two labels, and it must run on taskLVGL. Same deferral as the CQ and
+// override requests: the HTTP task leaves a request, the 1 Hz timer performs it.
+// Packed rather than two variables so a half-applied request cannot be drained.
+static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src);   // defined below
+static volatile uint32_t s_web_preset_hz  = 0;    // 0 = nothing pending
+static volatile bool     s_web_preset_ft4 = false;
+// The OUTCOME OF THE LAST BROWSER COMMAND - not a description of the current
+// state, which is what it looked like to Randy N4OPI: "'Busy: working KA3PMW'
+// never clears until a new QSO is initiated", and the same for "QSO cancelled"
+// after the picked-up QSO had completed and logged. It was only ever overwritten
+// by the NEXT command, so a refusal from ten minutes ago still sat on screen
+// describing a station already in the log - and, because the status lines are
+// pinned, sat on top of the TX power/SWR readout as well.
+//
+// Every string written here answers "what happened when I clicked that": it
+// belongs to the click, so it expires with it. A live condition has its own
+// field in /api/status (ft8.st, working, tx_w/tx_swr) and does not need to be
+// mirrored in a sentence.
+#define WEB_RESULT_TTL_MS 20000
+static char          s_web_reply_result[64];
+static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
+
+// Every write goes through here so none can forget the timestamp. The printf
+// attribute keeps the compiler checking the format strings it used to check
+// when these were plain snprintf() calls.
+static void web_result_set(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void web_result_set(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
+    va_end(ap);
+    s_web_reply_result_us = esp_timer_get_time();
+}
+
+void ft8_screen_view_request_reply(const char *call)
+{
+    if (!call || !call[0]) return;
+    snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
+    s_web_reply_pending = true;
+}
+
+// #221: ask for an FT8/FT4 preset from the API. freq_hz of 0 means "keep the
+// current frequency, only change sub-mode".
+// Defined further down, beside the preset tables it reads - those tables belong
+// with the preset UI, and this is used by the API drain above them.
+static uint32_t calling_freq_for(bool ft4, uint32_t near_hz);
+
+void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
+{
+    s_web_preset_ft4 = ft4;
+    s_web_preset_hz  = freq_hz ? freq_hz : 1;   // 1 = sentinel for "current freq"
+}
+
+void ft8_screen_view_request_override(int what)
+{
+    if (what < 1 || what > 4) return;
+    s_web_override_pending = what;
+}
+
+const char *ft8_screen_view_get_web_reply_result(void)
+{
+    // Reports expiry rather than clearing it: this runs on the HTTP task while
+    // the LVGL task owns the buffer, and a reader must not write into another
+    // task's string.
+    if (!s_web_reply_result[0] || !s_web_reply_result_us) return "";
+    if (esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
+        return "";
+    return s_web_reply_result;
+}
+
+// Runs on the LVGL task from t_clock_cb. Mirrors row_activate() + the TX modal's
+// buttons, minus the modal: the browser already confirmed, so the built message
+// goes straight to the same arm/pounce calls the modal's buttons make.
+static void web_reply_drain(void)
+{
+    char call[FT8_CALL_MAX_LEN];
+    snprintf(call, sizeof(call), "%s", s_web_reply_call);
+    s_web_reply_pending = false;
+    s_web_reply_call[0] = '\0';
+
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) { web_result_set("Internal: no snapshot buffer"); return; }
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    const ft8_call_t *match = NULL;
+    for (int i = 0; i < n; i++)
+        if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
+
+    char busy_target[24];
+    if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        if (busy_target[0]) web_result_set("Busy: working %s", busy_target);
+        else                web_result_set("Busy: calling CQ");
+        return;
+    }
+
+    ft8_tx_request_t req;
+    bool is_fresh_grid = false;
+    char err[64];
+    if (match) {
+        if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, &is_fresh_grid, err, sizeof(err))) {
+            web_result_set("%s", err[0] ? err : "Could not build the reply");
+            return;
+        }
+    } else {
+        // Not in the live decode table - a row is gone after FT8_ROW_STALE_SEC
+        // (120 s) with no fresh decode, or the browser's own poll can be a
+        // cycle older still. But the pileup list has NO expiry of its own by
+        // design (ft8_pileup.h: "so the operator can go back and work someone
+        // ... even after they've aged out of the live decode list"), so a
+        // caller can sit there for minutes - and this endpoint used to refuse
+        // outright the moment the decode row was gone, even though the Tab5's
+        // own pileup screen has always had a working fallback for exactly this
+        // (Randy N4OPI: he could click a pileup entry on the web page and get
+        // "no longer in the decode list" for a caller he could work fine from
+        // the Tab5 sitting right next to it). Same fallback here now: reply
+        // report-first from the pileup entry's own cached SNR, same shape
+        // cqrun_answer() and ft8_pileup_modal.c's row_work_cb already use.
+        ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
+        int pn = ft8_pileup_get_all(pile, FT8_PILEUP_MAX);
+        const ft8_pileup_entry_t *pmatch = NULL;
+        for (int i = 0; i < pn; i++)
+            if (strcmp(pile[i].call, call) == 0) { pmatch = &pile[i]; break; }
+        if (!pmatch) {
+            // Genuinely gone from both lists - refusing is still right here,
+            // not transmitting at a station with no trace of ever calling.
+            web_result_set("%s is no longer in the decode list", call);
+            return;
+        }
+        qmx_settings_t qs;
+        settings_load_all(&qs);
+        bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+        char rpt[8];
+        const char *extra = NULL;
+        if (!fd_mode) {
+            ft8_qso_fmt_report(pmatch->snr_db, rpt, sizeof(rpt));
+            extra = rpt;
+        }
+        if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pmatch->call, ft8_tx_pick_tone_hz(),
+                                  pmatch->last_seen_utc, extra, &req, err, sizeof(err))) {
+            web_result_set("%s", err[0] ? err : "Could not build the reply");
+            return;
+        }
+        is_fresh_grid = false;   // report-first is never TX1
+        ESP_LOGI(TAG, "web reply: %s via pileup fallback, report=%s",
+                 call, extra ? extra : "(grid TX1, FD mode)");
+    }
+
+    // Their fresh CQ -> the full auto-sequencer, because the operator is NOT in
+    // front of the radio to click each exchange step. Anything mid-exchange ->
+    // arm the one correct next message, with the same manual-QSO bookkeeping the
+    // modal's Transmit does (working-highlight, and WAIT_DONE seeding so a
+    // closing 73 still logs to ADIF).
+    if (is_fresh_grid) {
+        if (ft8_qso_start(&req, err, sizeof(err))) {
+            web_result_set("Working %s (auto QSO)", call);
+            ESP_LOGI(TAG, "web reply: auto pounce on %s", call);
+        } else {
+            web_result_set("%s", err[0] ? err : "Pounce refused");
+        }
+        return;
+    }
+    if (ft8_tx_arm(&req, err, sizeof(err))) {
+        if (req.target_call[0]) ft8_qso_note_manual_target(req.target_call);
+        if (req.kind == FT8_TX_KIND_73) ft8_qso_notify_manual_final(req.target_call);
+        web_result_set("Armed: %s", req.display_text);
+        ESP_LOGI(TAG, "web reply: armed '%s'", req.display_text);
+    } else {
+        web_result_set("%s", err[0] ? err : "Could not arm");
+    }
+}
+
+/* Respawn watchdog pacing - see the note at the check itself for the 390-retry
+ * incident these numbers exist to prevent. */
+#define RESPAWN_FAST_TRIES 3
+#define RESPAWN_FAST_MS    1000
+#define RESPAWN_SLOW_MS    30000
+
+static uint32_t s_respawn_next_ms = 0;
+static int      s_respawn_tries   = 0;
+
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // Drain a web CQ request BEFORE the visibility gate below, so it is consumed
+    // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
+    // request left pending would otherwise fire the moment the operator next
+    // switched to FT8 - possibly minutes later, unasked.
+    if (s_web_parity_pending != -2) {
+        int p = s_web_parity_pending;
+        s_web_parity_pending = -2;
+        s_cq_parity = (p == 0 || p == 1) ? p : -1;
+        update_parity_btns();
+        ESP_LOGI(TAG, "web set CQ parity: %s",
+                 s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+    }
+
+    if (s_web_cq_pending) {
+        s_web_cq_pending = false;
+        bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        if (ft8_up) {
+            ESP_LOGI(TAG, "web requested CQ start");
+            start_cq_run(false);
+        } else {
+            ESP_LOGW(TAG, "web CQ request ignored - not in FT8 mode");
+        }
+    }
+
+    // Web reply request: consumed even when FT8 is not up, same reasoning as the
+    // CQ flag - a stale TX request firing minutes later, unasked, is the one
+    // failure mode this deferral must never have.
+    if (s_web_preset_hz) {
+        uint32_t hz  = s_web_preset_hz;
+        bool     ft4 = s_web_preset_ft4;
+        s_web_preset_hz = 0;                    // consume before acting
+        if (hz == 1) {
+            // Sentinel: keep the dial where it is. With the radio off or not yet
+            // enumerated CAT answers 0, and this used to fall straight through
+            // the `if (hz)` below - the request consumed, nothing done, no log
+            // line, and an {"ok":true} already sent to the caller. That is the
+            // silent-no-op shape CLAUDE.md warns about, and it cost a quarter of
+            // an hour of "why is it still FT8?" on a bench with the radio off.
+            // The stored FT8 frequency is the right fallback: it is what the FT8
+            // screen would have tuned to anyway.
+            hz = cat_get_frequency();
+            if (!hz) {
+                qmx_settings_t fs;
+                settings_load_all(&fs);
+                hz = fs.ft8_freq_hz;
+                ESP_LOGW(TAG, "API preset: no frequency from the radio - using the stored %lu Hz",
+                         (unsigned long)hz);
+            }
+            // Landing on the right frequency for the protocol asked for. FT4 has
+            // its own calling frequencies - 14.080 where FT8 uses 14.074 - and
+            // switching protocol while staying put means calling FT4 on the FT8
+            // watering hole, which is what "keep the dial where it is" quietly
+            // did (operator, 2026-08-26: "ft4 require change in freq??"). The
+            // Tab5's own Preset list has always set both together; this makes
+            // the API agree with it. A band with no standard frequency for that
+            // protocol keeps the current dial rather than jumping bands.
+            uint32_t want = calling_freq_for(ft4, hz);
+            if (want && want != hz) {
+                ESP_LOGW(TAG, "API preset: %s calling frequency on this band is %lu Hz",
+                         ft4 ? "FT4" : "FT8", (unsigned long)want);
+                hz = want;
+            }
+        }
+        if (hz) {
+            ESP_LOGW(TAG, "API: switching to %s on %lu Hz",
+                     ft4 ? "FT4" : "FT8", (unsigned long)hz);
+            apply_freq_preset(hz, ft4, "api");
+        } else {
+            ESP_LOGE(TAG, "API preset ignored: no frequency from the radio and none stored");
+        }
+    }
+
+    if (s_web_override_pending) {
+        int what = s_web_override_pending;
+        s_web_override_pending = 0;
+        bool up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        char err[64] = "";
+        if (!up) {
+            web_result_set("Not in FT8 mode");
+        } else if (what == 4) {
+            // Cancel: disarm whatever is queued AND end the exchange, which is
+            // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
+            // "mid-QSO over-ride/cancel button".
+            ft8_tx_disarm();
+            ft8_qso_abort();
+            web_result_set("QSO cancelled");
+            ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
+        } else {
+            ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
+                            : (what == 3) ? FT8_TX_KIND_73
+                                          : FT8_TX_KIND_REPLY;
+            if (ft8_qso_override_next(k, err, sizeof(err))) {
+                web_result_set("Override armed");
+                ESP_LOGI(TAG, "web override: kind=%d armed", (int)k);
+            } else {
+                web_result_set("%s", err[0] ? err : "Override refused");
+                ESP_LOGW(TAG, "web override refused: %s", err);
+            }
+        }
+    }
+
+    if (s_web_reply_pending) {
+        bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        if (ft8_up) {
+            web_reply_drain();
+        } else {
+            s_web_reply_pending = false;
+            s_web_reply_call[0] = '\0';
+            web_result_set("Not in FT8 mode");
+            ESP_LOGW(TAG, "web reply request ignored - not in FT8 mode");
+        }
+    }
+
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
     // Respawn watchdog: the FT8 view is visible (we're past the guard above),
@@ -1042,9 +1523,69 @@ static void t_clock_cb(lv_timer_t *t)
     // ever notices that exit, so the view is left showing a stale status
     // forever with no task behind it. Checking here, once a second, closes
     // that gap regardless of the exact timing that caused it.
+    //
+    // BACKED OFF, because retrying once a second for ever is worse than not
+    // retrying at all. Measured 2026-08-27 on a WSPR -> FT8 switch: ft8_task
+    // could not get its capture scratch (WSPR still held 11.25 MB and frees on
+    // its own next pass), exited, and this fired ~390 times - every one of
+    // them failing to even create the task, because FT8's own entry had taken
+    // ~34 KB of internal heap it never gave back. Internal free went 38 KB ->
+    // 4 KB with a 0 KB largest block, which on this board is also the state
+    // that breaks TLS, USB endpoint allocation and the SD mount. A watchdog
+    // that degrades the device it is trying to rescue is not a watchdog.
+    //
+    // So: a few prompt retries for the ordinary lingering-task case this was
+    // written for, then every 30 s, and the log line only on a change - the
+    // repeat was 390 identical lines burying everything else in the capture.
     if (!ft8_task_is_alive()) {
-        ESP_LOGW(TAG, "t_clock_cb: FT8 view visible but no ft8_task alive - respawning");
-        ft8_self_test();
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+        if (now >= s_respawn_next_ms) {
+            if (s_respawn_tries < RESPAWN_FAST_TRIES) {
+                /* INFO, and worded as the routine event it is (#280).
+                 *
+                 * This fires on MOST FT8 entries and it is not a fault - it is
+                 * this watchdog doing the job it was written for. Measured over
+                 * 4 entry/exit cycles on 2026-09-01: teardown takes ~10 s (the
+                 * decode task finishes its slot, then joins its worker), so
+                 * re-entering FT8 inside that window finds the previous task
+                 * still alive; ft8_self_test() correctly REFUSES, teardown
+                 * completes ~250 ms later, and this picks it up ~1 s after that.
+                 *
+                 * The same run showed 4 monitor-pool builds for 4 entries, ZERO
+                 * "rebuilt with no teardown", zero crashes, and PSRAM figures
+                 * that repeated byte-identically every cycle - so there is no
+                 * double spawn and no leak behind this line.
+                 *
+                 * It was ESP_LOGW reading "no ft8_task alive - respawning",
+                 * which looks like a fault on every ordinary toggle and buries
+                 * the back-off warning below that IS one.
+                 *
+                 * ⛔ Do NOT "fix" the underlying delay with a grace period here.
+                 * CLAUDE.md records two attempts falsified on hardware for
+                 * exactly that reasoning: timing changes the odds of a race, not
+                 * the race. The ~1 s of delayed start is the price of a
+                 * single-spawner design, and it is the right price. */
+                ESP_LOGI(TAG, "t_clock_cb: previous FT8 session has finished "
+                              "tearing down - starting the new one");
+                s_respawn_next_ms = now + RESPAWN_FAST_MS;
+            } else {
+                if (s_respawn_tries == RESPAWN_FAST_TRIES)
+                    ESP_LOGW(TAG, "t_clock_cb: ft8_task still will not start after %d tries"
+                                  " - backing off to %d s (int free=%u KB)",
+                             s_respawn_tries, RESPAWN_SLOW_MS / 1000,
+                             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+                s_respawn_next_ms = now + RESPAWN_SLOW_MS;
+            }
+            s_respawn_tries++;
+            ft8_self_test();
+        }
+    } else {
+        /* Cleared by a task that is actually running, so the NEXT time one
+         * dies it gets the prompt retries again rather than inheriting a
+         * back-off earned by an unrelated failure. */
+        s_respawn_tries = 0;
+        s_respawn_next_ms = 0;
     }
 
     if (s_lbl_count) {
@@ -1141,7 +1682,61 @@ static void t_clock_cb(lv_timer_t *t)
         // it vanishes the instant TX ends (QSO finish or cancel), by request.
         if (s_lbl_tx_pswr) lv_obj_add_flag(s_lbl_tx_pswr, LV_OBJ_FLAG_HIDDEN);
 
-        bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
+        // Clash: GRADED, and suppressed on screen mid-exchange (Gyula HA3HZ,
+        // 2026-08-28). He reported both halves of the same fault: *"The freq busy
+        // with red is also present when the other station is on the other side of
+        // the earth and I can see his signal e.g. with -32"*, and then *"I jumped
+        // to the red message and changed the frequency, while I shouldn't have
+        // because the partner didn't see my signal and the QSO was broken."*
+        //
+        // Two separate problems, and the second is the one that cost him a
+        // contact. During an exchange the tone is LOCKED to the partner by design
+        // - relocate_cq_tone_if_clashing() only ever moves a CQ between cycles -
+        // so a warning shown then cannot be acted on correctly. Showing an
+        // alarm at the one moment when obeying it is wrong is a UI fault whatever
+        // the detection says, so the SCREEN goes quiet in those states.
+        //
+        // ⛔ The LOG does not. #201 exists because "FREQ BUSY" was screen-only
+        // and Roy KI0ER's 29 minutes of diagnostic log never contained the
+        // string, so his report could not be investigated at all. Suppressing
+        // the display must not re-create that: raw_lvl is logged unconditionally.
+        const ft8_clash_t raw_lvl = (tx_st != FT8_TX_IDLE) ? ft8_tx_clash_level()
+                                                           : FT8_CLASH_NONE;
+        const bool in_exchange = (qso_st == FT8_QSO_WAIT_RPT  ||
+                                  qso_st == FT8_QSO_WAIT_ROGER ||
+                                  qso_st == FT8_QSO_WAIT_RR73 ||
+                                  qso_st == FT8_QSO_WAIT_DONE);
+        const ft8_clash_t clash_lvl = in_exchange ? FT8_CLASH_NONE : raw_lvl;
+        bool clash = (clash_lvl != FT8_CLASH_NONE);
+
+        // ⛔ LOG THE CLASH. "⚠ FREQ BUSY" was a screen-only state: Roy KI0ER
+        // photographed it and sent 29 minutes of diagnostic log in which the
+        // string does not appear once, so the report could not be investigated
+        // from the log at all. A warning the operator can see and the log cannot
+        // is a warning nobody can diagnose remotely.
+        //
+        // Change-detected because this timer runs at 1 Hz and the state persists
+        // for a whole burst. Carries the occupancy picture with it, since the
+        // question is always "busy according to what?" - n_stations == 0 means
+        // the map is empty and the warning is about nothing.
+        {
+            static int s_clash_logged = -1;
+            int now_lvl = (int)raw_lvl * 2 + (in_exchange ? 1 : 0);
+            if (now_lvl != s_clash_logged) {
+                s_clash_logged = now_lvl;
+                int n_slots = 0, n_stations = 0;
+                (void)ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+                ESP_LOGI(TAG, "TX clash %s: tone=%d Hz, occupancy %d/%d slots busy "
+                              "from %d station(s)%s",
+                         raw_lvl == FT8_CLASH_STRONG ? "DETECTED (strong)"
+                       : raw_lvl == FT8_CLASH_WEAK   ? "DETECTED (weak)"
+                                                     : "cleared",
+                         ft8_qso_get_tx_tone_hz(), n_slots, 52, n_stations,
+                         (raw_lvl != FT8_CLASH_NONE && in_exchange)
+                             ? " - not shown: mid-exchange, the tone is locked to the partner"
+                             : "");
+            }
+        }
 
         // CQ auto-stop progress (Don WB0LQW): "call 2 of 4" while a limited
         // CQ run is armed/on-air, "call 2" when unlimited. The engine counts
@@ -1157,7 +1752,17 @@ static void t_clock_cb(lv_timer_t *t)
                 snprintf(cq_line, sizeof(cq_line), "\ncall %d", cq_sent + 1);
         }
 
-        if (tx_st == FT8_TX_ACTIVE) {
+        // SWR protection latched - a fault line, above everything else. The
+        // transmitter is refusing to key until the operator clears this, so it
+        // has to say so plainly rather than looking like an idle status.
+        float trip_swr = 0.0f;
+        if (ft8_tx_swr_tripped(&trip_swr)) {
+            snprintf(b, sizeof(b),
+                     LV_SYMBOL_WARNING " SWR %.1f:1\nTX STOPPED\nCheck antenna\nTAP TO CLEAR",
+                     (double)trip_swr);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
+        } else if (tx_st == FT8_TX_ACTIVE) {
             // Red: transmitting right now (tap to abort). Each logical chunk
             // gets its own explicit line - "TAP TO ABORT" is always the last
             // line on its own, never sharing a line (and so never an
@@ -1212,14 +1817,20 @@ static void t_clock_cb(lv_timer_t *t)
             // the state where it's still changeable, so the chip is where the
             // operator should be looking anyway.
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n" LV_SYMBOL_WARNING " FREQ BUSY",
-                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n" LV_SYMBOL_WARNING " FREQ BUSY%s",
+                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until,
+                         (clash_lvl == FT8_CLASH_WEAK) ? " (weak)" : "");
             else
                 snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL",
                          tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
+            // Graded rather than binary: a loud neighbour still gets the
+            // red-orange, a faint one stays close to the normal armed amber so
+            // it reads as information instead of an instruction.
             lv_obj_set_style_text_color(s_lbl_tx,
-                clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);
+                (clash_lvl == FT8_CLASH_STRONG) ? lv_color_hex(0xFF4010)
+              : (clash_lvl == FT8_CLASH_WEAK)   ? lv_color_hex(0xFFC060)
+                                                : lv_color_hex(0xFFA040), 0);
 
         } else if (qso_st == FT8_QSO_DONE) {
             // Bright green: QSO complete
@@ -1323,7 +1934,8 @@ static void mini_paint(void)
     if (!s_mini_strip || s_mini_n_slots <= 0) return;
 
     int n_slots = 0, n_stations = 0;
-    uint64_t occ = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+    uint64_t occ_e = 0, occ_o = 0;
+    ft8_tx_get_tone_occupancy_split(&occ_e, &occ_o, &n_slots, &n_stations);
     if (n_slots > s_mini_n_slots) n_slots = s_mini_n_slots;
 
     // Our own tone: live value while running, otherwise the preference - the
@@ -1338,18 +1950,59 @@ static void mini_paint(void)
     if (ft8_qso_get_priority_freq(&partner_hz) && partner_hz > 0)
         partner_slot = (partner_hz - FT8_TX_TONE_MIN_HZ) / FT8_TX_TONE_STEP_HZ;
 
-    for (int i = 0; i < n_slots; i++) {
-        if (!s_mini_cells[i]) continue;
-        uint8_t cls;
-        uint32_t col;
-        if (i == mine_slot)             { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
-        else if (i == partner_slot)     { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
-        else if (n_stations == 0)       { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
-        else if ((occ >> i) & 1ULL)     { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
-        else                            { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
-        if (cls == s_mini_prev[i]) continue;
-        s_mini_prev[i] = cls;
-        lv_obj_set_style_bg_color(s_mini_cells[i], lv_color_hex(col), 0);
+    // Which ROW carries our white marker: our TX window when it is knowable,
+    // both rows when it is not (nothing armed, TXCQ ANY) - the tone is the same
+    // either way, only the window is undecided. The partner, when there is one,
+    // transmits in the OPPOSITE window to ours by construction.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
+
+    // A window we did not LISTEN to has no picture, and must not be painted as
+    // though every tone in it were free - which is what happened while
+    // transmitting, since our own window decodes nothing and every cell fell
+    // through to FREE. Roy KI0ER: "it turns the strip all green", and green is
+    // the one reading that will send you onto an occupied frequency.
+    //
+    // Stale = we have not received that window for STALE_WINDOWS of its own
+    // occurrences. A given parity comes round every SECOND slot, hence the x2:
+    // with FT8's 15 s slots this is 2 x 30 s = 60 s. One missed or aborted
+    // capture therefore does not flicker the strip, while a run of transmit
+    // cycles greys it within about four slots - close to the "about 3 cycles"
+    // Roy KI0ER described it going stale after.
+    //
+    // Grey is his own preferred option, and it matches the not-heard-yet state
+    // at FT8 start rather than inventing a third colour for "probably still
+    // true".
+    const int STALE_WINDOWS = 2;
+    int64_t now_utc = (int64_t)time(NULL);
+    int slot_s = ft8_op_mode_slot_ms() / 1000;
+    if (slot_s <= 0) slot_s = 15;
+
+    for (int row = 0; row < 2; row++) {
+        bool row_even        = (row == 0);
+        lv_obj_t **cells     = row_even ? s_mini_cells_e : s_mini_cells_o;
+        uint8_t   *prev      = row_even ? s_mini_prev_e  : s_mini_prev_o;
+        uint64_t   occ       = row_even ? occ_e : occ_o;
+        bool mine_here    = !parity_known || (row_even == our_even);
+        bool partner_here = parity_known && (row_even != our_even) && partner_slot >= 0;
+
+        int64_t last_rx = ft8_last_rx_utc_for_parity(row_even);
+        bool row_stale  = (last_rx <= 0) ||
+                          ((now_utc - last_rx) > (int64_t)STALE_WINDOWS * slot_s * 2);
+
+        for (int i = 0; i < n_slots; i++) {
+            if (!cells[i]) continue;
+            uint8_t cls;
+            uint32_t col;
+            if (mine_here && i == mine_slot)         { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
+            else if (partner_here && i == partner_slot) { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
+            else if (n_stations == 0 || row_stale)   { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
+            else if ((occ >> i) & 1ULL)              { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
+            else                                     { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
+            if (cls == prev[i]) continue;
+            prev[i] = cls;
+            lv_obj_set_style_bg_color(cells[i], lv_color_hex(col), 0);
+        }
     }
 }
 
@@ -1425,11 +2078,14 @@ static void override_73_cb(lv_event_t *e)
         ESP_LOGW(TAG, "73 override failed: %s", err);
 }
 
-static void cq_btn_cb(lv_event_t *e)
+// Start a fresh CQ run. Shared by the Call CQ button and the web interface's
+// restart button, so the two can never drift apart - notably over the TX-hold tone
+// choice and the EVEN/ODD parity selection, which live in this file.
+//
+// `interactive` is false for the web path: it must not pop the identity modal on a
+// screen nobody is looking at. It reports through the log instead.
+static void start_cq_run(bool interactive)
 {
-    (void)e;
-    ESP_LOGI(TAG, "Call CQ tapped");
-
     ft8_tx_request_t req;
     char err[64];
     // TX hold on -> exactly the tone the chip is showing. Off -> the nearest
@@ -1448,14 +2104,55 @@ static void cq_btn_cb(lv_event_t *e)
         char qso_err[64];
         if (!ft8_qso_start_cq(&req, qso_err, sizeof(qso_err))) {
             ESP_LOGW(TAG, "CQ start failed: %s", qso_err);
-            if (strstr(qso_err, "callsign") || strstr(qso_err, "Set your")) {
+            if (interactive && (strstr(qso_err, "callsign") || strstr(qso_err, "Set your")))
                 identity_config_modal_show();
-            }
+            else if (!interactive)
+                ui_toast(qso_err);
         }
     } else {
         ESP_LOGW(TAG, "build_request(CQ '%s') failed: %s", cq_text, err);
-        identity_config_modal_show();
+        // Show what actually went wrong. This branch used to pop the identity
+        // modal for ANY encode failure, which told Don WB0LQW to fix a callsign
+        // that was perfectly fine while the real fault was in the message - and
+        // sent him looking in the wrong place for a day. Only offer the identity
+        // editor when the error is genuinely about identity.
+        if (strstr(err, "callsign") || strstr(err, "Set your") || strstr(err, "grid")) {
+            if (interactive) identity_config_modal_show();
+            else             ui_toast("Set your callsign and grid first");
+        } else {
+            ui_toast(err);
+        }
     }
+}
+
+// Web-interface request to (re)start CQ - Dennis WN4FLA asked for it so a timed-out
+// CQ run can be restarted without walking back to the Tab5.
+//
+// Only sets a flag: this is called on the HTTP server task, while ft8_qso_start_cq()
+// belongs to the LVGL task (see CLAUDE.md's QSO state-machine call sites). The 1 Hz
+// clock timer drains it. Same deferral pattern as the CAT poll task's pending
+// writes, and a second of latency is nothing against a 15 s slot. The flag itself is
+// declared up beside t_clock_cb, which consumes it.
+void ft8_screen_view_request_cq(void)
+{
+    s_web_cq_pending = true;
+}
+
+// -1 = any, 0 = EVEN only, 1 = ODD only. Applied by the 1 Hz timer so the Tab5
+// button and the browser can never disagree - there is one piece of state, not
+// a copy per surface.
+void ft8_screen_view_set_cq_parity(int parity)
+{
+    s_web_parity_pending = (parity == 0 || parity == 1) ? parity : -1;
+}
+
+int ft8_screen_view_get_cq_parity(void) { return s_cq_parity; }
+
+static void cq_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Call CQ tapped");
+    start_cq_run(true);
 }
 
 // Long-press "Call CQ" -> open the CQ preset editor.
@@ -1516,12 +2213,34 @@ static void tx_indicator_tap_cb(lv_event_t *e)
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(text, sizeof(text), NULL);
     ft8_qso_state_t qso_st = ft8_qso_get_state();
 
+    // SWR protection outranks everything: while latched no TX can be armed at
+    // all, so every other branch below is unreachable anyway. Clearing it also
+    // ends whatever session was interrupted - the QSO cannot be resumed into a
+    // known-bad antenna, and the operator has just been told to go check it.
+    if (ft8_tx_swr_tripped(NULL)) {
+        ESP_LOGI(TAG, "SWR trip indicator tapped - clearing latch");
+        ft8_tx_clear_swr_trip();
+        ft8_qso_abort();
+        return;
+    }
+
+    // Cancelling a transmission STOPS THE AUTOMATICS TOO. The operator is
+    // cancelling in order to do something else - check an antenna, change a
+    // tuner, close the station down - and auto-answer re-arming a cycle later is
+    // exactly the thing they were preventing. Roy KI0ER is caught by this
+    // repeatedly: "It would be bad if I halted a TX to check my antenna, and
+    // detached it, and the QMX started transmitting."
+    //
+    // Being surprised by the radio NOT transmitting is recoverable in one tap.
+    // Being surprised by it transmitting is not.
     if (tx_st == FT8_TX_ACTIVE) {
         ESP_LOGI(TAG, "TX indicator tapped ACTIVE — requesting abort");
+        ft8_robot_stand_down("you cancelled a transmission");
         ft8_qso_abort();          // also aborts the auto-pounce QSO if one is running
         ft8_tx_request_abort();
     } else if (tx_st == FT8_TX_ARMED) {
         ESP_LOGI(TAG, "TX indicator tapped ARMED — disarming");
+        ft8_robot_stand_down("you cancelled a transmission");
         ft8_qso_abort();
         ft8_tx_disarm();
     } else if (qso_st == FT8_QSO_TIMEOUT) {
@@ -1586,6 +2305,28 @@ static const ft8_band_freq_t FT4_BAND_FREQS[] = {
 #define N_FT4_BAND_FREQS (sizeof(FT4_BAND_FREQS) / sizeof(FT4_BAND_FREQS[0]))
 #endif
 
+/* One accessor over both tables, so the web dropdown is built from the very
+ * numbers the Tab5 tunes to. ft8_preset_t is layout-identical to
+ * ft8_band_freq_t on purpose - the cast keeps the tables where they are and
+ * avoids a second list to forget to update. */
+_Static_assert(sizeof(ft8_preset_t) == sizeof(ft8_band_freq_t) &&
+               offsetof(ft8_preset_t, band)    == offsetof(ft8_band_freq_t, band) &&
+               offsetof(ft8_preset_t, freq_hz) == offsetof(ft8_band_freq_t, freq_hz),
+               "ft8_preset_t must stay layout-identical to ft8_band_freq_t - the "
+               "accessor below casts between them so the web and the Tab5 read ONE table");
+
+const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count)
+{
+#ifndef FT4_MODE_DISABLED
+    if (ft4) { if (out_count) *out_count = (int)N_FT4_BAND_FREQS;
+               return (const ft8_preset_t *)FT4_BAND_FREQS; }
+#else
+    (void)ft4;
+#endif
+    if (out_count) *out_count = (int)N_FT8_BAND_FREQS;
+    return (const ft8_preset_t *)FT8_BAND_FREQS;
+}
+
 // Cyan accent used for everything FT4: the dropdown's FT4 column header and the
 // "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
 // UI_COLOR_ACCENT_GOLD.
@@ -1604,12 +2345,52 @@ static void ft8_freq_popup_close(void)
 // op-mode flag and the "MODE:" label move. (The 7.5 s FT4 slot engine is a
 // pending follow-up; for now FT4 retunes + relabels but still decodes/TXes on
 // FT8 timing - see ft8_op_mode_set() and the TODO in ft8_test.c.)
-static void apply_freq_preset(uint32_t freq_hz, bool ft4)
+// `src` names the caller in the log, and it is not decoration (#269, Markus
+// DL8MBY). His diag log showed the Tab5 retuning his radio back to the previous
+// band 11.5 s after he changed it, and the write could be pinned to THIS
+// function - it is the only path that retunes, clears the decode list and
+// persists the frequency together - but not to which of its three call sites,
+// so the next question could not be answered from the log he had already sent.
+static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
 {
+    ESP_LOGW(TAG, "freq preset: %lu Hz %s (from %s)",
+             (unsigned long)freq_hz, ft4 ? "FT4" : "FT8", src ? src : "?");
     ft8_freq_popup_close();
+
+    /* Did this preset actually move anything? Read BEFORE the retune below.
+     *
+     * Compared against the RADIO rather than a stored copy on purpose:
+     * settings_load_all() puts a multi-kilobyte qmx_settings_t on the caller's
+     * stack, this runs on taskLVGL (~8 KB), and ft8_robot_stand_down() below
+     * already puts one there - see the task-stack rule in CLAUDE.md. */
+    const uint32_t dial_hz = cat_get_frequency();
+    const bool     was_ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    const bool     moved   = (dial_hz && dial_hz != freq_hz) || (ft4 != was_ft4);
+
     // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
     // goes through even if the sticky-settings restore just fired a freq write.
     if (cat_set_frequency_forced(freq_hz) != ESP_OK) return;
+
+    /* ⭐ A PRESET CHANGE ENDS THE QSO, for the same reason a band button does
+     * (Randy N4OPI, 2026-08-31) - see ft8_band_change_stand_down().
+     *
+     * A CROSS-BAND preset tap was already covered, but only indirectly and only
+     * later: topbar_reconcile_cb() notices the band the CAT poll reports has
+     * changed and stands down from there, up to a poll interval afterwards.
+     * What that can never see is a move WITHIN one band - FT8 14.074 -> FT4
+     * 14.080 - because the band string does not change. The QSO then survives a
+     * change of PROTOCOL and goes on sending its next message in FT4 at a
+     * partner who is listening on FT8.
+     *
+     * Done here as well so this path is self-sufficient rather than relying on
+     * a side effect of the poll observing our own retune. Both are safe
+     * together: ft8_robot_stand_down() early-returns when auto-answer is
+     * already off, so there is no second toast, and the QSO abort is a no-op
+     * once IDLE.
+     *
+     * Gated on something having actually changed - re-tapping the preset you
+     * are already on must not kill a contact in progress. */
+    if (moved) ft8_band_change_stand_down("preset changed");
 
     // Persist the chosen FT8/FT4 frequency so it survives a reboot and FT8 mode
     // never opens on the panadapter's inherited (non-FT8) VFO. (The FT4/FT8
@@ -1644,13 +2425,33 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4)
 
 static void ft8_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false);
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false, "ft8 preset row");
 }
 
 #if !FT4_MODE_DISABLED
+// The calling frequency for `ft4` on whatever band `near_hz` is in, or 0 if
+// this protocol has no standard frequency there (FT4 has none on 160 m or
+// 60 m). Nearest-entry rather than a band-label lookup: the tables are MHz
+// apart, so nearest is unambiguous, and the 5 % guard is what stops a band
+// without an entry silently jumping to the next band up.
+static uint32_t calling_freq_for(bool ft4, uint32_t near_hz)
+{
+    const ft8_band_freq_t *tbl = ft4 ? FT4_BAND_FREQS : FT8_BAND_FREQS;
+    int n = ft4 ? (int)N_FT4_BAND_FREQS : (int)N_FT8_BAND_FREQS;
+    if (!near_hz) return 0;
+    uint32_t best = 0, best_d = 0xFFFFFFFFu;
+    for (int i = 0; i < n; i++) {
+        uint32_t f = tbl[i].freq_hz;
+        uint32_t d = (f > near_hz) ? (f - near_hz) : (near_hz - f);
+        if (d < best_d) { best_d = d; best = f; }
+    }
+    if (!best) return 0;
+    return (best_d * 20 < near_hz) ? best : 0;   // within 5 % = same band
+}
+
 static void ft4_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true);
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true, "ft4 preset row");
 }
 #endif
 
@@ -1970,21 +2771,53 @@ void ft8_screen_view_init(lv_obj_t *parent)
         lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_CLICKABLE);
 
-        for (int i = 0; i < s_mini_n_slots; i++) {
-            int x0 = (i * MINI_STRIP_W) / s_mini_n_slots;
-            int x1 = ((i + 1) * MINI_STRIP_W) / s_mini_n_slots;
-            lv_obj_t *c = lv_obj_create(s_mini_strip);
-            lv_obj_set_size(c, (x1 - x0) - 1, MINI_STRIP_H - 6);
-            lv_obj_set_pos(c, x0, 2);
-            lv_obj_set_style_bg_color(c, lv_color_hex(FT8_TONE_COL_UNKNOWN), 0);
-            lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_width(c, 0, 0);
-            lv_obj_set_style_radius(c, 1, 0);
-            lv_obj_set_style_pad_all(c, 0, 0);
-            lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-            s_mini_cells[i] = c;
-            s_mini_prev[i]  = MINI_C_UNKNOWN;
+        // Two rows in the same 26 px: EVEN on top, ODD below, a 2 px seam
+        // between. 16 px of the width goes to the E/O letters on the right so a
+        // glance says which row is which - the colours already match the slot
+        // countdown and the per-row E/O column (steel blue / warm orange).
+        const int lbl_w   = 24;
+        const int cells_w = MINI_STRIP_W - lbl_w;
+        const int row_h   = (MINI_STRIP_H - 2) / 2 - 2;   // 10 px each
+        for (int row = 0; row < 2; row++) {
+            int y = 2 + row * (row_h + 2);
+            lv_obj_t **cells = row ? s_mini_cells_o : s_mini_cells_e;
+            uint8_t   *prev  = row ? s_mini_prev_o  : s_mini_prev_e;
+            for (int i = 0; i < s_mini_n_slots; i++) {
+                int x0 = (i * cells_w) / s_mini_n_slots;
+                int x1 = ((i + 1) * cells_w) / s_mini_n_slots;
+                lv_obj_t *c = lv_obj_create(s_mini_strip);
+                lv_obj_set_size(c, (x1 - x0) - 1, row_h);
+                lv_obj_set_pos(c, x0, y);
+                lv_obj_set_style_bg_color(c, lv_color_hex(FT8_TONE_COL_UNKNOWN), 0);
+                lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+                lv_obj_set_style_border_width(c, 0, 0);
+                lv_obj_set_style_radius(c, 1, 0);
+                lv_obj_set_style_pad_all(c, 0, 0);
+                lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+                cells[i] = c;
+                prev[i]  = MINI_C_UNKNOWN;
+            }
+            // The letter lives in a row-sized box and is CENTRED in it, rather
+            // than positioned by hand: a 20 px font has a ~25 px line box, so a
+            // hand-placed label would hang into the row below (or off the
+            // bottom of the strip). Centring puts the cap height inside the row
+            // and the box clips the rest.
+            lv_obj_t *tagbox = lv_obj_create(s_mini_strip);
+            lv_obj_set_size(tagbox, lbl_w, row_h);
+            lv_obj_set_pos(tagbox, cells_w, y);
+            lv_obj_set_style_bg_opa(tagbox, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(tagbox, 0, 0);
+            lv_obj_set_style_pad_all(tagbox, 0, 0);
+            lv_obj_clear_flag(tagbox, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(tagbox, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *tag = lv_label_create(tagbox);
+            lv_obj_set_style_text_font(tag, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_color(tag,
+                lv_color_hex(row ? 0xFFA040 : 0x8AB4F8), 0);   // ODD orange / EVEN blue
+            lv_obj_clear_flag(tag, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_text(tag, row ? "O" : "E");
+            lv_obj_center(tag);
         }
     }
 
@@ -1998,7 +2831,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // out (operator, 2026-07-29).
     s_btn_parity = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_parity, 140, 52);
-    lv_obj_set_pos(s_btn_parity, 0, 183);
+    lv_obj_set_pos(s_btn_parity, 0, 197);
     lv_obj_set_style_bg_color(s_btn_parity, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_parity, 0, 0);
     lv_obj_set_style_radius(s_btn_parity, 8, 0);
@@ -2016,7 +2849,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the fill stays distinct from the parity button's three meaningful fills.
     s_btn_tx_tone = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_tx_tone, 140, 52);
-    lv_obj_set_pos(s_btn_tx_tone, 148, 183);
+    lv_obj_set_pos(s_btn_tx_tone, 148, 197);
     lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
     lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_border_width(s_btn_tx_tone, 2, 0);
@@ -2036,21 +2869,28 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 140, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 243);  // 8 px below the TX row (uniform grid gap)
+    lv_obj_set_pos(s_btn_filter, 0, 257);  // 8 px below the TX row (uniform grid gap)
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
     lv_obj_set_style_radius(s_btn_filter, 8, 0);
     lv_obj_add_event_cb(s_btn_filter, filter_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *filter_lbl = lv_label_create(s_btn_filter);
-    lv_label_set_text(filter_lbl, "Filter");
+    // Was "Filter" - Roy KI0ER pointed out the modal it opens holds real
+    // behaviour toggles (auto-work pileup, grey-listing) that aren't
+    // filters at all, and that an active-vs-inactive colour idea (Dirk
+    // DK7CVD's suggestion) wouldn't help anyway since most operators
+    // running FT8 seriously have at least one setting on permanently - the
+    // button would just always read as "active" and signal nothing. The
+    // name was simply inaccurate; fixing that is the real improvement.
+    lv_label_set_text(filter_lbl, "Options");
     lv_obj_set_style_text_color(filter_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(filter_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(filter_lbl);
 
     s_btn_adif = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_adif, 140, 60);
-    lv_obj_set_pos(s_btn_adif, 148, 243);
+    lv_obj_set_pos(s_btn_adif, 148, 257);
     lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
@@ -2074,7 +2914,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 311);
+    lv_obj_set_pos(s_btn_cq, 0, 325);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -2106,7 +2946,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 379);   // the "Active: N" line paid for the mini strip above
+    lv_obj_set_pos(s_lbl_tx, 0, 393);   // the "Active: N" line paid for the mini strip above
 
     // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
     // LVGL v9 dropped in-label recolor markup, so a distinct colour from the
@@ -2185,7 +3025,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
         { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
-        { "HRD",     COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT },
+        { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };
     for (int i = 0; i < 10; i++) {
         lv_obj_t *lbl = lv_label_create(hdr);
@@ -2211,7 +3051,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // Pre-allocate the row pool at boot, when ~199 KB internal heap is
     // free. See MAX_ROWS comment block for the beta3 rationale.
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    memset(s_rows, 0, sizeof(s_rows));
+    if (!s_rows) {
+        s_rows = heap_caps_calloc(MAX_ROWS, sizeof(row_widgets_t),
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_rows) { ESP_LOGE(TAG, "no PSRAM for the row pool"); return; }
+    }
+    memset(s_rows, 0, (size_t)MAX_ROWS * sizeof(row_widgets_t));
     for (int i = 0; i < MAX_ROWS; i++) {
         build_row(i);
     }

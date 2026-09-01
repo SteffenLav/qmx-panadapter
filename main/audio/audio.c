@@ -1,4 +1,8 @@
 #include "audio.h"
+#include "cat.h"          // cat_is_ready - the dead-stream watchdog's CAT-alive test
+#include "usb_replug.h"   // the dead-stream watchdog's escalation
+#include "util/usb_patch_counters.h"  // #189: report the silent USB patches' counts
+#include "util/sock_probe.h"          // #313: socket-exhaustion canary
 #include "dsp.h"
 
 #include <string.h>
@@ -54,6 +58,19 @@ typedef struct {
 static TaskHandle_t s_audio_task = NULL;
 static QueueHandle_t s_evt_queue = NULL;
 static uac_host_device_handle_t s_uac_dev = NULL;
+
+// Partial-frame carry and its measurement. Declared here rather than beside
+// process_rx() because the 1 Hz stats logger below reports the counters.
+// Full reasoning lives at process_rx().
+static uint8_t  s_carry[6];
+static size_t   s_carry_len = 0;
+static uint32_t s_misalign_events = 0;
+static uint32_t s_misalign_bytes  = 0;
+
+void audio_reset_frame_alignment(void)
+{
+    s_carry_len = 0;
+}
 static RingbufHandle_t s_ring = NULL;
 static uint8_t *s_ring_storage = NULL;   // where the ring's 64 KB landed (PSRAM vs internal)
 
@@ -78,6 +95,17 @@ static void heap_watchdog_task(void *arg)
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
+
+        // Standing USB patches #7/#8 turn two aborts into survivable errors but
+        // may not log from the interrupt path, so they count instead and this is
+        // where the count is read (TODO #189). Prints only on change, so a
+        // healthy device stays quiet and the line appearing IS the evidence.
+        usb_patch_counters_report();
+        /* #313: the socket table filling up is silent - two listeners stop
+         * accepting while ping, CAT and FT8 all keep working. One socket()
+         * plus close(), change-detected, so a healthy device stays quiet. */
+        sock_probe_report();
+
         size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         size_t p_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -204,6 +232,73 @@ esp_err_t audio_init(void)
     return ESP_OK;
 }
 
+/* ⭐ WHICH DIAL EACH SAMPLE BELONGS TO (#298).
+ *
+ * A spectrum is built from audio that left the radio a while ago, so drawing it
+ * against the dial as it is NOW puts it in the wrong place - the trace slides
+ * the way the VFO went and every waterfall row carries a different error, which
+ * is the diagonal smear seen on the bench.
+ *
+ * ⛔ AND A TIME-BASED CONSTANT CANNOT FIX IT. Measured twice on 2026-08-31 by
+ * commanding a 2 kHz step and watching the raw bins arrive: the audio moved
+ * between 565 and 653 ms on one run and between 104 and 312 ms on the next -
+ * the same rig, minutes apart, better than a factor of two. Frame spacing was
+ * ~100 ms, so that is not measurement noise. Any fixed SPECTRUM_LATENCY would
+ * be right for one run and wrong for the next.
+ *
+ * So the dial travels WITH THE SAMPLES instead, indexed by a monotonic pair
+ * counter rather than by wall time. Scheduling jitter, ring depth and how often
+ * the FFT gets to run all stop mattering: sample number N was captured under
+ * exactly one dial, whenever it happens to be processed.
+ *
+ * ⚠ ONE FIXED OFFSET REMAINS, and it is the one that is genuinely fixed:
+ * AUDIO_USB_QUEUE_PAIRS. Samples reach this ring having already sat in the USB
+ * isochronous queue, which is CONFIGURED depth - 8 URBs x 40 packets x 1 ms
+ * (CONFIG_UAC_NUM_ISOC_URBS / _NUM_PACKETS_PER_URB, deliberately deep for #51).
+ * That part cannot vary the way scheduling does. If those Kconfig values ever
+ * change, this must change with them. */
+#define AUDIO_USB_QUEUE_PAIRS   (320 * 48)      /* 320 ms at 48 kHz */
+#define AUDIO_DIAL_TRAIL_N      24
+
+static uint64_t s_pairs_written = 0;            /* monotonic, written side */
+static uint64_t s_pairs_read    = 0;            /* monotonic, read side    */
+static struct { uint64_t at_pair; uint32_t hz; } s_dial_trail[AUDIO_DIAL_TRAIL_N];
+static int      s_dial_trail_n  = 0;
+static uint32_t s_dial_now      = 0;
+
+void audio_note_dial_hz(uint32_t hz)
+{
+    if (hz == s_dial_now) return;
+    s_dial_now = hz;
+    /* This dial applies to samples that reach the ring AFTER the ones already
+     * queued in USB - hence the offset. Everything downstream is exact. */
+    int i = s_dial_trail_n % AUDIO_DIAL_TRAIL_N;
+    s_dial_trail[i].at_pair = s_pairs_written + AUDIO_USB_QUEUE_PAIRS;
+    s_dial_trail[i].hz      = hz;
+    s_dial_trail_n++;
+}
+
+/* The dial in force for the sample at monotonic index `pair`. */
+static uint32_t dial_for_pair(uint64_t pair)
+{
+    uint32_t best = 0; uint64_t best_at = 0; bool found = false;
+    int have = (s_dial_trail_n < AUDIO_DIAL_TRAIL_N) ? s_dial_trail_n : AUDIO_DIAL_TRAIL_N;
+    for (int k = 0; k < have; k++) {
+        int idx = (s_dial_trail_n - 1 - k) % AUDIO_DIAL_TRAIL_N;
+        if (idx < 0) idx += AUDIO_DIAL_TRAIL_N;
+        uint64_t at = s_dial_trail[idx].at_pair;
+        if (at <= pair && (!found || at > best_at)) {
+            best = s_dial_trail[idx].hz; best_at = at; found = true;
+        }
+    }
+    return found ? best : s_dial_now;
+}
+
+uint32_t audio_dial_for_last_read(void)
+{
+    return dial_for_pair(s_pairs_read);
+}
+
 size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
 {
     if (!s_ring || !dst || max_pairs == 0) return 0;
@@ -216,7 +311,9 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
 
     memcpy(dst, item, got_bytes);
     vRingbufferReturnItem(s_ring, item);
-    return got_bytes / (sizeof(int16_t) * 2);
+    size_t pairs = got_bytes / (sizeof(int16_t) * 2);
+    s_pairs_read += pairs;
+    return pairs;
 }
 
 size_t audio_ring_backlog_pairs(void)
@@ -300,7 +397,63 @@ static void log_stats(void)
     s_period_start_us = now;
 
     uint32_t pairs_per_sec = (uint32_t)((uint64_t)samples * 1000000ULL / (uint64_t)elapsed_us);
-    if (dropped > 0) {
+
+    // Dead-stream watchdog (Roy KI0ER, two field reports 2026-08-07: decode
+    // list blank while TX still works; his reproducible trigger is exiting the
+    // QMX's own menu, which stops the IQ audio stream and it never resumes).
+    // The decode-side watchdog cannot catch this - it stands down during TX/QSO
+    // (Roy was auto-answering) - but the SIGNATURE here is unambiguous: the UAC
+    // device is open, CAT answers polls, and not one audio pair arrives. A
+    // working QMX in IQ mode streams ~48000 pairs/s without exception.
+    //
+    // Escalation, deliberately slow and capped, cheapest step first:
+    //   30 s  -> re-assert IQ mode (Q9 1;). Free and invisible. Added after
+    //            the menu-visit trigger was understood: Q9 is SESSION state on
+    //            the QMX, and a trip through its menu can drop it - in which
+    //            case the radio is working perfectly and simply is not being
+    //            asked for IQ audio any more. Nothing to reset, nothing to
+    //            power-cycle; just ask again.
+    //   60 s  -> soft reset of the audio pipeline (the same reset the decode
+    //            watchdog uses).
+    //   120 s -> ONE usb_replug() (VBUS cycle - the recovery Roy performs by
+    //            hand as a QMX power-cycle, minus the walk). Cap of 2 replugs
+    //            per connection so a genuinely dead radio cannot put the port
+    //            in a cycle loop; any real audio resets everything.
+    //
+    // Stands down entirely while the operator has paused CAT: a deliberate trip
+    // into the QMX's own menu produces this exact signature, and yanking VBUS
+    // under the operator's hands would be the worst possible response to it.
+    {
+        static int s_silent_secs = 0;
+        static int s_replug_used = 0;
+        if (pairs_per_sec > 0 || !s_uac_dev || !cat_is_ready() || cat_user_pause_active()) {
+            if (pairs_per_sec > 0) s_replug_used = 0;
+            s_silent_secs = 0;
+        } else {
+            s_silent_secs += STATS_PERIOD_MS / 1000;
+            if (s_silent_secs == 30) {
+                ESP_LOGW(TAG, "dead stream: 30 s of silence with CAT alive - re-asserting IQ mode");
+                cat_request_iq_reassert();
+            } else if (s_silent_secs == 60) {
+                ESP_LOGW(TAG, "dead stream: 60 s of silence with CAT alive - soft audio reset");
+                audio_request_reset();
+            } else if (s_silent_secs >= 120 && s_replug_used < 2) {
+                s_replug_used++;
+                s_silent_secs = 0;   // give the replug its own 120 s to prove itself
+                ESP_LOGW(TAG, "dead stream: still silent - USB replug (attempt %d/2)", s_replug_used);
+                usb_replug(2000);
+            }
+        }
+    }
+
+    // A partial 6-byte frame ever reaching us is the I/Q-interleave hazard, so
+    // it is reported the moment it is non-zero rather than only under DROPPED.
+    // Cumulative, not per-second: one event is the whole story.
+    if (s_misalign_events > 0) {
+        ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d  FRAME-MISALIGN=%u ev / %u B (carried, not dropped)",
+                 (unsigned)pairs_per_sec, (int)pL, (int)pR,
+                 (unsigned)s_misalign_events, (unsigned)s_misalign_bytes);
+    } else if (dropped > 0) {
         ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
     } else {
@@ -320,12 +473,44 @@ static inline int32_t s24_to_s32(const uint8_t *p)
     return (int32_t)u;
 }
 
-static void process_rx(void)
+// Returns true if this poll actually moved audio. The caller uses that to decide
+// whether to yield: see audio_task().
+// Bytes left over from the previous read when it did not end on a whole 6-byte
+// stereo frame, carried into the next one.
+//
+// WHY THIS EXISTS. The stream is 3 bytes I + 3 bytes Q, and NOTHING in the path
+// re-synchronises it. `pairs = bytes_read / 6` used to discard the remainder, so
+// a single read that ended mid-frame shifted every following sample by 1-5
+// bytes for the REST OF THE UAC SESSION: a 3-byte shift swaps I and Q outright,
+// the others build both channels from mismatched bytes. Either way the image
+// rejection collapses and mirror signals appear.
+//
+// That failure survives a QMX power cycle (the UAC device stays open - see the
+// v0.15.5 note) and is cleared only by a Tab5 reboot, which is exactly what
+// Roy KI0ER reported on 2026-08-14: restarting the radio changed nothing,
+// restarting the Tab5 fixed it.
+//
+// Two ways a partial frame can reach us, neither guarded: `_ring_buffer_pop()`
+// returns whatever it has when its timeout expires with no frame alignment, and
+// the driver pushes `actual_num_bytes` per ISO packet, which its own comment
+// says "may be less than requested" - this file's own header already records
+// truncated UAC chunks as real on this radio.
+//
+// s_misalign_events is the measurement. It is a modulo on a hot path and one
+// counter, nothing walked (cyan-flash rule), and it reports on the existing
+// 1 Hz line rather than adding one. If it stays 0 in the field then partial
+// frames are not happening and the mirror images have another cause.
+static bool process_rx(void)
 {
     // Raw 24-bit packed bytes from the QMX
     static uint8_t raw[RX_BUF_BYTES];
     // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
     static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
+
+    // Whether this call moved any audio at all. NOT simply "the last read
+    // returned data": the drain loop always ends on an empty read, so a healthy
+    // stream would otherwise look idle every single poll.
+    bool got_data = false;
 
     // Phase 5.7: drain loop. First read waits up to 25 ms for data;
     // subsequent reads in the same call are non-blocking so we drain the
@@ -335,21 +520,39 @@ static void process_rx(void)
         uint32_t bytes_read = 0;
         uint32_t to = first_read ? pdMS_TO_TICKS(25) : 0;
         first_read = false;
-        esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
+        // Put any partial frame from last time back at the front, so the frame
+        // it belongs to is completed rather than lost.
+        if (s_carry_len) memcpy(raw, s_carry, s_carry_len);
+
+        esp_err_t err = uac_host_device_read(s_uac_dev, raw + s_carry_len,
+                                             sizeof(raw) - s_carry_len,
                                              &bytes_read, to);
         if (err != ESP_OK || bytes_read == 0) {
             // No data this poll: the QMX may be mid power-cycle. Mark the
             // flat-spectrum floor for re-seeding once real samples resume.
             s_flat_reset_pending = true;
-            return;
+            return got_data;
         }
 
         // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
-        size_t pairs = bytes_read / 6;
+        size_t avail = s_carry_len + bytes_read;
+        size_t pairs = avail / 6;
+        size_t rem   = avail - pairs * 6;
+
+        // Keep the partial frame for the next read instead of dropping it.
+        // Dropping is what shifted the I/Q interleave permanently.
+        if (rem) {
+            s_misalign_events++;
+            s_misalign_bytes += (uint32_t)rem;
+            memcpy(s_carry, raw + pairs * 6, rem);
+        }
+        s_carry_len = rem;
+
         if (pairs == 0) {
             s_flat_reset_pending = true;
-            return;
+            return got_data;
         }
+        got_data = true;
 
         if (s_flat_reset_pending) {
             s_flat_reset_pending = false;
@@ -386,6 +589,7 @@ static void process_rx(void)
 
         size_t bytes_to_push = pairs * sizeof(int16_t) * 2;
         BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
+        if (sent == pdTRUE) s_pairs_written += pairs;
         if (sent != pdTRUE) {
             s_dropped_this_period += pairs;
             s_dropped_total += pairs;
@@ -472,6 +676,9 @@ static void audio_task(void *arg)
             switch (e.kind) {
             case AE_RX_CONNECTED:
                 if (s_uac_dev == NULL) {
+                    // A new UAC session starts on a frame boundary; anything
+                    // held from the old one belongs to a stream that is gone.
+                    audio_reset_frame_alignment();
                     open_and_start(e.addr, e.iface_num);
                 } else {
                     ESP_LOGW(TAG, "Already streaming; ignoring extra RX_CONNECTED");
@@ -479,6 +686,7 @@ static void audio_task(void *arg)
                 break;
             case AE_DISCONNECTED:
                 ESP_LOGW(TAG, "UAC disconnected, cleaning up");
+                audio_reset_frame_alignment();
                 if (s_uac_dev) {
                     uac_host_device_stop(s_uac_dev);
                     uac_host_device_close(s_uac_dev);
@@ -490,11 +698,56 @@ static void audio_task(void *arg)
             }
         }
         if (s_uac_dev) {
-            process_rx();
-            // vTaskDelay(1) removed - 10ms at default tick rate, was starving the read
+            // No vTaskDelay when audio is flowing - 10 ms at the default tick
+            // rate starved the read (and #51 is a standing reminder of what
+            // starving this path costs).
+            //
+            // But a poll that moved NOTHING must yield, or a dead device pegs
+            // this core. Hardware-observed 2026-08-05: a QMX power-cycle did not
+            // deliver AE_DISCONNECTED (a documented quirk of this hardware - the
+            // UAC handle just goes quiet), so s_uac_dev still pointed at the dead
+            // device. On a merely SILENT device the read honours its 25 ms
+            // timeout, so this loop self-limits to ~40 Hz and all is well; on an
+            // INVALID-STATE device it fails INSTANTLY, and this loop span flat
+            // out at priority 6. Result: core 0 at 0% idle, LVGL starved, the UI
+            // frozen and no recovery possible - the USB host logged
+            // "usbh_devs_open error: ESP_ERR_INVALID_STATE" every 50 ms
+            // indefinitely while nothing could act on it.
+            //
+            // Costs nothing when streaming (got_data == true), and turns the
+            // dead-device case from a locked-up radio into an idle one.
+            if (!process_rx()) vTaskDelay(pdMS_TO_TICKS(5));
         } else {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         log_stats();
     }
+}
+// Orderly UAC shutdown - see util/usb_shutdown.h.
+//
+// This is the half that matters most for the QMX. uac_host_device_stop() sets
+// the streaming interface back to alternate setting 0, which is the device's
+// signal to stop producing isochronous audio; uac_host_device_close() then
+// releases it. A host that simply disappears does neither, leaving the radio's
+// USB stack mid-stream on an endpoint nobody is servicing any more - which is
+// the state the QMX appears not to recover from.
+//
+// Runs on the caller's task, not audio_task: by the time this is called the
+// system is going down, and waiting for a task that polls USB (which is exactly
+// what we are dismantling) would be circular. s_uac_dev is cleared FIRST so
+// process_rx() cannot touch the handle we are closing.
+void audio_usb_shutdown(void)
+{
+    uac_host_device_handle_t dev = s_uac_dev;
+    if (!dev) {
+        ESP_LOGI(TAG, "shutdown: no UAC device open");
+        return;
+    }
+    s_uac_dev = NULL;              // audio_task's next poll sees no device
+    vTaskDelay(pdMS_TO_TICKS(30)); // let an in-flight read return
+
+    esp_err_t e1 = uac_host_device_stop(dev);
+    esp_err_t e2 = uac_host_device_close(dev);
+    ESP_LOGI(TAG, "shutdown: UAC stream stopped (%s) and closed (%s)",
+             esp_err_to_name(e1), esp_err_to_name(e2));
 }

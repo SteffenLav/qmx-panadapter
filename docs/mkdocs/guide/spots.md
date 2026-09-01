@@ -1,0 +1,230 @@
+# Live Spots
+
+Live spots put other stations **on your spectrum**, at the frequency they are
+actually operating on, so you can see who is where without leaving the radio.
+
+Two sources feed the same display:
+
+| Source | What it tells you | Default |
+|--------|-------------------|---------|
+| **POTA** (Parks On The Air) | Park activations currently spotted, any mode | **On** |
+| **RBN** (Reverse Beacon Network) | CW stations the skimmer network is hearing right now | **Off** (opt-in) |
+
+Both need WiFi. Nothing here transmits, and nothing here touches the radio until
+you tap a spot.
+
+---
+
+### 1. What you see
+
+Spots are drawn **over the spectrum**, the way a FlexRadio or similar SDR shows
+them — the callsign sits around the middle of the spectrum with a thin vertical
+line dropping from it down to the frequency axis, so the line points at the
+frequency the station is on. The line is only 2 px wide, so the trace stays
+readable underneath.
+
+**Colour tells you what a spot means:**
+
+| Colour | Meaning |
+|--------|---------|
+| **Amber** | A POTA activation |
+| **Bright green** | An RBN (CW skimmer) spot |
+| **Grey** | You have **already worked this station on this band** |
+
+Grey is the useful one: it answers "do I need this station?" at a glance. It is
+band-aware, so the same operator on a different band is *not* greyed out — that
+is a new band-slot.
+
+**Spots fade as they age.** A spot is a claim about *now*, and an old one pointing
+at an empty frequency is worse than no spot at all:
+
+- Under 5 minutes old — full brightness
+- Around 15 minutes — about half faded
+- 30 minutes — gone
+
+The callsign and its line always fade together.
+
+**Off-screen counts.** When there are spots on your band that fall outside the
+window you are looking at, a small count appears in the bottom corner of the
+spectrum — `< spots (3)` on the low side, `spots (5) >` on the high side. It says
+"spots" in words rather than a bare `<3`, because a lone number against the edge
+of the spectrum tells you neither what it counts nor that you can tap it. These
+are **scoped to the band you are on**, so the arrow never points at something on
+40 m while you are on 20 m. Each is coloured like the spot it will take you to.
+
+**Crowded bands.** Only so many callsigns fit legibly side by side, so on a busy
+segment the closest-spaced spots lose their name — and a spot with no name is not
+drawn at all, rather than leaving a line pointing at nothing. Stations you have
+**not** worked are labelled in preference to ones you have, and fresher spots in
+preference to older ones.
+
+---
+
+### 2. Tapping a spot
+
+**Tap a callsign** and the radio tunes to it *and* switches mode:
+
+| Spot mode | Radio goes to |
+|-----------|---------------|
+| CW | CW |
+| FT8, FT4, other data | DiGi |
+| SSB | USB above 10 MHz, LSB below |
+| Unknown | Frequency only — the mode is left alone |
+
+Bandwidth is deliberately **not** forced. The QMX keeps a filter per mode and
+loads it when the mode changes, so the right width follows by itself.
+
+**Tap an off-screen count** (`< spots (3)` / `spots (5) >`) and you jump to the nearest spot on
+that side, which brings it into view. Those counts have a deliberately large
+touch area — the visible text is small, but the target around it is not.
+
+Tapping the spectrum anywhere else still tunes normally, and pinch-zoom and the
+one-finger pan are unaffected. Only the callsigns themselves and the two counts
+are spot targets.
+
+**A callsign's target is the text, and nothing above or below it.** That matters
+because a long callsign is a wide label sitting over the trace, and a click inside
+it goes to *that station* rather than to the frequency under your pointer. If a
+signal you want is behind a label, aim at the same column higher or lower in the
+spectrum and it tunes there normally.
+
+In the browser, hovering a callsign shows you a marker at that station's real
+frequency with its name, so you can see where the click will take you before you
+commit. On the Tab5 the two gestures are already distinct: tuning to a point needs
+a brief hold, while a callsign is a quick tap.
+
+---
+
+### 3. Turning it on and off
+
+**Settings drawer** (swipe in from the right edge) — **Live spots** section:
+
+| Control | Default | What it does |
+|---------|---------|--------------|
+| **Live spots (POTA)** | On | The whole feature. Off leaves the spectrum completely clean |
+| **Add RBN (CW skimmers)** | Off | Adds RBN as a second source. Needs your callsign set |
+| **DX cluster spots** | Off | Human-typed spots — the only source of SSB activity. A second connection, so opt-in |
+| **SOTA spots (summits)** | Off | Summit activations from spothole.app, a volunteer-run server. Opt-in for that reason |
+| **Mode filter the spots** | **On** | Shows only spots you can work in the mode you are in |
+
+Every one is saved and appears in the configuration file you can download and
+restore from the web UI, under `[settings]`.
+
+**About the mode filter**, since it is on by default and changes what you see: tapping
+a spot sets the **mode** as well as the frequency, so an unfiltered lane can drop a CW
+operator into FT8 without warning — which is exactly what happened to Michael KZ4LY,
+and why this exists. With it on, changing mode changes which spots are on screen, and
+the off-screen counts change with them. A spot whose mode is unknown is always shown,
+so nothing is hidden on a guess. Switch it **off** and every spot is shown, with a
+two-letter tag on the label (`CW`, `SB`, `FT`) telling you what tapping it will do —
+deliberately absent when the filter is on, because then every spot is already your
+mode.
+
+The spots overlay belongs to the **Panadapter** page. It is not drawn on the FT8
+screen.
+
+---
+
+### 4. About RBN
+
+RBN is **off by default, on purpose.** It is a continuous global feed rather than
+an occasional fetch, and it arrives over a persistent connection on the part of
+this board that has historically been the most delicate. Off by default means it
+can never affect anyone who has not asked for it.
+
+If you do switch it on:
+
+- **Your callsign is required.** The feed asks for one when connecting; it is how
+  RBN attributes load, not a password. Set it under **Callsign & Grid**.
+- **Only your current band is kept.** RBN reports the whole world, and the
+  display can only show one band at a time, so spots outside the band you are on
+  are discarded as they arrive. Changing band clears the picture and it refills
+  within a few seconds.
+- **Duplicates are merged.** The same CQ is typically reported by ten or more
+  skimmers; you see one entry per station, at the best reported signal.
+- **RBN spots** are held for up to **10 minutes** after any skimmer last heard
+  them — shorter than the 30 minutes above, because an active caller is
+  re-spotted every couple of minutes and silence means they have stopped.
+- It is the **CW/RTTY** skimmer feed. RBN runs a separate FT8/FT4 feed that the
+  panadapter deliberately does not subscribe to — you are already decoding those
+  yourself, far better, from the antenna.
+
+---
+
+### 5. About the DX cluster — where phone spots come from
+
+RBN cannot show you an SSB station. It is a network of **automated skimmers**,
+and a skimmer decodes CW, RTTY, FT8 and FT4 — machine-readable modes. There is
+no such thing as an SSB skimmer, because no machine can recognise a callsign
+spoken into a microphone. So every phone station on the band is invisible to it.
+
+A **DX cluster** is people typing. That is the whole difference, and it is why
+this exists as a third source:
+
+- **Phone spots** — SSB activity you cannot see any other way.
+- **Park and summit references** — a human writes `POTA ES-2081` in the comment,
+  so a cluster spot can also tag your chase in the log.
+- **Everything else people bother to spot** — DX, contest activity, anything
+  worth telling other operators about.
+
+Switch it on with **DX cluster spots (phone)**, next to the other two sources in
+the settings drawer, or from the web UI. Like RBN it is **off by default**: it is
+a second continuous connection, and the same caution applies.
+
+Things worth knowing:
+
+- **Your callsign is required**, for the same reason as RBN — the node asks for
+  one to identify the connection.
+- **Only your current band is kept**, again like RBN.
+- **Mode is worked out for you.** Most cluster spots carry no mode field at all.
+  If the spotter typed one (`LSB`, `CW`, `FT8`) it is used; otherwise the
+  frequency is looked up in your band plan — 14.020 is CW, 14.285 is phone. The
+  same inference you would make reading the line yourself.
+- **Skimmer spots relayed onto the cluster are ignored.** Some nodes forward RBN
+  traffic; those entries would duplicate what RBN already gives you, so they are
+  dropped rather than drawn twice.
+- Spots are held for up to **15 minutes** — longer than RBN, because a human
+  spot describes something slower-moving than a skimmer's automatic report.
+
+!!! note "Not every node is equally busy"
+    Cluster nodes vary enormously. In testing, one node produced two spots in
+    four minutes while another produced seventy-five in fifteen. A quiet node
+    looks exactly like a broken connection, so give it a few minutes before
+    concluding anything.
+
+---
+
+### 6. About SOTA — summit activations
+
+SOTA spots come from **[spothole.app](https://spothole.app)**, an aggregator run by
+Ian Renton M0TRT, used with his permission. That is worth knowing because it shapes
+how the Tab5 treats it:
+
+- **Off by default**, so nobody polls somebody else's hobby server without choosing to.
+- **Fetched once every two minutes**, which is plenty for activations that last an hour.
+- **When it is unreachable, nothing happens.** The spots already on screen stay until
+  they age out normally — no banner, no error, nothing to dismiss. A volunteer server
+  being down for an afternoon is an ordinary state, not a fault in your radio.
+
+Almost every SOTA spot carries a portable suffix — `EA2GM/P` rather than `EA2GM` —
+because the operator is on a summit rather than at home. That is why the callsign
+shown is the one that was spotted, exactly as spotted.
+
+> **SOTA is nearly all CW and SSB.** Of a typical sample, none are in a digital mode.
+> So a summit will rarely appear in your FT8 log; the value of the source is seeing
+> where the activity is on the spectrum, and being able to tap it.
+
+---
+
+### 7. Refresh and timing
+
+- POTA is fetched about **once a minute** — spot rates on that service change on
+  that sort of timescale, and the fetch briefly pauses the web UI's spectrum
+  stream so the two never compete for the link.
+- RBN and the DX cluster arrive continuously and are merged into the display
+  every **10 seconds**.
+- Ageing is re-evaluated every second, so spots dim and disappear on their own
+  even when nothing new arrives.
+
+If spots never appear at all, check in this order: WiFi connected (bottom bar),
+**Live spots** switched on, and — for RBN only — a callsign set.

@@ -94,6 +94,29 @@ bool cat_is_ready(void);
  * Returns 700 (QMX default) if not yet read or CAT not connected.
  */
 int cat_get_cw_offset_hz(void);
+
+// True while WE are holding the radio in split for the CW transmit offset.
+// RIT is refused while this is true - the two are mutually exclusive, since the
+// offset is implemented as split (the QMX has no XIT) and RIT would move the
+// receiver as well. Clearing RIT to zero is always allowed.
+bool cat_cw_tx_offset_engaged(void);
+
+// How many CDC (virtual COM) interfaces this QMX exposes: 1, 2 or 3, or -1 if no
+// radio is open. Read-only - it opens and immediately closes the extra ones and
+// writes nothing to the radio.
+//
+// Matters because the QMX can be configured for three ports so a terminal
+// session can run alongside CAT. If there is a second interface, a Tab5 terminal
+// can own it and never disturb the CAT poll.
+int cat_probe_extra_cdc_ports(void);
+
+// Open the QMX's SECOND serial port (interface 5), send Enter, and hex-dump what
+// comes back to the log. Returns the byte count, or -1 if the port would not
+// open. CAT on port 1 is untouched throughout.
+//
+// Answers the one question left before a Tab5 terminal can be designed: is the
+// stream ANSI/VT100 escape sequences or plain re-sent lines?
+int cat_probe_terminal(void);
 /**
  * @brief QMX firmware version string from the VN; query (e.g. "1_03_002QMX").
  * Returns an empty string until the radio has answered VN; after link-up.
@@ -115,6 +138,13 @@ bool cat_qmx_fw_at_least(int major, int minor, int patch);
  * in that state the spectrum will appear mirrored/shifted.
  */
 bool cat_get_iq_mode_confirmed(void);
+
+// True when the radio reports a permanently fitted GPS ("GPS source = QMX+
+// Internal"), read once from its own menu at link-up. This is the radio's own
+// answer, which is why it exists: the alternative - inferring GPS from the
+// clock agreeing with ours - can be satisfied by a clock WE set. False on
+// firmware that does not report the item, so it only ever ADDS certainty.
+bool cat_qmx_gps_source_internal(void);
 /**
  * @brief True once VOX has been confirmed OFF (Q3; readback == 0) for the
  * current connection. The panadapter keys the QMX via CAT (TX;/TA;/RX;), never
@@ -185,6 +215,21 @@ void cat_request_mode(const char *mode);
  * write is deferred to the poll task (which owns the CDC pipe), avoiding a
  * command-interleave race with the FA/MD/FW poll that made BW changes flaky.
  */
+/* WSPR PA-voltage guard (#290) - QMX "Max. PA voltage" in the Protection menu,
+ * in TENTHS of a volt (115 = 11.5 V, the factory default).
+ *
+ * WSPR keys the PA for ~110 s out of every 120. The radio's OWN Virtual U3S
+ * WSPR halves the PA voltage (a quarter of the power) to protect the BS170s;
+ * our WSPR TX is CAT-driven and bypasses that mode entirely, so it gets none
+ * of that protection unless we apply it.
+ *
+ * WARNING: an MM Set is stored in the QMX's EEPROM. Call this once per TX
+ * SESSION, never per burst - a burst-by-burst guard would be thousands of
+ * EEPROM writes over a night of beaconing. */
+void    cat_request_pa_voltage_x10(uint16_t v_x10);
+void    cat_query_pa_voltage(void);
+int16_t cat_get_pa_voltage_x10(void);   /* -1 until the radio has answered */
+
 void cat_request_ssb_bandwidth(uint32_t hz);
 
 /* QMX AF gain (volume), in the radio's own 0.25 dB steps. Kenwood "AG0nnn;".
@@ -239,6 +284,79 @@ void cat_query_af_gain(void);
  * Divide by 4 for the dB figure the QMX displays. */
 int cat_get_af_gain(void);
 
+/* ---- RF gain (RG), Stan's suggestion via Samuel W7STF, 2026-08-07 ----------
+ *
+ * The QMX's per-band "RF gain (dB)" from its Band Configuration screen, exposed
+ * over CAT as RG in BOTH 1_03 and 1_04 - no firmware gate needed. Range 0-99,
+ * default 54 (operation manual: "RF gain (dB): 54 is the default. Valid values
+ * for the parameter are 0 to 99"). Get answers "RG063" for 63 dB.
+ *
+ * Two things this is NOT:
+ *  - not AF gain: AG is the volume in 0.25 dB steps, RG is plain dB. The
+ *    commands look alike and are scaled differently.
+ *  - not session-only: unlike Q9/Q3, the CAT manual does not mark RG as
+ *    "current operating session only", and the same value is editable in the
+ *    Band Configuration terminal app - so a write here changes the operator's
+ *    stored per-band configuration. That is why the drawer commits on slider
+ *    RELEASE rather than on every tick of a drag.
+ *
+ * It also moves the noise floor the panadapter is calibrated against, so a
+ * change re-seeds flat mode's floor (see the drawer callback). */
+#define CAT_RF_GAIN_DB_MAX  99
+void cat_request_rf_gain(uint8_t db);
+
+// ---- RIT (receiver incremental tuning) -------------------------------------
+//
+// Move the RECEIVE frequency without moving transmit - the thing you want when a
+// caller is answering you slightly off your frequency (Roy KI0ER: "a Sasquatch
+// tone below my centre frequency or a mosquito above me"). Positive = receive
+// HIGHER. Real RIT, present in both 1_03 and 1_04, so unlike the CW transmit
+// offset this needs no split trickery and no firmware gate.
+//
+// Writes are deferred to the poll task like every other CAT write, and the
+// sequence is deliberately RC; then RU/RD - see cat.c, because RU/RD alone are
+// absolute or relative depending on a QMX menu setting we cannot read.
+//
+// cat_get_rit_hz() returns what we last commanded, not a reading from the radio:
+// the display needs it every frame (see ui_get_if_offset_hz), and it is our own
+// value, so polling for it would be slower and would add a fifth competitor for
+// this pipe.
+#define CAT_RIT_MAX_HZ  500   /* plenty for pulling in an off-frequency caller */
+void cat_request_rit_hz(int hz);
+int  cat_get_rit_hz(void);
+
+/* Ask the radio for the active band's RF gain; answer lands asynchronously in
+ * cat_get_rf_gain(). Same drawer-open read-back reasoning as AF gain, with an
+ * extra reason: RF gain is PER BAND, so the stored value goes stale the moment
+ * the operator changes band. */
+void cat_query_rf_gain(void);
+
+/* Last RF gain read back from the radio in dB, or -1 if never read. */
+int cat_get_rf_gain(void);
+
+/* ---- Operator pause: release the radio -------------------------------------
+ *
+ * Stops all CAT traffic to the QMX so the operator can use the radio's own menu
+ * or its Terminal Applications (Band Configuration), which speak over this same
+ * CDC pipe - our 50 ms FA/MD/FW poll otherwise lands in the middle of whatever
+ * they are doing. Also stands down the dead-stream and stuck-decode watchdogs,
+ * which would otherwise read a deliberate menu visit as a fault and eventually
+ * power-cycle the USB port under the operator's hands.
+ *
+ * Deliberately separate from cat_poll_set_paused(): that flag belongs to the
+ * FT8 TX burst and is cleared at the end of every burst, which would silently
+ * cancel the operator's pause.
+ *
+ * Resuming re-runs the IQ-mode handshake, because leaving the QMX's menu can
+ * drop IQ mode (Q9 is session state) and stop the audio stream. */
+void cat_user_pause_set(bool paused);
+bool cat_user_pause_active(void);
+
+/* Queue a re-run of the Q9 IQ-mode enable+confirm handshake on the live link.
+ * Cheap, invisible when IQ was already on, and the first thing worth trying
+ * when the radio has stopped streaming audio while still answering CAT. */
+void cat_request_iq_reassert(void);
+
 /*
  * Request a CW filter width (Hz). Deferred to the poll task as
  * "MMCW|CW passband=<hz>;" - the QMX rejects a Kenwood FW<nnnn>; set with ?;,
@@ -282,6 +400,12 @@ void cat_cw_poll_set_active(bool active);     /* TB; poll while CW page visible 
  * @param paused  true to pause polling, false to resume
  */
 void cat_poll_set_paused(bool paused);
+
+// Close the CAT link deliberately, on our way out - see util/usb_shutdown.h.
+// Sends TA0;RX; first so the radio is never left keyed, then tears the CDC
+// handle down using the same poll-task-aware sequence the disconnect path uses.
+// Safe to call with nothing open.
+void cat_usb_shutdown(void);
 
 #define CAT_MAX_BANDS 16
 
@@ -335,3 +459,11 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec);
  *         CDC pipe is busy (e.g. FT8 TX); ESP_ERR_TIMEOUT if no flip in ~1.3 s.
  */
 esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us);
+
+// #146: tell CAT that a TX stop command (TA0; / RX;) was lost, so the radio may
+// still be keyed. The poll task re-asserts RX; on every cycle that succeeds
+// until it gets through - a burst-local retry cannot cover a link that stays
+// down longer than the burst is willing to wait, which is what left Roy KI0ER's
+// QMX transmitting until he power-cycled it.
+void cat_request_force_rx(void);
+bool cat_force_rx_pending(void);

@@ -37,6 +37,13 @@ rem --- 2. Verify firmware components are available -----
 set "BL=%~dp0bootloader.bin"
 set "PT=%~dp0partition-table.bin"
 set "APP=%~dp0qmx_panadapter.bin"
+rem OTA data. Written so a cable flash actually BOOTS what it just wrote:
+rem the app goes to the factory slot at 0x10000, but if the device has an
+rem update staged in ota_0 the bootloader goes there instead and the operator
+rem sees the OLD firmware come back. Caught on the bench flashing v1.9.3 - the
+rem device booted a staged v1.9.2. Matters far more from v1.9.3 on, because it
+rem downloads updates in the background by default.
+set "OTAD=%~dp0ota_data_initial.bin"
 
 if not exist "%BL%" (
     echo(
@@ -124,12 +131,12 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%" 0x920000 "%OTAD%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%" 0x920000 "%OTAD%"
     if not errorlevel 1 set "RC=0"
 )
 

@@ -105,3 +105,14 @@ void time_sync_mark_qmx(void);
 // (e.g. after the "Set and Sync" modal saves in NTP mode, where the
 // system clock itself did not change so push_to_qmx wasn't triggered).
 void time_sync_push_to_qmx(void);
+
+// DEV ONLY: re-arm the one-shot QMX GPS auto-detection so it runs again on the
+// next periodic pass (within 5 min), without rebooting.
+//
+// Exists because the detection is deliberately once-per-boot, and the only other
+// way to re-trigger it is a Tab5 reset - which, with the radio attached, is the
+// documented #74 USB-wedge trigger, and recovering from THAT needs a QMX power
+// cycle, which resets the radio's clock and so destroys the very precondition
+// the test needs. Same reasoning as the cat_raw escape hatch: make the question
+// answerable instead of guessed.
+void time_sync_force_redetect(void);

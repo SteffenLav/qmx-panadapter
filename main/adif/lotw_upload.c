@@ -237,7 +237,7 @@ static uint8_t *gzip_store(const uint8_t *src, size_t n, size_t *out_len)
 typedef struct {
     char call[16];
     char band[8];
-    char mode[12];
+    char mode[12];   // the LoTW mode, already collapsed from ADIF MODE+SUBMODE
     char freq[16];
     char date[12];   // "YYYY-MM-DD"
     char time[12];   // "HH:MM:SSZ"
@@ -265,6 +265,19 @@ static int fill_rec(int idx, lotw_rec_t *r)
     if (strlen(date) != 8 || strlen(tim) != 6) {
         ESP_LOGW(TAG, "record %d has bad date/time - skipping", idx);
         return 0;
+    }
+    // FT4 is logged the ADIF-correct way (MODE=MFSK + SUBMODE=FT4), but LoTW
+    // has no MFSK mode of its own, so the pair is collapsed back to the LoTW
+    // mode before anything is signed. lotw_mode_from_adif() returns "FT4" here
+    // and leaves every other mode - FT8 included - exactly as it was, so the
+    // bytes this uploader produces are unchanged from what LoTW has already
+    // been accepting.
+    {
+        char submode[12] = "";
+        if (adif_log_extract_field(line, "SUBMODE", submode, sizeof submode)) {
+            const char *m = lotw_mode_from_adif(r->mode, submode);
+            if (m != r->mode) snprintf(r->mode, sizeof r->mode, "%s", m);
+        }
     }
     // ADIF YYYYMMDD / HHMMSS -> TQ8 "YYYY-MM-DD" / "HH:MM:SSZ"
     snprintf(r->date, sizeof r->date, "%.4s-%.2s-%.2s", date, date + 4, date + 6);
@@ -500,7 +513,13 @@ static bool lotw_post_tq8(const uint8_t *gz, size_t gz_len,
     // failure - and declined to advance the upload cursor - on a successful
     // upload. Still matched against the extracted <!-- .UPL. --> comment only,
     // never the raw page, so a login/landing page can't false-positive.
-    if (strstr(result, "accepted") != NULL) {
+    // ...but a substring test alone cannot tell "accepted" from "not accepted"
+    // or "rejected - not accepted", and reporting one of those as success is
+    // the worst possible failure here: the cursor advances and the QSOs are
+    // never retried. Refuse any status that also carries a negative word.
+    if (strstr(result, "accepted") != NULL &&
+        strstr(result, "not accepted") == NULL &&
+        strstr(result, "rejected")     == NULL) {
         *accepted = true;
     } else if (!msg[0]) {
         snprintf(msg, msg_sz, result[0] ? "LoTW: %s" : "unexpected LoTW response",
@@ -565,13 +584,18 @@ bool lotw_upload_pending(lotw_upload_result_t *result)
         cursor += (uint32_t)consumed;
         result->uploaded += nsigned;
         result->skipped  += consumed - nsigned;
+        // Keep whatever LoTW said about the batch we just sent. It is the only
+        // thing that can distinguish "queued and fine" from "accepted the file,
+        // dropped every QSO in it".
+        if (msg[0]) snprintf(result->note, sizeof result->note, "%s", msg);
     }
 
     if (cursor > cfg.lotw_uploaded_n)
         settings_set_lotw_uploaded_n(cursor);
 
-    ESP_LOGI(TAG, "upload batch: %d uploaded, %d skipped, %d failed (%s)",
+    ESP_LOGI(TAG, "upload batch: %d uploaded, %d skipped, %d failed (%s)%s%s",
              result->uploaded, result->skipped, result->failed,
-             result->failed ? result->error : "ok");
+             result->failed ? result->error : "ok",
+             result->note[0] ? " - LoTW says: " : "", result->note);
     return true;
 }

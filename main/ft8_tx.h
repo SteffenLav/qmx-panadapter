@@ -166,6 +166,16 @@ void ft8_tx_disarm(void);
 // if nothing is currently transmitting.
 void ft8_tx_request_abort(void);
 
+// How far into the MOST RECENT burst it was aborted, in milliseconds, or -1 if
+// that burst ran to completion. Reset at the start of every ft8_tx_run(), so it
+// never describes an older burst.
+//
+// Exists so the slot loop can tell an abort from a normal burst and decide
+// whether enough of the slot is left to be worth listening to: an aborted TX
+// hands the rest of its slot back, and what is heard in it is perfectly good
+// data for the occupancy map (Roy KI0ER, #136).
+int ft8_tx_last_abort_ms(void);
+
 // Snapshot current state for the UI. Mutex-guarded; safe to call from any
 // task/core at any rate (e.g. a 1 Hz refresh timer).
 //   text        if non-NULL, receives the display text of the armed/active
@@ -205,6 +215,16 @@ int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // taken, or if that particular value was unavailable.
 float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 
+// SWR protection. When settings' swr_limit_x10 is non-zero, a burst whose
+// live SW; reading reaches the limit is cut short and the transmitter is
+// LATCHED OFF: ft8_tx_arm() then refuses everything, including the QSO
+// machine's automatic re-arms, until ft8_tx_clear_swr_trip() is called.
+// Sticky on purpose - a bad antenna does not fix itself, and auto-resuming
+// would key into the same mismatch every slot. Returns true while latched;
+// *swr_out (optional) gets the reading that tripped it.
+bool ft8_tx_swr_tripped(float *swr_out);
+void ft8_tx_clear_swr_trip(void);
+
 // Scan the current heard-station table and return the audio frequency (Hz) of
 // the nearest unoccupied 50-Hz bin to FT8_TX_CQ_DEFAULT_FREQ_HZ (1500 Hz).
 // Safe to call from any task; takes the ft8_screen mutex internally via
@@ -226,6 +246,13 @@ int ft8_find_clear_tone_hz(void);
 //                 "unknown", not "empty band" - say so in the UI.
 // Same snapshot cost as ft8_find_clear_tone_hz_near(); safe from any task.
 uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out);
+
+// Both windows at once (Roy KI0ER): one mask per parity, so the operator can see
+// which offset to choose BEFORE arming - only they know which window they will
+// pounce into. A station whose slot is unknowable lands in BOTH masks. Same
+// snapshot cost as the single-mask call.
+void ft8_tx_get_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                     int *n_slots_out, int *n_stations_out);
 
 // --- TX tone preference and hold (WSJT-X's "Hold Tx Freq") -------------------
 //
@@ -271,6 +298,33 @@ int ft8_find_clear_tone_hz_near(int center_hz);
 // (they are expected to be at that frequency). Returns false when IDLE or if
 // the decode table is empty.  Safe to call from any task at 1 Hz or less.
 bool ft8_tx_is_clashing(void);
+
+// How BAD the clash is, for the display only. Gyula HA3HZ, 2026-08-28: "The freq
+// busy with red is also present when the other station is on the other side of
+// the earth and I can see his signal e.g. with -32. When I first used the
+// Panadapter, I jumped to the red message and changed the frequency, while I
+// shouldn't have because the partner didn't see my signal and the QSO was
+// broken." He is right - the test had no strength gate at all, so a -32 dB trace
+// read exactly like a loud local. He suggested colouring by DISTANCE; SNR is the
+// better proxy because we measure it directly and a distant station without a
+// grid has no distance.
+//
+// ⛔ ENGINE BEHAVIOUR IS UNCHANGED. ft8_tx_is_clashing() still reports any
+// collision, so relocate_cq_tone_if_clashing() keeps moving a CQ off an occupied
+// slot however weak the occupant - moving a CQ is free and staying put is not.
+// Only what the OPERATOR is shown is graded.
+typedef enum {
+    FT8_CLASH_NONE = 0,
+    FT8_CLASH_WEAK,      // someone is there, but faint - information, not an alarm
+    FT8_CLASH_STRONG,    // a real presence at our offset in our window
+} ft8_clash_t;
+
+// SNR at or above which a colliding station counts as STRONG. A judgement call,
+// not a measurement: FT8 reports run about -24..+15, so -15 keeps genuinely
+// loud neighbours red while a trace at the decode floor stops shouting.
+#define FT8_CLASH_STRONG_SNR_DB (-15)
+
+ft8_clash_t ft8_tx_clash_level(void);
 
 // ---- Consumed only by ft8_task's slot loop (ft8_test.c) --------------------
 

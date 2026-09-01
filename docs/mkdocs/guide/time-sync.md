@@ -19,9 +19,27 @@ If you're operating **without WiFi** (POTA, portable, SOTA):
 1. **Set the Tab5 RTC before you leave home** (settings → Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
-4. Optional: if your QMX has GPS, the panadapter syncs the RTC from QMX GPS every 5 minutes
+4. **Turn the QMX on whenever you like — you do not have to do anything about its
+   clock.** A QMX without GPS comes up at 00:00 and its clock free-runs, so the
+   panadapter does not take the time from it while the Tab5's own clock is good.
+   It sets the radio's clock instead, and only when the radio is more than a few
+   seconds out.
+5. Optional: if your QMX has GPS, the panadapter syncs the RTC from QMX GPS every 5 minutes
 
 No internet needed — FT8 timing works offline.
+
+!!! note "Why step 4 says that"
+
+    Earlier versions took the time from a GPS-less QMX when there was no WiFi,
+    which meant switching the radio on in the field replaced your accurate RTC
+    time with the radio's 00:00 — and FT8 stopped decoding. Reported by
+    Don WB0LQW. The Tab5's supercap RTC is the better clock of the two offline,
+    so it now wins, and the radio gets set from it.
+
+    If you have no accurate time at all — the RTC was never set, or it has been
+    unpowered for more than a day or two — then a QMX reading *is* used, because
+    something is better than nothing. Failing that, set the clock by hand
+    (**FT8 → Options → Sync Time**), which also accepts seconds.
 
 ### 3. WiFi + SNTP
 
@@ -39,22 +57,59 @@ SNTP sync is **automatic** — you don't need to do anything. The bottom bar sho
 If your QMX has **internal GPS** (QMX+ models often do), there is **nothing to enable** — the Tab5 detects it automatically:
 
 1. At connect, it catches the QMX's `TM;` seconds *flip* (the true GPS second boundary) and compares it against SNTP.
-2. If they agree tightly, the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
+2. If they agree tightly — **and the Tab5 has not itself set that radio's clock** — the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
 3. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback.
 
-The verdict is remembered across reboots. A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
+A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
 
-### 5. Manual Time Set
+!!! note "Why step 2 asks who set the clock"
+    The Tab5 pushes its own time into a non-GPS QMX to set that radio's clock —
+    which leaves the radio agreeing with the Tab5 *because the Tab5 put it
+    there*. Until v1.8.5 a close-enough agreement was taken as proof of GPS, so a
+    radio with no GPS at all could be labelled `UTC(GPS)`, and worse, the Tab5
+    then stopped maintaining the clock of the one radio that had no other source.
+    A clock the Tab5 has set is no longer accepted as evidence about itself. The
+    flag clears when the radio's clock is plainly its own again — a QMX's clock is
+    not kept across a power cycle, so switching it off and on is what re-arms
+    detection.
 
-To set time manually:
+!!! note "The label needs the radio to still be there"
+    A remembered verdict says *this radio is GPS-disciplined*, not *GPS is
+    keeping time right now*. With the QMX unplugged the Tab5 has no GPS of its
+    own, so the label falls back to whatever is actually in charge — usually
+    `UTC(NTP)`. Reported by Don N2VGU, whose Tab5 read `UTC(GPS)` with the radio
+    disconnected; the time was correct throughout, only the label was wrong.
 
-1. Swipe ← to open the settings drawer
-2. Tap **Time Sync** section
-3. Tap **Set Manual Time**
-4. Enter hours, minutes, seconds (UTC)
-5. Tap **Apply**
+### 5. Setting the time by hand
 
-The time is set immediately and written to the RTC.
+**There is no "Set Manual Time" control in the settings drawer.** Earlier versions of this
+guide said there was, and there never has been on recent firmware — Don WB0LQW went looking
+for it during a POTA activation and could not find it. Apologies. The clock is set from the
+FT8 screen:
+
+1. Switch to **FT8**
+2. Tap **Options** (left pane)
+3. Tap **Sync Time** (bottom right of the modal)
+4. A panel appears with three boxes: **[HH] : [MM] : [SS]**
+5. Tap **HH** or **MM** to type them on the numpad (0–23, 0–59)
+6. **Hold the SS box and let go exactly on the minute** — the seconds are set to 00 the
+   instant you release
+7. Tap **Apply**
+
+Step 6 is the one that matters off-grid. FT8 needs the clock right to about a second, and
+until v1.8.1 the seconds could not be set at all — hours and minutes were editable and the
+seconds were not, which left no way to get inside a second with no WiFi and no GPS.
+
+The clock is set **when you release**, not when you tap Apply. The release is the
+measurement, so an Apply a few seconds later would be a few seconds late. Use a watch with
+a second hand, or listen for the gap between FT8 transmissions. While you hold the box it
+turns amber and tells you what letting go will do.
+
+If you have typed hours and minutes first, those are used. If you have not, the Tab5 takes
+the nearest minute to its own clock — so this corrects the seconds without disturbing an
+hour and minute that are already right.
+
+The time is written to the RTC as well as the system clock, so it survives a power-off.
 
 ### 6. FT8-Derived Sync (Offline Fallback)
 
@@ -70,13 +125,15 @@ Most useful when: WiFi is unavailable, no GPS QMX, and your RTC has drifted.
 
 #### Fine-Tune Time with "Sync Time" (FT8 Only)
 
-In **FT8 mode**, the Filter modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
+In **FT8 mode**, the Options modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
 
-1. Tap the **Filter** button (FT8 screen, left pane)
+1. Tap the **Options** button (FT8 screen, left pane)
 2. Tap the **Sync Time** button (bottom right of the modal)
 3. A panel appears with three fields: **[HH] : [MM] : [SS]**
    - **HH** / **MM** (hours/minutes) — tap to edit via numpad (0–23, 0–59)
-   - **SS** (seconds) — auto-syncs from FT8 signals (blue frame = actively syncing, grey = locked)
+   - **SS** (seconds) — auto-syncs from FT8 signals (blue frame = actively syncing, grey =
+     locked). **Hold it and release on the minute** to set the seconds to 00 yourself, which
+     is what you want when there are no FT8 signals to sync from
 4. Tap **Apply** to write the time to the RTC and system clock
 
 The **SS field** updates automatically from decoded FT8 messages — each decode gives a sub-second correction estimate. Tap **SS** to toggle between auto-syncing (blue) and locked (grey). While locked, seconds still count at the captured offset, so you don't lose precision after locking.
