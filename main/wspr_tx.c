@@ -141,7 +141,14 @@ int wspr_tx_seconds_until_next_slot(void)
     int sec_in_minute = (int)(now % 60);
     int minute_is_even = ((now / 60) % 2) == 0;
     int secs;
-    if (minute_is_even && sec_in_minute <= WSPR_TX_LATE_GRACE_S) {
+    /* ⚠ STRICTLY LESS THAN. `<=` admitted the whole of second 2, i.e. up to
+     * 2.999 s, and the first live burst went out at 2965 ms while the log
+     * cheerfully called it "inside the 2 s grace" (caught on air, 2026-09-01).
+     * The operator set the bound at 2 s; this makes the latest possible start
+     * 1.999 s. An arm at second 2 now waits for the next slot instead - which
+     * costs nothing on screen, because wspr_rx.c keeps receiving while the
+     * burst is a cycle away. */
+    if (minute_is_even && sec_in_minute < WSPR_TX_LATE_GRACE_S) {
         /* ⭐ A GRACE WINDOW, NOT AN EXACT SECOND (Dirk, 2026-09-01).
          *
          * This used to require `sec_in_minute == 0` - a ONE-SECOND window -
@@ -425,10 +432,12 @@ static void wspr_tx_worker_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS((uint32_t)remain));
         } else if (into_min_ms > WSPR_TX_START_OFFSET_MS) {
             ESP_LOGW(TAG, "burst starting %lld ms into the minute (%lld ms later "
-                          "than the +%d ms convention) - inside the %d s grace",
+                          "than the +%d ms convention)%s",
                      (long long)into_min_ms,
                      (long long)(into_min_ms - WSPR_TX_START_OFFSET_MS),
-                     WSPR_TX_START_OFFSET_MS, WSPR_TX_LATE_GRACE_S);
+                     WSPR_TX_START_OFFSET_MS,
+                     into_min_ms > (int64_t)WSPR_TX_LATE_GRACE_S * 1000
+                         ? "  - OUTSIDE THE GRACE, this should not happen" : "");
         }
     }
 
