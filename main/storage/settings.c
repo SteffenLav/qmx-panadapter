@@ -1879,6 +1879,18 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
     xSemaphoreGive(s_mutex);
 }
 
+/* Two fields, for the same reason as the accessor above - see settings.h. */
+void settings_get_bandplan(uint8_t *region_out, char grid_out[8])
+{
+    if (region_out) *region_out = 0;
+    if (grid_out)   grid_out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (region_out) *region_out = s_pending.bandplan_region;
+    if (grid_out)   memcpy(grid_out, s_pending.my_grid, sizeof(s_pending.my_grid));
+    xSemaphoreGive(s_mutex);
+}
+
 // Default ON: the RIT pill is a v1.8.0 feature and hiding it by default would make
 // it invisible to everyone who never opens the drawer. This is opt-OUT, for
 // operators who do not use RIT and do not want the top-right corner spent on it

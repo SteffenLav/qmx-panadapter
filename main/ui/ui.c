@@ -283,12 +283,12 @@ static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
 {
     if (!legal_band_edges(center_hz, lo, hi)) return false;
     if (ui_mode_get() != UI_MODE_CW) return true;
-    qmx_settings_t s;
-    settings_load_all(&s);
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(center_hz,
-                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
-                                          s.my_grid), &segs);
+                bandplan_effective_region((bandplan_region_t)bp_region,
+                                          bp_grid), &segs);
     for (int i = 0; i < n; i++) {
         if (segs[i].type == BP_CW) {
             *lo = segs[i].lo_hz;
@@ -4132,10 +4132,10 @@ static void update_bandplan_strip(uint32_t freq_hz)
     if (!s_bandplan_obj) return;
     const int W_BP = DISPLAY_H_RES;
 
-    qmx_settings_t s;
-    settings_load_all(&s);
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
     bandplan_region_t reg =
-        bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+        bandplan_effective_region((bandplan_region_t)bp_region, bp_grid);
 
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(freq_hz, reg, &segs);
@@ -6970,12 +6970,12 @@ void ui_help_overlay_changed(void)
 
 static uint32_t cw_segment_center_hz(uint32_t hz)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(hz,
-                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
-                                          s.my_grid), &segs);
+                bandplan_effective_region((bandplan_region_t)bp_region,
+                                          bp_grid), &segs);
     if (n <= 0 || !segs) return 0;
     for (int i = 0; i < n; i++) {
         if (segs[i].type == BP_CW) {
@@ -6993,12 +6993,12 @@ static uint32_t cw_segment_center_hz(uint32_t hz)
 // should not be possible to leave it (operator, 2026-08-04).
 static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(hz,
-                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
-                                          s.my_grid), &segs);
+                bandplan_effective_region((bandplan_region_t)bp_region,
+                                          bp_grid), &segs);
     if (n <= 0 || !segs) return hz;   // not in a known band: leave alone
     for (int i = 0; i < n; i++)
         if (segs[i].type == BP_CW && hz >= segs[i].lo_hz && hz <= segs[i].hi_hz)
@@ -8654,10 +8654,10 @@ static void touch_event_cb(lv_event_t *e)
         s_bp_drag_start_freq = (int64_t)s_last_qmx_freq_hz;
         s_bp_drag_target_hz = s_bp_drag_start_freq;
 
-        qmx_settings_t s;
-        settings_load_all(&s);
+        uint8_t bp_region; char bp_grid[8];
+        settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
         bandplan_region_t reg =
-            bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+            bandplan_effective_region((bandplan_region_t)bp_region, bp_grid);
         const bp_seg_t *segs = NULL;
         int n = bandplan_get_segments(s_last_qmx_freq_hz, reg, &segs);
         s_bp_oob_drag      = false;
@@ -9144,10 +9144,10 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             int margin  = 40;   // expanded touch area on each side of the head
             bool on_head = (int)p.x >= knob_x0 - margin && (int)p.x <= knob_x1 + margin;
             if (on_head) {
-                qmx_settings_t s;
-                settings_load_all(&s);
+                uint8_t bp_region; char bp_grid[8];
+                settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
                 bandplan_region_t reg =
-                    bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+                    bandplan_effective_region((bandplan_region_t)bp_region, bp_grid);
                 const bp_seg_t *segs = NULL;
                 int n = bandplan_get_segments(s_last_qmx_freq_hz, reg, &segs);
                 if (n > 0) {

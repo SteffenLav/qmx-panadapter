@@ -478,6 +478,14 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Stack protection fault. See the note on the implementation - it has already
  * boot-looped this device once. */
 void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16]);
+
+/* Band-plan region + grid without copying the whole struct. Same reason as
+ * settings_get_wifi_static() above: the callers are the band-plan strip and the
+ * CW-segment helpers, which run on the render task (4096 B) and the LVGL touch
+ * path - and cw_bandplan_clamp_hz() calls cw_segment_center_hz(), so the old
+ * settings_load_all() form put TWO 1192-byte structs on one stack. That
+ * overflowed "render" and rebooted the device on a page swipe (2026-09-01). */
+void settings_get_bandplan(uint8_t *region_out, char grid_out[8]);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)
