@@ -40,6 +40,7 @@ idf_component_register(
     "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"
+    "util/ip_guard.c"
     "util/ansi_term.c"
         "util/bandplan.c"
         "util/dxcc.c"

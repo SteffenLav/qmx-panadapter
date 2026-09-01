@@ -3253,14 +3253,45 @@ async function setSave() {
   const st = document.getElementById("set-status");
   st.textContent = "Saving...";
   try {
-    const r = await fetch("/api/settings", {
+    let r = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch)
     });
-    st.textContent = r.ok ? "Saved" : "Save failed (HTTP " + r.status + ")";
+
+    /* A refused static IP comes back 400 with a sentence saying why (see
+       util/ip_guard.h). Showing "HTTP 400" instead of that sentence would be
+       the same as showing nothing: the whole value of the check is that it
+       names which network the device is actually on.
+
+       The off-subnet refusal - and ONLY that one - is overridable, because
+       configuring in advance for a network the Tab5 is not on yet is a real
+       thing people do. Everything else the guard rejects is malformed, and
+       there is nothing to confirm about a typo. */
+    if (!r.ok) {
+      let msg = "", offSubnet = false;
+      try { const j = await r.json(); msg = j.error || ""; offSubnet = !!j.off_subnet; }
+      catch (e) { /* not our JSON - fall through to the plain HTTP message */ }
+
+      if (offSubnet && confirm(msg + "\n\nSave it anyway? Only do this if you " +
+                               "are setting the Tab5 up for a different network. " +
+                               "On this one you will lose the web interface, and " +
+                               "the way back is the Use DHCP button in the Tab5's " +
+                               "own settings drawer.")) {
+        patch.wifi_ip_force = true;
+        r = await fetch("/api/settings", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+        st.textContent = r.ok ? "Saved" : "Save failed (HTTP " + r.status + ")";
+      } else {
+        st.textContent = msg || ("Save failed (HTTP " + r.status + ")");
+      }
+    } else {
+      st.textContent = "Saved";
+    }
     if (r.ok && setGroup) ft8OptsRefreshBadge();
   } catch (e) { st.textContent = "Save failed (" + e.message + ")"; }
-  setTimeout(() => { st.textContent = ""; }, 3000);
+  setTimeout(() => { st.textContent = ""; }, 8000);
 }
 
 document.getElementById("settings-btn").addEventListener("click", () => setOpen(false));

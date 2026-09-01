@@ -53,6 +53,14 @@ int wifi_get_rssi_dbm(void);
 // Returns empty string if not connected or no IP yet.
 const char *wifi_get_ip(void);
 
+// The live address/mask/gateway/DNS, as four dotted-quad strings. Returns false
+// (and blanks all four) when there is no address yet. Every pointer may be NULL.
+//
+// This is the reference a proposed STATIC configuration is judged against - see
+// util/ip_guard.h. Read live, never cached.
+bool panadapter_wifi_get_lease(char ip[16], char mask[16],
+                               char gw[16], char dns[16]);
+
 // Returns true once SNTP has set the system time at least once.
 bool wifi_time_is_valid(void);
 

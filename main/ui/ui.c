@@ -2227,6 +2227,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_WSPRHOP    33  // WSPR-only: band hopping on/off + the band picker
 #define DRAWER_SEC_WSPRNET    36  // WSPR-only: publish spots to wsprnet
 #define DRAWER_SEC_STILL      37  /* #298 spectrum holds still / follows the dial */
+#define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
+                                 // made the web UI unreachable (#307). Built only
+                                 // when a static address is actually configured.
+                                 // NOTE ids 0..38 used, N_DRAWER_SECTIONS is 40.
 #define DRAWER_SEC_RITPILL    30  // panadapter-only: show/hide the RIT pill in the top bar.
                                    // Only the pill's VISIBILITY - the control itself stays where
                                    // it is; RIT is not operated from the drawer (operator).
@@ -2336,6 +2340,12 @@ static const drawer_item_t GRP_RADIO[] = {
 // what the network connection does unasked, so it belongs beside WiFi.
 static const drawer_item_t GRP_NETWORK[] = {
     { DRAWER_SEC_WIFI, "WiFi setup", true },
+    // Basic on purpose, and directly under WiFi setup. It only exists at all
+    // when a static address is configured, and when it does exist it is the
+    // ONLY way back from an address that made the web UI unreachable - so
+    // hiding it behind Advanced would hide the escape hatch from exactly the
+    // operator who needs it.
+    { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     { DRAWER_SEC_BT, "Bluetooth mouse", false },
@@ -2425,6 +2435,9 @@ static uint64_t s_drawer_adv_mask;
 void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 // Defined far below; the setter re-lays the drawer after a web change.
 static void drawer_set_mode(ui_mode_t mode);
+// Defined next to the other restart-the-device callback, used up in the drawer
+// build - see drawer_usedhcp_btn_cb for why that button has to exist (#307).
+static void drawer_usedhcp_btn_cb(lv_event_t *e);
 // Defined below, next to the mode switch that is its other caller.
 static void hide_panadapter_widgets_instant(void);
 static void apply_edge_grips_for_mode(ui_mode_t m);
@@ -10247,6 +10260,40 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
+    // "Use DHCP" - built ONLY when a static address is configured, so on the
+    // ordinary DHCP unit it does not exist at all and there is no gap to
+    // reflow. That is why it is conditional rather than hidden: a hidden
+    // section still owns its y, and this file's own history is two separate
+    // bugs from a section height and its `y +=` drifting apart.
+    // See drawer_usedhcp_btn_cb for why this button has to be on the TAB5.
+    {
+        char sip[16], smask[16], sgw[16], sdns[16];
+        settings_get_wifi_static(sip, smask, sgw, sdns);
+        if (sip[0]) {
+            lv_obj_t *sec = drawer_section(DRAWER_SEC_USEDHCP, y, 104);
+            lv_obj_t *hdr = lv_label_create(sec);
+            // Name the address, so the operator can see whether it is the one
+            // they meant before deciding to throw it away.
+            static char hdr_txt[48];
+            snprintf(hdr_txt, sizeof(hdr_txt), "Static IP: %s", sip);
+            lv_label_set_text(hdr, hdr_txt);
+            lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+            lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+            lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+            lv_obj_t *btn = lv_btn_create(sec);
+            lv_obj_set_size(btn, DRAWER_W - 32, 56);
+            lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 40);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            lv_obj_add_event_cb(btn, drawer_usedhcp_btn_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *l2 = lv_label_create(btn);
+            lv_label_set_text(l2, "Use DHCP");
+            lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_color(l2, lv_color_hex(0xffffff), 0);
+            lv_obj_center(l2);
+            y += 104;
+        }
+    }
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
@@ -12330,6 +12377,55 @@ static void drawer_bt_restart_cb(lv_event_t *e)
     // this the operator gets a few seconds of bright empty panel.
     vTaskDelay(pdMS_TO_TICKS(400));
     display_set_brightness(0);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    esp_restart();
+}
+
+/* "Use DHCP" - the way back from a static IP that made the device unreachable
+ * (#307).
+ *
+ * ⛔ THIS BUTTON EXISTS BECAUSE THE WEB UI CANNOT BE THE ONLY WAY OUT. A static
+ * address on the wrong subnet is answered by the access point, logged as
+ * applied, and reachable from nothing - so the browser that could undo it is
+ * exactly what has been taken away. Before this, the only recovery was a
+ * factory reset, which also takes the WiFi password, the callsign, the memory
+ * channels and the LoTW private key.
+ *
+ * It only appears when a static address is actually configured; on a DHCP unit
+ * there is nothing for it to undo and it would just be another thing to explain.
+ *
+ * Clearing and REBOOTING rather than re-applying live is deliberate. wifi.c
+ * stops the DHCP client at STA_START and nothing ever restarts it, so clearing
+ * the setting and reconnecting would leave the device holding the old static
+ * address with no DHCP client running - the same fault, now invisible. A reboot
+ * takes the ordinary DHCP path from the top, and this is a rare recovery, not a
+ * hot path.
+ */
+static void drawer_usedhcp_btn_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    static bool armed = false;
+
+    if (!armed) {
+        // Two taps, because the second one reboots. Same arming pattern as the
+        // ADIF "delete all" - a control with a consequence does not fire on a
+        // brush past it.
+        armed = true;
+        if (lbl) lv_label_set_text(lbl, "Tap again to restart on DHCP");
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xC08000), 0);
+        return;
+    }
+    armed = false;
+
+    ESP_LOGW(TAG, "operator cleared the static IP from the drawer - "
+                  "restarting on DHCP");
+    settings_set_wifi_static("", "", "", "");
+    settings_flush();           // must reach NVS before the restart
+
+    lv_refr_now(NULL);
+    vTaskDelay(pdMS_TO_TICKS(400));
+    display_set_brightness(0);  // see drawer_bt_restart_cb for why
     vTaskDelay(pdMS_TO_TICKS(80));
     esp_restart();
 }

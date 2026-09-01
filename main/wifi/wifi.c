@@ -753,6 +753,44 @@ const char *wifi_get_ip(void)
     return ip_buf;
 }
 
+// The address the device is living on RIGHT NOW, whether it came from DHCP or
+// from a static configuration - which is the same question either way: what
+// network is the browser that is talking to us on?
+//
+// This is what makes a static address safe to accept (util/ip_guard.c). It is
+// deliberately read live rather than remembered: a remembered lease belongs to
+// whichever network the device was on when it was stored, and judging today's
+// configuration against yesterday's network is exactly the mistake the guard
+// exists to prevent.
+bool panadapter_wifi_get_lease(char ip[16], char mask[16],
+                               char gw[16], char dns[16])
+{
+    if (ip)   ip[0]   = '\0';
+    if (mask) mask[0] = '\0';
+    if (gw)   gw[0]   = '\0';
+    if (dns)  dns[0]  = '\0';
+
+    if (!wifi_is_connected()) return false;
+    esp_netif_t *netif = s_sta_netif ? s_sta_netif
+                       : esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif) return false;
+
+    esp_netif_ip_info_t info;
+    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) return false;
+    if (info.ip.addr == 0) return false;   // associated but no address yet
+
+    if (ip)   snprintf(ip,   16, IPSTR, IP2STR(&info.ip));
+    if (mask) snprintf(mask, 16, IPSTR, IP2STR(&info.netmask));
+    if (gw && info.gw.addr) snprintf(gw, 16, IPSTR, IP2STR(&info.gw));
+
+    esp_netif_dns_info_t d;
+    if (dns && esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &d) == ESP_OK &&
+        d.ip.type == ESP_IPADDR_TYPE_V4 && d.ip.u_addr.ip4.addr)
+        snprintf(dns, 16, IPSTR, IP2STR(&d.ip.u_addr.ip4));
+
+    return true;
+}
+
 bool wifi_time_is_valid(void)
 {
     if (!s_events) return false;
