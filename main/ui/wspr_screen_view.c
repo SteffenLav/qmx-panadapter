@@ -641,7 +641,37 @@ static void tx_toggle_cb(lv_event_t *e)
     (void)e;
     qmx_settings_t st;
     settings_load_all(&st);
+    const bool turning_off = st.wspr_tx_en;
     settings_set_wspr_tx_en(!st.wspr_tx_en);
+
+    /* ⭐ SWITCHING OFF STOPS A BURST THAT IS ON THE AIR (Roy KI0ER, 2026-09-01:
+     * "if that button is tapped while actively transmitting, nothing happens and
+     * TX continues until the end of the 2 minute cycle... an immediate change to
+     * TX OFF is a more expected behaviour").
+     *
+     * He is right, and it was only ever a wiring gap: run_burst() has checked
+     * s_abort_requested at every symbol since WSPR TX was written, and
+     * wspr_tx_request_abort() has been public the whole time - nothing called
+     * it. Tapping the button set a flag that took effect at the NEXT slot, so a
+     * burst already keyed ran its full ~110 s with the button reading ON AIR.
+     *
+     * The abort keys up through run_burst's own tail (TA0; then RX;), which
+     * always runs, so the radio is left receiving rather than stuck keyed.
+     *
+     * ⛔ The PA voltage is deliberately NOT restored here. It is restored when
+     * WSPR is left, and only after the burst has actually stopped - raising the
+     * finals' voltage while the radio is still keyed is the exact thing the
+     * guard exists to prevent. See wspr_rx_stop(). */
+    if (turning_off) {
+        char t[64];
+        wspr_tx_state_t tst = wspr_tx_get_status(t, sizeof(t), NULL);
+        if (tst == WSPR_TX_ACTIVE) {
+            ESP_LOGW(TAG, "TX switched off while ON AIR - aborting the burst now");
+            wspr_tx_request_abort();
+        } else if (tst == WSPR_TX_ARMED) {
+            wspr_tx_disarm();
+        }
+    }
 }
 
 /* duty_cycle_cb moved to the settings drawer with its button (2026-08-28). */

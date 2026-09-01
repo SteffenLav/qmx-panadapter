@@ -973,6 +973,9 @@ static void wspr_dec_task(void *arg)
  * target is meaningful regardless of what the operator's limit happens to be. */
 #define WSPR_PA_TARGET_X10 60   /* 6.0 V - about 1 W, per the QMX manual */
 
+/* Defined near wspr_rx_stop(); used by the task's own out-of-memory exit too. */
+static void wspr_pa_guard_release(void);
+
 static void wspr_pa_guard_update(const qmx_settings_t *ws)
 {
     bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0;
@@ -1077,6 +1080,9 @@ static void wspr_rx_task(void *arg)
          * so leaving the page really does give the memory back. */
         wspr_decode_capture_changed();
         set_status("out of memory");
+        /* This exit bypasses wspr_rx_stop() entirely, so the PA would stay
+         * reduced for every later mode. See the note there. */
+        wspr_pa_guard_release();
         s_run = false; s_task = NULL;
         psram_task_park();
         return;
@@ -1622,7 +1628,41 @@ static void wspr_pa_guard_release(void)
 
 void wspr_rx_stop(void)
 {
-    if (!s_run) return;
+    /* ⛔ STOP THE RADIO TRANSMITTING BEFORE GIVING IT ITS POWER BACK, AND
+     * RELEASE EVEN IF THE LOOP HAS ALREADY GONE (Roy KI0ER, 2026-09-01: "if
+     * mid TX in WSPR mode, and the user changes to FT8 or to the Panadapter
+     * waterfall, TX should immediately halt, and Max. PA should be set back").
+     *
+     * Two faults, and the ORDER is the dangerous one. Leaving WSPR mid-burst
+     * used to restore the PA voltage while the burst was still keyed - so the
+     * finals' supply went from 6.0 V back to 11.5 V IN THE MIDDLE OF A ~110 s
+     * KEY-DOWN, which is precisely the stress the guard exists to prevent. It
+     * had to abort first and restore second.
+     *
+     * The second is why Roy saw 6.0 V persist into CW and FT8 at all: the
+     * release sat behind `if (!s_run) return;`, so any path that had already
+     * cleared s_run - the task's own out-of-memory exit, or a second call -
+     * skipped it silently and left the radio's STORED configuration reduced,
+     * visible only on the QMX's own Protection menu.
+     *
+     * wspr_pa_guard_release() is idempotent (it returns immediately when
+     * nothing is outstanding), so running it unconditionally is safe. */
+    char t[64];
+    wspr_tx_state_t tst = wspr_tx_get_status(t, sizeof(t), NULL);
+    if (tst == WSPR_TX_ACTIVE) {
+        ESP_LOGW(TAG, "leaving WSPR while ON AIR - aborting the burst before "
+                      "restoring the PA voltage");
+        wspr_tx_request_abort();
+    } else if (tst == WSPR_TX_ARMED) {
+        wspr_tx_disarm();
+    }
+    /* Wait for the radio to actually stop keying. run_burst() always runs its
+     * TA0;/RX; tail, so this is bounded by the settle delay, not by the burst -
+     * but it is bounded explicitly regardless, because blocking the UI thread
+     * for ever on a stuck TX task would be worse than a raised PA voltage. */
+    for (int i = 0; i < 40 && wspr_tx_get_status(t, sizeof(t), NULL) != WSPR_TX_IDLE; i++)
+        vTaskDelay(pdMS_TO_TICKS(50));
+
     s_run = false;
     wspr_pa_guard_release();
     /* The task frees its own buffers and clears s_task; the mode goes back here
