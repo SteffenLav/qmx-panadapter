@@ -1600,6 +1600,20 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     int32_t bw = pb_hi - pb_lo;
     if (bw < 100) bw = 100;          /* a degenerate filter must not page instantly */
 
+    /* ⭐ HALF A BANDWIDTH OF SLIDE, NOT A WHOLE ONE (operator, 2026-09-01, on
+     * air with the pin removed: "i know already it is too much - let it slide
+     * off up to 1/2 a bw only before jumping").
+     *
+     * With the pin gone the passband really does leave the screen during the
+     * push, so the push distance stopped being a bookkeeping detail and became
+     * the thing you feel - how long the signal you are tuning is out of sight.
+     * A whole bandwidth was too long.
+     *
+     * Still stated in passband widths, which is the unit this policy is written
+     * in and the reason SV_EDGE/SV_PUSHMAX/SV_LAND were deleted - a half BW is
+     * "half the filter slides off", not a free percentage to mis-tune. */
+    const int32_t push_max = bw / 2;
+
     int32_t span_hz  = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
     int64_t dial_hz  = (int64_t)now_hz;
     int64_t view_lo  = dial_hz + s_sv_pan_hz - span_hz / 2;
@@ -1641,16 +1655,16 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
         s_sv_push = hi_over;
         /* Pages are logged because when he asked me to follow one in the log,
          * nothing logged them at all and I had to simulate the code instead. */
-        if (s_sv_push > bw) { ESP_LOGI(TAG, "page: upper edge, bw=%d span=%d",
-                                       (int)bw, (int)span_hz);
+        if (s_sv_push > push_max) { ESP_LOGI(TAG, "page: upper edge, bw=%d push_max=%d span=%d",
+                                       (int)bw, (int)push_max, (int)span_hz);
                               sv_apply_pan_hz((int64_t)pb_lo + span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
         /* else: hold - the pan from the top of the function already does it. */
     } else if (lo_over > 0) {
         if (s_sv_side != -1) { s_sv_side = -1; s_sv_push = 0; }
         s_sv_push = lo_over;    /* assign, not accumulate - see the note above */
-        if (s_sv_push > bw) { ESP_LOGI(TAG, "page: lower edge, bw=%d span=%d",
-                                       (int)bw, (int)span_hz);
+        if (s_sv_push > push_max) { ESP_LOGI(TAG, "page: lower edge, bw=%d push_max=%d span=%d",
+                                       (int)bw, (int)push_max, (int)span_hz);
                               sv_apply_pan_hz((int64_t)pb_hi - span_hz / 2);
                               s_sv_push = 0; s_sv_side = 0; }
         /* else: hold. */
