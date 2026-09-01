@@ -532,8 +532,19 @@ the count at 0 instead of failing the link). Reported by
 `usb_patch_counters_report()` from the 10 s heap watchdog **only when a count
 changes**, and in `/api/status` as `usb_patch`. Because a silent-but-tolerant patch
 is as good as no patch for diagnosis, **`check_patches.py`'s marker for both is the
-counter symbol**, not a date comment. ⚠ Neither counter has been observed firing
-yet — the patches are correct-by-construction, not hardware-confirmed.
+counter symbol**, not a date comment.
+
+⭐ **BOTH COUNTERS HAVE NOW FIRED, AND THAT SETTLES IT — 2026-09-01, dev bench,
+`/api/status` reading `usb_patch: {chan_err_no_halt: 1, unexpected_pipe_event: 1}`
+in a single ~5 h session.** They are plain RAM globals zeroed at boot, so both
+events happened in that one uptime. On an unpatched build each would have been an
+`abort()`, i.e. a warm reset with the radio attached, i.e. the documented **#74**
+wedge — so this bench would have lost the QMX twice in an afternoon. The earlier
+caveat here (*"neither counter has been observed firing yet — correct-by-
+construction, not hardware-confirmed"*) is retired: patches #7 and #8 are now
+hardware-confirmed, and #189's whole argument — that a silent tolerant patch is
+indistinguishable from a missing one — is what made the confirmation readable at
+a glance instead of needing a reproduction.
 
 ### USB mouse — WORKS mouse-alone (hw-verified 2026-07-20); simultaneous-with-QMX blocked by the hub/TT wall
 Frank K4FMH asked for mouse support (USB or BT). **The full USB-mouse stack works and is hardware-verified**: a mouse plugged **directly** into USB-A (no hub, QMX not attached) enumerates, and `main/usb_hid_mouse.c` (HID host, boot-protocol report → cursor accumulation) + the LVGL pointer indev in `ui.c` (`ui_mouse_init()`, `mouse_read_cb`, white-circle cursor on `lv_layer_top()`) give a moving cursor that drives every menu/button/drawer via normal LVGL clicks. The 90° rotation transform (`point.x = ly; point.y = (W-1) - lx`, the inverse of LVGL's own `indev_pointer_proc` ROTATION_90 map) was correct first try — cursor tracks and clicks land accurately. Verified with the mouse as the SOLE USB device.

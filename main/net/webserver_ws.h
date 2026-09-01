@@ -39,6 +39,15 @@ void webserver_ws_stats(uint32_t *sessions, uint32_t *takeovers,
  */
 void webserver_ws_set_paused(bool paused);
 
+// Is the stream currently paused? Read-only.
+//
+// The pause is a plain boolean shared by ~29 call sites, so a caller that
+// sets it and then unconditionally clears it will also clear a pause somebody
+// else is relying on. This exists so a nested pause can SAVE AND RESTORE
+// instead - see mirror_diag_slow() in storage/sd_archive.c, which runs every
+// 30 s and can land inside an upload's own pause window.
+bool webserver_ws_is_paused(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -156,6 +156,8 @@ void webserver_ws_set_paused(bool paused)
     s_ws_paused = paused;
 }
 
+bool webserver_ws_is_paused(void) { return s_ws_paused; }
+
 // ---------------------------------------------------------------------------
 // Sending a WS frame WITHOUT the partial-write bug in IDF's own helper.
 //

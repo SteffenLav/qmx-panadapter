@@ -24,6 +24,10 @@
 #include "settings.h"   // wifi_enabled: the WiFi-aware mirroring gate
 #include "ui.h"
 #include "psram_task.h"
+// The SD write pauses the spectrum stream around itself - see mirror_diag_slow().
+// storage -> net is the same direction net/webserver.c already goes the other way
+// (it takes sd_archive_lock() for uploads); both live in the `main` component.
+#include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
 
 static const char *TAG = "sd_arch";
 
@@ -367,6 +371,45 @@ static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
 // So the card keeps getting the log, just slowly. Open/append/fsync/close per
 // burst is deliberately not the held-open handle the continuous path uses: it
 // costs a little more per write and removes the corruption window entirely.
+// ⛔ AND WHY IT IS QUIESCED (2026-09-01). #153 restored this write, and THIS
+// WRITE IS WHAT TRIPS THE EIO WEDGE - measured on the bench the same morning:
+//
+//     6.1-8.2s  boot mount attempts 1-4 FAILED err=0x108
+//    13.7s      mounted on attempt 5/5                <- the dot comes on
+//    42-90s     diag write failed: I/O error (errno 5) x5, mounted=1
+//    90.2s      INSTR unmount(write failures)         <- the dot goes out
+//
+// which is exactly the operator's report: the SD dot appears, then vanishes.
+// It is NOT a v1.10.5 regression - no SD code changed in that release - and it
+// is not memory: CLAUDE.md records this same EIO with 135 KB of DMA free and a
+// 65 KB largest block. It is the documented SPI2-SD vs WiFi-SDIO contention.
+//
+// Every OTHER place in this firmware that writes the card while WiFi is up
+// already knows this and quiets the link first - the QRZ/eQSL/LoTW uploads, the
+// log download, the Reader's Save offline, the /files browser. This path, added
+// later, did none of it. So it is the one SD write on the device that runs
+// straight into the contention with the stream at full rate.
+//
+// ⚠ SAVE AND RESTORE, never set-then-clear. The pause is a plain boolean shared
+// with ~29 other call sites, and upload_task() raises it BEFORE it takes
+// sd_archive_lock() - so a 30 s write can land inside an upload's own pause
+// window, and clearing it unconditionally would drop that upload's protection
+// while it is still running. Which is the very hazard being guarded against.
+//
+// ⛔ THE WS PAUSE ONLY - NOT dsp_set_transfer_quiet(), which the upload path
+// pairs it with. Considered and rejected on 2026-09-01, so it does not get
+// "restored" later as an oversight:
+//   - It buys nothing here. It exists to stop fft_task (pri 4, core 1)
+//     preempting the upload task (pri 3, core 0). THIS task is pri 2 pinned to
+//     core 0, so fft_task never preempts it and there is nothing to yield.
+//   - And it would cost real decodes. In the quiet branch fft_task DISCARDS
+//     audio in 50 ms chunks (dsp.c). An upload is occasional and operator-
+//     initiated; this write runs every 30 s forever, so during FT8 it would
+//     throw audio away on every cycle - which is #51, the single most expensive
+//     bug in this project's history, reintroduced deliberately.
+// The contention being avoided is SPI2-SD DMA against WiFi-SDIO DMA, and the
+// ~10 fps spectrum stream is the SDIO traffic that matters. Pausing it is the
+// whole point; quieting the FFT is not.
 static bool mirror_diag_slow(void)
 {
     static char buf[DIAG_CHUNK];
@@ -374,13 +417,23 @@ static bool mirror_diag_slow(void)
     size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
     if (got == 0) return true;              // nothing new; not a failure
 
+    const bool was_paused = webserver_ws_is_paused();
+    if (!was_paused) webserver_ws_set_paused(true);
+
     FILE *f = fopen(SD_LOG_PATH, "ab");
-    if (!f) { sd_fail_diag("slowopen", errno); return false; }
-    bool ok = (fwrite(buf, 1, got, f) == got);
-    if (ok) { fflush(f); fsync(fileno(f)); }
-    else    { sd_fail_diag("slowwrite", errno); }
-    fclose(f);
-    if (ok) { s_diag_cursor = next; s_log_bytes += got; }
+    bool ok;
+    if (!f) {
+        sd_fail_diag("slowopen", errno);
+        ok = false;
+    } else {
+        ok = (fwrite(buf, 1, got, f) == got);
+        if (ok) { fflush(f); fsync(fileno(f)); }
+        else    { sd_fail_diag("slowwrite", errno); }
+        fclose(f);
+        if (ok) { s_diag_cursor = next; s_log_bytes += got; }
+    }
+
+    if (!was_paused) webserver_ws_set_paused(false);
     return ok;
 }
 
