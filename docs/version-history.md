@@ -3073,3 +3073,39 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 
 - A warning in the diagnostic log about the FT8 decoder "respawning" was describing entirely normal behaviour and made ordinary mode switches look like faults. It no longer does.
 - The diagnostic log now says so if the device ever runs out of network connections — a state in which the web page stops answering while everything else keeps working.
+
+### Shipped in v1.10.7 — 2026-09-02
+
+**A release of things users found, plus one crash that had been in the firmware for months.**
+
+**Reliability**
+
+- **A crash that rebooted the Tab5 during FT8 is fixed, and it was our own leftover debugging code.** A diagnostic routine from earlier weak-signal development was still in the decoder, trying to open a log file **once per decoded candidate — up to 140 times a slot, every slot**. The file could never be created, so it tried again forever, and each attempt asked for a small piece of memory the device was short of. Eventually one attempt failed and the firmware stopped. It showed up as a cyan screen and a restart, usually a minute or two into an FT8 session. Two occurrences were captured on the bench and traced exactly before the fix.
+- **Static IP addressing works.** It did not in v1.10.6 — the address you entered was always rejected and the Tab5 fell back to DHCP. Anyone who tried it saw it silently not take effect.
+- **A timed-out contact no longer blocks the station.** When a call went unanswered the message stayed on screen until you tapped it, and while it was there the automatic answering would not start anything new. It now clears itself after 20 seconds, counting down so you can see it go, and tapping still clears it at once. On the web page it is a button you can click.
+
+**WSPR**
+
+- **Transmit is off every time you open the WSPR page.** It used to come back on if that is how you left it last time, which meant a session could start transmitting without you deciding to.
+- **The first burst of a session can no longer go out at full power** *(Roy KI0ER)*. With "Protect finals" on, the reduction is confirmed by the radio before anything is armed, rather than the first transmission going out while the request was still in flight.
+- **The countdown on the TX button counts down to a real transmission.** It used to count down to the next opportunity and start again whenever the duty cycle decided not to transmit, which made it useless. The decision is now taken in advance, so the time shown is the time until a burst actually happens.
+- **The radio gets its power back after an interrupted session** *(Roy KI0ER)*. Leaving the WSPR page has always restored the maximum PA voltage, but a power cut is not leaving the page — so a session interrupted overnight could leave the radio at about a quarter power in every mode, with nothing on screen saying so. It is now restored when the radio reconnects, and only if the radio is still sitting at the reduced voltage, so it can never push one radio's setting onto another *(Michael KZ4LY)*.
+- **The spot list no longer says "Listening..." while transmitting** *(Roy KI0ER)*, and the waterfall stands completely still for the transmitting cycle instead of scrolling blank.
+- **The transmit controls are in one place.** "Allow transmitting" has gone from the settings drawer and from the web settings window: it set the same thing as the TX button on the WSPR page and did not track it, so the two could disagree.
+- **The TX button moved to the bottom of the panel** *(Randy N4OPI)*, clear of the edge used for swiping between screens.
+
+**FT8 and FT4**
+
+- **The band dropdown no longer switches you to FT4 by mistake** *(Steve KX7R)*. In v1.10.6 the browser's FT4 frequency list was accidentally filled with the FT8 frequencies, so whichever preset you picked switched the radio to FT4 — and there was no way back from the browser. The dropdown now has separate FT8 and FT4 groups, and the mode shown comes from the radio rather than being guessed.
+
+**Web page**
+
+- **A large heading says which screen you are on** — MODE: FT8, MODE: FT4 or MODE: WSPR — matching the Tab5.
+- **The FT8 page shows the slot occupancy strip and the slot countdown**, the same two the Tab5 has always had: which 50 Hz slots are busy in each transmit window, and how long the current slot has left.
+- **The WSPR page has the whole left-hand panel from the Tab5**: band selection, the TX button and its state, the finals-guard voltage, best DX, stations heard per cycle, and the wsprnet publishing status. Previously it showed only the list of decodes.
+- **The layout stops moving.** Both panels reserved no space, so everything shifted as decodes arrived; the receive status, decode count and controls now keep one position.
+
+**Smaller things**
+
+- Distances and bearings, the decode count and the receive status are all readable rather than fine print.
+- The mid-QSO buttons always take their own line rather than moving depending on window width.

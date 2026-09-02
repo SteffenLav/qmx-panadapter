@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.6.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.10.7.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.10.6 — a release of things users found on the air.** WSPR no longer loses **two** receive cycles to every transmission — the transmitter was being armed as much as two minutes before its slot and the receiver stood down for that whole wait as well, so at a 50% duty cycle the band went unheard about half the time it looked like it was listening. Its **TX** button now stops a burst at once instead of at the end of the cycle, and leaving WSPR gives the radio back the PA voltage it borrowed — that was being left behind, so CW and FT8 ran at a quarter power with nothing on the Tab5 to say so. **Picking a spot brings it into view** instead of landing at the screen edge, and **the still display now holds completely still and then jumps** rather than being dragged along in between, with at most half your filter width sliding off first. **A static IP that would lock you out of the web page is refused** before it can, blank mask/gateway/DNS are filled from the current lease, and a **Use DHCP** button on the Tab5 undoes one that already has. **A microSD card inserted while the Tab5 is running is finally noticed**, and a QMX restart can no longer reboot the Tab5.
+> **New in v1.10.7 — user reports, and one crash that had been in the firmware for months.** **A cyan screen and a restart a minute or two into an FT8 session is fixed**, and the cause was our own leftover debugging code: a routine from earlier weak-signal work was still trying to open a log file *once per decoded signal* — up to 140 times a slot, every slot — on a file that could never be created, until one attempt ran the device out of memory. **Static IP addressing works**; it did not in v1.10.6, where the address was always rejected and the Tab5 quietly fell back to DHCP. **The band dropdown in the browser no longer switches you to FT4 by mistake** — its FT4 list had been filled with the FT8 frequencies, and there was no way back without going to the radio. **WSPR transmit is off every time you open the page**, its countdown now counts down to a transmission that will really happen, and an interrupted session no longer leaves the radio at a quarter power in every mode. **A timed-out contact clears itself after 20 seconds** instead of sitting there blocking the automatic answering. And the web page gains a **large MODE heading**, the **slot occupancy strip and slot countdown** on FT8, and the **whole WSPR left-hand panel** — band, transmit state, best DX, stations per cycle and wsprnet status.
 >
 > **Also fixed: the right-hand quarter of the ×1 view was showing real signals at the wrong frequency.** The QMX's local oscillator sits 12 kHz below the dial, so the 48 kHz it sends covers dial−36 kHz to dial+12 kHz and there is nothing at all above dial+12. The display filled that quarter by wrapping the bottom of the band into it and the frequency scale labelled it as dial+12 to +24, so **tapping a signal there tuned you about 48 kHz away from it**. That region is now hatched and inert on both the Tab5 and the browser, and it says why it is empty.
 >
@@ -24,7 +24,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.6.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.7.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -1073,7 +1073,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.10.6 is here.** Next on the bench:
+**v1.10.7 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

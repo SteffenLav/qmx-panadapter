@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.6** — 2026-09-01
+**v1.10.7** — 2026-09-02
+
+**User reports, and one crash that had been in the firmware for months.**
+
+- **A crash that rebooted the Tab5 during FT8 is fixed** — and it was our own leftover debugging code. A routine from earlier weak-signal development was still trying to open a log file **once per decoded signal, up to 140 times a slot, every slot**, on a path that could never be created. Each attempt asked for a small piece of memory the device was short of, and eventually one failed and the firmware stopped. It looked like a cyan screen and a restart, usually a minute or two into an FT8 session.
+- **Static IP addressing works.** It did not in v1.10.6 — the address was always rejected and the Tab5 fell back to DHCP without saying so.
+- **The browser's band dropdown no longer switches you to FT4 by mistake** *(Steve KX7R)*. Its FT4 list had been filled with the FT8 frequencies, so any preset you picked switched the radio to FT4, with no way back from the browser. There are separate FT8 and FT4 groups now, and the mode shown comes from the radio.
+- **A timed-out contact no longer blocks the station.** It stayed on screen until tapped, and while it was there the automatic answering would not start anything new. It clears itself after 20 seconds, counting down as it goes.
+- **WSPR transmit is off every time you open the page**, rather than resuming because of how you left it last time.
+- **The WSPR countdown counts down to a real transmission** *(Roy KI0ER)*. It used to count to the next opportunity and restart whenever the duty cycle decided not to transmit.
+- **The first WSPR burst of a session can no longer go out at full power** *(Roy KI0ER)*, and **an interrupted session no longer leaves the radio at a quarter power in every mode** — the PA voltage is restored when the radio reconnects, and only if that radio is still sitting at the reduced value, so one radio's setting can never be pushed onto another *(Michael KZ4LY)*.
+- **The web page gains a large MODE heading**, the **slot occupancy strip and slot countdown** on FT8, and the **whole WSPR left-hand panel** — band, transmit state, finals-guard voltage, best DX, stations per cycle and wsprnet status. Both panels also stop shifting about as decodes arrive.
+
+## Previous Releases
+
+### v1.10.6 — 2026-09-01
 
 **A release of things users found — almost every item here came from a report on the air.**
 
@@ -17,8 +32,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A static IP that would lock you out is refused**, and blank mask/gateway/DNS are filled from the current DHCP lease rather than assumed. There is also a **"Use DHCP" button on the Tab5** *(Michael KZ4LY)*, shown only when a static address is set — until now the only way back was the web page the wrong address had just made unreachable.
 - **A QMX restart could reboot the Tab5.** Worth knowing if you have seen this: the reboot also disturbs the radio, so what looks like the QMX wedging can be the Tab5 restarting underneath it.
 - **The microSD card is handled better.** Its first write no longer collides with WiFi starting up, a failed background write no longer unmounts a working card, and the card is retried for an hour after start-up — so **a card inserted while the Tab5 is running is now picked up** within about five minutes instead of being ignored until the next restart.
-
-## Previous Releases
 
 ### v1.10.5 — 2026-09-01
 
@@ -543,7 +556,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.6.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.7.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

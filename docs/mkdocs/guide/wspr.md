@@ -53,9 +53,11 @@ The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR
 
 All of WSPR's settings live in the **settings drawer** (swipe ← from the right edge) under **WSPR**, and appear only while the WSPR page is up. The page itself keeps just one control — the **TX** button — because that is the only one you reach while a session is running.
 
-#### Allow transmitting
+#### Transmitting is the TX button, and nothing else
 
-Off by default. Turning it on lets the station beacon; turning it off makes the Tab5 a pure receiver, which is a perfectly good way to use WSPR.
+There is no separate "allow transmitting" setting. The **TX** button on the page is the only control, so there is nothing that can disagree with it.
+
+**It is off every time you open the WSPR page**, whatever you did last session. A beacon that resumes on its own because of how you left it a week ago is not a decision you made, so the page always starts as a pure receiver — which is a perfectly good way to use WSPR — and transmitting is something you switch on deliberately each time.
 
 **Your callsign and grid must be set**, in **Station → Callsign & Grid square**. Without them there is no transmission at all — the same rule FT8 follows. WSPR sends your callsign to every station that hears you and publishes it to a public database, so it uses the identity you entered and nothing else.
 
@@ -126,20 +128,22 @@ It needs WiFi and your callsign and grid.
 
 ### 4. Transmitting
 
-With **Allow transmitting** on, a callsign and grid set, and a duty cycle above 0%, the **TX** button on the page arms the station. Each cycle is then decided by the duty cycle, and the button shows what is happening.
+With a callsign and grid set and a duty cycle above 0%, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the duty cycle, and the button shows what is happening.
+
+**The countdown on the button is the time until a real transmission.** The duty-cycle decision is taken in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.
 
 A few things worth knowing before you leave it running:
 
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
 - **SWR protection still applies.** If the SWR limit in **Radio → SWR protection** is exceeded, transmitting stops.
-- **The Tab5 wakes up on the page you left it on.** If you leave it on WSPR with transmitting enabled, it resumes beaconing after a power cycle — including after an unexpected one, with nobody present. That is what a beacon is for, but it is worth knowing before you leave the shack.
+- **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
 - **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **FT8 Simulation Mode** in the drawer; it interlocks WSPR TX as well.
 
 ---
 
 ### 5. From the browser
 
-The web UI mirrors whatever page the Tab5 is on. Switch it to WSPR with the **Switch to WSPR** link in the bottom bar, and the spot table appears in the browser as well.
+The web UI mirrors whatever page the Tab5 is on. Switch it to WSPR with the **Switch to WSPR** link in the bottom bar, and the browser shows the same page the Tab5 does: a **MODE: WSPR** heading, the band selection, the **TX** button with its countdown, the finals-guard voltage, best DX, stations heard per cycle, the wsprnet publishing status — and the table of spots.
 
 The table is shown only while the Tab5 is on the WSPR page, because that is the only time the receiver is running — on any other page it would be a frozen list that looked live.
 
