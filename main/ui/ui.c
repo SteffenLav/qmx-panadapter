@@ -9389,10 +9389,6 @@ static void drawer_sota_cb(lv_event_t *e)
  * and would put a station on the air under an identity the operator did not
  * think they were setting.
  */
-static void drawer_check_wspr_tx_cb(lv_event_t *e)
-{
-    settings_set_wspr_tx_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
-}
 
 static void drawer_check_wspr_net_cb(lv_event_t *e)
 {
@@ -11234,24 +11230,36 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 352);
+        /* 302, not 352: the "Allow transmitting" row above was removed and the
+         * height and the `y +=` below must move together - this file has twice
+         * had a section overlap the next one by changing only one of them. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 302);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_t *l1 = lv_label_create(sec);
-        lv_label_set_text(l1, "Allow transmitting");
-        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
-        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 46);
-        lv_obj_t *cb1 = make_drawer_checkbox(sec, ws.wspr_tx_en, drawer_check_wspr_tx_cb, NULL);
-        lv_obj_align(cb1, LV_ALIGN_TOP_RIGHT, 0, 42);
+        /* ⛔ "Allow transmitting" IS GONE FROM HERE (operator, 2026-09-02:
+         * "just delete it from the drawer and settings on the web - it is
+         * confusing to have both - i like the button (with count down) the
+         * most").
+         *
+         * It set wspr_tx_en - the SAME setting the page's TX button toggles -
+         * so there were two controls for one thing, and they did not track each
+         * other: this checkbox was built once from the settings and never
+         * refreshed, so after the button (or the entry-time force-off) changed
+         * the value it sat there showing the opposite. That is the #291 class,
+         * named in drawer_refresh_wspr()'s own comment.
+         *
+         * Deleting the duplicate is better than syncing it. The TX button is on
+         * the page where transmitting is decided, it shows the state AND the
+         * countdown, and a second copy of a control that keys a radio is worth
+         * less than the confusion it costs. */
         lv_obj_t *l2 = lv_label_create(sec);
         lv_label_set_text(l2, "Declared power");
         lv_obj_set_style_text_color(l2, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
-        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 96);
+        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 46);
         lv_obj_t *dd = lv_dropdown_create(sec);
         lv_dropdown_set_options(dd,
             "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
@@ -11263,7 +11271,7 @@ static void drawer_build(void)
          * own text under the chevron, and left nowhere for the measured hint.
          * Screenshot-reported; the fix is the layout, not the font. */
         lv_obj_set_size(dd, DRAWER_W - 32, 50);
-        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 136);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 86);
         s_wspr_dbm_dd = dd;   /* the guard moves this when it changes state */
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
         {
@@ -11305,7 +11313,7 @@ static void drawer_build(void)
                 lv_label_set_text(hint, hint_txt);
                 lv_obj_set_style_text_color(hint, lv_color_hex(0x9AA6B2), 0);
                 lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
-                lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 194);
+                lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 144);
             }
         }
 
@@ -11335,11 +11343,11 @@ static void drawer_build(void)
         lv_label_set_text(l3, "Protect finals");
         lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
-        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 232);
+        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 182);
 
         s_wspr_pa_btn = lv_btn_create(sec);
         lv_obj_set_size(s_wspr_pa_btn, DRAWER_W - 32, 60);
-        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 272);
+        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 222);
         lv_obj_add_event_cb(s_wspr_pa_btn, drawer_wspr_pa_btn_cb, LV_EVENT_CLICKED, NULL);
         s_wspr_pa_lbl = lv_label_create(s_wspr_pa_btn);
         lv_obj_set_style_text_font(s_wspr_pa_lbl, &lv_font_montserrat_28, 0);
@@ -11349,7 +11357,7 @@ static void drawer_build(void)
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped. */
-        y += 352;
+        y += 302;
     }
     {
         qmx_settings_t ws;

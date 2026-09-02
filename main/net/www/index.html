@@ -2967,8 +2967,11 @@ const SET_FIELDS = [
   // All four were already accepted by /api/settings GET *and* POST and were
   // invisible in the browser - the worst of both, exactly the gap the v1.6.0
   // parity pass named. Added with the v1.10.0 WSPR launch.
-  ["WSPR", "wspr_tx_en",  "bool", "Allow transmitting",
-     "Receiving needs nothing; transmitting also needs your callsign and grid"],
+  /* "Allow transmitting" was here and is deliberately gone (operator,
+     2026-09-02): it set the same wspr_tx_en the WSPR page's TX button
+     toggles, so there were two controls for one thing and they did not
+     track each other. The TX button is the one that stays - it lives where
+     transmitting is decided and shows the countdown with it. */
   // Declared power goes to 37 dBm and carries NO warning words - matching the
   // Tab5. Capping it was yesterday's mistake: this number is published to
   // wsprnet and does not command the radio, so a cap could only prevent an

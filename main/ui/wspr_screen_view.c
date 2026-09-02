@@ -1465,8 +1465,30 @@ void wspr_screen_view_tick(void)
             snprintf(txt, sizeof(txt), "TX  in %d:%02d%s", secs / 60, secs % 60,
                      unprotected ? "  FULL PWR" : "");
             lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        } else if (st.wspr_tx_en) {
+            /* ⭐ COUNT DOWN WHENEVER TRANSMIT IS ON, not only while ARMED
+             * (operator, 2026-09-02: "TX ON button never count down any more?
+             * This was an important info").
+             *
+             * ⚠ I removed this without meaning to. The countdown used to be
+             * visible because of a BUG: an arm that missed its own even minute
+             * was scheduled for the NEXT one, so ARMED lasted nearly two
+             * minutes and the button counted through it. Fixing that (this
+             * release) made ARMED last about a second, and the countdown
+             * vanished with it.
+             *
+             * So it comes back from the honest source: the time to the next
+             * even minute, which is when a burst may start. It says "next"
+             * rather than promising one, because the duty cycle is a random
+             * roll taken at the boundary - at 50 % roughly every other slot
+             * transmits, and claiming a burst that then does not happen would
+             * be worse than saying nothing. */
+            int nxt = wspr_tx_seconds_until_next_slot();
+            if (nxt < 0) nxt = 0;
+            snprintf(txt, sizeof(txt), "TX  ON  next %d:%02d%s", nxt / 60, nxt % 60,
+                     unprotected ? "  FULL PWR" : "");
         } else {
-            snprintf(txt, sizeof(txt), "TX  %s%s", st.wspr_tx_en ? "ON" : "OFF",
+            snprintf(txt, sizeof(txt), "TX  OFF%s",
                      unprotected ? "  FULL PWR" : "");
             lv_obj_set_style_bg_color(s_btn_tx,
                 lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
