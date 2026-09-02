@@ -3583,6 +3583,61 @@ static esp_err_t wspr_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "tx_secs", secs);
     }
 
+    /* ⭐ THE THREE THINGS THE TAB5'S LEFT PANE SHOWS AND THE BROWSER DID NOT.
+     * Operator, 2026-09-02: "I still see no: Stations per cycle graphics - Best
+     * DX - wsprnet data". Each is served from the SAME accessor the Tab5 reads,
+     * never re-derived here, so the two screens cannot drift apart - the rule
+     * the KM/BRG/COUNTRY columns already follow.
+     *
+     * All three are small and change every cycle, so unlike the band list they
+     * belong in the ordinary poll rather than behind a query flag. */
+    {
+        wspr_spot_t dx;
+        if (wspr_spots_best_dx(&dx) && dx.km >= 0) {
+            cJSON *o = cJSON_AddObjectToObject(root, "best_dx");
+            cJSON_AddStringToObject(o, "call", dx.call);
+            cJSON_AddStringToObject(o, "grid", dx.grid);
+            /* Spelled out, like the spot rows' country column and for the same
+             * reason: the browser has the width. Falls back the way the Tab5's
+             * own line does when the callsign is not in the DXCC table. */
+            {
+                const char *full = dxcc_lookup(dx.call);
+                cJSON_AddStringToObject(o, "country",
+                    (full && full[0]) ? full : (dx.cty[0] ? dx.cty : dx.grid));
+            }
+            cJSON_AddNumberToObject(o, "km",  dx.km);
+            cJSON_AddNumberToObject(o, "pwr", dx.power_dbm);
+        } else {
+            /* null, not an empty object - "nothing heard yet" is a state the
+             * browser should render as such, not as a row of blanks. */
+            cJSON_AddNullToObject(root, "best_dx");
+        }
+    }
+
+    {
+        uint8_t h[WSPR_CYCLE_HISTORY];
+        int nh = wspr_rx_cycle_history(h, WSPR_CYCLE_HISTORY);
+        /* Oldest first, as the accessor promises. The browser scales to the
+         * busiest cycle held rather than to a fixed ceiling - what matters is
+         * whether the band is rising or falling, and a fixed scale flattens a
+         * quiet band into nothing. Same choice the Tab5's bars make. */
+        cJSON *a = cJSON_AddArrayToObject(root, "history");
+        for (int i = 0; i < nh; i++) cJSON_AddItemToArray(a, cJSON_CreateNumber(h[i]));
+    }
+
+    {
+        cJSON *o = cJSON_AddObjectToObject(root, "net");
+        /* ⚠ ASK the uploader, never restate a belief about it. The Tab5's own
+         * line said "off" as a string literal while the operator watched his
+         * spots appear on wsprnet.org. */
+        cJSON_AddStringToObject(o, "status", wsprnet_status());
+        /* How many of the calls heard are eligible under the heard-more-than-
+         * once rule that gates publication - the part an operator cannot work
+         * out from anywhere else on the page. */
+        cJSON_AddNumberToObject(o, "confirmed", wspr_spots_repeat_calls());
+        cJSON_AddNumberToObject(o, "calls",     wspr_spots_unique_calls());
+    }
+
     /* The WSPR dial frequencies, sent ONLY when asked for (?bands=1) - the list
      * never changes, so putting it in a poll would spend bytes on this link for
      * ever. Same contract as /api/status?presets=1, and built from the SAME

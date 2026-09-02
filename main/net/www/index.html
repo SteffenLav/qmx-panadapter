@@ -357,6 +357,39 @@
      for both so the row reads as one set of controls. */
   #wspr-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
   .wspr-ind { color: var(--dim); font-size: 13px; }
+  /* ⛔ THE WSPR CARD MUST NOT CHANGE HEIGHT AS SPOTS ARRIVE. It is the last row
+     of the page grid, so a card that grows pushes its own top edge upward -
+     every control above the table moved a little further up each cycle, and the
+     list appeared to "grow up from the bottom" (operator, 2026-09-02: "I'd like
+     it to fall down from the middle starting exactly where the first decode
+     will end when we have a full window").
+
+     So the scroll box is a FIXED height, not a max-height: the space a full
+     window will occupy is reserved from the first paint, the first spot lands
+     where it will still be when the window is full, and later ones fall down
+     the reserved box. Everything above it - band, TX, indicators, Best DX, the
+     bars, wsprnet - then has a fixed spot on the screen, which was the point.
+
+     ⚠ Keep height (not min-height) here. min-height plus content growth is the
+     same moving target with an extra step. */
+  #wspr-scroll { height: 40vh; overflow: auto;
+                 border: 1px solid #333; border-radius: 6px; }
+  /* The Tab5's left pane, laid out across instead of down - the browser has the
+     width the 340 px pane does not. Wraps to one column on a phone. */
+  #wspr-extras { display:flex; flex-wrap:wrap; gap:18px 28px; align-items:flex-end;
+                 margin:10px 0 8px; }
+  #wspr-extras h4 { margin:0 0 4px; font-size:12px; font-weight:600;
+                    letter-spacing:0.08em; color:var(--dim); }
+  #wspr-dx { font-size:15px; color:var(--accent); line-height:1.35; }
+  #wspr-dx .sub { color:var(--dim); font-size:13px; }
+  /* Bars scaled to the busiest cycle held, exactly as the Tab5 scales them:
+     the SHAPE is what is being read, and a fixed ceiling flattens a quiet band
+     into nothing. */
+  #wspr-hist { display:flex; align-items:flex-end; gap:2px; height:34px; }
+  #wspr-hist i { width:6px; background:#3a8f5a; border-radius:1px 1px 0 0; }
+  #wspr-hist i.none { background:#553333; }   /* cycle ran, heard nothing */
+  #wspr-hist i.gap  { background:#333; }      /* no cycle there yet */
+  #wspr-net { font-size:15px; color:var(--dim); line-height:1.35; }
   #ft8-actions button, #ft8-actions select,
   #wspr-actions button, #wspr-actions select {
     font: inherit; font-size: clamp(0.95rem, 1.5vw, 1.5rem);
@@ -758,7 +791,25 @@
         <span id="wspr-lasttx" class="wspr-ind"></span>
       </div>
       <div id="wspr-status" class="wspr-ind" style="margin:6px 0 8px;"></div>
-      <div style="max-height:40vh; overflow:auto; border:1px solid #333; border-radius:6px;">
+      <!-- The rest of the Tab5's left pane. Operator, 2026-09-02: "I still see
+           no: Stations per cycle graphics - Best DX - wsprnet data". Every
+           figure comes from /api/wspr, i.e. from the same accessors the Tab5
+           reads, so neither screen can tell a different story about the band. -->
+      <div id="wspr-extras">
+        <div>
+          <h4>BEST DX</h4>
+          <div id="wspr-dx">-</div>
+        </div>
+        <div>
+          <h4>STATIONS PER CYCLE</h4>
+          <div id="wspr-hist"></div>
+        </div>
+        <div>
+          <h4>WSPRNET</h4>
+          <div id="wspr-net">-</div>
+        </div>
+      </div>
+      <div id="wspr-scroll">
         <table id="wspr-table" style="width:100%; border-collapse:collapse; font-size:13px; font-family:ui-monospace,'DejaVu Sans Mono',Consolas,monospace;">
           <thead><tr id="wspr-head"></tr></thead>
           <tbody id="wspr-body"></tbody>
@@ -3601,6 +3652,64 @@ async function wsprFillBands() {
   });
 })();
 
+/* Best DX / stations-per-cycle / wsprnet - the rest of the Tab5's left pane.
+   Presentation only: every figure is decided on the device, so the two screens
+   read from one source and cannot disagree about the band. */
+function wsprRenderExtras(j) {
+  /* ⚠ Built from text nodes, not innerHTML. The callsign and country come off
+     the air, and this page's own esc() is nested inside the ADIF viewer and out
+     of scope here - so the choice was a second copy of an escape function or no
+     escaping question at all. This is the one with nothing to get wrong. */
+  const dx = document.getElementById("wspr-dx");
+  dx.textContent = "";
+  if (j.best_dx && j.best_dx.call) {
+    const d = j.best_dx;
+    const where = document.createElement("span");
+    where.className = "sub";
+    where.textContent = d.country || d.grid || "";
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = Math.round(d.km) + " km · " + d.pwr + " dBm";
+    dx.append(d.call + " ", where, document.createElement("br"), sub);
+  } else {
+    dx.textContent = "-";
+  }
+
+  /* Scale to the busiest cycle held, never to a fixed ceiling: a fixed scale
+     flattens a quiet band into nothing, and it is the SHAPE - rising or
+     falling - that is being read. Same choice the Tab5's bars make.
+     Oldest at the left, so a partly-filled history grows rightwards the way
+     the decode list does. */
+  const hist = document.getElementById("wspr-hist");
+  const h = Array.isArray(j.history) ? j.history : [];
+  const BARS = 40, H = 34;
+  let peak = 1;
+  for (const v of h) if (v > peak) peak = v;
+  let bars = "";
+  for (let i = 0; i < BARS; i++) {
+    const v = (i < h.length) ? h[i] : -1;
+    const px = (v <= 0) ? 2 : Math.max(2, Math.round(v * (H - 2) / peak) + 2);
+    const cls = (v < 0) ? "gap" : (v === 0) ? "none" : "";
+    const t = (v < 0) ? "no cycle yet" : v + " station" + (v === 1 ? "" : "s");
+    bars += "<i class='" + cls + "' style='height:" + px + "px' title='" + t + "'></i>";
+  }
+  hist.innerHTML = bars;
+
+  const net = document.getElementById("wspr-net");
+  net.textContent = "";
+  if (j.net) {
+    /* The confirmed count is the part an operator cannot work out from anywhere
+       else on this page: how many of the calls heard are eligible under the
+       heard-more-than-once rule that gates publication. */
+    const cnt = document.createElement("span");
+    cnt.style.fontSize = "13px";
+    cnt.textContent = j.net.confirmed + "/" + j.net.calls + " confirmed";
+    net.append(j.net.status || "-", document.createElement("br"), cnt);
+  } else {
+    net.textContent = "-";
+  }
+}
+
 async function pollWspr() {
   if (!wsprEnabled) return;
   if (wsprPollInFlight) return;          /* in-flight guard: this board's httpd
@@ -3652,6 +3761,12 @@ async function pollWspr() {
       const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
       document.getElementById("wspr-tx").textContent = cfg.wspr_tx_en ? "TX ON" : "TX OFF";
     } catch (e) { /* leave the last label */ }
+
+    /* ⚠ BEFORE the table, deliberately. The table block below returns early
+       when there are no spots, and these three panels are at their most useful
+       exactly then - a run of empty bars says "the loop is running and the band
+       is dead", which an absent panel does not. */
+    wsprRenderExtras(j);
 
     const head = document.getElementById("wspr-head");
     if (!head.children.length) {
