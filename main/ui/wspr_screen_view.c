@@ -1555,7 +1555,20 @@ void wspr_screen_view_tick(void)
     lv_label_set_text(s_lbl_heard, h);
 
     if (n == 0) {
-        lv_label_set_text(s_lbl_rows, "Listening...");
+        /* ⭐ NOT "Listening..." WHILE THE RADIO IS KEYED (Roy KI0ER, 2026-09-01:
+         * "while TX ON AIR is showing, over in the empty decodes list, it still
+         * says listening ...").
+         *
+         * He filed it as cosmetic. It is not quite: during a transmit cycle the
+         * receiver really is stood down - wspr_rx.c skips the capture entirely
+         * and the status line says "transmitting" - so "Listening" was the one
+         * part of the screen making a false statement, and it was doing it next
+         * to a button reading TX ON AIR. Say what the radio is actually doing. */
+        char txt[64];
+        wspr_tx_state_t tst = wspr_tx_get_status(txt, sizeof(txt), NULL);
+        lv_label_set_text(s_lbl_rows,
+            tst == WSPR_TX_ACTIVE ? "Transmitting - not receiving this cycle"
+                                  : "Listening...");
         return;
     }
 
