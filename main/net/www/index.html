@@ -31,7 +31,18 @@
   }
   body {
     display: grid;
-    grid-template-rows: auto auto 1fr auto 8px 3fr auto auto auto;
+    /* ⛔ THE ROW LIST LIVES HERE AND NOWHERE ELSE. The split-handle drag used
+       to rebuild this whole string in JS, so the row COUNT existed in two
+       places - and on 2026-09-02 they drifted the moment a row was added for
+       the mode heading: the inline copy still started "auto 1fr", so the
+       heading landed in a 1fr row and stretched to 153 px, which the operator
+       saw as "all the black dead space" pushing the decodes to the bottom.
+       (It was already one row short before that, which is why #bot had been
+       quietly living in an implicit row.)
+
+       The drag now sets --wf-fr only, so the number of rows is unknown to the
+       JavaScript and cannot drift from it again. */
+    grid-template-rows: auto auto 1fr auto 8px var(--wf-fr, 3fr) auto auto auto;
     gap: 0; padding: 0.3rem;
   }
   /* Explicit row assignment (not document-order auto-placement): the
@@ -731,7 +742,7 @@
     </div>
   </div>
 
-  <div id="mode-banner">MODE: PANADAPTER</div>
+  <div id="mode-banner" style="display:none"></div>
 
   <div id="spec-wrap"><canvas id="spec" width="1024" height="200"></canvas><div class="tune-overlay" id="spec-overlay"></div></div>
 
@@ -3928,7 +3939,9 @@ async function pollDecodes() {
     // The KM column has to become MI the moment the Tab5 setting is flipped.
     decState.unit = d.miles ? "MI" : "KM";
     decState.mode = d.mode || "FT8";
-    document.getElementById("dec-title").textContent = decState.mode + " decode list";
+    /* Just "Decode list": the mode heading above the panel already says FT8 or
+       FT4, and saying it twice on one screen is noise. */
+    document.getElementById("dec-title").textContent = "Decode list";
     document.getElementById("dec-count").textContent =
       decState.rows.length ? decState.rows.length + " station" + (decState.rows.length === 1 ? "" : "s") + " heard"
                   : "nothing heard yet";
@@ -4685,10 +4698,16 @@ async function tick() {
        keeps that from touching the DOM 10 times a second. */
     {
       const mb = document.getElementById("mode-banner");
+      /* Nothing on the panadapter: the Tab5 has no MODE title on that screen
+         either, and mirroring it was the whole request. Hidden rather than
+         emptied, so the grid row collapses instead of leaving a gap. */
       const want = screen === "wspr" ? "MODE: WSPR"
                  : screen === "ft8"  ? "MODE: " + (ft8IsFt4() ? "FT4" : "FT8")
-                                     : "MODE: PANADAPTER";
-      if (mb && mb.textContent !== want) mb.textContent = want;
+                                     : "";
+      if (mb && mb.textContent !== want) {
+        mb.textContent = want;
+        mb.style.display = want ? "" : "none";
+      }
     }
 
     /* TX/QSO status banner - updated every poll while the FT8 screen is up.
@@ -7269,7 +7288,10 @@ connectWs();
 
   function applyRatio(fr) {
     wfFr = Math.max(0.3, Math.min(10, fr));
-    document.body.style.gridTemplateRows = "auto 1fr auto 8px " + wfFr.toFixed(3) + "fr auto auto";
+    /* One custom property, not the whole track list - see the note on
+       grid-template-rows. Rewriting the list here meant maintaining a second
+       copy of the page's row structure in JavaScript. */
+    document.body.style.setProperty("--wf-fr", wfFr.toFixed(3) + "fr");
   }
   applyRatio(wfFr);
 
