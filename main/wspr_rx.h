@@ -204,6 +204,17 @@ int wspr_rx_cycle_history(uint8_t *out, int max);
  * Safe from any task: one read of an int64 and some arithmetic. */
 int wspr_rx_seconds_to_next_tx(void);
 
+/* Put the radio's Max. PA voltage back if the WSPR finals guard still has one
+ * outstanding, and say why in the log. Idempotent and safe from any task - it
+ * returns immediately when nothing is outstanding, which is the normal case on
+ * almost every boot.
+ *
+ * Called when leaving WSPR AND at CAT link-up: a power cut during a WSPR
+ * session never runs the leave path, so without the link-up call the radio
+ * stays capped at about 1 W in EVERY mode until the operator next happens to
+ * visit the WSPR page. Field-reported by Roy KI0ER, 2026-09-02. */
+void wspr_pa_guard_release_pending(const char *why);
+
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
  * wspr_duty_pct, or the countdown keeps describing the previous setting until

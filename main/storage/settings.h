@@ -461,6 +461,7 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
 uint8_t settings_get_wspr_duty_pct(void);
+uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
  *

@@ -15,6 +15,7 @@
 #include "usb/cdc_acm_host.h"
 #include "bsp/m5stack_tab5.h"
 
+#include "wspr_rx.h"   // wspr_pa_guard_release_pending - see the VN; handler
 #include "ui.h"
 #include "diag_log.h"
 #include "settings.h"     // cw_tx_offset_hz - the CW split maintainer reads it live
@@ -790,6 +791,14 @@ static void process_cat_message(const char *msg, size_t len)
         // that the version is known - the drawer may already have been built
         // (lazy, first-open) before VN; answered.
         ui_notify_qmx_fw_known();
+        /* ⭐ AND PUT THE PA VOLTAGE BACK IF THE WSPR GUARD STILL OWES IT.
+         * A power cut during a WSPR session never runs the leave path, so the
+         * radio can come up still capped at about 1 W with the value to restore
+         * sitting in NVS and nothing on the FT8 or panadapter path ever looking
+         * at it (Roy KI0ER, 2026-09-02). Here because this is the first moment
+         * CAT is proven alive, and it is idempotent - on almost every boot
+         * there is nothing outstanding and it returns at once. */
+        wspr_pa_guard_release_pending("radio reconnected with a guard outstanding");
         return;
     }
     // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the

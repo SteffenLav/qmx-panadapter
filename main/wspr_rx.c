@@ -1793,13 +1793,40 @@ bool wspr_rx_start(void)
  * leaving the page is the case the loop cannot cover. */
 static void wspr_pa_guard_release(void)
 {
-    qmx_settings_t ws;
-    settings_load_all(&ws);
-    if (ws.wspr_pa_saved_x10 == 0) return;      /* nothing outstanding */
-    cat_request_pa_voltage_x10(ws.wspr_pa_saved_x10);
+    wspr_pa_guard_release_pending("leaving WSPR");
+}
+
+/* ⭐ THE RESTORE HAS TO BE REACHABLE FROM OUTSIDE WSPR, because the case that
+ * needs it is the one where WSPR never gets to run again.
+ *
+ * Roy KI0ER, 2026-09-02: WSPR ran overnight, his supply switched off on a timer
+ * mid-session, and in the morning he went straight to FT8 and found the radio
+ * still capped at 6.0 V. Leaving the WSPR page restores correctly and always
+ * has - but a power cut is not leaving the page. wspr_rx_stop() never ran, the
+ * value to restore sat in NVS, and nothing on the FT8 or panadapter path ever
+ * looks at it. Every subsequent transmission on any mode was at about 1 W.
+ *
+ * ⚠ He guessed the cause differently - that the radio had reported 6.0 V as its
+ * own full-power setting and the guard had adopted it. That would be the
+ * "a guard inherits whatever the last session left" hazard already recorded in
+ * CLAUDE.md, and it is real, but it is not this: the capture only runs when the
+ * stored value is 0, and his was 11.5. The stored value was right the whole
+ * time; nothing was asking for it.
+ *
+ * So this is called at CAT link-up too. Idempotent - it returns at once when
+ * there is nothing outstanding, which is the normal case on almost every boot.
+ *
+ * ⚠ Uses the narrow accessor, never settings_load_all(): one caller is the CAT
+ * link task on a 5 KB stack, and the settings struct is multi-kilobyte. That is
+ * the bug class that has boot-looped this board four times. */
+void wspr_pa_guard_release_pending(const char *why)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;                       /* nothing outstanding */
+    cat_request_pa_voltage_x10(back);
     settings_set_wspr_pa_saved_x10(0);
-    ESP_LOGW(TAG, "PA guard: leaving WSPR - Max. PA voltage restored to %u.%u V",
-             ws.wspr_pa_saved_x10 / 10, ws.wspr_pa_saved_x10 % 10);
+    ESP_LOGW(TAG, "PA guard: %s - Max. PA voltage restored to %u.%u V",
+             why ? why : "restoring", back / 10, back % 10);
 }
 
 void wspr_rx_stop(void)

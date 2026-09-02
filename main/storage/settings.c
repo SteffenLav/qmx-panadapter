@@ -1785,6 +1785,15 @@ uint8_t settings_get_wspr_duty_pct(void)
     return v;
 }
 
+uint16_t settings_get_wspr_pa_saved_x10(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.wspr_pa_saved_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 /* ⛔ THIS EXISTS BECAUSE ITS CALLERS RUN ON `sys_evt`, WHOSE STACK IS 2808 B.
  *
  * The static-IP code is driven from the WiFi and IP event handlers, and the
