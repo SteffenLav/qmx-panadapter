@@ -20,6 +20,7 @@
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
+#include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
@@ -3569,6 +3570,44 @@ static esp_err_t wspr_handler(httpd_req_t *req)
           cJSON_AddNumberToObject(root, "advised_dbm", wspr_tx_advised_dbm());
       } }
     cJSON_AddNumberToObject(root, "pa_voltage_x10", cat_get_pa_voltage_x10());
+
+    /* ⭐ THE TRANSMIT STATE, so the browser can show what the Tab5's TX button
+     * shows rather than inferring it from rx_status text. Same three states and
+     * the same countdown the button uses. */
+    {
+        char txt[64];
+        int secs = 0;
+        wspr_tx_state_t tst = wspr_tx_get_status(txt, sizeof(txt), &secs);
+        cJSON_AddStringToObject(root, "tx_state",
+            tst == WSPR_TX_ACTIVE ? "active" : tst == WSPR_TX_ARMED ? "armed" : "idle");
+        cJSON_AddNumberToObject(root, "tx_secs", secs);
+    }
+
+    /* The WSPR dial frequencies, sent ONLY when asked for (?bands=1) - the list
+     * never changes, so putting it in a poll would spend bytes on this link for
+     * ever. Same contract as /api/status?presets=1, and built from the SAME
+     * accessor the Tab5's own picker uses (wspr_bands), so the two cannot
+     * disagree about what a band is.
+     *
+     * ⚠ That mattered this week: the FT8/FT4 equivalent went through a second
+     * path that had been compiled out, and served the FT8 table as FT4 without
+     * anything noticing. One accessor, both screens. */
+    {
+        char q[96];
+        if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+            httpd_query_key_value(q, "bands", (char[4]){0}, 4) == ESP_OK) {
+            int nb = 0;
+            const wspr_band_t *bl = wspr_bands(&nb);
+            cJSON *arr = cJSON_AddArrayToObject(root, "bands");
+            for (int i = 0; i < nb; i++) {
+                cJSON *o = cJSON_CreateObject();
+                cJSON_AddStringToObject(o, "band",  bl[i].name);
+                cJSON_AddStringToObject(o, "label", bl[i].label);
+                cJSON_AddNumberToObject(o, "hz",    (double)bl[i].dial_hz);
+                cJSON_AddItemToArray(arr, o);
+            }
+        }
+    }
 
     cJSON *arr = cJSON_AddArrayToObject(root, "spots");
     for (int i = 0; i < n; i++) {

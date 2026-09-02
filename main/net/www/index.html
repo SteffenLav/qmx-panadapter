@@ -355,6 +355,9 @@
   /* The preset <select> sits among these buttons and looked foreign next to
      them (Randy N4OPI asked whether it was intentional - it was not). Same rule
      for both so the row reads as one set of controls. */
+  #wspr-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
+  .wspr-ind { color: var(--dim); font-size: 13px; }
+  #wspr-actions button, #wspr-actions select {
   #ft8-actions button, #ft8-actions select {
     font: inherit; font-size: clamp(0.95rem, 1.5vw, 1.5rem);
     padding: clamp(0.35rem, 0.7vw, 0.7rem) clamp(0.8rem, 1.8vw, 1.8rem);
@@ -738,10 +741,21 @@
        ===================================================================== -->
   <div class="card" id="wspr-card" style="display:none"><div class="card-in">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
-        <strong style="color:#ffa040">WSPR spots</strong>
+        <strong style="color:#ffa040">WSPR</strong>
         <span id="wspr-count" style="color:var(--dim); font-size:13px"></span>
         <span id="wspr-note" style="color:var(--dim); font-size:12px"></span>
       </div>
+      <!-- The Tab5's left pane, mirrored. Operator, 2026-09-02: "Web WSPR is not
+           showing anything other than decodes at the bottom.... no band selector...
+           no TX OFF/TX ON... nothing of all the text and indicators". -->
+      <div id="wspr-actions">
+        <select id="wspr-band" title="WSPR dial frequency - the same list the Tab5 offers"><option value="">Band…</option></select>
+        <button id="wspr-tx" title="Enable or disable WSPR transmit. The finals guard turns the radio down before the first burst.">TX OFF</button>
+        <span id="wspr-state" class="wspr-ind"></span>
+        <span id="wspr-pa" class="wspr-ind"></span>
+        <span id="wspr-lasttx" class="wspr-ind"></span>
+      </div>
+      <div id="wspr-status" class="wspr-ind" style="margin:6px 0 8px;"></div>
       <div style="max-height:40vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <table id="wspr-table" style="width:100%; border-collapse:collapse; font-size:13px; font-family:ui-monospace,'DejaVu Sans Mono',Consolas,monospace;">
           <thead><tr id="wspr-head"></tr></thead>
@@ -3537,6 +3551,51 @@ function wsprCycleLabel(utc) {
    contention on the link the spectrum stream shares. */
 let wsprEnabled = false;
 let wsprPollInFlight = false;
+/* The band list is fetched ONCE - it never changes - exactly like the FT8
+   presets, and from the device rather than hardcoded here. */
+let wsprBandsLoaded = false;
+async function wsprFillBands() {
+  if (wsprBandsLoaded) return;
+  try {
+    const r = await fetch("/api/wspr?bands=1", { cache: "no-store" });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.bands || !d.bands.length) return;
+    wsprBandsLoaded = true;
+    const sel = document.getElementById("wspr-band");
+    const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
+    sel.innerHTML = "";
+    for (const b of d.bands) {
+      const o = document.createElement("option");
+      o.value = String(b.hz);
+      o.textContent = b.label;
+      if (b.hz === cfg.wspr_dial_hz) o.selected = true;
+      sel.appendChild(o);
+    }
+  } catch (e) { /* offline - the control stays empty rather than lying */ }
+}
+
+(function wireWspr() {
+  const sel = document.getElementById("wspr-band");
+  const btn = document.getElementById("wspr-tx");
+  if (sel) sel.addEventListener("change", async () => {
+    const hz = parseInt(sel.value, 10);
+    if (hz) await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wspr_dial_hz: hz }) });
+  });
+  if (btn) btn.addEventListener("click", async () => {
+    /* Read the CURRENT value rather than tracking one here - the Tab5 button and
+       the entry-time default both change it underneath us. */
+    const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
+    const on = !cfg.wspr_tx_en;
+    await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wspr_tx_en: on }) });
+    btn.textContent = on ? "TX ON" : "TX OFF";
+  });
+})();
+
 async function pollWspr() {
   if (!wsprEnabled) return;
   if (wsprPollInFlight) return;          /* in-flight guard: this board's httpd
@@ -3555,6 +3614,39 @@ async function pollWspr() {
        look like a dead band. */
     document.getElementById("wspr-note").textContent =
       j.rx_live ? "" : "RX slot loop not running - these are self-test decodes";
+
+    /* ---- the Tab5's left pane, mirrored ------------------------------
+       Every value here comes from the device, and the band list from the same
+       accessor the Tab5's own picker uses, so the two screens cannot disagree
+       about what a band is. */
+    wsprFillBands();
+    const st = document.getElementById("wspr-state");
+    if (j.tx_state === "active") {
+      st.textContent = "ON AIR"; st.style.color = "#ff4010";
+    } else if (j.tx_state === "armed") {
+      const m = Math.floor((j.tx_secs || 0) / 60), sec = (j.tx_secs || 0) % 60;
+      st.textContent = "TX in " + m + ":" + String(sec).padStart(2, "0");
+      st.style.color = "var(--accent)";
+    } else { st.textContent = ""; st.style.color = "var(--dim)"; }
+
+    /* The finals guard is the thing most worth surfacing: it is why the first
+       burst may be held, and it is invisible on the radio unless you go into
+       its Protection menu. */
+    const pa = document.getElementById("wspr-pa");
+    pa.textContent = (typeof j.pa_voltage_x10 === "number" && j.pa_voltage_x10 >= 0)
+      ? "PA " + (j.pa_voltage_x10 / 10).toFixed(1) + " V" : "";
+    const lt = document.getElementById("wspr-lasttx");
+    lt.textContent = (j.last_tx_watts > 0)
+      ? "last TX " + j.last_tx_watts.toFixed(1) + " W  SWR " + (j.last_tx_swr || 0).toFixed(2)
+      : "";
+    document.getElementById("wspr-status").textContent = j.rx_status || "";
+    /* Keep the button honest: wspr_tx_en is changed by the Tab5 button and, on
+       entry, forced off by the firmware - so the label must follow the device
+       rather than remember what this page last clicked. */
+    try {
+      const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
+      document.getElementById("wspr-tx").textContent = cfg.wspr_tx_en ? "TX ON" : "TX OFF";
+    } catch (e) { /* leave the last label */ }
 
     const head = document.getElementById("wspr-head");
     if (!head.children.length) {
