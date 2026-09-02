@@ -334,9 +334,19 @@
      nothing to share a centre with, so it cannot move. */
   #ft8-topline > #mode-banner { flex: 0 0 auto; align-self: center;
                                 white-space: nowrap; padding: 0 0.2rem 0 0; }
-  #ft8-topline > #ft8-status { flex: 0 1 32rem; margin-bottom: 0; }
-  #ft8-topline > #ft8-hint   { flex: 0 1 32rem; display: flex; align-items: center;
-                               text-align: left; }
+  /* Trimmed to fit the reclaimed row: the transmitting line is the longest
+     thing this box ever holds ("TX ACTIVE: VK3ABC OZ1LAV R-09 (2450 Hz)") and
+     it now shares the row with the power and SWR cells. */
+  #ft8-topline #ft8-tx { font-size: clamp(0.95rem, 1.7vw, 1.45rem); }
+  #ft8-topline .ft8-stat .v { font-size: clamp(0.8rem, 1.25vw, 1.05rem); }
+  #ft8-topline .ft8-stat { min-width: 3.6rem; padding: 0.15rem 0.45rem; }
+  /* ⛔ The "Spectrum & waterfall are shown in Panadapter mode" hint was DELETED
+     (operator, 2026-09-02: "it is not needed and we need to have the
+     transmitting red box and the PWR and SWR moved over to this space"). It was
+     a sentence you read once, holding a third of the top line for the whole
+     session. The status box takes the width instead - so a live TX line and its
+     power/SWR cells sit on one row rather than wrapping. */
+  #ft8-topline > #ft8-status { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
   /* ---- slot row: the E/O occupancy strip and the slot clock ---------------
      Both are on the Tab5's left pane and neither was here. The strip is drawn
      from the SAME masks and the SAME palette as the tone picker's own canvas
@@ -440,6 +450,14 @@
   #ft8-override button.btn-danger:hover { background: #ab2727; }
   #ft8-override .ovr-label { color: var(--dim);
                              font-size: clamp(0.75rem, 1.05vw, 0.95rem); }
+  /* ⭐ THE TIMED-OUT LINE IS A BUTTON (operator: "needs to be a button that
+     disappears when clicked"). Only in that one state - the rest of the time
+     this box is a readout and must not invite a press. It clears the same way
+     the Tab5's tap does, and the same way it clears itself after 20 s. */
+  #ft8-status.clearable { cursor: pointer; }
+  #ft8-status.clearable #ft8-tx { border: 1px solid #ff6020; border-radius: 6px;
+                                  padding: 0.3rem 0.7rem; }
+  #ft8-status.clearable:hover #ft8-tx { background: #ff6020; color: #0d1116; }
   /* Collapse anything with nothing to say instead of holding a row open. */
   #ft8-webr:empty, #ft8-stats:empty { display: none; }
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
@@ -853,7 +871,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -1706,6 +1724,23 @@ async function promptCloudlogCreds() {
   updateCredsRows();
   return true;
 }
+
+/* Clearing a timed-out QSO from the browser. Sends the SAME cancel the Cancel
+   button sends and the Tab5's own tap performs (ft8_tx_disarm + ft8_qso_abort),
+   rather than a second path to the same place. The box is hidden immediately so
+   the press feels answered - the next poll, up to a second later, is what makes
+   it stay gone. If the device refuses for any reason the poll puts it back,
+   which is the honest outcome. */
+document.getElementById("ft8-status").addEventListener("click", async (e) => {
+  const box = e.currentTarget;
+  if (!box.classList.contains("clearable")) return;   /* a readout, not a button */
+  box.classList.remove("clearable");
+  box.style.display = "none";
+  try {
+    await sendCmd({ action: "qso_override", what: "cancel" });
+  } catch (err) { /* the poll will restore it */ }
+  setTimeout(() => { box.style.display = ""; }, 1200);
+});
 
 /* Mid-QSO override (#205, Randy N4OPI). Deliberately only visible while an
    exchange is actually running - these key the radio, and four always-on buttons
@@ -4944,6 +4979,15 @@ async function tick() {
       const el = document.getElementById("ft8-tx");
       el.className   = "st-" + (s.ft8.st || "idle");
       el.textContent = s.ft8.text || "--";
+      /* Clickable ONLY while timed out. The state is sticky and blocks the
+         automatic pickers, so there has to be a way to clear it from here -
+         the Tab5 has had one (tap the label) since v0.15. It also clears
+         itself after 20 s, on the device, so the browser does not need a timer
+         of its own and the two screens cannot disagree about when it went. */
+      {
+        const box = document.getElementById("ft8-status");
+        if (box) box.classList.toggle("clearable", s.ft8.st === "timeout");
+      }
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list". */
       document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";

@@ -66,6 +66,22 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+/* ---- the sticky timeout expires by itself ---------------------------------
+ *
+ * FT8_QSO_TIMEOUT is deliberately sticky so an unanswered call is noticed, but
+ * sticky is also BLOCKING - the machine is not IDLE, so nothing new starts
+ * until it is cleared. Operator, 2026-09-02: "it blocks new processes."
+ *
+ * ft8_qso_timeout_expire_check() clears it once it is 20 s old and returns
+ * whether it did. Safe from any task and idempotent, so it can be called from
+ * both the 1 Hz UI timer (which gives it second accuracy) and the decode task's
+ * advance() (which covers a browser-only session). Tapping still clears it at
+ * once.
+ *
+ * ft8_qso_timeout_secs_left() is for showing the wait; -1 when not timed out. */
+bool ft8_qso_timeout_expire_check(void);
+int  ft8_qso_timeout_secs_left(void);
+
 /* A band change ends any QSO in progress AND stands the robot down. Use this
  * from every band-change path - ft8_robot_stand_down() alone leaves a running
  * exchange transmitting on the new band (Randy N4OPI, 2026-08-31). */

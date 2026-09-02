@@ -25,6 +25,7 @@
 // the idle fallback) does the actual ft8_tx_arm(). This avoids the
 // "arm refused, burst already in progress" race that previously left CQ stuck.
 
+#include "esp_timer.h"   // the sticky-timeout expiry clock
 #include "ft8_qso.h"
 #include "ft8_robot.h"   // ft8_band_change_stand_down also stands the robot down
 #include "ft8_pileup.h"
@@ -58,6 +59,29 @@ static const char *TAG = "ft8_qso";
 // (2026-06-26): an OH5KNL RR73 landed just 29s after a 4-slot timeout fired -
 // they needed one more cycle to successfully copy our report and reply.
 #define QSO_TIMEOUT_SLOTS  6
+
+/* ⭐ AND THEN THE TIMEOUT STATE CLEARS ITSELF.
+ *
+ * FT8_QSO_TIMEOUT is sticky: it was designed to be, so the operator finds out
+ * that a call went unanswered rather than the fact scrolling past. But sticky
+ * also means BLOCKING - the state machine is not IDLE, so the automatic pickers
+ * will not start anything new until somebody taps the label. Operator,
+ * 2026-09-02: "it blocks new processes".
+ *
+ * A message that stops the station working is worse than a message nobody read,
+ * so it now expires. Twenty seconds is the operator's figure: long enough to
+ * see it across the shack, short enough that a session left alone carries on by
+ * itself. Tapping still clears it immediately.
+ *
+ * ⚠ Only the STICKY case expires. The pileup-initiated timeout in
+ * ft8_qso_advance() already clears itself so one caller who wandered off cannot
+ * stall the drain, and that path is untouched. */
+#define QSO_TIMEOUT_AUTO_CLEAR_MS  20000
+
+/* When the sticky timeout began. Written under the lock beside s_state, at all
+   three places that enter it, so it can never describe a different timeout than
+   the one being shown. */
+static int64_t s_timeout_us;
 
 // Clamp the SNR we report to a sane FT8 range.
 #define RPT_MIN_DB  (-24)
@@ -1299,7 +1323,7 @@ static void register_miss(const char *waiting_for)
         ft8_status_set("QSO %s lost - back to CQ", tgt);
         ESP_LOGI(TAG, "QSO %s timed out - resuming CQ", tgt);
     } else {
-        lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+        lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
         ft8_tx_disarm();
         ft8_status_set("QSO %s: no response - timeout", tgt);
         ESP_LOGW(TAG, "QSO %s timed out", tgt);
@@ -2136,6 +2160,10 @@ static bool final_resend_if_still_asked(int64_t slot_sec)
 
 void ft8_qso_advance(int64_t slot_sec)
 {
+    /* Covers a session watched only from a browser, where the Tab5's 1 Hz timer
+     * is the one that normally does this. Idempotent either way. */
+    ft8_qso_timeout_expire_check();
+
     capture_pileup_callers(slot_sec);
 
     // Before anything else can start a NEW contact this slot: finish the last
@@ -2705,7 +2733,7 @@ void ft8_qso_advance(int64_t slot_sec)
             }
         }
         if (!ok) {
-            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+            lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
         arm_current_replacing_armed();
@@ -2817,7 +2845,7 @@ void ft8_qso_advance(int64_t slot_sec)
         if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
             ft8_status_set("QSO %s: sending 73", target);
         else {
-            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+            lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
         arm_current_replacing_armed();
@@ -3097,6 +3125,34 @@ void ft8_band_change_stand_down(const char *why)
         ft8_qso_abort();
     }
     ft8_robot_stand_down(why);
+}
+
+bool ft8_qso_timeout_expire_check(void)
+{
+    lock();
+    bool due = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us &&
+               (esp_timer_get_time() - s_timeout_us) >= (int64_t)QSO_TIMEOUT_AUTO_CLEAR_MS * 1000;
+    unlock();
+    /* ⚠ Aborting OUTSIDE the lock: ft8_qso_abort() takes it itself, and this is
+     * called from a 1 Hz UI timer and from the decode task's advance(). Holding
+     * it across the call would be a straightforward deadlock. */
+    if (due) {
+        ESP_LOGI(TAG, "QSO timeout expired after %d s - clearing by itself",
+                 QSO_TIMEOUT_AUTO_CLEAR_MS / 1000);
+        ft8_qso_abort();
+    }
+    return due;
+}
+
+int ft8_qso_timeout_secs_left(void)
+{
+    lock();
+    bool on = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us;
+    int64_t age_us = on ? (esp_timer_get_time() - s_timeout_us) : 0;
+    unlock();
+    if (!on) return -1;
+    int left = (int)((QSO_TIMEOUT_AUTO_CLEAR_MS - age_us / 1000 + 999) / 1000);
+    return left < 0 ? 0 : left;
 }
 
 void ft8_qso_abort(void)

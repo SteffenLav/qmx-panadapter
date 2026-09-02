@@ -1473,6 +1473,11 @@ static void t_clock_cb(lv_timer_t *t)
         }
     }
 
+    /* The sticky QSO timeout clears itself after 20 s. Here as well as in the
+     * decode task's advance(), because this timer runs every second and gives
+     * the countdown on the label a figure worth printing. Idempotent. */
+    ft8_qso_timeout_expire_check();
+
     if (s_web_override_pending) {
         int what = s_web_override_pending;
         s_web_override_pending = 0;
@@ -1841,10 +1846,23 @@ static void t_clock_cb(lv_timer_t *t)
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);
 
         } else if (qso_st == FT8_QSO_TIMEOUT) {
-            // Orange-red: QSO timed out (tap to clear)
+            // Orange-red: QSO timed out. Tapping clears it - and so does time.
+            //
+            // ⭐ IT COUNTS ITSELF OUT (operator, 2026-09-02: "needs to disappear
+            // automatically after 20sec if not cleared by tapping - it blocks
+            // new processes"). The state is not IDLE, so while it stands the
+            // automatic pickers start nothing - a notice that stops the station
+            // working is worse than one nobody reads. The seconds are SHOWN
+            // rather than left to surprise: a label that vanishes on its own
+            // with no warning reads like a fault.
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
-            snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
+            int left = ft8_qso_timeout_secs_left();
+            if (left >= 0)
+                snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR  (%d s)",
+                         target, left);
+            else
+                snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
