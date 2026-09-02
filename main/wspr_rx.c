@@ -1589,6 +1589,35 @@ bool wspr_rx_start(void)
         return false;
     }
 
+    /* ⛔ TRANSMIT ALWAYS STARTS OFF (Roy KI0ER, 2026-09-01; operator's call:
+     * "It is not okay to have it transmitting automatically if the user were
+     * not aware how it was left last time").
+     *
+     * wspr_tx_en persists, so entering WSPR - including the page being restored
+     * at boot - used to resume beaconing on its own. That is a transmitter
+     * keying up because of a decision made in a previous session, possibly days
+     * ago, and possibly with a different antenna or supply connected. Roy hit
+     * exactly that: he came back to WSPR and found TX already enabled from
+     * before, on a 12 V radio running from a 9 V supply.
+     *
+     * ⚠ This narrows v1.10.0's "the Tab5 wakes on the page it was left on", and
+     * only that far: the PAGE still comes back, so a station set up for WSPR
+     * finds itself on WSPR after a reboot. It just does not transmit until
+     * somebody says so. Those two were only ever bundled together by the fact
+     * that one setting carried both.
+     *
+     * Written through settings_set_wspr_tx_en() rather than poked, so the
+     * drawer, the web page and the config export all see it. */
+    {
+        qmx_settings_t st;
+        settings_load_all(&st);
+        if (st.wspr_tx_en) {
+            settings_set_wspr_tx_en(false);
+            ESP_LOGW(TAG, "entering WSPR: transmit was left ON from a previous "
+                          "session - defaulting it OFF; enable it deliberately");
+        }
+    }
+
     /* Claimed BEFORE the task exists, and cleared if creation fails - #199: a
      * flag set as the task's first statement means "has begun running" while
      * every reader needs "exists", and on this board the gap between the two is

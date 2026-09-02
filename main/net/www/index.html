@@ -352,13 +352,17 @@
   #ft8-hint { font-size: clamp(0.8rem, 1.15vw, 1.05rem); color: var(--dim);
               max-width: 46rem; line-height: 1.45; }
   #ft8-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.6rem; }
-  #ft8-actions button {
+  /* The preset <select> sits among these buttons and looked foreign next to
+     them (Randy N4OPI asked whether it was intentional - it was not). Same rule
+     for both so the row reads as one set of controls. */
+  #ft8-actions button, #ft8-actions select {
     font: inherit; font-size: clamp(0.95rem, 1.5vw, 1.5rem);
     padding: clamp(0.35rem, 0.7vw, 0.7rem) clamp(0.8rem, 1.8vw, 1.8rem);
     color: var(--fg); background: var(--card);
     border: 2px solid var(--accent); border-radius: 8px; cursor: pointer;
   }
-  #ft8-actions button:hover:not(:disabled) { background: var(--accent); color: #000; }
+  #ft8-actions button:hover:not(:disabled),
+  #ft8-actions select:hover { background: var(--accent); color: #000; }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
   /* Count, not a binary active-colour: Dirk DK7CVD wanted the Options button to
      show something was on, Roy KI0ER pointed out a plain on/off colour would
@@ -3090,18 +3094,38 @@ async function ft8LoadPresets() {
 function ft8FillPresets() {
   const sel = document.getElementById("ft8-preset");
   if (!sel || !window.__ft8Presets) return;
-  const ft4  = (lastMode || "").toUpperCase().indexOf("FT4") >= 0 || ft8IsFt4();
-  const list = ft4 ? window.__ft8Presets.ft4 : window.__ft8Presets.ft8;
-  const cur  = sel.value;
+  const cur = sel.value;
   sel.innerHTML = '<option value="">Band…</option>';
-  for (const p of list) {
-    const o = document.createElement("option");
-    o.value = String(p.hz);
-    o.textContent = p.band + " m  " + (p.hz / 1e6).toFixed(3);
-    /* Mark the one we are already on, so the control reads as a position and
-       not just a jump list. */
-    if (Math.abs(p.hz - lastFreqHz) < 500) o.selected = true;
-    sel.appendChild(o);
+
+  /* ⛔ BOTH LISTS, ALWAYS - one group each (Randy N4OPI, 2026-09-01: "I get the
+     preset list for FT8 but not for FT4 and can't switch between FT8 and FT4").
+     This used to choose ONE list from the sub-mode the device was already in,
+     so from FT8 there was no FT4 frequency to pick and therefore NO WAY TO
+     SWITCH MODE from the browser at all - the control could only ever move you
+     within the mode you were in.
+     The change handler has always worked out FT8 vs FT4 from the frequency
+     chosen (they share none), so it needed nothing: the option simply was never
+     offered. Two <optgroup>s mirror the Tab5's own picker, which shows FT8 and
+     FT4 side by side in two columns. */
+  const groups = [["FT8", window.__ft8Presets.ft8],
+                  ["FT4", window.__ft8Presets.ft4]];
+  for (const [label, list] of groups) {
+    if (!list || !list.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = label;
+    for (const p of list) {
+      const o = document.createElement("option");
+      o.value = String(p.hz);
+      o.textContent = p.band + " m  " + (p.hz / 1e6).toFixed(3);
+      /* Mark the one we are already on, so the control reads as a position and
+         not just a jump list. Both mode AND frequency have to match, or the
+         same band in the other mode can look selected. */
+      const inFt4 = (lastMode || "").toUpperCase().indexOf("FT4") >= 0 || ft8IsFt4();
+      if (Math.abs(p.hz - lastFreqHz) < 500 && (label === "FT4") === inFt4)
+        o.selected = true;
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
   }
   if (!sel.value && cur) sel.value = cur;
 }
