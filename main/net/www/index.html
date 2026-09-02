@@ -19,6 +19,12 @@
     --border: #1f2937;
     --spec-bg: #000;
     --passband: #4a5560;
+    /* FT8/FT4 slot parity. Blue EVEN, amber ODD - the convention, and the same
+       two colours the occupancy strip's E and O chips are drawn in (they read
+       them from here via TONE_EO_EVEN/TONE_EO_ODD so the strip and the slot bar
+       cannot end up disagreeing about which is which). */
+    --slot-even: #8AB4F8;
+    --slot-odd:  #FFA040;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -310,19 +316,26 @@
      stacked, and the hint is static text that never changes - a whole row of
      panel height spent on a sentence you read once. Wraps back to a column on a
      narrow window, where there is no width to share. */
+  /* Packed to the LEFT, and nothing in it grows. With the status box growing,
+     the hint was carried out to the right-hand edge of the window with a gulf
+     between them (operator: "the text next to the RX: 14 Decoded is pushed all
+     to the right - bring it back please"). Leftover width is now left over. */
   #ft8-topline {
     flex: 0 0 auto; align-self: stretch;
-    display: flex; flex-flow: row wrap; align-items: stretch; gap: 0.8rem;
+    display: flex; flex-flow: row wrap; align-items: stretch;
+    justify-content: flex-start; gap: 0.8rem;
     margin-bottom: 0.8rem;
   }
-  #ft8-topline > #ft8-status { flex: 2 1 22rem; margin-bottom: 0; }
-  /* The mode heading moves INTO the status box on this screen (operator: "put
-     the MODE: FT8 on the same line as the RX: 24 Decoded - plenty of space
-     there"). It is the same element, relocated rather than duplicated - two
-     copies of one label is how they end up disagreeing. */
-  #ft8-status > #mode-banner { padding: 0; margin: 0; white-space: nowrap;
-                               flex: 0 0 auto; }
-  #ft8-topline > #ft8-hint   { flex: 1 1 16rem; display: flex; align-items: center;
+  /* ⭐ ITS OWN COLUMN, at the far left, exactly where MODE: WSPR sits.
+     It was briefly INSIDE the status box, which centres its contents - so the
+     heading slid left and right every time the decode count went from one digit
+     to two (operator: "put it in a seperate column as not to jitter back and
+     forth due to the counter having 1 or two digits"). Outside the box it has
+     nothing to share a centre with, so it cannot move. */
+  #ft8-topline > #mode-banner { flex: 0 0 auto; align-self: center;
+                                white-space: nowrap; padding: 0 0.2rem 0 0; }
+  #ft8-topline > #ft8-status { flex: 0 1 32rem; margin-bottom: 0; }
+  #ft8-topline > #ft8-hint   { flex: 0 1 32rem; display: flex; align-items: center;
                                text-align: left; }
   /* ---- slot row: the E/O occupancy strip and the slot clock ---------------
      Both are on the Tab5's left pane and neither was here. The strip is drawn
@@ -348,21 +361,33 @@
     flex: 1 1 15rem; min-width: 0; max-width: 500px;
     display: flex; flex-direction: row; align-items: center; gap: 0.9rem;
   }
-  #slot-sec { flex: 0 0 auto;
+  /* The number and its unit. The digits are right-aligned in a fixed box so
+     15 -> 9 does not drag the bar sideways with it. */
+  #slot-sec { flex: 0 0 auto; display: flex; align-items: baseline; gap: 0.25rem;
+              line-height: 1; color: var(--fg); }
+  #slot-n   { min-width: 2.1ch; text-align: right;
               font-size: clamp(1.6rem, 3.2vw, 2.6rem); font-weight: 700;
-              line-height: 1; color: var(--fg); font-variant-numeric: tabular-nums; }
-  #slot-meter { flex: 1 1 auto; min-width: 0;
-                display: flex; flex-direction: column; gap: 5px; }
-  #slot-par { font-size: clamp(0.72rem, 1vw, 0.92rem); color: var(--dim);
-              letter-spacing: 0.08em; text-align: center; }
-  #slot-track { width: 100%; height: 14px; border-radius: 7px;
+              font-variant-numeric: tabular-nums; }
+  #slot-sec i { font-style: normal; color: var(--dim);
+                font-size: clamp(0.8rem, 1.15vw, 1.05rem); }
+  #slot-meter { flex: 1 1 auto; min-width: 0; display: flex; }
+  #slot-track { width: 100%; height: 18px; border-radius: 9px;
                 background: #23292f; overflow: hidden; }
   /* No CSS transition on the fill: it is repainted every animation frame from
      the device's own slot position, and a transition would fight that and lag
      it. The bar IS the animation. */
-  #slot-fill { height: 100%; width: 0; background: var(--accent); }
+  /* ⭐ THE BAR'S COLOUR IS THE PARITY, so the word under it went away as
+     redundant (operator: "the ODD is redundant as the colour of the bar signals
+     the E or O (so E is blue bar right? - that is the convention)"). Yes -
+     blue EVEN, amber ODD, the same two colours the strip's E and O chips use
+     and the same convention the tone picker follows. Defined in one place each
+     so a change reaches strip and bar together. */
+  #slot-fill { height: 100%; width: 0; background: var(--slot-odd); }
+  #ft8-slotrow.even #slot-fill { background: var(--slot-even); }
+  /* Transmitting outranks both - it is the one state worth interrupting the
+     colour scheme for. */
   #ft8-slotrow.tx #slot-fill { background: #ff4010; }
-  #ft8-slotrow.tx #slot-sec  { color: #ff4010; }
+  #ft8-slotrow.tx #slot-n    { color: #ff4010; }
 
   #ft8-status {
     flex: 0 0 auto; align-self: stretch;
@@ -828,7 +853,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec">--</div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div><div id="slot-par">--</div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -2385,6 +2410,12 @@ const TONE_COL_BUSY    = "#7A2020";
 const TONE_COL_UNKNOWN = "#3A3F46";
 const TONE_COL_PICK    = "#FFFFFF";
 const TONE_COL_PARTNER = "#FF69B4";
+/* Read from the stylesheet so the strip's E/O chips and the slot bar's colour
+   have ONE definition between them - see --slot-even / --slot-odd. */
+const TONE_EO_EVEN = getComputedStyle(document.documentElement)
+                       .getPropertyValue("--slot-even").trim() || "#8AB4F8";
+const TONE_EO_ODD  = getComputedStyle(document.documentElement)
+                       .getPropertyValue("--slot-odd").trim()  || "#FFA040";
 
 let toneState = null;   // last /api/tone reply
 let toneSel   = 1500;   // the slot the operator is choosing
@@ -3318,6 +3349,13 @@ function ft8IsFt4() {
    ========================================================================== */
 let eoState = null;              /* last ft8 object that carried the masks */
 let slotAnchor = null;           /* {posMs, slotMs, at} - the device's clock */
+/* ⚠ ONE parity for the whole pane. The bar's colour is recomputed every 100 ms
+   from the slot clock, while the strip's lit E/O chip was reading the value
+   that arrived with the last 1 Hz poll - so at a slot boundary the bar flipped
+   and the chip followed up to a second later, the two of them disagreeing about
+   which window is live. Caught in a layout test at phone width, before it
+   reached the bench. slotTick owns it and redraws the strip when it changes. */
+let slotEvenNow = null;
 
 function eoDraw() {
   const cv = document.getElementById("ft8-eo");
@@ -3363,8 +3401,9 @@ function eoDraw() {
        2026-09-02: "the slot E & O is written so small and with no background -
        they disappear"). Drawn in the reserved gutter with its own fill, and
        the live window is lit while the other stays dim. */
-    const live = (eoState.slot_even === true) === r.even;
-    const col  = live ? (r.even ? "#8AB4F8" : "#FFA040") : "#4a545e";
+    const nowEven = (slotEvenNow !== null) ? slotEvenNow : eoState.slot_even;
+    const live = (nowEven === true) === r.even;
+    const col  = live ? (r.even ? TONE_EO_EVEN : TONE_EO_ODD) : "#4a545e";
     ctx.fillStyle = live ? col : "#20262c";
     ctx.fillRect(0, r.y, GUT - 3, rowH);
     ctx.fillStyle = live ? "#0d1116" : col;
@@ -3385,7 +3424,7 @@ function eoDraw() {
 /* Run off the browser's own clock between polls, re-anchored on every one, so
    the bar is smooth without a request per frame. */
 function slotTick() {
-  const secEl = document.getElementById("slot-sec");
+  const secEl = document.getElementById("slot-n");
   if (!secEl) return;
   if (!slotAnchor) { secEl.textContent = "--"; return; }
   const slot = slotAnchor.slotMs;
@@ -3395,17 +3434,17 @@ function slotTick() {
   secEl.textContent = String(Math.ceil(left / 1000));
   const fill = document.getElementById("slot-fill");
   if (fill) fill.style.width = (100 * (1 - pos / slot)).toFixed(1) + "%";
-  const par = document.getElementById("slot-par");
-  if (par) {
-    /* Recomputed locally so it flips at the boundary rather than at the next
-       poll: the parity alternates every slot, so an elapsed slot inverts it. */
-    const flips = Math.floor((slotAnchor.posMs + (performance.now() - slotAnchor.at)) / slot);
-    /* XOR: an odd number of elapsed slots inverts the parity. Written with
-       !== on booleans rather than ^ on 0/1, where the precedence against the
-       following ?: silently produced the INVERSE. */
-    const even  = slotAnchor.even !== ((flips & 1) === 1);
-    const want  = even ? "EVEN" : "ODD";
-    if (par.textContent !== want) par.textContent = want;
+  /* Recomputed locally so the parity flips AT the boundary rather than at the
+     next poll: it alternates every slot, so an elapsed slot inverts it.
+     ⚠ XOR written with !== on booleans, not ^ on 0/1 - in front of a ?: the
+     precedence silently produced the INVERSE. */
+  const flips = Math.floor((slotAnchor.posMs + (performance.now() - slotAnchor.at)) / slot);
+  const even  = slotAnchor.even !== ((flips & 1) === 1);
+  if (slotEvenNow !== even) {
+    slotEvenNow = even;
+    const row = document.getElementById("ft8-slotrow");
+    if (row) row.classList.toggle("even", even);
+    eoDraw();                 /* the chip follows the bar, in the same frame */
   }
 }
 setInterval(slotTick, 100);
@@ -4890,7 +4929,7 @@ async function tick() {
          ignored inside the flex box and applies again the moment it is a body
          child, so nothing else has to change. */
       if (mb) {
-        const line = document.getElementById("ft8-status");
+        const line = document.getElementById("ft8-topline");
         if (screen === "ft8" && line) {
           if (mb.parentElement !== line) line.insertBefore(mb, line.firstChild);
         } else if (mb.parentElement !== document.body) {
@@ -4918,8 +4957,7 @@ async function tick() {
                           eoState.busy_o !== f.busy_o ||
                           eoState.tone_hz !== f.tone_hz ||
                           eoState.partner_hz !== f.partner_hz ||
-                          eoState.stations !== f.stations ||
-                          eoState.slot_even !== f.slot_even;
+                          eoState.stations !== f.stations;
           eoState = f;
           if (changed) eoDraw();
         }
