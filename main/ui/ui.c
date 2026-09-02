@@ -1388,6 +1388,33 @@ static void recompute_zoom_pan(void);
  * still_view_follow_dial. There is nothing left to mis-tune. */
 
 static bool    s_still_view = true;  /* the SETTING - behaviour asks sv_effective() */
+/* ⭐ DAVE KX3DX'S x1 REQUEST, AND IT IS OFF BY DEFAULT ON PURPOSE.
+ *
+ * "I prefer the operation and display of the original spectrum display when on
+ * 1X even though some of it is not real. Is it possible to make it switchable?
+ * ... PowerSDR always fills the horizontal space with real spectrum - and shifts
+ * the bandpass as needed depending on the IF set by the user. Maybe that is
+ * possible instead of showing a blank area? Just stretch out the real spectrum
+ * across the whole width."
+ *
+ * At x1 the view is exactly as wide as the capture window but centred on the
+ * dial, while the capture runs dial-12k..+36k - so a quarter of the screen is
+ * frequency the radio cannot hear, and #297 hatches it rather than lying about
+ * it. Framing on the capture window instead fills all 1280 px with real
+ * spectrum and puts the VFO at 75% across, which is exactly what Dave asks for
+ * and what PowerSDR does.
+ *
+ * ⛔ IT IS ALSO THE CLAMP THE OPERATOR REJECTED, so it cannot be the default.
+ * See the tombstone above sv_frame_on_capture(): holding the view inside the
+ * capture window drags it with the dial, which at x1 pins the VFO on screen -
+ * "x1 suddenly have fixed vfo - garbage. x1 was okay before with the hatched
+ * areas!" That verdict stands for anyone who does not ask for this.
+ *
+ * So the two are honestly incompatible and the setting says so: turning this on
+ * trades the still display AT x1 for a full screen of real spectrum. Above x1
+ * it changes nothing - there the view already fits inside the capture window
+ * and stillness works. */
+static bool    s_x1_fill    = false;
 static int64_t s_sv_push    = 0;     /* Hz tuned past the trigger at the current edge */
 static int     s_sv_side    = 0;     /* +1 right, -1 left, 0 none */
 
@@ -1417,6 +1444,30 @@ void ui_set_still_view(bool on)
                                           : "OFF - spectrum follows the dial");
 }
 bool ui_get_still_view(void) { return s_still_view; }
+
+static void sv_frame_on_capture(void);   /* defined below - see its tombstone */
+
+void ui_set_x1_fill(bool on)
+{
+    s_x1_fill = on;
+    if (s_zoom_factor <= 1.0001f) {
+        /* Take effect now rather than at the next tune - the operator is
+         * looking at the screen when they move the switch. */
+        if (on) sv_frame_on_capture();
+        else    { sv_apply_pan_hz(0); s_sv_push = 0; s_sv_side = 0; }
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+    }
+    ESP_LOGI(TAG, "x1 fill: %s", on ? "ON - whole width is real spectrum, VFO off centre"
+                                    : "OFF - dial centred, unheard columns hatched");
+}
+bool ui_get_x1_fill(void) { return s_x1_fill; }
+
+/* True while the x1 full-width view is actually in force. Above x1 the ordinary
+ * view already fits inside the capture window, so the setting is inert there. */
+static bool x1_fill_active(void)
+{
+    return s_x1_fill && s_zoom_factor <= 1.0001f;
+}
 
 /* ⭐ STILL MODE NEEDS PLAY, AND AT x1 THERE IS NONE.
  *
@@ -1553,6 +1604,17 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
     if (d > DSP_SAMPLE_RATE_HZ || d < -DSP_SAMPLE_RATE_HZ) {
         s_sv_push = 0; s_sv_side = 0;
         sv_frame_on_capture();      /* land on live spectrum, not on the dial */
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+        return;
+    }
+
+    /* x1 full-width (Dave KX3DX): keep the view ON the capture window instead of
+     * holding it still, so the whole screen stays real spectrum as the dial
+     * moves. This IS the clamp - it is opt-in precisely because it costs the
+     * still display at x1, which is the trade he asked for. */
+    if (x1_fill_active()) {
+        s_sv_push = 0; s_sv_side = 0;
+        sv_frame_on_capture();
         dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
         return;
     }
@@ -2286,6 +2348,7 @@ static int16_t   s_resmon_drag_start_dx, s_resmon_drag_start_dy;
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
 static lv_obj_t *s_check_still     = NULL;  // #298 still-spectrum checkbox
+static lv_obj_t *s_check_x1fill    = NULL;  // Dave KX3DX: fill the screen at x1
 static lv_obj_t *s_lbl_still       = NULL;  // the sentence under it, which way is which
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
 static lv_obj_t *s_activation_btn  = NULL;  // POTA/SOTA activation entry
@@ -2887,6 +2950,7 @@ static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_check_still_cb(lv_event_t *e);
+static void drawer_check_x1fill_cb(lv_event_t *e);
 static void drawer_still_refresh_label(void);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_activation_btn_cb(lv_event_t *e);
@@ -10602,7 +10666,7 @@ static void drawer_build(void)
      * because the label alone cannot say which way is which - "Still spectrum
      * OFF" is not obviously "the view follows the dial". */
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_STILL, y, 116);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_STILL, y, 240);
         lv_obj_t *lbl = lv_label_create(sec);
         lv_label_set_text(lbl, "Still spectrum");
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
@@ -10619,7 +10683,35 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(s_lbl_still, &lv_font_montserrat_20, 0);
         lv_obj_align(s_lbl_still, LV_ALIGN_TOP_LEFT, 0, 52);
         drawer_still_refresh_label();
-        y += 116;
+
+        /* Dave KX3DX's x1 request, in THIS section rather than one of its own.
+         * Two reasons: the two settings interact - this one disables the still
+         * display at x1 - so they belong side by side; and a new section id is
+         * an index into s_drawer_sections[], which has overrun N_DRAWER_SECTIONS
+         * before now and taken the whole UI down with it. */
+        lv_obj_t *x1l = lv_label_create(sec);
+        lv_label_set_text(x1l, "Fill the screen at x1");
+        lv_obj_set_style_text_color(x1l, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(x1l, &lv_font_montserrat_28, 0);
+        lv_obj_align(x1l, LV_ALIGN_TOP_LEFT, 0, 118);
+        s_check_x1fill = make_drawer_checkbox(sec, ui_get_x1_fill(),
+                                              drawer_check_x1fill_cb, NULL);
+        lv_obj_align(s_check_x1fill, LV_ALIGN_TOP_RIGHT, 0, 114);
+
+        lv_obj_t *x1e = lv_label_create(sec);
+        lv_label_set_long_mode(x1e, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(x1e, DRAWER_W - 80);
+        lv_label_set_text(x1e,
+            "At x1 only: show the whole 48 kHz the radio actually sends, so "
+            "there is no hatched area and the VFO sits right of centre. "
+            "Costs the still display at x1 - the view follows the dial there.");
+        lv_obj_set_style_text_color(x1e, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(x1e, &lv_font_montserrat_20, 0);
+        lv_obj_align(x1e, LV_ALIGN_TOP_LEFT, 0, 160);
+
+        /* ⛔ Height and the `y +=` move TOGETHER. This file has twice had a
+         * section overlap the next one because only one of the two changed. */
+        y += 240;
     }
 
     // Phase 5.12: Flat Spectrum ON/OFF row
@@ -11831,6 +11923,16 @@ static void drawer_check_still_cb(lv_event_t *e)
      * notice has done its job and must not appear again. */
     settings_set_still_notice_done(true);
     drawer_still_refresh_label();
+}
+
+/* ⚠ IN THE SAME SECTION AS "Still spectrum" ON PURPOSE - the two interact, and
+ * a switch that quietly disables the one above it must be next to it. */
+static void drawer_check_x1fill_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    ui_set_x1_fill(on);
+    settings_set_x1_fill(on);
 }
 
 static void drawer_switch_flat_cb(lv_event_t *e)
