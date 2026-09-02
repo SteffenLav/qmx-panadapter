@@ -215,6 +215,19 @@ int wspr_rx_seconds_to_next_tx(void);
  * visit the WSPR page. Field-reported by Roy KI0ER, 2026-09-02. */
 void wspr_pa_guard_release_pending(const char *why);
 
+/* The link-up version, and it VERIFIES before it writes: it restores only when
+ * the radio reports the voltage the guard reduces to, i.e. only when this is our
+ * own doing. Anything else means a different radio or an operator who has set it
+ * by hand, and the stored value is kept for the radio it belongs to rather than
+ * pushed onto this one (Michael KZ4LY: an operator may own both a 9 V and a 12 V
+ * QMX). Nothing identifies a QMX - no CAT serial, and its USB descriptor reports
+ * iSerialNumber 0 - so asking the radio what it is currently set to is the only
+ * honest test available, and it is a better one than an identity would be.
+ *
+ * Blocks up to ~500 ms waiting for the answer. Call once per link-up, from a
+ * context where CAT queries actually go out. */
+void wspr_pa_guard_reclaim_on_link(void);
+
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
  * wspr_duty_pct, or the countdown keeps describing the previous setting until

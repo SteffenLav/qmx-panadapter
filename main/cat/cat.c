@@ -791,14 +791,6 @@ static void process_cat_message(const char *msg, size_t len)
         // that the version is known - the drawer may already have been built
         // (lazy, first-open) before VN; answered.
         ui_notify_qmx_fw_known();
-        /* ⭐ AND PUT THE PA VOLTAGE BACK IF THE WSPR GUARD STILL OWES IT.
-         * A power cut during a WSPR session never runs the leave path, so the
-         * radio can come up still capped at about 1 W with the value to restore
-         * sitting in NVS and nothing on the FT8 or panadapter path ever looking
-         * at it (Roy KI0ER, 2026-09-02). Here because this is the first moment
-         * CAT is proven alive, and it is idempotent - on almost every boot
-         * there is nothing outstanding and it returns at once. */
-        wspr_pa_guard_release_pending("radio reconnected with a guard outstanding");
         return;
     }
     // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the
@@ -1319,6 +1311,20 @@ static bool iq_mode_handshake(int max_attempts)
 static void poll_task(void *arg)
 {
     ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
+
+    /* ⭐ PUT THE PA VOLTAGE BACK IF THE WSPR GUARD STILL OWES IT. A power cut
+     * during a WSPR session never runs the leave path, so the radio can come up
+     * still capped at about 1 W with the value to restore sitting in NVS and
+     * nothing on the FT8 or panadapter path ever looking at it (Roy KI0ER).
+     *
+     * ⚠ HERE, not in the VN; handler where it was first put: that runs inside
+     * the RX path before this task exists, and the reclaim needs to QUERY the
+     * radio and read the answer - a query queued with no poll task to send it
+     * would never go out. It verifies before writing (see its comment), so it
+     * cannot push one radio's voltage onto another. Costs ~500 ms once, only
+     * when something is actually owed, which is almost never. */
+    wspr_pa_guard_reclaim_on_link();
+
     int phase = 0;
     int poll_fail = 0;   // consecutive poll-TX failures; one transient timeout must not kill the poll
     while (s_cdc_dev != NULL) {

@@ -1829,6 +1829,68 @@ void wspr_pa_guard_release_pending(const char *why)
              why ? why : "restoring", back / 10, back % 10);
 }
 
+/* ⭐ RESTORE ONLY WHAT WE OURSELVES REDUCED - which is also the answer to the
+ * two-radio problem, and a better one than remembering a value per radio.
+ *
+ * Michael KZ4LY, 2026-09-02: "I have built both 9V QMX, 12V QMX+ so far... if
+ * the tab5 keeps track of it in configuration, it should be per unit ID, not
+ * generic across all devices."
+ *
+ * He is right, and the hazard is in THIS code, not hypothetical: the outstanding
+ * value is a single NVS number with no radio attached to it. Reduce a 12 V unit
+ * to 6.0, unplug it, plug in the 9 V unit, and the link-up restore would push
+ * the first radio's 11.5 V onto the second - raising a cap the operator never
+ * set, on a radio that never asked. That is exactly what the capture path
+ * already refuses to do ("a guard that turns someone's power UP is the opposite
+ * of a guard"), and the restore path was not holding to it.
+ *
+ * ⚠ A per-unit table is not available and that is measured, not assumed: the
+ * QMX answers no CAT command with a serial, and its USB descriptor reports
+ * iSerialNumber 0 - checked in the enumeration log rather than guessed. Both
+ * doors are shut.
+ *
+ * But identity was never the question worth asking. The question is "is this
+ * radio still sitting at the value we put there?" - and the radio can answer
+ * that itself. If it reports the WSPR target, this is our own reduction and
+ * restoring is right. If it reports anything else, it is either a different
+ * radio or one the operator has since set by hand, and in both cases the stored
+ * value is not ours to write. The value is kept rather than dropped, so the
+ * original radio still gets it back when it returns.
+ *
+ * Blocks briefly for the answer. Called once per link-up from the poll task,
+ * which is the first place a query can actually go out. */
+void wspr_pa_guard_reclaim_on_link(void)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;                       /* the normal case, every boot */
+
+    cat_query_pa_voltage();
+    int16_t cur = -1;
+    for (int i = 0; i < 25 && cur < 0; i++) {    /* up to ~500 ms */
+        vTaskDelay(pdMS_TO_TICKS(20));
+        cur = cat_get_pa_voltage_x10();
+    }
+    if (cur < 0) {
+        ESP_LOGW(TAG, "PA guard: %u.%u V still owed, but the radio has not "
+                      "reported its Max. PA voltage - leaving it for now",
+                 back / 10, back % 10);
+        return;
+    }
+    if ((uint16_t)cur != WSPR_PA_TARGET_X10) {
+        ESP_LOGW(TAG, "PA guard: %u.%u V is owed, but this radio is at %d.%d V, "
+                      "not the %u.%u V we reduce to - so it is not our doing "
+                      "(a different radio, or you set it yourself). Leaving it "
+                      "alone and keeping the value for the radio it belongs to",
+                 back / 10, back % 10, cur / 10, cur % 10,
+                 WSPR_PA_TARGET_X10 / 10, WSPR_PA_TARGET_X10 % 10);
+        return;
+    }
+    cat_request_pa_voltage_x10(back);
+    settings_set_wspr_pa_saved_x10(0);
+    ESP_LOGW(TAG, "PA guard: radio reconnected still reduced - Max. PA voltage "
+                  "restored to %u.%u V", back / 10, back % 10);
+}
+
 void wspr_rx_stop(void)
 {
     /* ⛔ STOP THE RADIO TRANSMITTING BEFORE GIVING IT ITS POWER BACK, AND
