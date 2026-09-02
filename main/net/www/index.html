@@ -3211,8 +3211,6 @@ const SET_FIELDS = [
      "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -300 to +300, and around 100 Hz or less is typical - most CW operators run a 500 Hz filter or narrower (200 Hz is not unusual), and a QRP signal loses energy towards the filter edges (Michael KZ4LY). Roy KI0ER uses +60"],
   ["Radio & display", "still_view",        "bool", "Still spectrum",
      "On (the default): the spectrum and waterfall hold still and the VFO marker moves across them, so a signal stays where you last saw it while you tune. Off: the old behaviour, where the view re-centres on the dial at every step and the marker stays in the middle. Either way, the hatched region on the right is frequency the radio genuinely cannot hear"],
-  ["Radio & display", "x1_fill",           "bool", "Fill the screen at x1",
-     "At x1 only. The QMX sends 48 kHz of spectrum but centred 12 kHz off the dial, so a dial-centred view leaves a quarter of the screen showing frequency the radio cannot hear - which is what the hatching means. Turn this on to show the whole captured window instead: real spectrum edge to edge, with the VFO marker right of centre, the way PowerSDR and similar SDR panadapters do it (asked for by Dave KX3DX). The cost is that the still spectrum above cannot work at x1 while this is on - the view has to follow the dial to stay over live spectrum. Above x1 this changes nothing"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "rit_pill_show",     "bool", "Show the RIT button",

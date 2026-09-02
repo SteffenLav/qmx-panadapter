@@ -2990,7 +2990,6 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddBoolToObject(root, "still_view",        c.still_view);
-    cJSON_AddBoolToObject(root, "x1_fill",           c.x1_fill);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
@@ -3276,13 +3275,6 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_still_view(v);
         settings_set_still_notice_done(true);
         ui_set_still_view(v);
-    }
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "x1_fill"))) {
-        bool v = cJSON_IsTrue(it);
-        settings_set_x1_fill(v);
-        /* Applied live, like still_view beside it: the operator is looking at
-         * the spectrum when they move this. */
-        ui_set_x1_fill(v);
     }
     // Spur suppression, like IQ balance below, is a live DSP path as well as a
     // stored value - set both or the control does nothing until the next boot.

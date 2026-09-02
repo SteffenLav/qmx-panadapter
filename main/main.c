@@ -286,7 +286,6 @@ void app_main(void)
     /* #298: before the first frame, so nobody sees the wrong one and then a jump.
      * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
     ui_set_still_view(cfg.still_view);
-    ui_set_x1_fill(cfg.x1_fill);
     ui_still_notice_arm(!cfg.still_notice_done);
     render_waterfall_set_colormap(cfg.colormap_idx);
 

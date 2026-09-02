@@ -88,18 +88,6 @@ void ui_note_frequency_jump(void);
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);
 
-/* x1 only: frame the view on the CAPTURE WINDOW rather than on the dial, so the
- * whole width is real spectrum and the VFO sits at 75% across (Dave KX3DX, who
- * runs a Flex-1500 where PowerSDR does exactly this). Default OFF.
- *
- * ⛔ It is the clamp the operator rejected as a default - it costs the still
- * display at x1, because a view held inside the capture window is dragged by the
- * dial. That is the trade, and it is stated in the setting's own description.
- * Above x1 it is inert: the ordinary view already fits inside the capture
- * window there. See the block comment on s_x1_fill in ui.c. */
-void ui_set_x1_fill(bool on);
-bool ui_get_x1_fill(void);
-
 /* The pan the display is ACTUALLY drawn at, in Hz. ui_get_pan_offset_bins() is
  * the same value rounded to a whole FFT bin (46.875 Hz); anything that has to
  * agree with the spectrum to better than that needs this one. */

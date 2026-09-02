@@ -81,7 +81,6 @@ static const char *TAG = "settings";
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
-#define KEY_X1_FILL      "x1_fill"
 #define KEY_STILL_NOTICE   "still_note"
 #define KEY_SPUR_SUP       "spur_sup"
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
@@ -343,7 +342,6 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_DRAWER_EXPERT 104   /* Basic/Expert drawer choice, remembered */
 #define DIRTY_WSPR_PA       107   /* #290 WSPR PA-voltage guard + the value to restore */
 #define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
-#define DIRTY_X1_FILL          111
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 
@@ -525,7 +523,6 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_X1_FILL))      nvs_set_u8(s_nvs, KEY_X1_FILL,      snap.x1_fill ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap.spur_mode);
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
@@ -684,7 +681,6 @@ static void load_from_nvs(qmx_settings_t *out)
      * can - see the notice in ui.c. still_notice_done stays false so an
      * upgrading unit shows that notice exactly once. */
     out->still_view = true;      // opt-OUT, same reason as the line above
-    out->x1_fill    = false;     // opt-IN: it trades away the still display at x1
     // Spur suppression is opt-IN for now: it nudges the dial 25 Hz to learn a
     // frequency, which is a visible side effect, and it is out with the beta
     // testers before it can be a default.
@@ -918,7 +914,6 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
-    if (nvs_get_u8(s_nvs, KEY_X1_FILL,      &u8v) == ESP_OK) out->x1_fill    = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPUR_SUP, &u8v) == ESP_OK) out->spur_mode = (u8v <= 2) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
@@ -1872,16 +1867,6 @@ void settings_set_still_view(bool v)
     s_pending.still_view = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_STILL_VIEW);
-}
-
-void settings_set_x1_fill(bool v)
-{
-    if (!s_ready) return;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.x1_fill == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.x1_fill = v;
-    xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_X1_FILL);
 }
 
 void settings_set_still_notice_done(bool v)

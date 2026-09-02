@@ -206,10 +206,6 @@ typedef struct {
      * the view re-centres on the dial on every tune. A real preference, not a
      * dev switch: it changes how the main screen is read. */
     bool     still_view;        // spectrum holds, VFO moves (default TRUE)
-    /* x1 only: frame on the CAPTURE window so the whole width is real spectrum
-     * (Dave KX3DX). Default FALSE - it costs the still display at x1, which is
-     * why it is a choice and not the behaviour. See ui.c's s_x1_fill. */
-    bool     x1_fill;
     bool     still_notice_done; // the one-time "you can switch back" toast has been shown
     uint8_t  spur_mode;         // 0=off 1=subtract 2=interpolate (see spur_map.h); default 0, opt-in
     bool     ft8_early_decode; // FT8 monitoring: cut capture ~1.8 s early so decodes surface BEFORE the
@@ -501,7 +497,6 @@ uint8_t settings_get_swr_limit_x10(void);
 void settings_set_distance_in_miles(bool v);
 void settings_set_rit_pill_show(bool v);
 void settings_set_still_view(bool v);
-void settings_set_x1_fill(bool v);    // x1 full-width spectrum (default false)
 void settings_set_still_notice_done(bool v);
 void settings_set_spur_mode(uint8_t v);
 
