@@ -2160,9 +2160,25 @@ static bool final_resend_if_still_asked(int64_t slot_sec)
 
 void ft8_qso_advance(int64_t slot_sec)
 {
-    /* Covers a session watched only from a browser, where the Tab5's 1 Hz timer
-     * is the one that normally does this. Idempotent either way. */
-    ft8_qso_timeout_expire_check();
+    /* ⛔ THE EXPIRY CHECK IS NOT CALLED HERE ANY MORE.
+     *
+     * It was, "to cover a session watched only from a browser" - which was
+     * reasoning, not a requirement: /api/status only carries the FT8 block
+     * while ft8_screen_view_is_active(), so the Tab5's own 1 Hz timer is
+     * running whenever any of this is visible anywhere. The browser case it
+     * was covering cannot occur.
+     *
+     * What it did do was clear the state to IDLE at the TOP of advance(), so
+     * the state machine ran the rest of the slot against a state that had
+     * changed underneath it - and the robot, which self-gates on IDLE and runs
+     * immediately after advance(), could start a fresh contact inside the same
+     * slot. That is new behaviour on the decode task, and the decode task is
+     * where the bench then took an abort() at 137 s.
+     *
+     * ⚠ THAT IS NOT PROOF: the serial capture missed the pre-crash window, so
+     * the abort has NOT been root-caused and this is a reduction in exposure,
+     * not a diagnosis. Said plainly so nobody later reads it as one. If the
+     * abort returns with the check gone from this task, look elsewhere. */
 
     capture_pileup_callers(slot_sec);
 

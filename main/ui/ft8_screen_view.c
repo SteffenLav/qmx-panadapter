@@ -1473,11 +1473,6 @@ static void t_clock_cb(lv_timer_t *t)
         }
     }
 
-    /* The sticky QSO timeout clears itself after 20 s. Here as well as in the
-     * decode task's advance(), because this timer runs every second and gives
-     * the countdown on the label a figure worth printing. Idempotent. */
-    ft8_qso_timeout_expire_check();
-
     if (s_web_override_pending) {
         int what = s_web_override_pending;
         s_web_override_pending = 0;
@@ -1521,9 +1516,11 @@ static void t_clock_cb(lv_timer_t *t)
 
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
-    // The sticky QSO timeout clears itself after 20 s. Called here as well as
-    // in the decode task's advance(), because this timer runs every second and
-    // so gives the label's countdown a figure worth printing.
+    // The sticky QSO timeout clears itself after 20 s. THE ONLY caller: this
+    // timer runs every second, so it gives the label's countdown a figure worth
+    // printing, and it is the one place where the state is both visible and
+    // blocking. It was also called from the decode task's advance() for a
+    // browser-only case that cannot actually occur - see the note there.
     //
     // ⛔ BELOW THE VISIBILITY GUARD, with every other call into the engine.
     // Above it, this ran on the panadapter screen 3.5 s after boot and took a
