@@ -664,6 +664,9 @@ static void tx_toggle_cb(lv_event_t *e)
     settings_load_all(&st);
     const bool turning_off = st.wspr_tx_en;
     settings_set_wspr_tx_en(!st.wspr_tx_en);
+    /* Re-roll which cycle transmits next, so the countdown on this very button
+     * is right the moment it is pressed rather than at the next boundary. */
+    wspr_rx_tx_schedule_reset(!turning_off, st.wspr_duty_pct);
 
     /* ⭐ SWITCHING OFF STOPS A BURST THAT IS ON THE AIR (Roy KI0ER, 2026-09-01:
      * "if that button is tapped while actively transmitting, nothing happens and
@@ -1483,10 +1486,30 @@ void wspr_screen_view_tick(void)
              * roll taken at the boundary - at 50 % roughly every other slot
              * transmits, and claiming a burst that then does not happen would
              * be worse than saying nothing. */
-            int nxt = wspr_tx_seconds_until_next_slot();
-            if (nxt < 0) nxt = 0;
-            snprintf(txt, sizeof(txt), "TX  ON  next %d:%02d%s", nxt / 60, nxt % 60,
-                     unprotected ? "  FULL PWR" : "");
+            /* ⭐ TIME TO THE NEXT REAL BURST, not to the next opportunity.
+             *
+             * This asked wspr_tx_seconds_until_next_slot() for one release, and
+             * the operator caught it immediately (2026-09-02): "when it reached
+             * 00:00 then it started counting down again 01:20(!) I need to see a
+             * REAL count down to the next TX." Quite right - the duty-cycle roll
+             * was taken AT the boundary, so at zero there was still only a
+             * duty_pct chance of anything happening, and most of the time the
+             * counter simply restarted. It was counting down to a coin toss.
+             *
+             * The roll is now taken in advance (roll_next_tx_cycle in
+             * wspr_rx.c), so there is a real answer to give.
+             *
+             * -1 means nothing is scheduled - duty 0, or the schedule was just
+             * overtaken and the RX loop has not re-rolled yet. Say nothing then
+             * rather than print 0:00, which would be the same lie in a
+             * different shape. */
+            int nxt = wspr_rx_seconds_to_next_tx();
+            if (nxt >= 0)
+                snprintf(txt, sizeof(txt), "TX  ON  next %d:%02d%s",
+                         nxt / 60, nxt % 60, unprotected ? "  FULL PWR" : "");
+            else
+                snprintf(txt, sizeof(txt), "TX  ON%s",
+                         unprotected ? "  FULL PWR" : "");
         } else {
             snprintf(txt, sizeof(txt), "TX  OFF%s",
                      unprotected ? "  FULL PWR" : "");

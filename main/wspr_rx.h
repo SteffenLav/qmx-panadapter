@@ -188,3 +188,28 @@ void wspr_rx_set_guards(int enforce_near, double near_hz,
 /* Writes up to `max` counts, OLDEST first, and returns how many were written.
  * If the caller wants fewer than are held it gets the NEWEST ones. */
 int wspr_rx_cycle_history(uint8_t *out, int max);
+
+/* ---- transmit schedule ----------------------------------------------------
+ *
+ * Seconds until the next cycle that will actually TRANSMIT, or -1 when none is
+ * scheduled (transmit off, duty 0, or the schedule has just been overtaken and
+ * the RX loop has not re-rolled it yet).
+ *
+ * ⭐ This is a real countdown, not a countdown to the next opportunity. The
+ * duty-cycle roll is taken IN ADVANCE for exactly this reason - see the block
+ * comment on roll_next_tx_cycle() in wspr_rx.c. The button used to count down
+ * to the next slot and start again every time the roll lost, which the operator
+ * read, correctly, as no countdown at all.
+ *
+ * Safe from any task: one read of an int64 and some arithmetic. */
+int wspr_rx_seconds_to_next_tx(void);
+
+/* Re-roll the schedule after the operator changes whether or how often we
+ * transmit. Call it from the TX on/off control and from any path that writes
+ * wspr_duty_pct, or the countdown keeps describing the previous setting until
+ * the next cycle boundary.
+ *
+ * ⚠ Takes the two values rather than reading the settings, because both callers
+ * are UI tasks and settings_load_all() is a multi-kilobyte stack allocation -
+ * the bug class that has boot-looped this board four times. */
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct);

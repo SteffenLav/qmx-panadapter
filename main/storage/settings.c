@@ -1761,6 +1761,30 @@ int16_t settings_get_cw_tx_offset_hz(void)
     return v;
 }
 
+/* ---- WSPR transmit, narrowly ----------------------------------------------
+ * Two bytes for the callers that need to re-roll the transmit schedule, so
+ * neither of them has to put a whole qmx_settings_t on its stack. Both run on
+ * tasks that cannot afford one - taskLVGL and httpd - and this board has
+ * boot-looped four times on exactly that mistake. Same reason
+ * settings_get_cw_tx_offset_hz() above exists. */
+bool settings_get_wspr_tx_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.wspr_tx_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint8_t settings_get_wspr_duty_pct(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.wspr_duty_pct;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 /* ⛔ THIS EXISTS BECAUSE ITS CALLERS RUN ON `sys_evt`, WHOSE STACK IS 2808 B.
  *
  * The static-IP code is driven from the WiFi and IP event handlers, and the

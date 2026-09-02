@@ -212,6 +212,15 @@ static void add_ft8_tx_status(cJSON *root)
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
 
+    /* ⭐ FT8 or FT4, from the engine rather than inferred. The browser used to
+     * work this out by looking for "FT4" in the TX status TEXT, which is a
+     * guess dressed as a fact: it reads FT8 whenever nothing is transmitting.
+     * The mode heading and the preset list both need the real answer, and the
+     * device is the only thing that has it. Same rule the FT4 preset list had
+     * to learn the hard way this week - one accessor, both screens. */
+    cJSON_AddStringToObject(f, "proto",
+        ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+
     char tx_text[32];
     int  secs_until = 0;
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
@@ -3087,12 +3096,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_wspr_net_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_pa_reduce")))
         settings_set_wspr_pa_reduce(cJSON_IsTrue(it));
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
+    bool wspr_sched_dirty = false;
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en"))) {
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
+        wspr_sched_dirty = true;
+    }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
         int v = it->valueint;
-        if (v >= 0 && v <= 50) settings_set_wspr_duty_pct((uint8_t)v);
+        if (v >= 0 && v <= 50) { settings_set_wspr_duty_pct((uint8_t)v); wspr_sched_dirty = true; }
     }
+    /* Re-roll which cycle transmits next, or the TX countdown goes on
+     * describing the previous setting until the next cycle boundary - up to two
+     * minutes of a page contradicting the switch that was just moved. Both
+     * values are passed in rather than re-read: this is the httpd task. */
+    if (wspr_sched_dirty)
+        wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
+                                  settings_get_wspr_duty_pct());
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not
@@ -3582,6 +3601,10 @@ static esp_err_t wspr_handler(httpd_req_t *req)
             tst == WSPR_TX_ACTIVE ? "active" : tst == WSPR_TX_ARMED ? "armed" : "idle");
         cJSON_AddNumberToObject(root, "tx_secs", secs);
     }
+    /* Time to the next cycle that will ACTUALLY transmit, which is a different
+     * question from tx_secs above (that one counts an armed burst down to its
+     * own slot). -1 when nothing is scheduled. See wspr_rx.h. */
+    cJSON_AddNumberToObject(root, "next_tx_secs", wspr_rx_seconds_to_next_tx());
 
     /* ⭐ THE THREE THINGS THE TAB5'S LEFT PANE SHOWS AND THE BROWSER DID NOT.
      * Operator, 2026-09-02: "I still see no: Stations per cycle graphics - Best

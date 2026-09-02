@@ -456,6 +456,11 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
  * reason settings_wifi_known_count() exists (see CLAUDE.md, "Task stacks on
  * this board are TINY"). */
 int16_t settings_get_cw_tx_offset_hz(void);
+
+/* Narrow reads for the WSPR transmit schedule - see the note in settings.c.
+ * Never load the whole struct on taskLVGL or httpd just to get these two. */
+bool    settings_get_wspr_tx_en(void);
+uint8_t settings_get_wspr_duty_pct(void);
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
  *

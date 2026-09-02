@@ -119,6 +119,77 @@ static const char *TAG = "wspr_rx";
 static uint8_t s_hist[WSPR_CYCLE_HISTORY];
 static int     s_hist_n;
 
+/* ---- the transmit SCHEDULE ------------------------------------------------
+ *
+ * ⭐ THE DUTY-CYCLE ROLL IS TAKEN IN ADVANCE, and that is the whole point.
+ *
+ * It used to be taken AT the cycle boundary, for that same cycle. Nothing could
+ * then say when the next burst was, because nothing had decided yet - so the
+ * TX button counted down to the next SLOT, i.e. to the next opportunity, and
+ * every time the roll lost it reset and counted down again. The operator,
+ * 2026-09-02: "when it reached 00:00 then it started counting down again
+ * 01:20(!) I need to see a REAL count down to the next TX."
+ *
+ * So the roll is moved forward in time: one cycle index is chosen and held, the
+ * countdown reads it, and the boundary merely acts on a decision already made.
+ *
+ * ⚠ THE RANDOMNESS IS UNCHANGED, and that matters - it is load-bearing, not
+ * decoration (stations on a fixed schedule collide with the same neighbours for
+ * ever). Rolling each future cycle in turn until one wins gives exactly the
+ * geometric gap that independent per-cycle rolls give; the only difference is
+ * that the coin is tossed before the cycle rather than at it. Duty 100 still
+ * means every cycle, duty 0 still means never.
+ *
+ * ⚠ And a schedule can be OVERTAKEN. The PA guard can hold a burst, a build can
+ * fail, a callsign can be missing - in each case the cycle passes without
+ * transmitting and the next one is rolled from there, so the countdown jumps to
+ * a later time rather than sitting at zero claiming a burst that is not coming.
+ */
+static int64_t now_ms(void);           /* UTC ms - the cycle index is UTC-aligned */
+static int64_t s_next_tx_cycle = -1;   /* cycle index; -1 = nothing scheduled */
+static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
+
+/* First cycle AFTER `after` that wins the duty roll. */
+static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
+{
+    if (duty == 0) return -1;
+    if (duty >= 100) return after + 1;
+    /* Bounded so a corrupt duty can never spin here. At the lowest duty this
+     * offers (10%) the chance of 2000 straight losses is about 10^-92, so the
+     * bound is a safety net and not a behaviour. */
+    for (int i = 1; i <= 2000; i++)
+        if ((esp_random() % 100u) < duty) return after + i;
+    return -1;
+}
+
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
+{
+    /* ⚠ Takes the two values it needs as ARGUMENTS rather than reading the
+     * settings itself. Both callers are UI paths - the Tab5's TX button on
+     * taskLVGL and the /api/settings handler on httpd - and settings_load_all()
+     * is a multi-kilobyte struct on the caller's stack. That is the bug class
+     * this board has hit four times; see "Task stacks on this board are TINY". */
+    if (!tx_en || duty_pct == 0) {
+        s_next_tx_cycle = -1;
+        s_sched_duty    = 0;
+        return;
+    }
+    /* Rolled from the CURRENT cycle, so the earliest possible burst is the next
+     * boundary and a countdown appears the instant the operator presses TX ON -
+     * rather than after up to two minutes of the button saying nothing. */
+    s_next_tx_cycle = roll_next_tx_cycle(now_ms() / WSPR_CYCLE_MS, duty_pct);
+    s_sched_duty    = duty_pct;
+}
+
+int wspr_rx_seconds_to_next_tx(void)
+{
+    int64_t sched = s_next_tx_cycle;          /* one read - the loop may write */
+    if (sched < 0) return -1;
+    int64_t ms = sched * WSPR_CYCLE_MS - now_ms();
+    if (ms < 0) return -1;                    /* overtaken; the loop re-rolls */
+    return (int)(ms / 1000);
+}
+
 int wspr_rx_cycle_history(uint8_t *out, int max)
 {
     if (!out || max <= 0) return 0;
@@ -1242,7 +1313,34 @@ static void wspr_rx_task(void *arg)
             continue;
         }
 
-        if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 && !wspr_pa_guard_ready(&ws)) {
+        /* ---- is THIS the cycle the schedule picked? --------------------
+         * The roll itself happened earlier (see roll_next_tx_cycle) so that
+         * the TX button can count down to a real burst instead of to the next
+         * mere opportunity. All that is left here is to act on it, and to roll
+         * the following one - whether this cycle transmitted or not, so a held
+         * or refused burst moves the countdown on rather than leaving it at
+         * zero promising something that is not coming. */
+        const bool tx_possible = ws.wspr_tx_en && ws.wspr_duty_pct > 0;
+        if (!tx_possible) {
+            s_next_tx_cycle = -1;
+            s_sched_duty    = 0;
+        } else if (s_next_tx_cycle < last_cycle_idx ||
+                   s_sched_duty != ws.wspr_duty_pct) {
+            /* Nothing scheduled, the schedule was overtaken (a stalled cycle,
+             * a clock step), or the operator changed the duty. Rolled from
+             * last_cycle_idx - 1 so THIS cycle is the first candidate, which
+             * keeps the old behaviour that a burst can happen in the very
+             * first cycle after transmitting is switched on. */
+            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx - 1, ws.wspr_duty_pct);
+            s_sched_duty    = ws.wspr_duty_pct;
+        }
+        const bool tx_this_cycle = tx_possible && s_next_tx_cycle == last_cycle_idx;
+        if (tx_this_cycle) {
+            /* Roll the next one now, before anything below can fail. */
+            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx, ws.wspr_duty_pct);
+        }
+
+        if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {
             /* Loud, and only while it is actually holding something up. */
             /* -1 means "not answered yet", and printing that as tenths gave
              * "0.-1 V" on the very first run of this line. Say which it is. */
@@ -1256,8 +1354,7 @@ static void wspr_rx_task(void *arg)
                      (long long)cycle_utc, pavs,
                      (unsigned)(WSPR_PA_TARGET_X10 / 10),
                      (unsigned)(WSPR_PA_TARGET_X10 % 10));
-        } else if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&
-            (esp_random() % 100u) < ws.wspr_duty_pct) {
+        } else if (tx_this_cycle) {
             wspr_tx_request_t req;
             char err[80] = "";
             if (!ws.my_callsign[0] || !ws.my_grid[0]) {

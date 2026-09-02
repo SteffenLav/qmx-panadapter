@@ -31,7 +31,7 @@
   }
   body {
     display: grid;
-    grid-template-rows: auto 1fr auto 8px 3fr auto auto auto;
+    grid-template-rows: auto auto 1fr auto 8px 3fr auto auto auto;
     gap: 0; padding: 0.3rem;
   }
   /* Explicit row assignment (not document-order auto-placement): the
@@ -40,18 +40,36 @@
      fragile once there were more than 5 rows - pin each item to its own
      row number so hiding one never shifts the others. */
   #top          { grid-row: 1; }
-  #spec-wrap    { grid-row: 2; }
-  #freqaxis     { grid-row: 3; }
-  #split-handle { grid-row: 4; }
-  #wf-wrap      { grid-row: 5; }
-  #bandplan-wrap{ grid-row: 6; }
+  /* ⭐ THE MODE HEADING, mirroring the Tab5's own gold "MODE: ..." title.
+     Operator, 2026-09-02: "on the Web I need to see a big: MODE: WSPR just like
+     on the Tab5 - it should be aligned with all the other pages on the web
+     reflecting the Tab5 screens".
+
+     Its own grid row rather than a header inside each card, because the three
+     screens keep their content in different places - the panadapter in rows
+     3-7, FT8 in a spanning notice, WSPR in a card - and a per-card heading
+     would have sat at a different height on each. One row, one position. */
+  #mode-banner  { grid-row: 2; }
+  #spec-wrap    { grid-row: 3; }
+  #freqaxis     { grid-row: 4; }
+  #split-handle { grid-row: 5; }
+  #wf-wrap      { grid-row: 6; }
+  #bandplan-wrap{ grid-row: 7; }
   /* Pinned like every other grid child - see the note above. The first version
      of this card had no grid-row at all and the grid auto-placed it AFTER the
      bottom bar, which is exactly the fragility that note warns about. */
-  #wspr-card    { grid-row: 7; }
-  #bot          { grid-row: 8; }
-  /* Replaces the spec/freqaxis/handle/wf block (rows 2-5) when in FT8 mode. */
-  #ft8-notice   { grid-row: 2 / 6; }
+  #wspr-card    { grid-row: 8; }
+  #bot          { grid-row: 9; }
+  /* Replaces the spec/freqaxis/handle/wf block (rows 3-6) when in FT8 mode. */
+  #ft8-notice   { grid-row: 3 / 7; }
+
+  #mode-banner {
+    font-weight: 700; letter-spacing: 0.02em; color: var(--accent);
+    /* Big, but it must not eat the spectrum on a laptop - clamped rather than
+       a fixed size, the same way the button text is. */
+    font-size: clamp(1.15rem, 2.6vw, 2.1rem);
+    line-height: 1.15; padding: 2px 4px 4px;
+  }
 
   /* ---- Band-plan strip (whole-band CW/Digi/Phone strip + draggable
      visible-window knob, mirrors the Tab5's own bottom-of-screen strip,
@@ -712,6 +730,8 @@
       <div id="fps" class="bad">disconnected</div>
     </div>
   </div>
+
+  <div id="mode-banner">MODE: PANADAPTER</div>
 
   <div id="spec-wrap"><canvas id="spec" width="1024" height="200"></canvas><div class="tune-overlay" id="spec-overlay"></div></div>
 
@@ -3200,9 +3220,11 @@ function ft8FillPresets() {
   if (!sel.value && cur) sel.value = cur;
 }
 
+/* The device's own answer (/api/status ft8.proto), not a scan of the status
+   text - that only ever said FT4 while something was being transmitted, so the
+   preset list quietly believed FT8 the rest of the time. */
 function ft8IsFt4() {
-  const t = document.getElementById("ft8-tx");
-  return !!(t && /FT4/i.test(t.textContent || ""));
+  return lastFtProto === "FT4";
 }
 
 function ft8OptsSummarize(cfg) {
@@ -3605,6 +3627,7 @@ function wsprCycleLabel(utc) {
    Skipping the poll matters on its own: this board's httpd has a single
    worker, and a request every 5 s for a feature nobody enabled is pure
    contention on the link the spectrum stream shares. */
+let lastFtProto = "FT8";     /* what the device says it is running */
 let wsprEnabled = false;
 let wsprPollInFlight = false;
 /* The band list is fetched ONCE - it never changes - exactly like the FT8
@@ -3741,6 +3764,13 @@ async function pollWspr() {
       const m = Math.floor((j.tx_secs || 0) / 60), sec = (j.tx_secs || 0) % 60;
       st.textContent = "TX in " + m + ":" + String(sec).padStart(2, "0");
       st.style.color = "var(--accent)";
+    } else if (typeof j.next_tx_secs === "number" && j.next_tx_secs >= 0) {
+      /* The countdown to the next cycle that will really transmit. The duty
+         roll is taken in advance on the device precisely so this can be an
+         honest figure - see wspr_rx.h. */
+      const m = Math.floor(j.next_tx_secs / 60), sec = j.next_tx_secs % 60;
+      st.textContent = "next TX " + m + ":" + String(sec).padStart(2, "0");
+      st.style.color = "var(--dim)";
     } else { st.textContent = ""; st.style.color = "var(--dim)"; }
 
     /* The finals guard is the thing most worth surfacing: it is why the first
@@ -4560,6 +4590,10 @@ async function tick() {
         wfPalette    = buildWfPalette(wfPaletteIdx);
       }
     }
+    /* FT8 vs FT4 straight from the engine (s.ft8.proto). It used to be
+       inferred by looking for "FT4" in the TX status text, which reads FT8
+       whenever nothing is transmitting - a guess wearing a fact's clothes. */
+    if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
@@ -4643,6 +4677,18 @@ async function tick() {
         fpsEl.classList.remove("bad");
         ft8OptsRefreshBadge();   // fresh count each time this screen comes up
       }
+    }
+
+    /* The heading the Tab5 shows on this screen, in the same words. Repainted
+       every tick, not only when the screen changes: FT8 -> FT4 stays on the
+       same screen and would otherwise leave it saying FT8. The text compare
+       keeps that from touching the DOM 10 times a second. */
+    {
+      const mb = document.getElementById("mode-banner");
+      const want = screen === "wspr" ? "MODE: WSPR"
+                 : screen === "ft8"  ? "MODE: " + (ft8IsFt4() ? "FT4" : "FT8")
+                                     : "MODE: PANADAPTER";
+      if (mb && mb.textContent !== want) mb.textContent = want;
     }
 
     /* TX/QSO status banner - updated every poll while the FT8 screen is up.
