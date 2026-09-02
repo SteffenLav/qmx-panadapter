@@ -3129,6 +3129,14 @@ void ft8_band_change_stand_down(const char *why)
 
 bool ft8_qso_timeout_expire_check(void)
 {
+    /* ⛔ s_lock IS CREATED LAZILY, on the engine's first run (see the
+     * xSemaphoreCreateMutex below). Both of these are public and are called
+     * from a 1 Hz UI timer, so they can be reached on a screen where FT8 has
+     * never started - and xSemaphoreTake(NULL) is an assert, not a no-op.
+     * Cost me a boot loop on 2026-09-02: taskLVGL, 3.5 s of uptime, named
+     * exactly by the #117 crash record. Nothing can have timed out before the
+     * engine has ever run, so "no lock yet" simply means "nothing to do". */
+    if (!s_lock) return false;
     lock();
     bool due = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us &&
                (esp_timer_get_time() - s_timeout_us) >= (int64_t)QSO_TIMEOUT_AUTO_CLEAR_MS * 1000;
@@ -3146,6 +3154,7 @@ bool ft8_qso_timeout_expire_check(void)
 
 int ft8_qso_timeout_secs_left(void)
 {
+    if (!s_lock) return -1;          /* see the note above */
     lock();
     bool on = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us;
     int64_t age_us = on ? (esp_timer_get_time() - s_timeout_us) : 0;
