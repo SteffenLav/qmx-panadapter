@@ -458,6 +458,14 @@
   #ft8-status.clearable #ft8-tx { border: 1px solid #ff6020; border-radius: 6px;
                                   padding: 0.3rem 0.7rem; }
   #ft8-status.clearable:hover #ft8-tx { background: #ff6020; color: #0d1116; }
+  /* Both were 13 px beside a montserrat heading, which read as fine print.
+     They are the live figures on this panel - how many stations are on the band
+     and what the receiver is doing - so they are sized to be read across a
+     desk. */
+  #dec-count, #dec-rx { color: var(--dim);
+                        font-size: clamp(0.95rem, 1.35vw, 1.15rem); }
+  #dec-rx { color: var(--fg); }
+  #dec-rx:empty { display: none; }
   /* Collapse anything with nothing to say instead of holding a row open. */
   #ft8-webr:empty, #ft8-stats:empty { display: none; }
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
@@ -875,7 +883,12 @@
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
-        <span id="dec-count" style="color:var(--dim); font-size:13px"></span>
+        <span id="dec-count"></span>
+        <!-- The receive status - "RX: capturing..." / "RX: 11 decoded" - moved
+             down here from the top status box (operator, 2026-09-02). It belongs
+             beside the count of what has been heard, and it leaves the top line
+             to the transmitting box and its power/SWR cells. -->
+        <span id="dec-rx"></span>
         <!-- Only shown once a column click has replaced the device's own
              ordering, so clicking any header does not leave the operator
              wondering how to get the CQ-callers-on-top view back. -->
@@ -1731,15 +1744,21 @@ async function promptCloudlogCreds() {
    the press feels answered - the next poll, up to a second later, is what makes
    it stay gone. If the device refuses for any reason the poll puts it back,
    which is the honest outcome. */
+/* ⚠ The poll also owns this box's visibility now, so the click cannot simply
+   hide it - the next poll, up to a second later, would put it straight back
+   while the device was still draining the cancel. A short window instead: the
+   press hides it, the poll respects that for 1.5 s, and by then the state has
+   really changed. If the device refuses, the box returns, which is honest. */
+let ft8StatusHideUntil = 0;
 document.getElementById("ft8-status").addEventListener("click", async (e) => {
   const box = e.currentTarget;
   if (!box.classList.contains("clearable")) return;   /* a readout, not a button */
   box.classList.remove("clearable");
   box.style.display = "none";
+  ft8StatusHideUntil = performance.now() + 1500;
   try {
     await sendCmd({ action: "qso_override", what: "cancel" });
   } catch (err) { /* the poll will restore it */ }
-  setTimeout(() => { box.style.display = ""; }, 1200);
 });
 
 /* Mid-QSO override (#205, Randy N4OPI). Deliberately only visible while an
@@ -4976,9 +4995,27 @@ async function tick() {
     /* TX/QSO status banner - updated every poll while the FT8 screen is up.
        s.ft8 = { st: active|armed|wait|done|timeout|idle, text: "..." }. */
     if (screen === "ft8" && s.ft8) {
+      /* ⭐ TWO HOMES FOR ONE STRING, decided by the state. While nothing is
+         being transmitted this is a RECEIVE readout - "RX: capturing...",
+         "RX: 11 decoded" - and it now sits beside "19 stations heard", which is
+         the other half of the same sentence. The top box then holds only what
+         it is for: the transmitting line and its power/SWR cells. */
       const el = document.getElementById("ft8-tx");
-      el.className   = "st-" + (s.ft8.st || "idle");
-      el.textContent = s.ft8.text || "--";
+      const st = s.ft8.st || "idle";
+      const idleRx = (st === "idle");
+      el.className   = "st-" + st;
+      el.textContent = idleRx ? "" : (s.ft8.text || "--");
+      {
+        const rx = document.getElementById("dec-rx");
+        if (rx) rx.textContent = idleRx ? (s.ft8.text || "") : "";
+        /* An empty bordered box is worse than no box: hide the whole thing
+           unless it has something to say. The reply outcome lives in it too, so
+           that counts as something. */
+        const box = document.getElementById("ft8-status");
+        if (box) box.style.display =
+            (performance.now() < ft8StatusHideUntil) ? "none"
+          : (idleRx && !s.ft8.web_r)                 ? "none" : "";
+      }
       /* Clickable ONLY while timed out. The state is sticky and blocks the
          automatic pickers, so there has to be a way to clear it from here -
          the Tab5 has had one (tap the label) since v0.15. It also clears
