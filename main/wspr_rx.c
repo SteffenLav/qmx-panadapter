@@ -1245,11 +1245,16 @@ static void wspr_rx_task(void *arg)
 
         if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 && !wspr_pa_guard_ready(&ws)) {
             /* Loud, and only while it is actually holding something up. */
+            /* -1 means "not answered yet", and printing that as tenths gave
+             * "0.-1 V" on the very first run of this line. Say which it is. */
+            int16_t pav = cat_get_pa_voltage_x10();
+            char pavs[24];
+            if (pav < 0) snprintf(pavs, sizeof(pavs), "not answered yet");
+            else         snprintf(pavs, sizeof(pavs), "%d.%d V", pav / 10, pav % 10);
             ESP_LOGW(TAG, "cycle %lld: holding TX - the finals guard has not "
-                          "confirmed the PA is turned down yet (radio says %d.%d V, "
+                          "confirmed the PA is turned down yet (radio says %s, "
                           "target %u.%u V)",
-                     (long long)cycle_utc,
-                     cat_get_pa_voltage_x10() / 10, cat_get_pa_voltage_x10() % 10,
+                     (long long)cycle_utc, pavs,
                      (unsigned)(WSPR_PA_TARGET_X10 / 10),
                      (unsigned)(WSPR_PA_TARGET_X10 % 10));
         } else if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&

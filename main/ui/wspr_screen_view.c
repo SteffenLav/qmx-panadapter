@@ -202,9 +202,30 @@ static void dial_changed_cb(lv_event_t *e)
  */
 #define EX_X      16
 #define EX_W      (LEFT_W - 32)
-#define EX_DX_Y   322
-#define EX_HIST_Y 404
-#define EX_NET_Y  470
+/* ⭐ TX SITS AT THE BOTTOM AND EVERYTHING ELSE MOVED UP (Roy KI0ER, 2026-09-01:
+ * the TX button "is still where you have to touch to switch to the Panadapter";
+ * operator's call: "lets move it to the bottom then - and free up the space in
+ * the middle of the panel").
+ *
+ * v1.10.5 shifted the button right, out of the 30 px edge-swipe strip, which
+ * fixed the horizontal overlap Randy reported. It did not fix this one, because
+ * the problem is VERTICAL: the button sat at y=258 in a 624 px panel, i.e.
+ * across the middle, and the middle of the left edge is exactly where a hand
+ * goes for the page-swipe grip. Being clear of the strip in x does not help if
+ * the thumb lands there on the way past.
+ *
+ * At the bottom it is nowhere near the grip, and the three read-only extras -
+ * BEST DX, the cycle history and the wsprnet line - move up into the space it
+ * vacated, so the panel has no hole in the middle.
+ *
+ * ⚠ These three and the TX button's y must move TOGETHER. This file's own
+ * history is a section height and its y drifting apart; keep the arithmetic
+ * here, where all four are visible at once. */
+#define EX_DX_Y   258
+#define EX_HIST_Y 340
+#define EX_NET_Y  406
+/* Bottom of the panel, one button height plus a margin. */
+#define EX_TX_Y   (MID_H - 72)
 /* ⚠ BAND HOP SITS AT THE BOTTOM, and the gap above it is not slack.
  * The wsprnet line above wraps to TWO lines once the counts reach two digits
  * ("wsprnet: off - 12 of 25 calls confirmed"), and at 506 the second line
@@ -1140,10 +1161,16 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * ⚠ Any control added to this pane must clear 30 px too. The rule this
      * project already has for radio-keying controls - impossible to trigger by
      * accident - is not satisfied by a confirmation label if the thing can be
-     * hit by a gesture aimed at something else entirely. */
+     * hit by a gesture aimed at something else entirely.
+     *
+     * ⭐ AND CLEARING THE STRIP IN X WAS NOT ENOUGH. Roy reported the same
+     * accident after that fix shipped: the button was at y=258 of a 624 px
+     * panel - across the middle - and the middle of the left edge is where the
+     * hand goes for the swipe grip. It now sits at the bottom (EX_TX_Y); see
+     * the layout note beside EX_DX_Y. */
     s_btn_tx = lv_btn_create(s_container);
     lv_obj_set_size(s_btn_tx, LEFT_W - 48, 56);
-    lv_obj_set_pos(s_btn_tx, 40, 258);
+    lv_obj_set_pos(s_btn_tx, 40, EX_TX_Y);
     lv_obj_set_style_radius(s_btn_tx, 8, 0);
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_tx = lv_label_create(s_btn_tx);
