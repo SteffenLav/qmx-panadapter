@@ -983,8 +983,16 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
     if (want_reduced && ws->wspr_pa_saved_x10 == 0) {
         int16_t cur = cat_get_pa_voltage_x10();
         if (cur < 0) {
-            /* Not known yet - ask, and act on the next cycle. Two minutes late
-             * is fine; guessing the current value is not. */
+            /* ⛔ "Two minutes late is fine" - what this comment used to say -
+             * IS EXACTLY ONE FULL-POWER TRANSMISSION, which is the thing the
+             * guard exists to prevent. Roy KI0ER, 2026-09-01, on a 12 V QMX fed
+             * from a 9 V supply: "first WSPR TX went out at full power for the
+             * first 2 minutes... I checked QMX Menu, and PA voltage was still
+             * at 11.5 volts. Subsequent WSPR TX cycles were then at 6.0 Volts."
+             *
+             * Asking and returning is still right - guessing the operator's
+             * value would be worse - but the ARM must now wait for the answer.
+             * See wspr_pa_guard_ready(), which the duty-cycle roll consults. */
             cat_query_pa_voltage();
             return;
         }
@@ -1012,6 +1020,33 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
         ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage restored to %u.%u V",
                  back / 10, back % 10);
     }
+}
+
+/* ⛔ MAY A BURST BE ARMED YET?
+ *
+ * The guard is asynchronous: it asks the radio for Max. PA voltage over CAT,
+ * and the answer arrives a poll or two later. Until then it cannot reduce
+ * anything - and the duty-cycle roll immediately below it used to fire anyway,
+ * so the FIRST burst of a WSPR session went out at whatever the radio was
+ * already set to. Every later cycle was correctly reduced, which is exactly why
+ * it reads as intermittent and why it survived a release.
+ *
+ * The test is a MEASUREMENT, not a flag: the radio's own reported Max. PA
+ * voltage must actually be at or below the target. That covers all three ways
+ * this can be satisfied - the guard reduced it, the operator was already
+ * running lower (the guard never raises anyone's power), or the read-back after
+ * the write has confirmed it landed. A flag saying "we sent the write" would
+ * not, and the write is the part that goes through MM + MU; + a Q9 re-assert.
+ *
+ * Skipping a transmit cycle costs nothing: the duty cycle is random anyway, so
+ * a skipped slot is indistinguishable from an unlucky roll. Transmitting at
+ * four times the intended power is not so cheap. */
+static bool wspr_pa_guard_ready(const qmx_settings_t *ws)
+{
+    if (!(ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0))
+        return true;                    /* protection not wanted - nothing to wait for */
+    int16_t cur = cat_get_pa_voltage_x10();
+    return cur >= 0 && (uint16_t)cur <= WSPR_PA_TARGET_X10;
 }
 
 static void wspr_rx_task(void *arg)
@@ -1208,7 +1243,16 @@ static void wspr_rx_task(void *arg)
             continue;
         }
 
-        if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&
+        if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 && !wspr_pa_guard_ready(&ws)) {
+            /* Loud, and only while it is actually holding something up. */
+            ESP_LOGW(TAG, "cycle %lld: holding TX - the finals guard has not "
+                          "confirmed the PA is turned down yet (radio says %d.%d V, "
+                          "target %u.%u V)",
+                     (long long)cycle_utc,
+                     cat_get_pa_voltage_x10() / 10, cat_get_pa_voltage_x10() % 10,
+                     (unsigned)(WSPR_PA_TARGET_X10 / 10),
+                     (unsigned)(WSPR_PA_TARGET_X10 % 10));
+        } else if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&
             (esp_random() % 100u) < ws.wspr_duty_pct) {
             wspr_tx_request_t req;
             char err[80] = "";
