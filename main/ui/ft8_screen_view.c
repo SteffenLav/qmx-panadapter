@@ -2317,7 +2317,24 @@ _Static_assert(sizeof(ft8_preset_t) == sizeof(ft8_band_freq_t) &&
 
 const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count)
 {
-#ifndef FT4_MODE_DISABLED
+/* ⛔ #if !, NOT #ifndef. FT4_MODE_DISABLED is DEFINED AS 0 when FT4 is enabled
+ * (ft8_test.h), so `#ifndef` is false and this branch was compiled OUT of every
+ * build since it was written - the accessor returned the FT8 table for both
+ * arguments.
+ *
+ * Every other guard on this symbol - two in ft8_test.c and three in this file -
+ * spells it `#if FT4_MODE_DISABLED` / `#if !FT4_MODE_DISABLED` and is correct.
+ * This was the single odd one out, which is why the fault was invisible on the
+ * Tab5 (its own picker uses the tables through the guards at 2431/2613 and
+ * shows the right FT4 frequencies) and showed up only in the browser, whose
+ * dropdown is built from THIS accessor: /api/status?presets=1 served the FT8
+ * frequencies under "ft4_presets", identical to the FT8 list.
+ *
+ * It also broke mode switching from the browser, and did so silently: the page
+ * decides FT8 vs FT4 by asking which list the chosen frequency is in, and with
+ * two identical lists the answer was always FT4 (Randy N4OPI: "only frequency
+ * change - window stay on mode FT4 both places"). */
+#if !FT4_MODE_DISABLED
     if (ft4) { if (out_count) *out_count = (int)N_FT4_BAND_FREQS;
                return (const ft8_preset_t *)FT4_BAND_FREQS; }
 #else
