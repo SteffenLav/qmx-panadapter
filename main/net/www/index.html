@@ -320,19 +320,34 @@
      the hint was carried out to the right-hand edge of the window with a gulf
      between them (operator: "the text next to the RX: 14 Decoded is pushed all
      to the right - bring it back please"). Leftover width is now left over. */
+  /* ⭐ A THREE-COLUMN GRID, so the status box is centred ON THE PAGE.
+     As a flex row it could not be: the mode heading takes the left, the box
+     takes the rest, and centring INSIDE the box centres it in what is left over
+     - visibly right of the page centre (operator, 2026-09-02: "you need to
+     center those arm / tx boxes with the text next to it - it sits to the right
+     now"). Two equal minmax(0,1fr) columns either side of an auto middle put
+     the box on the real centre with no spacer element and no guess at how wide
+     the heading is. The outer columns can shrink to nothing, so a narrow window
+     gives the box the whole width instead of overflowing. */
   #ft8-topline {
     flex: 0 0 auto; align-self: stretch;
-    display: flex; flex-flow: row wrap; align-items: stretch;
-    justify-content: flex-start; gap: 0.8rem;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center; gap: 0.8rem;
     margin-bottom: 0.8rem;
   }
+  #ft8-topline > #ft8-status { grid-column: 2; min-width: 0; }
   /* ⭐ ITS OWN COLUMN, at the far left, exactly where MODE: WSPR sits.
      It was briefly INSIDE the status box, which centres its contents - so the
      heading slid left and right every time the decode count went from one digit
      to two (operator: "put it in a seperate column as not to jitter back and
      forth due to the counter having 1 or two digits"). Outside the box it has
      nothing to share a centre with, so it cannot move. */
-  #ft8-topline > #mode-banner { flex: 0 0 auto; align-self: center;
+  /* ⚠ grid-row MUST be reset. #mode-banner carries `grid-row: 2` for the PAGE
+     grid, and that declaration follows it into this grid too - so the heading
+     was placed on row 2 of the top line, i.e. underneath the status box.
+     Measured, not spotted by eye: mode top=154 against status top=70. */
+  #ft8-topline > #mode-banner { grid-column: 1; grid-row: auto;
+                                justify-self: start;
                                 white-space: nowrap; padding: 0 0.2rem 0 0; }
   /* Trimmed to fit the reclaimed row: the transmitting line is the longest
      thing this box ever holds ("TX ACTIVE: VK3ABC OZ1LAV R-09 (2450 Hz)") and
@@ -346,7 +361,7 @@
      a sentence you read once, holding a third of the top line for the whole
      session. The status box takes the width instead - so a live TX line and its
      power/SWR cells sit on one row rather than wrapping. */
-  #ft8-topline > #ft8-status { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+  #ft8-topline > #ft8-status { margin-bottom: 0; }
   /* ---- slot row: the E/O occupancy strip and the slot clock ---------------
      Both are on the Tab5's left pane and neither was here. The strip is drawn
      from the SAME masks and the SAME palette as the tone picker's own canvas
@@ -436,7 +451,15 @@
      Cancel towered over them. Sized here rather than by adding classes so the
      row is defined in ONE place, and it wraps rather than overflowing when the
      window is narrow. */
-  #ft8-override { display: flex; flex-flow: row wrap; align-items: center;
+  /* ⛔ ALWAYS ITS OWN LINE. Together these two rows come within a couple of
+     pixels of the panel width, so whether the mid-QSO buttons sat beside Call
+     CQ or under it flipped on a scrollbar appearing or a preset label getting
+     one character longer - the operator saw it move and asked what had happened.
+     A control row that reflows on two pixels is a defect, not a layout. And
+     these four key the radio: they belong on their own line, not inline with
+     the everyday buttons. */
+  #ft8-override { flex: 1 1 100%;
+                  display: flex; flex-flow: row wrap; align-items: center;
                   justify-content: center; gap: 0.4rem; }
   #ft8-override button {
     font: inherit; font-size: clamp(0.8rem, 1.15vw, 1.05rem);
