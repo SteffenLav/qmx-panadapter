@@ -357,15 +357,17 @@
      for both so the row reads as one set of controls. */
   #wspr-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
   .wspr-ind { color: var(--dim); font-size: 13px; }
+  #ft8-actions button, #ft8-actions select,
   #wspr-actions button, #wspr-actions select {
-  #ft8-actions button, #ft8-actions select {
     font: inherit; font-size: clamp(0.95rem, 1.5vw, 1.5rem);
     padding: clamp(0.35rem, 0.7vw, 0.7rem) clamp(0.8rem, 1.8vw, 1.8rem);
     color: var(--fg); background: var(--card);
     border: 2px solid var(--accent); border-radius: 8px; cursor: pointer;
   }
   #ft8-actions button:hover:not(:disabled),
-  #ft8-actions select:hover { background: var(--accent); color: #000; }
+  #ft8-actions select:hover,
+  #wspr-actions button:hover:not(:disabled),
+  #wspr-actions select:hover { background: var(--accent); color: #000; }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
   /* Count, not a binary active-colour: Dirk DK7CVD wanted the Options button to
      show something was on, Roy KI0ER pointed out a plain on/off colour would
