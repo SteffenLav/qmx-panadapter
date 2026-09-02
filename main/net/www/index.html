@@ -69,7 +69,13 @@
   /* Pinned like every other grid child - see the note above. The first version
      of this card had no grid-row at all and the grid auto-placed it AFTER the
      bottom bar, which is exactly the fragility that note warns about. */
-  #wspr-card    { grid-row: 8; }
+  /* ⛔ SPANS THE FLEXIBLE ROWS, like #ft8-notice does, and for the same reason.
+     Pinned to row 8 alone it left rows 3 and 6 - the 1fr and the waterfall fr -
+     empty but still claiming their share of the free space, so the card sat
+     below a block of nothing. Operator, 2026-09-02: "here also remove the dead
+     space under the MODE: WSPR". An fr track with no item in it is not a track
+     that takes no room. */
+  #wspr-card    { grid-row: 3 / 9; }
   #bot          { grid-row: 9; }
   /* Replaces the spec/freqaxis/handle/wf block (rows 3-6) when in FT8 mode. */
   #ft8-notice   { grid-row: 3 / 7; }
@@ -299,6 +305,65 @@
      row of boxes it says the same things in roughly one row on a wide window and
      folds gracefully to two or three on a narrow one, which is also the honest
      answer to "every user have their own windows and zoom levels". */
+  /* ⭐ STATUS AND HINT SIDE BY SIDE. Operator, 2026-09-02: "in two blocks next
+     to each other - this way economise with the available space". They were
+     stacked, and the hint is static text that never changes - a whole row of
+     panel height spent on a sentence you read once. Wraps back to a column on a
+     narrow window, where there is no width to share. */
+  #ft8-topline {
+    flex: 0 0 auto; align-self: stretch;
+    display: flex; flex-flow: row wrap; align-items: stretch; gap: 0.8rem;
+    margin-bottom: 0.8rem;
+  }
+  #ft8-topline > #ft8-status { flex: 2 1 22rem; margin-bottom: 0; }
+  /* The mode heading moves INTO the status box on this screen (operator: "put
+     the MODE: FT8 on the same line as the RX: 24 Decoded - plenty of space
+     there"). It is the same element, relocated rather than duplicated - two
+     copies of one label is how they end up disagreeing. */
+  #ft8-status > #mode-banner { padding: 0; margin: 0; white-space: nowrap;
+                               flex: 0 0 auto; }
+  #ft8-topline > #ft8-hint   { flex: 1 1 16rem; display: flex; align-items: center;
+                               text-align: left; }
+  /* ---- slot row: the E/O occupancy strip and the slot clock ---------------
+     Both are on the Tab5's left pane and neither was here. The strip is drawn
+     from the SAME masks and the SAME palette as the tone picker's own canvas
+     (TONE_COL_*), so the page and the modal cannot come to different
+     conclusions about which slots are busy. */
+  /* Half each, and the pair no wider than the decode list below them, so the
+     three blocks line up as one column of content. Operator, 2026-09-02: "make
+     it half the with of that of the decoded station list... the countdown and
+     bar needs to take up the other half". 1000px is #ft8-decodes' own max-width
+     - if that ever changes, change it here too. */
+  #ft8-slotrow {
+    align-self: center; width: 100%; max-width: 1000px;
+    display: flex; flex-flow: row wrap; align-items: center; gap: 0.9rem;
+  }
+  #ft8-eo {
+    flex: 1 1 20rem; min-width: 0; max-width: 500px;
+    height: 60px; border: 1px solid #333; border-radius: 4px; background: #0d1116;
+  }
+  /* Bar BESIDE the number, not under it - the row is short and wide, so
+     stacking them wasted the width and shrank both. */
+  #ft8-slot {
+    flex: 1 1 15rem; min-width: 0; max-width: 500px;
+    display: flex; flex-direction: row; align-items: center; gap: 0.9rem;
+  }
+  #slot-sec { flex: 0 0 auto;
+              font-size: clamp(1.6rem, 3.2vw, 2.6rem); font-weight: 700;
+              line-height: 1; color: var(--fg); font-variant-numeric: tabular-nums; }
+  #slot-meter { flex: 1 1 auto; min-width: 0;
+                display: flex; flex-direction: column; gap: 5px; }
+  #slot-par { font-size: clamp(0.72rem, 1vw, 0.92rem); color: var(--dim);
+              letter-spacing: 0.08em; text-align: center; }
+  #slot-track { width: 100%; height: 14px; border-radius: 7px;
+                background: #23292f; overflow: hidden; }
+  /* No CSS transition on the fill: it is repainted every animation frame from
+     the device's own slot position, and a transition would fight that and lag
+     it. The bar IS the animation. */
+  #slot-fill { height: 100%; width: 0; background: var(--accent); }
+  #ft8-slotrow.tx #slot-fill { background: #ff4010; }
+  #ft8-slotrow.tx #slot-sec  { color: #ff4010; }
+
   #ft8-status {
     flex: 0 0 auto; align-self: stretch;
     display: flex; flex-flow: row wrap; align-items: center; justify-content: center;
@@ -763,7 +828,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec">--</div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div><div id="slot-par">--</div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -807,7 +872,8 @@
        ===================================================================== -->
   <div class="card" id="wspr-card" style="display:none"><div class="card-in">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
-        <strong style="color:#ffa040">WSPR</strong>
+        <!-- No "WSPR" label: the MODE heading above the panel already says so,
+             and it read as "WSPR 0 spots - 0 stations" (operator: "redundant"). -->
         <span id="wspr-count" style="color:var(--dim); font-size:13px"></span>
         <span id="wspr-note" style="color:var(--dim); font-size:12px"></span>
       </div>
@@ -3238,6 +3304,113 @@ function ft8IsFt4() {
   return lastFtProto === "FT4";
 }
 
+/* ==========================================================================
+   The FT8 pane's occupancy strip and slot clock - the Tab5's left pane, on the
+   web. Operator, 2026-09-02: "the mini E & O strips shown just like on the Tab5
+   but bigger of course... next to the strips i want to se the 15sec or 7 sec
+   countdown with the pulsing bar - again like the Tab5."
+
+   The masks arrive on the ordinary /api/status poll (ft8.busy_e / busy_o) and
+   are drawn with the SAME TONE_COL_* palette the tone picker's canvas uses, so
+   the two cannot disagree about which slots are busy. The Tab5 shares its
+   palette between its own mini strip and its tone modal for exactly this
+   reason - see ft8_tone_modal.h.
+   ========================================================================== */
+let eoState = null;              /* last ft8 object that carried the masks */
+let slotAnchor = null;           /* {posMs, slotMs, at} - the device's clock */
+
+function eoDraw() {
+  const cv = document.getElementById("ft8-eo");
+  if (!cv) return;
+  /* Match the backing store to the CSS box, or the strip is drawn at the
+     element's default 300 px and stretched. */
+  const w = Math.max(1, Math.round(cv.clientWidth));
+  const h = Math.max(1, Math.round(cv.clientHeight));
+  if (cv.width !== w)  cv.width  = w;
+  if (cv.height !== h) cv.height = h;   /* or the backing store is scaled */
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.fillStyle = "#0d1116"; ctx.fillRect(0, 0, W, H);
+  if (!eoState || !eoState.busy_e) return;
+
+  const n = eoState.busy_e.length || 1;
+  /* A gutter for the E/O chips, so they never overlap a cell. */
+  const GUT = 20;
+  const bw = (W - GUT) / n;
+  const known = (eoState.stations || 0) > 0;
+  const rowH = Math.floor((H - 20) / 2) - 2;
+  /* EVEN above ODD, and the window this slot belongs to is marked rather than
+     hidden: the operator picks which window to pounce into, so both must stay
+     visible (Roy KI0ER's point when the tone picker gained two rows). */
+  const rows = [
+    { mask: eoState.busy_e, y: 16,            label: "E", even: true  },
+    { mask: eoState.busy_o, y: 16 + rowH + 4, label: "O", even: false },
+  ];
+  const slotOf = hz => Math.round((hz - 200) / 50);
+  const ours = eoState.tone_hz ? slotOf(eoState.tone_hz) : -1;
+  const part = eoState.partner_hz ? slotOf(eoState.partner_hz) : -1;
+
+  for (const r of rows) {
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = (i === ours) ? TONE_COL_PICK
+                    : (i === part) ? TONE_COL_PARTNER
+                    : !known       ? TONE_COL_UNKNOWN
+                    : (r.mask[i] === "1" ? TONE_COL_BUSY : TONE_COL_FREE);
+      ctx.fillRect(GUT + i * bw + 0.5, r.y, Math.max(1, bw - 1), rowH);
+    }
+    /* ⚠ A CHIP, not bare text. At 13 px with no background the letters sat on
+       top of whatever cell happened to be under them and vanished (operator,
+       2026-09-02: "the slot E & O is written so small and with no background -
+       they disappear"). Drawn in the reserved gutter with its own fill, and
+       the live window is lit while the other stays dim. */
+    const live = (eoState.slot_even === true) === r.even;
+    const col  = live ? (r.even ? "#8AB4F8" : "#FFA040") : "#4a545e";
+    ctx.fillStyle = live ? col : "#20262c";
+    ctx.fillRect(0, r.y, GUT - 3, rowH);
+    ctx.fillStyle = live ? "#0d1116" : col;
+    ctx.font = "bold 15px system-ui,sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(r.label, (GUT - 3) / 2, r.y + rowH / 2 + 1);
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  }
+  ctx.fillStyle = "#9db0bd"; ctx.font = "11px system-ui,sans-serif";
+  ctx.textAlign = "center";
+  for (let hz = 500; hz <= 2500; hz += 500) {
+    const x = GUT + (slotOf(hz) + 0.5) * bw;
+    if (x > GUT && x < W - 8) ctx.fillText(String(hz), x, 11);
+  }
+  ctx.textAlign = "left";
+}
+
+/* Run off the browser's own clock between polls, re-anchored on every one, so
+   the bar is smooth without a request per frame. */
+function slotTick() {
+  const secEl = document.getElementById("slot-sec");
+  if (!secEl) return;
+  if (!slotAnchor) { secEl.textContent = "--"; return; }
+  const slot = slotAnchor.slotMs;
+  const pos  = (slotAnchor.posMs + (performance.now() - slotAnchor.at)) % slot;
+  const left = slot - pos;
+  /* Whole seconds remaining, the way the Tab5 counts. */
+  secEl.textContent = String(Math.ceil(left / 1000));
+  const fill = document.getElementById("slot-fill");
+  if (fill) fill.style.width = (100 * (1 - pos / slot)).toFixed(1) + "%";
+  const par = document.getElementById("slot-par");
+  if (par) {
+    /* Recomputed locally so it flips at the boundary rather than at the next
+       poll: the parity alternates every slot, so an elapsed slot inverts it. */
+    const flips = Math.floor((slotAnchor.posMs + (performance.now() - slotAnchor.at)) / slot);
+    /* XOR: an odd number of elapsed slots inverts the parity. Written with
+       !== on booleans rather than ^ on 0/1, where the precedence against the
+       following ?: silently produced the INVERSE. */
+    const even  = slotAnchor.even !== ((flips & 1) === 1);
+    const want  = even ? "EVEN" : "ODD";
+    if (par.textContent !== want) par.textContent = want;
+  }
+}
+setInterval(slotTick, 100);
+window.addEventListener("resize", eoDraw);
+
 function ft8OptsSummarize(cfg) {
   const labels = [];
   for (const [grp, path, type, label] of SET_FIELDS) {
@@ -4668,7 +4841,10 @@ async function tick() {
       document.getElementById("wf-wrap").style.display       = noPan ? "none" : "";
       document.getElementById("bandplan-wrap").style.display = noPan ? "none" : "";  // falls back to the .show-class-controlled default when cleared
       document.getElementById("ft8-notice").style.display    = isFt8 ? "flex" : "none";
-      if (isFt8) { ft8LoadPresets(); ft8FillPresets(); }
+      if (isFt8) { ft8LoadPresets(); ft8FillPresets();
+                   /* The canvas has no layout width until the panel is shown,
+                      so a draw from the poll before this would size to nothing. */
+                   requestAnimationFrame(eoDraw); }
       /* ⛔ The WSPR card follows the SCREEN, not the wspr_en feature flag.
          It used to key off the flag alone, so it sat at the bottom of every
          page - and worse than untidy, it was misleading: wspr_rx_start() runs
@@ -4708,6 +4884,19 @@ async function tick() {
         mb.textContent = want;
         mb.style.display = want ? "" : "none";
       }
+      /* ⭐ ONE element, relocated - not a second copy. On FT8 it joins the
+         status box so the mode sits on the same line as "RX: N decoded"; on
+         WSPR it goes back to its own grid row above the card. Grid-row is
+         ignored inside the flex box and applies again the moment it is a body
+         child, so nothing else has to change. */
+      if (mb) {
+        const line = document.getElementById("ft8-status");
+        if (screen === "ft8" && line) {
+          if (mb.parentElement !== line) line.insertBefore(mb, line.firstChild);
+        } else if (mb.parentElement !== document.body) {
+          document.body.appendChild(mb);
+        }
+      }
     }
 
     /* TX/QSO status banner - updated every poll while the FT8 screen is up.
@@ -4720,6 +4909,27 @@ async function tick() {
          "Armed: ...", "Busy: working X", "no longer in the decode list". */
       document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";
       if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity, true);
+      /* The occupancy strip and the slot clock. Redrawn only when the picture
+         actually changes - the masks move once a slot, not ten times a second. */
+      {
+        const f = s.ft8;
+        if (f.busy_e !== undefined) {
+          const changed = !eoState || eoState.busy_e !== f.busy_e ||
+                          eoState.busy_o !== f.busy_o ||
+                          eoState.tone_hz !== f.tone_hz ||
+                          eoState.partner_hz !== f.partner_hz ||
+                          eoState.stations !== f.stations ||
+                          eoState.slot_even !== f.slot_even;
+          eoState = f;
+          if (changed) eoDraw();
+        }
+        if (typeof f.slot_ms === "number" && f.slot_ms > 0) {
+          slotAnchor = { posMs: f.slot_pos_ms || 0, slotMs: f.slot_ms,
+                         even: !!f.slot_even, at: performance.now() };
+        }
+        const row = document.getElementById("ft8-slotrow");
+        if (row) row.classList.toggle("tx", f.st === "active");
+      }
       /* Show the override row only while an exchange is live. st covers the
          armed/active/waiting states; idle and done get nothing to press. */
       {

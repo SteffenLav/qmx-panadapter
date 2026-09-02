@@ -4,6 +4,8 @@
 #include "net/ota_update.h"     // #218
 #include "filebrowser.h"      // filebrowser_register - microSD web file browser
 
+#include <sys/time.h>         // gettimeofday - the FT8 slot clock in /api/status
+
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -220,6 +222,54 @@ static void add_ft8_tx_status(cJSON *root)
      * to learn the hard way this week - one accessor, both screens. */
     cJSON_AddStringToObject(f, "proto",
         ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+
+    /* ⭐ THE MINI OCCUPANCY STRIP AND THE SLOT CLOCK, so the browser can show
+     * what the Tab5's left pane shows. Operator, 2026-09-02: "I want to have
+     * the mini E & O strips shown just like on the Tab5 but bigger of course...
+     * next to the strips i want to se the 15sec or 7 sec countdown with the
+     * pulsing bar - again like the Tab5."
+     *
+     * Carried on THIS poll rather than by making the page fetch /api/tone as
+     * well. It is about 130 bytes, it is only sent while the FT8 screen is up
+     * (see the caller), and httpd here is single-worker - a second periodic
+     * request is the more expensive of the two by a wide margin.
+     *
+     * ⚠ The masks are STRINGS, one character per 50 Hz slot. JavaScript cannot
+     * hold 52 bits of integer without losing the low ones to the double it
+     * would become - the same reason /api/tone sends them this way. */
+    {
+        int n_slots = 0, n_stations = 0;
+        uint64_t mask_e = 0, mask_o = 0;
+        ft8_tx_get_tone_occupancy_split(&mask_e, &mask_o, &n_slots, &n_stations);
+        char bits[72];
+        int n = (n_slots > 0 && n_slots < (int)sizeof(bits)) ? n_slots : 0;
+        for (int i = 0; i < n; i++) bits[i] = (mask_e >> i) & 1ULL ? '1' : '0';
+        bits[n] = '\0';
+        cJSON_AddStringToObject(f, "busy_e", bits);
+        for (int i = 0; i < n; i++) bits[i] = (mask_o >> i) & 1ULL ? '1' : '0';
+        cJSON_AddStringToObject(f, "busy_o", bits);
+        /* Drives the all-grey "nothing heard yet" state - an empty band and a
+         * band nobody has listened to must not look alike. */
+        cJSON_AddNumberToObject(f, "stations", n_stations);
+        cJSON_AddNumberToObject(f, "tone_hz",  ft8_tx_get_tone_pref_hz());
+        int partner = 0;
+        if (ft8_qso_get_priority_freq(&partner) && partner > 0)
+            cJSON_AddNumberToObject(f, "partner_hz", partner);
+    }
+    {
+        /* Slot length and how far into the slot we are. The browser runs the
+         * bar off its own clock between polls and re-anchors on each of these,
+         * so it stays smooth without a request per frame. */
+        const int slot_ms = ft8_op_mode_slot_ms();
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        int64_t ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        cJSON_AddNumberToObject(f, "slot_ms",     slot_ms);
+        cJSON_AddNumberToObject(f, "slot_pos_ms", (double)(ms % slot_ms));
+        /* Which window this slot is, on the SAME grid the decode list's E/O
+         * column uses - so the strip's highlight and the rows agree. */
+        cJSON_AddBoolToObject(f, "slot_even", ((ms / slot_ms) % 2) == 0);
+    }
 
     char tx_text[32];
     int  secs_until = 0;
