@@ -368,20 +368,22 @@
   /* Bar BESIDE the number, not under it - the row is short and wide, so
      stacking them wasted the width and shrank both. */
   #ft8-slot {
-    flex: 1 1 15rem; min-width: 0; max-width: 500px;
-    display: flex; flex-direction: row; align-items: center; gap: 0.9rem;
+    flex: 1 1 12rem; min-width: 0; max-width: 380px;
+    display: flex; flex-direction: row; align-items: center; gap: 0.7rem;
   }
   /* The number and its unit. The digits are right-aligned in a fixed box so
      15 -> 9 does not drag the bar sideways with it. */
   #slot-sec { flex: 0 0 auto; display: flex; align-items: baseline; gap: 0.25rem;
               line-height: 1; color: var(--fg); }
+  /* Toned down - "the countdown and the bar could be reduced a bit - they are
+     very dominant". It is a background rhythm, not the headline. */
   #slot-n   { min-width: 2.1ch; text-align: right;
-              font-size: clamp(1.6rem, 3.2vw, 2.6rem); font-weight: 700;
+              font-size: clamp(1.2rem, 2.1vw, 1.75rem); font-weight: 700;
               font-variant-numeric: tabular-nums; }
   #slot-sec i { font-style: normal; color: var(--dim);
                 font-size: clamp(0.8rem, 1.15vw, 1.05rem); }
   #slot-meter { flex: 1 1 auto; min-width: 0; display: flex; }
-  #slot-track { width: 100%; height: 18px; border-radius: 9px;
+  #slot-track { width: 100%; height: 10px; border-radius: 5px;
                 background: #23292f; overflow: hidden; }
   /* No CSS transition on the fill: it is repainted every animation frame from
      the device's own slot position, and a transition would fight that and lag
@@ -464,7 +466,9 @@
      desk. */
   #dec-count, #dec-rx { color: var(--dim);
                         font-size: clamp(0.95rem, 1.35vw, 1.15rem); }
-  #dec-rx { color: var(--fg); }
+  /* They are two separate facts sharing a line, and at the header's 10 px gap
+     they read as one run-on phrase. */
+  #dec-rx { color: var(--fg); margin-left: 1.6rem; }
   #dec-rx:empty { display: none; }
   /* Collapse anything with nothing to say instead of holding a row open. */
   #ft8-webr:empty, #ft8-stats:empty { display: none; }
@@ -475,7 +479,12 @@
   /* The reply outcome takes the full width of the strip and sits under the
      rest, because it is a sentence rather than a figure and would otherwise
      stretch the row. No min-height - :empty above collapses it. */
-  #ft8-webr { flex: 1 1 100%; text-align: center; color: var(--dim);
+  /* ⚠ `flex: 1 1 100%` forced its own line under the box - so "Working X (auto
+     QSO)" sat below "Transmitting: ..." while the row it was on had most of its
+     width free (operator, 2026-09-02: "put the text under the box next to it so
+     it fit the available line space"). `auto` lets it share the line and still
+     wrap onto its own when there genuinely is no room. */
+  #ft8-webr { flex: 0 1 auto; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); }
   /* SCALED, not fixed. Every user has a different window and browser zoom, and
      a size picked at one of them is wrong at the others - which is how the same
