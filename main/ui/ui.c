@@ -2336,6 +2336,10 @@ static int  s_drawer_sec_y0 = 176;
 static lv_obj_t *s_drawer_scrim = NULL;
 static lv_obj_t *s_drawer_grip = NULL;   // visible handle while the drawer is open
 static int s_drawer_scrim_swipe_start_x = -1;
+/* The close-swipe needs the vertical component too - see drawer_touch_cb. */
+static int  s_drawer_swipe_start_y  = -1;
+static bool s_drawer_is_scrolling   = false;  /* LVGL is scrolling the drawer */
+static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // FT8 mode only needs WiFi/Callsign+Grid/Brightness; everything else is
 // hidden and those three are restacked near the top. Each drawer section
 // lives in its own transparent container so it can be hidden/repositioned
@@ -9203,6 +9207,63 @@ static void ft8_slide_out_ready_cb(lv_anim_t *a)
 
 // Counter-swipe (drag right) on the drawer background closes it; replaces
 // the close-X button.
+/* ⭐ WHILE THE DRAWER IS SCROLLING, NOTHING ELSE IN IT ACTS.
+ *
+ * The operator's rule, 2026-09-03: "as soon as tab5 detects a vertical scroll or
+ * movement then all other detections like sliders or checkboxes or even closing
+ * swipes should be blocked until the scroll is over."
+ *
+ * ⚠ THE SIGNAL MATTERS MORE THAN THE RULE, because the obvious reading of it -
+ * "any vertical movement blocks the controls" - would undo a fix that is already
+ * in this file. Sliders and checkboxes have LV_OBJ_FLAG_SCROLL_CHAIN_VER
+ * CLEARED precisely so a grabbed knob is not stolen by a 10 px wander (Don
+ * WB0LQW: "sometimes the sliders slide and sometimes they don't", and taps that
+ * felt intermittent). Blocking a control because the finger moved vertically
+ * would bring both straight back.
+ *
+ * LVGL's own LV_EVENT_SCROLL_BEGIN is the honest signal: it fires when LVGL has
+ * decided the DRAWER owns the gesture, which by construction cannot happen while
+ * a knob or a checkbox holds it. So the two requirements do not actually
+ * conflict - whoever owns the press keeps it, and if that is the drawer, nothing
+ * else may act until the finger lifts.
+ *
+ * lv_indev_wait_release() is what enforces it: from that moment the input device
+ * delivers nothing to any widget until release, so a slider cannot creep, a
+ * checkbox cannot toggle, and the close-swipe below cannot fire. */
+static void drawer_scroll_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_SCROLL_BEGIN) {
+        s_drawer_is_scrolling = true;
+        lv_indev_t *indev = lv_event_get_indev(e);
+        if (indev) lv_indev_wait_release(indev);
+    } else if (code == LV_EVENT_SCROLL_END) {
+        s_drawer_is_scrolling = false;
+    }
+}
+
+/* ⛔ A SCROLL IS NOT A CLOSE, AND THIS USED TO CONFUSE THEM.
+ *
+ * The close test was `released x - pressed x >= 60` and looked at nothing else -
+ * no vertical component at all. So dragging DOWN the settings list with any
+ * rightward drift shut the drawer, which is what Samuel W7STF reported
+ * (2026-09-03): "sometimes it is too sensitive to vertical gestures that deviate
+ * off center before lifting the finger, resulting in the menu closing. Can this
+ * behavior be modified a bit such that when beginning to scroll in one
+ * direction, the scroll remains active and does not close the menu while the
+ * finger is still being detected as a hit on the display?"
+ *
+ * That is the right shape and it is what this does: the FIRST significant
+ * movement decides what the gesture is, and it cannot change its mind. Once the
+ * finger has travelled DRAWER_SCROLL_LATCH_PX vertically the gesture is a
+ * scroll for as long as it is down, however far it later wanders sideways.
+ *
+ * ⚠ A ratio test (|dx| > |dy| at release) was the obvious alternative and is
+ * worse: a long scroll that ends with a sideways flick still passes it, because
+ * it judges only the endpoints. Latching judges the gesture as it happens,
+ * which is what "beginning to scroll" means. */
+#define DRAWER_SCROLL_LATCH_PX 12
+
 static void drawer_touch_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -9214,14 +9275,35 @@ static void drawer_touch_cb(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED) {
         s_drawer_swipe_start_x = (int)p.x;
+        s_drawer_swipe_start_y = (int)p.y;
+        s_drawer_swipe_vertical = false;
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        if (s_drawer_swipe_start_y >= 0) {
+            int dy = (int)p.y - s_drawer_swipe_start_y;
+            if (dy < 0) dy = -dy;
+            if (dy >= DRAWER_SCROLL_LATCH_PX) s_drawer_swipe_vertical = true;
+        }
         return;
     }
     if (code == LV_EVENT_RELEASED) {
-        if (s_drawer_swipe_start_x >= 0 &&
+        /* Two independent reasons to refuse: LVGL is scrolling the drawer, or
+         * this particular drag went vertical. The second is the backstop for a
+         * drawer short enough that there is nothing to scroll, where no
+         * SCROLL_BEGIN is ever emitted. */
+        if (!s_drawer_is_scrolling && !s_drawer_swipe_vertical &&
+            s_drawer_swipe_start_x >= 0 &&
             (int)p.x - s_drawer_swipe_start_x >= DRAWER_SWIPE_MIN_DX) {
             drawer_close();
         }
         s_drawer_swipe_start_x = -1;
+        s_drawer_swipe_start_y = -1;
+        /* ⚠ s_drawer_is_scrolling is NOT cleared here. It is owned by
+         * drawer_scroll_cb, which clears it on LV_EVENT_SCROLL_END - and that
+         * arrives AFTER the release, because LVGL keeps scrolling through the
+         * throw animation. Clearing it here would re-arm every other control
+         * while the drawer was still visibly moving. */
     }
 }
 
@@ -10044,7 +10126,16 @@ static void drawer_build(void)
     // rather than only after something else triggers a re-lay.
     drawer_masks_load();
 
+    /* Scroll begin/end: while the drawer is being scrolled, nothing else in it
+     * acts - see drawer_scroll_cb for why this is hung on LVGL's own signal
+     * rather than on "the finger moved vertically". */
+    lv_obj_add_event_cb(s_drawer, drawer_scroll_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(s_drawer, drawer_scroll_cb, LV_EVENT_SCROLL_END, NULL);
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
+    /* PRESSING as well: the scroll latch is decided while the finger moves, and
+     * without this event the handler only ever sees where it went down and
+     * where it came up - which is the endpoint test that caused the bug. */
+    lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_RELEASED, NULL);
 
     // === Phase 5.10D Stage 2b: presets + sliders ===
