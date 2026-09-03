@@ -4,7 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.7** — 2026-09-02
+**v1.10.8** — 2026-09-03
+
+**A crash introduced and fixed in the same release cycle, plus more groups.io reports.**
+
+- **A settings-drawer scroll could crash the device.** v1.10.7's "while the drawer is scrolling, nothing else in it acts" fix forced the touch driver to treat a finger as already lifted the moment a scroll began, and that collided with LVGL's own built-in momentum-scroll animation on the same object — every reproduction crashed the display task at the identical point. Found with a diagnostic build that confirmed the cause before anything was changed, not guessed at. The offending call is gone; the drawer's scroll-vs-tap protection is unchanged and still works.
+- **Restore your worked-station history from a downloaded ADIF file** *(Randy N4OPI)*. A clean erase-and-reinstall used to leave no way back to it — restoring settings has never touched the QSO log, on purpose — so **ADIF restore** in the web UI's QSO Logs menu now merges a previously downloaded (or any logger's) file in, skipping anything already logged.
+- **The web decode list no longer jumps up and down during an exchange** *(Randy N4OPI)*. The status box above it used to grow and shrink with the message text, pushing the list around while you were trying to click a row.
+- **The web spectrum could go on drawing against a stale frequency axis** *(Samuel W7STF)*. If the once-a-second status poll missed a beat after a band change or mode switch, the picture kept looking normal while every signal sat at the wrong frequency — it now blanks itself and says why instead. Not yet confirmed on the air.
+- **A WSPR spot hopped to a new band could be published to wsprnet.org under the wrong band** *(Kevin KQ4DTX)* — the upload read the dial at send time rather than at decode time. Not yet confirmed on the air.
+- **The "QMX cannot display this" caption is gone** from the hatched dead-band on both screens — the hatching alone says what it needs to.
+
+## Previous Releases
+
+### v1.10.7 — 2026-09-02
 
 **User reports, and one crash that had been in the firmware for months.**
 
@@ -16,8 +29,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The WSPR countdown counts down to a real transmission** *(Roy KI0ER)*. It used to count to the next opportunity and restart whenever the duty cycle decided not to transmit.
 - **The first WSPR burst of a session can no longer go out at full power** *(Roy KI0ER)*, and **an interrupted session no longer leaves the radio at a quarter power in every mode** — the PA voltage is restored when the radio reconnects, and only if that radio is still sitting at the reduced value, so one radio's setting can never be pushed onto another *(Michael KZ4LY)*.
 - **The web page gains a large MODE heading**, the **slot occupancy strip and slot countdown** on FT8, and the **whole WSPR left-hand panel** — band, transmit state, finals-guard voltage, best DX, stations per cycle and wsprnet status. Both panels also stop shifting about as decodes arrive.
-
-## Previous Releases
 
 ### v1.10.6 — 2026-09-01
 
@@ -556,7 +567,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.7.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.8.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

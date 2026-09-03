@@ -106,22 +106,22 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.7 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.10.7 — user reports, and one crash that had been in the firmware for months.**
-A cyan screen and a restart a minute or two into an FT8 session is fixed: leftover debugging code from
-earlier weak-signal work was trying to open a log file once per decoded signal — up to 140 times a slot,
-every slot — on a file that could never be created, until one attempt ran the device out of memory.
-**Static IP addressing works**, which it did not in v1.10.6. **The browser's band dropdown no longer
-switches you to FT4 by mistake**, and now has separate FT8 and FT4 groups. **WSPR transmit is off every
-time you open the page**, its countdown counts down to a transmission that will really happen, and an
-interrupted session no longer leaves the radio at a quarter power in every mode. **A timed-out contact
-clears itself after 20 seconds** instead of blocking the automatic answering. The web page gains a large
-**MODE** heading, the **slot occupancy strip and countdown** on FT8, and the **whole WSPR left-hand panel**.
+**New in v1.10.8 — a crash introduced and fixed in the same release cycle, plus more
+groups.io reports.** A settings-drawer scroll could crash the device: the previous
+release's scroll-vs-tap protection collided with LVGL's own built-in scroll animation,
+found and fixed the same day with a diagnostic build that confirmed the cause before
+anything changed. **Restore worked-station history from a downloaded ADIF file** — the
+web UI's new "ADIF restore" merges a previous log back in after an erase-and-reinstall,
+skipping anything already logged. **The web decode list no longer jumps around during an
+exchange.** Also: the web spectrum could draw against a stale frequency axis after a
+missed status poll, and a WSPR spot hopped to a new band could be published to
+wsprnet.org under the wrong one — both fixed, neither yet confirmed on the air.
 
 **In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
@@ -156,7 +156,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.7.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.8.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

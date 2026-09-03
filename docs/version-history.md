@@ -3109,3 +3109,25 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 
 - Distances and bearings, the decode count and the receive status are all readable rather than fine print.
 - The mid-QSO buttons always take their own line rather than moving depending on window width.
+
+### Shipped in v1.10.8 — 2026-09-03
+
+**A crash introduced and fixed in the same release cycle, plus more groups.io reports.**
+
+**Reliability**
+
+- **A settings-drawer scroll could crash the device.** v1.10.7's "while the drawer is scrolling, nothing else in it acts" fix called into the touch driver to force a scroll gesture to be treated as already released the moment it began, so a slider or the close-swipe could not steal it. That collided with LVGL's own built-in momentum-scroll animation running on the same drawer object: every reproduction crashed the display task at the identical point, inside LVGL's own animation-completion code, with the animation's callback pointer corrupted to a small, obviously-wrong value. A diagnostic build that guarded the crash site and logged instead of jumping into it confirmed this was one specific interaction happening every time, not a rare race, before anything was changed. The offending call is removed; the drawer's scroll-vs-tap protection is unchanged and still works, because sliders and checkboxes were never actually at risk from it — they cannot chain a touch into the drawer's own scroll in the first place.
+- **The web spectrum could go on drawing against a stale frequency axis** *(Samuel W7STF)*. Spectrum data and the frequency axis it is drawn against arrive on two different channels — the spectrum over a fast stream, the axis on a once-a-second status poll — so a single missed poll after a band change or mode switch used to leave the picture looking completely normal while every signal sat at the wrong frequency. It now blanks itself and says why after a few missed polls, instead of showing a plausible lie. Not yet confirmed on the air.
+- **A WSPR spot heard just before a band hop could be published to wsprnet.org under the wrong band** *(Kevin KQ4DTX)*. The upload read the dial at send time, several minutes after the fact, rather than the dial the spot was actually heard on — so with band hopping and wsprnet publishing both on, a station heard on one band could be reported on another in a public database, with no way for anyone reading it to know. It now uses the frequency recorded at the moment of the decode. Not yet confirmed on the air.
+
+**QSO logging**
+
+- **Restore worked-station history from a downloaded ADIF file** *(Randy N4OPI)*. An erase-and-reinstall used to leave no way back to it — restoring your settings has never touched the QSO log, on purpose, so a config restore could not help either. "ADIF restore" in the web UI's QSO Logs menu merges a previously downloaded (or any other logger's) ADIF file in, skipping any contact already logged, and marks the restored contacts as already uploaded to QRZ/eQSL/LoTW so they are not sent again.
+
+**Web page**
+
+- **The decode list no longer jumps up and down during an exchange** *(Randy N4OPI)*. The status box above the list grew and shrank with the message text, pushing the list below it around while you were trying to click a row. It now holds a fixed height.
+
+**Smaller things**
+
+- The "QMX cannot display this" caption is gone from the hatched dead-band on both the Tab5 and the browser — the hatching alone says what it needs to.

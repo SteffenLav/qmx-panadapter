@@ -283,6 +283,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **Today only, dated file ↓** — just today's contacts, named `qso-YYYY-MM-DD.adi`. For anyone who files each day's log separately, the date is already in the filename rather than something to add by hand afterwards *(Gyula HA3HZ)*
+- **ADIF restore ↑** — merges a previously downloaded (or any logger's) ADIF file back into the log, skipping any contact already there (matched on callsign, date and time). For after an erase-and-reinstall: **Config upload** never touches the QSO log on purpose, so this is the only way to get worked-station history back *(Randy N4OPI)*. A prompt lets you say whether the restored contacts should be marked as already uploaded to QRZ/eQSL/LoTW (the usual answer is yes, since "restore" almost always means a log that was already sent) or as not-yet-uploaded, so the next upload sends them
 - **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
 - **↳ Change QRZ API key** — appears once a key is stored, and replaces it. New in v1.8.3: before that the prompt only ever appeared when *nothing* was stored, so a key typed wrongly or later reissued could not be changed from the page at all (reported by Brian WA6JFK)
 - **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)

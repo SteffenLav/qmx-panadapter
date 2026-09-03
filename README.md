@@ -12,19 +12,19 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.7.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.10.8.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.10.7 — user reports, and one crash that had been in the firmware for months.** **A cyan screen and a restart a minute or two into an FT8 session is fixed**, and the cause was our own leftover debugging code: a routine from earlier weak-signal work was still trying to open a log file *once per decoded signal* — up to 140 times a slot, every slot — on a file that could never be created, until one attempt ran the device out of memory. **Static IP addressing works**; it did not in v1.10.6, where the address was always rejected and the Tab5 quietly fell back to DHCP. **The band dropdown in the browser no longer switches you to FT4 by mistake** — its FT4 list had been filled with the FT8 frequencies, and there was no way back without going to the radio. **WSPR transmit is off every time you open the page**, its countdown now counts down to a transmission that will really happen, and an interrupted session no longer leaves the radio at a quarter power in every mode. **A timed-out contact clears itself after 20 seconds** instead of sitting there blocking the automatic answering. And the web page gains a **large MODE heading**, the **slot occupancy strip and slot countdown** on FT8, and the **whole WSPR left-hand panel** — band, transmit state, best DX, stations per cycle and wsprnet status.
+> **New in v1.10.8 — a crash introduced and fixed in the same release cycle, plus more groups.io reports.** **A settings-drawer scroll could crash the device.** The previous cycle's "while the drawer is scrolling, nothing else in it acts" fix forced the touch driver to treat a finger as already lifted the moment a scroll began, and that collided with LVGL's own built-in momentum-scroll animation on the same object — every reproduction crashed the display task at the identical point. Root-caused with a diagnostic build that confirmed it before the fix, rather than guessed at; the offending call is gone, and the drawer's scroll-vs-tap protection stands on what was already there.
 >
-> **Also fixed: the right-hand quarter of the ×1 view was showing real signals at the wrong frequency.** The QMX's local oscillator sits 12 kHz below the dial, so the 48 kHz it sends covers dial−36 kHz to dial+12 kHz and there is nothing at all above dial+12. The display filled that quarter by wrapping the bottom of the band into it and the frequency scale labelled it as dial+12 to +24, so **tapping a signal there tuned you about 48 kHz away from it**. That region is now hatched and inert on both the Tab5 and the browser, and it says why it is empty.
+> **Restore your worked-station history from a downloaded ADIF file.** A clean erase-and-reinstall used to leave no way back to it — the existing config restore deliberately never touches the QSO log — so **ADIF restore** in the web UI's QSO Logs menu now merges a previously downloaded (or any logger's) file in, skipping anything already logged *(Randy N4OPI)*. **The web decode list no longer jumps up and down during an exchange** — the status box above it now holds a fixed height instead of growing and shrinking with the message text *(Randy N4OPI)*.
 >
-> **Also fixed: leaving FT8 or FT4 could reboot the device a few seconds later.** Switching back to the panadapter tore down the decoder while one of its decode tasks was still working on the last slot, and the memory it was reading was freed underneath it — a window that is easy to hit precisely because returning to the panadapter puts the display work back on the core the decoder shares. The decoder now abandons that final slot as soon as you leave, and the teardown refuses to free anything it cannot prove is finished with. **This one is older than v1.10.5** and was found while testing the release.
+> **Also fixed:** the web spectrum could go on drawing against a **stale frequency axis** after a band change or mode switch if the once-a-second status poll missed a beat — spectrum bins and the axis that says what frequency they are arrive on two different channels, so a lost poll left the picture looking normal while every signal sat at the wrong frequency; it now blanks itself and says why rather than showing a plausible lie *(Samuel W7STF)*. A **WSPR spot hopped to a new band could be labelled — and published to wsprnet.org — under the wrong band**, because the upload read the dial at send time rather than the dial the spot was actually heard on *(Kevin KQ4DTX)*. Neither fix has been confirmed on the air yet.
 >
-> **And from the groups.io reports:** **changing band now ends a contact in progress** instead of carrying the call sequence onto the new band *(Randy N4OPI)*; the **WSPR transmit button has moved clear of the left edge**, where a swipe towards the panadapter could catch it and key the radio for two minutes *(Randy N4OPI)*; **WSPR spots show the band they were heard on** *(Roy KI0ER)*; the **WSPR waterfall marks a transmit cycle** rather than leaving the previous picture sitting there looking frozen *(Dirk)*; the **browser gets the FT8/FT4 band preset list** the Tab5 has always had *(Randy N4OPI)*; and **a LoTW upload now shows LoTW's own reply** — the count before was only what we sent, which is why an upload could look successful while nothing appeared in the log *(Randy N4OPI)*. The **LoTW certificate can be replaced from a visible button**, and the Tab5 can be given a **static IP address** under **Settings → WiFi** (leave it empty for DHCP, which is what it does today).
+> The **"QMX cannot display this" caption is gone** from the hatched dead-band on both screens — the hatching alone says what it needs to.
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.7.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.8.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -90,7 +90,10 @@ timestamp, callsign, grid, frequency, band, mode, both signal reports and distan
 browser, delete single records or all of them, and upload *(needs WiFi)* to **QRZ
 Logbook**, **eQSL**, **ARRL LoTW** and **your own Cloudlog or Wavelog** — LoTW QSOs are
 signed on the device itself with your own callsign certificate. A signal report or a
-park/summit reference can be corrected after the fact from the browser's log table.
+park/summit reference can be corrected after the fact from the browser's log table. The
+browser's **ADIF restore** merges a previously downloaded (or any logger's) ADIF file
+back in — contacts already logged are skipped — so an erase-and-reinstall does not cost
+you your worked-station history.
 
 **Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
 **RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
@@ -1073,7 +1076,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.10.7 is here.** Next on the bench:
+**v1.10.8 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
