@@ -661,9 +661,15 @@ typedef struct {
      * Reading the dial when the SPOT is filed would attribute it to the wrong
      * band: band hopping retunes HOP_LEAD_SEC before the next cycle, and a
      * decode routinely finishes after that, so spots from the cycle just ended
-     * would be filed under the band we have already moved to. Captured at the
-     * moment the window is queued instead - which is what the samples actually
-     * belong to. */
+     * would be filed under the band we have already moved to.
+     *
+     * ⚠ IT IS READ AT CAPTURE-BEGIN, NOT AT QUEUE TIME. This comment used to
+     * say "the moment the window is queued ... which is what the samples
+     * actually belong to", and that was wrong by up to the length of the
+     * waterfall build plus an SD dump: the queue happens at the END of the
+     * cycle, and the hop retunes in its last 3 seconds. Kevin KQ4DTX saw spots
+     * labelled with the band we had just moved to. The dial is now taken before
+     * the first sample, where nothing can overtake it. */
     uint32_t dial_hz;
 } wspr_dec_job_t;
 
@@ -1481,6 +1487,24 @@ static void wspr_rx_task(void *arg)
          * store could not be allocated - so driving the row loop after a failed
          * wf_begin() would spin forever and hang the capture, turning an
          * out-of-memory condition into a dead receiver. */
+        /* ⭐ THE DIAL IS READ HERE, WHERE THE SAMPLES START - NOT WHERE THE
+         * WINDOW IS QUEUED (Kevin KQ4DTX, 2026-09-03: "when the software
+         * decodes a station(s) it labels the band it heard that station on
+         * incorrectly, it uses the current listening band").
+         *
+         * The job already carried the dial rather than letting the decode task
+         * read it, precisely so a decode finishing after a hop could not file
+         * spots under the band we had moved to. But it was read at QUEUE time,
+         * which is after the capture, after the waterfall build and after an
+         * optional SD dump - and hop_maybe() retunes in the last HOP_LEAD_SEC
+         * (3 s) of the cycle. Anything that pushed the queue past that point
+         * recorded the band we were about to listen on instead of the one the
+         * samples came from.
+         *
+         * Reading it at capture-begin removes the window entirely: the value is
+         * taken before the first sample and cannot be overtaken by a retune. */
+        const uint32_t cap_dial_hz = wspr_rx_cycle_dial_hz();
+
         const bool wf_live = wf_begin();
         esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
         if (err != ESP_OK) {
@@ -1632,7 +1656,7 @@ static void wspr_rx_task(void *arg)
          * the capture below starts on time while this window is still decoding. */
         {
             wspr_dec_job_t job = { .slot = slot, .cycle_utc = cycle_utc,
-                                   .dial_hz = wspr_rx_cycle_dial_hz() };
+                                   .dial_hz = cap_dial_hz };
             if (!s_dec_q || xQueueSend(s_dec_q, &job, 0) != pdTRUE) {
                 ESP_LOGE(TAG, "cycle %lld: decode queue full - dropping window",
                          (long long)cycle_utc);
