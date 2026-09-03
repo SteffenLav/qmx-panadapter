@@ -917,6 +917,171 @@ void adif_log_clear(void)
     ESP_LOGI(TAG, "ADIF log cleared");
 }
 
+// Case-insensitive substring search over a bounded, read-only buffer. Not
+// strstr_local() above - that one wants a mutable char* for its other
+// caller and this one is read-only end to end, including the caller's
+// const char *adif_text.
+static const char *find_ci(const char *hay, const char *hay_end, const char *needle)
+{
+    size_t nlen = strlen(needle);
+    if ((size_t)(hay_end - hay) < nlen) return NULL;
+    for (const char *p = hay; p + nlen <= hay_end; p++) {
+        if (strncasecmp(p, needle, nlen) == 0) return p;
+    }
+    return NULL;
+}
+
+// Restore records from a raw ADIF file - Randy N4OPI, after a clean
+// erase-and-reinstall: he had downloaded his log first but found no way to
+// get the worked-station history back onto the device, only overwrite it
+// (the existing config import explicitly does NOT touch the QSO log; see
+// its own header comment). This is that missing other half.
+//
+// The imported file is treated as UNTRUSTED input in one specific way: an
+// external tool (WSJT-X, ADIFMaster, or a spreadsheet round-trip) is free to
+// pretty-print one record across several lines, while everything else in
+// this module assumes one record per line (see load_from_file()'s own
+// comment). So each record is read as a whole blob between <EOR> markers,
+// stripped of embedded newlines, and rewritten as a single line before it
+// ever reaches this file - the SAME normalisation adif_log_record() already
+// produces, just arriving from outside instead of from a live QSO.
+//
+// Deduplicated against the CURRENT log by CALL+QSO_DATE+TIME_ON before
+// writing, so re-importing the same file twice (or importing a file that
+// overlaps what a partial earlier import already restored) is a no-op for
+// the overlapping records rather than a second copy of them.
+int adif_log_import(const char *adif_text)
+{
+    if (!s_mounted || !adif_text) return -1;
+
+    size_t total_len = strlen(adif_text);
+    const char *end = adif_text + total_len;
+
+    // Skip the IMPORTED file's own header if it has one. Headerless input
+    // (e.g. a handful of records pasted without the <ADIF_VER.../<EOH>
+    // preamble) is accepted too - the loop below just starts at the top.
+    const char *cursor = adif_text;
+    const char *eoh = find_ci(adif_text, end, "<eoh>");
+    if (eoh) cursor = eoh + 5;
+
+    // Snapshot every CALL+QSO_DATE+TIME_ON already in the log, once, so each
+    // imported record is checked against it in memory rather than re-reading
+    // the file from disk per candidate. Sized to the current count with a
+    // little slack; a record beyond the cap just risks an occasional
+    // duplicate rather than failing the whole import.
+    typedef struct { char call[ADIF_CALL_MAX]; char date[9]; char time[7]; } key_t;
+    int cap = s_count + 64;
+    key_t *existing = heap_caps_malloc(sizeof(key_t) * cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int n_existing = 0;
+    if (existing) {
+        FILE *rf = fopen(FILE_PATH, "r");
+        if (rf) {
+            char line[512];
+            while (n_existing < cap && fgets(line, sizeof(line), rf)) {
+                if (!strstr(line, "<EOR>")) continue;
+                key_t *k = &existing[n_existing];
+                if (!adif_log_extract_field(line, "CALL", k->call, sizeof(k->call))) continue;
+                if (!adif_log_extract_field(line, "QSO_DATE", k->date, sizeof(k->date))) k->date[0] = '\0';
+                if (!adif_log_extract_field(line, "TIME_ON", k->time, sizeof(k->time))) k->time[0] = '\0';
+                n_existing++;
+            }
+            fclose(rf);
+        }
+    }
+
+    FILE *f = fopen(FILE_PATH, "a");
+    if (!f) {
+        ESP_LOGE(TAG, "ADIF import: cannot open %s for append", FILE_PATH);
+        if (existing) free(existing);
+        return -1;
+    }
+
+    int added = 0;
+    char norm[512];
+
+    while (cursor < end) {
+        const char *eor = find_ci(cursor, end, "<eor>");
+        if (!eor) break;
+
+        // Normalise the blob [cursor, eor) into one line: newlines become
+        // spaces (ADIF fields are self-delimiting by their <NAME:len> prefix,
+        // so collapsing the layout around them changes nothing a parser
+        // reads), leading whitespace trimmed, then <EOR>\n appended - the
+        // exact shape adif_log_record() itself writes.
+        const char *p = cursor;
+        while (p < eor && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        size_t blen = (size_t)(eor - p);
+        if (blen == 0 || blen >= sizeof(norm) - 8) { cursor = eor + 5; continue; }
+        size_t w = 0;
+        for (size_t i = 0; i < blen; i++) {
+            char c = p[i];
+            norm[w++] = (c == '\r' || c == '\n') ? ' ' : c;
+        }
+        norm[w] = '\0';
+        cursor = eor + 5;   // past "<eor>"
+
+        if (!strchr(norm, '<')) continue;   // not a real record - nothing tagged
+
+        char call[ADIF_CALL_MAX], date[9], time_on[7], band[ADIF_BAND_MAX], freq_str[16];
+        if (!adif_log_extract_field(norm, "CALL", call, sizeof(call))) continue;  // no call, nothing to key on
+        if (!adif_log_extract_field(norm, "QSO_DATE", date, sizeof(date))) date[0] = '\0';
+        if (!adif_log_extract_field(norm, "TIME_ON", time_on, sizeof(time_on))) time_on[0] = '\0';
+
+        bool dup = false;
+        for (int i = 0; i < n_existing; i++) {
+            if (strcmp(existing[i].call, call) == 0 &&
+                strcmp(existing[i].date, date) == 0 &&
+                strcmp(existing[i].time, time_on) == 0) { dup = true; break; }
+        }
+        if (dup) continue;
+
+        fprintf(f, "%s<EOR>\n", norm);
+
+        if (!adif_log_extract_field(norm, "BAND", band, sizeof(band))) {
+            band[0] = '\0';
+            if (adif_log_extract_field(norm, "FREQ", freq_str, sizeof(freq_str))) {
+                strncpy(band, freq_to_band((uint32_t)(atof(freq_str) * 1e6)), sizeof(band) - 1);
+                band[sizeof(band) - 1] = '\0';
+            }
+        }
+        cache_add(call, band);
+        added++;
+
+        // Also guard against a duplicate appearing TWICE within this same
+        // import (a file concatenated from two exports, say), not just
+        // against what was already on the device.
+        if (existing && n_existing < cap) {
+            strncpy(existing[n_existing].call, call, sizeof(existing[n_existing].call) - 1);
+            existing[n_existing].call[sizeof(existing[n_existing].call) - 1] = '\0';
+            strncpy(existing[n_existing].date, date, sizeof(existing[n_existing].date) - 1);
+            existing[n_existing].date[sizeof(existing[n_existing].date) - 1] = '\0';
+            strncpy(existing[n_existing].time, time_on, sizeof(existing[n_existing].time) - 1);
+            existing[n_existing].time[sizeof(existing[n_existing].time) - 1] = '\0';
+            n_existing++;
+        }
+    }
+
+    bool write_ok = (ferror(f) == 0);
+    if (write_ok) { fflush(f); fsync(fileno(f)); }
+    if (fclose(f) != 0) write_ok = false;
+    if (existing) free(existing);
+
+    if (!write_ok) {
+        ESP_LOGE(TAG, "ADIF import: write failed (storage full?), %d record(s) may be lost", added);
+        load_from_file();   // resync count/cache to whatever actually landed on disk
+        return -1;
+    }
+
+    if (added > 0) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_count += added;
+        xSemaphoreGive(s_lock);
+        sd_archive_mark_adif_dirty();
+    }
+    ESP_LOGI(TAG, "ADIF import: %d record(s) added, log now has %d", added, s_count);
+    return added;
+}
+
 const char *adif_log_band_for_freq(uint32_t hz)
 {
     return freq_to_band(hz);

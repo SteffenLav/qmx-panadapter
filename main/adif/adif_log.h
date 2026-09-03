@@ -89,6 +89,18 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz);
 bool adif_log_extract_field(const char *line, const char *field,
                             char *out, size_t out_sz);
 
+// Merge records from a raw ADIF file (any standard export - WSJT-X,
+// ADIFMaster, or our own earlier "ADIF download") into the log. Normalises
+// each pretty-printed multi-line record to our own one-line-per-record
+// convention, skips a record already present (same CALL+QSO_DATE+TIME_ON -
+// re-importing the same file twice is a no-op), and updates the count and
+// worked-call cache exactly as adif_log_record() would. Does NOT touch
+// upload cursors - the caller decides whether these are already-uploaded
+// history or fresh records to send.
+// Returns the number of records actually added (0 on an all-duplicate
+// import), or -1 if the file could not be written at all.
+int adif_log_import(const char *adif_text);
+
 // The ADIF BAND string this module would log for a frequency ("20M", "40M"...),
 // or "" if it falls outside every known band. Exposed so callers comparing two
 // frequencies "same band?" use the same table the log itself is written from -

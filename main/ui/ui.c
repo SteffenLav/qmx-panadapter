@@ -2995,10 +2995,6 @@ static int     s_wf_stroll_off = 0;   /* the pan gesture's own offset, added on 
 
 static void wf_apply_x(void);    /* defined beside the row push, used from ui_init */
 static void wf_clear_all(void);
-/* #297: the words on the hatched block. An OVERLAY object, for the same reason
- * s_wf_cursor is one - the waterfall's rows scroll, so text painted into the
- * bitmap would trail down the screen. */
-static lv_obj_t *s_nodata_lbl = NULL;
 static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the waterfall (not drawn into the
                                       // bitmap — that trailed as rows scrolled); a single current-position line
 
@@ -4520,32 +4516,6 @@ static void build_waterfall(lv_obj_t *parent)
     // repaints it at the current x each frame, so it shows only the actual
     // position, never the path taken. Non-clickable so touches fall through to
     // the waterfall's own tune handler. Hidden until a tune drag is active.
-    /* #297 the hatched block's caption.
-     *
-     * ⚠ MOVED TO THE SPECTRUM, low down by the frequency scale (operator,
-     * 2026-09-03, from Samuel W7STF: "move the caption up in the spectrum
-     * portion close to the scale as not to blend with spot text").
-     *
-     * It used to sit on the waterfall, and the reason recorded here was that
-     * 370 px gives more open space than the spectrum's 200 so the text would not
-     * compete with the trace's baseline. That was true about the trace and blind
-     * to the waterfall's own content: the hatched block is where a spot label
-     * lands too, and grey text over a spot lane reads as a jumble.
-     *
-     * The bottom of the spectrum is empty in the hatched region by definition -
-     * there is no trace there, that is the whole point - so the crowding the old
-     * placement was avoiding cannot occur, and the caption ends up next to the
-     * frequency scale that says which frequencies it is talking about. */
-    s_nodata_lbl = lv_label_create(s_spectrum_obj);
-    /* Two lines, centred: "display" rather than "hear" because the radio can
-       often hear it perfectly well - what it cannot do is send it to us. */
-    lv_label_set_text(s_nodata_lbl, "QMX cannot\ndisplay this");
-    lv_obj_set_style_text_align(s_nodata_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(s_nodata_lbl, lv_color_hex(0x7A8894), 0);
-    lv_obj_set_style_text_font(s_nodata_lbl, &lv_font_montserrat_22, 0);
-    lv_obj_clear_flag(s_nodata_lbl, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
-
     s_wf_cursor = lv_obj_create(s_waterfall_obj);
     lv_obj_set_size(s_wf_cursor, 2, WATERFALL_H);
     lv_obj_set_style_bg_color(s_wf_cursor, lv_color_hex(0x00FFFF), 0);
@@ -6109,6 +6079,19 @@ static void pinch_poll_cb(lv_timer_t *t)
     // touch_event_cb, because that's a separate code path entirely.
     if (s_touch_on_bandplan) return;
 
+    // Same class of bug, third instance: the drawer was never given this
+    // exclusion either. A crash capture (2026-09-03, taskLVGL, Instruction
+    // access fault, an lv_anim ready_cb corrupted to the literal value 8)
+    // showed "still pan"/"TUNE MODE LOCKED" firing continuously for the
+    // whole time the drawer was open - a drawer-scroll drag was ALSO being
+    // read here as a one-finger spectrum pan, retuning the still-view while
+    // the drawer's own scroll and section animations ran concurrently on
+    // the same touch. Whether that race is the exact mechanism that
+    // corrupted the anim struct or just the trigger that exposed it, the
+    // drawer has no more business driving spectrum pan/tune than the
+    // band-plan strip or the freq keypad do while they own the touch.
+    if (s_drawer_open) return;
+
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
 
@@ -7523,29 +7506,6 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int sx = (nodata_from > 0) ? nodata_from : nodata_to;
         if (sx > 0 && sx < DISPLAY_H_RES)
             for (int y = 0; y < SPECTRUM_H; y++) px[y * DISPLAY_H_RES + sx] = seam;
-    }
-    /* Say WHY it is empty, so nobody reads the hatching as a dead receiver.
-     *
-     * ⛔ A block too narrow for its own label declines to draw it - the same rule
-     * the manual's diagram renderer follows. Half a caption bleeding out of the
-     * hatched area onto live spectrum would claim the radio cannot hear a part
-     * of the band it can. */
-    if (s_nodata_lbl) {
-        int w = (nodata_from >= 0) ? (nodata_to - nodata_from + 1) : 0;
-        int lw = lv_obj_get_width(s_nodata_lbl);
-        if (lw <= 0) lw = 200;                    /* before the first layout pass */
-        if (w >= lw + 24) {
-            /* Low in the spectrum, just above the frequency scale below it, and
-             * clear of the spot lane at the top. */
-            int lh = lv_obj_get_height(s_nodata_lbl);
-            if (lh <= 0) lh = 56;                 /* before the first layout pass */
-            int ly = SPECTRUM_H - lh - 8;
-            if (ly < spots_lane_top_hit_y()) ly = spots_lane_top_hit_y();
-            lv_obj_set_pos(s_nodata_lbl, nodata_from + (w - lw) / 2, ly);
-            lv_obj_remove_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
-        }
     }
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
@@ -9245,16 +9205,31 @@ static void ft8_slide_out_ready_cb(lv_anim_t *a)
  * conflict - whoever owns the press keeps it, and if that is the drawer, nothing
  * else may act until the finger lifts.
  *
- * lv_indev_wait_release() is what enforces it: from that moment the input device
- * delivers nothing to any widget until release, so a slider cannot creep, a
- * checkbox cannot toggle, and the close-swipe below cannot fire. */
+ * ⛔ lv_indev_wait_release() USED TO enforce this and is GONE (2026-09-03) - it
+ * caused a real, 100%-reproducible crash. Forcing the indev to treat the touch
+ * as already released MID-GESTURE collided with LVGL's own scroll-throw/inertia
+ * lifecycle on the very same object: three captures all showed taskLVGL dying
+ * inside anim_completed_handler with a corrupted callback pointer on an
+ * lv_anim_t whose exec_cb decoded next to lv_obj_get_scroll_y - LVGL's OWN
+ * built-in scroll_y_anim, not any of ours. A diagnostic patch in lv_anim.c
+ * (guard the call, log instead of jump) turned the crash into a clean log line
+ * and confirmed it: EVERY reproduction hit the identical var/exec_cb, i.e. the
+ * same drawer scroll, every time - not a rare race. Interrupting an indev's
+ * press/release state machine out from under LVGL's own gesture code is not a
+ * safe thing to do mid-drag, however well-intentioned the reason.
+ *
+ * s_drawer_is_scrolling alone is what is left, and it is enough: the close-
+ * swipe check below already reads it. Sliders and checkboxes never needed the
+ * indev freeze in the first place - they have LV_OBJ_FLAG_SCROLL_CHAIN_VER
+ * cleared, so a press that starts on one of them can never chain up into the
+ * drawer's own scroll and reach LV_EVENT_SCROLL_BEGIN at all; by the time this
+ * fires, LVGL has already decided the touch started somewhere the drawer's
+ * scroll was free to claim. */
 static void drawer_scroll_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_SCROLL_BEGIN) {
         s_drawer_is_scrolling = true;
-        lv_indev_t *indev = lv_event_get_indev(e);
-        if (indev) lv_indev_wait_release(indev);
     } else if (code == LV_EVENT_SCROLL_END) {
         s_drawer_is_scrolling = false;
     }

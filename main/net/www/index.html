@@ -416,12 +416,34 @@
   #ft8-slotrow.tx #slot-fill { background: #ff4010; }
   #ft8-slotrow.tx #slot-n    { color: #ff4010; }
 
+  /* min-height reserves room for the box's OWN worst case (TX status +
+     stat boxes + the #ft8-webr outcome sentence all present at once), so
+     filling in mid-exchange does not push the decode list below it down and
+     then back up as the exchange clears (Randy N4OPI: "that whole list
+     shifts down and then up and down as the exchange progresses... hard to
+     hit a moving target"). This is NOT the same trap as the sticky/pinned
+     attempts recorded above - those covered content BELOW them because they
+     were taken out of flow; a min-height on an in-flow box only ever adds
+     blank space in the short state, never overlaps anything.
+     Measured in a real browser (idle vs. a synthesized worst-case exchange
+     line + two stat boxes + a long outcome sentence): 5.3rem is the
+     measured worst-case height from ~700px viewport width up to at least
+     1400px - the ordinary desktop range this was reported from - so idle
+     and active are byte-for-byte the SAME height there, at the cost of a
+     little reserved blank space while idle. A first attempt used clamp()
+     to also track narrower widths, but the active height itself jumps in
+     steps as wrapping changes the line count (108px at 600px wide, 192px
+     at 320px) - the same "numbers change with every window size" problem
+     the sticky attempts hit - so no single reservation, fixed or scaled,
+     can remove the jump everywhere. This fixes the common desktop case
+     Randy reported and does not try to chase the mobile one. */
   #ft8-status {
     flex: 0 0 auto; align-self: stretch;
     display: flex; flex-flow: row wrap; align-items: center; justify-content: center;
     gap: 0.5rem 0.9rem;
     background: #11171e; border: 1px solid var(--border); border-radius: 8px;
     padding: 0.55rem 0.8rem; margin-bottom: 0.8rem;
+    min-height: 5.3rem;
   }
   /* The measured figures, as labelled cells. A number with its unit above it
      reads at a glance and packs far tighter than "Last TX: 5.0 W SWR 1.11
@@ -1037,6 +1059,7 @@
       <div class="bot-menu" id="log-menu">
         <a href="/api/adif" download="qso.adi" id="adif-link">ADIF download &#8595;</a>
         <a href="/api/adif?date=today" class="subrow" id="adif-today-link" title="Just today's contacts, in a file named for the date - for filing each day's log separately">&#8627; Today only, dated file</a>
+        <a href="#" id="adif-restore-link" title="Restore worked-station history from a previously downloaded ADIF file (or any logger's export) - merges in, skipping contacts already in the log. Handy after an erase-and-reinstall.">ADIF restore &#8593;</a>
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
         <a href="#" id="qrz-creds-link" class="subrow" style="display:none" title="Replace the stored QRZ Logbook API key - after a new key is issued, or if it was typed wrongly the first time.">&#8627; Change QRZ API key</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
@@ -1082,6 +1105,7 @@
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+    <input type="file" id="adif-restore-file" accept=".adi,.adif,text/plain" style="display:none">
   </div>
 
   <!-- POTA / SOTA activation. Mirrors ui/activation_modal.c: pick the programme,
@@ -2148,6 +2172,52 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       }
     } catch (err) {
       alert("Config upload failed: " + err);
+    } finally {
+      link.textContent = prev;
+      file.value = "";
+    }
+  });
+})();
+
+/* ADIF restore: pick a previously downloaded (or any logger's) ADIF file and
+   POST it to /api/adif/import. Merges by CALL+QSO_DATE+TIME_ON - re-picking
+   the same file twice, or one that overlaps what is already logged, adds
+   nothing extra (Randy N4OPI, after an erase-and-reinstall left him with no
+   way to get worked-station history back). Defaults to marking the restored
+   contacts as already uploaded to QRZ/eQSL/LoTW, since that is what "restore"
+   means for almost everyone asking for it - a log wiped by a reinstall, not
+   one that was never sent anywhere. */
+(function () {
+  const link = document.getElementById("adif-restore-link");
+  const file = document.getElementById("adif-restore-file");
+  if (!link || !file) return;
+  link.addEventListener("click", function (e) { e.preventDefault(); file.click(); });
+  file.addEventListener("change", async function () {
+    const f = file.files[0];
+    if (!f) return;
+    const markUploaded = confirm(
+      'Restore contacts from "' + f.name + '"?\n\n' +
+      "Contacts already in the log (same call, date and time) are skipped.\n\n" +
+      "Click OK to mark restored contacts as already uploaded to QRZ/eQSL/LoTW " +
+      "(the usual case - you are restoring a log that was already sent).\n" +
+      "Click Cancel to import them as NOT yet uploaded instead, so the next " +
+      "upload pass sends them.");
+    const prev = link.textContent;
+    link.textContent = "ADIF …";
+    try {
+      const text = await f.text();
+      const r = await fetch("/api/adif/import?mark_uploaded=" + (markUploaded ? "1" : "0"),
+        { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+      const j = await r.json();
+      if (!j.ok) {
+        alert("ADIF restore failed - the log could not be written (storage full?).");
+      } else if (j.added === 0) {
+        alert("Nothing new to restore - every contact in that file is already in the log.");
+      } else {
+        alert("Restored " + j.added + " contact(s). Log now has " + j.total + " total.");
+      }
+    } catch (err) {
+      alert("ADIF restore failed: " + err);
     } finally {
       link.textContent = prev;
       file.value = "";
@@ -5742,11 +5812,6 @@ function overlayTuneCursor() {
   // Always clear the wf cursor canvas so old lines don't persist
   wfcurctx.clearRect(0, 0, wfPxW, wfPxH);
 
-  /* The dead-band caption, on the OVERLAY rather than painted into the
-     waterfall - the waterfall scrolls its own canvas onto itself every row, so
-     text drawn there would smear down the screen. Same reason the Tab5 uses an
-     LVGL overlay object for it instead of writing into the bitmap. */
-  drawNoDataCaption(wfcurctx, wfPxW, wfPxH);
   /* Over a label the click does NOT go to the pointer, so show where it does go
      instead of a tune cursor that would be lying about it. */
   if (spotHover) {
@@ -6701,34 +6766,6 @@ function drawNoDataHatch(ctx, W, H) {
       n0 = -1;
     }
   }
-}
-
-/* The same words the Tab5 puts on its hatched block, so a screenshot of one
-   screen explains the other. Two centred lines, and - like the Tab5 - a block
-   too narrow for the text declines to draw it rather than spilling the caption
-   onto live spectrum. */
-function drawNoDataCaption(ctx, W, H) {
-  if (!lastView) return;
-  const runs = []; let n0 = -1;
-  for (let i = 0; i <= W; i++) {
-    const dead = (i < W) && (viewBinAt(i, W, frameDialHz || radioFreqHz) === null);
-    if (dead && n0 < 0) n0 = i;
-    if (!dead && n0 >= 0) { runs.push([n0, i - n0]); n0 = -1; }
-  }
-  if (!runs.length) return;
-  ctx.save();
-  ctx.font = "500 16px system-ui, sans-serif";
-  ctx.fillStyle = "#7a8894";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  const L = ["QMX cannot", "display this"];
-  const need = Math.max(ctx.measureText(L[0]).width, ctx.measureText(L[1]).width) + 26;
-  for (const [x, w] of runs) {
-    if (w < need) continue;
-    const cx = x + w / 2, cy = H / 3;
-    ctx.fillText(L[0], cx, cy - 11);
-    ctx.fillText(L[1], cx, cy + 11);
-  }
-  ctx.restore();
 }
 
 /* Spectrum — flat mode */
