@@ -4520,11 +4520,23 @@ static void build_waterfall(lv_obj_t *parent)
     // repaints it at the current x each frame, so it shows only the actual
     // position, never the path taken. Non-clickable so touches fall through to
     // the waterfall's own tune handler. Hidden until a tune drag is active.
-    /* #297 the hatched block's caption. Placed on the WATERFALL rather than the
-     * spectrum: it is 370 px against 200, so the text sits in open space instead
-     * of competing with the trace's own baseline. Hidden until there is a block
-     * wide enough to hold it - see the paint. */
-    s_nodata_lbl = lv_label_create(s_waterfall_obj);
+    /* #297 the hatched block's caption.
+     *
+     * ⚠ MOVED TO THE SPECTRUM, low down by the frequency scale (operator,
+     * 2026-09-03, from Samuel W7STF: "move the caption up in the spectrum
+     * portion close to the scale as not to blend with spot text").
+     *
+     * It used to sit on the waterfall, and the reason recorded here was that
+     * 370 px gives more open space than the spectrum's 200 so the text would not
+     * compete with the trace's baseline. That was true about the trace and blind
+     * to the waterfall's own content: the hatched block is where a spot label
+     * lands too, and grey text over a spot lane reads as a jumble.
+     *
+     * The bottom of the spectrum is empty in the hatched region by definition -
+     * there is no trace there, that is the whole point - so the crowding the old
+     * placement was avoiding cannot occur, and the caption ends up next to the
+     * frequency scale that says which frequencies it is talking about. */
+    s_nodata_lbl = lv_label_create(s_spectrum_obj);
     /* Two lines, centred: "display" rather than "hear" because the radio can
        often hear it perfectly well - what it cannot do is send it to us. */
     lv_label_set_text(s_nodata_lbl, "QMX cannot\ndisplay this");
@@ -7523,7 +7535,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int lw = lv_obj_get_width(s_nodata_lbl);
         if (lw <= 0) lw = 200;                    /* before the first layout pass */
         if (w >= lw + 24) {
-            lv_obj_set_pos(s_nodata_lbl, nodata_from + (w - lw) / 2, WATERFALL_H / 3);
+            /* Low in the spectrum, just above the frequency scale below it, and
+             * clear of the spot lane at the top. */
+            int lh = lv_obj_get_height(s_nodata_lbl);
+            if (lh <= 0) lh = 56;                 /* before the first layout pass */
+            int ly = SPECTRUM_H - lh - 8;
+            if (ly < spots_lane_top_hit_y()) ly = spots_lane_top_hit_y();
+            lv_obj_set_pos(s_nodata_lbl, nodata_from + (w - lw) / 2, ly);
             lv_obj_remove_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_nodata_lbl, LV_OBJ_FLAG_HIDDEN);

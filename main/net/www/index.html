@@ -1487,6 +1487,60 @@ const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
  * pan_view deliberately does not describe. Every consumer must fall back to its
  * old path rather than assume zero. */
 let lastView = null;   /* {lo, hi, capLo, capHi, span} in absolute Hz */
+/* ⛔ WHEN THE VIEWPORT WAS LAST CONFIRMED, and why that has to be tracked.
+ *
+ * The spectrum frames and the viewport arrive on DIFFERENT channels - frames on
+ * the WebSocket, the viewport on the 1 Hz /api/status poll. The frames carry no
+ * frequency information of their own; they are bins, and lastView is the only
+ * thing that says which frequency each bin is. So if the poll stops while the
+ * socket keeps delivering, the page goes on drawing new spectrum against an old
+ * viewport - and every signal is placed at the wrong frequency, on a display
+ * that looks completely normal.
+ *
+ * That is what Samuel W7STF hit (2026-09-03): "I got in some strange state where
+ * the display on the Tab5 was centering on the VFO freq, but it was in the other
+ * mode on the Web-UI." The Tab5 had re-framed and the browser had not heard.
+ *
+ * The rule is already stated a few lines down for the no-viewport case: no
+ * correct answer means draw nothing, "rather than fall through to a mapping
+ * built for the other layout, which would put signals at the wrong frequency and
+ * look plausible". A STALE viewport is the same thing wearing a better disguise,
+ * so it is aged out the same way.
+ *
+ * Four seconds is four missed polls - long enough that a single dropped request
+ * changes nothing, short enough that nobody works a signal off a wrong axis. */
+let lastViewAt = 0;
+const VIEW_STALE_MS = 4000;
+function viewIsFresh() {
+  return lastView !== null && (performance.now() - lastViewAt) < VIEW_STALE_MS;
+}
+
+/* Say WHY the spectrum stopped, rather than leaving a blank that reads as a dead
+   receiver - the same rule the hatched block's caption follows on the Tab5.
+   Built on demand like the paused bar, so it needs no markup or CSS of its own. */
+function paintViewStale(stale) {
+  let n = document.getElementById("view-stale");
+  if (stale && !n) {
+    const host = document.getElementById("spec-wrap");
+    if (!host) return;
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    n = document.createElement("div");
+    n.id = "view-stale";
+    n.style.cssText = "position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:50;" +
+                      "background:rgba(31,78,121,0.92);color:#fff;padding:6px 12px;border-radius:6px;" +
+                      "font-size:13px;text-align:center;pointer-events:none";
+    n.textContent = "Lost contact with the Tab5 - not drawing, because the frequency scale " +
+                    "would be out of date. Signals would appear in the wrong place.";
+    host.appendChild(n);
+  } else if (!stale && n) {
+    n.remove();
+  }
+}
+/* Off the poll, so it still fires when the poll is what stopped. */
+setInterval(() => {
+  const onPanadapter = (lastScreen || "panadapter") === "panadapter";
+  paintViewStale(onPanadapter && lastView !== null && !viewIsFresh());
+}, 1000);
 
 /* ⛔ THE RADIO'S FREQUENCY, NEVER THE OPTIMISTIC ONE - and the distinction is
  * load-bearing.
@@ -1547,6 +1601,9 @@ function viewBinAt(px, W, dialHz) {
    * layout, which would put signals at the wrong frequency and look plausible. */
   if (lastZoomDecim > 1) return undefined;            /* zoom FFT: old path */
   if (!lastView || lastView.ifOff === undefined) return null;
+  /* A viewport nobody has confirmed for four seconds is not a viewport - see
+     lastViewAt. Drawing against it puts real signals at wrong frequencies. */
+  if (!viewIsFresh()) return null;
   const hz = viewHzAt(px, W);
   if (hz < lastView.capLo || hz >= lastView.capHi) return null;
   const nBins = lastView.nBins;
@@ -4917,6 +4974,7 @@ async function tick() {
       lastView = { lo: s.view_lo_hz, hi: s.view_hi_hz,
                    capLo: s.cap_lo_hz, capHi: s.cap_hi_hz, span: s.span_hz,
                    ifOff: s.if_offset_hz, nBins: s.n_bins || SPEC_W };
+      lastViewAt = performance.now();
     } else if (s.zoom <= 1.0001) {
       lastView = null;      /* only drop it when the device plainly has none */
     }
