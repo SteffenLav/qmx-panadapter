@@ -16,7 +16,7 @@
 #include "bsp_info.h"
 #include "cat.h"
 #include "audio.h"
-#include "cw_audio.h"
+#include "rx_audio.h"
 #include "dsp.h"
 #include "render.h"
 #include "render_waterfall.h"
@@ -250,11 +250,10 @@ void app_main(void)
     display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
-    // BAND-AID (v0.18.5): e07f114 (CW audio) introduced cw_audio_preopen() which
-    // degrades FT8 decode yield by 2-3x even when CW is disabled. Root cause under
-    // investigation (likely I2S/DMA contention with USB-audio pipeline). Disabled
-    // pending a proper fix. CW audio remains shelved until pipeline rework.
-    // cw_audio_preopen();
+    // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
+    // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
+    // costs nothing on any unit that has never turned it on.
+    rx_audio_preopen();
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
@@ -348,25 +347,13 @@ void app_main(void)
     render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
     dsp_set_window(cfg.wf_window);
 
-    // BAND-AID EXTENDED (v0.18.6): cw_audio_init() spawns cw_audio_task at
-    // PRIORITY 6 on core 1 - higher than fft_task (4) and both FT8 tasks (1) -
-    // looping forever on a 120ms vTaskDelay even though cw_audio_preopen() is
-    // already disabled above (s_codec_ready can never become true, so the task
-    // does nothing but wake/check/sleep). The v0.18.5 band-aid disabled the two
-    // things CW audio actually DOES but missed this: a priority-6 "ghost" task
-    // preempting fft_task - the audio ring's sole consumer for BOTH panadapter
-    // and FT8 capture - ~125 times per 15s FT8 slot, for the entire session.
-    // Root-caused 2026-06-25 via empirical diff against v0.18.0 (which has no
-    // cw_audio.c at all) after the user found NO release after v0.18.0 matched
-    // its sustained decode yield, even with the v0.18.5 band-aid applied. Fits
-    // the "first slot decodes great, every slot after collapses" pattern from
-    // the v0.18.4 investigation: fresh-boot ring has no backlog yet; periodic
-    // high-priority preemption of fft_task lets the ring backlog grow, so each
-    // subsequent FT8 capture reads time-shifted audio that still syncs (sync
-    // detection tolerates jitter) but doesn't decode (LDPC needs exact symbol
-    // alignment). CW audio remains fully shelved - do not re-enable without
-    // also fixing this task's priority/cadence as part of the pipeline rework.
-    // cw_audio_init();
+    // Spawns rx_audio_task, pinned strictly below fft_task's priority and
+    // fully blocked (no wakeups at all) whenever RX audio is disabled - see
+    // rx_audio.h for why the old CW-only version (priority ABOVE fft_task,
+    // polling every 120 ms even when idle) cost FT8 decode yield, and how
+    // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
+    // before this call was re-enabled (memory project_rx_audio_track.md).
+    rx_audio_init();
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew

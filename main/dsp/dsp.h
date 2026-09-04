@@ -9,6 +9,13 @@
 #define DSP_FFT_SIZE       1024
 #define DSP_SAMPLE_RATE_HZ 48000
 
+// fft_task's own FreeRTOS priority (core 1). Named so any task that must
+// never preempt it - rx_audio_task is the reason this got named at all,
+// see rx_audio.h - can assert against it at compile time instead of the two
+// numbers silently drifting apart. fft_task is created with this literal in
+// dsp.c; if that ever changes, this must change with it.
+#define DSP_FFT_TASK_PRIORITY 4
+
 // Phase 5.8: dBm calibration offset. Added to every dB value before display so
 // readings match real-world signal strength. Procedure: with QMX on dummy load,
 // log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
@@ -119,17 +126,23 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
 int       dsp_ft8_capture_progress(void);
 esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms);
 
-// ---- CW audio out (v0.18+): forward raw I/Q to the CW demodulator ----------
-// The CW demodulator needs EVERY I/Q sample in real time. fft_task is a
+// ---- RX audio out: forward raw I/Q to the RX demodulator -------------------
+// The RX demodulator needs EVERY I/Q sample in real time. fft_task is a
 // snapshot consumer (~15 windows/s, lets the rest overflow) so it is NOT a
 // usable audio source. Instead audio.c's real-time producer (process_rx) calls
-// dsp_cw_forward() for every decoded chunk into an internal PSRAM byte ring;
-// cw_audio_task drains it with dsp_cw_read(). Zero cost when forwarding is off.
-void   dsp_cw_forward_enable(bool en);                       // consumer enables/disables
-void   dsp_cw_forward(const int16_t *pairs, size_t n_pairs); // producer (audio.c); no-op if off
+// dsp_rxaudio_forward() for every decoded chunk into an internal-RAM byte ring
+// (see dsp.c - internal, not PSRAM, deliberately: PSRAM would contend with
+// process_rx's own PSRAM writes and halve the UAC drain rate);
+// rx_audio_task drains it with dsp_rxaudio_read(). Zero cost when forwarding is off.
+// Allocate the ring now (idempotent) - call as early as possible, before
+// WiFi/BLE/spots fragment internal RAM. See dsp.c for why: a lazy first-use
+// allocation deep into a session can permanently fail and never recover.
+void   dsp_rxaudio_ring_preinit(void);
+void   dsp_rxaudio_forward_enable(bool en);                       // consumer enables/disables
+void   dsp_rxaudio_forward(const int16_t *pairs, size_t n_pairs); // producer (audio.c); no-op if off
 // Read up to n_pairs interleaved int16 stereo pairs into dst (dst holds
 // n_pairs*2 int16). Returns pairs actually read (0 on timeout).
-size_t dsp_cw_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms);
+size_t dsp_rxaudio_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms);
 
 // ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
 // The fft_task mixes the pan-center down to DC, low-pass filters, decimates

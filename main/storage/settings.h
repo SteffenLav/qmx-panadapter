@@ -153,8 +153,8 @@ typedef struct {
     char     cloudlog_key[64];   // Cloudlog API key
     char     cloudlog_station[8];// station_profile_id, as text - it is an opaque id, not arithmetic
     uint32_t cloudlog_uploaded_n;// count of ADIF records already uploaded to Cloudlog
-    bool     cw_audio_en;     // CW sidetone audio on Tab5 speaker/headphone (default false)
-    uint8_t  cw_audio_vol;    // CW audio output volume 0..100 (default 60)
+    bool     rx_audio_en;     // demodulated RX audio on Tab5 speaker/headphone, any supported mode (default false)
+    uint8_t  rx_audio_vol;    // RX audio output volume 0..100 (default 60)
     float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
@@ -433,10 +433,10 @@ void settings_set_onboarded(bool v);
 void settings_set_ft8_filters(const ft8_filters_t *f);
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
-// CW audio output: enable the on-device CW sidetone (speaker/headphone), and
-// its volume 0..100 (debounced flush).
-void settings_set_cw_audio_en(bool v);
-void settings_set_cw_audio_vol(uint8_t v);
+// RX audio output: enable demodulated audio on the Tab5 speaker/headphone
+// (CW/CW-R/USB/LSB - see rx_audio.c), and its volume 0..100 (debounced flush).
+void settings_set_rx_audio_en(bool v);
+void settings_set_rx_audio_vol(uint8_t v);
 
 // Waterfall colorisation (debounced flush). Black level and contrast are in
 // dB; floor blend is 0..100 (% per-bin vs global floor); window is the FFT

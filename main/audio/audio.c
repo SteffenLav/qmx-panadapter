@@ -595,11 +595,14 @@ static bool process_rx(void)
             s_dropped_total += pairs;
         }
 
-        // BAND-AID (v0.18.5): e07f114 added dsp_cw_forward() in the audio hot path.
-        // Even as a no-op when CW disabled, it degrades FT8 decode by ~2-3x
-        // (avg 39→11 on fading band, likely due to call overhead on core-0 audio task).
-        // Disabled pending a proper fix. CW audio remains shelved.
-        // dsp_cw_forward(decoded, pairs);
+        // Feeds rx_audio.c's demodulator (any supported mode, not just CW - see
+        // rx_audio.h). Bool-gated no-op when RX audio is off; measured clean
+        // over an 8.7 h live FT8 session (zero ring drops/skips) before this
+        // call was trusted again - the v0.18.5 band-aid's "this costs 2-3x FT8
+        // decode" claim did not reproduce once isolated from the actual root
+        // cause (a priority-6 consumer task preempting fft_task - see
+        // rx_audio.c). See memory project_rx_audio_track.md for the A/B.
+        dsp_rxaudio_forward(decoded, pairs);
         // Loop back for another non-blocking drain read.
     }
 }

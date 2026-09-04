@@ -64,8 +64,8 @@ static const char *TAG = "settings";
 #define KEY_CL_KEY       "cl_key"
 #define KEY_CL_STATION   "cl_stn"
 #define KEY_CL_UPLOADED  "cl_upl_n"
-#define KEY_CW_AUD_EN    "cw_aud_en"
-#define KEY_CW_AUD_VOL   "cw_aud_vol"
+#define KEY_RX_AUD_EN    "rx_aud_en"
+#define KEY_RX_AUD_VOL   "rx_aud_vol"
 #define KEY_WF_BLACK     "wf_black"
 #define KEY_WF_CONTRAST  "wf_contr"
 #define KEY_WF_BLEND     "wf_blend"
@@ -147,8 +147,8 @@ static const char *TAG = "settings";
 #define DEF_BRIGHTNESS  (100)
 #define DEF_LAST_MODE     (0)
 #define DEF_WIFI_ENABLED  (true)
-#define DEF_CW_AUD_EN     (false)
-#define DEF_CW_AUD_VOL    (60)
+#define DEF_RX_AUD_EN     (false)
+#define DEF_RX_AUD_VOL    (60)
 #define DEF_WF_BLACK      (9.0f)
 #define DEF_WF_CONTRAST   (45.0f)
 #define DEF_WF_BLEND      (100)
@@ -259,8 +259,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CL_KEY        92
 #define DIRTY_CL_STATION    93
 #define DIRTY_CL_UPLOADED   94
-#define DIRTY_CW_AUD_EN     32
-#define DIRTY_CW_AUD_VOL    33
+#define DIRTY_RX_AUD_EN     32
+#define DIRTY_RX_AUD_VOL    33
 #define DIRTY_WF_BLACK      34
 #define DIRTY_WF_CONTRAST   35
 #define DIRTY_WF_BLEND      36
@@ -366,7 +366,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
     DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
-    DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
+    DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_RX_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
@@ -505,8 +505,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap.cloudlog_key);
         if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap.cloudlog_station);
         if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap.cloudlog_uploaded_n);
-        if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
+        if (dirty_test(&dirty_local, DIRTY_RX_AUD_EN))  nvs_set_u8(s_nvs, KEY_RX_AUD_EN,  snap.rx_audio_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RX_AUD_VOL)) nvs_set_u8(s_nvs, KEY_RX_AUD_VOL, snap.rx_audio_vol);
         if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
         if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
         if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
@@ -715,8 +715,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cloudlog_key[0] = '\0';
     out->cloudlog_station[0] = '\0';
     out->cloudlog_uploaded_n = 0;
-    out->cw_audio_en  = DEF_CW_AUD_EN;
-    out->cw_audio_vol = DEF_CW_AUD_VOL;
+    out->rx_audio_en  = DEF_RX_AUD_EN;
+    out->rx_audio_vol = DEF_RX_AUD_VOL;
     out->wf_black_db    = DEF_WF_BLACK;
     out->wf_contrast_db = DEF_WF_CONTRAST;
     out->wf_floor_blend = DEF_WF_BLEND;
@@ -891,8 +891,8 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_CL_STATION, out->cloudlog_station, &sz);
     nvs_get_u32(s_nvs, KEY_CL_UPLOADED, &out->cloudlog_uploaded_n);
 
-    if (nvs_get_u8(s_nvs, KEY_CW_AUD_EN, &u8v) == ESP_OK) out->cw_audio_en = (u8v != 0);
-    nvs_get_u8(s_nvs, KEY_CW_AUD_VOL, &out->cw_audio_vol);
+    if (nvs_get_u8(s_nvs, KEY_RX_AUD_EN, &u8v) == ESP_OK) out->rx_audio_en = (u8v != 0);
+    nvs_get_u8(s_nvs, KEY_RX_AUD_VOL, &out->rx_audio_vol);
 
     if (nvs_get_float(KEY_WF_BLACK,    &fv)) out->wf_black_db    = fv;
     if (nvs_get_float(KEY_WF_CONTRAST, &fv)) out->wf_contrast_db = fv;
@@ -1190,7 +1190,7 @@ void settings_set_last_ui_mode(uint8_t mode)
     }
     s_pending.last_ui_mode = mode;
     // 64-bit mask: ~(1u<<15) is a 32-bit value that would zero-extend and clear
-    // the upper dirty bits (e.g. cw_audio, bits 32/33). Cast keeps them intact.
+    // the upper dirty bits (e.g. rx_audio, bits 32/33). Cast keeps them intact.
     dirty_clear_bit(&s_dirty, DIRTY_LAST_MODE);  // written synchronously below; nothing left for flush_task
     xSemaphoreGive(s_mutex);
 
@@ -1408,25 +1408,25 @@ void settings_set_passband_width_hz(uint32_t hz)
     mark_dirty(DIRTY_PASSBAND_HZ);
 }
 
-void settings_set_cw_audio_en(bool v)
+void settings_set_rx_audio_en(bool v)
 {
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.cw_audio_en == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.cw_audio_en = v;
+    if (s_pending.rx_audio_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rx_audio_en = v;
     xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_CW_AUD_EN);
+    mark_dirty(DIRTY_RX_AUD_EN);
 }
 
-void settings_set_cw_audio_vol(uint8_t v)
+void settings_set_rx_audio_vol(uint8_t v)
 {
     if (!s_ready) return;
     if (v > 100) v = 100;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.cw_audio_vol == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.cw_audio_vol = v;
+    if (s_pending.rx_audio_vol == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rx_audio_vol = v;
     xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_CW_AUD_VOL);
+    mark_dirty(DIRTY_RX_AUD_VOL);
 }
 
 void settings_set_qrz_api_key(const char *key)

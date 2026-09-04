@@ -58,7 +58,7 @@ idf_component_register(
         "util/dma_owners.c"   # TEMP INSTRUMENT #283 - delete with the diagnosis
         "cat/cat.c"
         "audio/audio.c"
-        "audio/cw_audio.c"
+        "audio/rx_audio.c"
         "dsp/dsp.c"
         "dsp/iq_balance.c"
         "dsp/spur_map.c"

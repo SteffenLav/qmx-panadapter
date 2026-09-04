@@ -546,7 +546,21 @@ static void status_task(void *arg)
 
 void status_bar_start(void)
 {
-    ui_set_bottom_version(esp_app_get_description()->version);
+    // "v1.10.8-dirty" (git-describe) stays IDENTICAL across every WIP build in
+    // an uncommitted worktree - found 2026-09-04, the operator had no way to
+    // confirm a specific flash actually landed without asking the compile
+    // timestamp be read from the serial log for them each time. Appending the
+    // build TIME (HH:MM, all the bottom bar has room for - the full date is
+    // in /api/status's built_at) gives a signature that changes on every
+    // single rebuild automatically, checkable straight off the Tab5's own
+    // screen, no network needed.
+    {
+        char ver_buf[40];
+        const esp_app_desc_t *d = esp_app_get_description();
+        const char *t = d->time;   // "HH:MM:SS"
+        snprintf(ver_buf, sizeof(ver_buf), "%s (%.5s)", d->version, t);
+        ui_set_bottom_version(ver_buf);
+    }
     ui_set_update_tap_cb(update_line_tap);   // #218
     // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
     // and driven live by the sd_archive task on mount/unmount.

@@ -1,0 +1,108 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// RX audio out: demodulate the tuned signal from the QMX I/Q stream and play
+// it on the Tab5's built-in speaker / headphone jack, so an operator can
+// listen without external audio gear - "hear what the panadapter is showing."
+//
+// Supersedes the CW-only cw_audio.c prototype (see memory
+// project_rx_audio_track.md, Track A). Two things changed on top of that
+// prototype's proven pieces (the I2S preopen-before-USB-host ordering, the
+// internal-RAM forward ring in dsp.c):
+//
+//   1. Mode-aware filtering (CW/CW-R narrow-band around the CW offset,
+//      USB/LSB a voice-width passband) instead of CW only.
+//   2. The consumer task is now STRUCTURALLY unable to preempt fft_task: it
+//      runs at a priority BELOW fft_task's (RX_AUDIO_TASK_PRIORITY <
+//      DSP_FFT_TASK_PRIORITY in dsp.h), so FreeRTOS's preemptive scheduler
+//      cannot hand it the CPU while fft_task is ready - regardless of wake
+//      cadence. On top of that, the task is fully BLOCKED (no wakeups at
+//      all) whenever RX audio is disabled, which is the default. The
+//      original cw_audio_task's bug was priority 6 (ABOVE fft_task's 4)
+//      waking every 120 ms even when idle - see cw_audio.c's git history
+//      and CLAUDE.md's "CW audio (shelved)" section for the post-mortem.
+//
+// Gated to CW/CW-R/USB/LSB; any other mode (DiGi, AM, TUNE, unknown) is
+// treated as unsupported and the path stays idle.
+
+// One-time bring-up: open the ES8388 codec (48 kHz, 16-bit stereo) via the
+// BSP and spawn rx_audio_task. Reads persisted enable/volume from settings.
+// Safe to call once from app_main after settings_init().
+void rx_audio_init(void);
+
+// Open the ES8388/I2S output path early - call this BEFORE bsp_usb_host_start()
+// so I2S can claim its DMA-capable RAM before the USB UAC stream consumes the
+// pool. No-op (and no I2S/DMA claimed) unless RX audio is persisted-enabled.
+void rx_audio_preopen(void);
+
+// Enable / disable RX audio output (persisted to NVS). Enabling wakes the
+// consumer task if it was blocked; disabling lets it go back to sleep on its
+// next iteration.
+void rx_audio_set_enabled(bool en);
+bool rx_audio_is_enabled(void);
+
+// Output volume, 0..100 (persisted to NVS).
+void rx_audio_set_volume(uint8_t vol_0_100);
+uint8_t rx_audio_get_volume(void);
+
+// ---- Live tuning (RAM only, NOT persisted - dev/field iteration without a
+// rebuild+reflash+QMX-power-cycle, see main/net/webserver.c's "rxaudio"
+// /api/cmd action). Each setter takes effect on the very next sample; no
+// restart, no re-enable needed. -1 in any field of rx_audio_get_tuning()'s
+// struct never happens - it is always fully populated, this is just the
+// read side of the same five values.
+typedef struct {
+    float out_clamp;     // hard clip before int16 cast (headroom), >0
+    float agc_target;    // AGC target envelope level, >0
+    float agc_attack;    // per-sample AGC attack coefficient, 0..1
+    float agc_release;   // per-sample AGC release coefficient, 0..1
+    float agc_gain_max;  // AGC gain ceiling, >0
+} rx_audio_tuning_t;
+
+void rx_audio_set_out_clamp(float v);
+void rx_audio_set_agc_target(float v);
+void rx_audio_set_agc_attack(float v);
+void rx_audio_set_agc_release(float v);
+void rx_audio_set_agc_gain_max(float v);
+void rx_audio_get_tuning(rx_audio_tuning_t *out);
+
+// Output samples clamped at out_clamp since the last call - an objective
+// answer to "how much is it actually clipping", not a guess by ear. Reading
+// it resets the count, so each call reports the rate since the previous one.
+uint32_t rx_audio_take_clip_count(void);
+
+// Real timing/starvation data, added 2026-09-04 after several rounds of
+// theorizing about the DSP cost and the forward ring's health with no way to
+// actually check either. frame_us_avg/max cover ONLY the NCO+FIR+AGC math
+// (not the I2S write) - compare against ~21333 us
+// (DSP_FFT_SIZE/DSP_SAMPLE_RATE_HZ) to see whether the math itself is keeping
+// up. read_us_avg/max is how long dsp_rxaudio_read() itself took to return
+// (its own internal 60 ms timeout, separate from frame timing); write_us is
+// the blocking esp_codec_dev_write() call. read_timeouts is how many times
+// the read came back with zero pairs (forward ring starved). A fix to the
+// math alone (frame_us) that leaves read_us or write_us as the real cost
+// will show no audible improvement, which is exactly what happened once
+// already - check all three, not just frame_us. All fields are
+// since-the-last-call rates, same convention as the clip count.
+typedef struct {
+    uint32_t frame_us_avg;
+    uint32_t frame_us_max;
+    uint32_t frame_count;
+    uint32_t read_timeouts;
+    uint32_t read_us_avg;
+    uint32_t read_us_max;
+    uint32_t write_us_avg;
+    uint32_t write_us_max;
+} rx_audio_diag_t;
+
+void rx_audio_take_diag(rx_audio_diag_t *out);
+
+#ifdef __cplusplus
+}
+#endif

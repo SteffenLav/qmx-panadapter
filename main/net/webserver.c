@@ -54,6 +54,7 @@
 #include "bt_hid_mouse.h"
 #include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
+#include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
@@ -487,6 +488,20 @@ static esp_err_t status_handler(httpd_req_t *req)
     {
         cJSON *up = cJSON_AddObjectToObject(root, "update");
         cJSON_AddStringToObject(up, "running", esp_app_get_description()->version);
+        // A real per-build signature, found needed 2026-09-04: "running" is
+        // git-describe-based and stays "v1.10.8-dirty" for EVERY WIP build in
+        // an uncommitted worktree, so the operator had no way to confirm a
+        // specific flash actually landed without asking me to read the
+        // serial log for them. built_at is the COMPILE timestamp - ESP-IDF
+        // stamps this automatically into esp_app_desc_t, changes on every
+        // single rebuild with zero extra bookkeeping, and is checkable
+        // straight from the browser.
+        {
+            char built_at[40];
+            snprintf(built_at, sizeof(built_at), "%s %s",
+                     esp_app_get_description()->date, esp_app_get_description()->time);
+            cJSON_AddStringToObject(up, "built_at", built_at);
+        }
         char latest[32] = "";
         update_check_get_latest(latest, sizeof(latest));
         cJSON_AddStringToObject(up, "latest",    latest);
@@ -1343,6 +1358,56 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             vTaskDelay(pdMS_TO_TICKS(250));
             esp_restart();
         }
+        return ESP_OK;
+    } else if (action && strcmp(action, "rxaudio") == 0) {
+        // Live AGC/clip tuning for rx_audio.c - RAM only, not persisted.
+        // Added 2026-09-04 so chasing "clicking on stronger signals" doesn't
+        // need a rebuild+reflash+QMX-power-cycle per guess. Any field present
+        // in the body is applied; the response always reports every current
+        // value plus the clip count SINCE THE LAST CALL (reading it resets
+        // it - see rx_audio_take_clip_count()), so repeated calls with no
+        // body are a free "how much is it clipping right now" poll.
+        //   {"action":"rxaudio"}                          - just read
+        //   {"action":"rxaudio","agc_gain_max":60}         - lower the ceiling
+        //   {"action":"rxaudio","out_clamp":12000}         - clip earlier/softer
+        cJSON *jc;
+        if ((jc = cJSON_GetObjectItem(root, "out_clamp"))    && cJSON_IsNumber(jc)) rx_audio_set_out_clamp((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "agc_target"))   && cJSON_IsNumber(jc)) rx_audio_set_agc_target((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "agc_attack"))   && cJSON_IsNumber(jc)) rx_audio_set_agc_attack((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "agc_release"))  && cJSON_IsNumber(jc)) rx_audio_set_agc_release((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "agc_gain_max")) && cJSON_IsNumber(jc)) rx_audio_set_agc_gain_max((float)jc->valuedouble);
+        rx_audio_tuning_t t;
+        rx_audio_get_tuning(&t);
+        uint32_t clips = rx_audio_take_clip_count();
+        rx_audio_diag_t diag;
+        rx_audio_take_diag(&diag);
+        cJSON_Delete(root);
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddNumberToObject(resp, "out_clamp",    t.out_clamp);
+        cJSON_AddNumberToObject(resp, "agc_target",   t.agc_target);
+        cJSON_AddNumberToObject(resp, "agc_attack",   t.agc_attack);
+        cJSON_AddNumberToObject(resp, "agc_release",  t.agc_release);
+        cJSON_AddNumberToObject(resp, "agc_gain_max", t.agc_gain_max);
+        cJSON_AddNumberToObject(resp, "clips_since_last_read", (double)clips);
+        // frame_us_* excludes the I2S write on purpose - compare against
+        // ~21333 (DSP_FFT_SIZE/DSP_SAMPLE_RATE_HZ) to see if the math itself
+        // is keeping up. read_timeouts>0 means the forward ring is starved -
+        // silence/clicks regardless of any AGC setting, since there is
+        // nothing for those to act on.
+        cJSON_AddNumberToObject(resp, "frame_us_avg",  diag.frame_us_avg);
+        cJSON_AddNumberToObject(resp, "frame_us_max",  diag.frame_us_max);
+        cJSON_AddNumberToObject(resp, "frame_count",   diag.frame_count);
+        cJSON_AddNumberToObject(resp, "read_timeouts", diag.read_timeouts);
+        cJSON_AddNumberToObject(resp, "read_us_avg",   diag.read_us_avg);
+        cJSON_AddNumberToObject(resp, "read_us_max",   diag.read_us_max);
+        cJSON_AddNumberToObject(resp, "write_us_avg",  diag.write_us_avg);
+        cJSON_AddNumberToObject(resp, "write_us_max",  diag.write_us_max);
+        char *out = cJSON_PrintUnformatted(resp);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out ? out : "{\"ok\":false}");
+        if (out) cJSON_free(out);
+        cJSON_Delete(resp);
         return ESP_OK;
     } else if (action && strcmp(action, "cpu_owners") == 0) {
         // TEMP INSTRUMENT (#284) - dev only. Names the task eating a core.
@@ -4106,6 +4171,90 @@ static esp_err_t manual_handler(httpd_req_t *req)
     return httpd_resp_send(req, data, len);
 }
 
+// ---------------------------------------------------------------------------
+// GET /rxaudio - live AGC/clip tuning page for rx_audio.c. Dev tool, added
+// 2026-09-04 so the operator can drag these themselves while listening,
+// instead of relaying "try X" over chat for a reflash each time - every
+// slider POSTs straight to /api/cmd's "rxaudio" action (see there for the
+// field list) and takes effect on the very next audio sample, no restart.
+// Same self-contained-page pattern as filebrowser.c's PAGE: single-quoted
+// HTML attrs + backtick JS template literals, so the outer C string needs no
+// escaping. Not linked from the main UI - reached directly by URL.
+static const char RXAUDIO_TUNE_PAGE[] =
+"<!doctype html><html><head><meta charset='utf-8'>"
+"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>RX audio tuning</title><style>"
+"body{font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;background:#111;color:#eee;padding:16px}"
+"h1{font-size:19px;margin:0 0 14px}"
+"label{display:block;margin:16px 0 4px;font-size:14px;color:#ccc}"
+".row{display:flex;align-items:center;gap:10px}"
+"input[type=range]{flex:1}"
+".val{min-width:74px;text-align:right;color:#7bf;font-variant-numeric:tabular-nums}"
+"#clips{font-size:28px;margin:20px 0;color:#f66}"
+"#clips.clean{color:#7c7}"
+"#note{color:#999;font-size:13px}"
+"button{background:#2a6;color:#fff;border:0;padding:9px 15px;border-radius:6px;cursor:pointer;font-size:14px}"
+"</style></head><body>"
+"<h1>RX audio tuning (live, no reflash)</h1>"
+"<div id='clips' class='clean'>clips/s: -</div>"
+"<div id='diag' style='font-size:13px;color:#999;margin-bottom:14px'>frame: - / - us (budget 21333)  |  ring timeouts/s: -</div>"
+"<button id='reset'>Reset to defaults</button>"
+"<div id='sliders'></div>"
+"<p id='note'>Drag a slider - it applies immediately. Values reset to firmware"
+" defaults on the next reboot (nothing here is persisted) - or tap Reset above"
+" any time without waiting for a reboot.</p>"
+"<script>"
+// def: the value rx_audio.c actually boots with (its DEF_* constants) - the
+// tick mark below each slider AND what Reset restores. Sliders alone gave no
+// way to tell "off" from "default" (found 2026-09-04: a slider dragged low
+// looked identical to a working one, and it silently muted the audio).
+"var FIELDS=["
+"{k:'agc_gain_max',label:'AGC gain ceiling',min:1,max:400,step:1,def:200},"
+"{k:'agc_target',label:'AGC target level',min:500,max:32767,step:100,def:30000},"
+"{k:'agc_attack',label:'AGC attack',min:0.0005,max:0.1,step:0.0005,def:0.007},"
+"{k:'agc_release',label:'AGC release',min:0.00002,max:0.005,step:0.00002,def:0.00014},"
+"{k:'out_clamp',label:'Output clamp (clip point)',min:1000,max:32767,step:100,def:32000}"
+"];"
+"var box=document.getElementById('sliders');"
+"function apply(f,val){"
+"var body={};body[f.k]=val;"
+"return fetch('/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({action:'rxaudio'},body))});"
+"}"
+"FIELDS.forEach(f=>{"
+"var l=document.createElement('label');l.textContent=f.label+' (default '+f.def+')';box.appendChild(l);"
+"var row=document.createElement('div');row.className='row';"
+"var s=document.createElement('input');s.type='range';s.min=f.min;s.max=f.max;s.step=f.step;s.id='s_'+f.k;"
+"var v=document.createElement('span');v.className='val';v.id='v_'+f.k;"
+"row.appendChild(s);row.appendChild(v);box.appendChild(row);"
+"s.oninput=()=>{v.textContent=s.value;apply(f,parseFloat(s.value));};"
+"});"
+"document.getElementById('reset').onclick=()=>{"
+"FIELDS.forEach(f=>{apply(f,f.def);var s=document.getElementById('s_'+f.k),v=document.getElementById('v_'+f.k);s.value=f.def;v.textContent=f.def;});"
+"};"
+"function poll(){fetch('/api/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'rxaudio'})})"
+".then(r=>r.json()).then(d=>{"
+"FIELDS.forEach(f=>{var s=document.getElementById('s_'+f.k),v=document.getElementById('v_'+f.k);"
+"if(document.activeElement!==s){s.value=d[f.k];v.textContent=d[f.k];}});"
+"var c=document.getElementById('clips');var rate=d.clips_since_last_read;"
+"c.textContent='clips/s: '+rate;c.className=rate>0?'':'clean';"
+"document.getElementById('diag').innerHTML="
+"'frame: '+d.frame_us_avg+' / '+d.frame_us_max+' us (budget 21333)'"
+"+'  |  ring timeouts/s: '+d.read_timeouts+' ('+d.frame_count+' frames/s)'"
+"+'<br>read: '+d.read_us_avg+' / '+d.read_us_max+' us  |  write: '+d.write_us_avg+' / '+d.write_us_max+' us';"
+"}).catch(()=>{});}"
+"poll();setInterval(poll,1000);"
+"</script></body></html>";
+
+static esp_err_t rxaudio_tune_page_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    return httpd_resp_send(req, RXAUDIO_TUNE_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
+static const httpd_uri_t uri_rxaudio_tune = {
+    .uri = "/rxaudio", .method = HTTP_GET, .handler = rxaudio_tune_page_handler,
+};
+
 // once-per-second /api/status that undersamples dynamic signals and reads low.
 // Same dsp call + params as status_handler and render.c's Tab5 S-meter, so the
 // dBm value is identical — only the polling cadence differs.
@@ -4732,6 +4881,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_rxaudio_tune);
     httpd_register_uri_handler(s_server, &uri_drawer_map_get);
     httpd_register_uri_handler(s_server, &uri_drawer_map_post);
     httpd_register_uri_handler(s_server, &uri_tone_get);
