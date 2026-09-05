@@ -580,6 +580,22 @@
      the Tab5 to reply to VK9/WB0LQW...") cannot itself grow the box. The
      lowest-priority child of the row (see #ft8-status's own comment) - it is
      the one allowed to give up its width and wrap to its own line first. */
+  /* Decoded CW, laid over the bottom of the waterfall - the same place the
+     Tab5 puts it, so the two screens read alike (operator's request).
+     MONOSPACE and pre-wrapped: the line is a fixed 71-column grid that the
+     device wraps and overwrites in place, so a proportional font would make
+     "column 40" a different place on every update. The device sends the line
+     already rendered, gap and all, precisely so the browser cannot disagree
+     with it. */
+  #cw-line { position: absolute; left: 0; right: 0; bottom: 6px;
+             font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+             font-size: clamp(0.7rem, 1.15vw, 1.05rem); line-height: 1.5;
+             white-space: pre; overflow: hidden;
+             background: rgba(0,0,0,.7); padding: 2px 6px;
+             pointer-events: none; }   /* the waterfall under it is click-to-tune */
+  #cw-head { color: #30e060; }         /* green header, as on the Tab5 */
+  #cw-text { color: #30e0e0; }         /* cyan decoded text */
+
   #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1022,7 +1038,7 @@
 
   <div id="split-handle" title="Drag to resize"></div>
 
-  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div></div>
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><span id="cw-head"></span><span id="cw-text"></span></div></div>
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
@@ -3686,6 +3702,7 @@ const SET_FIELDS = [
   ["Radio & display", "still_view",        "bool", "Still spectrum",
      "On (the default): the spectrum and waterfall hold still and the VFO marker moves across them, so a signal stays where you last saw it while you tune. Off: the old behaviour, where the view re-centres on the dial at every step and the marker stays in the middle. Either way, the hatched region on the right is frequency the radio genuinely cannot hear"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
+  ["Radio & display", "cw_decode_en", "bool", "Show decoded CW", "The radio decodes CW itself; this shows it along the bottom of the panadapter in CW mode"],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "rit_pill_show",     "bool", "Show the RIT button",
      "The RIT button in the Tab5's top-right corner, on the panadapter screen. Turn it off if you never use RIT and would rather have the space. An RIT offset that is actually engaged still shows itself either way, so the radio can never be listening off frequency with nothing on screen saying so"],
@@ -5551,6 +5568,28 @@ async function tick() {
         const box = document.getElementById("ft8-status");
         if (box) box.classList.toggle("clearable", s.ft8.st === "timeout");
       }
+      /* Decoded CW. The device sends the line EXACTLY as its own screen is
+         drawing it - same 71-column grid, same wrap position, same two-column
+         gap - so the two cannot drift. The header is built here only because
+         it is fixed text; the speed inside it is the device's number, zero
+         padded so the colon never moves and the text never shifts. */
+      {
+        const el = document.getElementById("cw-line");
+        if (el) {
+          const cw = s.cw;
+          if (cw && typeof cw.line === "string") {
+            const w = (cw.wpm > 0) ? String(Math.min(99, cw.wpm)).padStart(2, "0") : "??";
+            document.getElementById("cw-head").textContent = "CW ~" + w + " wpm:  ";
+            document.getElementById("cw-text").textContent = cw.line;
+            el.hidden = false;
+          } else {
+            /* Absent means not in CW, or switched off. Either way: nothing to
+               show, and no stale line left lying over the waterfall. */
+            el.hidden = true;
+          }
+        }
+      }
+
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list".
          A completed QSO also lands here and, unlike the others, does NOT expire

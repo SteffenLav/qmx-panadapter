@@ -14,7 +14,8 @@
 #include "battery.h"          // battery_get_level, battery_is_charging
 #include "util/status.h"      // status_charge_limit_active
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
-#include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
+#include "cat.h"
+#include "cw_decode.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"
 #include "audio.h"          // audio_ring_backlog_pairs - spectrum staleness               // ui_get_*, ui_set_zoom
 #include "qmx_term.h"         // /api/term
@@ -479,6 +480,26 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "freq_hz",     (double)cat_get_frequency());
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
+    // Decoded CW, EXACTLY the line the Tab5 is drawing - same grid, same wrap
+    // position, same two-column gap - because the operator asked for the two
+    // screens to be identical and rendering it twice from the raw text would
+    // drift the moment either side changed. Only in CW/CW-R, and only when the
+    // operator has it switched on, so it costs nothing the rest of the time.
+    {
+        const char *m = cat_get_mode_str();
+        bool cw = m && (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0);
+        if (cw && settings_get_cw_decode_en()) {
+            char line[CW_LINE_COLS + 1];
+            cw_decode_line(line, sizeof(line));
+            cJSON *c = cJSON_CreateObject();
+            if (c) {
+                cJSON_AddStringToObject(c, "line", line);
+                cJSON_AddNumberToObject(c, "wpm", cw_decode_wpm());
+                cJSON_AddItemToObject(root, "cw", c);
+            }
+        }
+    }
+
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     /* Three pages now. Asked of ui_mode rather than of the FT8 view, so a new
      * page cannot be reported as "panadapter" just because FT8 is not up. */
@@ -3181,6 +3202,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
     cJSON_AddStringToObject(root, "fd_class",     c.fd_class);
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
+    cJSON_AddBoolToObject(root, "cw_decode_en", c.cw_decode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddBoolToObject(root, "still_view",        c.still_view);
@@ -3291,6 +3313,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // a setting behind the UI's back.
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode")))
         settings_set_flat_mode(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "cw_decode_en")))
+        settings_set_cw_decode_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))
         settings_set_distance_in_miles(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "greylist_en")))
@@ -3451,6 +3475,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // generally: this is the one setting that makes TX SAFER (ft8_tx.c's interlock
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
+    BOOLTOP("cw_decode_en", settings_set_cw_decode_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
     BOOLTOP("field_day_en",      settings_set_field_day_en);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "fd_class"))))   settings_set_fd_class(s);

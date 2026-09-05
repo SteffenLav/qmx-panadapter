@@ -3452,15 +3452,17 @@ static unsigned  s_cw_seen;          /* change detector - repaint only on new te
  * two labels quietly overlapping on screen. */
 _Static_assert(sizeof("CW ~08 wpm:") - 1 + 2 == CW_PREFIX_COLS,
                "CW_PREFIX_COLS must match CW_PREFIX_FMT rendered with two digits");
-#define CW_LINE_COLS    (84 - CW_PREFIX_COLS)
+/* CW_LINE_COLS comes from cw_decode.h now: the browser draws the same line, so
+ * the grid it wraps on cannot live in the Tab5's UI file. 71 columns is what is
+ * left of 84 after this header. */
+_Static_assert(84 - CW_PREFIX_COLS == CW_LINE_COLS,
+               "the Tab5 header and cw_decode's line width must still add up");
 #define CW_COL_PX       15
 /* Half a line of clear air above the band-plan strip, so the text is not
  * sitting on the bar below it (operator). */
 #define CW_LIFT_PX      15
 
 static lv_obj_t *s_cw_prefix;
-static char s_cw_line[CW_LINE_COLS + 1];
-static int  s_cw_col;
 
 static void cw_strip_tick_cb(lv_timer_t *t)
 {
@@ -3485,26 +3487,13 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         return;
     }
 
+    /* The grid itself is maintained in cw_decode.c, because the browser draws
+     * the same line and two copies of "where does the next character go" would
+     * drift. This just asks for it. */
     unsigned total = cw_decode_total();
     bool fresh = (total != s_cw_seen);
     if (!fresh && !lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) return;
-
-    if (fresh) {
-        /* Only what arrived since the last tick, so each character is
-         * placed exactly once and the line is never rebuilt from scratch. */
-        unsigned n_new = total - s_cw_seen;
-        if (n_new > CW_LINE_COLS) n_new = CW_LINE_COLS;  /* a long gap: the
-                                                            older part would
-                                                            be overwritten
-                                                            anyway */
-        char fresh_txt[CW_LINE_COLS + 1];
-        cw_decode_tail(fresh_txt, n_new + 1);
-        for (const char *q = fresh_txt; *q; q++) {
-            s_cw_line[s_cw_col] = *q;
-            s_cw_col = (s_cw_col + 1) % CW_LINE_COLS;
-        }
-        s_cw_seen = total;
-    }
+    s_cw_seen = total;
 
     /* Enough characters to fill the width at this font; the ring keeps the
      * rest for the CW page. */
@@ -3545,15 +3534,7 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * it wraps with the text instead of being a fixed slot the text runs
      * into. */
     char disp[CW_LINE_COLS + 1];
-    memcpy(disp, s_cw_line, CW_LINE_COLS);
-    disp[CW_LINE_COLS] = '\0';
-
-    /* Two blank columns ahead of the write position. Once the line has
-     * wrapped this gap is the only thing separating what has just been
-     * decoded from what is about to be overwritten. */
-    for (int i = 0; i < 2; i++)
-        disp[(s_cw_col + i) % CW_LINE_COLS] = ' ';
-
+    cw_decode_line(disp, sizeof(disp));   /* grid + the gap, already applied */
     lv_label_set_text(s_cw_strip, disp);
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
@@ -3564,9 +3545,6 @@ static void cw_strip_tick_cb(lv_timer_t *t)
 static void cw_strip_init(void)
 {
     if (s_cw_strip) return;
-    memset(s_cw_line, ' ', CW_LINE_COLS);
-    s_cw_line[CW_LINE_COLS] = '\0';
-    s_cw_col = 0;
     /* TWO labels, not one with colour markup: the prefix and the text are
      * different colours and the text half is a fixed-width grid, so giving each
      * its own object keeps the column arithmetic honest and needs nothing from

@@ -108,6 +108,29 @@ size_t cw_decode_snapshot(char *out, size_t out_sz);
 // UI that only wants to repaint when something arrived.
 unsigned cw_decode_total(void);
 
+// ---- the one-line display ---------------------------------------------------
+//
+// A fixed grid of columns that WRAPS and overwrites itself, the way the QMX's
+// own scroll line does, rather than scrolling text leftwards. Nothing moves, so
+// a callsign you are half-way through reading stays where it is; only the
+// oldest end is replaced.
+//
+// ⭐ It lives HERE rather than in the UI because BOTH screens draw it - the
+// Tab5's panadapter and the browser's. Two copies of "where does the next
+// character go" would drift the moment one of them changed, and the operator
+// asked for them to be identical.
+//
+// 71 columns is what the Tab5 has left after the green "CW ~08 wpm:" header at
+// 15 px per character across 1280 px. The browser uses the same number so the
+// two wrap in the same places.
+#define CW_LINE_COLS 71
+
+// Copy the line as it should be DRAWN: the grid, with two blank columns laid
+// over it at the write position. After the line has wrapped that gap is the
+// only thing separating what has just been decoded from what is about to be
+// overwritten. Always NUL-terminated; returns the number of columns written.
+size_t cw_decode_line(char *out, size_t out_sz);
+
 // Estimated speed of what is being received, words per minute, over the last
 // few tens of seconds. 0 means "not enough to say" - which is the honest answer
 // on a quiet band and is what the UI should show rather than a stale number.

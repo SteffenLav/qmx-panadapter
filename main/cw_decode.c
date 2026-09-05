@@ -155,6 +155,8 @@ int cw_wpm_estimate(int chars, unsigned elapsed_ms)
 #define CW_WPM_MIN_CHARS   12
 
 static cw_squelch_t     s_squelch;
+static char             s_line[CW_LINE_COLS];   /* the wrapping display grid */
+static int              s_line_col;             /* where the next character lands */
 static uint32_t        *s_stamp;
 static int              s_stamp_head, s_stamp_count;
 static char            *s_ring;
@@ -174,6 +176,8 @@ void cw_decode_init(void)
     s_stamp_head = s_stamp_count = 0;
     s_total = 0;
     memset(&s_squelch, 0, sizeof(s_squelch));
+    memset(s_line, ' ', sizeof(s_line));
+    s_line_col = 0;
 }
 
 void cw_decode_feed(const char *resp)
@@ -191,6 +195,9 @@ void cw_decode_feed(const char *resp)
             s_ring[s_head] = rel[k];
             s_head = (s_head + 1) % CW_RING_CAP;
             if (s_count < CW_RING_CAP) s_count++;
+            /* ...and into the wrapping line both screens draw from. */
+            s_line[s_line_col] = rel[k];
+            s_line_col = (s_line_col + 1) % CW_LINE_COLS;
             // Timestamp every accepted character for the speed estimate. Noise
             // never reaches here, so it cannot drag the figure around.
             s_stamp[s_stamp_head] = (uint32_t)(esp_timer_get_time() / 1000);
@@ -200,6 +207,28 @@ void cw_decode_feed(const char *resp)
         s_total += (unsigned)m;
     }
     xSemaphoreGive(s_lock);
+}
+
+size_t cw_decode_line(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return 0;
+    out[0] = '\0';
+    if (!s_ring) return 0;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    size_t n = CW_LINE_COLS;
+    if (n > out_sz - 1) n = out_sz - 1;
+    memcpy(out, s_line, n);
+    /* Two blank columns at the write position - see the header. Applied to the
+     * COPY, so the grid itself keeps the characters that are about to be
+     * overwritten and nothing is lost early. */
+    for (int i = 0; i < 2; i++) {
+        size_t idx = (size_t)((s_line_col + i) % CW_LINE_COLS);
+        if (idx < n) out[idx] = ' ';
+    }
+    out[n] = '\0';
+    xSemaphoreGive(s_lock);
+    return n;
 }
 
 // Speed over the characters still inside CW_WPM_WINDOW_MS. Anything older is
@@ -260,6 +289,8 @@ void cw_decode_clear(void)
     s_head = s_count = 0;
     s_stamp_head = s_stamp_count = 0;
     memset(&s_squelch, 0, sizeof(s_squelch));
+    memset(s_line, ' ', sizeof(s_line));
+    s_line_col = 0;
     xSemaphoreGive(s_lock);
 }
 
