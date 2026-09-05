@@ -57,6 +57,22 @@ int cw_decode_parse_tb(const char *resp, char *out, size_t out_sz, int *tx_pendi
 // ---------------------------------------------------------------------------
 // Noise squelch. Portable.
 // ---------------------------------------------------------------------------
+/* '*' is the decoder's marker for a symbol it could not resolve, not a
+ * character: it appears nowhere in the CAT manual's list of what the QMX
+ * decodes (? . , " ` ( ) + - : @ $ < ! > and the prosigns), and it cannot be
+ * part of a callsign. Measured on the bench it was the SINGLE most common thing
+ * arriving - 23.6% of 864 characters over 20 minutes on 20 m - which is what
+ * "the line fills with rubbish" actually consisted of. E and T together were
+ * only 8%, so the first version of this squelch was filtering the wrong thing.
+ *
+ * So it is dropped outright rather than held for a run verdict. There is no
+ * reading of "the decoder could not tell what that was" that is worth a column,
+ * and unlike E or T it can never be real text. */
+static int is_unresolved(char c) { return c == '*'; }
+
+/* E and T are the two SHORTEST Morse symbols - one dit, one dah - so a random
+ * threshold crossing lands on them more often than on anything longer. Unlike
+ * '*' they ARE real letters, so they are only dropped as part of a long run. */
 static int is_noise_char(char c) { return c == 'E' || c == 'T'; }
 
 int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
@@ -66,6 +82,14 @@ int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
     // A space neither starts nor breaks a run: noise arrives as "T T E T" just
     // as often as "TTET", and letting a space end the run would release every
     // noise character one at a time.
+    /* Unresolved symbols never reach the screen. They also COUNT toward the run,
+     * so "T*T*E*T" is recognised as one stretch of the decoder struggling
+     * rather than as text interrupted by noise. */
+    if (is_unresolved(c)) {
+        st->run++;
+        return 0;
+    }
+
     if (c == ' ' || is_noise_char(c)) {
         if (is_noise_char(c)) st->run++;
         if (st->n_pend < CW_SQUELCH_HOLD) st->pend[st->n_pend++] = c;

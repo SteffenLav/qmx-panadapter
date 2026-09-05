@@ -114,6 +114,12 @@ int main(void)
           /* Spaced-out noise is still noise - a space must not release a run. */
           { "spaced noise is dropped",     "T T T T T T E T CQ",    "CQ"          },
           { "run resets after real text",  "CQ TTTTTTTT DE K",      "CQ DE K"     },
+          /* '*' is the decoder saying it could not resolve a symbol. Measured at
+             23.6% of everything arriving on a live band - the biggest single
+             contributor to the mess, and never part of real text. */
+          { "unresolved symbols dropped",  "C*Q* D*E K",            "CQ DE K"     },
+          { "a line of nothing but them",  "**********",            ""            },
+          { "they count toward a run",     "T*T*E*T*T*T CQ",        "CQ"          },
         };
         for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
             cw_squelch_t st;
