@@ -16,6 +16,7 @@
 #include "bsp_info.h"
 #include "gpio_relay.h"
 #include "cat.h"
+#include "cw_decode.h"
 #include "audio.h"
 #include "cw_audio.h"
 #include "dsp.h"
@@ -297,6 +298,10 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
+    // Before cat_init(): the poll task starts inside it and can deliver a TB
+    // response immediately, and cw_decode_feed() drops everything until the
+    // ring exists.
+    cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver

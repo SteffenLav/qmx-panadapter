@@ -18,6 +18,7 @@
 #include "wspr_rx.h"   // wspr_pa_guard_release_pending - see the VN; handler
 #include "ui.h"
 #include "diag_log.h"
+#include "cw_decode.h"   // TB; - the QMX decodes CW itself, we just read it
 #include "settings.h"     // cw_tx_offset_hz - the CW split maintainer reads it live
 
 static const char *TAG = "cat";
@@ -579,6 +580,16 @@ static void diag_log_rx(const char *msg, size_t len)
 
 static void process_cat_message(const char *msg, size_t len)
 {
+    // TB: decoded CW from the radio's own decoder. First, because it is the
+    // only response whose payload is arbitrary text - it can legitimately
+    // contain the punctuation the QMX decodes (? . , " ` ( ) + - : @ $ < ! >),
+    // so it must not fall through to any parser that pattern-matches on
+    // characters. cw_decode_feed() re-validates the whole frame and drops
+    // anything malformed rather than letting it into the text.
+    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B') {
+        cw_decode_feed(msg);
+        return;
+    }
     if (len == 14 && msg[0] == 'F' && msg[1] == 'A') {
         uint32_t freq_hz = 0;
         for (size_t i = 2; i < 13; i++) {
@@ -1585,14 +1596,32 @@ static void poll_task(void *arg)
         bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');
         bool skip_fw = (s_ssb_bw_pinned != 0 && in_ssb);
         bool tune_poll = s_tune_poll_active;
-        int n_phases = tune_poll ? 4 : 3;
+        // TB; - decoded CW straight out of the radio's own decoder (Uwe DL8UG).
+        //
+        // CW/CW-R only, so it costs nothing in any other mode, and NOT while
+        // Tune is running (that rotation is already carrying PC;SW; against a
+        // transmitting radio, and there is no CW to decode mid-tune).
+        //
+        // ⛔ This has to keep a STEADY cadence, not be read on demand: the
+        // radio's decode buffer is 40 characters and is NOT circular - the CAT
+        // manual says it "simply discards any new incoming characters" once
+        // full. At 20 WPM that is about 24 seconds, and anything lost there is
+        // lost silently. A 4th phase at CAT_POLL_INTERVAL_MS reads it several
+        // times a second, which is far inside that.
+        //
+        // No firmware gate: TB is in the 1_03 CAT manual as well as 1_04.
+        bool in_cw = (s_last_mode_digit == '3' || s_last_mode_digit == '7');
+        bool cw_poll = (in_cw && !tune_poll);
+        int n_phases = tune_poll ? 4 : (cw_poll ? 4 : 3);
         const char *cmd;
         size_t cmd_len;
         switch (phase) {
             case 0:  cmd = "FA;"; cmd_len = 3; break;
             case 1:  cmd = "MD;"; cmd_len = 3; break;
             case 2:  cmd = skip_fw ? NULL : "FW;"; cmd_len = 3; break;
-            default: cmd = "PC;SW;"; cmd_len = 6; break;  // only reached when tune_poll
+            default: if (tune_poll) { cmd = "PC;SW;"; cmd_len = 6; }
+                     else           { cmd = "TB;";    cmd_len = 3; }
+                     break;
         }
         if (cmd != NULL) {
             // Diagnostic: don't log every poll TX (FA/MD/FW every ~50ms swamps

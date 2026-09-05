@@ -3,6 +3,7 @@
 #include "util/pan_view.h"
 #include "util/freq_gridlines.h"
 #include "ui_theme.h"
+#include "cw_decode.h"   /* the QMX decodes CW itself; this just shows it */
 #include "nvs.h"
 #include "wspr_screen_view.h"
 #include "render.h"
@@ -3389,6 +3390,83 @@ static bool any_modal_open(void)
 
 static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
 
+/* ---------------------------------------------------------------------------
+ * Decoded CW, one line, over the bottom of the waterfall.
+ *
+ * The QMX decodes CW in its own microcontroller and hands the text over CAT
+ * (TB;), so this costs no DSP at all - which is the whole reason it is
+ * affordable here. Core 0 is the wall on this board and every attempt to do CW
+ * audio work ourselves has run into it. Suggested by Uwe DL8UG.
+ *
+ * ⛔ It OVERLAYS the waterfall rather than taking a row of its own. The
+ * panadapter's vertical budget is fully spent (60+200+32+22+36 of bars, the
+ * waterfall gets what is left), and this file's own history is full of reflow
+ * bugs where a section's height and the y it advances by disagreed. A floating
+ * child costs no reflow, and in every mode but CW it is simply hidden.
+ *
+ * The full scrollback belongs on the CW page; this is the glance-at-it line.
+ * ------------------------------------------------------------------------ */
+static lv_obj_t *s_cw_strip;
+static unsigned  s_cw_seen;          /* change detector - repaint only on new text */
+
+static void cw_strip_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_cw_strip) return;
+
+    /* CW/CW-R only, and only on the panadapter - the FT8 and WSPR pages own
+     * their own screen real estate and there is no CW to show there. */
+    const char *mode = cat_get_mode_str();
+    bool want = (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
+                (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0);
+    if (!want) {
+        if (!lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN))
+            lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    unsigned total = cw_decode_total();
+    if (total == s_cw_seen && !lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) return;
+    s_cw_seen = total;
+
+    /* Enough characters to fill the width at this font; the ring keeps the
+     * rest for the CW page. */
+    char tail[96];
+    cw_decode_tail(tail, sizeof(tail));
+    if (tail[0] == '\0') {
+        lv_label_set_text(s_cw_strip, "CW decode: listening...");
+    } else {
+        lv_label_set_text(s_cw_strip, tail);
+    }
+    lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_cw_strip);
+}
+
+static void cw_strip_init(void)
+{
+    if (s_cw_strip) return;
+    s_cw_strip = lv_label_create(lv_scr_act());
+    lv_label_set_long_mode(s_cw_strip, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_cw_strip, DISPLAY_H_RES);
+    /* Directly above the band-plan strip, i.e. along the bottom edge of the
+     * waterfall, where it covers the oldest rows rather than the newest. */
+    lv_obj_align(s_cw_strip, LV_ALIGN_BOTTOM_MID, 0, -(BOTTOM_BAR_H + BANDPLAN_H));
+    lv_obj_set_style_text_font(s_cw_strip, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_cw_strip, lv_color_hex(0x30E0B0), 0);
+    lv_obj_set_style_bg_color(s_cw_strip, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_cw_strip, LV_OPA_70, 0);
+    lv_obj_set_style_pad_all(s_cw_strip, 4, 0);
+    lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+    /* Not clickable: it sits over the waterfall, and the waterfall is
+     * tap-to-tune. A label that ate those taps would be a bug, not a feature. */
+    lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cw_strip, UI_FLAG_NOT_HOT);
+
+    /* 4 Hz: fast enough that text does not arrive in visible clumps, slow
+     * enough to be nothing on a core that is already the constraint. */
+    lv_timer_create(cw_strip_tick_cb, 250, NULL);
+}
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
@@ -5831,6 +5909,7 @@ void ui_init(lv_display_t *disp)
     }
     qmx_wait_poll_cb(NULL);
     lv_timer_create(qmx_wait_poll_cb, 1000, NULL);
+    cw_strip_init();
     /* WSPR page refresh. Its own 1 Hz timer rather than a call inside
      * qmx_wait_poll_cb: the page must keep counting down its 120 s cycle
      * whether or not the radio is answering, and the tick returns immediately
