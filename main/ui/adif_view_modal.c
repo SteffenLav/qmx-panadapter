@@ -320,8 +320,10 @@ static void restore_sd_btn_cb(lv_event_t *e)
     // No confirm gesture, deliberately, and unlike "Delete all" next to it:
     // this only ever ADDS contacts, and one already in the log is skipped - so
     // pressing it twice, or by accident, cannot cost anything.
+    // No "reading the card..." toast. The read is ~0.1 s measured, so it is
+    // gone before it can be read and the result window lands on top of it
+    // anyway - two messages for one press, the first of which says nothing.
     s_sdr_state = SDR_RUNNING;
-    ui_toast("Reading the log from the SD card...");
     if (!s_sdr_timer) s_sdr_timer = lv_timer_create(restore_poll_cb, 200, NULL);
     if (!psram_task_create_reapable(restore_task, "adif_sdr", 4096, NULL,
                                     tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
