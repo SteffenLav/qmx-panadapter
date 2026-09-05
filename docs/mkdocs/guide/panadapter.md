@@ -372,7 +372,60 @@ Before v1.10.5 the display filled that quarter of the ×1 view by wrapping the b
 
 If a signal you want falls into the hatching, tune down or zoom in. The radio cannot hear above dial+12 kHz, and no display setting can change that.
 
-### 11. S-Meter
+### 11. Decoded CW
+
+In **CW or CW-R**, a single line along the bottom of the waterfall shows the
+Morse the radio is decoding — on the Tab5 and in the browser alike.
+
+The decoding is not done by the Tab5. **The QMX has its own CW decoder** and
+hands the text over the CAT link, so this costs the panadapter nothing: no
+audio processing, no effect on the spectrum, no effect on FT8. It works on QMX
+firmware 1.03 and later — there is nothing to enable on the radio for most
+people, since its own **Decoder → Enable Rx** setting is on by default
+*(suggested by Uwe DL8UG)*.
+
+The line reads:
+
+```
+CW ~18 wpm:  CQ CQ DE OZ1LAV OZ1LAV K
+```
+
+- The **green header** carries the estimated sending speed and never moves. The
+  number is zero-padded, so the text after it does not shift as the estimate
+  crosses ten.
+- The **cyan text** is what the radio decoded, in a fixed grid of 71 characters.
+- When the line fills, it **wraps and writes over the oldest end** rather than
+  scrolling. Nothing slides sideways, so a callsign you are half-way through
+  reading stays where it is. Two blank spaces travel ahead of the writing
+  position — after the first wrap, that gap is what tells new text from old.
+
+**About the speed.** It is a *throughput* figure: characters per unit time,
+counting the gaps between words and between overs. During a real exchange it
+therefore reads **lower** than the other operator is actually sending, and only
+approaches their true speed during continuous sending. The radio hands over
+finished characters, so the element timing a true speed measurement needs is
+already gone. That is why it is shown with a `~`, and why it reads `??` rather
+than guessing when there is not enough to go on.
+
+**About the noise.** With no signal the decoder chews on noise. Two kinds of
+rubbish are filtered out before anything reaches the screen:
+
+- `*` — the decoder's marker for a symbol it could not resolve. Measured on a
+  live band it was the single most common thing arriving, and it is never part
+  of real text, so it is dropped outright.
+- Long runs of **E** and **T** — the two shortest Morse symbols, so noise lands
+  on them more often than on anything longer, and worst just after switching to
+  CW while the decoder settles. A long run is dropped; a short one is kept,
+  because those are real letters and words like TEST and BETTER must survive.
+
+A dropped run leaves one space behind, so words either side of it are not welded
+together.
+
+**Turning it off.** Settings drawer → **Radio** → **Show decoded CW**, beside CW
+centre and the transmit offset. It is on by default and the setting is shared
+with the browser.
+
+### 12. S-Meter
 
 The **Signal** field in the top bar is a tick-scale bar labelled S1, S3, S5, S7, S9, +10, +20, with a moving green bar beneath it.
 
@@ -385,7 +438,7 @@ The reading is the peak level in a ±64-bin window centred on the **IF-shifted V
 
 It is a readout, not a control: there is nothing to tap, and there is no peak-hold mode.
 
-### 12. Settings Drawer
+### 13. Settings Drawer
 
 Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
 

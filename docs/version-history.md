@@ -3178,3 +3178,50 @@ archive had only ever been able to write *to* the card.
 - **A finished QSO stays on screen in the browser** *(Randy N4OPI)*. `<callsign> QSO complete` in green, held until you do something else, where every other message in that line clears itself after twenty seconds. Stepping away and coming back now tells you the contact finished. Two other designs were rejected first: holding the radio in the completed state blocks the next QSO, and freezing the display misreports what the radio is doing. This is neither — it is a record that the contact happened, and the radio carries on regardless. The Tab5's own label is unchanged; it is the browser that has to cope with nobody watching.
 - **Results on the Tab5 are a window with an OK button**, not a message that fades. A restore, a delete of test contacts, or clearing the whole log all report in a panel you dismiss — the outcome of something you asked for is worth reading, and dismissing it is how you say you read it. Clearing the log spells out "This cannot be undone".
 
+### Shipped in v1.11.1 — 2026-09-05
+
+**Decoded CW along the bottom of the panadapter, from the radio's own decoder.**
+
+Suggested by Uwe DL8UG, who had already built it for himself and wrote in to say
+how easy it was. He was right, and the reason it is affordable is that **the Tab5
+does not do the decoding**: the QMX decodes CW in its own microcontroller and
+hands the text to a CAT host with `TB;`, so this is one more slot in a poll that
+was already running. That matters on this board specifically — the display task
+is what limits it, and every previous attempt at doing CW audio work ourselves
+ran into exactly that.
+
+`TB` is in the **1.03** CAT manual as well as 1.04, so it needs no firmware
+version check and works on what people are already running. Uwe's pointer was to
+the 1.04 manual; the older one has it on page 9.
+
+**The line**
+
+- One line along the bottom of the waterfall in CW/CW-R, on the Tab5 and in the browser. A fixed green header carries the estimated speed; the decoded text follows in cyan.
+- It **wraps and overwrites itself** rather than scrolling, the way the QMX's own scroll line does. Nothing slides sideways, so a callsign you are half-way through reading stays where it is — only the oldest end is replaced. Two blank columns travel ahead of the writing position; after the first wrap that gap is the only thing separating new text from old.
+- The speed is **zero-padded to two digits**, so the header width never changes and the text does not shift every time the estimate crosses ten.
+- Both screens draw from **one** line model in the firmware, and the device sends the line already rendered — grid, wrap position and gap included. Rendering it twice would have drifted the moment either side changed.
+
+**The noise, which turned out to be the interesting part**
+
+- Measured rather than guessed: 864 characters over 20 minutes of live 20 m CW. `*` was **23.6%** — the single most common thing arriving — and it is not a character at all. It appears nowhere in the CAT manual's list of what the QMX decodes, so it is the decoder's marker for a symbol it could not resolve. It is dropped outright; it can never be real text.
+- Long runs of **E** and **T** are dropped too. They are the two shortest Morse symbols, so noise lands on them more often than on anything longer, and it is worst just after switching to CW while the decoder's amplitude tracking settles. Only long runs go: short ones are released, because those are real letters and TEST, BETTER and OZ1LAV have to survive.
+- A dropped run leaves **one space** behind. Without it, "CQ TTTTTTTT DE" came out as "CQDE" — two words welded together. The host tests caught that one.
+- E and T together are only 8% of what arrives, so the first version of this filter was targeting the wrong thing entirely.
+
+**The speed estimate, and what it is not**
+
+Characters per unit time on the PARIS convention of five characters to a word,
+over a 30 s window. It is a **throughput** figure: it counts the gaps between
+words and between overs, so it reads low during a real exchange and only
+approaches the sender's keying speed during continuous sending. A true keying
+speed needs element timing, and the radio hands over finished characters — the
+timing is gone before we see them. Hence the `~`, and hence `??` rather than a
+number when there is not enough to go on.
+
+**Everything else**
+
+- **Restore from SD reads both logs on the card** *(Gyula HA3HZ)*. It only ever read `qso.adi`, so putting a backup on the card as `qso.prev.adi` — the name the firmware itself writes for its safety copy — was answered with "nothing to restore", which was narrowly true and completely unhelpful. Verified by reproducing his exact steps: an 8-record file uploaded as `qso.prev.adi` now reports 33 found, 8 added, 25 already present, where it previously added nothing.
+- **The Tab5's QSO log gains a Grid column**, beside the callsign, where it sits with the contact's own details rather than out with the reports.
+- **The power-cycle relay's help text no longer names a connector that does not exist** *(Randy N4OPI)*: "I would really hate for someone to waste time looking for a non-existent connector or worse, connect these signals to the wrong connector." The QMX has no PWR_ON/GND jack — those signals have to be brought out of the radio to a connector of your own — so the control leads with "!Experimenter feature!" and says so. The same wrong wording was in four other places in the documentation and is corrected there too. His other question has a firmware answer rather than a hardware one: GPIO53/54 cannot float because they are held as driven outputs from boot, deliberately, so a relay cannot be closed by the Tab5 booting or being reflashed.
+- **Decoded CW can be switched off** in the settings drawer under Radio, beside CW centre and the transmit offset, and from the browser's settings form.
+

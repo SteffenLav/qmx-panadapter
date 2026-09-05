@@ -54,6 +54,8 @@ soon as the radio replies. It writes when you let go of the slider, not
 while you drag, because this is stored configuration rather than a session setting.
 Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
 
+**Show decoded CW** — the line along the bottom of the panadapter carrying the Morse the radio is decoding, in CW/CW-R. On by default. The QMX does the decoding itself, so switching this off frees no processing — only the screen space; see the Decoded CW section of the [Panadapter](panadapter.md) guide for what the line shows and how the noise is filtered. The same setting is in the browser under **Radio & display**.
+
 **CW transmit offset** — transmit a little away from the station you are listening to,
 so a QRP call is not buried in the pile of everyone zero-beating the DX (suggested by
 Roy KI0ER). The centre of the slider is off, and the sign chooses whether you transmit

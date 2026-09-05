@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.11.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.11.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.11.0 — restore your QSO log straight from the microSD card, search it on either screen, and export just the contacts you pick.**
+> **New in v1.11.1 — decoded CW along the bottom of the panadapter, from the radio's own decoder.**
 >
 > **The web decode list no longer jumps**, for real this time *(Randy N4OPI)*. The v1.10.8 fix sized the status box against the wrong "worst case" text and still moved on an armed transmit or a busy exchange; the actual cause turned out to be the box disappearing entirely (`display:none`) while idle rather than staying reserved at a fixed size — every hide path now uses `visibility:hidden` instead, so its footprint never collapses. The countdown is now its own badge that can't be truncated away, Cancel clears immediately with no leftover "Cancelling" text, and the box no longer exceeds the width of the occupancy strip below it.
 >
@@ -26,7 +26,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -183,6 +183,13 @@ in plain words. See [Getting help](#getting-help).
 supercap-backed RTC across power-off, the QMX's clock as an offline fallback, GPS
 detected and phase-locked automatically if your QMX has one, and a manual set-and-sync
 panel. FT8/FT4 timing also self-corrects from the decoded band consensus when offline.
+
+**Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
+panadapter shows the Morse the radio is decoding, with an estimate of the sending
+speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
+the panadapter no processing at all and does not touch the spectrum or FT8. Works on
+QMX firmware 1.03 and later, on the Tab5 and in the browser, and switches off in the
+settings drawer under Radio *(suggested by Uwe DL8UG)*.
 
 **microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) **before
 switching on** and your whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a

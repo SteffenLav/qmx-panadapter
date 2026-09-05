@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.11.0** — 2026-09-05
+**v1.11.1** — 2026-09-05
+
+**Decoded CW along the bottom of the panadapter, from the radio's own decoder.**
+
+- **Decoded CW along the bottom of the panadapter** *(suggested by Uwe DL8UG)*. In CW or CW-R, a single line shows the Morse the radio is decoding, with an estimate of the sending speed — on the Tab5 and in the browser alike. **The QMX decodes it itself** and hands the text over the CAT link, so this costs the panadapter no processing at all: it does not touch the spectrum, the waterfall or FT8. Works on QMX firmware 1.03 and later, and on most radios there is nothing to switch on.
+- **Noise is filtered before it reaches the screen.** With no signal the decoder produces a stream of rubbish; measured on a live band, `*` — its marker for a symbol it could not resolve — was the single most common thing arriving, and it is dropped outright. Long runs of E and T, the two shortest Morse symbols, are dropped as well, while short ones are kept so that real words survive.
+- **The line wraps and overwrites itself** rather than scrolling, so a callsign you are half-way through reading stays where it is. Two spaces travel ahead of the writing position to show where the new text is landing.
+- **The speed is a throughput figure**, not the other operator's keying speed: it counts the gaps between words, so it reads low during a real exchange. Shown with a `~` for that reason, and `??` when there is not enough to go on.
+- **Turn it off** in the settings drawer under Radio, beside CW centre and the transmit offset. On by default, and the setting is shared with the browser.
+- **Restore from SD now reads both logs on the card** *(Gyula HA3HZ)*. It only ever read `qso.adi`, so putting a backup on the card as `qso.prev.adi` — the name the firmware itself writes — was met with "nothing to restore". It reads both now.
+- **The Tab5's QSO log gains a Grid column**, beside the callsign.
+- **The power-cycle relay's help text no longer names a connector that does not exist** *(Randy N4OPI)*. The QMX has no PWR_ON/GND jack — those signals have to be brought out to a connector of your own — so the control now says so, and says it is an experimenter feature.
+
+## Previous Releases
+
+### v1.11.0 — 2026-09-05
 
 **Your QSO log, recoverable from the card it was already backed up to — and searchable on both screens.**
 
@@ -16,8 +31,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A restore or a delete on the Tab5 reports in a window with an OK button**, not a message that fades on its own. The result of something you asked for is worth reading. Clearing the whole log now says "This cannot be undone" in as many words.
 - **The Tab5's log gains a Ref column** — the park or summit the other station was activating — because the new search offered to find it while the list never showed it.
 - **An import that could not read a file no longer claims everything was already logged.** It now reports how many contacts were found, added, already present and unreadable. A file too large gives a plain sentence instead of a raw browser error, the size limit is four times higher, and a slow upload is retried rather than abandoned.
-
-## Previous Releases
 
 ### v1.10.9 — 2026-09-05
 
@@ -590,7 +603,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.11.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.11.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
