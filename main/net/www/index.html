@@ -5518,6 +5518,34 @@ async function tick() {
 
     /* TX/QSO status banner - updated every poll while the FT8 screen is up.
        s.ft8 = { st: active|armed|wait|done|timeout|idle, text: "..." }. */
+    /* OUTSIDE the FT8 branch, and that is the whole point: this is the
+       PANADAPTER's line. It was first written just below the FT8 status box
+       because that is where the other status fields live, and inside
+       `if (screen === "ft8")` it could never run on the screen it belongs to -
+       the API was sending the text correctly the whole time and nothing drew
+       it. */
+    /* Decoded CW. The device sends the line EXACTLY as its own screen is
+       drawing it - same 71-column grid, same wrap position, same two-column
+       gap - so the two cannot drift. The header is built here only because
+       it is fixed text; the speed inside it is the device's number, zero
+       padded so the colon never moves and the text never shifts. */
+    {
+      const el = document.getElementById("cw-line");
+      if (el) {
+        const cw = s.cw;
+        if (cw && typeof cw.line === "string") {
+          const w = (cw.wpm > 0) ? String(Math.min(99, cw.wpm)).padStart(2, "0") : "??";
+          document.getElementById("cw-head").textContent = "CW ~" + w + " wpm:  ";
+          document.getElementById("cw-text").textContent = cw.line;
+          el.hidden = false;
+        } else {
+          /* Absent means not in CW, or switched off. Either way: nothing to
+             show, and no stale line left lying over the waterfall. */
+          el.hidden = true;
+        }
+      }
+    }
+
     if (screen === "ft8" && s.ft8) {
       /* ⭐ TWO HOMES FOR ONE STRING, decided by the state. While nothing is
          being transmitted this is a RECEIVE readout - "RX: capturing...",
@@ -5568,28 +5596,6 @@ async function tick() {
         const box = document.getElementById("ft8-status");
         if (box) box.classList.toggle("clearable", s.ft8.st === "timeout");
       }
-      /* Decoded CW. The device sends the line EXACTLY as its own screen is
-         drawing it - same 71-column grid, same wrap position, same two-column
-         gap - so the two cannot drift. The header is built here only because
-         it is fixed text; the speed inside it is the device's number, zero
-         padded so the colon never moves and the text never shifts. */
-      {
-        const el = document.getElementById("cw-line");
-        if (el) {
-          const cw = s.cw;
-          if (cw && typeof cw.line === "string") {
-            const w = (cw.wpm > 0) ? String(Math.min(99, cw.wpm)).padStart(2, "0") : "??";
-            document.getElementById("cw-head").textContent = "CW ~" + w + " wpm:  ";
-            document.getElementById("cw-text").textContent = cw.line;
-            el.hidden = false;
-          } else {
-            /* Absent means not in CW, or switched off. Either way: nothing to
-               show, and no stale line left lying over the waterfall. */
-            el.hidden = true;
-          }
-        }
-      }
-
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list".
          A completed QSO also lands here and, unlike the others, does NOT expire
