@@ -517,6 +517,10 @@ static void add_header_row(lv_obj_t *parent)
     add_col(row, "Time",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
     add_col(row, "Sent",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
     add_col(row, "Rcvd",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    // Their Maidenhead grid. Same reason the Ref column was added: the search
+    // matches it, so it has to be visible - a column you can search and cannot
+    // see is a promise the screen does not keep.
+    add_col(row, "Grid",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
     // The park or summit THEY were activating (ADIF SIG_INFO). Added because the
     // search box offered to find it while the list never showed it - a column you
     // can search and cannot see is a promise the screen does not keep.
@@ -555,6 +559,8 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     adif_log_extract_field(line, "RST_RCVD", rst_rcvd, sizeof(rst_rcvd));
     char sig_info[20] = "";
     adif_log_extract_field(line, "SIG_INFO", sig_info, sizeof(sig_info));
+    char grid[12] = "";
+    adif_log_extract_field(line, "GRIDSQUARE", grid, sizeof(grid));
 
     // date is "YYYYMMDD", time_on is "HHMMSS" (or "HHMM") - slice down to
     // "MM-DD" / "HH:MM" for a compact column.
@@ -586,6 +592,9 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     add_col(row, hhmm,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, rst_sent,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, rst_rcvd,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    // Legitimately empty on plenty of contacts - a station answering with a
+    // report rather than a grid never sends one - so "-" like the reports.
+    add_col(row, grid[0] ? grid : "-",    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
     // Most QSOs are not park-to-park, so an empty cell is the normal case and
     // gets the same "-" the reports use rather than a blank that reads as a
     // rendering fault.
@@ -1090,7 +1099,7 @@ static void modal_build(void)
     // Names what it searches in the operator's words. "reference" was ours -
     // it means the POTA park or SOTA summit, and nobody had to guess that.
     lv_textarea_set_placeholder_text(s_search_ta,
-        "Search a callsign, country, band, mode, date or park/summit reference");
+        "Search a callsign, country, band, mode, date, grid or park/summit reference");
     lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
     lv_obj_set_width(s_search_ta, LV_PCT(100));
     lv_obj_set_style_text_font(s_search_ta, &lv_font_montserrat_24, 0);
