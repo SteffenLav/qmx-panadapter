@@ -101,6 +101,8 @@ static bool s_today_only = true;
 // rather than only in the browser - the screen he is actually sitting at.
 static lv_obj_t *s_search_ta, *s_search_kb;
 static char      s_query[24];        // uppercased; empty = show everything
+static bool      s_search_dirty;     // a re-render is owed - see search_ta_cb()
+static lv_timer_t *s_search_timer;
 
 // Panel geometry. The list cap SHRINKS while the keyboard is up, because a
 // search you cannot see the results of is not a search - see kb_show().
@@ -983,6 +985,31 @@ static void search_ta_cb(lv_event_t *e)
     for (; txt && txt[i] && i < sizeof(s_query) - 1; i++)
         s_query[i] = (char)toupper((unsigned char)txt[i]);
     s_query[i] = '\0';
+
+    /* ⛔ DO NOT re-render here. This runs inside LVGL's event dispatch for the
+     * textarea, and list_render() calls lv_obj_clean() - tearing down the whole
+     * row tree, hundreds of objects, while the event system is still walking
+     * its own bookkeeping for this very event.
+     *
+     * That crashed the device: taskLVGL, Load access fault at 36 minutes,
+     * MEPC in lv_event_mark_deleted() called from lv_obj_destructor(), with the
+     * log showing the viewer had just rendered "5 of 25" - i.e. mid-search. It
+     * is the same shape as the v1.10.8 drawer crash: do not reach into LVGL's
+     * internals from inside an event it has not finished dispatching.
+     *
+     * So the keystroke only records that a render is OWED, and the timer below
+     * does it from lv_timer_handler, outside any event. That also coalesces
+     * fast typing - "OZ1LAV" becomes one rebuild instead of six, which on a
+     * 200-row log is the difference between responsive and not. */
+    s_search_dirty = true;
+}
+
+/* Runs from lv_timer_handler, never from inside an event. */
+static void search_render_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_search_dirty || !s_open) return;
+    s_search_dirty = false;
     list_render();
 }
 
@@ -990,7 +1017,13 @@ static void filter_btn_cb(lv_event_t *e)
 {
     (void)e;
     s_today_only = !s_today_only;
-    list_render();
+    /* Deferred for the same reason the search box is - see search_ta_cb(). This
+       one predates the search and has never crashed, because a single tap is a
+       different point in the dispatch from a keystroke with the on-screen
+       keyboard mid-press. It goes through the same path anyway: the hazard is
+       the same shape, and having two rules for one operation is how the unsafe
+       one gets copied next time. */
+    s_search_dirty = true;
 }
 
 static void modal_build(void)
@@ -1205,6 +1238,10 @@ static void modal_build(void)
     lv_obj_center(close_lbl);
     ui_kbd_set_buttons(NULL, close_btn);   // physical keyboard Esc -> Close
 
+    /* 120 ms: fast enough to feel immediate while typing, slow enough that a
+     * quick word is one rebuild rather than one per letter. */
+    if (!s_search_timer) s_search_timer = lv_timer_create(search_render_cb, 120, NULL);
+
     // On the modal, not the panel: it has to be able to sit BELOW the panel
     // rather than inside it. Hidden until the search field is touched.
     s_search_kb = lv_keyboard_create(s_modal);
@@ -1299,6 +1336,7 @@ void adif_view_modal_show(void)
     // would silently hide records, and the box holding the reason for it is
     // easy to miss beside the title.
     s_query[0] = 0;
+    s_search_dirty = false;
     if (s_search_ta) lv_textarea_set_text(s_search_ta, "");
     kb_hide();
     // Open on the Today view (the POTA-activation use case) - but fall back
