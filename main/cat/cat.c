@@ -55,6 +55,9 @@ static bool s_audio_dumped = false;
 
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
+// Decoded-CW poll pacing - see the TB phase in poll_task().
+#define TB_POLL_MIN_US 500000
+static int64_t s_last_tb_us = 0;
 static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_message
 static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
@@ -568,6 +571,14 @@ static void diag_log_rx(const char *msg, size_t len)
     static char last_fa[16], last_md[8], last_fw[12];
     char  *slot    = NULL;
     size_t slot_sz = 0;
+    // TB is polled several times a second in CW and is EMPTY most of the time.
+    // Logging every one put ~2.3 lines/s into the ring for as long as the
+    // operator stays in CW - measured at 60 in 26 s on the bench - which buries
+    // a diagnostic download and rotates the 256 KB flash log far faster. An
+    // empty buffer is not an event; decoded TEXT always is, and is never
+    // dropped, because it is the whole point of the feature.
+    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B' &&
+        msg[3] == '0' && msg[4] == '0') return;   // TBt00; - nothing decoded
     if      (len >= 2 && msg[0] == 'F' && msg[1] == 'A') { slot = last_fa; slot_sz = sizeof(last_fa); }
     else if (len >= 2 && msg[0] == 'M' && msg[1] == 'D') { slot = last_md; slot_sz = sizeof(last_md); }
     else if (len >= 2 && msg[0] == 'F' && msg[1] == 'W') { slot = last_fw; slot_sz = sizeof(last_fw); }
@@ -1620,7 +1631,16 @@ static void poll_task(void *arg)
             case 1:  cmd = "MD;"; cmd_len = 3; break;
             case 2:  cmd = skip_fw ? NULL : "FW;"; cmd_len = 3; break;
             default: if (tune_poll) { cmd = "PC;SW;"; cmd_len = 6; }
-                     else           { cmd = "TB;";    cmd_len = 3; }
+                     else {
+                         // Rate-limited to TB_POLL_MIN_US rather than running at
+                         // the phase rate. The radio's 40-character buffer takes
+                         // about 24 s to fill at 20 WPM, so twice a second has a
+                         // ~48x margin - asking five times a second bought
+                         // nothing and put needless traffic on the CAT link.
+                         int64_t now_tb = esp_timer_get_time();
+                         if (now_tb - s_last_tb_us < TB_POLL_MIN_US) { cmd = NULL; }
+                         else { s_last_tb_us = now_tb; cmd = "TB;"; cmd_len = 3; }
+                     }
                      break;
         }
         if (cmd != NULL) {
