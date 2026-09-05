@@ -58,6 +58,13 @@ PATCHES = [
      "an oversized SDIO pending-byte delta livelocks the link: WiFi dies within "
      "minutes and every RPC times out forever (reboot is the only way out)"),
 
+    ("apply_esp_hosted_sdio_write_avail_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_WRITE_AVAIL_TOLERANT",
+     "sdio_is_write_buffer_available() gave the slave two back-to-back chances "
+     "and then REBOOTED the device - a deliberate restart, so no crash record, "
+     "and a warm reset with the radio attached wedges the QMX (#74)"),
+
     ("apply_esp_hosted_assert_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
      "QMX_PANADAPTER_ASSERT_TOLERANT_PATCH_MARKER",
