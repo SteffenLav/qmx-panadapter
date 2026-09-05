@@ -2039,6 +2039,40 @@ static esp_err_t adif_clear_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
+// 1 MB. The old 256 KB cap was arbitrary and reachable: the body is allocated
+// from PSRAM, and a log people are told to keep for years runs past 256 KB at
+// roughly 1200 QSOs.
+#define ADIF_IMPORT_MAX_BYTES (1024 * 1024)
+
+// The counts an import reply carries, in one place because two endpoints send
+// them (an uploaded file and the SD card's own mirror) and they must not drift.
+//
+// "added" alone is not enough to describe an import, and saying so is the whole
+// point: 0 added because everything was already logged and 0 added because
+// nothing could be read look identical to a caller and mean opposite things.
+// The page next door already learned this - the config import carries a comment
+// about a user erasing his unit over an "applied: 0" that meant a bad file.
+static void adif_import_add_counts(cJSON *root, const adif_import_result_t *ir, int added)
+{
+    cJSON_AddBoolToObject(root, "ok", added >= 0);
+    cJSON_AddNumberToObject(root, "added", added < 0 ? 0 : added);
+    cJSON_AddNumberToObject(root, "found", ir->found);
+    cJSON_AddNumberToObject(root, "duplicate", ir->duplicate);
+    cJSON_AddNumberToObject(root, "unreadable", ir->unreadable);
+    cJSON_AddNumberToObject(root, "total", adif_log_count());
+}
+
+// Advance the QRZ/eQSL/LoTW cursors past everything now in the log, so a
+// restored history is not re-sent to three logbooks as if it were new. Shared
+// by both restore endpoints for the same reason the counts are.
+static void adif_import_mark_uploaded(void)
+{
+    uint32_t n = (uint32_t)adif_log_count();
+    settings_set_qrz_uploaded_n(n);
+    settings_set_eqsl_uploaded_n(n);
+    settings_set_lotw_uploaded_n(n);
+}
+
 // POST /api/adif/import?mark_uploaded=1 — merge records from an uploaded
 // ADIF file (Randy N4OPI: a clean erase-and-reinstall left him with no way
 // to get his downloaded log's worked-station history back). Body is the raw
@@ -2053,21 +2087,39 @@ static esp_err_t adif_clear_handler(httpd_req_t *req)
 static esp_err_t adif_import_handler(httpd_req_t *req)
 {
     int total = req->content_len;
-    if (total <= 0 || total > 262144) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad/empty body (262144 byte max)");
-        return ESP_FAIL;
+    // 1 MB rather than the old 256 KB: the body is PSRAM-allocated (15 MB
+    // free) and 256 KB is only about 1200 \"SOs of a log meant to last years.
+    if (total <= 0 || total > ADIF_IMPORT_MAX_BYTES) {
+        // JSON, not httpd_resp_send_err(): the browser parses this reply as
+        // JSON either way, so the HTML error page reached the user as a raw
+        // "SyntaxError" instead of a sentence saying the file was too big.
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req,
+            "{\"ok\":false,\"error\":\"That file is too big to import (1 MB maximum).\"}");
     }
     char *body = heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!body) return httpd_resp_send_500(req);
     int got = 0;
     while (got < total) {
         int r = httpd_req_recv(req, body + got, total - got);
-        if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed"); return ESP_FAIL; }
+        // A socket timeout mid-body means a slow link, not a failed upload.
+        // This board's WiFi produces exactly that, and treating it as fatal
+        // threw away a whole 90 KB restore on one late segment.
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) {
+            free(body);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "application/json");
+            return httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"The upload did not finish - try again.\"}");
+        }
         got += r;
     }
     body[got] = '\0';
 
-    int added = adif_log_import(body);
+    adif_import_result_t ir;
+    int added = adif_log_import_ex(body, &ir);
     free(body);
 
     char q[16] = "";
@@ -2077,18 +2129,11 @@ static esp_err_t adif_import_handler(httpd_req_t *req)
         if (httpd_query_key_value(q, "mark_uploaded", v, sizeof(v)) == ESP_OK)
             mark_uploaded = (v[0] != '0');
     }
-    if (added > 0 && mark_uploaded) {
-        uint32_t n = (uint32_t)adif_log_count();
-        settings_set_qrz_uploaded_n(n);
-        settings_set_eqsl_uploaded_n(n);
-        settings_set_lotw_uploaded_n(n);
-    }
+    if (added > 0 && mark_uploaded) adif_import_mark_uploaded();
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return httpd_resp_send_500(req);
-    cJSON_AddNumberToObject(root, "added", added < 0 ? 0 : added);
-    cJSON_AddBoolToObject(root, "ok", added >= 0);
-    cJSON_AddNumberToObject(root, "total", adif_log_count());
+    adif_import_add_counts(root, &ir, added);
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!out) return httpd_resp_send_500(req);
@@ -2275,6 +2320,54 @@ static const httpd_uri_t uri_adif_get = {
 static const httpd_uri_t uri_adif_clear = {
     .uri = "/api/adif/clear", .method = HTTP_POST, .handler = adif_clear_handler,
 };
+// POST /api/adif/import_sd - restore the QSO log from the card's own mirror.
+//
+// The auto-archive has always written qso.adi TO the card and never read it
+// back, so a log lost to a clean reinstall was recoverable only by moving the
+// file to a PC and uploading it through the browser - and only by someone who
+// knew the file was on the card at all. Gyula HA3HZ had 432 QSOs mirrored on
+// the card, inside the device, and no way to reach them; he assumed the
+// firmware would find them, which is a fair thing to assume of a backup.
+//
+// Merge semantics, so this is safe to press twice: contacts already logged are
+// skipped. mark_uploaded defaults ON for the same reason it does on the upload
+// path - a restored log is almost always one that was already sent onward.
+static esp_err_t adif_import_sd_handler(httpd_req_t *req)
+{
+    char q[16] = "";
+    bool mark_uploaded = true;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[4];
+        if (httpd_query_key_value(q, "mark_uploaded", v, sizeof(v)) == ESP_OK)
+            mark_uploaded = (v[0] != '0');
+    }
+
+    adif_import_result_t ir;
+    int added = adif_log_import_from_sd(&ir);
+    if (added > 0 && mark_uploaded) adif_import_mark_uploaded();
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    adif_import_add_counts(root, &ir, added);
+    // A card that could not be read is a different answer from a card whose log
+    // held nothing new, and the page has to be able to tell them apart.
+    if (added < 0 && ir.found == 0)
+        cJSON_AddStringToObject(root, "error",
+            "No QSO log found on the SD card. Check a card is inserted and that "
+            "it holds qmx-panadapter/qso.adi.");
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_adif_import_sd = {
+    .uri = "/api/adif/import_sd", .method = HTTP_POST, .handler = adif_import_sd_handler,
+};
+
 static const httpd_uri_t uri_adif_import = {
     .uri = "/api/adif/import", .method = HTTP_POST, .handler = adif_import_handler,
 };
@@ -4732,7 +4825,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 51;   // 42 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 51;   // 43 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -4765,6 +4858,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_adif_import);
+    httpd_register_uri_handler(s_server, &uri_adif_import_sd);
     httpd_register_uri_handler(s_server, &uri_adif_delete);
     httpd_register_uri_handler(s_server, &uri_adif_edit);
     httpd_register_uri_handler(s_server, &uri_qrz_key);

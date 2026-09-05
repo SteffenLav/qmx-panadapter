@@ -14,6 +14,8 @@
 #include "ui.h"
 #include "adif/adif_log.h"
 #include "util/dxcc.h"
+#include "storage/sd_archive.h"   // "Restore from SD" - card presence + the read
+#include "util/psram_task.h"      // the restore runs OFF taskLVGL; see restore_task()
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,6 +143,90 @@ static void del_bar_show(void)
 }
 
 static void list_render(void);   // fwd (sel_reset re-renders)
+
+// ---------------------------------------------------------------------------
+// "Restore from SD" - put the log back from the card's own mirror.
+//
+// The auto-archive has always copied qso.adi ON to the card and never back off
+// it, so a log lost to a clean reinstall needed a computer, a browser, and
+// knowing the file was on the card at all. Gyula HA3HZ had 432 QSOs mirrored on
+// the card, inside the device, out of reach - and at a POTA site there is no
+// computer to reach them with either. A backup you cannot restore from the
+// device is not a backup.
+//
+// ⛔ It does NOT run on taskLVGL. sd_archive_read_adif() takes the archive lock
+// (up to 5 s), reads up to ~100 KB over SPI, and the import then rewrites
+// SPIFFS - seconds of work. The QMX terminal already learned this the hard way:
+// a 2.4 s blocking open froze taskLVGL. So the button starts a worker and a
+// 200 ms poll timer re-renders the list once it has finished.
+typedef enum { SDR_IDLE = 0, SDR_RUNNING, SDR_DONE } sdr_state_t;
+static volatile sdr_state_t s_sdr_state = SDR_IDLE;
+static adif_import_result_t s_sdr_result;
+static volatile int         s_sdr_added;
+static lv_timer_t          *s_sdr_timer;
+
+static void restore_task(void *arg)
+{
+    (void)arg;
+    adif_import_result_t r;
+    int added = adif_log_import_from_sd(&r);
+    s_sdr_result = r;
+    s_sdr_added  = added;
+    s_sdr_state  = SDR_DONE;
+    psram_task_park();   // reapable task: never vTaskDelete (leaks the stack)
+}
+
+// Runs on taskLVGL, so it may touch LVGL and the list.
+static void restore_poll_cb(lv_timer_t *t)
+{
+    if (s_sdr_state != SDR_DONE) return;
+
+    const adif_import_result_t *r = &s_sdr_result;
+    char msg[160];
+    if (s_sdr_added < 0 && r->found == 0) {
+        snprintf(msg, sizeof(msg), "No QSO log found on the SD card");
+    } else if (s_sdr_added < 0) {
+        snprintf(msg, sizeof(msg), "Restore failed - the log could not be written");
+    } else if (r->added) {
+        // Say what happened to all of them, not just the ones that landed: an
+        // import reporting only "added" cannot tell "already logged" from
+        // "unreadable", and reporting the first when it was the second is a
+        // false statement about someone's log.
+        snprintf(msg, sizeof(msg), "Restored %d QSO%s from SD (%d already logged)",
+                 r->added, r->added == 1 ? "" : "s", r->duplicate);
+    } else if (r->found) {
+        snprintf(msg, sizeof(msg), "Nothing new - all %d already in the log", r->duplicate);
+    } else {
+        snprintf(msg, sizeof(msg), "No contacts found in the card's log file");
+    }
+    ui_toast(msg);
+    ESP_LOGI(TAG, "SD restore: %s", msg);
+
+    s_sdr_state = SDR_IDLE;
+    lv_timer_del(t);
+    s_sdr_timer = NULL;
+    list_render();   // the log just changed under the open list
+}
+
+static void restore_sd_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sdr_state != SDR_IDLE) return;   // one at a time
+    if (!sd_archive_is_mounted()) { ui_toast("No SD card in the slot"); return; }
+
+    // No confirm gesture, deliberately, and unlike "Delete all" next to it:
+    // this only ever ADDS contacts, and one already in the log is skipped - so
+    // pressing it twice, or by accident, cannot cost anything.
+    s_sdr_state = SDR_RUNNING;
+    ui_toast("Reading the log from the SD card...");
+    if (!s_sdr_timer) s_sdr_timer = lv_timer_create(restore_poll_cb, 200, NULL);
+    if (!psram_task_create_reapable(restore_task, "adif_sdr", 4096, NULL,
+                                    tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
+        s_sdr_state = SDR_IDLE;
+        ui_toast("Could not start the restore");
+    }
+}
+
 
 static void sel_reset(bool rerender)
 {
@@ -757,6 +843,25 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_lbl_del_all, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_lbl_del_all, &lv_font_montserrat_24, 0);
     lv_obj_center(s_lbl_del_all);
+
+    // "Restore from SD", between the two. Neutral colour on purpose: the note
+    // below says red in this panel means exactly one thing, and this is the
+    // opposite of that - it can only add contacts back. Shown only with a card
+    // in, since with no card the button could do nothing but explain itself.
+    if (sd_archive_is_mounted()) {
+        lv_obj_t *sd_btn = lv_btn_create(bot);
+        lv_obj_set_size(sd_btn, 260, 72);
+        lv_obj_set_style_bg_color(sd_btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(sd_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(sd_btn, 2, 0);
+        lv_obj_set_style_radius(sd_btn, 8, 0);
+        lv_obj_add_event_cb(sd_btn, restore_sd_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *sd_lbl = lv_label_create(sd_btn);
+        lv_label_set_text(sd_lbl, "Restore from SD");
+        lv_obj_set_style_text_color(sd_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(sd_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(sd_lbl);
+    }
 
     // ⭐ Close is NEUTRAL here, deliberately breaking the house Cancel colour.
     //

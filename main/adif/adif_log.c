@@ -952,6 +952,16 @@ static const char *find_ci(const char *hay, const char *hay_end, const char *nee
 // the overlapping records rather than a second copy of them.
 int adif_log_import(const char *adif_text)
 {
+    adif_import_result_t discard;
+    return adif_log_import_ex(adif_text, &discard);
+}
+
+int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+
     if (!s_mounted || !adif_text) return -1;
 
     size_t total_len = strlen(adif_text);
@@ -1011,7 +1021,15 @@ int adif_log_import(const char *adif_text)
         const char *p = cursor;
         while (p < eor && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
         size_t blen = (size_t)(eor - p);
-        if (blen == 0 || blen >= sizeof(norm) - 8) { cursor = eor + 5; continue; }
+        res->found++;
+        if (blen == 0 || blen >= sizeof(norm) - 8) {
+            // Too long to hold as one record. Counted, never silently dropped:
+            // a skipped record reported as "already in the log" is a false
+            // statement about someone's log.
+            if (blen) res->unreadable++;
+            cursor = eor + 5;
+            continue;
+        }
         size_t w = 0;
         for (size_t i = 0; i < blen; i++) {
             char c = p[i];
@@ -1020,10 +1038,10 @@ int adif_log_import(const char *adif_text)
         norm[w] = '\0';
         cursor = eor + 5;   // past "<eor>"
 
-        if (!strchr(norm, '<')) continue;   // not a real record - nothing tagged
+        if (!strchr(norm, '<')) { res->unreadable++; continue; }   // nothing tagged
 
         char call[ADIF_CALL_MAX], date[9], time_on[7], band[ADIF_BAND_MAX], freq_str[16];
-        if (!adif_log_extract_field(norm, "CALL", call, sizeof(call))) continue;  // no call, nothing to key on
+        if (!adif_log_extract_field(norm, "CALL", call, sizeof(call))) { res->unreadable++; continue; }  // no call to key on
         if (!adif_log_extract_field(norm, "QSO_DATE", date, sizeof(date))) date[0] = '\0';
         if (!adif_log_extract_field(norm, "TIME_ON", time_on, sizeof(time_on))) time_on[0] = '\0';
 
@@ -1033,7 +1051,7 @@ int adif_log_import(const char *adif_text)
                 strcmp(existing[i].date, date) == 0 &&
                 strcmp(existing[i].time, time_on) == 0) { dup = true; break; }
         }
-        if (dup) continue;
+        if (dup) { res->duplicate++; continue; }
 
         fprintf(f, "%s<EOR>\n", norm);
 
@@ -1046,6 +1064,7 @@ int adif_log_import(const char *adif_text)
         }
         cache_add(call, band);
         added++;
+        res->added++;
 
         // Also guard against a duplicate appearing TWICE within this same
         // import (a file concatenated from two exports, say), not just
@@ -1078,7 +1097,26 @@ int adif_log_import(const char *adif_text)
         xSemaphoreGive(s_lock);
         sd_archive_mark_adif_dirty();
     }
-    ESP_LOGI(TAG, "ADIF import: %d record(s) added, log now has %d", added, s_count);
+    ESP_LOGI(TAG, "ADIF import: %d found, %d added, %d duplicate, %d unreadable; log now has %d",
+             res->found, res->added, res->duplicate, res->unreadable, s_count);
+    return added;
+}
+
+// Restore from the card's own mirror. All the ADIF work is the existing
+// import; the only new part is getting the bytes off the card, which
+// sd_archive owns (it holds the mount, the paths and the lock).
+int adif_log_import_from_sd(adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+
+    size_t len = 0;
+    char *text = sd_archive_read_adif(&len);
+    if (!text) return -1;   // no card, no file, or the card failed - res stays zeroed
+
+    int added = adif_log_import_ex(text, res);
+    free(text);
     return added;
 }
 

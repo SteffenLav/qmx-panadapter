@@ -101,6 +101,37 @@ bool adif_log_extract_field(const char *line, const char *field,
 // import), or -1 if the file could not be written at all.
 int adif_log_import(const char *adif_text);
 
+// What an import actually did. "added" alone cannot tell a caller whether an
+// import of 0 means "every one of these was already logged" or "not one of them
+// could be read", and reporting the first when the second happened is how a
+// user ends up trusting a restore that never restored anything. The config
+// import next door already carries a comment about exactly this mistake.
+typedef struct {
+    int found;      // blocks terminated by <EOR> seen in the input
+    int added;      // written to the log
+    int duplicate;  // already present (same CALL+QSO_DATE+TIME_ON)
+    int unreadable; // no CALL, or too long for one record - could not be used
+} adif_import_result_t;
+
+// As adif_log_import(), but also reports what happened to every record. *res is
+// zeroed first and is filled in even when the return value is -1.
+int adif_log_import_ex(const char *adif_text, adif_import_result_t *res);
+
+// Restore the QSO log from the copy the SD auto-archive already keeps on the
+// card (/sdcard/qmx-panadapter/qso.adi). Same merge semantics as
+// adif_log_import() - existing contacts are skipped, so running it twice is
+// harmless - so this is a safe thing to offer as a plain button.
+//
+// This exists because the backup was previously one-way. Gyula HA3HZ lost his
+// log to a clean reinstall with 432 QSOs mirrored on the card and no way to
+// reach them without a PC; recovering it needed a file transfer, a browser and
+// the knowledge that the file was there. A backup you cannot restore from the
+// device is not a backup.
+//
+// Returns records added, -1 if the card could not be read (no card, no file, a
+// read error), or -1 with res->found > 0 if the log could not be written.
+int adif_log_import_from_sd(adif_import_result_t *res);
+
 // The ADIF BAND string this module would log for a frequency ("20M", "40M"...),
 // or "" if it falls outside every known band. Exposed so callers comparing two
 // frequencies "same band?" use the same table the log itself is written from -

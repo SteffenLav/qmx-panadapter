@@ -978,6 +978,71 @@ void sd_archive_mark_lotw_dirty(void)   { s_lotw_dirty = true; }
 
 const char *sd_archive_log_path(void)   { return SD_LOG_PATH; }
 
+// Read the mirrored ADIF log off the card into a PSRAM buffer the caller frees.
+//
+// This is the other half of a backup: the archive has always been able to put
+// qso.adi ONTO the card and never to bring it back, so a log wiped by a clean
+// reinstall was recoverable only via a PC, the web UI, and knowing the file was
+// there at all. Gyula HA3HZ had 432 QSOs sitting on the card, inside the
+// device, and no way to reach them - he assumed the firmware would notice them
+// ("the application doesn't detect backwards"), which is a fair thing to assume
+// of something that calls itself a backup.
+//
+// SD I/O lives here rather than in adif_log.c because this file already owns
+// the mount, the paths and the lock. The caller does the ADIF parsing.
+//
+// Same during-WiFi discipline as every other bulk SD read on this board (the
+// reader's offline save, the log download, the file browser): the spectrum
+// stream is paused for the duration, because SD traffic and the C6's SDIO link
+// share one physical peripheral. Returns NULL with *out_len untouched if there
+// is no card, no file, or no memory.
+char *sd_archive_read_adif(size_t *out_len)
+{
+    if (!sd_archive_is_mounted()) {
+        ESP_LOGW(TAG, "ADIF restore: no card mounted");
+        return NULL;
+    }
+    if (!sd_archive_lock(5000)) {
+        ESP_LOGW(TAG, "ADIF restore: card busy");
+        return NULL;
+    }
+
+    bool ws_was_paused = webserver_ws_is_paused();
+    if (!ws_was_paused) webserver_ws_set_paused(true);
+
+    char       *buf = NULL;
+    struct stat st;
+    if (stat(SD_ADIF_PATH, &st) != 0 || st.st_size <= 0) {
+        ESP_LOGW(TAG, "ADIF restore: %s not found on the card", SD_ADIF_PATH);
+    } else {
+        size_t len = (size_t)st.st_size;
+        buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buf) {
+            ESP_LOGE(TAG, "ADIF restore: out of memory for %u bytes", (unsigned)len);
+        } else {
+            FILE *f = fopen(SD_ADIF_PATH, "r");
+            size_t got = f ? fread(buf, 1, len, f) : 0;
+            if (f) fclose(f);
+            // A short read is a failing card, not a short file - do not hand
+            // back a truncated log and let it import as if it were complete.
+            if (got != len) {
+                ESP_LOGE(TAG, "ADIF restore: read %u of %u bytes - card error",
+                         (unsigned)got, (unsigned)len);
+                free(buf);
+                buf = NULL;
+            } else {
+                buf[len] = ' ';
+                if (out_len) *out_len = len;
+                ESP_LOGI(TAG, "ADIF restore: read %u bytes from the card", (unsigned)len);
+            }
+        }
+    }
+
+    if (!ws_was_paused) webserver_ws_set_paused(false);
+    sd_archive_unlock();
+    return buf;
+}
+
 bool sd_archive_lock(uint32_t timeout_ms)
 {
     if (!s_sd_mutex) return false;

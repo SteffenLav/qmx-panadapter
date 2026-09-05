@@ -1150,6 +1150,7 @@
         <a href="/api/adif" download="qso.adi" id="adif-link">ADIF download &#8595;</a>
         <a href="/api/adif?date=today" class="subrow" id="adif-today-link" title="Just today's contacts, in a file named for the date - for filing each day's log separately">&#8627; Today only, dated file</a>
         <a href="#" id="adif-restore-link" title="Restore worked-station history from a previously downloaded ADIF file (or any logger's export) - merges in, skipping contacts already in the log. Handy after an erase-and-reinstall.">ADIF restore &#8593;</a>
+        <a href="#" id="adif-restore-sd-link" class="subrow" title="Restore straight from the copy already on the microSD card - no computer needed. Contacts already in the log are skipped, so this is safe to press twice.">&#8627; Restore from SD card</a>
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
         <a href="#" id="qrz-creds-link" class="subrow" style="display:none" title="Replace the stored QRZ Logbook API key - after a new key is issued, or if it was typed wrongly the first time.">&#8627; Change QRZ API key</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
@@ -1437,6 +1438,16 @@
   <div id="adifv-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
     <div style="max-width:860px; margin:5vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px;">
       <h3 id="adifv-title" style="margin:0 0 10px; color:#ffa040;">QSO log</h3>
+      <!-- Gyula HA3HZ: "I like the LOG to tell me if there was a connection and
+           on which band and mode." The greyed-out callsign in the decode list
+           answers that only when the station happens to be on the air right
+           now; this is the same question asked whenever he likes. -->
+      <div style="margin:0 0 10px;">
+        <input type="search" id="adifv-search" placeholder="Search call, grid, band, mode, date, reference…"
+               autocomplete="off" spellcheck="false"
+               style="width:100%; box-sizing:border-box; padding:7px 10px; font-size:14px;
+                      background:#0e0e0e; color:#ddd; border:1px solid #494949; border-radius:6px;">
+      </div>
       <div style="max-height:62vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <table id="adifv-table">
           <thead><tr id="adifv-head"></tr></thead>
@@ -1445,6 +1456,8 @@
       </div>
       <div style="margin-top:14px; overflow:auto;">
         <button id="adifv-delall" class="bot-btn" style="cursor:pointer; float:left; border-color:#7a2020; color:#ff8080" title="Delete ALL logged QSOs from the Tab5 - no undo">Delete all</button>
+        <!-- Gyula HA3HZ: "it would be nice if it was possible to select data rows and save them". With the search box above, ticking is how you turn a question into a file - one park, one day, one band. -->
+        <button id="adifv-export" class="btn-neutral" style="float:left; margin-left:10px" disabled title="Save the ticked contacts as an ADIF file on this computer">Export selected</button>
         <button id="adifv-close" class="btn-neutral" style="float:right">Close</button>
       </div>
     </div>
@@ -2315,6 +2328,53 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   });
 })();
 
+/* Turn an import reply into a sentence that is true.
+   "added" on its own cannot distinguish "all of these were already logged" from
+   "not one of them could be read", and the old message asserted the first
+   whenever added was 0 - so a restore that imported nothing told the user their
+   log was already complete. Report what the device actually counted. */
+function adifImportMessage(j) {
+  if (!j.ok)
+    return j.error || "The log could not be written - the storage may be full.";
+  const bits = [];
+  if (j.added) bits.push("Restored " + j.added + " contact" + (j.added === 1 ? "" : "s") + ".");
+  if (j.duplicate) bits.push(j.duplicate + " already in the log.");
+  if (j.unreadable) bits.push(j.unreadable + " could not be read.");
+  if (!j.found) bits.push("No contacts were found in that file at all - check it is an ADIF log.");
+  else if (!j.added && !j.unreadable) bits.push("Nothing new - every contact was already in the log.");
+  bits.push("The log now holds " + j.total + ".");
+  return bits.join("\n");
+}
+
+/* Restore from the card's own mirror. The auto-archive has always copied the
+   log ON to the card and never back off it, so a log lost to a clean reinstall
+   needed a computer, a browser and the knowledge that the file was there.
+   Gyula HA3HZ had 432 QSOs on the card, in the device, out of reach. */
+(function () {
+  const link = document.getElementById("adif-restore-sd-link");
+  if (!link) return;
+  link.addEventListener("click", async function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm("Restore the QSO log from the microSD card?\n\n" +
+                 "Contacts already in the log are skipped, so nothing is duplicated " +
+                 "and nothing already logged is lost."))
+      return;
+    const prev = link.textContent;
+    link.textContent = "\u21b3 Restoring \u2026";
+    pauseWs();
+    try {
+      const r = await fetch("/api/adif/import_sd", { method: "POST" });
+      alert(adifImportMessage(await r.json()));
+    } catch (err) {
+      alert("Restore from SD failed: " + err);
+    } finally {
+      link.textContent = prev;
+      resumeWs();
+    }
+  });
+})();
+
 /* ADIF restore: pick a previously downloaded (or any logger's) ADIF file and
    POST it to /api/adif/import. Merges by CALL+QSO_DATE+TIME_ON - re-picking
    the same file twice, or one that overlaps what is already logged, adds
@@ -2340,23 +2400,18 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       "upload pass sends them.");
     const prev = link.textContent;
     link.textContent = "ADIF …";
+    pauseWs();   // same courtesy every other fetch here pays
     try {
       const text = await f.text();
       const r = await fetch("/api/adif/import?mark_uploaded=" + (markUploaded ? "1" : "0"),
         { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
-      const j = await r.json();
-      if (!j.ok) {
-        alert("ADIF restore failed - the log could not be written (storage full?).");
-      } else if (j.added === 0) {
-        alert("Nothing new to restore - every contact in that file is already in the log.");
-      } else {
-        alert("Restored " + j.added + " contact(s). Log now has " + j.total + " total.");
-      }
+      alert(adifImportMessage(await r.json()));
     } catch (err) {
       alert("ADIF restore failed: " + err);
     } finally {
       link.textContent = prev;
       file.value = "";
+      resumeWs();
     }
   });
 })();
@@ -2491,13 +2546,22 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   const NUMERIC = { FREQ: 1, RST_SENT: 1, RST_RCVD: 1 };
 
   let recs = [];
+  let query = "";
+  /* Ticked rows, keyed by the record's own index rather than its row position,
+     so a selection survives searching, sorting and reloading. */
+  let picked = new Set();
   /* Click a column header to sort by it (click again to reverse); no sort =
      newest first. Sorting by Date groups a POTA activation's QSOs together -
      the answer to "give me just today" without a filtered download. */
   let sortCol = null, sortAsc = true;
 
   function headHtml() {
-    return HDRS.map((h, i) => {
+    /* The tick-all box acts on what is CURRENTLY SHOWN, not on the whole log -
+       that is what pairs it with the search: find the day, or the park, or the
+       band, then tick the column and export exactly that. */
+    return "<th style='width:1%'><input type='checkbox' id='adifv-all' " +
+           "title='Tick every contact currently shown'></th>" +
+           HDRS.map((h, i) => {
       const k = KEYS[i];
       const arrow = (sortCol === k) ? (sortAsc ? " ▲" : " ▼") : "";
       return "<th data-col='" + k + "' style='cursor:pointer' title='Sort by " + h + "'>" + h + arrow + "</th>";
@@ -2529,19 +2593,43 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       let m;
       while ((m = re.exec(p)) !== null)
         rec[m[1].toUpperCase()] = p.substr(re.lastIndex, parseInt(m[2], 10));
+      /* Keep the record's ORIGINAL text. An export re-serialised from the
+         fields this page parses would silently drop every field it does not
+         display - CONTEST_ID, MY_SIG, STATION_CALLSIGN - and the file would
+         look right while being worth less than the log it came from. */
+      rec._raw = p.trim();
       if (rec.CALL) out.push(rec);
     }
     return out;
   }
 
+  /* Match against the fields that identify a contact, so one box answers all
+     the questions worth asking of a log: a callsign, a band, a mode, a date, a
+     grid, a park reference. Space-separated terms must ALL match, which is what
+     makes "ha3 20m" mean what it looks like. */
+  function matches(r) {
+    if (!query) return true;
+    const hay = [r.CALL, r.SUBMODE || r.MODE, r.BAND, r.FREQ, r.QSO_DATE,
+                 r.TIME_ON, r.GRIDSQUARE, r.SIG_INFO, r.SIG]
+                .filter(Boolean).join(" ").toUpperCase();
+    return query.split(/\s+/).every(t => hay.indexOf(t) >= 0);
+  }
+
   function render() {
-    title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s");
     head.innerHTML = headHtml();
+    const shown = recs.filter(matches);
+    title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s") +
+      (query ? "  ·  " + shown.length + " matching" : "");
     if (!recs.length) {
-      body.innerHTML = "<tr><td colspan='11' style='color:#888'>No QSOs logged</td></tr>";
+      body.innerHTML = "<tr><td colspan='12' style='color:#888'>No QSOs logged</td></tr>";
       return;
     }
-    let order = recs.map((r, k) => ({ r, k }));
+    if (!shown.length) {
+      body.innerHTML = "<tr><td colspan='12' style='color:#888'>Nothing in the log matches " +
+                       esc(query) + " — so this one has not been worked.</td></tr>";
+      return;
+    }
+    let order = shown.map(r => ({ r, k: recs.indexOf(r) }));
     if (sortCol) {
       order.sort((a, b) => {
         let c;
@@ -2563,7 +2651,8 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       /* FT4 is stored as ADIF requires it - MODE=MFSK with SUBMODE=FT4 - so
          show the submode: "MFSK" names a family of modes, not the one worked. */
       const mode = r.SUBMODE || r.MODE || "FT8";
-      rows.push("<tr><td>" + esc(r.CALL) + "</td><td>" + esc(mode) +
+      rows.push("<tr><td><input type='checkbox' class='pick' data-k='" + k + "'" +
+        (picked.has(r._idx) ? " checked" : "") + "></td><td>" + esc(r.CALL) + "</td><td>" + esc(mode) +
         "</td><td>" + esc(r.BAND || "--") + "</td><td>" + freq +
         "</td><td>" + date + "</td><td>" + time +
         "</td><td class='rstedit' data-k='" + k + "' data-f='RST_SENT'" +
@@ -2579,16 +2668,33 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
         "<td class='del' data-k='" + k + "' title='Delete this QSO'>&#10005;</td></tr>");
     }
     body.innerHTML = rows.join("");
+    syncPickUi(shown);
+  }
+
+  /* The button says how many, and is dead at zero - an "Export" that produces
+     an empty file is worse than one that will not press. */
+  function syncPickUi(shown) {
+    const btn = document.getElementById("adifv-export");
+    if (btn) {
+      btn.disabled = picked.size === 0;
+      btn.textContent = picked.size ? "Export " + picked.size + " selected" : "Export selected";
+    }
+    const all = document.getElementById("adifv-all");
+    if (all && shown) {
+      const on = shown.filter(r => picked.has(r._idx)).length;
+      all.checked = shown.length > 0 && on === shown.length;
+      all.indeterminate = on > 0 && on < shown.length;   // some, but not all, of what is shown
+    }
   }
 
   async function load() {
-    body.innerHTML = "<tr><td colspan='11' style='color:#888'>Loading …</td></tr>";
+    body.innerHTML = "<tr><td colspan='12' style='color:#888'>Loading …</td></tr>";
     try {
       const r = await fetch("/api/adif");
       if (!r.ok) throw new Error("HTTP " + r.status);
       recs = parseAdif(await r.text());
     } catch (err) {
-      body.innerHTML = "<tr><td colspan='11' style='color:#ff6055'>Load failed: " +
+      body.innerHTML = "<tr><td colspan='12' style='color:#ff6055'>Load failed: " +
                        esc(err.message) + "</td></tr>";
       return;
     }
@@ -2631,6 +2737,15 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   }
 
   body.addEventListener("click", async (e) => {
+    const pick = e.target.closest("input.pick");
+    if (pick) {
+      const r = recs[+pick.dataset.k];
+      if (r) {
+        if (pick.checked) picked.add(r._idx); else picked.delete(r._idx);
+        syncPickUi(recs.filter(matches));
+      }
+      return;   // a tick is not a click on the row underneath it
+    }
     /* Park-to-Park / Summit-to-Summit: the reference the OTHER station was
        activating. Only the reference is typed - the device derives the
        programme (POTA/SOTA/WWFF) from its shape, so the two can never end up
@@ -2699,6 +2814,42 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     load();
   });
 
+  head.addEventListener("change", (e) => {
+    if (e.target.id !== "adifv-all") return;
+    const shown = recs.filter(matches);
+    if (e.target.checked) shown.forEach(r => picked.add(r._idx));
+    else                  shown.forEach(r => picked.delete(r._idx));
+    render();
+  });
+
+  /* Build the file in the browser from the records' own text. No device work:
+     the log has already been fetched, and the Tab5 has better things to do. */
+  const EXPORT_BTN = document.getElementById("adifv-export");
+  if (EXPORT_BTN) EXPORT_BTN.addEventListener("click", () => {
+    const chosen = recs.filter(r => picked.has(r._idx));
+    if (!chosen.length) return;
+    const now = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    const stamp = now.getUTCFullYear() + pad(now.getUTCMonth() + 1) + pad(now.getUTCDate());
+    const body = "QMX-Panadapter selected QSOs" + String.fromCharCode(10) +
+      "<ADIF_VER:5>3.1.4 <PROGRAMID:13>QMX-Panadapter <EOH>" + String.fromCharCode(10) +
+      chosen.map(r => r._raw + "<EOR>").join(String.fromCharCode(10)) + String.fromCharCode(10);
+    const url = URL.createObjectURL(new Blob([body], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "qso-selected-" + chosen.length + "-" + stamp + ".adi";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  });
+
+  const search = document.getElementById("adifv-search");
+  if (search) search.addEventListener("input", () => {
+    query = search.value.trim().toUpperCase();
+    render();
+  });
+
   document.getElementById("adifv-close").addEventListener("click",
     () => { modal.style.display = "none"; });
   modal.addEventListener("click",
@@ -2707,6 +2858,9 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   document.getElementById("adif-view-link").addEventListener("click", (e) => {
     e.preventDefault();
     modal.style.display = "";
+    query = "";
+    picked.clear();
+    if (search) search.value = "";
     load();
   });
 })();
