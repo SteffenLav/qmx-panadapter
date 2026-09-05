@@ -36,6 +36,7 @@ static const char *TAG = "sd_arch";
 #define SD_LOG_PATH      "/sdcard/qmx-panadapter/qmx-log.txt"
 #define SD_LOG_PATH_1    "/sdcard/qmx-panadapter/qmx-log.1.txt"
 #define SD_ADIF_PATH     "/sdcard/qmx-panadapter/qso.adi"
+#define SD_ADIF_PREV     "/sdcard/qmx-panadapter/qso.prev.adi"
 #define SD_CONFIG_PATH   "/sdcard/qmx-panadapter/qmx-config.txt"
 #define SD_LOTW_CERT_PATH "/sdcard/qmx-panadapter/lotw_cert.b64"
 #define SD_LOTW_KEY_PATH  "/sdcard/qmx-panadapter/lotw_key.b64"
@@ -140,7 +141,11 @@ static void write_readme(void)
         "\r\n"
         "Files in this folder (qmx-panadapter/):\r\n"
         "  qso.adi         Your QSO log (ADIF). Import into any logger, or\r\n"
-        "                  upload to QRZ / eQSL / LoTW.\r\n"
+        "                  upload to QRZ / eQSL / LoTW. Restore it onto a Tab5\r\n"
+        "                  with 'Restore from SD' in the log window.\r\n"
+        "  qso.prev.adi    The copy from just before the log last got SMALLER\r\n"
+        "                  (a deletion, a reset). Kept so a mistake is not\r\n"
+        "                  mirrored away; only replaced by the next shrink.\r\n"
         "  qmx-config.txt  All settings + memory channels (editable INI text).\r\n"
         "                  Restore a device via the web UI's 'Config' upload.\r\n"
         "  lotw_cert.b64   Your LoTW (TQSL) signing certificate and\r\n"
@@ -612,6 +617,48 @@ static bool try_mount(void)
 
 // ---- task ------------------------------------------------------------------
 
+// Before the mirror overwrites qso.adi, keep the copy that is there as
+// qso.prev.adi - but ONLY when the log has shrunk.
+//
+// The card is a mirror of the present, and until now that was all it was: the
+// boot mirror pushes whatever the device holds over whatever the card holds, so
+// a deletion that survived one reboot was permanent on both. It protected
+// against the case it was built for (a wipe-and-reinstall, where nothing
+// reboots in between) and against nothing else. Found on the bench 2026-09-05
+// when a reflash synced a card down from 25 records to 23 and the two deleted
+// records existed nowhere afterwards.
+//
+// Rotating on EVERY write would be worse than useless: the ADIF mirror fires
+// once per logged QSO, so after two more contacts the previous copy would be
+// one QSO old and the deleted ones gone from both files. Only a SHRINK is the
+// dangerous direction, and only a shrink rotates - so qso.prev.adi holds the
+// last larger copy for as long as it takes to notice.
+//
+// Size, not a record count, is the test: records are only ever appended, so
+// fewer bytes means fewer records. An edit that clears a report shrinks the
+// file by a few bytes and will rotate too - harmless, and erring towards
+// keeping a copy is the right way to be wrong here.
+//
+// Never blocks the mirror. If the rotation cannot be done the mirror still
+// runs: a stale card helps nobody either, and the failure is logged.
+static void keep_previous_adif(void)
+{
+    struct stat cur, incoming;
+    if (stat(SD_ADIF_PATH, &cur) != 0 || cur.st_size <= 0) return;   // nothing to keep
+    const char *src = adif_log_file_path();
+    if (!src || stat(src, &incoming) != 0) return;
+    if (incoming.st_size >= cur.st_size) return;   // growing or unchanged: normal logging
+
+    unlink(SD_ADIF_PREV);   // FatFs rename will not replace an existing file
+    if (rename(SD_ADIF_PATH, SD_ADIF_PREV) == 0) {
+        ESP_LOGW(TAG, "QSO log shrank %ld -> %ld bytes; previous copy kept as %s",
+                 (long)cur.st_size, (long)incoming.st_size, SD_ADIF_PREV);
+    } else {
+        ESP_LOGE(TAG, "could not keep the previous QSO log (errno %d) - "
+                      "mirroring anyway", errno);
+    }
+}
+
 static void sd_archive_task(void *arg)
 {
     (void)arg;
@@ -848,6 +895,7 @@ static void sd_archive_task(void *arg)
 
         if (ok && s_adif_dirty) {
             s_adif_dirty = false;
+            keep_previous_adif();
             if (!copy_file(adif_log_file_path(), SD_ADIF_PATH)) {
                 s_adif_dirty = true;   // retry after remount
                 ok = false;
@@ -1031,7 +1079,7 @@ char *sd_archive_read_adif(size_t *out_len)
                 free(buf);
                 buf = NULL;
             } else {
-                buf[len] = ' ';
+                buf[len] = '\0';
                 if (out_len) *out_len = len;
                 ESP_LOGI(TAG, "ADIF restore: read %u bytes from the card", (unsigned)len);
             }
