@@ -3436,11 +3436,11 @@ static unsigned  s_cw_seen;          /* change detector - repaint only on new te
  * - and with it every column of decoded text - every time the estimate crossed
  * ten. The prefix width is a constant, and CW_PREFIX_COLS must match the format
  * string or the two labels overlap. */
-#define CW_PREFIX_FMT   "CW [~%s wpm]:"
-#define CW_PREFIX_COLS  15           /* "CW [~08 wpm]:" is 13, plus two spaces */
+#define CW_PREFIX_FMT   "CW ~%s wpm:"
+#define CW_PREFIX_COLS  13           /* "CW ~08 wpm:" is 11, plus two spaces */
 /* If the format string changes, this catches it at COMPILE time rather than as
  * two labels quietly overlapping on screen. */
-_Static_assert(sizeof("CW [~08 wpm]:") - 1 + 2 == CW_PREFIX_COLS,
+_Static_assert(sizeof("CW ~08 wpm:") - 1 + 2 == CW_PREFIX_COLS,
                "CW_PREFIX_COLS must match CW_PREFIX_FMT rendered with two digits");
 #define CW_LINE_COLS    (84 - CW_PREFIX_COLS)
 #define CW_COL_PX       15
@@ -3514,7 +3514,7 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     if (wpm > 99) wpm = 99;
     char wtxt[8];
     if (wpm > 0) snprintf(wtxt, sizeof(wtxt), "%02d", wpm);
-    else         snprintf(wtxt, sizeof(wtxt), "--");
+    else         snprintf(wtxt, sizeof(wtxt), "??");   /* not enough to say yet */
     lv_label_set_text_fmt(s_cw_prefix, CW_PREFIX_FMT, wtxt);
 
     if (tail[0] == '\0') {
