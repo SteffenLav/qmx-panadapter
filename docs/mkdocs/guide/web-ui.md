@@ -314,6 +314,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND jack, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash
 - **Keyboard shortcuts** — assign what the Tab5's snap-on keyboard does (see below)
 - **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
 - **Reset WiFi** — clear just the WiFi/network state

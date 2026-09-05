@@ -3131,3 +3131,21 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 **Smaller things**
 
 - The "QMX cannot display this" caption is gone from the hatched dead-band on both the Tab5 and the browser — the hatching alone says what it needs to.
+
+### Shipped in v1.10.9 — 2026-09-05
+
+**The web decode-list jump, root-caused for real this time; WSPR's PA-voltage guard made reliable; a remote QMX power-cycle relay.**
+
+**Web page**
+
+- **The decode list no longer jumps, for real this time** *(Randy N4OPI)*. v1.10.8's fix sized the status box against one "worst case" message and still moved on an armed transmit or a busy exchange — the real cause was the box disappearing from the page entirely while idle and reappearing at full size the moment there was something to show, not its size while visible. Every place that used to hide it now leaves its space reserved and only hides what is drawn inside it, so idle and busy are the same height throughout. The countdown shown while a transmission is armed is now its own small figure that cannot be cut off by a long message, Cancel clears the box immediately with no leftover "Cancelling" text, and the box no longer runs wider than the slot occupancy strip below it.
+- **The "Calling you" pileup list now ages out and clears on a band change** *(Randy N4OPI)*. It previously had no expiry at all — a caller from 17 hours earlier, on a different band, was still shown. Entries now drop after an hour, and changing bands clears the list outright, the same moment that already ends an in-progress QSO for the same reason.
+
+**WSPR**
+
+- **The finals-protection PA-voltage guard is now confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. Restoring the radio's power when leaving WSPR mode was a single CAT write with nothing checking it actually landed — if that one write was lost, the radio stayed at the reduced WSPR voltage indefinitely, in every mode, with nothing on screen saying so. A background check now confirms the restore took and resends it if not. Verified end to end on real hardware: reduced 11.5 V to 6.0 V on WSPR TX, held there correctly for the whole session, and restored 6.0 V back to 11.5 V on leaving WSPR, each step confirmed against the radio's own CAT read-back.
+- **The WSPR countdown no longer appears to hit zero and restart on the first transmit cycle.** The radio's PA-voltage was only asked for once the first cycle began, so a burst due right at the start of a session could be held back a cycle while waiting for that answer — the right call, but the countdown had already been shown counting down to it. The question is now asked the moment WSPR transmit is turned on, giving it the whole two minutes to be answered instead of a few hundred milliseconds.
+
+**New**
+
+- **A remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen level and duration — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade (which always needs the QMX power-cycled afterward) no longer needs someone physically at the radio.

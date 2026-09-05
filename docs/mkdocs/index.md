@@ -106,22 +106,22 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.10.9 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.10.8 — a crash introduced and fixed in the same release cycle, plus more
-groups.io reports.** A settings-drawer scroll could crash the device: the previous
-release's scroll-vs-tap protection collided with LVGL's own built-in scroll animation,
-found and fixed the same day with a diagnostic build that confirmed the cause before
-anything changed. **Restore worked-station history from a downloaded ADIF file** — the
-web UI's new "ADIF restore" merges a previous log back in after an erase-and-reinstall,
-skipping anything already logged. **The web decode list no longer jumps around during an
-exchange.** Also: the web spectrum could draw against a stale frequency axis after a
-missed status poll, and a WSPR spot hopped to a new band could be published to
-wsprnet.org under the wrong one — both fixed, neither yet confirmed on the air.
+**New in v1.10.9 — the web decode-list jump root-caused for real, WSPR's PA-voltage
+guard made reliable, and a remote QMX power-cycle relay.** The decode list no longer
+jumps: the real cause was the status box disappearing from the page entirely while
+idle rather than staying reserved at a fixed size, not its size while visible as the
+previous fix assumed. WSPR's finals-protection PA-voltage restore is now confirmed and
+retried instead of a single unverified write — checked end to end on real hardware,
+including the WSPR countdown that used to appear to hit zero and restart on the first
+cycle. New: a "Power-cycle relay" control in the web UI drives a Tab5 GPIO pin to
+trigger an external relay wired to the QMX's power switch, for power-cycling it
+remotely after a firmware upgrade.
 
 **In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
@@ -156,7 +156,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.8.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.9.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

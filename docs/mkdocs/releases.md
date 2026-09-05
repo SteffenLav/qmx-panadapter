@@ -4,7 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.8** — 2026-09-03
+**v1.10.9** — 2026-09-05
+
+**The web decode-list jump, root-caused for real this time; WSPR's PA-voltage guard made reliable; a remote QMX power-cycle relay.**
+
+- **The decode list no longer jumps, for real this time** *(Randy N4OPI)*. v1.10.8's fix sized the status box against one "worst case" message and still moved on an armed transmit or a busy exchange — the real cause was the box disappearing from the page entirely while idle and reappearing at full size once there was something to show. Every hide path now leaves its space reserved instead. The countdown shown while armed is its own small figure that can't be cut off, Cancel clears immediately with no leftover text, and the box no longer runs wider than the slot occupancy strip below it.
+- **The "Calling you" pileup list ages out and clears on a band change** *(Randy N4OPI)*. It previously had no expiry at all.
+- **WSPR's finals-protection PA-voltage guard is confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. Restoring the radio's power on leaving WSPR was a single CAT write with nothing checking it landed; a background check now confirms and resends if needed. Verified on real hardware with an 11.5 V → 6.0 V → 11.5 V round trip against the radio's own read-back.
+- **The WSPR countdown no longer appears to hit zero and restart on the first cycle.** The PA-voltage question is now asked the moment WSPR transmit is turned on, giving it the full two minutes to be answered instead of a few hundred milliseconds.
+- **New: a remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade no longer needs someone at the bench.
+
+## Previous Releases
+
+### v1.10.8 — 2026-09-03
 
 **A crash introduced and fixed in the same release cycle, plus more groups.io reports.**
 
@@ -14,8 +26,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The web spectrum could go on drawing against a stale frequency axis** *(Samuel W7STF)*. If the once-a-second status poll missed a beat after a band change or mode switch, the picture kept looking normal while every signal sat at the wrong frequency — it now blanks itself and says why instead. Not yet confirmed on the air.
 - **A WSPR spot hopped to a new band could be published to wsprnet.org under the wrong band** *(Kevin KQ4DTX)* — the upload read the dial at send time rather than at decode time. Not yet confirmed on the air.
 - **The "QMX cannot display this" caption is gone** from the hatched dead-band on both screens — the hatching alone says what it needs to.
-
-## Previous Releases
 
 ### v1.10.7 — 2026-09-02
 
@@ -567,7 +577,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.8.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.9.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
