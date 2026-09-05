@@ -79,6 +79,7 @@ static const char *TAG = "settings";
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_CW_DECODE       "cw_dec_en"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
 #define KEY_STILL_NOTICE   "still_note"
@@ -344,6 +345,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
+#define DIRTY_CW_DECODE     111   /* decoded-CW line on the panadapter */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -521,6 +523,7 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap.cw_decode_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
@@ -676,6 +679,9 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
+    /* Decoded CW is ON by default - it is the point of the feature - so like
+       rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
+    out->cw_decode_en = true;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
      * can - see the notice in ui.c. still_notice_done stays false so an
@@ -912,6 +918,7 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
@@ -1892,6 +1899,25 @@ void settings_set_spur_mode(uint8_t v)
     s_pending.spur_mode = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SPUR_SUP);
+}
+
+bool settings_get_cw_decode_en(void)
+{
+    if (!s_ready || !s_mutex) return true;   // default until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cw_decode_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_cw_decode_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_decode_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_decode_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_DECODE);
 }
 
 void settings_set_distance_in_miles(bool v)

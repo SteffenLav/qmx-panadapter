@@ -199,6 +199,10 @@ typedef struct {
     // a two-letter mode tag so the lane is not ambiguous.
     bool     spots_mode_filter;
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
+    // Decoded CW from the radio's own decoder, shown along the bottom of the
+    // panadapter in CW/CW-R. Default ON - it is the point of the feature - but
+    // it is an overlay on someone else's waterfall, so it has an off switch.
+    bool     cw_decode_en;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
     /* #298 STILL DISPLAY. true (the default) = the spectrum and waterfall hold
@@ -494,6 +498,13 @@ uint8_t settings_get_swr_limit_x10(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
+// ⛔ NARROW accessor on purpose. settings_load_all() copies a multi-kilobyte
+// struct, and this is read from a 4 Hz LVGL timer callback - taskLVGL has about
+// 8 KB of stack. See CLAUDE.md "Task stacks on this board are TINY": the same
+// mistake boot-looped the device via sys_evt in #307, and it has now been made
+// four times. Reads the staged copy, so it reflects a change immediately.
+bool settings_get_cw_decode_en(void);
+void settings_set_cw_decode_en(bool v);
 void settings_set_distance_in_miles(bool v);
 void settings_set_rit_pill_show(bool v);
 void settings_set_still_view(bool v);

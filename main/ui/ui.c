@@ -2875,6 +2875,16 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
     }
 }
 
+/* Decoded CW on/off. It is an overlay on the operator's own waterfall, so it
+ * gets a switch - default ON, since showing it is the point. cw_strip_tick_cb()
+ * re-reads this every 250 ms rather than caching it, so the line appears and
+ * disappears the moment the box is ticked, with no drawer close required. */
+static void drawer_cw_decode_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    settings_set_cw_decode_en(lv_obj_has_state(cb, LV_STATE_CHECKED));
+}
+
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
@@ -3460,7 +3470,12 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     /* CW/CW-R only, and only on the panadapter - the FT8 and WSPR pages own
      * their own screen real estate and there is no CW to show there. */
     const char *mode = cat_get_mode_str();
-    bool want = (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
+    /* Re-read every tick rather than cached, so ticking the box takes effect at
+     * once. ⛔ The NARROW accessor, never settings_load_all(): this runs on
+     * taskLVGL, which has ~8 KB of stack, and the full struct is kilobytes -
+     * the mistake that boot-looped the device in #307. */
+    bool want = settings_get_cw_decode_en() &&
+                (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
                 (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0);
     if (!want) {
         if (!lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) {
@@ -11161,7 +11176,7 @@ static void drawer_build(void)
     {
         // The green "CW" heading that used to sit here is gone: the group
         // heading above already says Radio, and "CW center" names itself.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244);   /* 194 + a nudge-button row */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244 + 60);   /* 194 + nudge row + decode row */
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
@@ -11242,7 +11257,26 @@ static void drawer_build(void)
                 lv_obj_center(l);
             }
         }
-        y += 244;
+        // Decoded CW (Uwe DL8UG). Sits with the other CW controls because that
+        // is where an operator looks for it, and below the offset row so the
+        // existing layout above is untouched.
+        {
+            /* cwcfg is already loaded above in this scope - no second copy of a
+               multi-kilobyte struct on the stack. */
+            lv_obj_t *cbx = make_drawer_checkbox(sec, cwcfg.cw_decode_en,
+                                                 drawer_cw_decode_cb, NULL);
+            lv_obj_align(cbx, LV_ALIGN_TOP_LEFT, 0, 240);
+            lv_obj_t *dl = lv_label_create(sec);
+            lv_label_set_text(dl, "Show decoded CW");
+            lv_obj_set_style_text_color(dl, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_font(dl, &lv_font_montserrat_28, 0);
+            lv_obj_align(dl, LV_ALIGN_TOP_LEFT, 52, 244);
+        }
+
+        /* ⛔ This MUST match the height passed to drawer_section() above. A
+         * section whose height and advance disagree overlaps the next one -
+         * the reflow bug this file has hit more than once. */
+        y += 244 + 60;
     }
 
     // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
