@@ -1111,13 +1111,41 @@ int adif_log_import_from_sd(adif_import_result_t *res)
     if (!res) res = &local;
     memset(res, 0, sizeof(*res));
 
-    size_t len = 0;
-    char *text = sd_archive_read_adif(&len);
-    if (!text) return -1;   // no card, no file, or the card failed - res stays zeroed
+    // BOTH files on the card, not just qso.adi.
+    //
+    // Gyula HA3HZ renamed his own saved backups to qso.prev.adi, put them on the
+    // card, pressed this button and was told "nothing to restore" - because it
+    // only ever read qso.adi, which was simply the device's current log. He did
+    // nothing wrong: qso.prev.adi is the name the firmware itself writes, the
+    // docs called it recoverable, and the only route offered was a file upload
+    // from a PC. "Restore from the card" should mean everything the card knows.
+    //
+    // Safe to merge blind: both are our own files, the import already skips a
+    // contact that is present, and reading them oldest-last means the newer copy
+    // wins any tie. Neither present is the only real failure.
+    int total_added = 0;
+    bool read_any = false;
 
-    int added = adif_log_import_ex(text, res);
-    free(text);
-    return added;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t len = 0;
+        char *text = sd_archive_read_adif_file(pass == 1, &len);
+        if (!text) continue;
+        read_any = true;
+
+        adif_import_result_t r;
+        int added = adif_log_import_ex(text, &r);
+        free(text);
+
+        res->found      += r.found;
+        res->added      += r.added;
+        res->duplicate  += r.duplicate;
+        res->unreadable += r.unreadable;
+        if (added > 0) total_added += added;
+        else if (added < 0) return -1;   // the log could not be written - stop
+    }
+
+    if (!read_any) return -1;   // no card, or neither file on it
+    return total_added;
 }
 
 const char *adif_log_band_for_freq(uint32_t hz)

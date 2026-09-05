@@ -27,7 +27,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The "Calling you" pileup list ages out and clears on a band change** *(Randy N4OPI)*. It previously had no expiry at all.
 - **WSPR's finals-protection PA-voltage guard is confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. Restoring the radio's power on leaving WSPR was a single CAT write with nothing checking it landed; a background check now confirms and resends if needed. Verified on real hardware with an 11.5 V → 6.0 V → 11.5 V round trip against the radio's own read-back.
 - **The WSPR countdown no longer appears to hit zero and restart on the first cycle.** The PA-voltage question is now asked the moment WSPR transmit is turned on, giving it the full two minutes to be answered instead of a few hundred milliseconds.
-- **New: a remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade no longer needs someone at the bench.
+- **New: a remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu — wire a home-automation relay to it and the QMX's PWR_ON/GND **signals**, and a remote firmware upgrade no longer needs someone at the bench. **The QMX has no PWR_ON/GND jack** — those signals have to be brought out of the radio to a connector of your own first, so this is an experimenter feature *(Randy N4OPI)*.
 
 ### v1.10.8 — 2026-09-03
 

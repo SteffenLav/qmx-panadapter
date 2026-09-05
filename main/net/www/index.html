@@ -1188,8 +1188,17 @@
              defeats doing the upgrade remotely. Pulses one of two GPIO pins
              the Tab5 exposes on its Grove/EXT header (53/54, whitelisted in
              gpio_relay.c) - wire a home-automation relay's trigger input to
-             one of them and its contacts to the QMX's PWR_ON/GND jack. -->
-        <div id="gpio-row" title="Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND jack - for power-cycling it after a remote firmware upgrade with nobody at the bench.">
+             one of them and its contacts to the QMX's PWR_ON/GND signals.
+             ⛔ The QMX has no PWR_ON/GND JACK - those signals have to be brought
+             out of the radio to a connector first. The tooltip said "jack" until
+             Randy N4OPI pointed out someone would hunt for a connector that does
+             not exist, or pick the wrong one. This is an experimenter feature and
+             now says so.
+             Note also that gpio_relay_init() holds both pins as driven OUTPUTS
+             from boot, resting LOW - so they never float. That is deliberate (a
+             contact closure must need a deliberate pulse) and it is the answer to
+             "can GPIO53/54 float?": not as the firmware currently drives them. -->
+        <div id="gpio-row" title="!Experimenter feature!&#10;Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND signals - for power-cycling it after a remote firmware upgrade with nobody at the bench.&#10;&#10;!Note! The QMX does not natively have a PWR_ON/GND jack. You would need to extend those signals from the main circuit board or front panel to an external connector.&#10;&#10;The pins rest as driven outputs, not floating.">
           <span>Power-cycle relay:</span>
           <select id="gpio-pin"><option value="53">GPIO53</option><option value="54">GPIO54</option></select>
           <select id="gpio-level"><option value="1">active HIGH</option><option value="0">active LOW</option></select>

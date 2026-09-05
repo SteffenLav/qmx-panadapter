@@ -621,6 +621,7 @@ Reporter requests.
 | Column | Content |
 |--------|---------|
 | Call | Callsign |
+| Grid | Their Maidenhead grid square, when they sent one |
 | Country | DXCC entity (looked up from the callsign prefix) |
 | Mode | FT8 or FT4 |
 | Band | Band (20m, 40m, …) |
@@ -628,7 +629,6 @@ Reporter requests.
 | Time | UTC time |
 | Sent | Your signal report (SNR) |
 | Rcvd | Their signal report (SNR) |
-| Grid | Their Maidenhead grid square, when they sent one |
 | Ref | The park or summit *they* were activating, when the contact came from a spot |
 
 A sticky header row stays pinned while you scroll. Even-numbered rows are lightly shaded so long logs stay easy to scan.

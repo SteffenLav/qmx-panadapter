@@ -3148,7 +3148,7 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 
 **New**
 
-- **A remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen level and duration — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade (which always needs the QMX power-cycled afterward) no longer needs someone physically at the radio.
+- **A remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen level and duration — wire a home-automation relay to it and the QMX's PWR_ON/GND **signals**, and a remote firmware upgrade (which always needs the QMX power-cycled afterward) no longer needs someone physically at the radio. (The QMX has no PWR_ON/GND jack - those signals must be brought out to a connector of your own, so this is an experimenter feature; wording corrected in v1.11.1 after Randy N4OPI pointed out someone would hunt for a socket that does not exist.)
 
 ### Shipped in v1.11.0 — 2026-09-05
 

@@ -1044,7 +1044,7 @@ const char *sd_archive_log_path(void)   { return SD_LOG_PATH; }
 // stream is paused for the duration, because SD traffic and the C6's SDIO link
 // share one physical peripheral. Returns NULL with *out_len untouched if there
 // is no card, no file, or no memory.
-char *sd_archive_read_adif(size_t *out_len)
+char *sd_archive_read_adif_file(bool previous, size_t *out_len)
 {
     if (!sd_archive_is_mounted()) {
         ESP_LOGW(TAG, "ADIF restore: no card mounted");
@@ -1058,17 +1058,19 @@ char *sd_archive_read_adif(size_t *out_len)
     bool ws_was_paused = webserver_ws_is_paused();
     if (!ws_was_paused) webserver_ws_set_paused(true);
 
+    const char *path = previous ? SD_ADIF_PREV : SD_ADIF_PATH;
     char       *buf = NULL;
     struct stat st;
-    if (stat(SD_ADIF_PATH, &st) != 0 || st.st_size <= 0) {
-        ESP_LOGW(TAG, "ADIF restore: %s not found on the card", SD_ADIF_PATH);
+    if (stat(path, &st) != 0 || st.st_size <= 0) {
+        // Not an error for the previous copy - most cards will never have one.
+        ESP_LOGI(TAG, "ADIF restore: %s not on the card", path);
     } else {
         size_t len = (size_t)st.st_size;
         buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!buf) {
             ESP_LOGE(TAG, "ADIF restore: out of memory for %u bytes", (unsigned)len);
         } else {
-            FILE *f = fopen(SD_ADIF_PATH, "r");
+            FILE *f = fopen(path, "r");
             size_t got = f ? fread(buf, 1, len, f) : 0;
             if (f) fclose(f);
             // A short read is a failing card, not a short file - do not hand
@@ -1081,7 +1083,7 @@ char *sd_archive_read_adif(size_t *out_len)
             } else {
                 buf[len] = '\0';
                 if (out_len) *out_len = len;
-                ESP_LOGI(TAG, "ADIF restore: read %u bytes from the card", (unsigned)len);
+                ESP_LOGI(TAG, "ADIF restore: read %u bytes from %s", (unsigned)len, path);
             }
         }
     }
