@@ -228,6 +228,15 @@ void wspr_pa_guard_release_pending(const char *why);
  * context where CAT queries actually go out. */
 void wspr_pa_guard_reclaim_on_link(void);
 
+/* Non-blocking twin of the above - call periodically (every ~15 s is plenty)
+ * from any task that already owns the CAT pipe, e.g. cat.c's poll_task. Where
+ * the link-up version blocks briefly waiting for one answer, this one only
+ * ever checks a query already in flight and re-issues one if needed, so it is
+ * safe to call from a tight polling loop. Covers the gap the link-up version
+ * cannot: a plain "leave WSPR mode" restore whose single queued write was
+ * never confirmed and silently failed to reach the radio. */
+void wspr_pa_guard_periodic_check(void);
+
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
  * wspr_duty_pct, or the countdown keeps describing the previous setting until

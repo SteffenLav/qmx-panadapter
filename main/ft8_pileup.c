@@ -1,6 +1,7 @@
 #include "ft8_pileup.h"
 
 #include <string.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -14,6 +15,29 @@ static int                 s_count = 0;
 
 static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static inline void unlock(void) { xSemaphoreGive(s_lock); }
+
+// The header's original design deliberately gave this list no expiry, so a
+// caller from earlier in a busy CQ-run could still be worked after aging out
+// of the live decode list. In practice that meant an entry could sit forever:
+// Randy N4OPI (2026-09-04) reported the web UI's "Calling you" list still
+// showing a station heard 1021 MINUTES (17 h) earlier. An hour is long enough
+// to go back and work someone from earlier this session; it is short enough
+// that an entry cannot survive into a session that has moved on to something
+// else entirely.
+#define PILEUP_MAX_AGE_S (60 * 60)
+
+// Drop entries older than PILEUP_MAX_AGE_S. Caller already holds s_lock.
+static void sweep_stale_locked(int64_t now_utc)
+{
+    for (int i = 0; i < s_count; ) {
+        if (now_utc - s_entries[i].last_seen_utc > PILEUP_MAX_AGE_S) {
+            for (int j = i; j < s_count - 1; j++) s_entries[j] = s_entries[j + 1];
+            s_count--;
+        } else {
+            i++;
+        }
+    }
+}
 
 void ft8_pileup_init(void)
 {
@@ -81,6 +105,7 @@ int ft8_pileup_get_all(ft8_pileup_entry_t *out, int max)
     if (!out || max <= 0 || !s_lock) return 0;
 
     lock();
+    sweep_stale_locked(time(NULL));
     int n = (s_count < max) ? s_count : max;
     memcpy(out, s_entries, (size_t)n * sizeof(ft8_pileup_entry_t));
     unlock();
@@ -102,6 +127,7 @@ int ft8_pileup_count(void)
 {
     if (!s_lock) return 0;
     lock();
+    sweep_stale_locked(time(NULL));
     int n = s_count;
     unlock();
     return n;

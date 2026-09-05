@@ -85,6 +85,7 @@ static char   s_q3_resp[16] = {0};  // last Q3 (VOX enable) response, e.g. "Q30;
 static size_t s_q3_resp_len = 0;
 static volatile bool s_vox_disabled = false;  // true once Q3; readback confirms VOX OFF
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
+static uint64_t s_wspr_pa_check_us = 0; // last non-blocking WSPR PA-guard check
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -1344,6 +1345,20 @@ static void poll_task(void *arg)
         if (s_user_paused) {
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
+        }
+        // Non-blocking WSPR PA-guard check, every ~15 s: catches a "leave WSPR
+        // mode" restore whose single queued write was never confirmed and
+        // silently failed to reach the radio - the gap the link-up reclaim
+        // (above, at task start) cannot cover, since the CAT link never
+        // dropped in that case. wspr_pa_guard_periodic_check() never blocks -
+        // it only reads the cached answer to a query already in flight and
+        // re-issues one if needed - so it is safe on this rotation.
+        {
+            uint64_t now = esp_timer_get_time();
+            if (now - s_wspr_pa_check_us > 15000000ULL) {
+                s_wspr_pa_check_us = now;
+                wspr_pa_guard_periodic_check();
+            }
         }
         // Re-assert IQ mode: queued on resume-from-pause and by the dead-stream
         // watchdog. Runs here because this task owns the pipe; it blocks for up

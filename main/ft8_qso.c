@@ -3131,7 +3131,12 @@ void ft8_qso_notify_manual_final(const char *target_call)
  *
  * ⛔ Deliberately NOT gated on "was the robot running". A hand-started pounce
  * transmits on the wrong band just as readily as an automatic one, and the
- * on-air consequence is identical. */
+ * on-air consequence is identical.
+ *
+ * ⭐ Also clears the pileup list (added after a second Randy N4OPI report,
+ * 2026-09-04): a station heard calling on the OLD band cannot be worked by
+ * replying on the new one, so leaving them listed just invites exactly the
+ * mistake this function exists to prevent. */
 void ft8_band_change_stand_down(const char *why)
 {
     char who[16];
@@ -3141,6 +3146,7 @@ void ft8_band_change_stand_down(const char *why)
         ft8_qso_abort();
     }
     ft8_robot_stand_down(why);
+    ft8_pileup_clear();
 }
 
 bool ft8_qso_timeout_expire_check(void)

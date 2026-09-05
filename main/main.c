@@ -14,6 +14,7 @@
 #include "status.h"
 #include "battery.h"
 #include "bsp_info.h"
+#include "gpio_relay.h"
 #include "cat.h"
 #include "audio.h"
 #include "cw_audio.h"
@@ -372,6 +373,7 @@ void app_main(void)
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
+    gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).

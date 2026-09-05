@@ -329,9 +329,22 @@
      the box on the real centre with no spacer element and no guess at how wide
      the heading is. The outer columns can shrink to nothing, so a narrow window
      gives the box the whole width instead of overflowing. */
+  /* ⭐ TWO COLUMNS, NOT THREE - the third one was empty on purpose (pure
+     symmetry, to centre the box), and Randy N4OPI pointed at exactly that
+     waste (2026-09-04): "the tx and arm boxes plus text below take up more
+     space than the empty space right of MODE: FT8 allow... fix it so text
+     is written next to the box in the space available." The box's column is
+     now a genuine `1fr` TRACK, not `auto` - `auto` sizes to the item's own
+     content, which is how a wide flex-wrap box can still end up visually
+     narrow (the auto track only grows to what its content already wants,
+     it does not hand out leftover row width the way a fr track does). `1fr`
+     means "everything left after the heading", full stop, so the box gets
+     the entire width this fix is asking for. No longer centred on the page -
+     it starts right after the heading and runs to the edge - which is the
+     direct trade for using the space instead of reserving it. */
   #ft8-topline {
     flex: 0 0 auto; align-self: stretch;
-    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    display: grid; grid-template-columns: auto minmax(0, 1fr);
     align-items: center; gap: 0.8rem;
     margin-bottom: 0.8rem;
   }
@@ -416,47 +429,76 @@
   #ft8-slotrow.tx #slot-fill { background: #ff4010; }
   #ft8-slotrow.tx #slot-n    { color: #ff4010; }
 
-  /* min-height reserves room for the box's OWN worst case (TX status +
-     stat boxes + the #ft8-webr outcome sentence all present at once), so
-     filling in mid-exchange does not push the decode list below it down and
-     then back up as the exchange clears (Randy N4OPI: "that whole list
-     shifts down and then up and down as the exchange progresses... hard to
-     hit a moving target"). This is NOT the same trap as the sticky/pinned
-     attempts recorded above - those covered content BELOW them because they
-     were taken out of flow; a min-height on an in-flow box only ever adds
-     blank space in the short state, never overlaps anything.
-     Measured in a real browser (idle vs. a synthesized worst-case exchange
-     line + two stat boxes + a long outcome sentence): 5.3rem is the
-     measured worst-case height from ~700px viewport width up to at least
-     1400px - the ordinary desktop range this was reported from - so idle
-     and active are byte-for-byte the SAME height there, at the cost of a
-     little reserved blank space while idle. A first attempt used clamp()
-     to also track narrower widths, but the active height itself jumps in
-     steps as wrapping changes the line count (108px at 600px wide, 192px
-     at 320px) - the same "numbers change with every window size" problem
-     the sticky attempts hit - so no single reservation, fixed or scaled,
-     can remove the jump everywhere. This fixes the common desktop case
-     Randy reported and does not try to chase the mobile one. */
+  /* ⭐ A FIXED HEIGHT, not a min-height guess - because min-height only
+     defends the FLOOR, and every version of this box so far still had a
+     CEILING that moved: a min-height lets the box grow past it the moment
+     content needs more than what was reserved, and this box has now proven
+     three separate times that "how much a real exchange needs" keeps being
+     larger than whatever was measured. Operator, 2026-09-05, after the
+     "pack it into the space available" fix still jumped on arm/TX: "please
+     make it stable so it does not jump - if needed then let the dead space
+     be bigger when not arming or TX'ing. just dont jump(!)"
+     So: `height` (not min-height) + `overflow: hidden`. The box is now
+     EXACTLY this tall in every state, full stop - idle, armed, transmitting,
+     wide desktop, narrow phone.
+     ⚠ The jump this was actually fighting turned out to be display:none on
+     idle (see the visibility:hidden fix at every call site below), not the
+     height itself - so once THAT was fixed, 7rem (sized for two full packed
+     rows) was needlessly tall for the common one-row case and read as a
+     half-empty box (operator, 2026-09-05: "it is almost a half box height
+     above and below"). Cut to fit ONE packed row (TX line/countdown/stats,
+     the three things that must never be clipped) plus the box's own padding,
+     with a small margin - no longer budgeting a whole second row for
+     #ft8-webr. If webr does not fit beside them it still wraps to its own
+     line (see the priority order below), but that second line now runs
+     under the padding's floor and overflow:hidden clips it instead of
+     showing - a smaller, more common trade than losing all of webr, which
+     already happens whenever it does not fit at all. */
   #ft8-status {
     flex: 0 0 auto; align-self: stretch;
-    display: flex; flex-flow: row wrap; align-items: center; justify-content: center;
-    gap: 0.5rem 0.9rem;
+    display: flex; flex-flow: row wrap; align-items: center; justify-content: flex-start;
+    gap: 0.4rem 0.7rem;
     background: #11171e; border: 1px solid var(--border); border-radius: 8px;
     padding: 0.55rem 0.8rem; margin-bottom: 0.8rem;
-    min-height: 5.3rem;
+    height: 4.6rem; overflow: hidden;
+    /* Never wider than the E/O occupancy strip + slot clock below it
+       (#ft8-slotrow's own max-width) - operator, 2026-09-04: the box had
+       grown wider than that row and the two no longer lined up. */
+    max-width: 1000px;
   }
+  /* A REAL flex-basis, not 0. `flex: N 1 0` has no floor, so it just shrinks
+     forever to stay on the row - which is how #ft8-webr ended up squeezed to
+     an unreadable 10 px sliver instead of dropping to its own line the way
+     #ft8-status's own comment says it should. With a basis, the wrap
+     algorithm has something to compare against: once tx's + webr's + the
+     gaps' bases genuinely do not fit beside the fixed countdown/stat cards,
+     webr (last in source order) is what wraps to row 2, leaving tx the
+     WHOLE box width on row 1 - usually enough to show it in full. grow:2
+     against webr's grow:1 is what they split BEYOND their bases, on the
+     (common) row where they do end up sharing space. */
+  #ft8-tx { flex: 2 1 220px; min-width: 0; }
+  /* The countdown, split out of the truncatable TX text into its own badge
+     (webserver.c's `armed_secs` field) precisely so ellipsis can never eat
+     it - Randy N4OPI, 2026-09-04: "in the boxes is a figure (~1... that is
+     cut off - what is it?" It was the seconds-to-TX countdown, the one
+     figure in that string an operator actually needs a live reading of.
+     Same visual weight as the power/SWR cells below it, shown only while
+     armed (JS toggles [hidden]). */
+  #ft8-countdown { flex: 0 0 auto; }
   /* The measured figures, as labelled cells. A number with its unit above it
      reads at a glance and packs far tighter than "Last TX: 5.0 W SWR 1.11
-     (just now)" spelled out as a sentence. */
-  #ft8-stats { display: flex; flex-flow: row wrap; gap: 0.45rem; justify-content: center; }
+     (just now)" spelled out as a sentence. flex-shrink:0 and nowrap (see
+     .ft8-stat below) keep it from ever losing a digit to the row squeeze. */
+  #ft8-stats { display: flex; flex-flow: row nowrap; gap: 0.45rem; flex: 0 0 auto; }
   .ft8-stat {
     display: flex; flex-direction: column; align-items: center; line-height: 1.15;
-    min-width: 4.2rem; padding: 0.2rem 0.55rem;
+    flex-shrink: 0; min-width: 4.2rem; padding: 0.2rem 0.55rem;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
   }
   .ft8-stat .k { font-size: clamp(0.58rem, 0.75vw, 0.75rem); color: var(--dim);
-                 letter-spacing: 0.07em; text-transform: uppercase; }
-  .ft8-stat .v { font-size: clamp(0.9rem, 1.45vw, 1.2rem); color: #40c0d0; font-weight: 600; }
+                 letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap; }
+  .ft8-stat .v { font-size: clamp(0.9rem, 1.45vw, 1.2rem); color: #40c0d0; font-weight: 600;
+                 white-space: nowrap; }
   #ft8-body {
     flex: 0 0 auto; align-self: stretch;
     display: flex; flex-direction: column; align-items: center; gap: 0.7rem;
@@ -513,36 +555,68 @@
                         font-size: clamp(0.95rem, 1.35vw, 1.15rem); }
   /* They are two separate facts sharing a line, and at the header's 10 px gap
      they read as one run-on phrase. */
-  #dec-rx { color: var(--fg); margin-left: 1.6rem; }
+  /* One line, always - same reasoning as #ft8-tx/#ft8-webr above. Randy
+     N4OPI, 2026-09-04: "'RX Capturing....' is also broken into 2 lines" on a
+     narrow window; wrapping here grows this header row and pushes the whole
+     decode table down with it. */
+  #dec-rx { color: var(--fg); margin-left: 1.6rem; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #dec-rx:empty { display: none; }
-  /* Collapse anything with nothing to say instead of holding a row open. */
-  #ft8-webr:empty, #ft8-stats:empty { display: none; }
+  /* ⛔ NOT :empty{display:none} any more - see #ft8-status's own comment above.
+     Collapsing an empty row was exactly what let the box's height change
+     between idle and busy; both rows now stay reserved via min-height whether
+     or not they have anything to say, in exchange for a little always-blank
+     space while idle. */
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
      so they read as fine print next to everything around them - "just too small
-     fonts if you ask me". Sized in rem now, so they track the rest of the page.
-     min-height holds the row open when empty so nothing jumps as they fill. */
-  /* The reply outcome takes the full width of the strip and sits under the
-     rest, because it is a sentence rather than a figure and would otherwise
-     stretch the row. No min-height - :empty above collapses it. */
+     fonts if you ask me". Sized in rem now, so they track the rest of the page. */
   /* ⚠ `flex: 1 1 100%` forced its own line under the box - so "Working X (auto
      QSO)" sat below "Transmitting: ..." while the row it was on had most of its
      width free (operator, 2026-09-02: "put the text under the box next to it so
      it fit the available line space"). `auto` lets it share the line and still
      wrap onto its own when there genuinely is no room. */
-  #ft8-webr { flex: 0 1 auto; text-align: left; color: var(--dim);
-              font-size: clamp(0.9rem, 1.3vw, 1.15rem); }
+  /* Same reasoning as #ft8-tx above: truncated to one line rather than sized
+     against a "worst case" sentence, so a long outcome string (e.g. "Asking
+     the Tab5 to reply to VK9/WB0LQW...") cannot itself grow the box. The
+     lowest-priority child of the row (see #ft8-status's own comment) - it is
+     the one allowed to give up its width and wrap to its own line first. */
+  #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
+              font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* SCALED, not fixed. Every user has a different window and browser zoom, and
      a size picked at one of them is wrong at the others - which is how the same
      panel fitted at 67% and covered its own buttons at 100%. clamp() ties these
      to the viewport with a floor (still legible on a phone) and a ceiling (does
      not become a billboard on a 4K screen), so the block adapts instead of
      being tuned for one machine. */
+  /* ⭐ ONE LINE, ALWAYS - not a min-height guess. Randy N4OPI, 2026-09-04: "You
+     could maybe restrict that box to one line also with the space reserved, as
+     the (~NNsec) countdown field makes the box 2 lines tall." He was right about
+     the cause: the "worst case" string the min-height below was measured against
+     was "Transmitting: VK3ABC OZ1LAV R-09 (2450 Hz)" (the ACTIVE state) - it never
+     included the ARMED state's extra " - call N of N (~Ns)" suffix (webserver.c's
+     "TX armed: %s%s (~%ds)"), which is longer and wraps to a second line the
+     min-height never budgeted for. Rather than re-measure yet another "worst
+     case" string (this file's history already records three different sizing
+     attempts failing for exactly that reason - the numbers change with every
+     window size, zoom level and font setting), truncate instead: the box's
+     height is now a function of font-size and padding ALONE, never of the text
+     it happens to be showing, so no future message can make it taller. */
   #ft8-tx {
     font-size: clamp(1.05rem, 1.9vw, 1.5rem); font-weight: 700; line-height: 1.3;
     padding: clamp(0.3rem, 0.7vw, 0.6rem) clamp(0.6rem, 1.4vw, 1.2rem);
     border-radius: 8px;
     border: 2px solid transparent; max-width: 96%;
     background-color: #12161a;   /* opaque base; state tints layer over it */
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    /* An EMPTY string (the idle state - see webserver.c's idleRx branch)
+       collapses this box to just its padding, no line box at all - measured
+       23px vs 53px with real text present at 1440px wide. Deriving min-height
+       from the SAME font-size/line-height/padding expressions as the rule
+       above (rather than a separate guessed rem figure) keeps this identical
+       to the box's own natural with-text height at every viewport width, so
+       idle can never be shorter than busy. */
+    min-height: calc(clamp(1.05rem, 1.9vw, 1.5rem) * 1.3 + 2 * clamp(0.3rem, 0.7vw, 0.6rem));
   }
   /* Restart a CQ run without walking back to the Tab5 (Dennis WN4FLA). Sized like
      a deliberate action rather than a toolbar link: it keys the radio. */
@@ -733,6 +807,22 @@
   /* Secondary row hanging off the item above it (e.g. "change these
      credentials" under an upload link). Quieter and indented so it reads as
      belonging to its parent rather than as another action of equal weight. */
+  /* The one non-link control in this menu - selects/number/button instead of
+     a plain <a>, so it needs its own compact layout rather than .bot-menu a's
+     single-line-of-text sizing. Wraps rather than forcing the menu wider than
+     its neighbours. */
+  #gpio-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.3rem;
+              padding: 0.35rem 0.6rem; font-size: 0.78rem; color: #9aa4b2; }
+  #gpio-row select, #gpio-row input { font: inherit; background: #1f2937;
+    color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 0.15rem 0.3rem; }
+  #gpio-row input#gpio-ms { width: 4.5em; }
+  #gpio-row button { font: inherit; background: #2a3138; color: #fff;
+    border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.6rem;
+    cursor: pointer; }
+  #gpio-row button:hover { border-color: var(--accent); }
+  #gpio-row button:disabled { opacity: 0.5; cursor: default; }
+  #gpio-result { color: var(--dim); }
   .bot-menu a.subrow {
     background: #171c25; color: #9aa4b2;
     font-size: 0.78rem; padding-left: 1.1rem;
@@ -933,7 +1023,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-countdown" class="ft8-stat" hidden><div class="k">TX in</div><div class="v" id="ft8-countdown-v">--</div></div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="visibility:hidden;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -1089,6 +1179,20 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
         <a href="#" id="sc-btn" title="Assign Ctrl and Alt shortcuts on the Tab5's snap-on keyboard - which key opens the radio menus, the manual, the log, and so on">Keyboard shortcuts</a>
+        <!-- Remote QMX power cycle (Randy N4OPI): a Tab5 firmware upgrade
+             wedges the QMX (#74) and needs a manual power cycle, which
+             defeats doing the upgrade remotely. Pulses one of two GPIO pins
+             the Tab5 exposes on its Grove/EXT header (53/54, whitelisted in
+             gpio_relay.c) - wire a home-automation relay's trigger input to
+             one of them and its contacts to the QMX's PWR_ON/GND jack. -->
+        <div id="gpio-row" title="Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND jack - for power-cycling it after a remote firmware upgrade with nobody at the bench.">
+          <span>Power-cycle relay:</span>
+          <select id="gpio-pin"><option value="53">GPIO53</option><option value="54">GPIO54</option></select>
+          <select id="gpio-level"><option value="1">active HIGH</option><option value="0">active LOW</option></select>
+          <input id="gpio-ms" type="number" min="50" max="5000" step="50" value="1000" title="How long to hold the pulse, in milliseconds - long enough for your relay/QMX to register it, no longer.">ms
+          <button type="button" id="gpio-pulse-btn">Pulse</button>
+          <span id="gpio-result"></span>
+        </div>
       </div>
     </div>
     <div class="bot-menu-wrap">
@@ -1861,13 +1965,24 @@ async function promptCloudlogCreds() {
    hide it - the next poll, up to a second later, would put it straight back
    while the device was still draining the cancel. A short window instead: the
    press hides it, the poll respects that for 1.5 s, and by then the state has
-   really changed. If the device refuses, the box returns, which is honest. */
+   really changed. If the device refuses, the box returns, which is honest.
+   ⛔ visibility, NOT display - operator, 2026-09-05, after the fixed-height fix
+   above still jumped: "the TX and Arm boxes have too much padding over and
+   under the boxes... it pushes the rest down and make it jump". The fixed
+   height only made the box the SAME size in every VISIBLE state - it never
+   touched the display:none toggle this box was ALREADY using to disappear
+   entirely while idle, which is the real jump: 0 height (gone) to 7rem
+   (visible) is a far bigger jump than anything the height fix was aimed at.
+   visibility:hidden reserves the space always, so idle is just an EMPTY
+   7rem box rather than an ABSENT one - exactly the "let the dead space be
+   bigger, just don't jump" trade already agreed to, applied to the one place
+   it was still being undone. */
 let ft8StatusHideUntil = 0;
 document.getElementById("ft8-status").addEventListener("click", async (e) => {
   const box = e.currentTarget;
   if (!box.classList.contains("clearable")) return;   /* a readout, not a button */
   box.classList.remove("clearable");
-  box.style.display = "none";
+  box.style.visibility = "hidden";
   ft8StatusHideUntil = performance.now() + 1500;
   try {
     await sendCmd({ action: "qso_override", what: "cancel" });
@@ -1890,6 +2005,27 @@ document.getElementById("ft8-status").addEventListener("click", async (e) => {
          to stop a transmission quickly. Confirms are kept only where something
          is destroyed or the device reboots - deleting a QSO, clearing a memory,
          importing a config, factory reset, OTA install. */
+      if (what === "cancel") {
+        // Cancel means stop, now, with NOTHING left on screen (operator,
+        // 2026-09-05: "do not show anything - just go back to the initial
+        // view"). A per-element hide (just the countdown badge, tried first)
+        // was not enough: the very next status poll can still land before the
+        // device has finished processing the abort and re-show it from stale
+        // data, and the server used to leave a "QSO cancelled" sentence
+        // sitting in web_r for its own 20 s (see web_result_clear() in
+        // ft8_screen_view.c, which now clears it instead of setting it).
+        // Reusing ft8StatusHideUntil hides the WHOLE box immediately and
+        // holds it hidden for the same 1.5 s window the sticky-timeout clear
+        // already uses - so no stale poll, for either field, can put
+        // anything back up before the device has genuinely gone idle.
+        // visibility, not display - see the sticky-timeout handler's own
+        // comment above for why: this box's reserved height must never
+        // collapse to zero, cancel included.
+        document.getElementById("ft8-status").style.visibility = "hidden";
+        ft8StatusHideUntil = performance.now() + 1500;
+        await sendCmd({ action: "qso_override", what: "cancel" });
+        return;
+      }
       document.getElementById("ft8-webr").textContent = "Asking the Tab5 to " + what + "...";
       await sendCmd({ action: "qso_override", what: what });
     });
@@ -2275,6 +2411,51 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       } catch (err) {
         alert("No answer from the Tab5 - it may already have closed the link.");
       } finally { link.textContent = prev; }
+    });
+  })();
+
+  /* Remote QMX power-cycle relay (Randy N4OPI) - pulses GPIO53/54, see
+     main/util/gpio_relay.c for the whitelisting/bounds-checking this trusts
+     the device to do. No confirm() - operator, 2026-09-05: "please do not
+     show this window - it is an additional and unnecessary step". Picking
+     the pin/level/duration and then pressing Pulse already IS the deliberate
+     step; a dialog on top of it was a second one nobody asked for. The result
+     is still reported next to the button either way. */
+  (function () {
+    const row = document.getElementById("gpio-row");
+    // The bar's own document-level "click anywhere closes every open menu"
+    // handler (see closeAll(), wired near the bottom-bar menu setup) has no
+    // idea this row's select/input/button are meant to be interacted with
+    // repeatedly while the menu stays open - every click on them bubbled up
+    // and closed the whole Miscellaneous menu, which is why only the FIRST
+    // click ever did anything (operator, 2026-09-04). Stop it at the row.
+    if (row) row.addEventListener("click", (e) => e.stopPropagation());
+    const btn = document.getElementById("gpio-pulse-btn");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      const pin   = document.getElementById("gpio-pin").value;
+      const level = document.getElementById("gpio-level").value;
+      const ms    = document.getElementById("gpio-ms").value;
+      const out   = document.getElementById("gpio-result");
+      btn.disabled = true;
+      out.textContent = "pulsing…";
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "gpio_pulse", pin: +pin, level: +level, ms: +ms })
+        });
+        if (r.ok) {
+          out.textContent = "ok";
+        } else {
+          const txt = await r.text().catch(() => "");
+          out.textContent = "refused: " + (txt || ("HTTP " + r.status));
+        }
+      } catch (err) {
+        out.textContent = "no answer from the Tab5";
+      } finally {
+        btn.disabled = false;
+        setTimeout(() => { out.textContent = ""; }, 4000);
+      }
     });
   })();
 
@@ -5166,15 +5347,34 @@ async function tick() {
       el.className   = "st-" + st;
       el.textContent = idleRx ? "" : (s.ft8.text || "--");
       {
+        // The countdown, split out of the truncatable text above into its
+        // own never-truncated badge (webserver.c's armed_secs) - see
+        // #ft8-countdown's own CSS comment.
+        const cd  = document.getElementById("ft8-countdown");
+        const cdv = document.getElementById("ft8-countdown-v");
+        if (cd) {
+          if (st === "armed" && typeof s.ft8.armed_secs === "number") {
+            if (cdv) cdv.textContent = "~" + s.ft8.armed_secs + "s";
+            cd.hidden = false;
+          } else {
+            cd.hidden = true;
+          }
+        }
+      }
+      {
         const rx = document.getElementById("dec-rx");
         if (rx) rx.textContent = idleRx ? (s.ft8.text || "") : "";
-        /* An empty bordered box is worse than no box: hide the whole thing
-           unless it has something to say. The reply outcome lives in it too, so
-           that counts as something. */
+        /* visibility, not display (operator, 2026-09-05 - see the
+           sticky-timeout click handler's own comment for the full story):
+           the box's 7rem height must be reserved EVEN while idle, or hiding
+           it via display:none is a bigger jump than anything the fixed
+           height was meant to prevent. An empty box sitting there invisible
+           costs nothing - visibility:hidden takes it fully out of sight
+           without taking its footprint out of the layout. */
         const box = document.getElementById("ft8-status");
-        if (box) box.style.display =
-            (performance.now() < ft8StatusHideUntil) ? "none"
-          : (idleRx && !s.ft8.web_r)                 ? "none" : "";
+        if (box) box.style.visibility =
+            (performance.now() < ft8StatusHideUntil) ? "hidden"
+          : (idleRx && !s.ft8.web_r)                 ? "hidden" : "visible";
       }
       /* Clickable ONLY while timed out. The state is sticky and blocks the
          automatic pickers, so there has to be a way to clear it from here -
@@ -5212,10 +5412,15 @@ async function tick() {
       /* Show the override row only while an exchange is live. st covers the
          armed/active/waiting states; idle and done get nothing to press. */
       {
+        // visibility, not display: an appearing/disappearing row shoves the
+        // decode list below it down and up with it - the same jump Randy
+        // N4OPI reported for the status box above, one level down. Hiding by
+        // visibility keeps this row's height reserved at all times, so mid-
+        // QSO is the only thing that changes, never the layout around it.
         const ov = document.getElementById("ft8-override");
         if (ov) {
           const live = ["active","armed","wait"].indexOf(s.ft8.st) >= 0;
-          ov.style.display = live ? "" : "none";
+          ov.style.visibility = live ? "visible" : "hidden";
         }
       }
       /* Power / SWR from the last burst (Randy N4OPI). The age matters as much as

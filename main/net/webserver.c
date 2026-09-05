@@ -69,6 +69,7 @@
 #include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
+#include "gpio_relay.h"        // gpio_pulse - remote relay for a QMX power cycle
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
 #include "util/dxcc.h"        // dxcc_lookup - the decode list's COUNTRY column
@@ -304,10 +305,21 @@ static void add_ft8_tx_status(cJSON *root)
                  (double)trip_swr);
     } else if (tx_st == FT8_TX_ACTIVE) {
         st = "active";
-        snprintf(b, sizeof(b), "Transmitting: %s%s", tx_text, cq_line);
+        // Shorter on purpose (operator, 2026-09-05) - one less word to fit
+        // before this line's own ellipsis truncation has to start eating
+        // the callsign.
+        snprintf(b, sizeof(b), "TX'ing: %s%s", tx_text, cq_line);
     } else if (tx_st == FT8_TX_ARMED) {
         st = "armed";
-        snprintf(b, sizeof(b), "TX armed: %s%s (~%ds)", tx_text, cq_line, secs_until);
+        // The countdown used to be baked into this string ("... (~Ns)") -
+        // the one piece of it an operator actually needs a fresh reading of
+        // every second - and a long callsign/cq_line combination could push
+        // it past the box's single-line width, ellipsis-truncating exactly
+        // the seconds figure (Randy N4OPI: "in the boxes is a figure (~1...
+        // that is cut off - what is it?"). It is now its own field
+        // (armed_secs, below) rendered as a small badge that can never be
+        // truncated away, so it is left out of the truncatable text here.
+        snprintf(b, sizeof(b), "TX armed: %s%s", tx_text, cq_line);
     } else if (qso_st == FT8_QSO_DONE) {
         st = "done";
         char target[FT8_CALL_MAX_LEN];
@@ -336,6 +348,7 @@ static void add_ft8_tx_status(cJSON *root)
     }
     cJSON_AddStringToObject(f, "st",   st);
     cJSON_AddStringToObject(f, "text", b);
+    if (tx_st == FT8_TX_ARMED) cJSON_AddNumberToObject(f, "armed_secs", secs_until);
 
     // Power and SWR from the last burst (Randy N4OPI, top of his list for
     // operating FT8 from another room: "Ability to see Power out and SWR. As it
@@ -710,6 +723,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
+        cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
 
         // Band-plan for the current band — whole-band strip on the web UI,
         // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
@@ -1215,6 +1229,31 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "off_ms");
         uint32_t off_ms = cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 2000;
         usb_replug(off_ms);
+    } else if (action && strcmp(action, "gpio_pulse") == 0) {
+        // Remote relay pulse - Randy N4OPI's request: a QMX power-cycled
+        // through a home-automation relay wired to its PWR_ON/GND jack, so a
+        // remote firmware upgrade (which wedges the QMX, per #74) can be
+        // followed up without anyone physically at the bench. gpio_relay.c
+        // does the actual whitelisting/bounds-checking; this handler only
+        // pulls the three parameters out of the body and reports what
+        // happened - it does not repeat those checks.
+        cJSON *pin_j   = cJSON_GetObjectItem(root, "pin");
+        cJSON *level_j = cJSON_GetObjectItem(root, "level");
+        cJSON *ms_j    = cJSON_GetObjectItem(root, "ms");
+        if (!cJSON_IsNumber(pin_j) || !cJSON_IsNumber(level_j) || !cJSON_IsNumber(ms_j)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "gpio_pulse needs numeric pin, level and ms");
+            return ESP_FAIL;
+        }
+        char err[64] = "";
+        bool ok = gpio_relay_pulse((uint8_t)pin_j->valuedouble, level_j->valuedouble != 0,
+                                    (uint16_t)ms_j->valuedouble, err, sizeof(err));
+        if (!ok) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err[0] ? err : "refused");
+            return ESP_FAIL;
+        }
     } else if (action && strcmp(action, "drawer") == 0) {
         // Hidden dev action, like resmon below: open or close the Tab5's own
         // settings drawer. No web UI element references it - the browser has

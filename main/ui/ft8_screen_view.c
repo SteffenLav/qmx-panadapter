@@ -1251,6 +1251,19 @@ static void web_result_set(const char *fmt, ...)
     s_web_reply_result_us = esp_timer_get_time();
 }
 
+// Cancel is the one browser action that should leave NOTHING behind - the
+// operator asked for it to "just cancel and never show Cancelling... go back
+// to the initial view", not a confirmation that fades after WEB_RESULT_TTL_MS
+// (20 s). Setting s_web_reply_result_us to 0 makes the getter's own "nothing
+// has been said yet" check (`!s_web_reply_result_us`) true immediately,
+// rather than waiting for the TTL - same field, same getter, just skipping
+// straight to the state it would reach on its own in 20 s.
+static void web_result_clear(void)
+{
+    s_web_reply_result[0] = '\0';
+    s_web_reply_result_us = 0;
+}
+
 void ft8_screen_view_request_reply(const char *call)
 {
     if (!call || !call[0]) return;
@@ -1486,7 +1499,12 @@ static void t_clock_cb(lv_timer_t *t)
             // "mid-QSO over-ride/cancel button".
             ft8_tx_disarm();
             ft8_qso_abort();
-            web_result_set("QSO cancelled");
+            // No confirmation text - operator, 2026-09-05: "do not show
+            // anything - just go back to the initial view". Every other
+            // override outcome is worth reading (Armed/Busy/refused); Cancel
+            // is the one action whose whole point is to stop, immediately,
+            // with nothing left to look at afterward.
+            web_result_clear();
             ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
         } else {
             ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
