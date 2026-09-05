@@ -4,6 +4,7 @@
 #include "util/freq_gridlines.h"
 #include "ui_theme.h"
 #include "cw_decode.h"   /* the QMX decodes CW itself; this just shows it */
+LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "nvs.h"
 #include "wspr_screen_view.h"
 #include "render.h"
@@ -3409,6 +3410,23 @@ static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
 static lv_obj_t *s_cw_strip;
 static unsigned  s_cw_seen;          /* change detector - repaint only on new text */
 
+/* The line is a fixed grid of columns that WRAPS and overwrites itself, the way
+ * the QMX's own scroll line does, rather than scrolling text leftwards. Nothing
+ * moves, so a callsign you are half-way through reading stays where it is; only
+ * the oldest end is replaced.
+ *
+ * That needs a MONOSPACE font or the columns are a fiction - qmx_mono_25 is the
+ * one the radio-menus screen already uses, 15 px per character, so 1280 px of
+ * screen is 84 columns with a little padding.
+ *
+ * A travelling gap marks where the next character will land, which is the only
+ * way to tell new text from old once the line has wrapped. The speed estimate
+ * rides in that gap: it is the one thing that wants to be near the writing
+ * point rather than pinned to an end that the text is about to overwrite. */
+#define CW_LINE_COLS 84
+static char s_cw_line[CW_LINE_COLS + 1];
+static int  s_cw_col;
+
 static void cw_strip_tick_cb(lv_timer_t *t)
 {
     (void)t;
@@ -3426,13 +3444,30 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     }
 
     unsigned total = cw_decode_total();
-    if (total == s_cw_seen && !lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) return;
-    s_cw_seen = total;
+    bool fresh = (total != s_cw_seen);
+    if (!fresh && !lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) return;
+
+    if (fresh) {
+        /* Only what arrived since the last tick, so each character is
+         * placed exactly once and the line is never rebuilt from scratch. */
+        unsigned n_new = total - s_cw_seen;
+        if (n_new > CW_LINE_COLS) n_new = CW_LINE_COLS;  /* a long gap: the
+                                                            older part would
+                                                            be overwritten
+                                                            anyway */
+        char fresh_txt[CW_LINE_COLS + 1];
+        cw_decode_tail(fresh_txt, n_new + 1);
+        for (const char *q = fresh_txt; *q; q++) {
+            s_cw_line[s_cw_col] = *q;
+            s_cw_col = (s_cw_col + 1) % CW_LINE_COLS;
+        }
+        s_cw_seen = total;
+    }
 
     /* Enough characters to fill the width at this font; the ring keeps the
      * rest for the CW page. */
-    char tail[96];
-    cw_decode_tail(tail, sizeof(tail));
+    char tail[8];
+    cw_decode_tail(tail, sizeof(tail));   /* just to ask "anything yet?" */
 
     /* Speed of what is being received, when there is enough to say.
      * ⚠ It is a THROUGHPUT figure - it counts the gaps between words and
@@ -3444,11 +3479,26 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     int wpm = cw_decode_wpm();
     if (tail[0] == '\0') {
         lv_label_set_text(s_cw_strip, "CW decode: listening...");
-    } else if (wpm > 0) {
-        lv_label_set_text_fmt(s_cw_strip, "%s   [~%d wpm]", tail, wpm);
-    } else {
-        lv_label_set_text(s_cw_strip, tail);
+        lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_cw_strip);
+        return;
     }
+
+    /* Paint the grid, then lay the gap over it AT the write position, so
+     * it wraps with the text instead of being a fixed slot the text runs
+     * into. */
+    char disp[CW_LINE_COLS + 1];
+    memcpy(disp, s_cw_line, CW_LINE_COLS);
+    disp[CW_LINE_COLS] = '\0';
+
+    char mark[16];
+    int  mlen = (wpm > 0) ? snprintf(mark, sizeof(mark), "  ~%d wpm  ", wpm)
+                          : snprintf(mark, sizeof(mark), "    ");
+    if (mlen > (int)sizeof(mark) - 1) mlen = (int)sizeof(mark) - 1;
+    for (int i = 0; i < mlen; i++)
+        disp[(s_cw_col + i) % CW_LINE_COLS] = mark[i];
+
+    lv_label_set_text(s_cw_strip, disp);
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_cw_strip);
 }
@@ -3456,13 +3506,18 @@ static void cw_strip_tick_cb(lv_timer_t *t)
 static void cw_strip_init(void)
 {
     if (s_cw_strip) return;
+    memset(s_cw_line, ' ', CW_LINE_COLS);
+    s_cw_line[CW_LINE_COLS] = '\0';
+    s_cw_col = 0;
     s_cw_strip = lv_label_create(lv_scr_act());
     lv_label_set_long_mode(s_cw_strip, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(s_cw_strip, DISPLAY_H_RES);
     /* Directly above the band-plan strip, i.e. along the bottom edge of the
      * waterfall, where it covers the oldest rows rather than the newest. */
     lv_obj_align(s_cw_strip, LV_ALIGN_BOTTOM_MID, 0, -(BOTTOM_BAR_H + BANDPLAN_H));
-    lv_obj_set_style_text_font(s_cw_strip, &lv_font_montserrat_24, 0);
+    /* MONOSPACE, or the wrapping columns above are a fiction. Same font the
+     * radio-menus screen uses; 15 px per character. */
+    lv_obj_set_style_text_font(s_cw_strip, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_cw_strip, lv_color_hex(0x30E0B0), 0);
     lv_obj_set_style_bg_color(s_cw_strip, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_cw_strip, LV_OPA_70, 0);
