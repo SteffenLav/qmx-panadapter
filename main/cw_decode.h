@@ -26,6 +26,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,48 @@ extern "C" {
 
 // Longest text one TB; response can carry (the radio's buffer is 40).
 #define CW_DECODE_MAX_CHUNK 64
+
+// ---- noise squelch ---------------------------------------------------------
+//
+// With no signal the radio's decoder chews on noise and emits a stream of E and
+// T - "TTTTTTTTETTTTTTT" - because those are the two SHORTEST Morse symbols (a
+// single dit and a single dah), so a random threshold crossing is far more
+// likely to land on one of them than on anything longer. It is worst just after
+// switching to CW, while the decoder's own amplitude tracking is still settling.
+//
+// So: hold a run of E/T back rather than printing it, and decide once something
+// else arrives. A SHORT run was real text and is released intact; a long one was
+// noise and is dropped. Spaces neither start nor break a run - noise produces
+// plenty of them - but any other character ends it.
+//
+// This cannot make a wrong decision permanently: at most CW_SQUELCH_RUN
+// characters are ever held, and a genuine "EEEE" (unusual in real CW) costs
+// nothing but those characters.
+#define CW_SQUELCH_RUN 5      // E/T in a row before a run is called noise
+#define CW_SQUELCH_HOLD 24    // characters held while deciding
+
+typedef struct {
+    char pend[CW_SQUELCH_HOLD];
+    int  n_pend;   // held, waiting on a verdict
+    int  run;      // consecutive E/T (may exceed CW_SQUELCH_RUN)
+    int  emitted;  // anything released yet? - stops a leading space
+} cw_squelch_t;
+
+// Push one decoded character. Writes any characters that are now released to
+// out and returns how many. PORTABLE; host-tested.
+int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz);
+
+// ---- speed estimate --------------------------------------------------------
+//
+// Words per minute from characters and elapsed time, on the PARIS convention of
+// 5 characters to a word.
+//
+// ⚠ This is a THROUGHPUT figure, not the sender's keying speed. It counts the
+// gaps between words and between overs, so it reads LOW during a real QSO and
+// only approaches the true speed during continuous sending. A true keying speed
+// needs element timing, and the radio hands us finished characters - the timing
+// is gone by then. Returns 0 when there is not enough to say.
+int cw_wpm_estimate(int chars, unsigned elapsed_ms);
 
 // PORTABLE, no ESP dependencies, host-tested by test/cw_decode_harness.c.
 //
@@ -61,9 +104,14 @@ size_t cw_decode_tail(char *out, size_t out_sz);
 // Copy the whole scrollback, oldest first - what the CW page shows.
 size_t cw_decode_snapshot(char *out, size_t out_sz);
 
-// Total characters ever decoded. A cheap change-detector for a UI that only
-// wants to repaint when something arrived.
+// Total characters ever decoded (after squelch). A cheap change-detector for a
+// UI that only wants to repaint when something arrived.
 unsigned cw_decode_total(void);
+
+// Estimated speed of what is being received, words per minute, over the last
+// few tens of seconds. 0 means "not enough to say" - which is the honest answer
+// on a quiet band and is what the UI should show rather than a stale number.
+int cw_decode_wpm(void);
 
 // Forget everything (mode change, or the operator clearing the window).
 void cw_decode_clear(void);

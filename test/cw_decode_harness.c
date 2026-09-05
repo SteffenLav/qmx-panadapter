@@ -99,6 +99,65 @@ int main(void)
         }
     }
 
+    /* ---- noise squelch ------------------------------------------------ */
+    printf("\ncw_squelch_push\n");
+    {
+        struct { const char *what; const char *in; const char *want; } cases[] = {
+          /* The reported symptom: a long E/T run with nothing else is noise. */
+          { "pure noise run is dropped",   "TTTTTTTTETTTTTTT",      ""            },
+          { "noise then real text",        "TTTTTTTTETTTTTTTCQ",    "CQ"          },
+          /* Real text keeps its E and T - this is the half that must not break. */
+          { "TEST survives",               "TEST K",                "TEST K"      },
+          { "a callsign with T and E",     "OZ1LAV DE K",           "OZ1LAV DE K" },
+          { "TT inside a word",            "BETTER K",              "BETTER K"    },
+          { "short E/T run released",      "ETET K",                "ETET K"      },
+          /* Spaced-out noise is still noise - a space must not release a run. */
+          { "spaced noise is dropped",     "T T T T T T E T CQ",    "CQ"          },
+          { "run resets after real text",  "CQ TTTTTTTT DE K",      "CQ DE K"     },
+        };
+        for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
+            cw_squelch_t st;
+            memset(&st, 0, sizeof(st));
+            char got[128]; size_t g = 0;
+            for (const char *q = cases[i].in; *q; q++) {
+                char rel[CW_SQUELCH_HOLD + 2];
+                int m = cw_squelch_push(&st, *q, rel, sizeof(rel));
+                for (int k = 0; k < m && g < sizeof(got)-1; k++) got[g++] = rel[k];
+            }
+            got[g] = 0;
+            if (strcmp(got, cases[i].want) != 0) {
+                fails++;
+                printf("  FAIL %-30s in=\"%s\"  got \"%s\" want \"%s\"\n",
+                       cases[i].what, cases[i].in, got, cases[i].want);
+            } else {
+                printf("  ok   %-30s -> \"%s\"\n", cases[i].what, got);
+            }
+        }
+    }
+
+    /* ---- speed --------------------------------------------------------- */
+    printf("\ncw_wpm_estimate\n");
+    {
+        struct { const char *what; int chars; unsigned ms; int want; } w[] = {
+          /* PARIS: five characters to a word. */
+          { "100 chars in 60 s = 20 wpm",  100, 60000, 20 },
+          { "50 chars in 60 s = 10 wpm",    50, 60000, 10 },
+          { "25 chars in 15 s = 20 wpm",    25, 15000, 20 },
+          { "nothing yet",                   0, 60000,  0 },
+          { "window too short to judge",    10,   500,  0 },
+          { "absurd rate is capped",    1000000,  1000, 99 },
+        };
+        for (size_t i = 0; i < sizeof(w)/sizeof(w[0]); i++) {
+            int got = cw_wpm_estimate(w[i].chars, w[i].ms);
+            if (got != w[i].want) {
+                fails++;
+                printf("  FAIL %-30s got %d want %d\n", w[i].what, got, w[i].want);
+            } else {
+                printf("  ok   %-30s -> %d\n", w[i].what, got);
+            }
+        }
+    }
+
     printf(fails ? "\nFAILED (%d)\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

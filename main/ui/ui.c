@@ -3433,8 +3433,19 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * rest for the CW page. */
     char tail[96];
     cw_decode_tail(tail, sizeof(tail));
+
+    /* Speed of what is being received, when there is enough to say.
+     * ⚠ It is a THROUGHPUT figure - it counts the gaps between words and
+     * between overs - so it reads LOW during a real exchange and only
+     * approaches the sender's keying speed during continuous sending. A
+     * true keying speed needs element timing, and the radio hands us
+     * finished characters, so the timing is already gone. Hence the "~",
+     * and hence showing nothing at all rather than a stale number. */
+    int wpm = cw_decode_wpm();
     if (tail[0] == '\0') {
         lv_label_set_text(s_cw_strip, "CW decode: listening...");
+    } else if (wpm > 0) {
+        lv_label_set_text_fmt(s_cw_strip, "%s   [~%d wpm]", tail, wpm);
     } else {
         lv_label_set_text(s_cw_strip, tail);
     }
