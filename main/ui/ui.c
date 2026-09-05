@@ -3423,7 +3423,32 @@ static unsigned  s_cw_seen;          /* change detector - repaint only on new te
  * way to tell new text from old once the line has wrapped. The speed estimate
  * rides in that gap: it is the one thing that wants to be near the writing
  * point rather than pinned to an end that the text is about to overwrite. */
-#define CW_LINE_COLS 84
+/* qmx_mono_25 advances 15 px, so 1280 px of screen is 84 columns.
+ *
+ * The line is in two parts. A fixed GREEN prefix carries the live speed, and
+ * the decoded text runs in CYAN after it. The speed lives in the prefix rather
+ * than travelling with the cursor because it is a property of the whole line,
+ * not of the place the next character lands - and a number the eye has to chase
+ * around a wrapping line is a number nobody reads.
+ *
+ * ⭐ The speed is ZERO-PADDED to two digits on purpose. At 8 wpm "8" and at
+ * 19 wpm "19" are different widths, so an unpadded number would move the colon
+ * - and with it every column of decoded text - every time the estimate crossed
+ * ten. The prefix width is a constant, and CW_PREFIX_COLS must match the format
+ * string or the two labels overlap. */
+#define CW_PREFIX_FMT   "CW [~%s wpm]:"
+#define CW_PREFIX_COLS  15           /* "CW [~08 wpm]:" is 13, plus two spaces */
+/* If the format string changes, this catches it at COMPILE time rather than as
+ * two labels quietly overlapping on screen. */
+_Static_assert(sizeof("CW [~08 wpm]:") - 1 + 2 == CW_PREFIX_COLS,
+               "CW_PREFIX_COLS must match CW_PREFIX_FMT rendered with two digits");
+#define CW_LINE_COLS    (84 - CW_PREFIX_COLS)
+#define CW_COL_PX       15
+/* Half a line of clear air above the band-plan strip, so the text is not
+ * sitting on the bar below it (operator). */
+#define CW_LIFT_PX      15
+
+static lv_obj_t *s_cw_prefix;
 static char s_cw_line[CW_LINE_COLS + 1];
 static int  s_cw_col;
 
@@ -3438,8 +3463,10 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     bool want = (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
                 (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0);
     if (!want) {
-        if (!lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN))
+        if (!lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
+        }
         return;
     }
 
@@ -3476,10 +3503,25 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * true keying speed needs element timing, and the radio hands us
      * finished characters, so the timing is already gone. Hence the "~",
      * and hence showing nothing at all rather than a stale number. */
-    int wpm = cw_decode_wpm();
+    /* The prefix is rewritten every tick: it is cheap, and the speed inside
+     * it is live. "--" rather than a number when there is not enough to
+     * say, which is the honest state on a quiet band. */
+    int  wpm = cw_decode_wpm();
+    /* Clamped again here, not only in cw_wpm_estimate(): the whole point of the
+     * two-digit field is that the prefix width never changes, so a three-digit
+     * number would shift every column of decoded text. Stating it at the place
+     * that depends on it also keeps the compiler happy about the buffer. */
+    if (wpm > 99) wpm = 99;
+    char wtxt[8];
+    if (wpm > 0) snprintf(wtxt, sizeof(wtxt), "%02d", wpm);
+    else         snprintf(wtxt, sizeof(wtxt), "--");
+    lv_label_set_text_fmt(s_cw_prefix, CW_PREFIX_FMT, wtxt);
+
     if (tail[0] == '\0') {
-        lv_label_set_text(s_cw_strip, "CW decode: listening...");
+        lv_label_set_text(s_cw_strip, "listening...");
         lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_cw_prefix);
         lv_obj_move_foreground(s_cw_strip);
         return;
     }
@@ -3491,15 +3533,16 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     memcpy(disp, s_cw_line, CW_LINE_COLS);
     disp[CW_LINE_COLS] = '\0';
 
-    char mark[16];
-    int  mlen = (wpm > 0) ? snprintf(mark, sizeof(mark), "  ~%d wpm  ", wpm)
-                          : snprintf(mark, sizeof(mark), "    ");
-    if (mlen > (int)sizeof(mark) - 1) mlen = (int)sizeof(mark) - 1;
-    for (int i = 0; i < mlen; i++)
-        disp[(s_cw_col + i) % CW_LINE_COLS] = mark[i];
+    /* Two blank columns ahead of the write position. Once the line has
+     * wrapped this gap is the only thing separating what has just been
+     * decoded from what is about to be overwritten. */
+    for (int i = 0; i < 2; i++)
+        disp[(s_cw_col + i) % CW_LINE_COLS] = ' ';
 
     lv_label_set_text(s_cw_strip, disp);
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_cw_prefix);
     lv_obj_move_foreground(s_cw_strip);
 }
 
@@ -3509,22 +3552,49 @@ static void cw_strip_init(void)
     memset(s_cw_line, ' ', CW_LINE_COLS);
     s_cw_line[CW_LINE_COLS] = '\0';
     s_cw_col = 0;
+    /* TWO labels, not one with colour markup: the prefix and the text are
+     * different colours and the text half is a fixed-width grid, so giving each
+     * its own object keeps the column arithmetic honest and needs nothing from
+     * LVGL's recolour parsing. They abut, and share a background, so they read
+     * as one line.
+     *
+     * ⛔ Neither is clickable. They sit over the waterfall, and the waterfall is
+     * tap-to-tune - a label that ate those taps would be a bug, not a feature.
+     * The bottom edge is also the memory-channel swipe zone. */
+    const int y_off = -(BOTTOM_BAR_H + BANDPLAN_H + CW_LIFT_PX);
+
+    s_cw_prefix = lv_label_create(lv_scr_act());
+    lv_label_set_long_mode(s_cw_prefix, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_cw_prefix, CW_PREFIX_COLS * CW_COL_PX);
+    lv_obj_align(s_cw_prefix, LV_ALIGN_BOTTOM_LEFT, 0, y_off);
+    lv_obj_set_style_text_font(s_cw_prefix, &qmx_mono_25, 0);
+    lv_obj_set_style_text_color(s_cw_prefix, lv_color_hex(0x30E060), 0);   /* green */
+    lv_obj_set_style_bg_color(s_cw_prefix, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_cw_prefix, LV_OPA_70, 0);
+    lv_obj_set_style_pad_top(s_cw_prefix, 4, 0);
+    lv_obj_set_style_pad_bottom(s_cw_prefix, 4, 0);
+    lv_obj_set_style_pad_left(s_cw_prefix, 4, 0);
+    lv_obj_set_style_pad_right(s_cw_prefix, 0, 0);
+    lv_obj_add_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cw_prefix, UI_FLAG_NOT_HOT);
+
     s_cw_strip = lv_label_create(lv_scr_act());
     lv_label_set_long_mode(s_cw_strip, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(s_cw_strip, DISPLAY_H_RES);
-    /* Directly above the band-plan strip, i.e. along the bottom edge of the
-     * waterfall, where it covers the oldest rows rather than the newest. */
-    lv_obj_align(s_cw_strip, LV_ALIGN_BOTTOM_MID, 0, -(BOTTOM_BAR_H + BANDPLAN_H));
-    /* MONOSPACE, or the wrapping columns above are a fiction. Same font the
-     * radio-menus screen uses; 15 px per character. */
+    lv_obj_set_width(s_cw_strip, CW_LINE_COLS * CW_COL_PX);
+    /* Starts exactly where the prefix ends - both are the same monospace font,
+     * so this is arithmetic rather than a guess. */
+    lv_obj_align(s_cw_strip, LV_ALIGN_BOTTOM_LEFT,
+                 4 + CW_PREFIX_COLS * CW_COL_PX, y_off);
     lv_obj_set_style_text_font(s_cw_strip, &qmx_mono_25, 0);
-    lv_obj_set_style_text_color(s_cw_strip, lv_color_hex(0x30E0B0), 0);
+    lv_obj_set_style_text_color(s_cw_strip, lv_color_hex(0x30E0E0), 0);   /* cyan */
     lv_obj_set_style_bg_color(s_cw_strip, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_cw_strip, LV_OPA_70, 0);
-    lv_obj_set_style_pad_all(s_cw_strip, 4, 0);
+    lv_obj_set_style_pad_top(s_cw_strip, 4, 0);
+    lv_obj_set_style_pad_bottom(s_cw_strip, 4, 0);
+    lv_obj_set_style_pad_left(s_cw_strip, 0, 0);
+    lv_obj_set_style_pad_right(s_cw_strip, 4, 0);
     lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
-    /* Not clickable: it sits over the waterfall, and the waterfall is
-     * tap-to-tune. A label that ate those taps would be a bug, not a feature. */
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_cw_strip, UI_FLAG_NOT_HOT);
 
