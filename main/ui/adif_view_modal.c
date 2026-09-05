@@ -159,6 +159,87 @@ static void list_render(void);   // fwd (sel_reset re-renders)
 // SPIFFS - seconds of work. The QMX terminal already learned this the hard way:
 // a 2.4 s blocking open froze taskLVGL. So the button starts a worker and a
 // 200 ms poll timer re-renders the list once it has finished.
+// A result the operator has to READ gets a window with an OK button, not a
+// toast. A toast is right for something you may glance at and may miss - "SD
+// card removed" - and wrong for the outcome of an action you just asked for:
+// it fades on its own timer, it can be missed entirely while you are looking at
+// the log underneath it, and "restored 432 of 432" is the whole answer to the
+// question the button was pressed to ask. Dismissing it is the acknowledgement.
+static lv_obj_t *s_msg_modal, *s_msg_title, *s_msg_text;
+
+static void msg_ok_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_msg_modal) lv_obj_add_flag(s_msg_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Built lazily and kept, like every other modal here. Two lines of body text at
+// montserrat_24 is the design size; the panel hugs whatever it is given.
+static void msg_show(const char *title_text, const char *body_text, bool good)
+{
+    if (!s_msg_modal) {
+        lv_obj_t *scr = lv_scr_act();
+        s_msg_modal = lv_obj_create(scr);
+        lv_obj_set_size(s_msg_modal, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_pos(s_msg_modal, 0, 0);
+        lv_obj_set_style_bg_color(s_msg_modal, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_msg_modal, UI_OPA_MODAL_SCRIM, 0);
+        lv_obj_set_style_border_width(s_msg_modal, 0, 0);
+        lv_obj_set_style_radius(s_msg_modal, 0, 0);
+        lv_obj_set_style_pad_all(s_msg_modal, 0, 0);
+        lv_obj_clear_flag(s_msg_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *panel = lv_obj_create(s_msg_modal);
+        lv_obj_set_size(panel, 760, LV_SIZE_CONTENT);
+        lv_obj_center(panel);
+        lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+        lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_border_width(panel, 2, 0);
+        lv_obj_set_style_radius(panel, 10, 0);
+        lv_obj_set_style_pad_all(panel, 28, 0);
+        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_row(panel, 20, 0);
+
+        s_msg_title = lv_label_create(panel);
+        lv_obj_set_style_text_font(s_msg_title, &lv_font_montserrat_32, 0);
+
+        s_msg_text = lv_label_create(panel);
+        lv_label_set_long_mode(s_msg_text, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_msg_text, LV_PCT(100));
+        lv_obj_set_style_text_align(s_msg_text, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(s_msg_text, lv_color_hex(0xdddddd), 0);
+        lv_obj_set_style_text_font(s_msg_text, &lv_font_montserrat_24, 0);
+
+        // OK is the ONLY control, and it is neutral: this window reports what
+        // already happened, so there is nothing here to accept or refuse.
+        lv_obj_t *ok = lv_btn_create(panel);
+        lv_obj_set_size(ok, 220, 72);
+        lv_obj_set_style_bg_color(ok, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(ok, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(ok, 2, 0);
+        lv_obj_set_style_radius(ok, 8, 0);
+        lv_obj_add_event_cb(ok, msg_ok_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *ok_lbl = lv_label_create(ok);
+        lv_label_set_text(ok_lbl, "OK");
+        lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(ok_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(ok_lbl);
+        // Deliberately NOT ui_kbd_set_buttons(): the log viewer already owns
+        // Esc -> Close, and nothing here would hand it back on dismissal.
+    }
+
+    lv_label_set_text(s_msg_title, title_text);
+    lv_obj_set_style_text_color(s_msg_title,
+        lv_color_hex(good ? UI_COLOR_SUCCESS_BORDER : 0xffa040), 0);
+    lv_label_set_text(s_msg_text, body_text);
+    lv_obj_clear_flag(s_msg_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_msg_modal);   // the log viewer is a sibling underneath
+}
+
 typedef enum { SDR_IDLE = 0, SDR_RUNNING, SDR_DONE } sdr_state_t;
 static volatile sdr_state_t s_sdr_state = SDR_IDLE;
 static adif_import_result_t s_sdr_result;
@@ -182,25 +263,44 @@ static void restore_poll_cb(lv_timer_t *t)
     if (s_sdr_state != SDR_DONE) return;
 
     const adif_import_result_t *r = &s_sdr_result;
-    char msg[160];
+    const char *title = "Restore from SD";
+    char msg[240];
+    bool good = false;
     if (s_sdr_added < 0 && r->found == 0) {
-        snprintf(msg, sizeof(msg), "No QSO log found on the SD card");
+        title = "No log on the card";
+        snprintf(msg, sizeof(msg),
+                 "Nothing was restored.\n\nCheck the card is in the slot and holds "
+                 "qmx-panadapter/qso.adi.");
     } else if (s_sdr_added < 0) {
-        snprintf(msg, sizeof(msg), "Restore failed - the log could not be written");
+        title = "Restore failed";
+        snprintf(msg, sizeof(msg),
+                 "The log could not be written.\n\nThe storage may be full.");
     } else if (r->added) {
-        // Say what happened to all of them, not just the ones that landed: an
+        // Say what happened to ALL of them, not just the ones that landed: an
         // import reporting only "added" cannot tell "already logged" from
         // "unreadable", and reporting the first when it was the second is a
         // false statement about someone's log.
-        snprintf(msg, sizeof(msg), "Restored %d QSO%s from SD (%d already logged)",
-                 r->added, r->added == 1 ? "" : "s", r->duplicate);
+        good = true;
+        title = "Restored";
+        int n = snprintf(msg, sizeof(msg),
+                         "%d contact%s restored from the SD card.\n\n"
+                         "%d already in the log.",
+                         r->added, r->added == 1 ? "" : "s", r->duplicate);
+        // Only mentioned when there were any: a permanent "0 could not be read"
+        // invites worry about a number that is almost always zero.
+        if (r->unreadable > 0 && n > 0 && n < (int)sizeof(msg))
+            snprintf(msg + n, sizeof(msg) - n, "\n%d could not be read.", r->unreadable);
     } else if (r->found) {
-        snprintf(msg, sizeof(msg), "Nothing new - all %d already in the log", r->duplicate);
+        good = true;
+        title = "Nothing to restore";
+        snprintf(msg, sizeof(msg),
+                 "All %d contacts on the card are already in the log.", r->duplicate);
     } else {
-        snprintf(msg, sizeof(msg), "No contacts found in the card's log file");
+        title = "Nothing to restore";
+        snprintf(msg, sizeof(msg), "No contacts were found in the card's log file.");
     }
-    ui_toast(msg);
-    ESP_LOGI(TAG, "SD restore: %s", msg);
+    msg_show(title, msg, good);
+    ESP_LOGI(TAG, "SD restore: %s - %s", title, msg);
 
     s_sdr_state = SDR_IDLE;
     lv_timer_del(t);
@@ -212,7 +312,10 @@ static void restore_sd_btn_cb(lv_event_t *e)
 {
     (void)e;
     if (s_sdr_state != SDR_IDLE) return;   // one at a time
-    if (!sd_archive_is_mounted()) { ui_toast("No SD card in the slot"); return; }
+    if (!sd_archive_is_mounted()) {
+        msg_show("No SD card", "There is no card in the slot to restore from.", false);
+        return;
+    }
 
     // No confirm gesture, deliberately, and unlike "Delete all" next to it:
     // this only ever ADDS contacts, and one already in the log is skipped - so
@@ -223,7 +326,7 @@ static void restore_sd_btn_cb(lv_event_t *e)
     if (!psram_task_create_reapable(restore_task, "adif_sdr", 4096, NULL,
                                     tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
         s_sdr_state = SDR_IDLE;
-        ui_toast("Could not start the restore");
+        msg_show("Restore failed", "The restore could not be started.", false);
     }
 }
 
@@ -669,9 +772,10 @@ static void del_test_btn_cb(lv_event_t *e)
     if (idxs) heap_caps_free(idxs);
 
     ESP_LOGI(TAG, "deleted %d test (sim-mode, FREQ=0) QSO record(s)", deleted);
-    char msg[48];
-    snprintf(msg, sizeof(msg), "Deleted %d test QSO%s", deleted, deleted == 1 ? "" : "s");
-    ui_toast(msg);
+    char msg[96];
+    snprintf(msg, sizeof(msg), "%d test contact%s removed from the log.",
+             deleted, deleted == 1 ? "" : "s");
+    msg_show("Deleted", msg, true);
     sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
@@ -694,9 +798,12 @@ static void del_all_btn_cb(lv_event_t *e)
     int n = adif_log_count();
     adif_log_clear();
     ESP_LOGI(TAG, "deleted ALL %d QSO record(s) (operator, ADIF viewer)", n);
-    char msg[48];
-    snprintf(msg, sizeof(msg), "Deleted all %d QSO%s", n, n == 1 ? "" : "s");
-    ui_toast(msg);
+    char msg[128];
+    // The one message here that must not be missable: it cannot be undone, and
+    // the count is the only record of what was lost.
+    snprintf(msg, sizeof(msg), "All %d contact%s deleted.\n\nThis cannot be undone.",
+             n, n == 1 ? "" : "s");
+    msg_show("Log cleared", msg, false);
     sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
