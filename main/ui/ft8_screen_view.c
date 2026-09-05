@@ -1237,6 +1237,8 @@ static volatile bool     s_web_preset_ft4 = false;
 #define WEB_RESULT_TTL_MS 20000
 static char          s_web_reply_result[64];
 static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
+static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
+static bool          s_web_done_said;            // DONE reported once per QSO
 
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
@@ -1249,6 +1251,31 @@ static void web_result_set(const char *fmt, ...)
     vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
     va_end(ap);
     s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = false;   // an answer to a click expires with the click
+}
+
+// A completed QSO is the one result here that nobody clicked for, so nothing
+// will come along to replace it and a 20 s timer is the wrong owner (Randy
+// N4OPI: he steps away, comes back, and wants to see that the contact
+// finished). It stands until the operator's NEXT action writes over it.
+//
+// ⭐ Why this is in web_r and not in the live status: the two obvious
+// implementations were both rejected, and this is the third. Holding the engine
+// in DONE longer blocks the next QSO - exactly what forced the 20 s expiry onto
+// the sticky TIMEOUT notice, which stops the automatic pickers while it stands.
+// Freezing the display shows DONE while the machine has moved on, which is a
+// lie about live state. web_r is neither: it is a record of something that
+// HAPPENED, it holds nothing, and this file's own comment already draws that
+// line - a live condition has its own field, an event does not.
+static void web_result_set_sticky(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void web_result_set_sticky(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
+    va_end(ap);
+    s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = true;
 }
 
 // Cancel is the one browser action that should leave NOTHING behind - the
@@ -1262,6 +1289,7 @@ static void web_result_clear(void)
 {
     s_web_reply_result[0] = '\0';
     s_web_reply_result_us = 0;
+    s_web_result_sticky   = false;
 }
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1295,7 +1323,8 @@ const char *ft8_screen_view_get_web_reply_result(void)
     // the LVGL task owns the buffer, and a reader must not write into another
     // task's string.
     if (!s_web_reply_result[0] || !s_web_reply_result_us) return "";
-    if (esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
+    if (!s_web_result_sticky &&
+        esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
         return "";
     return s_web_reply_result;
 }
@@ -1706,6 +1735,9 @@ static void t_clock_cb(lv_timer_t *t)
         int  secs_until = 0;
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
+        // Re-armed for the next contact the moment this one stops being DONE,
+        // so every completed QSO announces itself exactly once.
+        if (qso_st != FT8_QSO_DONE) s_web_done_said = false;
         char b[128];
 
         // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
@@ -1866,6 +1898,15 @@ static void t_clock_cb(lv_timer_t *t)
             // Bright green: QSO complete
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
+            // Tell the browser ONCE, on the edge. DONE is transient - the
+            // machine returns to IDLE and takes the message with it, which is
+            // fine on the Tab5 (you are sitting in front of it) and useless
+            // from another room. The sticky copy survives that transition
+            // because it is a record, not a mirror of the state.
+            if (!s_web_done_said) {
+                s_web_done_said = true;
+                web_result_set_sticky("%s  QSO complete", target);
+            }
             snprintf(b, sizeof(b), "QSO %s: complete!", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);

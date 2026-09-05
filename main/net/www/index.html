@@ -583,6 +583,9 @@
   #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* A finished contact is good news and the one line here that waits for you,
+     so it does not read as dim status. Same green the Tab5 uses for it. */
+  #ft8-webr.webr-done { color: #4caf50; font-weight: 600; }
   /* SCALED, not fixed. Every user has a different window and browser zoom, and
      a size picked at one of them is wrong at the others - which is how the same
      panel fitted at 67% and covered its own buttons at 100%. clamp() ties these
@@ -1443,7 +1446,7 @@
            answers that only when the station happens to be on the air right
            now; this is the same question asked whenever he likes. -->
       <div style="margin:0 0 10px;">
-        <input type="search" id="adifv-search" placeholder="Search call, grid, band, mode, date, reference…"
+        <input type="search" id="adifv-search" placeholder="Search a callsign, band, mode, date, grid or park"
                autocomplete="off" spellcheck="false"
                style="width:100%; box-sizing:border-box; padding:7px 10px; font-size:14px;
                       background:#0e0e0e; color:#ddd; border:1px solid #494949; border-radius:6px;">
@@ -5540,8 +5543,18 @@ async function tick() {
         if (box) box.classList.toggle("clearable", s.ft8.st === "timeout");
       }
       /* Outcome of the last browser-initiated reply, straight from the device -
-         "Armed: ...", "Busy: working X", "no longer in the decode list". */
-      document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";
+         "Armed: ...", "Busy: working X", "no longer in the decode list".
+         A completed QSO also lands here and, unlike the others, does NOT expire
+         on the device's 20 s timer: nobody clicked for it, so nothing would come
+         along to replace it (Randy N4OPI - he steps away and wants to find out
+         that the contact finished). It reads as success rather than as another
+         line of dim status, and the operator's next action writes over it. */
+      {
+        const wr = s.ft8.web_r || "";
+        const el = document.getElementById("ft8-webr");
+        el.textContent = wr;
+        el.classList.toggle("webr-done", /QSO complete$/.test(wr));
+      }
       if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity, true);
       /* The occupancy strip and the slot clock. Redrawn only when the picture
          actually changes - the masks move once a slot, not ten times a second. */

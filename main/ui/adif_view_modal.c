@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>   // toupper - the search is case-insensitive
 #include <time.h>
 
 #include "esp_log.h"
@@ -93,6 +94,34 @@ static int64_t   s_del_all_arm_us = 0;     // 0 = not armed
 // an old log at home shouldn't open onto an empty list).
 static bool s_today_only = true;
 
+// Search. Gyula HA3HZ: "I like the LOG to tell me if there was a connection and
+// on which band and mode. If it turns gray, then I know there was." The grey-out
+// in the decode list only answers that when the station happens to be on the air
+// at that moment; this asks the same question whenever he likes, and on the Tab5
+// rather than only in the browser - the screen he is actually sitting at.
+static lv_obj_t *s_search_ta, *s_search_kb;
+static char      s_query[24];        // uppercased; empty = show everything
+
+// Panel geometry. The list cap SHRINKS while the keyboard is up, because a
+// search you cannot see the results of is not a search - see kb_show().
+#define ADIF_LIST_MAX_H      370
+// 430 until the search row was added. That row is 48 px plus the panel's
+// 12 px pad_row - 60 px the panel did not have, so "Delete all / Restore
+// from SD / Close" were pushed off the bottom of the screen. The list pays
+// for the row it sits under (about 1.5 QSOs); the panel cap is unchanged,
+// because 690 was chosen to keep those buttons on a 720 px display and that
+// reasoning still holds. Anything added to this panel has to come out of
+// here too.
+#define ADIF_PANEL_MAX_H     690
+#define ADIF_KB_H            280     // same height every other modal's keyboard uses
+#define ADIF_LIST_MAX_H_KB   110     // ~2-3 rows still visible above the keys
+// Measured off a bench screenshot: with the keyboard up the panel used ~365 px
+// of its 420 px budget while the list was capped at 150 and the search box
+// still shared the header. Giving search its own ~56 px row would have pushed
+// that to ~421 and clipped the buttons off the bottom, so the list gives the
+// row back. Re-measure if any of these three change.
+#define ADIF_PANEL_MAX_H_KB  (720 - ADIF_KB_H - 20)
+
 // Counts from the most recent list_render() pass, for show()'s fallback.
 static int s_last_total = 0;
 static int s_last_today = 0;
@@ -143,6 +172,7 @@ static void del_bar_show(void)
 }
 
 static void list_render(void);   // fwd (sel_reset re-renders)
+static void kb_hide(void);       // fwd (modal_close stows the keyboard)
 
 // ---------------------------------------------------------------------------
 // "Restore from SD" - put the log back from the card's own mirror.
@@ -422,6 +452,7 @@ static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
     sel_reset(false);   // drop any pending delete selection with the modal
+    kb_hide();          // and never leave the keyboard up over the screen behind
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_open = false;
 }
@@ -459,6 +490,8 @@ static lv_obj_t *make_row(lv_obj_t *parent)
 #define COL_GROW_CALL  2
 #define COL_GROW_CTRY  3
 #define COL_GROW_NARROW 1
+// "US-1241" / "G/LD-049" - wider than a report, narrower than a country.
+#define COL_GROW_REF   2
 
 static void add_col(lv_obj_t *row, const char *text, int grow,
                      const lv_font_t *font, uint32_t color)
@@ -484,6 +517,10 @@ static void add_header_row(lv_obj_t *parent)
     add_col(row, "Time",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
     add_col(row, "Sent",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
     add_col(row, "Rcvd",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    // The park or summit THEY were activating (ADIF SIG_INFO). Added because the
+    // search box offered to find it while the list never showed it - a column you
+    // can search and cannot see is a promise the screen does not keep.
+    add_col(row, "Ref",     COL_GROW_REF,    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
 }
 
 // Build one QSO's row from a raw ADIF record line - callsign, DXCC country
@@ -516,6 +553,8 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     }
     adif_log_extract_field(line, "RST_SENT", rst_sent, sizeof(rst_sent));
     adif_log_extract_field(line, "RST_RCVD", rst_rcvd, sizeof(rst_rcvd));
+    char sig_info[20] = "";
+    adif_log_extract_field(line, "SIG_INFO", sig_info, sizeof(sig_info));
 
     // date is "YYYYMMDD", time_on is "HHMMSS" (or "HHMM") - slice down to
     // "MM-DD" / "HH:MM" for a compact column.
@@ -547,6 +586,11 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     add_col(row, hhmm,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, rst_sent,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, rst_rcvd,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    // Most QSOs are not park-to-park, so an empty cell is the normal case and
+    // gets the same "-" the reports use rather than a blank that reads as a
+    // rendering fault.
+    add_col(row, sig_info[0] ? sig_info : "-",
+                                          COL_GROW_REF,    &lv_font_montserrat_24, UI_COLOR_TEXT);
 }
 
 // Rebuild the list from the live ADIF log, newest record first, honouring
@@ -554,6 +598,67 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
 // button's label. The button reads as an ACTION, not a state: it shows the
 // view you'll switch TO by pressing it (operator feedback 2026-07-16 -
 // "you press what you get"); the title text carries the current state.
+// Does one raw ADIF record match the search box?
+//
+// Matched against the fields that IDENTIFY a contact - call, mode, band, date,
+// grid, reference - rather than the whole line, so a stray digit inside a
+// report or a timestamp cannot produce a hit the operator cannot explain.
+// Space-separated terms must ALL match, which is what makes "ha3 20m" mean what
+// it looks like.
+static bool record_matches_query(const char *raw)
+{
+    if (!s_query[0]) return true;
+
+    char hay[160];
+    int  n = 0;
+    static const char *FIELDS[] = { "CALL", "SUBMODE", "MODE", "BAND",
+                                    "QSO_DATE", "GRIDSQUARE", "SIG_INFO", "SIG" };
+    for (size_t i = 0; i < sizeof(FIELDS) / sizeof(FIELDS[0]); i++) {
+        char v[24];
+        if (!adif_log_extract_field(raw, FIELDS[i], v, sizeof(v))) continue;
+        for (char *c = v; *c && n < (int)sizeof(hay) - 2; c++)
+            hay[n++] = (char)toupper((unsigned char)*c);
+        if (n < (int)sizeof(hay) - 1) hay[n++] = ' ';
+    }
+
+    // The country too, even though no ADIF field carries it.
+    //
+    // It is DERIVED from the callsign at render time, which is why the first
+    // version could not search it - and it is the one column sitting on screen
+    // that the box appeared to ignore, so searching "Spain" found nothing while
+    // the word was right there in the list. Same dxcc_lookup() the row itself
+    // uses, so what is displayed and what is searched cannot disagree.
+    {
+        char call[24];
+        if (adif_log_extract_field(raw, "CALL", call, sizeof(call))) {
+            const char *country = dxcc_lookup(call);
+            if (country) {
+                for (const char *c = country; *c && n < (int)sizeof(hay) - 2; c++)
+                    hay[n++] = (char)toupper((unsigned char)*c);
+                if (n < (int)sizeof(hay) - 1) hay[n++] = ' ';
+            }
+        }
+    }
+    hay[n] = '\0';
+
+    // Every term must appear somewhere in the record.
+    const char *t = s_query;
+    while (*t) {
+        while (*t == ' ') t++;
+        if (!*t) break;
+        const char *e = t;
+        while (*e && *e != ' ') e++;
+        size_t len = (size_t)(e - t);
+        char term[24];
+        if (len >= sizeof(term)) len = sizeof(term) - 1;
+        memcpy(term, t, len);
+        term[len] = '\0';
+        if (!strstr(hay, term)) return false;
+        t = e;
+    }
+    return true;
+}
+
 static void list_render(void)
 {
     int64_t t_start = esp_timer_get_time();
@@ -627,6 +732,7 @@ static void list_render(void)
             if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
                 atof(freq_s) < 0.001) s_test_count++;
             if (s_today_only && !is_today) continue;
+            if (!record_matches_query(raw)) continue;
             char *slot = lines + (size_t)(matched % ring_cap) * 1024;
             strncpy(slot, raw, 1023);
             slot[1023] = '\0';
@@ -675,7 +781,13 @@ static void list_render(void)
 
     if (matched == 0) {
         lv_obj_t *lbl = lv_label_create(s_list);
-        lv_label_set_text(lbl, "No QSOs today yet");
+        // A search that finds nothing is an ANSWER, not an empty screen - it is
+        // the whole reason the box is here, so say what it means.
+        if (s_query[0])
+            lv_label_set_text_fmt(lbl, "Nothing matches \"%s\"%s\n- so this one has not been worked.",
+                                  s_query, s_today_only ? " today" : "");
+        else
+            lv_label_set_text(lbl, s_today_only ? "No QSOs today yet" : "No QSOs logged");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         heap_caps_free(lines);
@@ -809,6 +921,63 @@ static void del_all_btn_cb(lv_event_t *e)
     sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
+// Give the list back its height, and the panel its place.
+static void kb_hide(void)
+{
+    if (s_search_kb) lv_obj_add_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN);
+    if (s_list)  lv_obj_set_style_max_height(s_list,  ADIF_LIST_MAX_H, 0);
+    if (s_panel) {
+        lv_obj_set_style_max_height(s_panel, ADIF_PANEL_MAX_H, 0);
+        lv_obj_set_align(s_panel, LV_ALIGN_CENTER);
+    }
+}
+
+// ⛔ The keyboard must not cover the rows. A 280 px keyboard over a centred
+// 690 px panel on a 720 px screen would bury the list, the buttons, and the
+// matches - so the operator would be typing a search blind, which is the one
+// thing this box exists to avoid. The panel moves to the TOP and the list cap
+// drops to ~3 rows, which is enough to answer "have I worked this one" while
+// still showing the field being typed into.
+static void kb_show(void)
+{
+    if (!s_search_kb) return;
+    lv_keyboard_set_textarea(s_search_kb, s_search_ta);
+    // ui_osk_show(), not a bare flag clear: it declines to show the on-screen
+    // keyboard when a Bluetooth one is connected and already doing the job
+    // (#273), and its own comment asks callers to keep that decision in one
+    // place. Clearing the flag by hand would put half a screen of keys in front
+    // of an operator who is typing on a real keyboard.
+    ui_osk_show(s_search_kb);
+
+    // ...so only give up the list's height if a keyboard actually appeared.
+    // With a Bluetooth keyboard there is nothing covering the rows and no
+    // reason to shrink anything.
+    if (lv_obj_has_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN)) return;
+    if (s_list)  lv_obj_set_style_max_height(s_list,  ADIF_LIST_MAX_H_KB, 0);
+    if (s_panel) {
+        lv_obj_set_style_max_height(s_panel, ADIF_PANEL_MAX_H_KB, 0);
+        lv_obj_set_align(s_panel, LV_ALIGN_TOP_MID);
+    }
+}
+
+// Re-filter on every keystroke. The whole log is re-read per render, which is
+// the same work the Today/All toggle already does and is measured in single-
+// digit milliseconds for a few hundred records - and typing is slow.
+static void search_ta_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) { kb_show(); return; }
+    if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) { kb_hide(); return; }
+    if (code != LV_EVENT_VALUE_CHANGED) return;
+
+    const char *txt = lv_textarea_get_text(s_search_ta);
+    size_t i = 0;
+    for (; txt && txt[i] && i < sizeof(s_query) - 1; i++)
+        s_query[i] = (char)toupper((unsigned char)txt[i]);
+    s_query[i] = '\0';
+    list_render();
+}
+
 static void filter_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -834,12 +1003,19 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_width(s_panel, 900);
+    // 900 until the Ref column arrived. The display is 1280 wide, so this keeps a
+    // 50 px margin each side and gives the new column its room without squeezing
+    // Country, which is the widest text in the table.
+    lv_obj_set_width(s_panel, 1180);
     lv_obj_set_height(s_panel, LV_SIZE_CONTENT);
-    // Chrome (title header + column header + Close button + paddings) is ~230 px;
-    // plus the list's 430 px cap that leaves ~660 and keeps Close on-screen (the
-    // panel is centred in a 720 px-tall display). If the list cap changes, revisit.
-    lv_obj_set_style_max_height(s_panel, 690, 0);
+    // Chrome (title header + search row + column header + bottom buttons +
+    // paddings) is ~290 px; plus ADIF_LIST_MAX_H that leaves ~660 and keeps the
+    // buttons on-screen (the panel is centred in a 720 px-tall display).
+    // ⛔ These three numbers are ONE budget: ADIF_LIST_MAX_H, this cap, and
+    // whatever rows the panel holds. Adding a row without taking it out of the
+    // list pushes the buttons off the bottom - which is exactly what the search
+    // row did. If any of them changes, re-measure on the device.
+    lv_obj_set_style_max_height(s_panel, ADIF_PANEL_MAX_H, 0);
     lv_obj_set_align(s_panel, LV_ALIGN_CENTER);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -900,6 +1076,29 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_lbl_filter, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_lbl_filter, &lv_font_montserrat_24, 0);
     lv_obj_center(s_lbl_filter);
+
+    // Search gets its OWN row under the header, full width.
+    //
+    // It was first put in the header strip beside the title, to cost the list no
+    // height - and that squeezed the title into it ("ADIF Log - 25 QSOs (0 toda"
+    // running straight into the box). The header already carries a title whose
+    // width changes with the counts, plus up to two buttons; there is no room
+    // for a third flexible item, and a row of its own is ~56 px the list can
+    // spare.
+    s_search_ta = lv_textarea_create(s_panel);
+    lv_textarea_set_one_line(s_search_ta, true);
+    // Names what it searches in the operator's words. "reference" was ours -
+    // it means the POTA park or SOTA summit, and nobody had to guess that.
+    lv_textarea_set_placeholder_text(s_search_ta,
+        "Search a callsign, country, band, mode, date or park/summit reference");
+    lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
+    lv_obj_set_width(s_search_ta, LV_PCT(100));
+    lv_obj_set_style_text_font(s_search_ta, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_search_ta);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_FOCUSED,       NULL);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_DEFOCUSED,     NULL);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_READY,         NULL);
 
     // Header row sits outside the scrollable list (a sibling, not a child) so
     // column titles stay pinned in place while the QSO rows scroll under it.
@@ -998,6 +1197,38 @@ static void modal_build(void)
     lv_obj_center(close_lbl);
     ui_kbd_set_buttons(NULL, close_btn);   // physical keyboard Esc -> Close
 
+    // On the modal, not the panel: it has to be able to sit BELOW the panel
+    // rather than inside it. Hidden until the search field is touched.
+    s_search_kb = lv_keyboard_create(s_modal);
+    // ui_theme_style_keyboard() alone styles the keyboard's own background but
+    // NOT its keys, so on its own it leaves LVGL's default white keys - which
+    // is what shipped to the bench and looked nothing like the rest of the app.
+    // Every other modal here adds this per-key style as well; same block, same
+    // values, so this keyboard matches the ones beside it.
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
+    }
+    lv_obj_add_style(s_search_kb, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_search_kb);
+    lv_obj_set_size(s_search_kb, LV_PCT(100), ADIF_KB_H);
+    lv_obj_align(s_search_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(s_search_kb, LV_KEYBOARD_MODE_TEXT_UPPER);   // callsigns
+    ui_theme_keyboard_attach_caps_cycle_upper(s_search_kb);
+    // The key LABELS. Missing this is what still made it look like a different
+    // keyboard after the per-key colours were fixed - the letters came out at
+    // LVGL's default size against montserrat_28 everywhere else, and that is
+    // the difference the eye actually catches.
+    lv_obj_set_style_text_font(s_search_kb, &lv_font_montserrat_28, 0);
+    lv_obj_add_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN);
+
     // Single-record delete confirm bar: floating overlay across the bottom of
     // the panel (FLOATING = ignored by the flex layout, so nothing reflows),
     // hidden until a row is long-press-selected and released.
@@ -1056,6 +1287,12 @@ void adif_view_modal_init(void)
 void adif_view_modal_show(void)
 {
     modal_build();
+    // A fresh open starts from no search: a query left over from last time
+    // would silently hide records, and the box holding the reason for it is
+    // easy to miss beside the title.
+    s_query[0] = 0;
+    if (s_search_ta) lv_textarea_set_text(s_search_ta, "");
+    kb_hide();
     // Open on the Today view (the POTA-activation use case) - but fall back
     // to All when today is empty and older QSOs exist, so reviewing the log
     // at home doesn't open onto a blank list. An unsynced clock degrades the
