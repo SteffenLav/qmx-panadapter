@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.10.9** — 2026-09-05
+**v1.11.0** — 2026-09-05
+
+**Your QSO log, recoverable from the card it was already backed up to — and searchable on both screens.**
+
+- **Restore your QSO log straight from the microSD card** *(Gyula HA3HZ)*. The card has always held a copy of the log, and until now the Tab5 could only ever write to it. Gyula lost his log to a firmware reinstall with 432 contacts sitting on the card, inside the radio's own screen, and no way to reach them without a computer — he reasonably assumed the device would notice them. It does now: **Restore from SD** in the Tab5's log window, or **↳ Restore from SD card** in the browser's QSO Logs menu. It merges, so contacts already logged are skipped and pressing it twice does nothing.
+- **The card keeps the previous log as `qso.prev.adi`.** The card mirrors the *present*, so a QSO deleted before a restart used to be gone from the card as well at the next start-up. Whenever the log about to be written is smaller than the one already there, the older copy is kept first — normal logging never disturbs it, so it holds the last larger version for as long as it takes you to notice.
+- **Search the QSO log, on both screens** *(Gyula HA3HZ)*. Type any part of a callsign, country, band, mode, date or park reference and the list filters as you type; several words must all match. If nothing matches it says so — *"so this one has not been worked"* — which is the question worth asking of a log. The decode list already greys out a station you have worked, but only while that station is on the air; this asks the same question whenever you like.
+- **Export just the contacts you pick** *(Gyula HA3HZ)*. In the browser's log viewer, tick rows and press **Export selected** to save them as their own ADIF file. The tick box in the header takes everything currently shown, so a search plus one tick gives you a single day, band or park. Each record is exported exactly as the Tab5 wrote it, so nothing the table does not display is lost.
+- **A finished QSO now waits for you in the browser** *(Randy N4OPI)*. `<callsign> QSO complete` stays on screen in green until you do something else, instead of clearing itself after twenty seconds like every other message there — so stepping away and coming back still tells you the contact finished. The radio does not wait; only the message does.
+- **A restore or a delete on the Tab5 reports in a window with an OK button**, not a message that fades on its own. The result of something you asked for is worth reading. Clearing the whole log now says "This cannot be undone" in as many words.
+- **The Tab5's log gains a Ref column** — the park or summit the other station was activating — because the new search offered to find it while the list never showed it.
+- **An import that could not read a file no longer claims everything was already logged.** It now reports how many contacts were found, added, already present and unreadable. A file too large gives a plain sentence instead of a raw browser error, the size limit is four times higher, and a slow upload is retried rather than abandoned.
+
+## Previous Releases
+
+### v1.10.9 — 2026-09-05
 
 **The web decode-list jump, root-caused for real this time; WSPR's PA-voltage guard made reliable; a remote QMX power-cycle relay.**
 
@@ -13,8 +28,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **WSPR's finals-protection PA-voltage guard is confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. Restoring the radio's power on leaving WSPR was a single CAT write with nothing checking it landed; a background check now confirms and resends if needed. Verified on real hardware with an 11.5 V → 6.0 V → 11.5 V round trip against the radio's own read-back.
 - **The WSPR countdown no longer appears to hit zero and restart on the first cycle.** The PA-voltage question is now asked the moment WSPR transmit is turned on, giving it the full two minutes to be answered instead of a few hundred milliseconds.
 - **New: a remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade no longer needs someone at the bench.
-
-## Previous Releases
 
 ### v1.10.8 — 2026-09-03
 

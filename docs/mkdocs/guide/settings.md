@@ -470,6 +470,7 @@ Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is 
 | File | Contents |
 |------|----------|
 | `qso.adi` | ADIF QSO log — after each new entry with WiFi off, otherwise at the next start-up |
+| `qso.prev.adi` | The QSO log as it was just before it last got **smaller** — see below |
 | `qmx-config.txt` | All settings + memory channels, as INI text (restore via **Config** upload) |
 | `lotw_cert.b64`, `lotw_key.b64` | Your LoTW signing certificate + private key, so a restored device can sign for LoTW |
 | `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
@@ -493,6 +494,31 @@ If no card is inserted the dot is absent, which is not an error.
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
+
+### Restoring the log from the card
+
+The card copy used to be one-way: the Tab5 wrote `qso.adi` to it and could never
+read it back, so a log lost to an erase-and-reinstall needed a computer, a
+browser, and knowing the file was on the card at all. It now restores from the
+device itself.
+
+- **On the Tab5:** open the log window (**ADIF Log**) and press **Restore from
+  SD**.
+- **In the browser:** **QSO Logs ▲ → ↳ Restore from SD card**.
+
+Both merge: contacts already in the log are skipped, nothing is duplicated, and
+nothing already logged is lost — so it is safe to press twice. You are told what
+happened, including how many were already there and how many could not be read.
+
+**`qso.prev.adi` — the copy from before.** The card mirrors the *present*, so a
+QSO deleted before a restart is gone from the card at the next start-up too.
+Whenever the log about to be written is **smaller** than the one already on the
+card, the older copy is kept as `qso.prev.adi` first. Normal logging grows the
+file and never disturbs it, so it holds the last larger version for as long as
+it takes you to notice.
+
+To use it, copy `qso.prev.adi` off the card (**Files ▲ → SD Files** in the
+browser, or a card reader) and restore it with **ADIF restore ↑**.
 
 ## Activation (POTA / SOTA)
 
@@ -602,8 +628,26 @@ Reporter requests.
 | Time | UTC time |
 | Sent | Your signal report (SNR) |
 | Rcvd | Their signal report (SNR) |
+| Ref | The park or summit *they* were activating, when the contact came from a spot |
 
 A sticky header row stays pinned while you scroll. Even-numbered rows are lightly shaded so long logs stay easy to scan.
+
+**Search** — the field under the title filters the list as you type. It matches
+**callsign, country, mode, band, date, grid and the park/summit reference**, on
+any part of a word, and several words must all match: `ha3 20m` finds HA3-prefix
+contacts on 20 m only. Country is searchable even though the ADIF file does not
+store it — it comes from the same prefix lookup the Country column shows, so the
+two can never disagree.
+
+If nothing matches, the list says so in as many words: *"Nothing matches X — so
+this one has not been worked."* That is the question the search exists to
+answer. The decode list already greys out a station you have worked, but only
+while that station happens to be on the air; this asks the same question
+whenever you like *(Gyula HA3HZ)*.
+
+Tapping the field brings up the keyboard, and the window moves up and shortens
+so the matches stay visible while you type. Clear the field to see the whole log
+again; the search also clears itself each time you open the window.
 
 **Today/All filter** — the viewer opens on **Today** (falling back to All when nothing was logged today). The toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts.
 
@@ -611,7 +655,17 @@ A sticky header row stays pinned while you scroll. Even-numbered rows are lightl
 
 **Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 
+**Restore from SD** — the middle button reads the QSO log back off the microSD
+card. See [Restoring the log from the card](#restoring-the-log-from-the-card)
+below; there is nothing to choose, and contacts already logged are skipped, so
+pressing it twice does nothing.
+
 **Delete all** — the red-bordered button at the bottom-left erases the **whole** log. Two-tap confirm: the first tap arms it (the label changes to "ALL *N*?"), a second tap within 5 seconds deletes; wait and it disarms itself. There is no undo — download the ADIF from the web UI first if you want a copy. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit.
+
+Anything this window does — a restore, a delete — reports back in a small panel
+with an **OK** button rather than a message that fades on its own. The result of
+something you asked for is worth reading, and dismissing it is how you say you
+did.
 
 Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs → View / edit log**).
 

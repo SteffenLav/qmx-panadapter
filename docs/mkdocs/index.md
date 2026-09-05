@@ -106,22 +106,21 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.9 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.11.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.10.9 — the web decode-list jump root-caused for real, WSPR's PA-voltage
-guard made reliable, and a remote QMX power-cycle relay.** The decode list no longer
-jumps: the real cause was the status box disappearing from the page entirely while
-idle rather than staying reserved at a fixed size, not its size while visible as the
-previous fix assumed. WSPR's finals-protection PA-voltage restore is now confirmed and
-retried instead of a single unverified write — checked end to end on real hardware,
-including the WSPR countdown that used to appear to hit zero and restart on the first
-cycle. New: a "Power-cycle relay" control in the web UI drives a Tab5 GPIO pin to
-trigger an external relay wired to the QMX's power switch, for power-cycling it
-remotely after a firmware upgrade.
+**New in v1.11.0 — restore your QSO log straight from the microSD card, search it on
+either screen, and export just the contacts you pick.** The card has always held a copy
+of the log and the Tab5 could only ever write to it; **Restore from SD** now reads it
+back, on the device itself with no computer needed, and the copy from just before the
+log last got smaller is kept beside it as `qso.prev.adi` so a deletion noticed two
+restarts later is still recoverable. The log is searchable on both screens — any part of
+a callsign, country, band, mode, date or park — and a search that finds nothing says so.
+In the browser you can tick rows and export just those as their own ADIF file, and a
+finished QSO stays on screen until you come back to it.
 
 **In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
@@ -156,7 +155,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.9.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

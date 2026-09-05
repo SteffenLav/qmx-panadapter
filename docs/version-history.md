@@ -3149,3 +3149,32 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 **New**
 
 - **A remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen level and duration — wire a home-automation relay to it and the QMX's PWR_ON/GND jack, and a remote firmware upgrade (which always needs the QMX power-cycled afterward) no longer needs someone physically at the radio.
+
+### Shipped in v1.11.0 — 2026-09-05
+
+**Your QSO log, recoverable from the card it was already backed up to — and searchable on both screens.**
+
+All of it from one report. Gyula HA3HZ chose the erase option when updating his
+firmware, having first saved his log, and then found no way to get 432 contacts
+back onto the device. Two of my own explanations for that were wrong and were
+tested against his actual files on real hardware before the third was found: the
+importer was never at fault, because his log never reached it. The microSD
+archive had only ever been able to write *to* the card.
+
+**Restoring the log**
+
+- **Restore straight from the microSD card.** The card has always held a copy of the QSO log, and the Tab5 could only ever write to it — so recovery needed a computer, a browser, and knowing the file was on the card at all. It reads it back now: **Restore from SD** in the Tab5's own log window (no computer, which is the POTA case), or **↳ Restore from SD card** in the browser's QSO Logs menu. Both merge, so contacts already logged are skipped, nothing is duplicated, and pressing it twice does nothing.
+- **The previous log is kept as `qso.prev.adi`.** The card mirrors the *present*, so a contact deleted before a restart was gone from the card too at the next start-up — which is exactly what happened on the bench while testing this, and the records only survived because a copy happened to be sitting on the build machine. Whenever the log about to be written is **smaller** than the one on the card, the older copy is kept first. Growth is ordinary logging and never disturbs it, so it holds the last larger version for as long as it takes to notice. Recover it with the file browser and **ADIF restore ↑**.
+- **An import now says what actually happened.** Reporting only how many contacts were added cannot distinguish "all of these were already logged" from "not one of them could be read", and the page asserted the first in both cases. It now reports found, added, already present and unreadable. A file over the size limit gives a plain sentence rather than a raw browser error; the limit itself went from 256 KB to 1 MB (about 1200 QSOs to roughly five thousand); and an upload interrupted by a slow link is retried instead of abandoned.
+
+**Searching and exporting**
+
+- **Search the log, on the Tab5 and in the browser.** Any part of a callsign, country, band, mode, date, grid or park reference; several words must all match, so `ha3 20m` narrows to HA3-prefix contacts on 20 m. A search that finds nothing says so in as many words — *"so this one has not been worked"* — because that is the question the box exists to answer. The decode list already greys out a worked station, but only while that station is on the air; this asks the same question whenever you like. Country is searchable although no ADIF field stores it: it comes from the same prefix lookup the Country column shows, so the two cannot disagree.
+- **The Tab5's log gains a Ref column** — the park or summit the other station was activating. Added because the search offered to find it while the list never showed it, and a column you can search but cannot see is a promise the screen does not keep. The window is wider to fit it.
+- **Export just the contacts you pick** (browser). Tick rows and press **Export selected** to save them as their own ADIF file. The tick box in the header takes everything **currently shown**, so a search plus one tick gives a single day, band or park as a file. Each record is exported exactly as the Tab5 wrote it, rather than rebuilt from the columns on screen, so fields the table does not display survive the trip.
+
+**Messages that wait to be read**
+
+- **A finished QSO stays on screen in the browser** *(Randy N4OPI)*. `<callsign> QSO complete` in green, held until you do something else, where every other message in that line clears itself after twenty seconds. Stepping away and coming back now tells you the contact finished. Two other designs were rejected first: holding the radio in the completed state blocks the next QSO, and freezing the display misreports what the radio is doing. This is neither — it is a record that the contact happened, and the radio carries on regardless. The Tab5's own label is unchanged; it is the browser that has to cope with nobody watching.
+- **Results on the Tab5 are a window with an OK button**, not a message that fades. A restore, a delete of test contacts, or clearing the whole log all report in a panel you dismiss — the outcome of something you asked for is worth reading, and dismissing it is how you say you read it. Clearing the log spells out "This cannot be undone".
+

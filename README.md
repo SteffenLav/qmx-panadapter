@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.9.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.11.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.10.9 — the web decode-list jump, root-caused for real; WSPR's PA-voltage guard made reliable; a remote QMX power-cycle relay.**
+> **New in v1.11.0 — restore your QSO log straight from the microSD card, search it on either screen, and export just the contacts you pick.**
 >
 > **The web decode list no longer jumps**, for real this time *(Randy N4OPI)*. The v1.10.8 fix sized the status box against the wrong "worst case" text and still moved on an armed transmit or a busy exchange; the actual cause turned out to be the box disappearing entirely (`display:none`) while idle rather than staying reserved at a fixed size — every hide path now uses `visibility:hidden` instead, so its footprint never collapses. The countdown is now its own badge that can't be truncated away, Cancel clears immediately with no leftover "Cancelling" text, and the box no longer exceeds the width of the occupancy strip below it.
 >
@@ -26,7 +26,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.9.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -95,7 +95,10 @@ signed on the device itself with your own callsign certificate. A signal report 
 park/summit reference can be corrected after the fact from the browser's log table. The
 browser's **ADIF restore** merges a previously downloaded (or any logger's) ADIF file
 back in — contacts already logged are skipped — so an erase-and-reinstall does not cost
-you your worked-station history.
+you your worked-station history. Or **restore straight from the microSD card**, on the
+Tab5 itself with no computer at all. **Search the log** on either screen — by callsign,
+country, band, mode, date or park — and in the browser **tick rows and export just
+those** as their own ADIF file.
 
 **Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
 **RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
@@ -186,8 +189,12 @@ switching on** and your whole station is mirrored to `/qmx-panadapter/`: the ADI
 full config export, your LoTW certificate and key, the diagnostic log and a
 self-describing `README.txt`. Continuous with WiFi off (green **SD** dot); one complete
 backup per start-up with WiFi on (yellow dot), because the card and the WiFi
-co-processor share a bus. *(The card holds credentials — WiFi password, QRZ/eQSL logins,
-LoTW private key — so keep it physically secure.)*
+co-processor share a bus. It restores too, which is the half that was missing: **Restore
+from SD** in the Tab5's own log window, or from the browser. And because the card mirrors
+the *present*, the copy from just before the log last got **smaller** is kept beside it as
+`qso.prev.adi` — so a deletion you notice two restarts later is still recoverable.
+*(The card holds credentials — WiFi password, QRZ/eQSL logins, LoTW private key — so keep
+it physically secure.)*
 
 **Diagnostics** — An always-on diagnostic log, nothing to enable: 5 MB in RAM, a rolling
 copy in flash that survives a power cut, and a full mirror to microSD if a card is in.
@@ -492,7 +499,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **Zoom sync.** The browser renders the same zoomed window as the Tab5.
 
-**QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). The menu is only shown when the log contains data.
+**QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). **Search** (v1.11.0) filters as you type across callsign, band, mode, date, grid and reference, and says plainly when nothing matches — the answer to "have I worked this one". **Tick rows and press Export selected** to save just those contacts as their own ADIF file; the header tick box takes everything currently shown, so a search plus one tick gives you a single day, band or park. The menu is only shown when the log contains data.
 
 Three columns can be corrected by clicking them: the two **reports**, and **Their ref** — the park or summit the *other* station was activating. That last one is how a Park-to-Park contact gets into the log at all: while you are operating, the other activator's park number is on the POTA spots page on your phone and not in anything the radio sends, so you note it down and enter it when you get home *(Don Adams WB0LQW)*. It also fills itself in when the contact came from a spot, and it does that whether or not you were activating — the ADIF field records *their* activity, and a hunter's log should say which park they worked. It is Park-to-Park only when you were in a park as well, which is why the column is not called that. **An empty cell is not a fault**: the reference is matched from the POTA spot feed on the exact callsign, and not every digital-mode activator registers the activation — some just start calling `CQ POTA` — so where there is no spot there is no reference, which is better than a wrong one *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme (POTA, SOTA or WWFF) from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go again. Nothing else is editable: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so a wrong one is a delete-and-re-log.
 
