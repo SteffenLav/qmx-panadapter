@@ -1,6 +1,7 @@
 #include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
 #include "util/pan_view.h"
+#include "util/format_freq.h"   // #302: ONE frequency format
 #include "util/freq_gridlines.h"
 #include "ui_theme.h"
 #include "cw_decode.h"   /* the QMX decodes CW itself; this just shows it */
@@ -1046,8 +1047,7 @@ void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_
         s_freq_buf[0] = '\0';
     } else {
         unsigned long hz = (unsigned long)initial_hz;
-        snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu.%03lu.%03lu",
-                 hz / 1000000UL, (hz / 1000UL) % 1000UL, hz % 1000UL);
+        format_freq_hz((uint32_t)hz, g_freq_style, s_freq_buf, sizeof(s_freq_buf));
     }
     strncpy(s_freq_mode_sel, initial_mode && initial_mode[0] ? initial_mode : "", sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
@@ -4630,10 +4630,7 @@ static void update_freq_axis_labels(uint32_t center_hz)
         /* Hertz only when the grid is finer than a kilohertz - printing three
          * more digits under a 1 kHz grid is exactly the noise this replaced. */
         if (step < 1000)
-            snprintf(buf, sizeof(buf), "%lu.%03lu.%03lu",
-                     (unsigned long)(hz / 1000000),
-                     (unsigned long)((hz / 1000) % 1000),
-                     (unsigned long)(hz % 1000));
+            format_freq_hz((uint32_t)hz, g_freq_style, buf, sizeof(buf));
         else
             snprintf(buf, sizeof(buf), "%lu.%03lu",
                      (unsigned long)(hz / 1000000),
@@ -6587,9 +6584,8 @@ static void pinch_poll_cb(lv_timer_t *t)
              * what the gesture is doing. */
             char fb[32];
             uint32_t t = (uint32_t)tgt;
-            snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
-                     (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
-                     (unsigned long)(t % 1000));
+            { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
+              snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
             lv_label_set_text(s_freq_label, fb);
         }
         if (s_tune_tooltip) {
@@ -6722,7 +6718,9 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t mhz = freq_hz / 1000000;
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
-    snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
+    { char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+      snprintf(buf, sizeof(buf), "Freq: %s Hz", fs); }
+    (void)mhz; (void)khz; (void)hz;
     if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
         s_freq_shown_hz = freq_hz;   // so ui_refresh_freq_label() can early-out
@@ -6831,10 +6829,8 @@ void ui_refresh_freq_label(uint32_t freq_hz)
     if (freq_hz == s_freq_shown_hz) return;   // already correct - the normal case
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz",
-             (unsigned long)(freq_hz / 1000000),
-             (unsigned long)((freq_hz / 1000) % 1000),
-             (unsigned long)(freq_hz % 1000));
+    { char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+      snprintf(buf, sizeof(buf), "Freq: %s Hz", fs); }
     // Short timeout: this runs on every FA poll, so a busy moment simply means
     // the next poll ~150 ms later picks it up. No warning log for the same
     // reason - it would be noise, and the retry IS the recovery.
@@ -7899,10 +7895,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 int64_t tip_hz = s_target_freq_hz;
                 if (tip_hz > 0) {
                     char tbuf[24];
-                    snprintf(tbuf, sizeof(tbuf), "%lu.%03lu.%03lu",
-                        (unsigned long)(tip_hz / 1000000),
-                        (unsigned long)((tip_hz / 1000) % 1000),
-                        (unsigned long)(tip_hz % 1000));
+                    format_freq_hz((uint32_t)tip_hz, g_freq_style, tbuf, sizeof(tbuf));
                     lv_label_set_text(s_tune_tooltip, tbuf);
                     // Position label directly above cyan line, centered on it.
                     // Clamp tx to keep label on-screen, then position with offset from the cyan x.
@@ -8705,9 +8698,8 @@ static void touch_event_cb(lv_event_t *e)
             if (s_freq_label) {
                 char fb[32];
                 uint32_t t = (uint32_t)target;
-                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
-                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
-                         (unsigned long)(t % 1000));
+                { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
+                  snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
             }
             return;
@@ -8747,9 +8739,8 @@ static void touch_event_cb(lv_event_t *e)
             if (s_freq_label) {
                 char fb[32];
                 uint32_t t = (uint32_t)target;
-                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
-                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
-                         (unsigned long)(t % 1000));
+                { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
+                  snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
             }
             return;
@@ -9163,9 +9154,8 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             update_bandplan_strip((uint32_t)target);             // live strip position
             if (s_freq_label) {                                  // live top-bar freq (display only)
                 char fb[32]; uint32_t t = (uint32_t)target;
-                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
-                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
-                         (unsigned long)(t % 1000));
+                { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
+                  snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
             }
         }

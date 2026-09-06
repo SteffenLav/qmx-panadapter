@@ -60,6 +60,7 @@ idf_component_register(
         "util/dma_owners.c"   # TEMP INSTRUMENT #283 - delete with the diagnosis
         "util/task_stacks.c"  # on-demand stack headroom - /api/cmd {"action":"stacks"}
         "adif/adif_check.c"   # #263 "check my log" - portable, host-tested
+        "util/format_freq.c"  # #302 one frequency format, portable
         "cat/cat.c"
         "audio/audio.c"
         "audio/cw_audio.c"
