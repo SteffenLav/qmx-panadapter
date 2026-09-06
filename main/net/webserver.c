@@ -745,6 +745,18 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
         cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+        // The relay's wiring, so the web form comes back showing the pin and
+        // polarity this station is actually wired for instead of resetting to
+        // GP53/HIGH/1000 ms on every page load (Randy N4OPI, 2026-09-06).
+        {
+            uint8_t  rpin = 53; bool rlevel = true; uint16_t rms = 1000;
+            settings_get_gpio_relay(&rpin, &rlevel, &rms);
+            cJSON *relay = cJSON_CreateObject();
+            cJSON_AddNumberToObject(relay, "pin", rpin);
+            cJSON_AddNumberToObject(relay, "level", rlevel ? 1 : 0);
+            cJSON_AddNumberToObject(relay, "ms", rms);
+            cJSON_AddItemToObject(root, "relay", relay);
+        }
 
         // Band-plan for the current band — whole-band strip on the web UI,
         // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
@@ -1270,6 +1282,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         char err[64] = "";
         bool ok = gpio_relay_pulse((uint8_t)pin_j->valuedouble, level_j->valuedouble != 0,
                                     (uint16_t)ms_j->valuedouble, err, sizeof(err));
+        // Remember what actually fired, so the form restores this station's
+        // real wiring next time. Saved only on a pulse the device ACCEPTED -
+        // storing a refused combination would put a setting that can never
+        // work back in front of the operator.
+        if (ok) settings_set_gpio_relay((uint8_t)pin_j->valuedouble,
+                                        level_j->valuedouble != 0,
+                                        (uint16_t)ms_j->valuedouble);
         if (!ok) {
             cJSON_Delete(root);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err[0] ? err : "refused");
@@ -2249,11 +2268,21 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     // and a LoTW record is signed over exactly those. SIG/SIG_INFO are read by
     // POTA and SOTA to credit an activation and by nothing that matches a QSO,
     // so they fall on the safe side of that same boundary.
-    bool is_rst = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
-    bool is_ref = (strcmp(field, "SIG_INFO") == 0);
-    if (!is_rst && !is_ref) {
+    //   GRIDSQUARE           their locator. Falls on the same safe side: no
+    //                        logbook matches a QSO on it, and it is the field
+    //                        most likely to be WRONG through no fault of the
+    //                        operator - a partner's grid arrives once, in their
+    //                        first message, and a marginal QRP contact can
+    //                        complete without it ever being heard cleanly
+    //                        (Gyula HA3HZ, 2026-09-06, who was correcting them
+    //                        in a Windows ADIF editor instead). #322 fixes the
+    //                        cause; this fixes the records already logged.
+    bool is_rst  = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
+    bool is_ref  = (strcmp(field, "SIG_INFO") == 0);
+    bool is_grid = (strcmp(field, "GRIDSQUARE") == 0);
+    if (!is_rst && !is_ref && !is_grid) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "only RST_SENT, RST_RCVD and SIG_INFO are editable");
+                            "only RST_SENT, RST_RCVD, SIG_INFO and GRIDSQUARE are editable");
         return ESP_FAIL;
     }
     // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).
@@ -2283,6 +2312,34 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
         if (!okfmt) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                 "report must be like -07 or +03, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    // A Maidenhead locator: two letters A-R, two digits, optionally two more
+    // letters. Validated for the same reason as the report above - it is
+    // uploaded to three logbooks and drives distance/bearing on both screens,
+    // so a typo would be a wrong measurement presented as a real one, and the
+    // point of allowing the edit is to REMOVE wrong grids. Uppercase field,
+    // lowercase subsquare, which is the conventional rendering.
+    if (is_grid && value[0]) {
+        size_t n = strlen(value);
+        bool okfmt = (n == 4 || n == 6);
+        if (okfmt) {
+            value[0] = (char)toupper((unsigned char)value[0]);
+            value[1] = (char)toupper((unsigned char)value[1]);
+            okfmt = value[0] >= 'A' && value[0] <= 'R' &&
+                    value[1] >= 'A' && value[1] <= 'R' &&
+                    isdigit((unsigned char)value[2]) && isdigit((unsigned char)value[3]);
+        }
+        if (okfmt && n == 6) {
+            value[4] = (char)tolower((unsigned char)value[4]);
+            value[5] = (char)tolower((unsigned char)value[5]);
+            okfmt = value[4] >= 'a' && value[4] <= 'x' &&
+                    value[5] >= 'a' && value[5] <= 'x';
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "grid must be like JN45 or JN45bc, or empty to clear");
             return ESP_FAIL;
         }
     }

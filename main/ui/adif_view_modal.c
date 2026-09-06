@@ -450,6 +450,8 @@ static void today_utc(char out[9])
 // give Call/Country more room than the narrow fixed-format columns.
 #define COL_GAP  10
 
+static void adif_view_cache_invalidate(void);   // defined with the cache, below
+
 static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
@@ -457,6 +459,12 @@ static void modal_close(void)
     kb_hide();          // and never leave the keyboard up over the screen behind
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_open = false;
+    // Give the file cache back rather than holding ~100 KB of PSRAM for a
+    // window nobody is looking at. It is rebuilt on the next open, which is
+    // also what keeps it honest: a web-side edit changes a record without
+    // changing the count, so re-reading per open costs one file read and
+    // removes the only way this cache could show something stale.
+    adif_view_cache_invalidate();
 }
 
 static void close_btn_cb(lv_event_t *e)
@@ -669,6 +677,173 @@ static bool record_matches_query(const char *raw)
     return true;
 }
 
+/* ---- whole-file cache (#321, Gyula HA3HZ) ----------------------------------
+ *
+ * "The loading time for 462 QSOs was 4.5 seconds… it takes so long for it to
+ * appear that it is not worth searching for it."
+ *
+ * The render used to re-open and re-parse the entire SPIFFS file on EVERY
+ * render - and the search box renders on a 120 ms timer as you type, so
+ * searching a 462-QSO log meant re-reading the whole thing per keystroke. The
+ * file is read ONCE into PSRAM here and every later filter/search pass runs
+ * over memory instead.
+ *
+ * ⚠ This addresses the READ half only. The other half is building up to
+ * ADIF_VIEW_MAX_ROWS rows of 9 LVGL objects each, which this does not touch -
+ * the existing "read=… ms rows=… ms" log line reports the two separately, so
+ * which one still dominates is MEASURABLE rather than a matter of opinion.
+ * Do not assume this made the open fast; read that line.
+ *
+ * Records are appended-only, so a changed count is a reliable "reload me".
+ * Deletes and imports call adif_view_cache_invalidate() outright. */
+/* ---- lazy row building (#321) ----------------------------------------------
+ *
+ * Measured on the dev bench with 525 QSOs, which is why this exists rather than
+ * more caching: read=70 ms, rows=1857 ms. The file read was 3.6% of the open
+ * and building rows was 96% - 200 rows x 9 LVGL objects, with the LVGL pool
+ * going 729 KB -> 220 KB to do it. Caching the file (above) was the obvious fix
+ * and was very nearly worthless for the open; the numbers said so and are
+ * recorded here so nobody re-derives that the hard way.
+ *
+ * So only about a screenful is built up front and the rest follow on scroll.
+ * This is what makes SEARCH usable too: the box re-renders on a 120 ms timer as
+ * you type, and each keystroke used to rebuild all 200 rows.
+ *
+ * ADIF_VIEW_MAX_ROWS still caps the total, and the LVGL pool guard still stops
+ * a chunk early - both unchanged, so the worst case is no worse than before. */
+#define ADIF_VIEW_CHUNK_ROWS 14   /* ~one screenful, plus a little margin */
+
+static int   *s_match;        /* record indices that passed the filter/search */
+static int    s_match_cap;
+static int    s_match_n;
+static int    s_built;        /* how many of them have rows so far */
+static lv_obj_t *s_more_lbl;  /* the "showing N of M" footer, moved as we grow */
+
+static char  *s_cache;        /* whole file, newlines turned into NULs */
+static int   *s_cache_off;    /* byte offset of each record within s_cache */
+static int    s_cache_n;      /* records held */
+static int    s_cache_total;  /* adif_log_count() when it was loaded */
+
+static void adif_view_cache_invalidate(void)
+{
+    if (s_cache)     { heap_caps_free(s_cache);     s_cache = NULL; }
+    if (s_cache_off) { heap_caps_free(s_cache_off); s_cache_off = NULL; }
+    if (s_match)     { heap_caps_free(s_match);     s_match = NULL; }
+    s_cache_n = 0;
+    s_cache_total = -1;
+    s_match_cap = s_match_n = s_built = 0;
+}
+
+// Returns false if the log could not be read; an empty log is a valid true.
+static bool cache_load(int total)
+{
+    if (s_cache && s_cache_total == total) return true;   // still good
+    adif_view_cache_invalidate();
+    s_cache_total = total;
+    if (total <= 0) return true;
+
+    FILE *f = fopen(adif_log_file_path(), "r");
+    if (!f) {
+        ESP_LOGW(TAG, "open %s failed", adif_log_file_path());
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return true; }
+
+    s_cache     = heap_caps_malloc((size_t)sz + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_cache_off = heap_caps_malloc((size_t)(total + 8) * sizeof(int),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_cache || !s_cache_off) {
+        ESP_LOGE(TAG, "OOM caching %ld-byte ADIF file", sz);
+        adif_view_cache_invalidate();
+        fclose(f);
+        return false;
+    }
+    size_t got = fread(s_cache, 1, (size_t)sz, f);
+    fclose(f);
+    s_cache[got] = '\0';
+
+    // Split into records in place. The first line is the <EOH> header, skipped
+    // the same way the old fgets loop skipped it.
+    bool header_skipped = false;
+    char *p = s_cache;
+    char *end = s_cache + got;
+    while (p < end && s_cache_n < total + 8) {
+        char *nl = memchr(p, '\n', (size_t)(end - p));
+        if (nl) *nl = '\0';
+        if (!header_skipped) header_skipped = true;
+        else if (*p)        s_cache_off[s_cache_n++] = (int)(p - s_cache);
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return true;
+}
+
+// Build the next chunk of rows from s_match, newest first. Returns how many
+// rows exist afterwards. Safe to call when there is nothing left to do.
+static int build_more_rows(void)
+{
+    if (!s_list || !s_match) return s_built;
+
+    int want = (s_match_n < ADIF_VIEW_MAX_ROWS) ? s_match_n : ADIF_VIEW_MAX_ROWS;
+    if (s_built >= want) return s_built;
+
+    // The footer is rebuilt at the end of whatever we have, so drop the old one
+    // before adding rows beneath where it used to sit.
+    if (s_more_lbl) { lv_obj_del(s_more_lbl); s_more_lbl = NULL; }
+
+    int target = s_built + ADIF_VIEW_CHUNK_ROWS;
+    if (target > want) target = want;
+
+    for (; s_built < target; s_built++) {
+        // Budget guard (see ADIF_VIEW_LVGL_RESERVE): stop before the LVGL object
+        // pool runs low. Checked BEFORE building, since a row is 9 objects plus
+        // layout work and LVGL faults instead of failing gracefully. Newest-
+        // first, so what we drop is the oldest QSOs (still logged / downloadable).
+        if (lvgl_free_bytes() < ADIF_VIEW_LVGL_RESERVE) {
+            ESP_LOGW(TAG, "LVGL pool low (%u B free) - stopping ADIF render at %d of %d rows",
+                     (unsigned)lvgl_free_bytes(), s_built, want);
+            break;
+        }
+        int rec = s_match[s_match_n - 1 - s_built];       // newest first
+        build_qso_row(s_list, s_cache + s_cache_off[rec],
+                      (s_built % 2) == 1, rec);
+    }
+
+    // Say plainly when there is more than is on screen. Unlike the old version
+    // this is not a dead end - scrolling to it builds the next chunk - so it
+    // says so rather than sending the operator to the web UI.
+    if (s_built < s_match_n) {
+        s_more_lbl = lv_label_create(s_list);
+        lv_label_set_text_fmt(s_more_lbl,
+            (s_built >= ADIF_VIEW_MAX_ROWS)
+                ? "Showing newest %d of %d - download the ADIF (web UI) for the full log"
+                : "Showing %d of %d - scroll for more",
+            s_built, s_match_n);
+        lv_obj_set_style_text_font(s_more_lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_more_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_pad_top(s_more_lbl, 8, 0);
+        lv_obj_set_style_pad_bottom(s_more_lbl, 8, 0);
+    }
+    return s_built;
+}
+
+// Grow the list as it is scrolled towards the end. LVGL sends SCROLL while the
+// finger is still moving, and building a chunk is ~130 ms, so this deliberately
+// only acts near the bottom rather than on every scroll event.
+static void list_scroll_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_list || s_built >= s_match_n) return;
+    lv_coord_t y       = lv_obj_get_scroll_y(s_list);
+    lv_coord_t bottom  = lv_obj_get_scroll_bottom(s_list);
+    (void)y;
+    // scroll_bottom is how much content remains below the visible area.
+    if (bottom < 400) build_more_rows();
+}
+
 static void list_render(void)
 {
     int64_t t_start = esp_timer_get_time();
@@ -685,6 +860,8 @@ static void list_render(void)
     s_sel_row    = NULL;
     s_sel_active = false;
     lv_obj_clean(s_list);
+    s_more_lbl   = NULL;   // just destroyed by the clean above
+    s_built      = 0;
 
     if (total == 0) {
         s_last_total = 0;
@@ -704,34 +881,36 @@ static void list_render(void)
         return;
     }
 
-    // Ring buffer holding the newest ring_cap filter-matching records - the
-    // filter means we can't know which file offsets we'll display until the
-    // whole file is scanned, so keep overwriting the oldest slot and the last
-    // ring_cap matches survive. Still one fopen/fgets pass (the single-pass
-    // O(N) shape that replaced the old O(N^2) per-row re-scan - keep it that
-    // way). PSRAM: 200 rows * 1024 B = 200 KB max, trivial.
-    int ring_cap = (total < ADIF_VIEW_MAX_ROWS) ? total : ADIF_VIEW_MAX_ROWS;
-    char *lines = heap_caps_malloc((size_t)ring_cap * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int  *fidxs = heap_caps_malloc((size_t)ring_cap * sizeof(int), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!lines || !fidxs) {
-        ESP_LOGE(TAG, "OOM allocating %d-row ADIF buffer", ring_cap);
-        if (lines) heap_caps_free(lines);
-        if (fidxs) heap_caps_free(fidxs);
+    // Which records matched, as indices into the cache - no record TEXT is
+    // copied any more. The old version staged the newest 200 matches into a
+    // 200 KB ring of 1024-byte slots so the build loop had something to read
+    // from; the build now reads straight out of the cache, so a match costs
+    // 4 bytes instead of 1 KB.
+    if (!s_match) {
+        s_match = heap_caps_malloc((size_t)(total + 8) * sizeof(int),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_match_cap = total + 8;
+    } else if (s_match_cap < total + 8) {
+        heap_caps_free(s_match);
+        s_match = heap_caps_malloc((size_t)(total + 8) * sizeof(int),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_match_cap = total + 8;
+    }
+    if (!s_match) {
+        ESP_LOGE(TAG, "OOM allocating %d-entry ADIF match list", total + 8);
+        s_match_cap = 0;
         return;
     }
 
     int64_t t_read_start = esp_timer_get_time();
-    FILE *f = fopen(adif_log_file_path(), "r");
+    bool have = cache_load(total);
     int matched = 0;      // records passing the current filter (all, when All)
     int today_count = 0;  // records dated today UTC, counted regardless of filter
-    if (f) {
-        char raw[1024];
-        bool header_skipped = false;
-        int  rec = 0;   // 0-based file record index (counts ALL records)
+    if (have) {
         s_test_count = 0;
-        while (fgets(raw, sizeof(raw), f)) {
-            if (!header_skipped) { header_skipped = true; continue; }   // <EOH> line
-            int this_rec = rec++;
+        for (int rec = 0; rec < s_cache_n; rec++) {
+            const char *raw = s_cache + s_cache_off[rec];
+            int this_rec = rec;
             char date[9] = "";
             adif_log_extract_field(raw, "QSO_DATE", date, sizeof(date));
             bool is_today = (strcmp(date, today) == 0);
@@ -741,27 +920,35 @@ static void list_render(void)
             char freq_s[16] = "";
             if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
                 atof(freq_s) < 0.001) s_test_count++;
-            if (s_today_only && !is_today) continue;
+            // A search term overrides the Today/All filter and reaches the
+            // whole log - Gyula HA3HZ (2026-09-06): typing a callsign into
+            // the box only turned up a hit if it happened to be worked
+            // today, because the Today filter was applied BEFORE the search
+            // match. Searching is "did I ever work this", not "did I work it
+            // today" - the toggle still governs the browse view when the box
+            // is empty.
+            if (s_today_only && !s_query[0] && !is_today) continue;
             if (!record_matches_query(raw)) continue;
-            char *slot = lines + (size_t)(matched % ring_cap) * 1024;
-            strncpy(slot, raw, 1023);
-            slot[1023] = '\0';
-            fidxs[matched % ring_cap] = this_rec;   // file index rides along
+            if (matched < s_match_cap) s_match[matched] = this_rec;
             matched++;
         }
-        fclose(f);
-    } else {
-        ESP_LOGW(TAG, "open %s failed", adif_log_file_path());
     }
+    s_match_n = (matched < s_match_cap) ? matched : s_match_cap;
     int64_t t_read_done = esp_timer_get_time();
 
     s_last_total = total;
     s_last_today = today_count;
 
     if (s_title) {
-        char t[64];
-        if (s_today_only) snprintf(t, sizeof(t), "ADIF Log - Today: %d  (%d total)", today_count, total);
-        else              snprintf(t, sizeof(t), "ADIF Log - %d QSOs  (%d today)", total, today_count);
+        char t[80];
+        // While searching, the title has to describe the SEARCH - the rows on
+        // screen span the whole log regardless of the Today/All toggle, so
+        // repeating "Today: N" there would describe a scope the list is not
+        // using.
+        if (s_query[0])        snprintf(t, sizeof(t), "ADIF Log - %d match%s for \"%s\"  (%d total)",
+                                        matched, matched == 1 ? "" : "es", s_query, total);
+        else if (s_today_only) snprintf(t, sizeof(t), "ADIF Log - Today: %d  (%d total)", today_count, total);
+        else                   snprintf(t, sizeof(t), "ADIF Log - %d QSOs  (%d today)", total, today_count);
         lv_label_set_text(s_title, t);
         // Park is open: 10+ QSOs today = a valid POTA activation.
         lv_obj_set_style_text_color(s_title,
@@ -794,61 +981,87 @@ static void list_render(void)
         // A search that finds nothing is an ANSWER, not an empty screen - it is
         // the whole reason the box is here, so say what it means.
         if (s_query[0])
-            lv_label_set_text_fmt(lbl, "Nothing matches \"%s\"%s\n- so this one has not been worked.",
-                                  s_query, s_today_only ? " today" : "");
+            lv_label_set_text_fmt(lbl, "Nothing matches \"%s\" in the whole log\n- so this one has not been worked.",
+                                  s_query);
         else
             lv_label_set_text(lbl, s_today_only ? "No QSOs today yet" : "No QSOs logged");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        heap_caps_free(lines);
-        heap_caps_free(fidxs);
         return;
     }
 
-    // Newest-first display: the newest match sits at (matched-1) % ring_cap,
-    // walk backward from there.
-    int shown = (matched < ring_cap) ? matched : ring_cap;
-    int built = 0;
+    // Build ONE screenful now; the rest arrive as the operator scrolls.
     size_t lv_free_start = lvgl_free_bytes();   // LVGL pool headroom before rows
-    for (int k = 0; k < shown; k++) {
-        // Budget guard (see ADIF_VIEW_LVGL_RESERVE): stop before the LVGL object
-        // pool runs low. Checked BEFORE building, since a row is 9 objects plus
-        // layout work and LVGL faults instead of failing gracefully. Newest-
-        // first, so what we drop is the oldest QSOs (still logged / downloadable).
-        if (lvgl_free_bytes() < ADIF_VIEW_LVGL_RESERVE) {
-            ESP_LOGW(TAG, "LVGL pool low (%u B free) - stopping ADIF render at %d of %d rows",
-                     (unsigned)lvgl_free_bytes(), built, shown);
-            break;
-        }
-        int idx = (matched - 1 - k) % ring_cap;
-        bool even_row = (k % 2) == 1;
-        build_qso_row(s_list, lines + (size_t)idx * 1024, even_row, fidxs[idx]);
-        built++;
-    }
-    heap_caps_free(lines);
-    heap_caps_free(fidxs);
-
-    // Couldn't show them all (memory budget or the ring cap) - say so plainly.
-    // The full log is always available via the web ADIF download; this on-device
-    // viewer is just a quick "did I work them / how close to 10" check.
-    if (built < matched) {
-        lv_obj_t *more = lv_label_create(s_list);
-        lv_label_set_text_fmt(more,
-            "Showing newest %d of %d - download the ADIF (web UI) for the full log",
-            built, matched);
-        lv_obj_set_style_text_font(more, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(more, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        lv_obj_set_style_pad_top(more, 8, 0);
-        lv_obj_set_style_pad_bottom(more, 8, 0);
-    }
+    s_built = 0;
+    int built = build_more_rows();
 
     int64_t t_done = esp_timer_get_time();
-    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs (filter=%s today=%d, LVGL pool %uKB->%uKB free, read=%lld ms, rows=%lld ms, total=%lld ms)",
-             built, total, s_today_only ? "today" : "all", today_count,
+    // rows= is now the FIRST CHUNK only - the measurement that motivated the
+    // lazy build, so keep reading it the same way when judging a change here.
+    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d matched (%d logged, filter=%s today=%d, LVGL pool %uKB->%uKB free, read=%lld ms, rows=%lld ms, total=%lld ms)",
+             built, s_match_n, total, s_today_only ? "today" : "all", today_count,
              (unsigned)(lv_free_start / 1024), (unsigned)(lvgl_free_bytes() / 1024),
              (long long)((t_read_done - t_read_start) / 1000),
              (long long)((t_done - t_read_done) / 1000),
              (long long)((t_done - t_start) / 1000));
+}
+
+/* Deleting the test records (#325).
+ *
+ * ⛔ Was a loop over adif_log_delete_record() run straight from this button
+ * callback, i.e. on taskLVGL. Each of those calls rewrites the whole file, so
+ * it was O(N²): measured 0.25 deletions/s with 525 records - half an hour for
+ * 500 - with the UI frozen solid the entire time and nothing on screen to say
+ * why. The operator pressed "Sure?" and reported "nothing happens.... for like
+ * 2min?", which is exactly what a crash looks like.
+ *
+ * Now one batch rewrite (adif_log_delete_matching) on a WORKER, with the same
+ * task + poll-timer shape as "Restore from SD" above - and for the same
+ * reason. The button says "Deleting..." meanwhile, so a slow log never looks
+ * like a dead device again. */
+typedef enum { DELT_IDLE = 0, DELT_RUNNING, DELT_DONE } delt_state_t;
+static volatile delt_state_t s_delt_state = DELT_IDLE;
+static volatile int          s_delt_removed;
+static lv_timer_t           *s_delt_timer;
+
+// A simulation-mode record is the one written with FREQ=0.
+static bool is_test_record(int idx, const char *raw, void *ctx)
+{
+    (void)idx; (void)ctx;
+    char freq_s[16] = "";
+    return adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
+           atof(freq_s) < 0.001;
+}
+
+static void del_test_task(void *arg)
+{
+    (void)arg;
+    s_delt_removed = adif_log_delete_matching(is_test_record, NULL);
+    s_delt_state   = DELT_DONE;
+    psram_task_park();   // reapable task: never vTaskDelete (leaks the stack)
+}
+
+// Runs on taskLVGL, so it may touch LVGL and the list.
+static void del_test_poll_cb(lv_timer_t *t)
+{
+    if (s_delt_state != DELT_DONE) return;
+
+    int removed = s_delt_removed;
+    char msg[96];
+    if (removed < 0) {
+        msg_show("Delete failed",
+                 "The log could not be rewritten.\n\nThe storage may be full.", false);
+    } else {
+        snprintf(msg, sizeof(msg), "%d test contact%s removed from the log.",
+                 removed, removed == 1 ? "" : "s");
+        msg_show("Deleted", msg, true);
+    }
+    ESP_LOGI(TAG, "deleted %d test (sim-mode, FREQ=0) QSO record(s)", removed);
+
+    s_delt_state = DELT_IDLE;
+    lv_timer_del(t);
+    s_delt_timer = NULL;
+    sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
 // Delete every FREQ==0 (simulation-mode) record. Two-tap confirm: the first
@@ -867,40 +1080,19 @@ static void del_test_btn_cb(lv_event_t *e)
     }
     s_del_test_arm_us = 0;
 
-    // Collect the file indices of all FREQ==0 records.
-    int cap = adif_log_count();
-    int *idxs = cap > 0 ? heap_caps_malloc((size_t)cap * sizeof(int),
-                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
-    int n_test = 0;
-    if (idxs) {
-        FILE *f = fopen(adif_log_file_path(), "r");
-        if (f) {
-            char raw[1024];
-            bool header_skipped = false;
-            int  rec = 0;
-            while (fgets(raw, sizeof(raw), f) && n_test < cap) {
-                if (!header_skipped) { header_skipped = true; continue; }
-                int this_rec = rec++;
-                char freq_s[16] = "";
-                if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
-                    atof(freq_s) < 0.001) idxs[n_test++] = this_rec;
-            }
-            fclose(f);
-        }
+    if (s_delt_state != DELT_IDLE) return;   // one at a time
+    s_delt_state = DELT_RUNNING;
+    if (s_lbl_del_test) lv_label_set_text(s_lbl_del_test, "Deleting...");
+    if (!s_delt_timer) s_delt_timer = lv_timer_create(del_test_poll_cb, 200, NULL);
+    // 6144, not 4096: the rewrite carries a 1 KB line buffer, then
+    // load_from_file() runs its own 512 B one underneath, on top of FILE
+    // internals and a log call. 4096 crashed here once already (see the
+    // comment on this block), so the margin is deliberate.
+    if (!psram_task_create_reapable(del_test_task, "adif_delt", 6144, NULL,
+                                    tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
+        s_delt_state = DELT_IDLE;
+        msg_show("Delete failed", "The delete could not be started.", false);
     }
-
-    int deleted = 0;
-    for (int i = n_test - 1; i >= 0; i--) {           // highest-first
-        if (adif_log_delete_record(idxs[i])) deleted++;
-    }
-    if (idxs) heap_caps_free(idxs);
-
-    ESP_LOGI(TAG, "deleted %d test (sim-mode, FREQ=0) QSO record(s)", deleted);
-    char msg[96];
-    snprintf(msg, sizeof(msg), "%d test contact%s removed from the log.",
-             deleted, deleted == 1 ? "" : "s");
-    msg_show("Deleted", msg, true);
-    sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
 // Delete EVERY record. Two-tap confirm like the test-delete, but the armed
@@ -1163,6 +1355,9 @@ static void modal_build(void)
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_list, 8, 0);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
+    // Grow the list on the way down (#321) - only about a screenful is built
+    // when the window opens.
+    lv_obj_add_event_cb(s_list, list_scroll_cb, LV_EVENT_SCROLL, NULL);
 
     // Bottom strip: "Delete all" (left) + Close (right). Deliberately NOT in
     // the top header - the header is where the harmless Today/All toggle

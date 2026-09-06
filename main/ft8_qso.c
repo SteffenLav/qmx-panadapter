@@ -300,6 +300,27 @@ bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
 //   uploaded to QRZ/eQSL/LoTW as if real (Roy KI0ER, 2026-07-29).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
+/* Their grid, remembered for the LIFETIME OF THIS QSO (Gyula HA3HZ, 2026-09-06:
+ * "the associated call sign and grid data should be recorded in memory, then
+ * incorrect entries would not occur").
+ *
+ * The ADIF record is built at completion by looking the partner up in the live
+ * decode table - but that table ages quiet stations out, and a QRP exchange
+ * that drags on while the partner is not being decoded can outlive their row.
+ * Their grid arrived once, in their first message; nothing after it carries one
+ * (a report/RR73/73 has no room), so once the row is gone the grid is gone and
+ * the QSO logs without one. Captured here the moment it is seen, and used only
+ * as a FALLBACK when the live lookup comes up empty - the table stays the
+ * source of truth while it has an answer. Never a guess: empty stays empty, the
+ * same rule the RST fields follow.
+ *
+ * Stored WITH the callsign it belongs to, and used only when that matches the
+ * station being logged - so it cannot be left over from an earlier contact and
+ * attributed to this one. That is the same failure this fix exists to stop, one
+ * layer up, and pairing the two values makes it unrepresentable instead of
+ * relying on every reset path remembering to clear it. */
+static char               s_their_grid[FT8_GRID_MAX_LEN];
+static char               s_their_grid_call[FT8_CALL_MAX_LEN];
 /* Their numeric report of us, lifted from the message a manual/pileup reply
  * was built from, so the R-report entry can record it as RST_RCVD (#292). */
 static char               s_heard_their_rpt[8];
@@ -350,6 +371,19 @@ static int64_t next_slot_sec(bool match_parity, bool want_even, ftx_protocol_t p
 
 static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static inline void unlock(void) { xSemaphoreGive(s_lock); }
+
+/* Remember the partner's grid the first time it is seen in this exchange, with
+ * the callsign it belongs to - see s_their_grid. */
+static void note_their_grid(const char *call, const char *grid)
+{
+    if (!call || !call[0] || !grid || !grid[0]) return;
+    lock();
+    strncpy(s_their_grid_call, call, sizeof(s_their_grid_call) - 1);
+    s_their_grid_call[sizeof(s_their_grid_call) - 1] = '\0';
+    strncpy(s_their_grid, grid, sizeof(s_their_grid) - 1);
+    s_their_grid[sizeof(s_their_grid) - 1] = '\0';
+    unlock();
+}
 
 // Cache + uppercase the operator callsign for message scanning. Returns false
 // (with err) if no callsign is configured.
@@ -2182,6 +2216,24 @@ void ft8_qso_advance(int64_t slot_sec)
 
     capture_pileup_callers(slot_sec);
 
+    // Take a copy of the partner's grid while their row is still in the decode
+    // table. It ages out of that table on its own schedule, and on a slow QRP
+    // exchange the QSO can outlive it - see s_their_grid. Their grid only ever
+    // arrives in their FIRST message, so once it is gone there is no second
+    // chance to read it.
+    {
+        lock();
+        char tgt[FT8_CALL_MAX_LEN];
+        strncpy(tgt, s_target, sizeof(tgt) - 1);
+        tgt[sizeof(tgt) - 1] = '\0';
+        unlock();
+        if (tgt[0]) {
+            ft8_call_t row;
+            if (ft8_screen_find_call(tgt, &row) && row.last_grid[0])
+                note_their_grid(tgt, row.last_grid);
+        }
+    }
+
     // Before anything else can start a NEW contact this slot: finish the last
     // one properly if the partner is still waiting on our final. Runs only when
     // we aren't mid-exchange with someone else, and returns so this slot belongs
@@ -2419,6 +2471,19 @@ void ft8_qso_advance(int64_t slot_sec)
                     strncpy(their_grid, snap[i].last_grid, sizeof(their_grid) - 1);
                     break;
                 }
+            }
+            // Their row may have aged out during a long exchange, taking the
+            // only copy of their grid with it. Fall back to what was captured
+            // earlier in THIS QSO - and only if it was captured for THIS
+            // station (Gyula HA3HZ, 2026-09-06).
+            if (!their_grid[0]) {
+                lock();
+                bool same = (strcmp(s_their_grid_call, target) == 0) && s_their_grid[0];
+                if (same) snprintf(their_grid, sizeof(their_grid), "%s", s_their_grid);
+                unlock();
+                if (their_grid[0])
+                    ESP_LOGI(TAG, "grid for %s recovered from this QSO's own record (%s) "
+                                  "- their decode row had aged out", target, their_grid);
             }
 
             // ARRL Field Day exchange (if any): their_exch is "<class> <section>";

@@ -82,6 +82,9 @@ char *config_io_export(size_t *out_len)
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
     APP("display_sleep_min  = %u\n", (unsigned)c.display_sleep_min);
+    APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
+    APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
+    APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
@@ -268,6 +271,19 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "tx_tone_hz"))        settings_set_tx_tone_hz((uint16_t)atoi(val));
             else if (!strcasecmp(key, "tx_tone_hold"))      settings_set_tx_tone_hold(to_bool(val));
             else if (!strcasecmp(key, "display_sleep_min")) settings_set_display_sleep_min((uint8_t)atoi(val));
+            // The relay's three fields share one setter (they share a dirty
+            // bit), but an INI is read a line at a time and the keys may
+            // arrive in any order or singly - so each one re-reads the other
+            // two and writes the trio back.
+            else if (!strcasecmp(key, "relay_pin") || !strcasecmp(key, "relay_active_high") ||
+                     !strcasecmp(key, "relay_ms")) {
+                uint8_t rp; bool rl; uint16_t rms;
+                settings_get_gpio_relay(&rp, &rl, &rms);
+                if (!strcasecmp(key, "relay_pin"))              rp  = (uint8_t)atoi(val);
+                else if (!strcasecmp(key, "relay_active_high")) rl  = to_bool(val);
+                else                                            rms = (uint16_t)atoi(val);
+                settings_set_gpio_relay(rp, rl, rms);
+            }
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));

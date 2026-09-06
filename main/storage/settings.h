@@ -359,6 +359,15 @@ typedef struct {
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
                                  // instead of a generic default for the few seconds before the first real FW poll lands.
+    // Power-cycle relay (util/gpio_relay.c). Which pin the relay is wired to
+    // and its polarity are properties of the OPERATOR'S HARDWARE, not of the
+    // browser that happens to be open, so they live here rather than in web
+    // localStorage - Randy N4OPI, 2026-09-06: the web form reset to
+    // GP53/HIGH/1000 ms on every page load, and pulsing the wrong pin or the
+    // wrong polarity into a real relay is not a cosmetic mistake.
+    uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
+    bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
+    uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -692,6 +701,23 @@ void settings_set_wifi_static(const char *ip, const char *mask,
 // for the next upload batch). Debounced flush.
 void settings_set_lotw_uploaded_n(uint32_t n);
 
+// Read the three upload cursors WITHOUT loading the whole settings struct.
+//
+// ⛔ Exists because `settings_load_all()` puts a multi-kilobyte
+// `qmx_settings_t` on the caller's stack, and the callers that need these
+// three numbers are delete/rewrite paths running on small worker tasks. That
+// is not hypothetical: doing it the obvious way crashed `adif_delt` with a
+// Stack protection fault at 48 s on a 4 KB stack (2026-09-06) - the same bug
+// class as the three `wifi.c` instances in CLAUDE.md. Any argument is
+// optional (pass NULL).
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw);
+
+// The three fields the spot lane needs, without the whole struct. Same reason:
+// it runs on the `render` task, which the settings_load_all() stack guard
+// caught with under 2 KB to spare. grid_out must be at least 8 bytes.
+void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
+                             char *grid_out, size_t grid_sz);
+
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
@@ -719,6 +745,20 @@ void settings_set_charge_limit_pct(uint8_t pct);
 // Display sleep: minutes of touch inactivity before the backlight turns off
 // (0 = never). Any touch wakes it; a two-finger double-tap sleeps immediately.
 void settings_set_display_sleep_min(uint8_t minutes);
+
+// Power-cycle relay wiring (debounced flush). Set as a group - the three are
+// only ever written together from one form, so they share a dirty bit, the
+// same way the LoTW state/county fields share DIRTY_LOTW_DXCC.
+// Out-of-range values are clamped to the defaults rather than stored: a pin
+// outside gpio_relay.c's 53/54 whitelist would be refused at pulse time
+// anyway, and silently keeping it would leave the form showing a setting that
+// can never fire.
+void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
+
+// Read the stored relay wiring. Narrow accessor rather than
+// settings_load_all() - that is a multi-kilobyte struct and this is read from
+// the web handler; see the task-stack notes in CLAUDE.md.
+void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
 
 // Resource-monitor floating overlay: shown/hidden, and its dragged position
 // (offset in pixels from the screen's top-left, debounced flush). Position

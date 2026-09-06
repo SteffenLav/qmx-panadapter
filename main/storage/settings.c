@@ -118,6 +118,9 @@ static const char *TAG = "settings";
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
 #define KEY_CHARGE_LIM_EN  "chg_lim_en"
 #define KEY_CHARGE_LIM_PCT "chg_lim_pct"
+#define KEY_RELAY_PIN      "relay_pin"
+#define KEY_RELAY_LEVEL    "relay_lvl"
+#define KEY_RELAY_MS       "relay_ms"
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
@@ -156,6 +159,9 @@ static const char *TAG = "settings";
 #define DEF_WF_WINDOW     (0)
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
+#define DEF_RELAY_PIN      (53)
+#define DEF_RELAY_LEVEL    (true)   /* active HIGH */
+#define DEF_RELAY_MS       (1000)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -346,6 +352,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 #define DIRTY_CW_DECODE     111   /* decoded-CW line on the panadapter */
+#define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -369,7 +376,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
-    DIRTY_CHARGE_LIM_PCT,
+    DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
@@ -579,6 +586,11 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
+        if (dirty_test(&dirty_local, DIRTY_GPIO_RELAY)) {
+            nvs_set_u8 (s_nvs, KEY_RELAY_PIN,   snap.gpio_relay_pin);
+            nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap.gpio_relay_level ? 1 : 0);
+            nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap.gpio_relay_ms);
+        }
         if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
@@ -794,6 +806,9 @@ static void load_from_nvs(qmx_settings_t *out)
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    out->gpio_relay_pin   = DEF_RELAY_PIN;
+    out->gpio_relay_level = DEF_RELAY_LEVEL;
+    out->gpio_relay_ms    = DEF_RELAY_MS;
     out->resmon_en = false;
     out->resmon_dx = 0;
     out->resmon_dy = 0;
@@ -986,6 +1001,18 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
     if (out->charge_limit_pct < 50 || out->charge_limit_pct > 100) out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    {
+        uint8_t rp = out->gpio_relay_pin, rl = out->gpio_relay_level ? 1 : 0;
+        nvs_get_u8(s_nvs, KEY_RELAY_PIN, &rp);
+        nvs_get_u8(s_nvs, KEY_RELAY_LEVEL, &rl);
+        nvs_get_u16(s_nvs, KEY_RELAY_MS, &out->gpio_relay_ms);
+        // gpio_relay.c whitelists 53/54 and would refuse anything else at
+        // pulse time, so a stored value outside it could never fire - keep
+        // the form honest by falling back to the default instead.
+        out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
+        out->gpio_relay_level = (rl != 0);
+        if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+    }
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
     nvs_get_i16(s_nvs, KEY_RESMON_DY, &out->resmon_dy);
@@ -1011,6 +1038,31 @@ static void load_from_nvs(qmx_settings_t *out)
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
 }
 
+/* ⛔ A RUNTIME STACK GUARD WAS TRIED HERE AND REMOVED. Do not re-add it.
+ *
+ * The idea was sound - callers keep putting this multi-hundred-byte struct on
+ * a task that has no room for it, and the rule in CLAUDE.md only ever gets
+ * consulted AFTER the crash. So a check was added here to name the offending
+ * task in the log.
+ *
+ * It made things worse, twice, in one session (2026-09-06):
+ *   1. It called pxTaskGetStackStart()/pcTaskGetName() before the scheduler
+ *      was running - settings_load_all() runs during early boot - and put the
+ *      device into a BOOT LOOP.
+ *   2. Fixed that, and the check's own frame (plus the ESP_LOGE argument
+ *      marshalling when it fires) then overflowed `dxcluster`, a task that was
+ *      already close to its limit. It crashed precisely the tasks it existed
+ *      to protect.
+ *
+ * The lesson is about WHERE the check belongs, not whether to check: anything
+ * on this path costs stack in every caller, and the callers at risk are by
+ * definition the ones with none to spare. A check for this bug class must cost
+ * ZERO runtime stack - i.e. a build-time grep, or the count-don't-log pattern
+ * the USB patches use (util/usb_patch_counters.c) reported from a task known
+ * to be roomy. Not here.
+ *
+ * The narrow accessors are the real fix and they stay: settings_get_upload_cursors(),
+ * settings_get_spots_lane(), settings_get_wifi_static(), settings_wifi_known_count(). */
 void settings_load_all(qmx_settings_t *out)
 {
     if (!out) return;
@@ -2327,6 +2379,65 @@ void settings_set_charge_limit_pct(uint8_t pct)
     s_pending.charge_limit_pct = pct;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CHARGE_LIM_PCT);
+}
+
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw)
+{
+    if (qrz)  *qrz  = 0;
+    if (eqsl) *eqsl = 0;
+    if (lotw) *lotw = 0;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (qrz)  *qrz  = s_pending.qrz_uploaded_n;
+    if (eqsl) *eqsl = s_pending.eqsl_uploaded_n;
+    if (lotw) *lotw = s_pending.lotw_uploaded_n;
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
+                             char *grid_out, size_t grid_sz)
+{
+    if (region)      *region      = 0;
+    if (mode_filter) *mode_filter = false;
+    if (grid_out && grid_sz)      grid_out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (region)      *region      = s_pending.bandplan_region;
+    if (mode_filter) *mode_filter = s_pending.spots_mode_filter;
+    if (grid_out && grid_sz)
+        snprintf(grid_out, grid_sz, "%s", s_pending.my_grid);
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
+{
+    if (!s_ready) return;
+    if (pin != 53 && pin != 54) pin = DEF_RELAY_PIN;
+    if (ms < 50)   ms = 50;
+    if (ms > 5000) ms = 5000;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gpio_relay_pin == pin && s_pending.gpio_relay_level == level &&
+        s_pending.gpio_relay_ms == ms) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gpio_relay_pin   = pin;
+    s_pending.gpio_relay_level = level;
+    s_pending.gpio_relay_ms    = ms;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GPIO_RELAY);
+}
+
+void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
+{
+    // Defaults first, so a caller running before settings_init() still gets a
+    // usable answer rather than uninitialised stack.
+    if (pin)   *pin   = DEF_RELAY_PIN;
+    if (level) *level = DEF_RELAY_LEVEL;
+    if (ms)    *ms    = DEF_RELAY_MS;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pin)   *pin   = s_pending.gpio_relay_pin;
+    if (level) *level = s_pending.gpio_relay_level;
+    if (ms)    *ms    = s_pending.gpio_relay_ms;
+    xSemaphoreGive(s_mutex);
 }
 
 void settings_set_resmon_en(bool v)

@@ -139,6 +139,7 @@ int cw_wpm_estimate(int chars, unsigned elapsed_ms)
 
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include <time.h>       /* transcript timestamps (#323) */
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -164,6 +165,95 @@ static size_t           s_head;      // next write position
 static size_t           s_count;     // characters held (<= CW_RING_CAP)
 static unsigned         s_total;     // ever decoded - the change detector
 static SemaphoreHandle_t s_lock;
+
+/* ---- microSD transcript (#323, Michael KZ4LY) ------------------------------
+ *
+ * "Having embedded timestamps would be great for going back to resolve busts
+ * from flaky logging afterward, especially when operating disconnected from
+ * any network." So the text has to have been written BEFORE he knows he wants
+ * it - it runs automatically whenever a card is mounted, like the diag log,
+ * with no setting to have forgotten to turn on.
+ *
+ * This side only stages the bytes; sd_archive.c owns every actual SD write,
+ * because the SD-during-WiFi path is the wedge-prone one and it already holds
+ * the lock/pause discipline for it. A full buffer DROPS rather than blocking
+ * the CAT poll task that feeds us - a missed transcript line is not worth a
+ * stalled radio poll.
+ *
+ * ⚠ The transcript can only ever be as complete as the radio's own decoder:
+ * the QMX's 40-character buffer is not circular and silently discards anything
+ * that overflows it, so gaps are expected and the file must not be read as a
+ * verbatim record of everything sent. The header written by sd_archive says so.
+ */
+#define CW_SD_PENDING_CAP  2048
+#define CW_SD_LINE_MAX     72     /* wrap a transcript line at this many chars */
+#define CW_SD_GAP_MS       15000  /* silence this long starts a fresh stamped line */
+
+static char     s_sd_pend[CW_SD_PENDING_CAP];
+static size_t   s_sd_pend_len;
+static int      s_sd_line_len;    /* chars on the transcript line being built */
+static uint32_t s_sd_last_ms;     /* when the last character was appended */
+static bool     s_sd_dropped;     /* buffer overflowed - say so once, in the file */
+
+/* Append one raw byte to the pending buffer; silently drops when full. */
+static void sd_pend_putc(char c)
+{
+    if (s_sd_pend_len >= CW_SD_PENDING_CAP) { s_sd_dropped = true; return; }
+    s_sd_pend[s_sd_pend_len++] = c;
+}
+
+static void sd_pend_puts(const char *s)
+{
+    while (*s) sd_pend_putc(*s++);
+}
+
+/* One decoded character, on its way to the card. Caller holds s_lock. */
+static void sd_transcript_putc(char c)
+{
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    bool gap = (s_sd_line_len > 0) && (now_ms - s_sd_last_ms > CW_SD_GAP_MS);
+
+    if (s_sd_line_len == 0 || gap || s_sd_line_len >= CW_SD_LINE_MAX) {
+        if (s_sd_line_len > 0) sd_pend_puts("\r\n");
+        // Stamp carries the time of the line's FIRST character - that is the
+        // moment being reconstructed later, not whenever the line happened to
+        // fill up.
+        time_t    t  = time(NULL);
+        struct tm tmv;
+        gmtime_r(&t, &tmv);
+        char stamp[64];
+        snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02dZ  ",
+                 tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                 tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+        sd_pend_puts(stamp);
+        if (s_sd_dropped) {
+            sd_pend_puts("[... transcript bytes lost - buffer full ...]\r\n");
+            s_sd_dropped = false;
+            sd_pend_puts(stamp);
+        }
+        s_sd_line_len = 0;
+    }
+    sd_pend_putc(c);
+    s_sd_line_len++;
+    s_sd_last_ms = now_ms;
+}
+
+size_t cw_decode_take_pending(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0 || !s_lock) return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    size_t n = s_sd_pend_len;
+    if (n > out_sz) n = out_sz;
+    memcpy(out, s_sd_pend, n);
+    if (n < s_sd_pend_len) {
+        memmove(s_sd_pend, s_sd_pend + n, s_sd_pend_len - n);
+        s_sd_pend_len -= n;
+    } else {
+        s_sd_pend_len = 0;
+    }
+    xSemaphoreGive(s_lock);
+    return n;
+}
 
 void cw_decode_init(void)
 {
@@ -203,6 +293,10 @@ void cw_decode_feed(const char *resp)
             s_stamp[s_stamp_head] = (uint32_t)(esp_timer_get_time() / 1000);
             s_stamp_head = (s_stamp_head + 1) % CW_STAMP_CAP;
             if (s_stamp_count < CW_STAMP_CAP) s_stamp_count++;
+            /* ...and into the microSD transcript (#323). Squelched noise and
+               the radio's '*' never reach here, so the file holds what the
+               screen showed, not the raw stream. */
+            sd_transcript_putc(rel[k]);
         }
         s_total += (unsigned)m;
     }

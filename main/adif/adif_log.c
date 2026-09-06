@@ -783,6 +783,108 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
     return true;
 }
 
+// Delete MANY records in ONE rewrite (#325).
+//
+// ⛔ Do not implement a multi-delete as a loop over adif_log_delete_record().
+// That was the original shape and it is O(N²): each call rewrites the whole
+// file, so removing 500 of 525 records measured **0.25 deletions/second** on
+// the dev bench - about half an hour, and ~46 MB of SPIFFS writes on the
+// partition that also holds the LoTW private key. The caller ran it on
+// taskLVGL too, so the UI was dead throughout and the operator saw a device
+// that looked crashed ("I pressed Sure? then nothing happens.... for like
+// 2min?"). This does one pass instead, and the cost is the same as deleting
+// one record.
+//
+// `want_gone(idx, raw, ctx)` decides per record. Returns how many were removed,
+// or -1 on failure with the log left untouched.
+//
+// ⚠ Still not for taskLVGL: one rewrite of a large log is hundreds of ms.
+int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *ctx),
+                             void *ctx)
+{
+    if (!s_mounted || !want_gone) return -1;
+
+    const char *TMP_PATH = "/spiffs/qso.tmp";
+    FILE *in = fopen(FILE_PATH, "r");
+    if (!in) { ESP_LOGE(TAG, "batch delete: could not open %s (errno %d)", FILE_PATH, errno); return -1; }
+    FILE *out = fopen(TMP_PATH, "w");
+    if (!out && errno == ENOSPC) {
+        // Same live self-heal as the single-record path above.
+        esp_spiffs_check("storage");
+        esp_spiffs_gc("storage", 65536);
+        out = fopen(TMP_PATH, "w");
+    }
+    if (!out) {
+        ESP_LOGE(TAG, "batch delete: could not open %s for write (errno %d)", TMP_PATH, errno);
+        fclose(in);
+        return -1;
+    }
+
+    char line[1024];
+    int  rec = -1;
+    int  removed = 0;
+    // Cursors must follow every deletion that sits BELOW them - same rule as
+    // the single delete, counted as we go rather than applied per record.
+    int  removed_below_qrz = 0, removed_below_eqsl = 0, removed_below_lotw = 0;
+    // ⛔ NOT settings_load_all() - that is a multi-kilobyte struct on the
+    // stack and this runs on a small worker task. Doing it the obvious way
+    // crashed adif_delt with a Stack protection fault (2026-09-06); see the
+    // task-stack section in CLAUDE.md, which this is now another instance of.
+    uint32_t cur_qrz = 0, cur_eqsl = 0, cur_lotw = 0;
+    settings_get_upload_cursors(&cur_qrz, &cur_eqsl, &cur_lotw);
+
+    while (fgets(line, sizeof(line), in)) {
+        if (rec < 0) { fputs(line, out); rec = 0; continue; }   // keep header
+        if (want_gone(rec, line, ctx)) {
+            removed++;
+            if ((uint32_t)rec < cur_qrz)  removed_below_qrz++;
+            if ((uint32_t)rec < cur_eqsl) removed_below_eqsl++;
+            if ((uint32_t)rec < cur_lotw) removed_below_lotw++;
+        } else {
+            fputs(line, out);
+        }
+        rec++;
+    }
+    fclose(in);
+
+    bool write_ok = (ferror(out) == 0);
+    if (write_ok) {
+        fflush(out);
+        fsync(fileno(out));
+        write_ok = (ferror(out) == 0);
+    }
+    if (fclose(out) != 0) write_ok = false;
+
+    if (!write_ok) {
+        remove(TMP_PATH);
+        ESP_LOGE(TAG, "batch delete: rewrite failed (storage full?) - log left untouched");
+        ui_toast("Delete failed - storage full? Log unchanged");
+        return -1;
+    }
+    if (removed == 0) { remove(TMP_PATH); return 0; }   // nothing matched
+
+    remove(FILE_PATH);
+    if (rename(TMP_PATH, FILE_PATH) != 0) {
+        ESP_LOGE(TAG, "batch delete: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        ui_toast("Delete failed - could not replace the log file");
+        return -1;
+    }
+
+    if (removed_below_qrz)  settings_set_qrz_uploaded_n(cur_qrz   - removed_below_qrz);
+    if (removed_below_eqsl) settings_set_eqsl_uploaded_n(cur_eqsl - removed_below_eqsl);
+    if (removed_below_lotw) settings_set_lotw_uploaded_n(cur_lotw - removed_below_lotw);
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_count        = 0;
+    s_worked_count = 0;
+    xSemaphoreGive(s_lock);
+    load_from_file();
+
+    ESP_LOGI(TAG, "batch delete: removed %d record(s) in one rewrite (%d remain)", removed, s_count);
+    sd_archive_mark_adif_dirty();
+    return removed;
+}
+
 bool adif_log_delete_record(int idx)
 {
     // Every early return here used to be silent - the caller (adif_view_modal)

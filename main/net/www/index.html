@@ -859,8 +859,8 @@
   /* Gyula HA3HZ: the report column looked editable and was not. Now it is, and
      it says so - a dotted underline is the conventional "you can change this"
      without turning the table into a form. */
-  #adifv-table td.rstedit, #adifv-table td.sigedit { cursor: pointer; border-bottom: 1px dotted #666; }
-  #adifv-table td.rstedit:hover, #adifv-table td.sigedit:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  #adifv-table td.rstedit, #adifv-table td.sigedit, #adifv-table td.gridedit { cursor: pointer; border-bottom: 1px dotted #666; }
+  #adifv-table td.rstedit:hover, #adifv-table td.sigedit:hover, #adifv-table td.gridedit:hover { color: var(--accent); border-bottom-color: var(--accent); }
   /* A filled-in reference is the whole point of the column, so it reads as set
      rather than as one more grey cell.
      Header is "Their ref", NOT "P2P ref" (Don Adams WB0LQW): the field holds the
@@ -2515,6 +2515,25 @@ function adifImportMessage(j) {
     if (row) row.addEventListener("click", (e) => e.stopPropagation());
     const btn = document.getElementById("gpio-pulse-btn");
     if (!btn) return;
+
+    /* Restore this station's own wiring from the device (Randy N4OPI,
+       2026-09-06 - the three controls reset to GP53/HIGH/1000 ms on every
+       page load, because nothing had ever stored them). The device is the
+       source of truth, not localStorage: which pin the relay is on and its
+       polarity belong to the hardware, so a phone must not offer different
+       ones than the shack PC. Applied once, and never on top of a value the
+       operator is in the middle of choosing. */
+    let relayRestored = false;
+    window.applyRelayCfg = function (relay) {
+      if (relayRestored || !relay) return;
+      relayRestored = true;
+      const pinEl = document.getElementById("gpio-pin");
+      const lvlEl = document.getElementById("gpio-level");
+      const msEl  = document.getElementById("gpio-ms");
+      if (pinEl && relay.pin   !== undefined) pinEl.value = String(relay.pin);
+      if (lvlEl && relay.level !== undefined) lvlEl.value = String(relay.level);
+      if (msEl  && relay.ms    !== undefined) msEl.value  = String(relay.ms);
+    };
     btn.addEventListener("click", async function () {
       const pin   = document.getElementById("gpio-pin").value;
       const level = document.getElementById("gpio-level").value;
@@ -2689,7 +2708,9 @@ function adifImportMessage(j) {
         "' data-f='RST_RCVD'" +
         " title='Click to correct the report you RECEIVED. Empty = never exchanged.'>" +
         esc(r.RST_RCVD || "-") +
-        "</td><td>" + esc(r.GRIDSQUARE || "-") +
+        "</td><td class='gridedit' data-k='" + k + "'" +
+        " title='Their locator. Click to correct it - a partner&apos;s grid arrives only in their first message, so a marginal contact can log without it or with a stale one. Empty = never received.'>" +
+        esc(r.GRIDSQUARE || "-") +
         "</td><td class='sigedit" + (r.SIG_INFO ? " set" : "") + "' data-k='" + k + "'" +
         " title='The park or summit THEY were activating. Fills itself in from a spot; click to enter or correct it. Counts as Park-to-Park only if you were activating too.'>" +
         esc(r.SIG_INFO || "-") + "</td>" +
@@ -2788,6 +2809,18 @@ function adifImportMessage(j) {
         "Leave EMPTY to clear it." + uploadedWarning(r), r.SIG_INFO || "");
       if (v === null) return;
       await postEdit(r, "SIG_INFO", v.trim());
+      return;
+    }
+    const grd = e.target.closest("td.gridedit");
+    if (grd) {
+      const r = recs[+grd.dataset.k];
+      if (!r) return;
+      const v = prompt(
+        "Their grid square - " + r.CALL +
+        "\n\nLike JN45 or JN45bc. Leave EMPTY to record that no grid was received." +
+        (uploadedWarning(r) || ""), r.GRIDSQUARE || "");
+      if (v === null) return;
+      await postEdit(r, "GRIDSQUARE", v.trim());
       return;
     }
     const rst = e.target.closest("td.rstedit");
@@ -5760,6 +5793,7 @@ async function tick() {
     const logGroupBtn = document.getElementById("log-group-btn");
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");
+    if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     cloudlogSet  = !!s.cloudlog_set;

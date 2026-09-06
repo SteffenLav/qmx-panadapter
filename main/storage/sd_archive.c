@@ -22,6 +22,7 @@
 #include "adif_log.h"
 #include "config_io.h"
 #include "settings.h"   // wifi_enabled: the WiFi-aware mirroring gate
+#include "cw_decode.h"  // cw_decode_take_pending - the #323 CW transcript
 #include "ui.h"
 #include "psram_task.h"
 // The SD write pauses the spectrum stream around itself - see mirror_diag_slow().
@@ -41,6 +42,7 @@ static const char *TAG = "sd_arch";
 #define SD_LOTW_CERT_PATH "/sdcard/qmx-panadapter/lotw_cert.b64"
 #define SD_LOTW_KEY_PATH  "/sdcard/qmx-panadapter/lotw_key.b64"
 #define SD_README_PATH    "/sdcard/qmx-panadapter/README.txt"
+#define SD_CW_PATH        "/sdcard/qmx-panadapter/cw-decode.txt"
 
 // Source (SPIFFS) paths for the LoTW certificate + private key. Mirror of
 // lotw_upload.c's CERT_PATH/KEY_PATH — kept here to avoid a cross-module getter
@@ -153,6 +155,8 @@ static void write_readme(void)
         "                  LoTW after moving to / restoring another device.\r\n"
         "  qmx-log.txt     Diagnostic log, newest session (rolling, for bug\r\n"
         "  qmx-log.1.txt   reports); .1 is the previous segment after rotation.\r\n"
+        "  cw-decode.txt   Decoded CW, UTC-stamped per line. Gaps are expected\r\n"
+        "                  - see the note at the top of that file.\r\n"
         "\r\n"
         "*** CONTAINS CREDENTIALS ***\r\n"
         "qmx-config.txt stores your WiFi password and QRZ/eQSL logins in clear\r\n"
@@ -276,6 +280,53 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 
 #define SD_BOOT_MOUNT_TRIES   5
 #define SD_BOOT_MOUNT_GAP_MS  150
+
+// Append any decoded CW waiting in cw_decode.c to cw-decode.txt (#323, Michael
+// KZ4LY). Opened/appended/fsync'd/CLOSED per burst rather than held open: the
+// file is written rarely (only while CW is actually being decoded) and the
+// whole point is that it survives a card being pulled or the power going -
+// bytes sitting in a FatFs buffer behind an open handle would not (the same
+// reasoning as the slow diag path; `fflush` alone is not enough, see CLAUDE.md).
+//
+// Deliberately NOT rotated by size the way qmx-log.txt is: this is human-typed
+// Morse at a few characters a second, so it grows by orders of magnitude less
+// than the diag log, and truncating an operating session's transcript to save
+// kilobytes would defeat what it is for.
+static void mirror_cw(void)
+{
+    char buf[512];
+    size_t got = cw_decode_take_pending(buf, sizeof(buf));
+    if (got == 0) return;   // the normal case - nothing decoded since last time
+
+    bool fresh = (access(SD_CW_PATH, F_OK) != 0);
+    FILE *f = fopen(SD_CW_PATH, "ab");
+    if (!f) {
+        // The text is already gone from the staging buffer, so say so rather
+        // than lose it silently. Not fatal: the next burst still writes.
+        ESP_LOGW(TAG, "cw transcript: open %s failed (%s) - %u chars lost",
+                 SD_CW_PATH, strerror(errno), (unsigned)got);
+        return;
+    }
+    if (fresh) {
+        // Written once, on the file's first creation. States the limitation up
+        // front so nobody reads a gap as a decoder fault or as proof of silence.
+        fprintf(f, "QMX Panadapter - decoded CW transcript\r\n"
+                   "Times are UTC, stamped at the first character of each line.\r\n"
+                   "\r\n"
+                   "This is what the QMX's OWN decoder resolved and what the screen\r\n"
+                   "showed - not a verbatim record of everything sent. The radio's\r\n"
+                   "decode buffer holds 40 characters and is not circular, so fast or\r\n"
+                   "sustained sending overflows it and the excess is discarded before\r\n"
+                   "it ever reaches the Tab5. Unresolved characters are dropped too.\r\n"
+                   "Expect gaps; they do not mean the band was quiet.\r\n"
+                   "\r\n");
+    }
+    if (fwrite(buf, 1, got, f) != got)
+        ESP_LOGW(TAG, "cw transcript: write failed (%s)", strerror(errno));
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+}
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
 // Returns false on a write error (possible card removal).
@@ -892,6 +943,13 @@ static void sd_archive_task(void *arg)
         // Mirror diag (incremental), then ADIF/config if dirty. Any write
         // failure is taken as a card removal.
         bool ok = mirror_diag();
+
+        // Decoded CW transcript (#323). Append-only and usually empty, so it
+        // costs nothing on a band with no CW on it. A failure here is NOT
+        // treated as a card removal - the transcript is a convenience, and
+        // letting it declare the card gone would put the diag log and the QSO
+        // log through a remount for the sake of it.
+        if (ok) mirror_cw();
 
         if (ok && s_adif_dirty) {
             s_adif_dirty = false;

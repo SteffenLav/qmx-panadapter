@@ -274,8 +274,13 @@ static void repaint(void)
 
     // Opting out simply draws nothing. Now that this is an overlay rather than a
     // strip it costs no layout height either way, so there is nothing to reflow.
-    qmx_settings_t st;
-    settings_load_all(&st);
+    // ⛔ NOT settings_load_all(): this runs on the `render` task, and the stack
+    // guard in settings.c caught it here with ~1.9 KB left against a 916 B
+    // struct plus whatever the rest of this function needs. Three fields is all
+    // it ever used.
+    struct { uint8_t bandplan_region; bool spots_mode_filter; char my_grid[8]; } st;
+    settings_get_spots_lane(&st.bandplan_region, &st.spots_mode_filter,
+                            st.my_grid, sizeof(st.my_grid));
     if (!spots_any_source_enabled()) { hide_all(); return; }
 
     // Scope to the band we are ON, the same range /api/status uses. Taking the

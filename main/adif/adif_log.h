@@ -63,6 +63,16 @@ void adif_log_clear(void);
 // worked-call cache. Returns false if idx is out of range or I/O fails.
 bool adif_log_delete_record(int idx);
 
+// Delete every record want_gone() returns true for, in ONE file rewrite.
+// Returns the number removed, or -1 on failure (log left untouched).
+//
+// ⛔ Use this for any multi-record delete. Looping adif_log_delete_record() is
+// O(N²) - each call rewrites the whole file - and measured 0.25 deletions/s
+// with 525 records, i.e. half an hour to clear 500 (#325).
+// ⚠ Not for taskLVGL: one rewrite of a large log takes hundreds of ms.
+int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *ctx),
+                             void *ctx);
+
 // Replace, add or remove one field in one record. value NULL/"" removes the
 // field, which is the honest representation of "never exchanged" - so an
 // operator can get a report back to absent, not only to a different number.
