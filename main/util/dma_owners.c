@@ -528,6 +528,12 @@ void cpu_owners_report(void)
 
 #include "freertos/task.h"
 
+/* Own tag, for the same reason TAG_CPU has one: this lives OUTSIDE the
+ * CONFIG_HEAP_TASK_TRACKING guard, so it cannot use TAG. Without tracking
+ * the report itself says so and returns, which is the right behaviour -
+ * the trace still runs and still tells you the build cannot answer. */
+static const char *TAG_TRACE = "dmatrace";
+
 static void dma_boot_trace_task(void *arg)
 {
     (void)arg;
@@ -538,10 +544,10 @@ static void dma_boot_trace_task(void *arg)
     for (unsigned i = 0; i < sizeof(at_s) / sizeof(at_s[0]); i++) {
         vTaskDelay(pdMS_TO_TICKS((at_s[i] - prev) * 1000));
         prev = at_s[i];
-        ESP_LOGW(TAG, "=== DMA OWNERS at ~%d s of uptime ===", at_s[i]);
+        ESP_LOGW(TAG_TRACE, "=== DMA OWNERS at ~%d s of uptime ===", at_s[i]);
         dma_owners_report();
     }
-    ESP_LOGW(TAG, "=== DMA owners boot trace done ===");
+    ESP_LOGW(TAG_TRACE, "=== DMA owners boot trace done ===");
     vTaskDelete(NULL);
 }
 

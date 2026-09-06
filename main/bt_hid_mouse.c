@@ -1206,6 +1206,47 @@ static void bt_start_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(3000));   // let the link settle past DHCP/SNTP
     }
 
+    // ⛔ AND WAIT FOR MEMORY, NOT JUST FOR THE LINK (2026-09-06).
+    //
+    // The wait above is a proxy for "the C6 link is healthy", and it says
+    // nothing about the heap. That was harmless while WiFi came up late: BLE
+    // used to start at ~71 s with 36-43 KB internal free. Once the SD mount
+    // was sequenced after the SDIO card init (so esp_hosted no longer waits
+    // for the card), WiFi connected ~55 s earlier and this task fired at
+    // 17.4 s instead - straight into the boot memory trough, where the
+    // periodic heap line reads:
+    //
+    //     int free=0KB (min=0KB lblk=0KB LOW!)   at 15.6 s and 15.8 s
+    //     int free=9KB                            by 25.8 s
+    //
+    // nimble_port_init() does NOT return an error there. It asserts inside
+    // IDF's porting layer - "assert failed: npl_freertos_sem_init
+    // npl_os_freertos.c:636 (0)", task bt_start, at 15.501 s of uptime - i.e.
+    // a semaphore create returned NULL and the assert took the device down.
+    // The graceful-failure branch below can never run for that case.
+    //
+    // So gate on the heap as well. BLE is opt-in and nobody is waiting on it
+    // during boot, which is exactly why deferring it is the right answer
+    // rather than a workaround - and why giving up entirely is acceptable if
+    // the memory never appears. No mouse beats a boot loop.
+    {
+        const int MEM_WAIT_S = 60;
+        const size_t NEED = 24 * 1024;   // init itself costs ~5 KB; the rest is headroom
+        size_t have = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        for (int i = 0; i < MEM_WAIT_S * 2 && have < NEED; i++) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            have = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        }
+        if (have < NEED) {
+            ESP_LOGW(TAG, "internal heap still %u B after %d s (need %u) - "
+                          "NOT starting BLE this boot; nimble_port_init() would "
+                          "assert rather than fail", (unsigned)have, MEM_WAIT_S,
+                     (unsigned)NEED);
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+
     log_heap("before NimBLE init");
     esp_err_t e = nimble_port_init();
     if (e != ESP_OK) {

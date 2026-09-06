@@ -231,7 +231,12 @@ static uint32_t          s_cap_gap[RXCAP_MAX_GAPS];  /* sample index of each gap
  *
  * Set RXCAP_AUTO_SECONDS to 0 to disable. Decode with:
  *   python tools/rxcap_decode.py scratchpad/capture-dev.txt out.wav          */
-#define RXCAP_AUTO_SECONDS   20    /* 0 = off; one shot, armed once per boot */
+/* 0 = OFF, and off is the shipping value. Set it to a number of seconds to
+ * arm the capture automatically once per boot - it then base64s itself to the
+ * serial log, which is the only route that works when WiFi is wedged. Left
+ * off because the dump takes ~70 s and stops nothing else from running, but
+ * it is noise on every boot when nobody is measuring. */
+#define RXCAP_AUTO_SECONDS   0     /* 0 = off; one shot, armed once per boot */
 #define RXCAP_AUTO_DELAY_MS  90000 /* after audio starts - time to power-cycle
                                       the QMX and let the band settle */
 static bool     s_cap_auto_done = false;   /* armed once per boot */
