@@ -65,12 +65,42 @@
 
 static const char *TAG = "main";
 
+
+// === TEMP INSTRUMENT: which init step takes the MALLOC_CAP_DMA? ============
+//
+// Two blocks - 32,772 B and 25,600 B - hold 58 KB of the pool between them,
+// and dma_owners can only say "alloc'd by main" because both happen during
+// app_main, before the owning subsystem has a task of its own. Grepping for
+// the sizes found nothing: neither is a literal, so both are computed inside
+// a component. Bracketing every step names them by construction instead.
+//
+// ⛔ free_size() only, NEVER largest_free_block() - the latter walks the heap
+// with interrupts off (the cyan-flash rule, #281) and this runs ~20 times.
+// free_size() is O(1) and safe.
+//
+// Delete with TODO #283, alongside dma_owners.
+static uint32_t s_dmastep_prev = 0;
+static void dma_step(const char *what)
+{
+    uint32_t now = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DMA);
+    if (s_dmastep_prev) {
+        int32_t d = (int32_t)now - (int32_t)s_dmastep_prev;
+        ESP_LOGW("dmastep", "%-24s dma free=%7u  delta=%+8d", what,
+                 (unsigned)now, (int)d);
+    } else {
+        ESP_LOGW("dmastep", "%-24s dma free=%7u  (first)", what, (unsigned)now);
+    }
+    s_dmastep_prev = now;
+}
+
+
 void app_main(void)
 {
     // Install the diagnostic log capture hook first so the whole boot
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+    dma_step("after diag_log_init");
 
     // #117: if the last boot crashed, report it NOW - immediately after the log
     // hook is installed, so the record is captured, and before anything else can
@@ -104,6 +134,7 @@ void app_main(void)
     }
 
     settings_init();
+    dma_step("after settings_init");
     // Unattended transmission must never be the state the device powers up in.
     // If auto-answer was left on at shutdown it used to be on at boot and would
     // start answering CQs within a cycle or two - before the operator had
@@ -114,6 +145,7 @@ void app_main(void)
     ft8_robot_stand_down(NULL);
     mem_channels_init();
     adif_log_init();
+    dma_step("after adif_log_init");
 
     // === BENCH HARNESS - MUST be 0 in shipping builds ==================
     // Drives an unattended simulated QSO so FT8 exchange/logging changes can be
@@ -205,6 +237,7 @@ void app_main(void)
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
+    dma_step("after display_init");
 
     bsp_info_log();
     manual_embed_log_summary();   // built-in user manual shipped intact?
@@ -222,6 +255,7 @@ void app_main(void)
     time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
+    dma_step("after ui_init");
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
     display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
@@ -240,6 +274,7 @@ void app_main(void)
     // after ui_init so the SD mount never races display bring-up and the dot
     // exists when the first mount callback fires.
     sd_archive_init();
+    dma_step("after sd_archive_init");
 
     // Belt-and-suspenders: sync the dot in case a mount completed before this.
     ui_set_sd_active(sd_archive_is_mounted());
@@ -258,6 +293,7 @@ void app_main(void)
     render_set_ema_alpha(cfg.ema_alpha);
     display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
     status_bar_start();
+    dma_step("after status_bar_start");
 
     // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
     // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
@@ -265,6 +301,7 @@ void app_main(void)
     rx_audio_preopen();
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+    dma_step("after usb_host_start");
     ESP_LOGI(TAG, "USB host started");
     // Make every firmware-initiated reboot tear the USB link down properly, so
     // the QMX is told we are going rather than finding out (see usb_shutdown.h).
@@ -282,6 +319,7 @@ void app_main(void)
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
+    dma_step("after audio_init");
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
@@ -305,6 +343,7 @@ void app_main(void)
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
     ESP_ERROR_CHECK(cat_init());
+    dma_step("after cat_init");
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
     // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
@@ -361,6 +400,7 @@ void app_main(void)
     // separate question and needs its own soak.
     #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
+    dma_step("after wifi_start");
     // ⭐ REVERSED 2026-09-06, and the reason is measured rather than tidy.
     //
     // This used to wait for the SD mount BEFORE starting WiFi, on the strength
@@ -383,6 +423,7 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
     ESP_ERROR_CHECK(dsp_init());
+    dma_step("after dsp_init");
     // After dsp_init: the detector arms dsp_avg_*, which needs the FFT running.
     spur_map_init();
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
@@ -392,6 +433,7 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+    dma_step("after render_init");
 
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
@@ -411,6 +453,7 @@ void app_main(void)
     // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
     // before this call was re-enabled (memory project_rx_audio_track.md).
     rx_audio_init();
+    dma_step("after rx_audio_init");
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew
