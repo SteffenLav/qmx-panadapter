@@ -23,7 +23,7 @@
   "benches": [
     {
       "name": "dev",
-      "role": "MAIN. 2026-09-06 late: the audio track was PARKED and main flashed over it. Carries sock_owners.c (#313) - the LWIP socket-owner dump that fires on a new high-water mark and on exhaustion. A long soak with WiFi up and a browser connected is what names the leak; do not reflash casually.",
+      "role": "MAIN, on v1.11.3 (released 2026-09-06 late). Carries sock_owners.c (#313): the LWIP socket-owner dump, which fires on a new high-water mark and on exhaustion. A standing passive capture is running to scratchpad/capture-v1113.txt - LEAVE IT, it is the #313 soak. The leak shows as the table high-water stepping up and not coming back down, with the holders named.",
       "role_note": [
        "This bench normally runs the newest main commit. It was loaned to",
        "Track A (Tab5-native RX audio out + binaural CW, see memory",
