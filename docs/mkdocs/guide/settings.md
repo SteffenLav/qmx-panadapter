@@ -175,6 +175,18 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 
 **Brightness** — Screen brightness (0–100%).
 
+**Frequency format** — How a frequency is punctuated, everywhere it is shown: the readout in the top bar, the FT8/FT4
+preset button and its band lists, the WSPR band picker, the frequency keypad and the scale under the spectrum.
+
+The default, `14.074.000`, is what the Tab5 has always shown and what the QMX shows on its own LCD. It is not a
+national convention — Icom, Yaesu and Kenwood group a frequency the same way, using the periods as visual anchors
+between MHz, kHz and Hz rather than as a decimal point. Matching the radio sitting next to the Tab5 is why it is the
+default.
+
+The alternative, `14,074,000`, is US written grammar: a comma every three digits *(Don N2VGU, who reads and writes
+frequencies that way and whose instruments offer the choice)*. It changes as soon as you pick it — there is nothing
+to restart.
+
 **Spectrum Mode** — 
 - **Normal** — absolute dBm scale
 - **Flat** — relative to per-bin noise floor (signals pop above baseline)

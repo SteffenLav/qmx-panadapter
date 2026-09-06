@@ -387,17 +387,22 @@ people, since its own **Decoder → Enable Rx** setting is on by default
 The line reads:
 
 ```
-CW ~18 wpm:  CQ CQ DE OZ1LAV OZ1LAV K
+CW ~18wpm:  CQ CQ DE OZ1LAV OZ1LAV K
 ```
 
 - The **green header** carries the estimated sending speed and never moves. The
   number is zero-padded, so the text after it does not shift as the estimate
   crosses ten.
-- The **cyan text** is what the radio decoded, in a fixed grid of 71 characters.
+- The **cyan text** is what the radio decoded, in a fixed grid of 72 characters.
 - When the line fills, it **wraps and writes over the oldest end** rather than
   scrolling. Nothing slides sideways, so a callsign you are half-way through
   reading stays where it is. Two blank spaces travel ahead of the writing
   position — after the first wrap, that gap is what tells new text from old.
+
+**It is written to the microSD card too**, if one is in the slot: everything decoded
+goes to `qmx-panadapter/cw-decode.txt` with a timestamp on each line, so a callsign
+you only half-caught can be resolved afterwards *(Michael K Johnson KZ4LY)*. The
+line on screen holds one screenful; the card holds the session.
 
 **About the speed.** It is a *throughput* figure: characters per unit time,
 counting the gaps between words and between overs. During a real exchange it

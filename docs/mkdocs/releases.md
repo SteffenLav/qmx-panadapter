@@ -4,7 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.11.1** — 2026-09-05
+**v1.11.2** — 2026-09-06
+
+**A QSO log quick enough to use, a check-my-log pass before you submit an activation, and a choice of frequency punctuation.**
+
+- **The QSO log opens in 0.13 s instead of 2.2** *(Gyula HA3HZ: "it takes so long for it to appear that it is not worth searching for it")*. Measuring first changed the fix — reading the file was only 70 ms of it, building the rows was the rest — so it builds a screenful and adds the rest as you scroll. Nothing is capped; every record is still reachable.
+- **The log's search covers the whole log, not just today** *(Gyula HA3HZ)*. Searching a log asks "have I ever worked this", not "did I work it today".
+- **"Check log" in the web QSO log** *(Don Adams WB0LQW)*. It lists what each record is missing before you submit an activation — a callsign, a malformed date, no station callsign, a reference that does not look like one, or none of your own. It can only say a record is not obviously incomplete: the Tab5 cannot see POTA's rules or their database, and it never says a file will be accepted. The Tab5's Activation panel shows the same count, so it can be read at the park without a laptop.
+- **A station could be logged with another station's grid square**, and that is fixed. A recycled entry in the decode table kept the previous callsign's locator, so a new station could inherit it and keep it if its own messages never carried one — exactly a QRP contact that finishes on reports and RR73.
+- **A grid square can be corrected by hand in the web log** *(Gyula HA3HZ, who was editing them in ADIFMaster)*, joining the two reports and the park reference as the fields that may be changed.
+- **A choice of frequency punctuation** *(Don N2VGU)* — `14.074.000`, the default and what the QMX shows on its own LCD, or `14,074,000`. It applies to the readout, the preset buttons and lists, the WSPR band picker, the keypad and the spectrum scale.
+- **Decoded CW is written to the microSD card with timestamps** *(Michael K Johnson KZ4LY)*, so a half-caught callsign can be resolved afterwards.
+- **A download that failed partway was served as a file that looked complete** *(Gyula HA3HZ: "the website shows 220 lines of LOG data")*, with 462 in his log. The same fault was in the diagnostic-log download and the SD file browser.
+- **The power-cycle relay's settings survive a reboot** *(Randy N4OPI)*.
+- **"Lost contact with the Tab5" no longer appears over a spectrum that is drawing perfectly** *(Dave KX3DX)*, and web spot labels carry the mode as the Tab5's always have.
+- **Three crashes fixed**, including one that could abort the firmware when a browser reached the web server in the moment it started — present and unrecognised for many versions. Three tasks that were within a few hundred bytes of overrunning their stacks have been given room, and an overrun is now trapped as it happens.
+
+## Previous Releases
+
+### v1.11.1 — 2026-09-05
 
 **Decoded CW along the bottom of the panadapter, from the radio's own decoder.**
 
@@ -16,8 +34,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Restore from SD now reads both logs on the card** *(Gyula HA3HZ)*. It only ever read `qso.adi`, so putting a backup on the card as `qso.prev.adi` — the name the firmware itself writes — was met with "nothing to restore". It reads both now.
 - **The Tab5's QSO log gains a Grid column**, beside the callsign.
 - **The power-cycle relay's help text no longer names a connector that does not exist** *(Randy N4OPI)*. The QMX has no PWR_ON/GND jack — those signals have to be brought out to a connector of your own — so the control now says so, and says it is an experimenter feature.
-
-## Previous Releases
 
 ### v1.11.0 — 2026-09-05
 
@@ -603,7 +619,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.11.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.11.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

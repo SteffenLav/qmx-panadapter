@@ -106,20 +106,30 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.11.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.11.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.11.1 — decoded CW along the bottom of the panadapter.** In CW or CW-R
-the Morse the radio is decoding runs along the bottom of the waterfall, with an
-estimate of the sending speed beside it, on the Tab5 and in the browser alike. The
-QMX decodes it itself and hands the text over the CAT link, so it costs the
-panadapter no processing and does not affect the spectrum or FT8 — and it works on
-QMX firmware 1.03 and later, with nothing to enable on most radios. Noise is
-filtered before it reaches the screen, the line wraps and overwrites itself rather
-than scrolling, and the whole thing switches off in the settings drawer.
+**New in v1.11.2 — the QSO log is quick enough to actually use.** It opens in a
+tenth of a second instead of two and a bit, its search covers the whole log rather
+than just today, and a **Check log** button in the browser tells you what a record is
+missing before you submit an activation — a callsign, a malformed date, a reference
+that does not look like one. It cannot promise POTA will accept a file, and it does
+not pretend to: it only tells you nothing is obviously incomplete.
+
+A grid square can now be corrected by hand, which matters because a bug that could
+log one station under another's locator is fixed in this release. Frequencies can be
+punctuated `14.074.000` or `14,074,000`, whichever you read fluently. Decoded CW is
+written to the microSD card with timestamps. And three crashes are gone, one of them
+present and unrecognised for many versions.
+
+**In v1.11.1 — decoded CW along the bottom of the panadapter.** In CW or CW-R the
+Morse the radio is decoding runs along the bottom of the waterfall, with an estimate
+of the sending speed beside it, on the Tab5 and in the browser alike. The QMX decodes
+it itself and hands the text over the CAT link, so it costs the panadapter no
+processing and works on QMX firmware 1.03 and later.
 
 **In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
@@ -154,7 +164,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
