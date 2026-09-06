@@ -1359,6 +1359,23 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             esp_restart();
         }
         return ESP_OK;
+    } else if (action && strcmp(action, "rxcap") == 0) {
+        /* Record what the codec is actually PLAYING, so the artefact can be
+           looked at instead of inferred from counters (2026-09-06). One shot:
+           {"action":"rxcap","seconds":20} then GET /api/rxaudio.wav */
+        cJSON *sec = cJSON_GetObjectItem(root, "seconds");
+        bool ok = rx_audio_cap_start(cJSON_IsNumber(sec) ? sec->valueint : 20);
+        uint32_t n=0, cap=0; bool run=false;
+        rx_audio_cap_status(&n, &cap, &run);
+        cJSON_Delete(root);
+        char body[128];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":%s,\"recording\":%s,\"samples\":%lu,\"capacity\":%lu,\"rate\":%d}",
+                 ok ? "true" : "false", run ? "true" : "false",
+                 (unsigned long)n, (unsigned long)cap, DSP_SAMPLE_RATE_HZ);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "rxaudio") == 0) {
         // Live AGC/clip tuning for rx_audio.c - RAM only, not persisted.
         // Added 2026-09-04 so chasing "clicking on stronger signals" doesn't
@@ -2293,6 +2310,83 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
 
 static const httpd_uri_t uri_adif_edit = {
     .uri = "/api/adif/edit", .method = HTTP_POST, .handler = adif_edit_handler,
+};
+
+/* GET /api/rxaudio.wav - the recorded audio, exactly as the codec played it.
+ *
+ * Written by hand rather than through wspr_wav.c: that one writes a FILE, and
+ * this streams from PSRAM straight to the socket with no copy and no SD card
+ * in the path.
+ *
+ * GET /api/rxaudio.json returns the sample index of every gap in the same
+ * window, so an artefact in the waveform can be matched to one - or shown not
+ * to coincide with any, which is just as useful an answer. */
+static esp_err_t rxaudio_wav_handler(httpd_req_t *req)
+{
+    uint32_t n = 0;
+    const int16_t *pcm = rx_audio_cap_data(&n);
+    if (!pcm || !n) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+            "nothing recorded - POST /api/cmd {\"action\":\"rxcap\",\"seconds\":20} first");
+        return ESP_FAIL;
+    }
+    const uint32_t rate = DSP_SAMPLE_RATE_HZ, ch = 1, bits = 16;
+    const uint32_t data_bytes = n * sizeof(int16_t);
+    uint8_t hdr[44];
+    #define W32(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff);                          hdr[o+2]=(uint8_t)(((v)>>16)&0xff); hdr[o+3]=(uint8_t)(((v)>>24)&0xff);}while(0)
+    #define W16(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff);}while(0)
+    memcpy(hdr, "RIFF", 4);      W32(4, 36 + data_bytes);
+    memcpy(hdr + 8, "WAVEfmt ", 8); W32(16, 16); W16(20, 1);
+    W16(22, ch); W32(24, rate); W32(28, rate * ch * bits / 8);
+    W16(32, ch * bits / 8); W16(34, bits);
+    memcpy(hdr + 36, "data", 4); W32(40, data_bytes);
+    #undef W32
+    #undef W16
+
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=rxaudio.wav");
+    webserver_ws_set_paused(true);
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+    const uint8_t *p = (const uint8_t *)pcm;
+    for (uint32_t off = 0; off < data_bytes && err == ESP_OK; off += 4096) {
+        uint32_t len = (data_bytes - off < 4096) ? (data_bytes - off) : 4096;
+        err = httpd_resp_send_chunk(req, (const char *)(p + off), (ssize_t)len);
+    }
+    /* Same rule as every other download here: do NOT cap a failed body with a
+       valid terminator, or a short file looks complete. */
+    if (err != ESP_OK) { webserver_ws_set_paused(false); return ESP_FAIL; }
+    httpd_resp_send_chunk(req, NULL, 0);
+    webserver_ws_set_paused(false);
+    return ESP_OK;
+}
+
+static esp_err_t rxaudio_json_handler(httpd_req_t *req)
+{
+    uint32_t n = 0, cap = 0, gn = 0; bool run = false;
+    rx_audio_cap_status(&n, &cap, &run);
+    const uint32_t *g = rx_audio_cap_gaps(&gn);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "samples", (double)n);
+    cJSON_AddNumberToObject(root, "capacity", (double)cap);
+    cJSON_AddBoolToObject(root, "recording", run);
+    cJSON_AddNumberToObject(root, "rate", (double)DSP_SAMPLE_RATE_HZ);
+    cJSON *arr = cJSON_AddArrayToObject(root, "gap_sample");
+    for (uint32_t i = 0; arr && g && i < gn; i++)
+        cJSON_AddItemToArray(arr, cJSON_CreateNumber((double)g[i]));
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_500(req); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, out);
+    free(out);
+    return e;
+}
+
+static const httpd_uri_t uri_rxaudio_wav = {
+    .uri = "/api/rxaudio.wav", .method = HTTP_GET, .handler = rxaudio_wav_handler,
+};
+static const httpd_uri_t uri_rxaudio_json = {
+    .uri = "/api/rxaudio.json", .method = HTTP_GET, .handler = rxaudio_json_handler,
 };
 
 static const httpd_uri_t uri_adif_get = {
@@ -4842,7 +4936,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 51;   // 42 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 53;   // 44 API (+2 rxaudio capture) + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -4873,6 +4967,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log);
     httpd_register_uri_handler(s_server, &uri_log_saved);
     httpd_register_uri_handler(s_server, &uri_adif_get);
+    httpd_register_uri_handler(s_server, &uri_rxaudio_wav);
+    httpd_register_uri_handler(s_server, &uri_rxaudio_json);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_adif_import);
     httpd_register_uri_handler(s_server, &uri_adif_delete);

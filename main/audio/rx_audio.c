@@ -166,6 +166,60 @@ static volatile uint32_t s_frame_us_max = 0;    // worst single-frame DSP time t
 static volatile uint64_t s_frame_us_sum = 0;    // for an average - divide by s_frame_count
 static volatile uint32_t s_frame_count  = 0;    // frames processed since last read
 static volatile uint32_t s_read_timeout_count = 0;  // dsp_rxaudio_read() returned <=0
+
+/* ---- CHIRP CHARACTERISATION (2026-09-06) --------------------------------
+ *
+ * The operator hears a chirp every 4-5 s ON A SILENT BAND WITH NO SIGNAL, so
+ * it is not signal-dependent - and each read timeout above already plays a
+ * faded frame of silence, i.e. a gap. read to=1656 over 3360 s is one gap
+ * every ~2 s, the same order as what he hears.
+ *
+ * What we cannot yet say is WHY the ring runs dry on a cadence, and the two
+ * candidates need different fixes:
+ *
+ *   RATE MISMATCH  - the QMX's audio clock is not bit-exact 48 kHz (CLAUDE.md
+ *                    records the FT8 capture needing a UTC boundary for this
+ *                    very reason). If we consume faster than it produces, the
+ *                    ring drains steadily and underruns at a NEAR-CONSTANT
+ *                    interval. More buffering only makes it rarer, never
+ *                    fixes it; the fix is rate adaptation.
+ *   CONTENTION     - something periodic starves the producer. Then the
+ *                    intervals are IRREGULAR and cluster around that event.
+ *
+ * The interval between gaps discriminates them, so that is what this records:
+ * the spread of the last intervals, and the ring level at the moment of the
+ * gap. A tight spread means rate; a wide one means contention. */
+/* ---- RECORDER (2026-09-06) ----------------------------------------------
+ *
+ * ⭐ OBSERVE THE PHENOMENON BEFORE EXPLAINING IT. Counting events says WHEN
+ * something happened and never WHAT IT SOUNDED LIKE - and "chirp", "stutter"
+ * and "click" are different artefacts with different causes. A frequency sweep,
+ * a step discontinuity, a burst of noise and a hole in the audio all sound
+ * wrong and look nothing like each other.
+ *
+ * So this keeps the EXACT samples handed to the codec, in PSRAM (which has
+ * ~15 MB spare), and serves them as a WAV. Mono: the two channels are written
+ * identical a few lines below, so a second copy would only double the size.
+ *
+ * Alongside it, the sample index of every gap - so an artefact seen in the
+ * waveform can be matched against the event that produced it, or shown NOT to
+ * coincide with one, which would be just as informative.
+ *
+ * One-shot on purpose: it records until full and stops, so the window is
+ * contiguous and cannot be overwritten while it is being downloaded. */
+#define RXCAP_MAX_GAPS 512
+static int16_t          *s_cap        = NULL;   /* PSRAM, mono, DSP_SAMPLE_RATE_HZ */
+static volatile uint32_t s_cap_cap    = 0;      /* capacity in samples */
+static volatile uint32_t s_cap_n      = 0;      /* samples written */
+static volatile bool     s_cap_run    = false;
+static uint32_t          s_cap_gap[RXCAP_MAX_GAPS];  /* sample index of each gap */
+static volatile uint32_t s_cap_gap_n  = 0;
+
+static volatile uint32_t s_gap_prev_us   = 0;   /* uptime of the previous gap */
+static volatile uint32_t s_gap_iv_min_ms = 0xFFFFFFFF;
+static volatile uint32_t s_gap_iv_max_ms = 0;
+static volatile uint32_t s_gap_iv_sum_ms = 0;
+static volatile uint32_t s_gap_iv_n      = 0;
 // Round 2 (2026-09-04): the recursive-phasor NCO fix cut frame_us_avg but the
 // operator heard NO change at all - so the bottleneck is somewhere frame_us
 // does not cover. It only spans read-success to output-ready; it excludes
@@ -251,6 +305,11 @@ static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // one left off instead of jumping. See the upsample comment below for why
 // plain sample-and-hold was replaced.
 static float s_last_up_v = 0.0f;
+// Counts DOWN the samples remaining in the post-gap ramp-in - the mirror
+// of the ~10 ms fade-down in the read-timeout branch. See the long note
+// there for the measurement that showed the resume, not the entry, was
+// the audible half.
+static int s_resume_ramp = 0;
 static int   s_center_hz  = 0;     // center the current NCO steps + lowpass are built for
 static int   s_half_bw_hz = 0;     // half-bandwidth the current lowpass is built for
 
@@ -483,6 +542,21 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
 }
 
 // ---- Demodulation task ------------------------------------------------------
+/* Append the frame we are about to play. LEFT channel only - the two are
+   written identical, so mono halves the size and loses nothing. Silently stops
+   when full; the download is what reports how much was captured. */
+static inline void rxcap_push(const int16_t *out, int pairs)
+{
+    if (!s_cap_run || !s_cap) return;
+    uint32_t n = s_cap_n;
+    if (n >= s_cap_cap) { s_cap_run = false; return; }
+    uint32_t room = s_cap_cap - n;
+    uint32_t take = ((uint32_t)pairs < room) ? (uint32_t)pairs : room;
+    for (uint32_t i = 0; i < take; i++) s_cap[n + i] = out[2 * i];
+    s_cap_n = n + take;
+    if (s_cap_n >= s_cap_cap) s_cap_run = false;   /* one-shot */
+}
+
 static void rx_audio_task(void *arg)
 {
     (void)arg;
@@ -559,6 +633,21 @@ static void rx_audio_task(void *arg)
             // the DMA never underruns (an underrun is an audible click). A
             // brief silence is far less objectionable than breaking up.
             s_read_timeout_count++;
+            {   /* interval since the previous gap - see the note by the
+                   counters: a tight spread means a clock-rate mismatch, a
+                   wide one means something is periodically starving us. */
+                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                if (s_gap_prev_us) {
+                    uint32_t iv = now_ms - s_gap_prev_us;
+                    if (iv < s_gap_iv_min_ms) s_gap_iv_min_ms = iv;
+                    if (iv > s_gap_iv_max_ms) s_gap_iv_max_ms = iv;
+                    s_gap_iv_sum_ms += iv;
+                    s_gap_iv_n++;
+                }
+                s_gap_prev_us = now_ms;
+            }
+            if (s_cap_run && s_cap_gap_n < RXCAP_MAX_GAPS)
+                s_cap_gap[s_cap_gap_n++] = s_cap_n;   /* where in the WAV it lands */
             if (!ever_got_data) {
                 // The forward ring is created lazily on first activation; if
                 // that allocation failed (internal-RAM pressure), every read
@@ -592,17 +681,53 @@ static void rx_audio_task(void *arg)
             // gap from s_last_up_v down to true silence instead, and leave
             // s_last_up_v at 0 so the frame that resumes real audio ramps up
             // FROM the silence that was actually just played.
+            //
+            // 2026-09-06, MEASURED: the fade above is only HALF the job, and
+            // the missing half is what is actually heard. Recorded 20 s of
+            // exactly these bytes (rxcap -> /api/rxaudio.wav) and looked at
+            // it: entering the gap is clean (the ramp lands on -1, then 0),
+            // but the first sample AFTER the silence jumps straight to a
+            // median of 132 (worst 451) - i.e. essentially the pre-gap
+            // amplitude (median 140), where the intended 8-sample ramp from
+            // s_last_up_v == 0 would give about 18. So the ramp was being
+            // swamped, and the resumed audio began with a step
+            // discontinuity: a BROADBAND CLICK, +36 dB above the 3-9 kHz
+            // floor - a band the CW filter means real audio can never
+            // occupy, which is what made it measurable at all. 63 of them in
+            // 20 s, 90 % landing on a reported gap.
+            //
+            // The cause is that this branch wrote (int16_t)v STRAIGHT to
+            // s_out, bypassing smooth_step() - the one thing every normal
+            // sample goes through. So the two cascaded biquads kept their
+            // pre-gap state frozen for the whole silence and rang it back
+            // out the moment audio resumed, on top of a ramp that was
+            // correct but inaudible underneath it. Running the fade through
+            // the same filter lets that state decay to rest along with the
+            // audio, so the filter starts the next frame from silence too.
+            //
+            // The gaps themselves are a separate problem and NOT ours to fix
+            // here: measured 3.08/s with WiFi up against 0.42/s with it off,
+            // an 86 % reduction, i.e. they are WiFi/SDIO contention. This
+            // makes the ones that remain inaudible rather than pretending
+            // they are gone.
             {
                 const int fade_n = DSP_SAMPLE_RATE_HZ / 100;  // ~10 ms
                 float from = s_last_up_v;
                 for (int i = 0; i < DSP_FFT_SIZE; i++) {
                     float v = (i < fade_n) ? from * (1.0f - (float)i / (float)fade_n) : 0.0f;
-                    int16_t o = (int16_t)v;
+                    float ys = smooth_step(v);   // <- keeps the biquads in step with what is played
+                    int16_t o = (int16_t)ys;
                     s_out[2 * i] = o; s_out[2 * i + 1] = o;
                 }
             }
             s_last_up_v = 0.0f;
+            // Mirror of the fade-down: ramp the first ~10 ms of resumed audio
+            // up from silence. Without it the recovery still has to climb
+            // from 0 to full inside RX_DECIM_D == 8 samples (167 us), which
+            // is a step at audio rates however clean the filter state is.
+            s_resume_ramp = DSP_SAMPLE_RATE_HZ / 100;
             int64_t w0 = esp_timer_get_time();
+            rxcap_push(s_out, DSP_FFT_SIZE);   /* record exactly what is played */
             esp_codec_dev_write(s_codec, s_out, DSP_FFT_SIZE * 2 * (int)sizeof(int16_t));
             uint32_t w_us = (uint32_t)(esp_timer_get_time() - w0);
             if (w_us > s_write_us_max) s_write_us_max = w_us;
@@ -708,6 +833,13 @@ static void rx_audio_task(void *arg)
                 // overshoot, but re-clamp defensively before the int16 cast
                 // anyway - cheap insurance, not expected to ever trigger.
                 float ys = smooth_step(y);
+                if (s_resume_ramp > 0) {
+                    // Linear ramp-in over RESUME_RAMP_N samples. Counted in
+                    // OUTPUT samples so it is the same 10 ms as the fade-down
+                    // regardless of RX_DECIM_D.
+                    ys *= 1.0f - (float)s_resume_ramp / (float)(DSP_SAMPLE_RATE_HZ / 100);
+                    s_resume_ramp--;
+                }
                 if (ys >  out_clamp) ys =  out_clamp;
                 if (ys < -out_clamp) ys = -out_clamp;
                 int16_t o = (int16_t)ys;
@@ -732,6 +864,7 @@ static void rx_audio_task(void *arg)
 
         // Blocking write paces the task to real time (~21 ms per frame).
         int64_t write_start_us = esp_timer_get_time();
+        rxcap_push(s_out, pairs);   /* record exactly what is played */
         esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
@@ -750,11 +883,15 @@ static void rx_audio_task(void *arg)
                 s_last_diag_log_us = now_us;
                 uint32_t fc = s_frame_count;
                 uint32_t favg = fc ? (uint32_t)(s_frame_us_sum / fc) : 0;
+                uint32_t gn = s_gap_iv_n;
                 ESP_LOGI(TAG, "diag: frame %lu/%luus (n=%lu)  write max=%luus  "
-                         "read to=%lu  clips=%lu",
+                         "read to=%lu  clips=%lu  gap iv %lu/%lu/%lums (n=%lu)",
                          (unsigned long)favg, (unsigned long)s_frame_us_max, (unsigned long)fc,
                          (unsigned long)s_write_us_max,
-                         (unsigned long)s_read_timeout_count, (unsigned long)s_clip_count);
+                         (unsigned long)s_read_timeout_count, (unsigned long)s_clip_count,
+                         (unsigned long)(gn ? s_gap_iv_min_ms : 0),
+                         (unsigned long)(gn ? s_gap_iv_sum_ms / gn : 0),
+                         (unsigned long)s_gap_iv_max_ms, (unsigned long)gn);
             }
         }
     }
@@ -991,3 +1128,34 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     s_write_us_max        -= s_write_us_max;
     s_loop_count           -= loops;
 }
+
+bool rx_audio_cap_start(int seconds)
+{
+    if (seconds < 1) seconds = 1;
+    if (seconds > 30) seconds = 30;
+    uint32_t want = (uint32_t)seconds * (uint32_t)DSP_SAMPLE_RATE_HZ;
+    s_cap_run = false;
+    if (s_cap && s_cap_cap != want) { heap_caps_free(s_cap); s_cap = NULL; s_cap_cap = 0; }
+    if (!s_cap) {
+        s_cap = heap_caps_malloc((size_t)want * sizeof(int16_t),
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_cap) { ESP_LOGE(TAG, "cap: no PSRAM for %lu samples", (unsigned long)want); return false; }
+        s_cap_cap = want;
+    }
+    s_cap_n = 0; s_cap_gap_n = 0;
+    s_cap_run = true;
+    ESP_LOGW(TAG, "cap: recording %d s (%lu samples) - one shot", seconds, (unsigned long)want);
+    return true;
+}
+
+void rx_audio_cap_stop(void) { s_cap_run = false; }
+
+void rx_audio_cap_status(uint32_t *n, uint32_t *cap, bool *running)
+{
+    if (n) *n = s_cap_n;
+    if (cap) *cap = s_cap_cap;
+    if (running) *running = s_cap_run;
+}
+
+const int16_t *rx_audio_cap_data(uint32_t *n) { if (n) *n = s_cap_n; return s_cap; }
+const uint32_t *rx_audio_cap_gaps(uint32_t *n) { if (n) *n = s_cap_gap_n; return s_cap_gap; }

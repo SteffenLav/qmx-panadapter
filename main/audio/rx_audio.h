@@ -106,3 +106,20 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
 #ifdef __cplusplus
 }
 #endif
+
+/* ---- Recorder (2026-09-06, chirp characterisation) ----------------------
+ *
+ * Keeps the exact samples handed to the codec so the artefact can be LOOKED AT
+ * rather than inferred from counters. One-shot: records `seconds` and stops, so
+ * the window is contiguous and cannot be overwritten mid-download.
+ *
+ * Buffer is PSRAM (mono, DSP_SAMPLE_RATE_HZ): ~96 KB per second. */
+bool     rx_audio_cap_start(int seconds);   /* false = out of PSRAM */
+void     rx_audio_cap_stop(void);
+/* Samples captured, capacity, and whether it is still running. */
+void     rx_audio_cap_status(uint32_t *n, uint32_t *cap, bool *running);
+/* The captured samples (mono int16) - valid while not running. */
+const int16_t *rx_audio_cap_data(uint32_t *n);
+/* Sample index of every gap in the window, so an artefact in the waveform can
+   be matched to one - or shown NOT to coincide, which is just as informative. */
+const uint32_t *rx_audio_cap_gaps(uint32_t *n);
