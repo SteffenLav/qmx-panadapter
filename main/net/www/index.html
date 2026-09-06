@@ -1698,8 +1698,15 @@ let lastView = null;   /* {lo, hi, capLo, capHi, span} in absolute Hz */
  * look plausible". A STALE viewport is the same thing wearing a better disguise,
  * so it is aged out the same way.
  *
- * Four seconds is four missed polls - long enough that a single dropped request
- * changes nothing, short enough that nobody works a signal off a wrong axis. */
+ * Four seconds is long enough that a dropped request changes nothing, short
+ * enough that nobody works a signal off a wrong axis.
+ *
+ * ⭐ It is NOT "four missed polls" any more, and the difference is the whole
+ * bug: lastViewAt is stamped by the WEBSOCKET FRAME as well as by the poll,
+ * because every frame carries its own axis in its header. The poll is only the
+ * fallback for when the stream is not running. Judging staleness on the poll
+ * alone put a "lost contact" banner over a spectrum drawing correctly at
+ * 10 fps. */
 let lastViewAt = 0;
 const VIEW_STALE_MS = 4000;
 function viewIsFresh() {
@@ -8090,6 +8097,15 @@ function connectWs() {
       frameDialHz = u32(2);
       lastView = { lo: u32(6), hi: u32(6) + spanF, span: spanF,
                    capLo: u32(14), capHi: u32(18), ifOff: ifo, nBins: SPEC_W };
+      /* ⛔ AND STAMP IT FRESH. Every frame carries its OWN axis - dial, lo,
+         span, cap edges and the IF offset are all in this header - so while
+         frames are arriving the scale cannot be out of date, whatever the
+         1 Hz /api/status poll is doing.
+         This line was missing, so only the poll counted. A poll that merely
+         ran late put "Lost contact with the Tab5" over a spectrum that was
+         drawing correctly at 10 fps, which is how Dave KX3DX and the operator
+         both saw it while decoding carried on perfectly. */
+      lastViewAt = performance.now();
     }
     const payload=buf.subarray(HEADER_LEN,HEADER_LEN+SPEC_W);
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
