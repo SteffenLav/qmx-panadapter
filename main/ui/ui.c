@@ -3479,15 +3479,15 @@ static unsigned  s_cw_seen;          /* change detector - repaint only on new te
  * - and with it every column of decoded text - every time the estimate crossed
  * ten. The prefix width is a constant, and CW_PREFIX_COLS must match the format
  * string or the two labels overlap. */
-#define CW_PREFIX_FMT   "CW ~%s wpm:"
-#define CW_PREFIX_COLS  13           /* "CW ~08 wpm:" is 11, plus two spaces */
+#define CW_PREFIX_FMT   "CW ~%swpm:"
+#define CW_PREFIX_COLS  12           /* "CW ~08wpm:" is 10, plus two spaces */
 /* If the format string changes, this catches it at COMPILE time rather than as
  * two labels quietly overlapping on screen. */
-_Static_assert(sizeof("CW ~08 wpm:") - 1 + 2 == CW_PREFIX_COLS,
+_Static_assert(sizeof("CW ~08wpm:") - 1 + 2 == CW_PREFIX_COLS,
                "CW_PREFIX_COLS must match CW_PREFIX_FMT rendered with two digits");
 /* CW_LINE_COLS comes from cw_decode.h now: the browser draws the same line, so
  * the grid it wraps on cannot live in the Tab5's UI file. 71 columns is what is
- * left of 84 after this header. */
+ * left of 84 after this header - 72 since the header lost its space. */
 _Static_assert(84 - CW_PREFIX_COLS == CW_LINE_COLS,
                "the Tab5 header and cw_decode's line width must still add up");
 #define CW_COL_PX       15

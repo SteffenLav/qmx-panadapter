@@ -120,10 +120,15 @@ unsigned cw_decode_total(void);
 // character go" would drift the moment one of them changed, and the operator
 // asked for them to be identical.
 //
-// 71 columns is what the Tab5 has left after the green "CW ~08 wpm:" header at
+// 72 columns is what the Tab5 has left after the green "CW ~08wpm:" header at
 // 15 px per character across 1280 px. The browser uses the same number so the
 // two wrap in the same places.
-#define CW_LINE_COLS 71
+//
+// 71 until the header lost its space before "wpm" (operator, 2026-09-06). This
+// is NOT a free choice: ui.c static-asserts that the header width and this add
+// up to the 84 columns the display has, so narrowing the header WIDENS the
+// line by the same column. That assert is what caught it.
+#define CW_LINE_COLS 72
 
 // Copy the line as it should be DRAWN: the grid, with two blank columns laid
 // over it at the write position. After the line has wrapped that gap is the

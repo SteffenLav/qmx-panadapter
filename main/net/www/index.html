@@ -582,7 +582,7 @@
      the one allowed to give up its width and wrap to its own line first. */
   /* Decoded CW, laid over the bottom of the waterfall - the same place the
      Tab5 puts it, so the two screens read alike (operator's request).
-     MONOSPACE and pre-wrapped: the line is a fixed 71-column grid that the
+     MONOSPACE and pre-wrapped: the line is a fixed 72-column grid that the
      device wraps and overwrites in place, so a proportional font would make
      "column 40" a different place on every update. The device sends the line
      already rendered, gap and all, precisely so the browser cannot disagree
@@ -5663,7 +5663,7 @@ async function tick() {
        the API was sending the text correctly the whole time and nothing drew
        it. */
     /* Decoded CW. The device sends the line EXACTLY as its own screen is
-       drawing it - same 71-column grid, same wrap position, same two-column
+       drawing it - same 72-column grid, same wrap position, same two-column
        gap - so the two cannot drift. The header is built here only because
        it is fixed text; the speed inside it is the device's number, zero
        padded so the colon never moves and the text never shifts. */
@@ -5673,7 +5673,7 @@ async function tick() {
         const cw = s.cw;
         if (cw && typeof cw.line === "string") {
           const w = (cw.wpm > 0) ? String(Math.min(99, cw.wpm)).padStart(2, "0") : "??";
-          document.getElementById("cw-head").textContent = "CW ~" + w + " wpm:  ";
+          document.getElementById("cw-head").textContent = "CW ~" + w + "wpm:  ";
           document.getElementById("cw-text").textContent = cw.line;
           el.hidden = false;
         } else {
