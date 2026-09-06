@@ -101,8 +101,41 @@ static bool s_today_only = true;
 // rather than only in the browser - the screen he is actually sitting at.
 static lv_obj_t *s_search_ta, *s_search_kb;
 static char      s_query[24];        // uppercased; empty = show everything
-static bool      s_search_dirty;     // a re-render is owed - see search_ta_cb()
+/* ⛔⛔ THE ONE RULE IN THIS FILE: NOTHING DESTROYS AN LVGL OBJECT FROM INSIDE
+ * AN EVENT CALLBACK. Every rebuild goes through list_render_soon(), which only
+ * sets a flag; render_tick_cb() does the work from lv_timer_handler, outside
+ * any dispatch. list_render_now() and build_more_rows() are TIMER-ONLY.
+ *
+ * This has now crashed the device three times, always the same way - taskLVGL,
+ * Load access fault, MEPC in lv_event_mark_deleted() called from
+ * lv_obj_destructor(). LVGL keeps its in-flight events on a single global
+ * chain of structs that live on the DISPATCHING TASK'S STACK, and destroying
+ * an object walks that chain; tear the object tree down while a dispatch is
+ * still on it and the walk reads a stack frame that is already gone.
+ *
+ * The three, so the pattern is on the record rather than rediscovered a fourth
+ * time - each was a DIFFERENT entry point into the same list_render():
+ *   - search keystroke   -> search_ta_cb        (fixed 7f94766)
+ *   - Today/All toggle   -> filter_btn_cb       (fixed with it, pre-emptively)
+ *   - opening the window -> adif_or_pileup_btn_cb -> adif_view_modal_show()
+ *     and, new with the lazy build, a scroll -> list_scroll_cb -> the
+ *     lv_obj_del() of the "showing N of M" footer.
+ * Fixing them one at a time is what let the third happen, so the fix is now
+ * structural: there is exactly one caller of the renderer and it is a timer. */
+static bool      s_render_dirty;    // a full rebuild is owed
+static bool      s_more_dirty;      // another lazy chunk is owed (scrolling)
 static lv_timer_t *s_search_timer;
+static bool      s_fresh_open;      // this render is the one that opens the window
+
+/* Ask for a rebuild. SAFE FROM ANYWHERE, including inside an event callback -
+ * that is the entire point. `prompt` runs it on the next lv_timer_handler pass
+ * instead of waiting out the tick, which is what an open or a delete wants; a
+ * keystroke passes false so fast typing coalesces into one rebuild. */
+static void list_render_soon(bool prompt)
+{
+    s_render_dirty = true;
+    if (prompt && s_search_timer) lv_timer_ready(s_search_timer);
+}
 
 // Panel geometry. The list cap SHRINKS while the keyboard is up, because a
 // search you cannot see the results of is not a search - see kb_show().
@@ -337,7 +370,7 @@ static void restore_poll_cb(lv_timer_t *t)
     s_sdr_state = SDR_IDLE;
     lv_timer_del(t);
     s_sdr_timer = NULL;
-    list_render();   // the log just changed under the open list
+    list_render_soon(true);   // the log just changed under the open list
 }
 
 static void restore_sd_btn_cb(lv_event_t *e)
@@ -372,7 +405,7 @@ static void sel_reset(bool rerender)
     s_sel_active = false;
     if (s_del_bar) lv_obj_add_flag(s_del_bar, LV_OBJ_FLAG_HIDDEN);
     if (s_list) lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
-    if (rerender) list_render();
+    if (rerender) list_render_soon(true);
 }
 
 static void row_event_cb(lv_event_t *e)
@@ -840,11 +873,17 @@ static void list_scroll_cb(lv_event_t *e)
     lv_coord_t y       = lv_obj_get_scroll_y(s_list);
     lv_coord_t bottom  = lv_obj_get_scroll_bottom(s_list);
     (void)y;
-    // scroll_bottom is how much content remains below the visible area.
-    if (bottom < 400) build_more_rows();
+    /* scroll_bottom is how much content remains below the visible area.
+     * ⛔ Only FLAGGED here, never built: build_more_rows() lv_obj_del()s the
+     * footer label, and this runs inside LVGL's SCROLL dispatch. See the rule
+     * at the top of this file. The chunk lands on the next timer tick, which
+     * on this display is the same frame or the one after it. */
+    if (bottom < 400) { s_more_dirty = true; if (s_search_timer) lv_timer_ready(s_search_timer); }
 }
 
-static void list_render(void)
+/* ⛔ TIMER ONLY - never call this from an event callback. Use
+ * list_render_soon(). See the rule at the top of this file. */
+static void list_render_now(void)
 {
     int64_t t_start = esp_timer_get_time();
 
@@ -1193,16 +1232,38 @@ static void search_ta_cb(lv_event_t *e)
      * does it from lv_timer_handler, outside any event. That also coalesces
      * fast typing - "OZ1LAV" becomes one rebuild instead of six, which on a
      * 200-row log is the difference between responsive and not. */
-    s_search_dirty = true;
+    list_render_soon(false);   // false: coalesce fast typing into one rebuild
 }
 
-/* Runs from lv_timer_handler, never from inside an event. */
-static void search_render_cb(lv_timer_t *t)
+/* The ONLY caller of list_render_now() and of build_more_rows(). Runs from
+   lv_timer_handler, so no LVGL event is being dispatched underneath it. */
+static void render_tick_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_search_dirty || !s_open) return;
-    s_search_dirty = false;
-    list_render();
+    if (!s_open) return;
+    if (s_render_dirty) {
+        s_render_dirty = false;
+        s_more_dirty   = false;   // a full rebuild supersedes a pending chunk
+        list_render_now();
+        /* Open on Today (the POTA-activation case), but fall back to All when
+           today is empty and older QSOs exist, so reviewing the log at home
+           does not open onto a blank list. An unsynced clock degrades the same
+           way: a bogus "today" matches nothing -> All. Done HERE rather than in
+           show() because it needs the counts a render produces, and show() runs
+           inside a button event where a render may not happen. */
+        if (s_fresh_open) {
+            s_fresh_open = false;
+            if (s_last_today == 0 && s_last_total > 0 && s_today_only && !s_query[0]) {
+                s_today_only = false;
+                s_render_dirty = true;      // one more pass, still on this timer
+            }
+        }
+        return;
+    }
+    if (s_more_dirty) {
+        s_more_dirty = false;
+        build_more_rows();
+    }
 }
 
 static void filter_btn_cb(lv_event_t *e)
@@ -1215,7 +1276,7 @@ static void filter_btn_cb(lv_event_t *e)
        keyboard mid-press. It goes through the same path anyway: the hazard is
        the same shape, and having two rules for one operation is how the unsafe
        one gets copied next time. */
-    s_search_dirty = true;
+    list_render_soon(true);
 }
 
 static void modal_build(void)
@@ -1435,7 +1496,7 @@ static void modal_build(void)
 
     /* 120 ms: fast enough to feel immediate while typing, slow enough that a
      * quick word is one rebuild rather than one per letter. */
-    if (!s_search_timer) s_search_timer = lv_timer_create(search_render_cb, 120, NULL);
+    if (!s_search_timer) s_search_timer = lv_timer_create(render_tick_cb, 120, NULL);
 
     // On the modal, not the panel: it has to be able to sit BELOW the panel
     // rather than inside it. Hidden until the search field is touched.
@@ -1531,21 +1592,27 @@ void adif_view_modal_show(void)
     // would silently hide records, and the box holding the reason for it is
     // easy to miss beside the title.
     s_query[0] = 0;
-    s_search_dirty = false;
     if (s_search_ta) lv_textarea_set_text(s_search_ta, "");
     kb_hide();
-    // Open on the Today view (the POTA-activation use case) - but fall back
-    // to All when today is empty and older QSOs exist, so reviewing the log
-    // at home doesn't open onto a blank list. An unsynced clock degrades the
-    // same way: bogus "today" matches nothing -> All. A manual toggle back
-    // to an empty Today is respected (this fallback runs only on open).
     s_today_only = true;
-    list_render();
-    if (s_last_today == 0 && s_last_total > 0) {
-        s_today_only = false;
-        list_render();
-    }
+
+    /* ⛔ This function is called FROM A BUTTON CALLBACK
+     * (adif_or_pileup_btn_cb), so it must not render: list_render_now() does
+     * lv_obj_clean() on the row list and lv_obj_del() on the footer, and
+     * destroying objects inside a live event dispatch is what crashed the
+     * device on 2026-09-06 (taskLVGL, Load access fault, lv_event_mark_deleted
+     * from lv_obj_destructor). It used to call list_render() twice right here.
+     *
+     * s_open goes up FIRST because render_tick_cb() refuses to run on a closed
+     * window, and the Today-empty fallback moved into that timer with it - it
+     * needs the counts a render produces. The window therefore appears at most
+     * one frame before its rows do, which at 27 fps is not visible. */
+    s_open       = true;
+    s_fresh_open = true;
+    s_render_dirty = false;
+    s_more_dirty   = false;
+    list_render_soon(true);
+
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
-    s_open = true;
 }
