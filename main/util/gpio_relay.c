@@ -39,7 +39,11 @@ void gpio_relay_init(void)
 {
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B),
-        .mode         = GPIO_MODE_OUTPUT,
+        /* INPUT_OUTPUT, not OUTPUT: the input buffer is what makes
+         * gpio_get_level() report the level actually on the pin. Driving is
+         * unaffected, and a resting level that is only asserted in a log line
+         * is exactly the kind of claim #189 says must be measured instead. */
+        .mode         = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
@@ -73,8 +77,9 @@ void gpio_relay_init(void)
     esp_timer_create(&targs, &s_release_timer);
 
     s_inited = true;
-    ESP_LOGI(TAG, "GPIO53/54 configured as outputs, active %s so resting %s (%s)",
+    ESP_LOGI(TAG, "GPIO53/54: active %s so resting %s - pins READ BACK %d/%d (%s)",
              st_level ? "HIGH" : "LOW", s_rest_level ? "HIGH" : "LOW",
+             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B),
              e == ESP_OK ? "ok" : "gpio_config FAILED");
 }
 
@@ -127,6 +132,7 @@ void gpio_relay_set_polarity(bool active_level)
 
     gpio_set_level(RELAY_PIN_A, rest ? 1 : 0);
     gpio_set_level(RELAY_PIN_B, rest ? 1 : 0);
-    ESP_LOGI(TAG, "polarity now active %s - both pins resting %s",
-             active_level ? "HIGH" : "LOW", rest ? "HIGH" : "LOW");
+    ESP_LOGI(TAG, "polarity now active %s - both pins resting %s, READ BACK %d/%d",
+             active_level ? "HIGH" : "LOW", rest ? "HIGH" : "LOW",
+             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B));
 }
