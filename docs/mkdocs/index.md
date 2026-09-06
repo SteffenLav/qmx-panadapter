@@ -106,18 +106,20 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.11.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.11.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.11.2 — the QSO log is quick enough to actually use.** It opens in a
-tenth of a second instead of two and a bit, its search covers the whole log rather
-than just today, and a **Check log** button in the browser tells you what a record is
-missing before you submit an activation — a callsign, a malformed date, a reference
-that does not look like one. It cannot promise POTA will accept a file, and it does
-not pretend to: it only tells you nothing is obviously incomplete.
+**New in v1.11.3 — two things a user told us were still broken after we said
+they were fixed, and both of them were.** The power-cycle relay was held
+**closed** from boot for anyone using an active level of Low, on a line wired to
+a radio's power input; the pins now rest on the inactive side of the polarity
+you chose. And a log file corrected in another logger could not be imported —
+a merge matches on callsign, date and time, which is exactly what a correction
+keeps, so the fix looked like a duplicate and was skipped. You can now choose to
+let an incoming record replace the one already logged.
 
 A grid square can now be corrected by hand, which matters because a bug that could
 log one station under another's locator is fixed in this release. Frequencies can be
@@ -164,7 +166,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

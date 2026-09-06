@@ -4,6 +4,17 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.11.3** — 2026-09-06
+
+**Two things a user told us were still broken after we had said they were fixed. Both of them were.**
+
+- **The power-cycle relay was held closed from boot** for anyone using an active level of Low *(Randy N4OPI)*. The two pins were driven Low at every startup, under a comment reasoning that closing a contact should require a deliberate pulse — which is right, and is the opposite of what that did for an active-Low station, because Low is their asserted level. On a line wired to a radio's power input the relay therefore sat closed from power-on until the first pulse released it. The pins now rest on the inactive side of the polarity you chose, and follow it the moment you change it.
+- **A corrected log file can now be imported** *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Restoring a log merges on callsign, date and time — exactly the three fields a correction does not change — so a record fixed in another logger looked like a duplicate, was skipped, and was reported as "already in the log". Choose **corrections** at the first prompt and an incoming record replaces the one already logged; the result says how many were replaced, and those contacts go to QRZ, eQSL and LoTW again, since the copy held there is the one carrying the error.
+- **The web page tells you when it is older than the Tab5.** A browser tab left open across an update keeps working perfectly while missing every control added since it loaded — which is indistinguishable from a feature that was never shipped, and cost a round trip about an editor that was present all along. It now offers a Reload when the firmware version changes underneath it.
+
+
+## Previous Releases
+
 **v1.11.2** — 2026-09-06
 
 **A QSO log quick enough to use, a check-my-log pass before you submit an activation, and a choice of frequency punctuation.**
@@ -19,8 +30,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The power-cycle relay's settings survive a reboot** *(Randy N4OPI)*.
 - **"Lost contact with the Tab5" no longer appears over a spectrum that is drawing perfectly** *(Dave KX3DX)*, and web spot labels carry the mode as the Tab5's always have.
 - **Three crashes fixed**, including one that could abort the firmware when a browser reached the web server in the moment it started — present and unrecognised for many versions. Three tasks that were within a few hundred bytes of overrunning their stacks have been given room, and an overrun is now trapped as it happens.
-
-## Previous Releases
 
 ### v1.11.1 — 2026-09-05
 

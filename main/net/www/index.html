@@ -2412,6 +2412,10 @@ function adifImportMessage(j) {
     return j.error || "The log could not be written - the storage may be full.";
   const bits = [];
   if (j.added) bits.push("Restored " + j.added + " contact" + (j.added === 1 ? "" : "s") + ".");
+  // "replaced" is a different outcome from "added" and has to say so: a
+  // correction that lands silently is the same problem as one that is
+  // silently refused, which is what this whole path exists to fix.
+  if (j.replaced) bits.push(j.replaced + " of them replaced a contact already logged, and will be sent to QRZ/eQSL/LoTW again.");
   if (j.duplicate) bits.push(j.duplicate + " already in the log.");
   if (j.unreadable) bits.push(j.unreadable + " could not be read.");
   if (!j.found) bits.push("No contacts were found in that file at all - check it is an ADIF log.");
@@ -2465,19 +2469,41 @@ function adifImportMessage(j) {
   file.addEventListener("change", async function () {
     const f = file.files[0];
     if (!f) return;
-    const markUploaded = confirm(
-      'Restore contacts from "' + f.name + '"?\n\n' +
-      "Contacts already in the log (same call, date and time) are skipped.\n\n" +
-      "Click OK to mark restored contacts as already uploaded to QRZ/eQSL/LoTW " +
-      "(the usual case - you are restoring a log that was already sent).\n" +
-      "Click Cancel to import them as NOT yet uploaded instead, so the next " +
-      "upload pass sends them.");
+    // Asked FIRST, because it changes what the second question even means.
+    // A plain restore skips anything already logged - which is right for a
+    // wiped log and useless for a corrected one, since a correction keeps the
+    // call, date and time it is matched on and so looks like a duplicate
+    // (Gyula HA3HZ: "the corrected file cannot be installed, the previous
+    // incorrect version remains").
+    const isCorrection = confirm(
+      'Import from "' + f.name + '" - does this file contain CORRECTIONS?\n\n' +
+      "OK - corrections: a contact already logged with the same call, date and " +
+      "time is REPLACED by the version in this file, and is sent to " +
+      "QRZ/eQSL/LoTW again (the copy held there is the one carrying the error).\n\n" +
+      "Cancel - normal restore: contacts already logged are left exactly as " +
+      "they are and only new ones are added.");
+
+    // Only meaningful for a plain restore. In correction mode the device
+    // deliberately ignores it - marking everything uploaded would put the
+    // cursor past the corrections and they would never leave the Tab5.
+    let markUploaded = true;
+    if (!isCorrection) {
+      markUploaded = confirm(
+        'Restore contacts from "' + f.name + '"?\n\n' +
+        "Contacts already in the log (same call, date and time) are skipped.\n\n" +
+        "Click OK to mark restored contacts as already uploaded to QRZ/eQSL/LoTW " +
+        "(the usual case - you are restoring a log that was already sent).\n" +
+        "Click Cancel to import them as NOT yet uploaded instead, so the next " +
+        "upload pass sends them.");
+    }
     const prev = link.textContent;
     link.textContent = "ADIF …";
     pauseWs();   // same courtesy every other fetch here pays
     try {
       const text = await f.text();
-      const r = await fetch("/api/adif/import?mark_uploaded=" + (markUploaded ? "1" : "0"),
+      const qs = isCorrection ? "update=1"
+                              : "mark_uploaded=" + (markUploaded ? "1" : "0");
+      const r = await fetch("/api/adif/import?" + qs,
         { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
       alert(adifImportMessage(await r.json()));
     } catch (err) {

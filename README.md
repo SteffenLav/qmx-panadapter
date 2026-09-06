@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.11.2.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.11.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.11.2 — a faster, searchable QSO log, a "check my log" pass before you submit an activation, and a choice of frequency punctuation.**
+> **New in v1.11.3 — the power-cycle relay rests correctly from boot, and a corrected log file can be imported.**
 >
 > **The web decode list no longer jumps**, for real this time *(Randy N4OPI)*. The v1.10.8 fix sized the status box against the wrong "worst case" text and still moved on an armed transmit or a busy exchange; the actual cause turned out to be the box disappearing entirely (`display:none`) while idle rather than staying reserved at a fixed size — every hide path now uses `visibility:hidden` instead, so its footprint never collapses. The countdown is now its own badge that can't be truncated away, Cancel clears immediately with no leftover "Cancelling" text, and the box no longer exceeds the width of the occupancy strip below it.
 >
@@ -26,7 +26,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.3.pdf).
 
 <!-- USERGUIDE:START -->
 
