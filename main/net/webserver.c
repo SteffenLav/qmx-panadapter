@@ -2309,7 +2309,9 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     bool is_grid = (strcmp(field, "GRIDSQUARE") == 0);
     if (!is_rst && !is_ref && !is_grid) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "only RST_SENT, RST_RCVD, SIG_INFO and GRIDSQUARE are editable");
+                            "only RST_SENT, RST_RCVD, SIG_INFO and GRIDSQUARE are editable - "
+                            "call, band, mode, date and time are what QRZ/eQSL/LoTW match a "
+                            "contact on, so delete and re-log instead");
         return ESP_FAIL;
     }
     // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).

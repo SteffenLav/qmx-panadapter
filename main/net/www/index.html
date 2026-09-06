@@ -1476,6 +1476,22 @@
                style="width:100%; box-sizing:border-box; padding:7px 10px; font-size:14px;
                       background:#0e0e0e; color:#ddd; border:1px solid #494949; border-radius:6px;">
       </div>
+      <!-- Gyula HA3HZ, #178610: "you cannot edit the cells in them. I use the
+           AdifMaster windows application to correct it." Four fields are
+           editable and the rest deliberately are not, so the page says which
+           and why - an editable-looking cell that refuses is worse than one
+           that never invited the click. The boundary is not caution for its
+           own sake: CALL/BAND/MODE/QSO_DATE/TIME_ON are the fields QRZ, eQSL
+           and LoTW MATCH a contact on, and a LoTW record is signed over
+           exactly those, so changing one orphans the record rather than
+           correcting it. Delete and re-log is the route for those, and it is
+           already here. -->
+      <div style="margin:0 0 10px; color:#888; font-size:12px; line-height:1.5;">
+        Click a <span style="border-bottom:1px dotted #666">dotted</span> cell to correct it &mdash;
+        reports, grid and park reference. Call, band, mode, date and time cannot be edited:
+        they are what QRZ, eQSL and LoTW match a contact on, so changing one would orphan the
+        record rather than correct it. Delete the QSO and log it again if one of those is wrong.
+      </div>
       <div style="max-height:62vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <table id="adifv-table">
           <thead><tr id="adifv-head"></tr></thead>
@@ -2750,8 +2766,10 @@ function adifImportMessage(j) {
     render();
   }
 
-  /* Correct a report by hand. Only the two RST fields are editable, and the
-     device enforces that too - you may correct WHAT WAS EXCHANGED, never
+  /* Correct a field by hand. Only RST_SENT, RST_RCVD, SIG_INFO and GRIDSQUARE
+     are editable (this comment said "the two RST fields" until SIG_INFO and
+     then GRIDSQUARE joined them - keep it in step with adif_edit_handler()),
+     and the device enforces that too - you may correct WHAT WAS EXCHANGED, never
      who/when/where, because those are what QRZ/eQSL/LoTW match a contact on and
      what a LoTW signature covers. Clearing the value removes the field, which is
      the honest state for a report that was never exchanged (the panadapter
