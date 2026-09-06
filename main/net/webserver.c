@@ -48,6 +48,7 @@
 #include "util/net_guard.h"   // net_url_parse - save-time URL sanity only
 #include "util/ip_guard.h"    // #307: a static IP must not lock the operator out
 #include "util/sock_probe.h"  // #313: how many LWIP sockets are left
+#include "util/sock_owners.h"  // #313: and WHO is holding them
 #include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
@@ -1623,6 +1624,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         snprintf(body, sizeof(body), "{\"ok\":%s,\"failures\":%d}",
                  bad ? "false" : "true", bad);
         httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "sockets") == 0) {
+        /* #313. Names every holder of the 16-entry LWIP socket table. Costs no
+           socket of its own, so it is safe to fire while the table is full -
+           which is the only moment it is really wanted. Dev action, log only. */
+        sock_owners_report("on demand");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the log\"}");
         return ESP_OK;
     } else if (action && strcmp(action, "stacks") == 0) {
         /* One-shot per-task stack headroom. Dev action, serial/diag log only -
