@@ -1960,6 +1960,14 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
     total += stream_file_part(req, diag_log_persist_path(), &err);
     if (total == 0)
         return httpd_resp_sendstr(req, "(no saved diagnostic log yet)\n");
+    /* Same rule as /api/adif: never cap a failed body with a valid terminator.
+     * A diagnostic log silently missing its tail is worse than a download that
+     * visibly failed - the tail is the part with the fault in it. */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "/api/log/saved: send failed after %u bytes (err 0x%x) - aborting rather "
+                      "than serving a truncated log that looks complete", (unsigned)total, err);
+        return ESP_FAIL;
+    }
     httpd_resp_send_chunk(req, NULL, 0);
     return err;
 }
@@ -2066,6 +2074,25 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         }
     }
     fclose(f);
+    /* The terminating 0-length chunk MUST NOT be sent if the body failed
+     * partway. It closes the chunked stream cleanly, so a transfer that died at
+     * record 220 of 462 arrives as a WELL-FORMED ADIF FILE THAT IS SIMPLY
+     * SHORT: the browser reports success, the log viewer says "220 QSOs", and a
+     * download kept as a backup or uploaded to a logbook has silently lost half
+     * the contacts. That is what Gyula HA3HZ reported as "the website shows 220
+     * lines of LOG data" with 462 in his log.
+     *
+     * Returning ESP_FAIL without the terminator makes httpd close the socket,
+     * so the client sees an aborted download and can retry - the honest
+     * outcome. Same rule as the WebSocket partial write in #193: a transfer we
+     * are committed to must be finished or visibly broken, never quietly
+     * truncated into something that looks whole. */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "/api/adif: send failed mid-file (err 0x%x) - aborting the connection "
+                      "rather than serving a short log that looks complete", err);
+        webserver_ws_set_paused(false);
+        return ESP_FAIL;
+    }
     httpd_resp_send_chunk(req, NULL, 0);
     webserver_ws_set_paused(false);
     return err;
