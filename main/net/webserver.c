@@ -2189,6 +2189,7 @@ static void adif_import_add_counts(cJSON *root, const adif_import_result_t *ir, 
     cJSON_AddNumberToObject(root, "found", ir->found);
     cJSON_AddNumberToObject(root, "duplicate", ir->duplicate);
     cJSON_AddNumberToObject(root, "unreadable", ir->unreadable);
+    cJSON_AddNumberToObject(root, "replaced", ir->replaced);
     cJSON_AddNumberToObject(root, "total", adif_log_count());
 }
 
@@ -2248,18 +2249,33 @@ static esp_err_t adif_import_handler(httpd_req_t *req)
     }
     body[got] = '\0';
 
-    adif_import_result_t ir;
-    int added = adif_log_import_ex(body, &ir);
-    free(body);
-
-    char q[16] = "";
+    /* ⛔ QUERY PARSED BEFORE THE IMPORT, and the buffer sized for BOTH
+     * parameters. It used to be read afterwards into char q[16], which is one
+     * byte short of "mark_uploaded=1&update=1" - the second parameter would
+     * have been truncated away and silently ignored. */
+    char q[64] = "";
     bool mark_uploaded = true;
+    bool update_existing = false;
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
         char v[4];
         if (httpd_query_key_value(q, "mark_uploaded", v, sizeof(v)) == ESP_OK)
             mark_uploaded = (v[0] != '0');
+        if (httpd_query_key_value(q, "update", v, sizeof(v)) == ESP_OK)
+            update_existing = (v[0] != '0');
     }
-    if (added > 0 && mark_uploaded) adif_import_mark_uploaded();
+
+    adif_import_result_t ir;
+    int added = update_existing ? adif_log_import_update(body, &ir)
+                                : adif_log_import_ex(body, &ir);
+    free(body);
+    /* ⛔ NOT IN UPDATE MODE, AND THE TWO GENUINELY CONFLICT. Removing the
+     * stale versions already stepped the cursors back past them, so a corrected
+     * record now sits beyond the cursor and will be re-sent - which is the
+     * point, since the copy at QRZ/eQSL/LoTW is the one carrying the error.
+     * Marking everything uploaded here would put the cursor past the
+     * corrections and they would never leave the device. The unchanged records
+     * keep their existing cursor position either way. */
+    if (added > 0 && mark_uploaded && !update_existing) adif_import_mark_uploaded();
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return httpd_resp_send_500(req);
@@ -2586,6 +2602,9 @@ static esp_err_t adif_import_sd_handler(httpd_req_t *req)
 
     adif_import_result_t ir;
     int added = adif_log_import_from_sd(&ir);
+    /* Add-only by construction - the card mirror is a backup of what the device
+     * itself wrote, never a corrected file, so there is nothing here to replace
+     * and the cursors mean what they normally mean. */
     if (added > 0 && mark_uploaded) adif_import_mark_uploaded();
 
     cJSON *root = cJSON_CreateObject();

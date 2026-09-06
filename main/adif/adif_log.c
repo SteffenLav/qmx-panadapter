@@ -1272,6 +1272,116 @@ int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
     return added;
 }
 
+/* ---- update mode: let an import carry a CORRECTION ------------------------
+ *
+ * See adif_log.h for why. The keys of every readable record in the incoming
+ * text are collected once, the stale versions are removed in ONE rewrite, and
+ * then the ordinary add-only import runs - by which point nothing matches, so
+ * every corrected record lands as a normal append. */
+
+typedef struct { char call[ADIF_CALL_MAX]; char date[9]; char time[7]; } imp_key_t;
+typedef struct { imp_key_t *k; int n; } imp_keyset_t;
+
+static bool key_in_set(const imp_keyset_t *ks, const char *call, const char *date, const char *time_on)
+{
+    for (int i = 0; i < ks->n; i++)
+        if (strcmp(ks->k[i].call, call) == 0 &&
+            strcmp(ks->k[i].date, date) == 0 &&
+            strcmp(ks->k[i].time, time_on) == 0) return true;
+    return false;
+}
+
+static bool want_gone_if_incoming(int idx, const char *raw, void *ctx)
+{
+    (void)idx;
+    const imp_keyset_t *ks = (const imp_keyset_t *)ctx;
+    char call[ADIF_CALL_MAX], date[9], time_on[7];
+    if (!adif_log_extract_field(raw, "CALL", call, sizeof(call))) return false;
+    if (!adif_log_extract_field(raw, "QSO_DATE", date, sizeof(date))) date[0] = '\0';
+    if (!adif_log_extract_field(raw, "TIME_ON", time_on, sizeof(time_on))) time_on[0] = '\0';
+    return key_in_set(ks, call, date, time_on);
+}
+
+int adif_log_import_update(const char *adif_text, adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+    if (!adif_text) return -1;
+
+    /* COUNTED WITH find_ci, THE SAME SCANNER THE KEY LOOP USES. A first version
+     * counted "<EOR>" and "<eor>" as two literal sweeps: a mixed-case "<Eor>"
+     * would then be found by the loop but not by the count, the key array would
+     * fill, and the records past it would silently keep their stale versions -
+     * a partial correction reported as a complete one. The bound and the scan
+     * must come from one function. */
+    const char *end = adif_text + strlen(adif_text);
+    int n_eor = 0;
+    for (const char *q = adif_text; q < end; ) {
+        const char *e = find_ci(q, end, "<eor>");
+        if (!e) break;
+        n_eor++;
+        q = e + 5;
+    }
+    if (n_eor <= 0) return adif_log_import_ex(adif_text, res);
+
+    imp_keyset_t ks = { .k = heap_caps_malloc(sizeof(imp_key_t) * (size_t)n_eor,
+                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), .n = 0 };
+    if (!ks.k) {
+        /* No memory for the key set: fall back to an add-only import rather
+         * than deleting on a partial list, which would lose records. */
+        ESP_LOGW(TAG, "ADIF update: out of memory for %d keys - importing add-only", n_eor);
+        return adif_log_import_ex(adif_text, res);
+    }
+
+    const char *cursor = adif_text;
+    const char *eoh = find_ci(adif_text, end, "<eoh>");
+    if (eoh) cursor = eoh + 5;
+
+    char norm[512];
+    while (cursor < end && ks.n < n_eor) {
+        const char *eor = find_ci(cursor, end, "<eor>");
+        if (!eor) break;
+        const char *p = cursor;
+        while (p < eor && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        size_t blen = (size_t)(eor - p);
+        cursor = eor + 5;
+        if (blen == 0 || blen >= sizeof(norm) - 8) continue;
+        size_t w = 0;
+        for (size_t i = 0; i < blen; i++) {
+            char c = p[i];
+            norm[w++] = (c == '\r' || c == '\n') ? ' ' : c;
+        }
+        norm[w] = '\0';
+
+        imp_key_t *k = &ks.k[ks.n];
+        if (!adif_log_extract_field(norm, "CALL", k->call, sizeof(k->call))) continue;
+        if (!adif_log_extract_field(norm, "QSO_DATE", k->date, sizeof(k->date))) k->date[0] = '\0';
+        if (!adif_log_extract_field(norm, "TIME_ON", k->time, sizeof(k->time))) k->time[0] = '\0';
+        ks.n++;
+    }
+
+    int removed = 0;
+    if (ks.n > 0) {
+        removed = adif_log_delete_matching(want_gone_if_incoming, &ks);
+        if (removed < 0) {
+            /* The rewrite failed and left the log untouched, which is the safe
+             * outcome - but importing now would append second copies alongside
+             * the stale ones. Refuse instead. */
+            free(ks.k);
+            ESP_LOGE(TAG, "ADIF update: could not remove the stale records - log untouched, nothing imported");
+            return -1;
+        }
+    }
+    free(ks.k);
+
+    int added = adif_log_import_ex(adif_text, res);
+    res->replaced = (removed > 0) ? removed : 0;
+    ESP_LOGI(TAG, "ADIF update: %d found, %d added (%d of them replacing an existing record), %d unreadable",
+             res->found, res->added, res->replaced, res->unreadable);
+    return added;
+}
+
 // Restore from the card's own mirror. All the ADIF work is the existing
 // import; the only new part is getting the bytes off the card, which
 // sd_archive owns (it holds the mount, the paths and the lock).

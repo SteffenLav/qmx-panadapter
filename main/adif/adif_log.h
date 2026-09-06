@@ -148,11 +148,40 @@ typedef struct {
     int added;      // written to the log
     int duplicate;  // already present (same CALL+QSO_DATE+TIME_ON)
     int unreadable; // no CALL, or too long for one record - could not be used
+    int replaced;   // stale versions removed so a corrected record could land
+                    // (update mode only; 0 for a plain add-only import)
 } adif_import_result_t;
 
 // As adif_log_import(), but also reports what happened to every record. *res is
 // zeroed first and is filled in even when the return value is -1.
 int adif_log_import_ex(const char *adif_text, adif_import_result_t *res);
+
+// Import, and let an incoming record REPLACE the one already logged under the
+// same CALL+QSO_DATE+TIME_ON instead of being counted as a duplicate.
+//
+// ⛔ WHY THIS EXISTS. Plain import deduplicates on exactly the three fields a
+// correction does NOT change, so a record fixed in an external logger is by
+// construction a "duplicate" and is skipped - the wrong version stays and the
+// report says "duplicate", which reads like "already fine". Gyula HA3HZ hit
+// this twice: first the restore direction did not exist at all, then it existed
+// and silently refused his corrections ("The corrected file cannot be
+// installed, the previous incorrect version remains"). An import that cannot
+// carry a correction is not a way to fix a log.
+//
+// ⚠ Three consequences, all deliberate and all stated to the operator:
+//  - The match key is CALL+QSO_DATE+TIME_ON, so those three can never be
+//    corrected this way. A record with a wrong date is a different record.
+//  - Replaced records move to the END of the file. Records are only ever
+//    appended, so a rewrite in place would be new machinery for a cosmetic
+//    property; the log viewer sorts on the columns anyway.
+//  - Upload cursors step back past the removed records, so a corrected QSO is
+//    sent to QRZ/eQSL/LoTW again. That is the right direction - the remote copy
+//    is the one carrying the wrong grid - and all three dedupe server-side.
+//
+// Two passes, both O(N): one adif_log_delete_matching() rewrite to take the
+// stale versions out (which is what keeps the cursors honest), then the normal
+// append. Never loop a per-record delete here - see #325.
+int adif_log_import_update(const char *adif_text, adif_import_result_t *res);
 
 // Restore the QSO log from the copy the SD auto-archive already keeps on the
 // card (/sdcard/qmx-panadapter/qso.adi). Same merge semantics as

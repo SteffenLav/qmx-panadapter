@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "util/format_freq.h"   // #302: g_freq_style, applied on set
+#include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
 #include "sd_archive.h"
 
 #include <string.h>
@@ -2456,6 +2457,14 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
     s_pending.gpio_relay_ms    = ms;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_GPIO_RELAY);
+
+    /* ⭐ APPLIED HERE, NOT AT THE CALL SITES. Storing the polarity without
+     * re-resting the pins leaves them on the wrong side until the next reboot -
+     * exactly the bug Randy N4OPI reported, just deferred instead of fixed. Two
+     * callers exist today (the web form and the config import) and putting it
+     * in either one leaves the other wrong, so it goes in the single place
+     * every caller must pass through. Same reasoning as g_freq_style above. */
+    gpio_relay_set_polarity(level);
 }
 
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)

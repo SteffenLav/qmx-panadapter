@@ -6969,11 +6969,52 @@ async function otaRestart() {
   await sendCmd({ action: "ota_reboot" });
 }
 
+// ⛔ THIS PAGE CAN OUTLIVE THE FIRMWARE THAT SERVED IT, AND NOTHING SAID SO.
+// The page is sent with "Cache-Control: no-cache, must-revalidate" plus an
+// ETag, so a RELOAD always fetches the current one - but a tab that is simply
+// left open never revalidates anything. Its JavaScript keeps polling, keeps
+// drawing, keeps answering: completely responsive, and missing every control
+// added since it was loaded.
+//
+// That is indistinguishable, from the operator's chair, from a feature that
+// was never shipped - and it cost a round trip with Gyula HA3HZ, who reported
+// "the old line-deletion-only version remains" about a log editor that was
+// present in the firmware and being served correctly.
+//
+// /api/status already reports the running firmware. If it changes while this
+// page is open, the page is by definition older than the device.
+let s_fw_seen = null;
+function checkPageIsStale(running) {
+  if (!running) return;
+  if (s_fw_seen === null) { s_fw_seen = running; return; }
+  if (running === s_fw_seen) return;
+  if (document.getElementById("stale-page")) return;   // already saying so
+
+  const bar = document.createElement("div");
+  bar.id = "stale-page";
+  bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99999;" +
+    "background:#ffa040;color:#101010;font:600 15px system-ui,sans-serif;" +
+    "padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:center";
+  const txt = document.createElement("span");
+  // Names both versions: "it updated" is a different message from "you are
+  // looking at something old", and the operator needs the second one.
+  txt.textContent = "This page was loaded from firmware " + s_fw_seen +
+                    " and the Tab5 is now running " + running +
+                    " - reload to get the current controls.";
+  const btn = document.createElement("button");
+  btn.textContent = "Reload";
+  btn.style.cssText = "font:600 15px system-ui,sans-serif;padding:5px 14px;cursor:pointer";
+  btn.onclick = () => location.reload(true);
+  bar.appendChild(txt); bar.appendChild(btn);
+  document.body.appendChild(bar);
+}
+
 function paintUpdateNotice(s) {
   const el = document.getElementById("tab5fw");
   if (!el) return;
   const u   = s.update || {};
   const ota = u.ota || "idle";
+  checkPageIsStale(u.running);
 
   // ⭐ SAME WORDS, SAME COLOURS AS THE TAB5 (status.c). The two screens describe
   // one device, so they must not use different vocabulary for the same state -
