@@ -752,6 +752,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
         cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+        /* #333: the spot lane tags each label with its mode unless the mode
+           filter is on - with the filter on every label is your own mode and
+           a tag would be noise on all of them. The browser draws the same
+           lane and needs the same flag; cfg is already loaded here. */
+        cJSON_AddBoolToObject(root, "spots_mode_filter", cfg.spots_mode_filter);
         /* #302: the page's fmtHz() mirrors this, so both screens punctuate a
            frequency the same way without the browser having to fetch settings. */
         cJSON_AddNumberToObject(root, "freq_sep_style", (double)cfg.freq_sep_style);

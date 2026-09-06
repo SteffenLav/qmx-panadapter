@@ -1835,6 +1835,8 @@ function viewXAt(hz, W) {
    14.074.000 is in the dotted style. An earlier version printed 14,074.000,
    whose decimal point says kHz while the label beside it says Hz. */
 let freqSepStyle = 0;
+/* #333: mirrors the device setting, so the lane tags modes the same way. */
+let spotsModeFilter = false;
 
 function fmtHz(hz) {
     const sep = freqSepStyle === 1 ? "," : ".";
@@ -5903,6 +5905,7 @@ async function tick() {
        load-once guard, exactly like their Tab5 counterparts, and would sit
        there in the old punctuation until a page reload. Same lesson, both
        sides. */
+    if (typeof s.spots_mode_filter === "boolean") spotsModeFilter = s.spots_mode_filter;
     if (typeof s.freq_sep_style === "number" && s.freq_sep_style !== freqSepStyle) {
       freqSepStyle = s.freq_sep_style;
       wsprBandsLoaded = false;
@@ -6179,7 +6182,15 @@ function drawSpots(ctx, W, H) {
     if (c.x < 0)  { offLo++; if (!offLoHz || c.sp.f > offLoHz) { offLoHz = c.sp.f; offLoCol = spotColour(c.sp); } continue; }
     if (c.x > W)  { offHi++; if (!offHiHz || c.sp.f < offHiHz) { offHiHz = c.sp.f; offHiCol = spotColour(c.sp); } continue; }
 
-    const text = c.sp.c || "";
+    /* Mode tag, exactly as spots_lane.c does it (#333, operator): CW / SB / FT
+       appended to the callsign - and suppressed when the mode filter is on,
+       because then every label is your own mode and the tag is noise on all of
+       them. The Tab5 has always done this; the page had the mode in hand and
+       was not using it. */
+    const mtag = spotsModeFilter ? "" :
+                 (c.sp.m === "cw" ? " CW" : c.sp.m === "ssb" ? " SB" :
+                  c.sp.m === "digi" ? " FT" : "");
+    const text = (c.sp.c || "") + (c.sp.c ? mtag : "");
     if (!text) continue;
     const tw = ctx.measureText(text).width;
     const bx = Math.max(0, Math.min(W - tw - padX - 2, c.x - tw / 2 - padX));
