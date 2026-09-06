@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "util/format_freq.h"   // #302: g_freq_style, applied on set
 #include "sd_archive.h"
 
 #include <string.h>
@@ -79,6 +80,7 @@ static const char *TAG = "settings";
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_FREQ_SEP       "freq_sep"
 #define KEY_CW_DECODE       "cw_dec_en"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
@@ -275,6 +277,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_DISP_FLIP     38
 #define DIRTY_BP_REGION     40
 #define DIRTY_DISTANCE_MILES 41
+#define DIRTY_FREQ_SEP       113   /* #302 */
 #define DIRTY_RIT_PILL_SHOW  88
 #define DIRTY_SPUR_SUP       89
 #define DIRTY_QMX_TPUSH      90
@@ -376,7 +379,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
-    DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY,
+    DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
@@ -530,6 +533,7 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap.freq_sep_style);
         if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap.cw_decode_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
@@ -816,6 +820,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->gpio_relay_pin   = DEF_RELAY_PIN;
     out->gpio_relay_level = DEF_RELAY_LEVEL;
     out->gpio_relay_ms    = DEF_RELAY_MS;
+    out->freq_sep_style   = 0;   /* #302: the punctuation the Tab5 has always
+                                    shown - a stored preference is the only
+                                    thing that changes it, so nobody sees a
+                                    different readout by upgrading. */
     out->resmon_en = false;
     out->resmon_dx = 0;
     out->resmon_dy = 0;
@@ -940,6 +948,9 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    /* Anything other than the two known styles falls back to the historical
+       one rather than printing something nobody has seen. */
+    if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
@@ -1977,6 +1988,21 @@ void settings_set_cw_decode_en(bool v)
     s_pending.cw_decode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_DECODE);
+}
+
+void settings_set_freq_sep_style(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v > 1) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.freq_sep_style == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.freq_sep_style = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FREQ_SEP);
+    /* Applied immediately: every caller reads g_freq_style at format time, so
+       the next repaint is already in the new style - no reboot, and nothing
+       to keep in step. */
+    g_freq_style = (v == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
 }
 
 void settings_set_distance_in_miles(bool v)

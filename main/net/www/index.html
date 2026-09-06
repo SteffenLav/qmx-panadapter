@@ -1814,14 +1814,29 @@ function viewXAt(hz, W) {
   return pvRound((hz - lastView.lo) * W, lastView.span);
 }
 
-/* Format as 14.074.000 Hz — European dot-separated with Hz suffix. */
+/* The ONE place this page punctuates a frequency - 18 callers, and that is why
+   Don N2VGU's separator request (#302) was cheap on this side: nothing else
+   builds the string.
+
+   freqSepStyle mirrors the device's stored setting, delivered in /api/status.
+   0 = 14.074.000, the reading the Tab5 has always shown; 1 = 14,074,000, comma
+   thousands with a decimal point, which is how Don and his HP calculators read
+   it.
+
+   ⛔ BOTH separators change together. The value is in HERTZ, so an integer
+   number of Hz is 14,074,000 - thousands marks all the way down, exactly as
+   14.074.000 is in the dotted style. An earlier version printed 14,074.000,
+   whose decimal point says kHz while the label beside it says Hz. */
+let freqSepStyle = 0;
+
 function fmtHz(hz) {
-    if (!hz) return "---.---.--- Hz";
+    const sep = freqSepStyle === 1 ? "," : ".";
+    if (!hz) return "---" + sep + "---" + sep + "--- Hz";
     const n   = Math.round(hz);
     const mhz = Math.floor(n / 1000000);
     const khz = Math.floor((n % 1000000) / 1000);
     const uhz = n % 1000;
-    return mhz + "." + String(khz).padStart(3,"0") + "." + String(uhz).padStart(3,"0") + " Hz";
+    return mhz + sep + String(khz).padStart(3,"0") + sep + String(uhz).padStart(3,"0") + " Hz";
 }
 
 /* Map an absolute frequency (Hz) to a canvas pixel X position.
@@ -3808,6 +3823,13 @@ const SET_FIELDS = [
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "cw_decode_en", "bool", "Show decoded CW", "The radio decodes CW itself; this shows it along the bottom of the panadapter in CW mode"],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
+  // #302 (Don N2VGU): the options SHOW the two formats rather than naming a
+  // convention - "European"/"USA" would make the reader work out what they get,
+  // and which one you read fluently is the whole point. Both keep a decimal
+  // point before the Hz; only the thousands mark changes.
+  ["Radio & display", "freq_sep_style", "sel", "Frequency format",
+   "The first matches your QMX's own display - Icom, Yaesu and Kenwood group with periods the same way. The second is US written grammar.",
+   [["0","14.074.000"],["1","14,074,000"]]],
   ["Radio & display", "rit_pill_show",     "bool", "Show the RIT button",
      "The RIT button in the Tab5's top-right corner, on the panadapter screen. Turn it off if you never use RIT and would rather have the space. An RIT offset that is actually engaged still shows itself either way, so the radio can never be listening off frequency with nothing on screen saying so"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
@@ -4551,7 +4573,10 @@ async function wsprFillBands() {
     for (const b of d.bands) {
       const o = document.createElement("option");
       o.value = String(b.hz);
-      o.textContent = b.label;
+      /* Built here from hz, in the same punctuation as the rest of the page
+         (#302) - the device used to send a hardcoded label with no thousands
+         grouping at all. fmtHz appends " Hz", which this does not want. */
+      o.textContent = b.band + " m  " + fmtHz(b.hz).replace(/ Hz$/, "");
       if (b.hz === cfg.wspr_dial_hz) o.selected = true;
       sel.appendChild(o);
     }
@@ -5865,6 +5890,19 @@ async function tick() {
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");
     if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
+    /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
+       reads freqSepStyle at call time, so live text follows by itself - but the
+       WSPR band picker and the FT8 preset list are composed once behind a
+       load-once guard, exactly like their Tab5 counterparts, and would sit
+       there in the old punctuation until a page reload. Same lesson, both
+       sides. */
+    if (typeof s.freq_sep_style === "number" && s.freq_sep_style !== freqSepStyle) {
+      freqSepStyle = s.freq_sep_style;
+      wsprBandsLoaded = false;
+      ft8PresetsLoaded = false;
+      if (typeof wsprFillBands === "function") wsprFillBands();
+      if (typeof ft8LoadPresets === "function") ft8LoadPresets();
+    }
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     cloudlogSet  = !!s.cloudlog_set;

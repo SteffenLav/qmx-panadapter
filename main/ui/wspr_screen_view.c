@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "esp_log.h"
+#include "util/format_freq.h"   // #302
 #include "lvgl.h"
 #include "esp_attr.h"      /* EXT_RAM_BSS_ATTR on the row snapshot */
 
@@ -90,17 +91,17 @@ static lv_obj_t *s_lbl_tx;
 /* The type and the radio-availability accessor live in the header now, because
  * the band-hop tick list needs the same table and the same filtering. */
 static const wspr_band_t kBands[] = {
-    { "160", "160 m  1.836600",  1836600u },
-    { "80",  "80 m   3.568600",  3568600u },
-    { "60",  "60 m   5.287200",  5287200u },
-    { "40",  "40 m   7.038600",  7038600u },
-    { "30",  "30 m  10.138700", 10138700u },
-    { "20",  "20 m  14.095600", 14095600u },
-    { "17",  "17 m  18.104600", 18104600u },
-    { "15",  "15 m  21.094600", 21094600u },
-    { "12",  "12 m  24.924600", 24924600u },
-    { "10",  "10 m  28.124600", 28124600u },
-    { "6",   "6 m   50.293000", 50293000u },
+    { "160", 1836600u },
+    { "80", 3568600u },
+    { "60", 5287200u },
+    { "40", 7038600u },
+    { "30", 10138700u },
+    { "20", 14095600u },
+    { "17", 18104600u },
+    { "15", 21094600u },
+    { "12", 24924600u },
+    { "10", 28124600u },
+    { "6", 50293000u },
 };
 #define N_BANDS ((int)(sizeof(kBands) / sizeof(kBands[0])))
 
@@ -160,14 +161,33 @@ static int     s_navail;
 static void rebuild_dial_options(void)
 {
     if (!s_dd_dial) return;
-    char opts[N_BANDS * 20];
+    char opts[N_BANDS * 32];   /* "160 m  1.836.600" plus newline and headroom */
     size_t used = 0;
     opts[0] = 0;
     for (int k = 0; k < s_navail; k++) {
-        used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s",
-                                 k ? "\n" : "", kBands[s_avail[k]].label);
+        /* Built from the dial, in the operator's chosen punctuation (#302).
+           The old hardcoded label had no thousands grouping at all, so the
+           WSPR picker was the one place on the device that ignored the
+           setting - and it was a second copy of dial_hz that could drift. */
+        char fs[20];
+        format_freq_hz(kBands[s_avail[k]].dial_hz, g_freq_style, fs, sizeof(fs));
+        used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s m  %s",
+                                 k ? "\n" : "", kBands[s_avail[k]].name, fs);
     }
     lv_dropdown_set_options(s_dd_dial, opts);
+}
+
+/* #302: the band picker's option list is composed when the dropdown is built
+   and never again, so a frequency-format change leaves it showing the
+   punctuation it was created with - reported from the bench as "changing it
+   does not change WSPR". Rebuilding the options is all it takes; the selected
+   index is preserved because the order is unchanged. */
+void wspr_screen_view_freq_style_changed(void)
+{
+    if (!s_dd_dial) return;
+    uint16_t sel = lv_dropdown_get_selected(s_dd_dial);
+    rebuild_dial_options();
+    lv_dropdown_set_selected(s_dd_dial, sel);
 }
 
 static void dial_changed_cb(lv_event_t *e)

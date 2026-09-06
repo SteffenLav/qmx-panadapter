@@ -40,6 +40,7 @@
 #include "adif/adif_check.h"  // #263 "check my log" - completeness pass
 #include "util/dma_owners.h"
 #include "util/task_stacks.h"   // on-demand stack headroom (#329)
+#include "util/format_freq.h"   // #302 self-test
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
@@ -751,6 +752,9 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
         cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+        /* #302: the page's fmtHz() mirrors this, so both screens punctuate a
+           frequency the same way without the browser having to fetch settings. */
+        cJSON_AddNumberToObject(root, "freq_sep_style", (double)cfg.freq_sep_style);
         // The relay's wiring, so the web form comes back showing the pin and
         // polarity this station is actually wired for instead of resetting to
         // GP53/HIGH/1000 ms on every page load (Randy N4OPI, 2026-09-06).
@@ -1599,6 +1603,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                            jnh ? jnh->valuedouble : 0.0,
                            js ? (cJSON_IsTrue(js) || js->valueint) : 0,
                            jsc ? (unsigned)jsc->valueint : 0u);
+    } else if (action && strcmp(action, "freq_fmt_test") == 0) {
+        int bad = format_freq_selftest();
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":%s,\"failures\":%d}", bad ? "false" : "true", bad);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "adif_check_test") == 0) {
         /* Runs the checker's own cases on the device. Here because the bench
            machine has no host C compiler, so test/adif_check_harness.c could
@@ -3402,6 +3412,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "cw_decode_en", c.cw_decode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
+    cJSON_AddNumberToObject(root, "freq_sep_style", (double)c.freq_sep_style);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddBoolToObject(root, "still_view",        c.still_view);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
@@ -3515,6 +3526,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_cw_decode_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))
         settings_set_distance_in_miles(cJSON_IsTrue(it));
+    /* #302: 0 = 14.074.000, 1 = 14,074,000. Anything else is refused by the
+       setter rather than stored, so a bad value cannot produce a readout
+       nobody has seen. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "freq_sep_style")))
+        settings_set_freq_sep_style((uint8_t)it->valueint);
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "greylist_en")))
         settings_set_greylist_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ft8_early_decode")))
@@ -4147,7 +4163,10 @@ static esp_err_t wspr_handler(httpd_req_t *req)
             for (int i = 0; i < nb; i++) {
                 cJSON *o = cJSON_CreateObject();
                 cJSON_AddStringToObject(o, "band",  bl[i].name);
-                cJSON_AddStringToObject(o, "label", bl[i].label);
+                /* No "label": it was a hardcoded second copy of the dial that
+                   no setting could reformat (#302). The browser has hz and
+                   fmtHz(), so it punctuates it the same way as everything
+                   else on the page. */
                 cJSON_AddNumberToObject(o, "hz",    (double)bl[i].dial_hz);
                 cJSON_AddItemToArray(arr, o);
             }

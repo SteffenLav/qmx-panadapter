@@ -516,7 +516,12 @@ static void freq_popup_refresh_display(void)
         lv_label_set_text(s_freq_display, "Enter freq");
         return;
     }
-    if (strchr(s_freq_buf, '.')) {
+    /* #302: the buffer is PRE-FILLED with the current frequency in the
+       operator's chosen punctuation, so the mark to look for is whichever
+       one that is - with commas selected this test found no '.' at all and
+       fell through to the grouping below, which would then insert dots into
+       a string that already had commas. */
+    if (strchr(s_freq_buf, '.') || strchr(s_freq_buf, ',')) {
         // Still typing a raw "MHz.kHz.Hz"-style number for MHz/kHz conversion.
         strncpy(s_freq_disp, s_freq_buf, sizeof(s_freq_disp) - 1);
         s_freq_disp[sizeof(s_freq_disp) - 1] = '\0';
@@ -528,7 +533,8 @@ static void freq_popup_refresh_display(void)
     size_t len = strlen(s_freq_buf);
     int oi = 0;
     for (size_t i = 0; i < len; i++) {
-        if (i > 0 && (len - i) % 3 == 0) s_freq_disp[oi++] = '.';
+        if (i > 0 && (len - i) % 3 == 0)
+            s_freq_disp[oi++] = (g_freq_style == FREQ_STYLE_COMMA) ? ',' : '.';
         s_freq_disp[oi++] = s_freq_buf[i];
     }
     s_freq_disp[oi] = '\0';
@@ -546,7 +552,16 @@ static uint32_t freq_buf_to_hz(const char *buf)
     int gi = 0;
     const char *p = buf;
     while (*p && gi < 3) {
-        if (*p == '.') {
+        /* ⛔ A COMMA IS A GROUP SEPARATOR HERE TOO (#302). This split on '.'
+           alone, and the keypad is PRE-FILLED with the current frequency in
+           the operator's chosen punctuation - so with commas selected the
+           buffer holds 14,074,000, no dots at all, and every digit fell into
+           group 0 where the 3-digit cap turned 14074000 into 140.
+           That is not a hypothetical: it is Ian G4LXX's v0.18.0 report
+           ("14020000 read back as 140"), which came from a dotless string
+           reaching exactly this loop. Accepting both marks also makes a
+           hand-typed frequency work whichever the operator reaches for. */
+        if (*p == '.' || *p == ',') {
             gi++;
         } else if (*p >= '0' && *p <= '9' && gdigits[gi] < 3) {
             groups[gi] = groups[gi] * 10 + (uint32_t)(*p - '0');
@@ -644,7 +659,9 @@ static void freq_apply_key(char key, lv_obj_t *target_btn)
             if (dlen == 0) return;
             char removed = s_freq_disp[dlen - 1];
             s_freq_disp[dlen - 1] = '\0';
-            if (removed != '.') {
+            /* A separator in the DISPLAY is not a character in the buffer,
+               and with commas selected the separator is a comma (#302). */
+            if (removed != '.' && removed != ',') {
                 size_t blen = strlen(s_freq_buf);
                 if (blen > 0) s_freq_buf[blen - 1] = '\0';
             }
@@ -828,11 +845,17 @@ static void freq_popup_build(void)
     // 3x4 keypad grid. The nine digit cells (0..8) carry code '#': the actual
     // digit is read from the button's label at press time, so the layout
     // toggle just relabels them. Bottom row is fixed: . 0 <-
-    static const char *const keys[12] = {
+    /* #302: the separator KEY carries the operator's chosen mark. Its keycode
+       stays '.' - freq_buf_to_hz() accepts either, and the code is what the
+       handler switches on, so only the glyph changes. A keypad offering a dot
+       while every readout around it shows commas is the inconsistency this
+       setting exists to remove. */
+    const char *sep_key = (g_freq_style == FREQ_STYLE_COMMA) ? "," : ".";
+    const char *const keys[12] = {
         "1", "2", "3",
         "4", "5", "6",
         "7", "8", "9",
-        ".", "0", LV_SYMBOL_LEFT,
+        sep_key, "0", LV_SYMBOL_LEFT,
     };
     static const char keycodes[12] = {
         '#', '#', '#',
@@ -2372,7 +2395,15 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
                                  // made the web UI unreachable (#307). Built only
                                  // when a static address is actually configured.
-                                 // NOTE ids 0..38 used, N_DRAWER_SECTIONS is 40.
+#define DRAWER_SEC_FREQSEP   39  /* #302: how a frequency is punctuated -
+                                     14.074.000 or 14,074,000 (Don N2VGU) */
+                                 // NOTE ids 0..39 used, N_DRAWER_SECTIONS is 40.
+                                 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS
+                                 // FIRST. s_drawer_sections[] is indexed BY
+                                 // these ids, and writing past it landed in the
+                                 // neighbouring array, produced a garbage
+                                 // object pointer and boot-looped the device on
+                                 // a black screen - see CLAUDE.md.
 #define DRAWER_SEC_RITPILL    30  // panadapter-only: show/hide the RIT pill in the top bar.
                                    // Only the pill's VISIBILITY - the control itself stays where
                                    // it is; RIT is not operated from the drawer (operator).
@@ -2497,6 +2528,7 @@ static const drawer_item_t GRP_DISPLAY[] = {
     { DRAWER_SEC_BRIGHTNESS, "Display brightness", true },
     { DRAWER_SEC_SLEEP, "Display sleep", false },
     { DRAWER_SEC_CMAP, "Waterfall colour map", false },
+    { DRAWER_SEC_FREQSEP, "Frequency format", false },
     { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
 };
 static const drawer_item_t GRP_WSPR[] = {
@@ -2887,6 +2919,7 @@ static void drawer_cw_decode_cb(lv_event_t *e)
 
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
+static void drawer_dropdown_freqsep_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
@@ -4632,9 +4665,7 @@ static void update_freq_axis_labels(uint32_t center_hz)
         if (step < 1000)
             format_freq_hz((uint32_t)hz, g_freq_style, buf, sizeof(buf));
         else
-            snprintf(buf, sizeof(buf), "%lu.%03lu",
-                     (unsigned long)(hz / 1000000),
-                     (unsigned long)((hz / 1000) % 1000));
+            format_freq_mhz_khz((uint32_t)hz, g_freq_style, buf, sizeof(buf));
         lv_label_set_text(s_tick_labels[i], buf);
 
         int x = (int)(((hz - lo) * DISPLAY_H_RES) / span_hz) - 44;
@@ -6590,8 +6621,12 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
         if (s_tune_tooltip) {
             char b[32];
-            if (sv_effective()) snprintf(b, sizeof(b), "view %.3f MHz", (double)tgt / 1e6);
-            else              snprintf(b, sizeof(b), "%.3f MHz",      (double)tgt / 1e6);
+            /* #302: grouped like the top bar, so the tune tooltip and the
+               readout it is about never disagree about punctuation. */
+            char fs[20];
+            format_freq_hz((uint32_t)tgt, g_freq_style, fs, sizeof(fs));
+            if (sv_effective()) snprintf(b, sizeof(b), "view %s", fs);
+            else                snprintf(b, sizeof(b), "%s", fs);
             lv_label_set_text(s_tune_tooltip, b);
             lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, 0, TOP_BAR_H + 6);
             lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
@@ -11355,6 +11390,39 @@ static void drawer_build(void)
         y += 100;
     }
 
+    /* Frequency punctuation (#302, Don N2VGU). Advanced, not Basic: it is a
+       once-and-forget reading preference, not something touched while
+       operating. The options SHOW the two formats rather than naming a
+       convention - "European" and "USA" would make the operator work out what
+       they get, and the whole point is which one they read fluently. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_FREQSEP, y, 100);
+        lv_obj_t *fs_hdr = lv_label_create(sec);
+        lv_label_set_text(fs_hdr, "Frequency format");
+        lv_obj_set_style_text_color(fs_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(fs_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(fs_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *dd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(dd, "14.074.000\n14,074,000");
+        lv_obj_set_size(dd, DRAWER_W - 32, 50);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+        {
+            qmx_settings_t fcfg;
+            settings_load_all(&fcfg);
+            lv_dropdown_set_selected(dd, fcfg.freq_sep_style == 1 ? 1 : 0);
+        }
+        lv_obj_add_event_cb(dd, drawer_dropdown_freqsep_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        /* ...the SLEEP opener, not the colour-map one. LVGL caps an option
+           list's height by default, which puts a scrollbar on a list of TWO -
+           and a two-item choice you have to scroll to see is worse than no
+           choice at all, because the second format is the whole point of the
+           control. This one lifts the cap and sizes to content. */
+        lv_obj_add_event_cb(dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
+    }
+
     // Waterfall colorisation section: black level / contrast / per-bin floor
     // blend / FFT window. All slide live - changes scroll in from the top of
     // the waterfall as you drag.
@@ -12653,6 +12721,32 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e)
     uint8_t idx = (uint8_t)lv_dropdown_get_selected(dd);
     render_waterfall_set_colormap(idx);
     settings_set_colormap_idx(idx);
+}
+
+/* #302. settings_set_freq_sep_style() applies g_freq_style itself, so the next
+   repaint is already in the new punctuation - nothing here has to redraw, and
+   there is no second copy of the choice to keep in step. */
+/* ⛔ EVERYTHING THAT BUILT ITS TEXT ONCE HAS TO BE TOLD.
+ *
+ * The first version just repainted the top bar, on the assumption that
+ * everything reads g_freq_style at format time. Most things do - but a
+ * DROPDOWN's option list is composed when the widget is built and then never
+ * again, so the WSPR band picker kept the punctuation it was created with at
+ * boot, and the frequency keypad kept its separator key. Both were reported
+ * from the bench as "changing it does not change WSPR".
+ *
+ * So the setter notifies, rather than each screen being expected to remember.
+ * A new place that shows a frequency in text it composes ONCE belongs in this
+ * list. */
+static void drawer_dropdown_freqsep_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    settings_set_freq_sep_style((uint8_t)lv_dropdown_get_selected(dd));
+
+    ui_update_frequency(cat_get_frequency());   /* top bar */
+    if (s_freq_popup) freq_popup_build();       /* keypad: rebuilds the sep key */
+    wspr_screen_view_freq_style_changed();      /* the band dropdown's options */
+    ft8_screen_view_refresh_preset();           /* the Preset button's label */
 }
 
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e)

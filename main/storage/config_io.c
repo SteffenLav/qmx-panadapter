@@ -85,6 +85,8 @@ char *config_io_export(size_t *out_len)
     APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
     APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
     APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
+    /* #302: 0 = 14.074.000, 1 = 14,074,000 */
+    APP("freq_sep_style     = %u\n", (unsigned)c.freq_sep_style);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
@@ -284,6 +286,7 @@ int config_io_import(char *text)
                 else                                            rms = (uint16_t)atoi(val);
                 settings_set_gpio_relay(rp, rl, rms);
             }
+            else if (!strcasecmp(key, "freq_sep_style"))    settings_set_freq_sep_style((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));

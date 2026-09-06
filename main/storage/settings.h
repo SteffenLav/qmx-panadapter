@@ -204,6 +204,7 @@ typedef struct {
     // it is an overlay on someone else's waterfall, so it has an off switch.
     bool     cw_decode_en;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
+    uint8_t  freq_sep_style;    // #302: 0 = 14.074.000 (default), 1 = 14,074,000 (Don N2VGU)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
     /* #298 STILL DISPLAY. true (the default) = the spectrum and waterfall hold
      * still and the VFO marker moves across them; false = the old behaviour,
@@ -515,6 +516,12 @@ uint8_t settings_get_swr_limit_x10(void);
 bool settings_get_cw_decode_en(void);
 void settings_set_cw_decode_en(bool v);
 void settings_set_distance_in_miles(bool v);
+/* #302: how a frequency is punctuated. 0 = dots (what the Tab5 has always
+   shown), 1 = comma thousands with a decimal point, which is the USA/HP
+   calculator reading Don N2VGU asked for. Both keep a DECIMAL POINT between
+   kHz and Hz - 14,074,000 and 14.074.000 are the same number written two
+   ways, and 14,074,000 would be Hz. See util/format_freq.h. */
+void settings_set_freq_sep_style(uint8_t v);
 void settings_set_rit_pill_show(bool v);
 void settings_set_still_view(bool v);
 void settings_set_still_notice_done(bool v);

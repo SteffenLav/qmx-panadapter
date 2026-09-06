@@ -37,11 +37,20 @@ void      wspr_screen_view_tick(void);
  */
 typedef struct {
     const char *name;      /* "20" - matches what the QMX reports over CAT */
-    const char *label;     /* "20 m  14.095600" - what the picker shows */
     uint32_t    dial_hz;
 } wspr_band_t;
+/* ⛔ There is deliberately NO label field. It used to hold "20 m  14.095600" -
+   a hardcoded SECOND copy of the dial frequency, which could drift from
+   dial_hz beside it, and which no setting could ever reformat. The picker had
+   no thousands grouping at all as a result, while every other frequency on the
+   device followed the operator's chosen punctuation (#302). Build the text
+   from name + dial_hz where it is shown. */
 
 const wspr_band_t *wspr_bands(int *out_count);
+
+/* #302: re-compose the band picker's options after the frequency format
+   changes. Safe before the view exists. */
+void wspr_screen_view_freq_style_changed(void);
 
 /* "20", "30"... for a dial frequency, or NULL if it matches no WSPR band.
  * NULL rather than a guess: a spot recorded before dial_hz existed has 0 here,

@@ -1,5 +1,6 @@
 #include <stddef.h>   // offsetof - the layout assert below
 #include "ft8_screen_view.h"
+#include "util/format_freq.h"   // #302
 #include "ui_theme.h"
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
@@ -1676,10 +1677,15 @@ static void t_clock_cb(lv_timer_t *t)
     if (s_btn_freq) {
         uint32_t hz = cat_get_frequency();
         char b[40];
-        uint32_t mhz = hz / 1000000;
-        uint32_t khz_frac = (hz / 1000) % 1000;
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)mhz, (unsigned long)khz_frac);
+        /* #302: the SAME grouped form as the top bar and the preset list.
+           This used to print "14.074 MHz", where the dot is a decimal point
+           and so is correct in either convention - which meant it did not
+           change when the operator picked the other one, and sat next to a
+           top bar that had. Consistency across the screen is the point of
+           the setting, so it follows the style like everything else. */
+        char fs[20];
+        format_freq_hz((uint32_t)hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -2278,6 +2284,22 @@ static void adif_long_press_cb(lv_event_t *e)
 
 // Update the Call CQ button label to show the currently-selected CQ message.
 // Public so the preset modal can call it after a save.
+/* #302: relabel the Preset button after the frequency punctuation changes.
+   The label is otherwise only rewritten on the 1 Hz tick and on a preset
+   change, so without this the operator sees the top bar switch and this
+   button lag behind until something else happens. */
+void ft8_screen_view_refresh_preset(void)
+{
+    if (!s_btn_freq) return;
+    uint32_t hz = cat_get_frequency();
+    if (!hz) return;
+    char fs[20], b[40];
+    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
+    snprintf(b, sizeof(b), "Preset: %s", fs);
+    lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+    if (lbl) lv_label_set_text(lbl, b);
+}
+
 void ft8_screen_view_refresh_cq_label(void)
 {
     if (!s_cq_lbl) return;
@@ -2516,9 +2538,9 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     ui_update_frequency(freq_hz);               // top-bar "Freq:" label
     if (s_btn_freq) {
         char b[40];
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)(freq_hz / 1000000),
-                 (unsigned long)((freq_hz / 1000) % 1000));
+        char fs[20];
+        format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);   /* #302 - see above */
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -2665,10 +2687,9 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
                             (void *)(uintptr_t)dial_hz);
 
         char bstr[24];
-        snprintf(bstr, sizeof(bstr), "%sm  %lu.%03lu",
-                 bands[i].name,
-                 (unsigned long)(dial_hz / 1000000),
-                 (unsigned long)((dial_hz / 1000) % 1000));
+        char fstr[16];
+        format_freq_mhz_khz((uint32_t)dial_hz, g_freq_style, fstr, sizeof(fstr));
+        snprintf(bstr, sizeof(bstr), "%sm  %s", bands[i].name, fstr);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, bstr);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
@@ -2809,7 +2830,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_btn_freq, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *freq_lbl = lv_label_create(s_btn_freq);
-    lv_label_set_text(freq_lbl, "Preset: --.--- MHz");
+    lv_label_set_text(freq_lbl, "Preset: ---.---.---");
     lv_obj_set_style_text_color(freq_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(freq_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(freq_lbl);

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
+#include "util/format_freq.h"   // #302
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "ft8_test.h"
@@ -301,6 +302,13 @@ void app_main(void)
     // Before cat_init(): the poll task starts inside it and can deliver a TB
     // response immediately, and cw_decode_feed() drops everything until the
     // ring exists.
+    /* #302: the stored frequency punctuation, applied before any UI is built.
+       Every caller reads g_freq_style at format time, so this is the only
+       place it has to be set. */
+    {
+        qmx_settings_t fs; settings_load_all(&fs);
+        g_freq_style = (fs.freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+    }
     cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
 
