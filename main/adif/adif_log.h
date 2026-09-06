@@ -86,6 +86,33 @@ bool adif_log_set_field(int idx, const char *field, const char *value);
 // file; case-insensitive on the reference.
 int adif_log_count_activation(const char *sig_info);
 
+/* #263 "check my log" - one pass over the file reporting what records are
+ * missing. ONE walk, shared by GET /api/adif/check and the Tab5's Activation
+ * modal: two walks is how two answers to "is my log ready" come to disagree.
+ *
+ * ⛔ It can only say records are not OBVIOUSLY incomplete - see adif_check.h.
+ *
+ * `activating` makes a record with no MY_SIG_INFO a problem; off for an
+ * ordinary log, where its absence is correct. `problems` is filled with up to
+ * `max_problems` entries (pass 0/NULL for counts only) - a list of 300
+ * identical complaints is not more useful than 20. */
+typedef struct {
+    int      idx;               // record index in the file
+    char     call[16];
+    uint32_t flags;             // ADIF_CHK_* bitmask
+} adif_log_problem_t;
+
+typedef struct {
+    int total;                  // records in the log
+    int checked;                // records this pass looked at
+    int with_problems;
+    int listed;                 // how many landed in the caller's array
+    uint32_t all_flags;         // union of every problem seen
+} adif_log_check_t;
+
+void adif_log_check(bool activating, adif_log_check_t *out,
+                    adif_log_problem_t *problems, int max_problems);
+
 // Read the idx-th completed QSO record (0-based, in log order) as a single
 // ADIF line with no trailing newline. Returns false if idx is out of range
 // or the file can't be read. out must be sized generously - a record line

@@ -10,6 +10,7 @@
 // s_lock during I/O.
 
 #include "adif_log.h"
+#include "adif_check.h"
 
 #include "esp_log.h"
 #include "esp_spiffs.h"
@@ -603,6 +604,62 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz)
                                    // still counted, just not re-checked -
                                    // a >512-unique-station activation isn't
                                    // a realistic field session
+
+/* #263 - the ONE completeness walk. See adif_log.h for why it is not two.
+ *
+ * Runs on whichever task asked (httpd for the endpoint, taskLVGL for the
+ * Activation modal): one buffered read of a file measured at ~6 ms for a few
+ * hundred records, no allocation, and the caller owns the problem array. */
+void adif_log_check(bool activating, adif_log_check_t *out,
+                    adif_log_problem_t *problems, int max_problems)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->total = adif_log_count();
+    if (!s_mounted) return;
+
+    FILE *f = fopen(FILE_PATH, "r");
+    if (!f) return;
+
+    char line[1024];
+    int  rec = -1;
+    bool header_done = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (!header_done) { header_done = true; continue; }
+        if (!line[0] || line[0] == '\n') continue;
+        rec++;
+        out->checked++;
+
+        char call[24] = "", date[16] = "", tm[12] = "", band[12] = "",
+             mode[12] = "", stn[24] = "", mysig[24] = "", sig[24] = "";
+        adif_log_extract_field(line, "CALL",             call,  sizeof(call));
+        adif_log_extract_field(line, "QSO_DATE",         date,  sizeof(date));
+        adif_log_extract_field(line, "TIME_ON",          tm,    sizeof(tm));
+        adif_log_extract_field(line, "BAND",             band,  sizeof(band));
+        adif_log_extract_field(line, "MODE",             mode,  sizeof(mode));
+        adif_log_extract_field(line, "STATION_CALLSIGN", stn,   sizeof(stn));
+        adif_log_extract_field(line, "MY_SIG_INFO",      mysig, sizeof(mysig));
+        adif_log_extract_field(line, "SIG_INFO",         sig,   sizeof(sig));
+
+        adif_check_fields_t fl = {
+            .call = call, .qso_date = date, .time_on = tm, .band = band,
+            .mode = mode, .station_call = stn,
+            .my_sig_info = mysig, .sig_info = sig,
+        };
+        uint32_t bad = adif_check_record(&fl, activating);
+        if (!bad) continue;
+
+        out->all_flags |= bad;
+        out->with_problems++;
+        if (problems && out->listed < max_problems) {
+            adif_log_problem_t *e = &problems[out->listed++];
+            e->idx   = rec;
+            e->flags = bad;
+            snprintf(e->call, sizeof(e->call), "%s", call[0] ? call : "(none)");
+        }
+    }
+    fclose(f);
+}
 
 int adif_log_count_activation(const char *sig_info)
 {

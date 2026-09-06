@@ -2482,68 +2482,35 @@ static esp_err_t adif_check_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     if (!root) { httpd_resp_send_500(req); return ESP_FAIL; }
 
-    int total = adif_log_count();
-    int checked = 0, with_problems = 0;
-    uint32_t all_flags = 0;
+    /* ONE walk, shared with the Tab5's Activation modal - adif_log_check().
+       This handler used to extract the fields itself; two walks is how two
+       answers to "is my log ready" come to disagree. */
+    adif_log_check_t res;
+    adif_log_problem_t probs[20];
+    adif_log_check(activating, &res, probs, (int)(sizeof(probs) / sizeof(probs[0])));
+
     cJSON *list = cJSON_AddArrayToObject(root, "problems");
-
-    /* A line at a time, same walk as adif_log_get_record(), so this costs one
-       pass and no copy of the log. 1024 matches the longest record the writer
-       can produce. */
-    FILE *f = fopen(adif_log_file_path(), "r");
-    if (f) {
-        char line[1024];
-        int  rec = -1;
-        bool header_done = false;
-        while (fgets(line, sizeof(line), f)) {
-            if (!header_done) { header_done = true; continue; }
-            if (!line[0] || line[0] == '\n') continue;
-
-            char call[24] = "", date[16] = "", tm[12] = "", band[12] = "",
-                 mode[12] = "", stn[24] = "", mysig[24] = "", sig[24] = "";
-            adif_log_extract_field(line, "CALL",             call,  sizeof(call));
-            adif_log_extract_field(line, "QSO_DATE",         date,  sizeof(date));
-            adif_log_extract_field(line, "TIME_ON",          tm,    sizeof(tm));
-            adif_log_extract_field(line, "BAND",             band,  sizeof(band));
-            adif_log_extract_field(line, "MODE",             mode,  sizeof(mode));
-            adif_log_extract_field(line, "STATION_CALLSIGN", stn,   sizeof(stn));
-            adif_log_extract_field(line, "MY_SIG_INFO",      mysig, sizeof(mysig));
-            adif_log_extract_field(line, "SIG_INFO",         sig,   sizeof(sig));
-            rec++;
-            checked++;
-
-            adif_check_fields_t fl = {
-                .call = call, .qso_date = date, .time_on = tm, .band = band,
-                .mode = mode, .station_call = stn,
-                .my_sig_info = mysig, .sig_info = sig,
-            };
-            uint32_t bad = adif_check_record(&fl, activating);
-            if (!bad) continue;
-            all_flags |= bad;
-            with_problems++;
-            /* Cap the list: 300 identical complaints is not more useful than
-               20, and the counts above already carry the scale. */
-            if (list && cJSON_GetArraySize(list) < 20) {
-                cJSON *e = cJSON_CreateObject();
-                if (e) {
-                    cJSON_AddNumberToObject(e, "idx", rec);
-                    cJSON_AddStringToObject(e, "call", call[0] ? call : "(none)");
-                    const char *why = adif_check_first_problem(bad);
-                    cJSON_AddStringToObject(e, "problem", why ? why : "unknown");
-                    cJSON_AddItemToArray(list, e);
-                }
-            }
+    if (list) {
+        for (int i = 0; i < res.listed; i++) {
+            cJSON *e = cJSON_CreateObject();
+            if (!e) break;
+            cJSON_AddNumberToObject(e, "idx", probs[i].idx);
+            cJSON_AddStringToObject(e, "call", probs[i].call);
+            const char *why = adif_check_first_problem(probs[i].flags);
+            cJSON_AddStringToObject(e, "problem", why ? why : "unknown");
+            cJSON_AddItemToArray(list, e);
         }
-        fclose(f);
     }
 
+    int total = res.total, checked = res.checked, with_problems = res.with_problems;
+    uint32_t all_flags = res.all_flags;
     cJSON_AddNumberToObject(root, "records", (double)total);
     cJSON_AddNumberToObject(root, "checked", (double)checked);
     cJSON_AddNumberToObject(root, "with_problems", (double)with_problems);
     cJSON_AddNumberToObject(root, "flags", (double)all_flags);
     cJSON_AddBoolToObject(root, "activating", activating);
-    if (with_problems > 20)
-        cJSON_AddNumberToObject(root, "not_listed", (double)(with_problems - 20));
+    if (with_problems > res.listed)
+        cJSON_AddNumberToObject(root, "not_listed", (double)(with_problems - res.listed));
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
