@@ -37,6 +37,7 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
+#include "adif/adif_check.h"  // #263 "check my log" - completeness pass
 #include "util/dma_owners.h"
 #include "util/task_stacks.h"   // on-demand stack headroom (#329)
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
@@ -1590,6 +1591,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                            jnh ? jnh->valuedouble : 0.0,
                            js ? (cJSON_IsTrue(js) || js->valueint) : 0,
                            jsc ? (unsigned)jsc->valueint : 0u);
+    } else if (action && strcmp(action, "adif_check_test") == 0) {
+        /* Runs the checker's own cases on the device. Here because the bench
+           machine has no host C compiler, so test/adif_check_harness.c could
+           not be run when the checker was written. */
+        int bad = adif_check_selftest();
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":%s,\"failures\":%d}",
+                 bad ? "false" : "true", bad);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "stacks") == 0) {
         /* One-shot per-task stack headroom. Dev action, serial/diag log only -
            see task_stacks.h for why it must never go on a periodic path. */
@@ -2440,6 +2451,111 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
 
 static const httpd_uri_t uri_adif_edit = {
     .uri = "/api/adif/edit", .method = HTTP_POST, .handler = adif_edit_handler,
+};
+
+/* GET /api/adif/check[?activating=1] - #263, Don WB0LQW's "check my log".
+ *
+ * ⛔ This says what is MISSING, never that a file will be accepted. It cannot
+ * see POTA's rules or their database; a confident tick that turns into a
+ * rejected activation is worse than no check at all. Every string it emits is
+ * phrased as a shortfall, and the web UI repeats that in as many words.
+ *
+ * Streams the file once and decides per record with adif_check_record(), the
+ * portable function the self-test covers. Unique-callsign counting is NOT
+ * duplicated here - adif_log_count_activation() already dedupes by callsign
+ * (the fix for Eric's double-counted activation in v1.9.5), and having two
+ * answers to "how many count" is how they come to disagree.
+ */
+static esp_err_t adif_check_handler(httpd_req_t *req)
+{
+    bool activating = false;
+    {
+        size_t qlen = httpd_req_get_url_query_len(req) + 1;
+        if (qlen > 1 && qlen < 128) {
+            char q[128], v[8] = "";
+            if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+                httpd_query_key_value(q, "activating", v, sizeof(v)) == ESP_OK)
+                activating = (v[0] == '1' || v[0] == 't' || v[0] == 'y');
+        }
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { httpd_resp_send_500(req); return ESP_FAIL; }
+
+    int total = adif_log_count();
+    int checked = 0, with_problems = 0;
+    uint32_t all_flags = 0;
+    cJSON *list = cJSON_AddArrayToObject(root, "problems");
+
+    /* A line at a time, same walk as adif_log_get_record(), so this costs one
+       pass and no copy of the log. 1024 matches the longest record the writer
+       can produce. */
+    FILE *f = fopen(adif_log_file_path(), "r");
+    if (f) {
+        char line[1024];
+        int  rec = -1;
+        bool header_done = false;
+        while (fgets(line, sizeof(line), f)) {
+            if (!header_done) { header_done = true; continue; }
+            if (!line[0] || line[0] == '\n') continue;
+
+            char call[24] = "", date[16] = "", tm[12] = "", band[12] = "",
+                 mode[12] = "", stn[24] = "", mysig[24] = "", sig[24] = "";
+            adif_log_extract_field(line, "CALL",             call,  sizeof(call));
+            adif_log_extract_field(line, "QSO_DATE",         date,  sizeof(date));
+            adif_log_extract_field(line, "TIME_ON",          tm,    sizeof(tm));
+            adif_log_extract_field(line, "BAND",             band,  sizeof(band));
+            adif_log_extract_field(line, "MODE",             mode,  sizeof(mode));
+            adif_log_extract_field(line, "STATION_CALLSIGN", stn,   sizeof(stn));
+            adif_log_extract_field(line, "MY_SIG_INFO",      mysig, sizeof(mysig));
+            adif_log_extract_field(line, "SIG_INFO",         sig,   sizeof(sig));
+            rec++;
+            checked++;
+
+            adif_check_fields_t fl = {
+                .call = call, .qso_date = date, .time_on = tm, .band = band,
+                .mode = mode, .station_call = stn,
+                .my_sig_info = mysig, .sig_info = sig,
+            };
+            uint32_t bad = adif_check_record(&fl, activating);
+            if (!bad) continue;
+            all_flags |= bad;
+            with_problems++;
+            /* Cap the list: 300 identical complaints is not more useful than
+               20, and the counts above already carry the scale. */
+            if (list && cJSON_GetArraySize(list) < 20) {
+                cJSON *e = cJSON_CreateObject();
+                if (e) {
+                    cJSON_AddNumberToObject(e, "idx", rec);
+                    cJSON_AddStringToObject(e, "call", call[0] ? call : "(none)");
+                    const char *why = adif_check_first_problem(bad);
+                    cJSON_AddStringToObject(e, "problem", why ? why : "unknown");
+                    cJSON_AddItemToArray(list, e);
+                }
+            }
+        }
+        fclose(f);
+    }
+
+    cJSON_AddNumberToObject(root, "records", (double)total);
+    cJSON_AddNumberToObject(root, "checked", (double)checked);
+    cJSON_AddNumberToObject(root, "with_problems", (double)with_problems);
+    cJSON_AddNumberToObject(root, "flags", (double)all_flags);
+    cJSON_AddBoolToObject(root, "activating", activating);
+    if (with_problems > 20)
+        cJSON_AddNumberToObject(root, "not_listed", (double)(with_problems - 20));
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_500(req); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, out);
+    free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_adif_check = {
+    .uri = "/api/adif/check", .method = HTTP_GET, .handler = adif_check_handler,
 };
 
 static const httpd_uri_t uri_adif_get = {
@@ -4957,7 +5073,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 51;   // 43 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 52;   // 44 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -4988,6 +5104,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log);
     httpd_register_uri_handler(s_server, &uri_log_saved);
     httpd_register_uri_handler(s_server, &uri_adif_get);
+    httpd_register_uri_handler(s_server, &uri_adif_check);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_adif_import);
     httpd_register_uri_handler(s_server, &uri_adif_import_sd);

@@ -1502,6 +1502,12 @@
         <button id="adifv-delall" class="bot-btn" style="cursor:pointer; float:left; border-color:#7a2020; color:#ff8080" title="Delete ALL logged QSOs from the Tab5 - no undo">Delete all</button>
         <!-- Gyula HA3HZ: "it would be nice if it was possible to select data rows and save them". With the search box above, ticking is how you turn a question into a file - one park, one day, one band. -->
         <button id="adifv-export" class="btn-neutral" style="float:left; margin-left:10px" disabled title="Save the ticked contacts as an ADIF file on this computer">Export selected</button>
+        <!-- Don WB0LQW (#263): "I wish POTA and SOTA had a feature allowing you
+             to test your file for syntax and completeness without submitting it
+             for credit" - he made two trips to a park purely to get contacts to
+             test with. The title says what this can and cannot tell you, because
+             a check that reads as approval is worse than no check. -->
+        <button id="adifv-check" class="btn-neutral" style="float:left; margin-left:10px" title="Look for records that are missing something POTA or SOTA will want - a callsign, a date, a park reference. It can only say the log is not obviously incomplete; it cannot tell you an activation will be accepted.">Check log</button>
         <button id="adifv-close" class="btn-neutral" style="float:right">Close</button>
       </div>
     </div>
@@ -2646,6 +2652,50 @@ function adifImportMessage(j) {
       c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   }
 
+  /* #263 "check my log". Says what is MISSING, never that a file will be
+     accepted - the device cannot see POTA's rules or their database, and a
+     confident tick that turns into a rejected activation is worse than no
+     check. Every sentence below is a shortfall or a caveat. */
+  async function adifCheck() {
+    const btn = document.getElementById("adifv-check");
+    if (!btn) return;
+    const activating = confirm(
+      "Check this log as a PARK OR SUMMIT ACTIVATION?\n\n" +
+      "OK  - also flag contacts that name no reference of your own.\n" +
+      "Cancel - check it as an ordinary log (no reference expected).");
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = "Checking…";
+    try {
+      const r = await fetch("/api/adif/check?activating=" + (activating ? "1" : "0"));
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      let msg;
+      if (!d.checked) {
+        msg = "There are no contacts in the log to check.";
+      } else if (!d.with_problems) {
+        msg = d.checked + " contact" + (d.checked === 1 ? "" : "s") +
+              " checked, and none of them is missing anything this can see.\n\n" +
+              "That is not the same as POTA accepting it - the Tab5 cannot see " +
+              "their rules or their database. It only means nothing is " +
+              "obviously incomplete.";
+      } else {
+        msg = d.with_problems + " of " + d.checked + " contact" +
+              (d.checked === 1 ? "" : "s") + " may be incomplete:\n\n";
+        msg += d.problems.map(p => "  #" + p.idx + "  " + p.call + " - " + p.problem).join("\n");
+        if (d.not_listed) msg += "\n\n  …and " + d.not_listed + " more like these.";
+        msg += "\n\nEdit what you can in this window; delete and re-log anything " +
+               "whose callsign, band, mode, date or time is wrong.";
+      }
+      alert(msg);
+    } catch (err) {
+      alert("Could not check the log: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  }
+
   function parseAdif(text) {
     const eoh = text.search(/<EOH>/i);
     const parts = (eoh >= 0 ? text.slice(eoh + 5) : text).split(/<EOR>/i);
@@ -2677,6 +2727,9 @@ function adifImportMessage(j) {
                 .filter(Boolean).join(" ").toUpperCase();
     return query.split(/\s+/).every(t => hay.indexOf(t) >= 0);
   }
+
+  { const cb = document.getElementById("adifv-check");
+    if (cb) cb.addEventListener("click", adifCheck); }
 
   function render() {
     head.innerHTML = headHtml();
