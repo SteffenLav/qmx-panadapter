@@ -960,9 +960,17 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     const esp_app_desc_t *app = esp_app_get_description();
     /* #313: two listeners died together with the stack alive underneath.
-     * A small capped probe, so the figure costs a few socket()/close()
-     * pairs and never holds enough of the table to cause what it measures. */
-    cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free(6));
+     *
+     * ⛔ CACHED, and that is the point. The comment here used to claim the
+     * probe "never holds enough of the table to cause what it measures" - it
+     * did exactly that. sock_probe_free(6) holds up to SIX sockets at once,
+     * this runs on EVERY /api/status, and a browser polls that at 1 Hz while
+     * the bench idles with only five free. So every poll took the whole
+     * remaining table for the length of the probe, and anything arriving in
+     * that window would be refused with ENFILE - which is #313's signature.
+     * At most one real probe per 10 s now; the number is a trend, not a
+     * reading that has to be current to the millisecond. */
+    cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free_cached(6, 10000));
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
     int band_count = 0;

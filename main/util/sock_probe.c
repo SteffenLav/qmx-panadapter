@@ -1,5 +1,7 @@
 #include "sock_probe.h"
 
+#include "esp_timer.h"
+
 #include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -56,4 +58,19 @@ void sock_probe_report(void)
     } else {
         ESP_LOGW(TAG, "LWIP socket table recovered - sockets available again");
     }
+}
+
+/* See the header: the point is the RATE, not the probe. */
+int sock_probe_free_cached(int cap, int max_age_ms)
+{
+    static int64_t last_us;
+    static int     last_val = -1;
+
+    int64_t now = esp_timer_get_time();
+    if (last_val >= 0 && (now - last_us) < (int64_t)max_age_ms * 1000)
+        return last_val;
+
+    last_val = sock_probe_free(cap);
+    last_us  = now;
+    return last_val;
 }
