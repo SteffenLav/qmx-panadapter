@@ -37,7 +37,8 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
-#include "util/dma_owners.h"   // TEMP INSTRUMENT #283
+#include "util/dma_owners.h"
+#include "util/task_stacks.h"   // on-demand stack headroom (#329)
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
@@ -73,6 +74,10 @@
 #include "gpio_relay.h"        // gpio_pulse - remote relay for a QMX power cycle
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
+/* Defined by the lv_event.c guard in managed_components/ (#329,
+   tools/patches/apply_lv_event_chain_guard.ps1). Declared here rather than in
+   a header because the definition lives in a patched vendor file. */
+extern uint32_t qmx_lv_event_chain_bad;
 #include "util/dxcc.h"        // dxcc_lookup - the decode list's COUNTRY column
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
@@ -942,6 +947,16 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(usbp, "buffer_parse_no_urb", (double)g_qmx_usb_buffer_parse_no_urb);
     }
 
+    /* #329: how many times the LVGL event-chain guard refused to walk a
+     * corrupt link. Non-zero means the ADIF-viewer crash class fired and was
+     * survived rather than fixed - it is a DIAGNOSTIC, and it is reported here
+     * for the same reason the USB patch counters are: a silent tolerant patch
+     * reads exactly like a missing one (#189). Declared extern rather than in a
+     * header because it is DEFINED inside patched managed_components/, so a
+     * missing patch leaves this at 0 instead of failing the link... which it
+     * would, so the definition below is the firmware-side fallback. */
+    cJSON_AddNumberToObject(root, "lv_evt_bad", (double)qmx_lv_event_chain_bad);
+
     const esp_app_desc_t *app = esp_app_get_description();
     /* #313: two listeners died together with the stack alive underneath.
      * A small capped probe, so the figure costs a few socket()/close()
@@ -1575,6 +1590,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                            jnh ? jnh->valuedouble : 0.0,
                            js ? (cJSON_IsTrue(js) || js->valueint) : 0,
                            jsc ? (unsigned)jsc->valueint : 0u);
+    } else if (action && strcmp(action, "stacks") == 0) {
+        /* One-shot per-task stack headroom. Dev action, serial/diag log only -
+           see task_stacks.h for why it must never go on a periodic path. */
+        task_stacks_report();
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the log\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser

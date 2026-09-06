@@ -1,0 +1,268 @@
+/**
+ * @file lv_event.c
+ *
+ */
+
+/*********************
+ *      INCLUDES
+ *********************/
+#include "lv_event_private.h"
+#include "../core/lv_global.h"
+#include "../stdlib/lv_mem.h"
+#include "lv_assert.h"
+#include "lv_types.h"
+
+/*********************
+ *      DEFINES
+ *********************/
+
+#define event_head LV_GLOBAL_DEFAULT()->event_header
+#define event_last_id LV_GLOBAL_DEFAULT()->event_last_register_id
+
+/**********************
+ *      TYPEDEFS
+ **********************/
+
+/**********************
+ *  STATIC PROTOTYPES
+ **********************/
+
+/**********************
+ *  STATIC VARIABLES
+ **********************/
+
+/**********************
+ *      MACROS
+ **********************/
+
+#if LV_USE_LOG && LV_LOG_TRACE_EVENT
+    #define LV_TRACE_EVENT(...) LV_LOG_TRACE(__VA_ARGS__)
+#else
+    #define LV_TRACE_EVENT(...)
+#endif
+
+/**********************
+ *   GLOBAL FUNCTIONS
+ **********************/
+
+void lv_event_push(lv_event_t * e)
+{
+    /*Build a simple linked list from the objects used in the events
+     *It's important to know if this object was deleted by a nested event
+     *called from this `event_cb`.*/
+    e->prev = event_head;
+    event_head = e;
+
+}
+
+void lv_event_pop(lv_event_t * e)
+{
+    event_head = e->prev;
+}
+
+lv_result_t lv_event_send(lv_event_list_t * list, lv_event_t * e, bool preprocess)
+{
+    if(list == NULL) return LV_RESULT_OK;
+
+    uint32_t i = 0;
+    lv_event_dsc_t ** dsc = lv_array_front(list);
+    uint32_t size = lv_array_size(list);
+    for(i = 0; i < size; i++) {
+        if(dsc[i]->cb == NULL) continue;
+        bool is_preprocessed = (dsc[i]->filter & LV_EVENT_PREPROCESS) != 0;
+        if(is_preprocessed != preprocess) continue;
+        lv_event_code_t filter = dsc[i]->filter & ~LV_EVENT_PREPROCESS;
+        if(filter == LV_EVENT_ALL || filter == e->code) {
+            e->user_data = dsc[i]->user_data;
+            dsc[i]->cb(e);
+            if(e->stop_processing) return LV_RESULT_OK;
+
+            /*Stop if the object is deleted*/
+            if(e->deleted) return LV_RESULT_INVALID;
+
+        }
+    }
+    return LV_RESULT_OK;
+}
+
+lv_event_dsc_t * lv_event_add(lv_event_list_t * list, lv_event_cb_t cb, lv_event_code_t filter,
+                              void * user_data)
+{
+    lv_event_dsc_t * dsc = lv_malloc(sizeof(lv_event_dsc_t));
+    LV_ASSERT_NULL(dsc);
+
+    dsc->cb = cb;
+    dsc->filter = filter;
+    dsc->user_data = user_data;
+
+    if(lv_array_size(list) == 0) {
+        /*event list hasn't been initialized.*/
+        lv_array_init(list, 1, sizeof(lv_event_dsc_t *));
+    }
+
+    lv_array_push_back(list, &dsc);
+    return dsc;
+}
+
+bool lv_event_remove_dsc(lv_event_list_t * list, lv_event_dsc_t * dsc)
+{
+    LV_ASSERT_NULL(list);
+    LV_ASSERT_NULL(dsc);
+
+    int size = lv_array_size(list);
+    lv_event_dsc_t ** events = lv_array_front(list);
+    for(int i = 0; i < size; i++) {
+        if(events[i] == dsc) {
+            lv_free(dsc);
+            lv_array_remove(list, i);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32_t lv_event_get_count(lv_event_list_t * list)
+{
+    LV_ASSERT_NULL(list);
+    return lv_array_size(list);
+}
+
+lv_event_dsc_t * lv_event_get_dsc(lv_event_list_t * list, uint32_t index)
+{
+    LV_ASSERT_NULL(list);
+    lv_event_dsc_t ** dsc;
+    dsc = lv_array_at(list, index);
+    return dsc ? *dsc : NULL;
+}
+
+lv_event_cb_t lv_event_dsc_get_cb(lv_event_dsc_t * dsc)
+{
+    LV_ASSERT_NULL(dsc);
+    return dsc->cb;
+}
+
+void * lv_event_dsc_get_user_data(lv_event_dsc_t * dsc)
+{
+    LV_ASSERT_NULL(dsc);
+    return dsc->user_data;
+
+}
+
+bool lv_event_remove(lv_event_list_t * list, uint32_t index)
+{
+    LV_ASSERT_NULL(list);
+    lv_event_dsc_t * dsc = lv_event_get_dsc(list, index);
+    lv_free(dsc);
+    return lv_array_remove(list, index);
+}
+
+void lv_event_remove_all(lv_event_list_t * list)
+{
+    LV_ASSERT_NULL(list);
+    int size = lv_array_size(list);
+    lv_event_dsc_t ** dsc = lv_array_front(list);
+    for(int i = 0; i < size; i++) {
+        lv_free(dsc[i]);
+    }
+    lv_array_deinit(list);
+}
+
+void * lv_event_get_current_target(lv_event_t * e)
+{
+    return e->current_target;
+}
+
+void * lv_event_get_target(lv_event_t * e)
+{
+    return e->original_target;
+}
+
+lv_event_code_t lv_event_get_code(lv_event_t * e)
+{
+    return e->code & ~LV_EVENT_PREPROCESS;
+}
+
+void * lv_event_get_param(lv_event_t * e)
+{
+    return e->param;
+}
+
+void * lv_event_get_user_data(lv_event_t * e)
+{
+    return e->user_data;
+}
+
+void lv_event_stop_bubbling(lv_event_t * e)
+{
+    e->stop_bubbling = 1;
+}
+
+void lv_event_stop_processing(lv_event_t * e)
+{
+    e->stop_processing = 1;
+}
+
+uint32_t lv_event_register_id(void)
+{
+    event_last_id ++;
+    return event_last_id;
+}
+
+/* ---- QMX-PANADAPTER DIAGNOSTIC GUARD (#329) - not upstream LVGL ----
+ *
+ * The event chain is a stack of lv_event_t that live on the DISPATCHING TASK'S
+ * STACK, linked by ->prev, with the head in the LVGL global. Destroying any
+ * object walks it. Twice on 2026-09-06 that walk read a link that was not a
+ * pointer at all - taskLVGL, Load access fault, here:
+ *
+ *   MEPC=0x480e2fe8 A5=0x6a9d5caa MTVAL=0x6a9d5cae   (opening the ADIF log)
+ *   MEPC=0x480e3094 A5=0x0000ffff MTVAL=0x00010003   (typing in its search box)
+ *
+ * MTVAL is A5+4 both times, i.e. the fault is reading e->original_target
+ * through a garbage `e`. Different garbage each time, so the chain is being
+ * CORRUPTED rather than mis-sequenced, and deferring the rebuild out of the
+ * event dispatch did not stop it.
+ *
+ * So this stops walking instead of dying, and says so once. A dropped mark
+ * costs at most a stale `deleted` flag on an event already being torn down;
+ * the reboot cost the operator the whole session AND a wedged QMX (#74). The
+ * counters are read back through /api/status, because a silent tolerant patch
+ * is indistinguishable from a missing one - the #189 lesson.
+ *
+ * This is a DIAGNOSTIC, exactly like the temporary lv_anim.c guard that found
+ * the v1.10.8 drawer crash. It comes out when the cause is understood.
+ *
+ * ⚠ managed_components/ is git-ignored and wiped by fullclean / a dependency
+ * refresh, so re-apply tools/patches/apply_lv_event_chain_guard.ps1 after any
+ * of those.
+ */
+uint32_t qmx_lv_event_chain_bad;      /* read by /api/status as lv_evt_bad */
+
+void lv_event_mark_deleted(void * target)
+{
+    lv_event_t * e = event_head;
+    int hops = 0;
+
+    while(e) {
+        /* A link must be a 4-byte-aligned address inside internal DRAM: every
+         * lv_event_t is a local in lv_obj_send_event()'s frame, so a PSRAM or
+         * flash address is as wrong as a small integer. The hop cap catches a
+         * chain that has been made circular. */
+        if(((lv_uintptr_t)e & 0x3) || (lv_uintptr_t)e < 0x4ff00000u ||
+           (lv_uintptr_t)e >= 0x50000000u || ++hops > 64) {
+            if(qmx_lv_event_chain_bad == 0) {
+                LV_LOG_WARN("QMX: event chain corrupt (link %p, hop %d) - stopped walking",
+                            (void *)e, hops);
+            }
+            qmx_lv_event_chain_bad++;
+            return;
+        }
+        if(e->original_target == target || e->current_target == target) e->deleted = 1;
+        e = e->prev;
+    }
+}
+
+/**********************
+ *   STATIC FUNCTIONS
+ **********************/
