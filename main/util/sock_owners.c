@@ -43,9 +43,22 @@ static void fmt_addr(char *out, size_t n, const struct sockaddr_storage *sa, boo
         char ip[16];
         inet_ntoa_r(in->sin_addr, ip, sizeof(ip));
         int port = ntohs(in->sin_port);
+        /* esp_http_server keeps a UDP control socket on loopback - it looks
+         * like an anonymous high port and is a permanent, legitimate occupant.
+         * Say so, or every reading spends attention on it. */
         const char *nm = port_name(port);
+        if (!nm && in->sin_addr.s_addr == htonl(INADDR_LOOPBACK)) nm = "httpd-ctrl";
         if (nm) snprintf(out, n, "%s:%d(%s)", ip, port, nm);
         else    snprintf(out, n, "%s:%d", ip, port);
+    } else if (sa->ss_family == AF_INET6) {
+        /* httpd binds a v6 listener when LWIP_IPV6 is on. The address is not
+         * the interesting part - the PORT names the owner, and printing
+         * "af10" (as the first build did) names nothing at all. */
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)sa;
+        int port = ntohs(in6->sin6_port);
+        const char *nm = port_name(port);
+        if (nm) snprintf(out, n, "[v6]:%d(%s)", port, nm);
+        else    snprintf(out, n, "[v6]:%d", port);
     } else {
         snprintf(out, n, "af%d", (int)sa->ss_family);
     }
