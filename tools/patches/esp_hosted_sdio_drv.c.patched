@@ -874,6 +874,15 @@ static void sdio_read_task(void const* pvParameters)
 		vTaskDelete(NULL);
 	}
 
+	/* QMX_SDIO_INIT_FAIL_TOLERANT - tell the SD archive it may now take its
+	 * DMA. Defined in firmware (main/util/sdio_ready.c) and only extern'd
+	 * here, so a missing patch leaves the flag unset rather than failing the
+	 * link - same reasoning as util/usb_patch_counters.c. */
+	{
+		extern void qmx_sdio_card_ready_set(void);
+		qmx_sdio_card_ready_set();
+	}
+
 	create_debugging_tasks();
 
 #if DO_COMBINED_REG_READ

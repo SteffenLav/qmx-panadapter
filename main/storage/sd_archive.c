@@ -11,6 +11,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "sdio_ready.h"
+#include "wifi.h"
 #include "esp_attr.h"      // RTC_NOINIT_ATTR - the #282 durable instrument
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
@@ -654,6 +656,36 @@ static void sd_archive_task(void *arg)
     // boot cannot separate them. These two lines make it separable: flip
     // SD_BOOT_PROBE_DISABLE and compare "boot probe DMA" after against
     // before. Do not draw the conclusion without running both.
+    // ⭐ LET esp_hosted's SDIO CARD INIT GO FIRST (2026-09-06). Measured: the
+    // SD mount leaves that init 2039 B of MALLOC_CAP_DMA against 19927 B when
+    // the archive is off, and a card init that cannot allocate used to REBOOT
+    // the device. Both allocations are brief and early; they were overlapping
+    // only because nothing sequenced them. See util/sdio_ready.h for why this
+    // is aimed at the card init rather than at "before WiFi", and for the
+    // caveat that this is a hypothesis with a clean test.
+    //
+    // The timeout is generous but bounded, and proceeding on a timeout is
+    // deliberate - WiFi may be off, or the sdio_drv.c patch may be missing
+    // after a fullclean, and neither should mean "never mount the card".
+    {
+        // Only wait if WiFi is actually going to run. With it off nothing ever
+        // signals, and the card would sit through the whole timeout for a
+        // contention that cannot happen - a pointless 6 s delay on exactly the
+        // POTA/field configuration where the SD archive matters most.
+        // ⛔ panadapter_wifi_is_enabled(), NOT settings_load_all(). This runs
+        // on sd_archive's 6 KB task, qmx_settings_t is multi-kilobyte, and the
+        // compiler reserves every local's frame at the prologue whether the
+        // path is taken or not - so a second copy here adds to the peak even
+        // though the one in the loop below already exists. That is the exact
+        // bug class CLAUDE.md records FOUR instances of, three of them in
+        // wifi.c. A narrow accessor costs a bool.
+        if (panadapter_wifi_is_enabled()) {
+            qmx_sdio_card_ready_wait(6000);
+        } else {
+            ESP_LOGI(TAG, "WiFi off - mounting immediately, nothing to contend with");
+        }
+    }
+
     // Two largest_free_block() walks per BOOT, not on a periodic path - the
     // cyan-flash rule bans the latter, and the SDFAIL path below already
     // takes the same exemption with a hard cap of 3.

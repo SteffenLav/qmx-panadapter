@@ -52,6 +52,7 @@ idf_component_register(
         "util/panic_hook.c"
         "util/psram_task.c"
         "util/usb_patch_counters.c"
+        "util/sdio_ready.c"
         "util/factory_reset.c"
 "util/usb_replug.c"
         "util/cpu_stats.c"

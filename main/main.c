@@ -350,11 +350,26 @@ void app_main(void)
     // ⚠ This does NOT claim to fix the SD/WiFi wedge. It removes one race that
     // was making the mount a coin toss; whether the wedge survives it is a
     // separate question and needs its own soak.
-    if (!sd_archive_wait_mounted(3000))
-        ESP_LOGW(TAG, "SD: no card mounted in the boot window - starting WiFi anyway");
-
     #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
+    // ⭐ REVERSED 2026-09-06, and the reason is measured rather than tidy.
+    //
+    // This used to wait for the SD mount BEFORE starting WiFi, on the strength
+    // of sd_archive.h's "the only window in which SD writes are reliable".
+    // That guarantees the mount takes its ~51 KB of MALLOC_CAP_DMA first, and
+    // measurement showed what that leaves esp_hosted's SDIO card init: 2039 B,
+    // largest block 1152 B, against 19927/10240 with the archive off. A card
+    // init that cannot allocate used to reboot the device.
+    //
+    // So WiFi goes first now, and sd_archive's own boot probe waits for the
+    // card init to finish (qmx_sdio_card_ready_wait) before mounting. Both
+    // still get their memory before the system is busy; neither is asking
+    // while the other allocates.
+    //
+    // The wait below is kept, and still runs before the Reader's staged
+    // offline manual is flushed - it just no longer gates WiFi on it.
+    if (!sd_archive_wait_mounted(9000))
+        ESP_LOGW(TAG, "SD: no card mounted in the boot window");
     #else
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
