@@ -270,6 +270,10 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 }
 
 #define SD_BOOT_MOUNT_TRIES   5
+// A/B switch for the DMA measurement at the boot-probe loop below. 1 skips
+// the probe entirely - safe on a bench with no card, and the only way to
+// separate the probe's DMA cost from the WiFi bring-up it now overlaps.
+#define SD_BOOT_PROBE_DISABLE 0
 #define SD_BOOT_MOUNT_GAP_MS  150
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
@@ -635,7 +639,29 @@ static void sd_archive_task(void *arg)
     // WHY init is flaky; it only needs the good window to be used properly.
     // ~0.6 s worst case, all before WiFi starts (sd_archive_init runs well ahead
     // of panadapter_wifi_start in app_main).
-    for (int i = 0; i < SD_BOOT_MOUNT_TRIES && !s_mounted; i++) {
+    // ⛔ THE COMMENT ABOVE IS NO LONGER TRUE, MEASURED 2026-09-06. It claims
+    // these retries all happen "before WiFi starts". They do not: on the
+    // rx-audio build esp_hosted_init() logs at 5.88 s, i.e. BETWEEN attempt 1
+    // (5.62 s) and attempt 2 (5.97 s). So the probe and the WiFi bring-up now
+    // contend for MALLOC_CAP_DMA at the same moment, and on a bench with NO
+    // CARD AT ALL the pool went 135 KB -> 4.4 KB across the five attempts,
+    // then to 103 B once NimBLE initialised. At that point the device is one
+    // allocation away from anything: the same boot recorded sdio_read taking
+    // an Instruction access fault with MEPC=0x00000000, and a later probe
+    // asserting inside sdmmc_init_host_frequency.
+    //
+    // Whose bytes those are is NOT yet established - the two overlap, so one
+    // boot cannot separate them. These two lines make it separable: flip
+    // SD_BOOT_PROBE_DISABLE and compare "boot probe DMA" after against
+    // before. Do not draw the conclusion without running both.
+    // Two largest_free_block() walks per BOOT, not on a periodic path - the
+    // cyan-flash rule bans the latter, and the SDFAIL path below already
+    // takes the same exemption with a hard cap of 3.
+    ESP_LOGW(TAG, "boot probe DMA before: free=%u lblk=%u (int free=%u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    for (int i = 0; i < (SD_BOOT_PROBE_DISABLE ? 0 : SD_BOOT_MOUNT_TRIES) && !s_mounted; i++) {
         if (i) vTaskDelay(pdMS_TO_TICKS(SD_BOOT_MOUNT_GAP_MS));
         xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
         bool got = try_mount();
@@ -647,6 +673,11 @@ static void sd_archive_task(void *arg)
         }
         ESP_LOGW(TAG, "boot mount attempt %d/%d failed", i + 1, SD_BOOT_MOUNT_TRIES);
     }
+    ESP_LOGW(TAG, "boot probe DMA after:  free=%u lblk=%u (int free=%u)%s",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             SD_BOOT_PROBE_DISABLE ? "  [PROBE DISABLED]" : "");
     // Release app_main, which flushes the Reader's staged offline manual to the
     // card before it starts WiFi (see sd_archive_wait_mounted).
     s_boot_probe_done = true;

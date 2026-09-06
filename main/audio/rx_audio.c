@@ -213,6 +213,32 @@ static volatile uint32_t s_cap_cap    = 0;      /* capacity in samples */
 static volatile uint32_t s_cap_n      = 0;      /* samples written */
 static volatile bool     s_cap_run    = false;
 static uint32_t          s_cap_gap[RXCAP_MAX_GAPS];  /* sample index of each gap */
+
+/* ⛔ WHY THIS DUMPS OVER SERIAL AND NOT OVER WiFi (2026-09-06).
+ *
+ * The recorder was reachable only through /api/cmd + /api/rxaudio.wav, and
+ * on this track WiFi wedges constantly - the esp_hosted/SDIO link dies and
+ * STAYS dead until a REBOOT. That makes a WiFi fetch of a WiFi-off recording
+ * impossible IN PRINCIPLE, not merely awkward: the only way to get the link
+ * back is the one action that also clears this PSRAM buffer. I asked the
+ * operator to toggle WiFi off and back on to work around it, which could
+ * never have worked, and he had already said twice that it was wedged.
+ *
+ * The serial capture has none of that: it needs no network, it is already
+ * running for every bench session, and it survives the reboot. So the
+ * capture can also ARM ITSELF a fixed time after boot and BASE64 ITSELF to
+ * the log when full - no host round-trip anywhere in the loop.
+ *
+ * Set RXCAP_AUTO_SECONDS to 0 to disable. Decode with:
+ *   python tools/rxcap_decode.py scratchpad/capture-dev.txt out.wav          */
+#define RXCAP_AUTO_SECONDS   20    /* 0 = off; one shot, armed once per boot */
+#define RXCAP_AUTO_DELAY_MS  90000 /* after audio starts - time to power-cycle
+                                      the QMX and let the band settle */
+static bool     s_cap_auto_done = false;   /* armed once per boot */
+static bool     s_cap_autodump  = false;   /* dump to serial when full */
+static int64_t  s_cap_first_us  = 0;       /* first audio frame, for the delay */
+static volatile bool s_cap_dumping = false;  /* a dump task is running */
+static void rxcap_auto_tick(void);   /* defined by the recorder block below */
 static volatile uint32_t s_cap_gap_n  = 0;
 
 static volatile uint32_t s_gap_prev_us   = 0;   /* uptime of the previous gap */
@@ -865,6 +891,7 @@ static void rx_audio_task(void *arg)
         // Blocking write paces the task to real time (~21 ms per frame).
         int64_t write_start_us = esp_timer_get_time();
         rxcap_push(s_out, pairs);   /* record exactly what is played */
+        rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
         esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
@@ -1127,6 +1154,149 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     s_write_us_sum         = 0;
     s_write_us_max        -= s_write_us_max;
     s_loop_count           -= loops;
+}
+
+/* Base64 the captured samples into the serial log.
+ *
+ * ⛔ THIS IS BAUD-LIMITED, so the fix for "it takes 6 minutes" is to send
+ * LESS, not to send it faster. Measured 2026-09-06: 12,827 lines of ~110 B
+ * in ~130 s = 11.5 KB/s, which is exactly 115200 baud. Longer lines only
+ * amortise the ~40 B log prefix and buy about 1.4x; nothing buys more.
+ *
+ * So only the DIAGNOSTICALLY INTERESTING audio goes out: a reference chunk
+ * of ordinary background from the start, plus a window either side of every
+ * gap. A 20 s capture with 9 gaps is then ~3.7 s of audio rather than 20 -
+ * about 5x less - and the parts dropped are the parts where, by
+ * construction, nothing happened.
+ *
+ * Each region carries its own START SAMPLE INDEX so the decoder can place it
+ * and so a region is never silently confused with its neighbour. Regions are
+ * merged when they overlap, which matters because two gaps 60 ms apart are
+ * routine.
+ *
+ * ⛔ AND IT RUNS ON ITS OWN TASK. The first version dumped inline from
+ * rx_audio_task, which stopped the audio for the whole six minutes - the
+ * instrument silencing the thing it is measuring. */
+#define RXCAP_REF_SAMPLES  (DSP_SAMPLE_RATE_HZ)        /* 1 s of plain background */
+#define RXCAP_GAP_PRE      (DSP_SAMPLE_RATE_HZ / 8)    /* 125 ms before a gap */
+#define RXCAP_GAP_POST     (DSP_SAMPLE_RATE_HZ / 8)    /* 125 ms after it      */
+
+static void rxcap_emit_region(uint32_t start, uint32_t count, uint32_t *line_idx)
+{
+    static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    ESP_LOGW(TAG, "RXCAP-REGION %lu %lu", (unsigned long)start, (unsigned long)count);
+    const uint8_t *p = (const uint8_t *)(s_cap + start);
+    uint32_t total = count * sizeof(int16_t);
+    char line[248];
+    /* ⛔ 180 IS NOT ARBITRARY, AND THE OLD 45 WAS A BUG (measured 2026-09-06).
+     *
+     * 45 bytes is ODD, so every line boundary split an int16 sample across two
+     * lines. Any character lost in transit then manufactured a one-sample
+     * NEEDLE - and the needles were indistinguishable from real clicks by the
+     * 3-9 kHz detector this whole investigation runs on. 93 % of the 304
+     * needles in a 20 s dump sat at byte offsets 40-44 or 0-4 of the 45-byte
+     * line (chi-square 2087 against a uniform-distribution threshold of 60).
+     * The instrument was manufacturing the artefact it was measuring, and it
+     * had already been reported once as "a second, unexplained source".
+     *
+     * 180 is even AND a multiple of 2, so a line holds exactly 90 whole
+     * samples and no sample ever straddles a boundary. It is also a multiple
+     * of 3, so base64 never pads mid-stream.
+     *
+     * The checksum is the other half: a corrupted-but-PRESENT line used to
+     * decode silently into fake audio. Now it is dropped and counted, which
+     * is the difference between a missing measurement and a wrong one. */
+    for (uint32_t off = 0; off < total; off += 180) {
+        uint32_t m = (total - off < 180) ? (total - off) : 180;
+        int o = 0;
+        for (uint32_t j = 0; j < m; j += 3) {
+            uint32_t v = (uint32_t)p[off + j] << 16;
+            if (j + 1 < m) v |= (uint32_t)p[off + j + 1] << 8;
+            if (j + 2 < m) v |= (uint32_t)p[off + j + 2];
+            line[o++] = B64[(v >> 18) & 63];
+            line[o++] = B64[(v >> 12) & 63];
+            line[o++] = (j + 1 < m) ? B64[(v >> 6) & 63] : '=';
+            line[o++] = (j + 2 < m) ? B64[v & 63]        : '=';
+        }
+        line[o] = 0;
+        /* Fletcher-16 over the RAW bytes this line encodes - cheap, catches
+         * single-byte damage and transposition, which is what a serial link
+         * actually does to a line. */
+        uint16_t s1 = 0, s2 = 0;
+        for (uint32_t j = 0; j < m; j++) {
+            s1 = (uint16_t)((s1 + p[off + j]) % 255);
+            s2 = (uint16_t)((s2 + s1) % 255);
+        }
+        ESP_LOGW(TAG, "RXCAP %lu %04x %s", (unsigned long)(*line_idx)++,
+                 (unsigned)((s2 << 8) | s1), line);
+        if (((*line_idx) & 0x0F) == 0) vTaskDelay(1);   /* let the console drain */
+    }
+}
+
+static void rxcap_dump_task(void *arg)
+{
+    (void)arg;
+    uint32_t n = s_cap_n;
+    if (!s_cap || n == 0) { s_cap_dumping = false; vTaskDelete(NULL); return; }
+
+    ESP_LOGW(TAG, "RXCAP-BEGIN rate=%d samples=%lu gaps=%lu",
+             DSP_SAMPLE_RATE_HZ, (unsigned long)n, (unsigned long)s_cap_gap_n);
+    for (uint32_t i = 0; i < s_cap_gap_n; i++)
+        ESP_LOGW(TAG, "RXCAP-GAP %lu", (unsigned long)s_cap_gap[i]);
+
+    uint32_t line_idx = 0;
+    /* Region 0: plain background, the reference the gaps are compared against. */
+    uint32_t cur_lo = 0;
+    uint32_t cur_hi = (RXCAP_REF_SAMPLES < n) ? RXCAP_REF_SAMPLES : n;
+
+    for (uint32_t i = 0; i < s_cap_gap_n; i++) {
+        uint32_t g  = s_cap_gap[i];
+        uint32_t lo = (g > RXCAP_GAP_PRE) ? g - RXCAP_GAP_PRE : 0;
+        uint32_t hi = g + RXCAP_GAP_POST;
+        if (hi > n) hi = n;
+        if (lo <= cur_hi) {                 /* overlaps - merge, do not re-send */
+            if (hi > cur_hi) cur_hi = hi;
+            continue;
+        }
+        rxcap_emit_region(cur_lo, cur_hi - cur_lo, &line_idx);
+        cur_lo = lo; cur_hi = hi;
+    }
+    if (cur_hi > cur_lo) rxcap_emit_region(cur_lo, cur_hi - cur_lo, &line_idx);
+
+    ESP_LOGW(TAG, "RXCAP-END lines=%lu", (unsigned long)line_idx);
+    s_cap_dumping = false;
+    vTaskDelete(NULL);
+}
+
+/* Called once per audio frame. Arms the one-shot capture RXCAP_AUTO_DELAY_MS
+ * after audio first flows, and dumps it when it fills - both without any
+ * host involvement, which is the whole point (see the note above). */
+static void rxcap_auto_tick(void)
+{
+#if RXCAP_AUTO_SECONDS > 0
+    if (s_cap_first_us == 0) s_cap_first_us = esp_timer_get_time();
+    if (!s_cap_auto_done &&
+        esp_timer_get_time() - s_cap_first_us > (int64_t)RXCAP_AUTO_DELAY_MS * 1000) {
+        s_cap_auto_done = true;
+        if (rx_audio_cap_start(RXCAP_AUTO_SECONDS)) {
+            s_cap_autodump = true;
+            ESP_LOGW(TAG, "cap: AUTO-ARMED %d s - will base64 to serial when full",
+                     RXCAP_AUTO_SECONDS);
+        }
+    }
+    if (s_cap_autodump && !s_cap_run && s_cap_n > 0 && !s_cap_dumping) {
+        s_cap_autodump = false;
+        s_cap_dumping  = true;
+        /* Own task: the buffer is one-shot and finished, so reading it from
+         * another task races nothing - and dumping inline would stop the
+         * audio for the whole transfer. */
+        if (xTaskCreatePinnedToCore(rxcap_dump_task, "rxcap_dump", 4096, NULL,
+                                    1, NULL, 1) != pdPASS) {
+            s_cap_dumping = false;
+            ESP_LOGE(TAG, "cap: could not start the dump task");
+        }
+    }
+#endif
 }
 
 bool rx_audio_cap_start(int seconds)
