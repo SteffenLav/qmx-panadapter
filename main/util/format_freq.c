@@ -2,7 +2,14 @@
 
 #include <stdio.h>
 #include <string.h>
+/* ⛔ THE SELF-TEST BELOW IS THE ONLY ESP-IDF DEPENDENCY IN THIS FILE, and it
+ * is guarded so the file stays PORTABLE - that portability is the whole
+ * reason the logic lives here rather than in the caller, because it is what
+ * lets the host harness link the real function. Adding the self-test broke
+ * that on 2026-09-06 and the harness would not compile at all. */
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
+#endif
 
 freq_style_t g_freq_style = FREQ_STYLE_DOTS;
 
@@ -64,6 +71,7 @@ size_t format_freq_mhz_khz(uint32_t hz, freq_style_t style, char *out, size_t ou
     return copy_bounded(out, out_sz, tmp);
 }
 
+#ifdef ESP_PLATFORM
 int format_freq_selftest(void)
 {
     static const char *TAG = "freqfmt";
@@ -107,3 +115,4 @@ int format_freq_selftest(void)
     ESP_LOGW(TAG, "format_freq self-test: %s (%d failure(s))", bad ? "FAILED" : "all passed", bad);
     return bad;
 }
+#endif /* ESP_PLATFORM */

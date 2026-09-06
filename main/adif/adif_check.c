@@ -1,6 +1,13 @@
 #include "adif_check.h"
 
+/* ⛔ THE SELF-TEST BELOW IS THE ONLY ESP-IDF DEPENDENCY IN THIS FILE, and it
+ * is guarded so the file stays PORTABLE - that portability is the whole
+ * reason the logic lives here rather than in the caller, because it is what
+ * lets the host harness link the real function. Adding the self-test broke
+ * that on 2026-09-06 and the harness would not compile at all. */
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
+#endif
 
 #include <ctype.h>
 #include <string.h>
@@ -81,6 +88,9 @@ const char *adif_check_first_problem(uint32_t flags)
  * Deliberately the SAME cases as test/adif_check_harness.c. If one is changed,
  * change both - or better, run the harness once a host compiler exists here and
  * delete this. */
+
+
+#ifdef ESP_PLATFORM
 static const char *SELFTEST_TAG = "adif_chk";
 
 int adif_check_selftest(void)
@@ -138,3 +148,4 @@ int adif_check_selftest(void)
              bad ? "FAILED" : "all passed", bad);
     return bad;
 }
+#endif /* ESP_PLATFORM */
