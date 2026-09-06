@@ -995,6 +995,14 @@ bool sd_archive_is_mounted(void)        { return s_mounted; }
 
 bool sd_archive_wait_mounted(uint32_t timeout_ms)
 {
+#if SD_ARCHIVE_DISABLED
+    /* Nothing will ever set s_boot_probe_done when the archive is compiled
+     * out, so without this the caller in app_main burns the WHOLE timeout
+     * before starting WiFi. Measured 2026-09-06 while A/B-testing the SD
+     * archive's DMA cost: esp_hosted_init moved 5.81 s -> 9.23 s purely
+     * because of this, which confounded the very experiment it was in. */
+    return false;
+#else
     const uint32_t step = 25;
     uint32_t waited = 0;
     while (!s_boot_probe_done && waited < timeout_ms) {
@@ -1002,6 +1010,7 @@ bool sd_archive_wait_mounted(uint32_t timeout_ms)
         waited += step;
     }
     return s_mounted;
+#endif
 }
 void sd_archive_mark_adif_dirty(void)   { s_adif_dirty = true; }
 void sd_archive_mark_config_dirty(void) { s_config_dirty = true; }
