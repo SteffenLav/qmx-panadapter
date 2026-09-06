@@ -54,6 +54,7 @@
 #include "panic_hook.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
+#include "util/dma_owners.h"   // TEMP INSTRUMENT #283 - boot DMA trace
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "usb_hid_mouse.h"
@@ -189,6 +190,14 @@ void app_main(void)
     // card (POTA: log in the field, analyse at home). Background task, 256 KB
     // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
+
+    // TEMP INSTRUMENT: reports which task holds MALLOC_CAP_DMA at ~8/18/60 s,
+    // to the SERIAL log. Hunting the 44 KB that vanishes between 7 s and
+    // 15.6 s and eventually leaves SD writes failing on a 736-byte largest
+    // block. Compiles to nothing useful without CONFIG_HEAP_TASK_TRACKING,
+    // which sdkconfig.defaults keeps off for shipping - so this goes quiet by
+    // itself after a fullclean. Delete with TODO #283.
+    dma_owners_boot_trace_start();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
     iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
