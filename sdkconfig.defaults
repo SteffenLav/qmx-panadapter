@@ -295,3 +295,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # from the 70% that broke fft_task when taskLVGL was moved there - but WATCH THE
 # AUDIO DROP COUNTER after changing this, because that is the canary (#51).
 CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
+# #284/rx_audio: these two were IGNORED by esp_hosted, which hardcoded 5 KB.
+# tools/patches/apply_esp_hosted_task_stacks.ps1 makes the header honour them.
+# 4096, not the 3072 default: measured high-water marks put sdio_read at
+# ~2716 B and rpc_rx at ~2728 B, so 3072 would leave ~350 B of headroom and
+# this project has crashed at 232. Six tasks x 1 KB = 6 KB back to the
+# MALLOC_CAP_DMA pool, which the I2S channel needs.
+CONFIG_ESP_HOSTED_RPC_TASK_STACK=4096
+CONFIG_ESP_HOSTED_DFLT_TASK_STACK=4096
