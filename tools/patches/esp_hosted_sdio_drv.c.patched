@@ -16,6 +16,7 @@
 /** Includes **/
 #include "string.h"
 #include "sdio_drv.h"
+#include "esp_heap_caps.h"   /* QMX_SDIO_INIT_FAIL_TOLERANT */
 #include "sdio_reg.h"
 #include "serial_drv.h"
 #include "stats.h"
@@ -823,10 +824,54 @@ static void sdio_read_task(void const* pvParameters)
 		}
 	}
 
+	/* QMX_SDIO_INIT_FAIL_TOLERANT - 2026-09-06.
+	 *
+	 * Report the DMA pool at the moment that matters. The card init below
+	 * allocates DMA-capable memory, and on this board that pool is the
+	 * genuinely scarce one - serial-captured on the dev bench:
+	 *
+	 *   E dma_utils: esp_dma_capable_malloc(181): Not enough heap memory
+	 *   E sdio_wrapper: sdmmc_card_init failed
+	 *   E H_SDIO_DRV: sdio card init failed
+	 *   Guru Meditation: Core 1 Instruction access fault, MEPC=0 RA=0
+	 *
+	 * Without this line the failure is visible but its CAUSE is not: 88 KB
+	 * of MALLOC_CAP_DMA was free 1.4 s earlier and something took it all. */
+	/* One largest_free_block() walk per BOOT. It runs with interrupts off, so
+	 * the cyan-flash rule bans it on any PERIODIC path - this is neither
+	 * periodic nor on a hot path, same exemption sd_archive's SDFAIL takes. */
+	ESP_LOGW(TAG, "sdio card init: DMA free=%u lblk=%u internal free=%u",
+	         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+	         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+	         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
 	res = g_h.funcs->_h_sdio_card_init(sdio_handle);
 	if (res != ESP_OK) {
 		ESP_LOGE(TAG, "sdio card init failed");
-		return;
+		/* ⛔ STOCK WROTE `return;` HERE, AND THAT REBOOTS THE DEVICE.
+		 *
+		 * This is a FreeRTOS task function. Returning from one does not end
+		 * the task - it executes a `ret` with the stack's initial return
+		 * address, which is ZERO. Serial-captured twice on the dev bench,
+		 * 5.246 s and 5.247 s of uptime on two different builds:
+		 *
+		 *   Core 1 panic'ed (Instruction access fault)
+		 *   MEPC : 0x00000000   RA : 0x00000000   MCAUSE : 0x00000001
+		 *
+		 * MEPC and RA both zero is exactly a `ret` into address 0, and it
+		 * followed "sdio card init failed" by 60 ms both times.
+		 *
+		 * Deleting the task is what the code meant. WiFi is then simply
+		 * unavailable for the session - bad, but a running radio with no
+		 * network beats a reboot, which on this board is also a warm reset
+		 * with the QMX attached, i.e. the documented #74 wedge. So the
+		 * stock behaviour cost the RADIO as well as the link. */
+		ESP_LOGE(TAG, "sdio_read_task exiting - WiFi unavailable this session "
+		              "(stock returned from the task here, which jumps to 0)");
+		/* vTaskDelete(NULL) only - NOT _h_thread_cancel(sdio_read_thread)
+		 * as well. That helper deletes the task too, so calling both would
+		 * delete this task twice. Self-delete is the whole job here. */
+		vTaskDelete(NULL);
 	}
 
 	create_debugging_tasks();

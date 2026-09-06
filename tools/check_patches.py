@@ -58,6 +58,16 @@ PATCHES = [
      "an oversized SDIO pending-byte delta livelocks the link: WiFi dies within "
      "minutes and every RPC times out forever (reboot is the only way out)"),
 
+    # Same FILE as the row above, different marker. sdio_drv.c now carries
+    # three of our fixes and one apply script restores all three, so a row per
+    # marker is the only way a partially-restored copy shows up as missing.
+    ("apply_esp_hosted_sdio_recovery.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_INIT_FAIL_TOLERANT",
+     "a failed SDIO card init RETURNS from a FreeRTOS task function, executing "
+     "a ret to address 0 - the device reboots (MEPC=0, RA=0) instead of simply "
+     "losing WiFi, and that warm reset also wedges the attached QMX (#74)"),
+
     ("apply_esp_hosted_assert_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
      "QMX_PANADAPTER_ASSERT_TOLERANT_PATCH_MARKER",

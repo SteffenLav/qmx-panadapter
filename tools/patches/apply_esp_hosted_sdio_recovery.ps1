@@ -60,8 +60,18 @@ if (-not (Test-Path $stored)) {
 
 $content = Get-Content -Raw -Path $target
 
-# Already patched? (marker is our unique recovery log string.)
-if ($content -match "SDIO RX oversize") {
+# Already patched? THIS FILE NOW CARRIES THREE OF OUR FIXES, so the check must
+# require ALL of them - an older stored copy that has only the first would
+# otherwise report "already patched" and silently leave the others missing:
+#   1. SDIO RX oversize   - drain+resync instead of livelocking the link
+#   2. TX fail streak     - retry instead of _h_restart_host() rebooting the P4
+#   3. init-fail tolerant - vTaskDelete instead of `return` from a task
+#      function, which executes a `ret` to address 0 (MEPC=0, RA=0). Captured
+#      twice on the dev bench at 5.246/5.247 s, 60 ms after "sdio card init
+#      failed", itself caused by esp_dma_capable_malloc running out of DMA.
+if (($content -match "SDIO RX oversize") -and
+    ($content -match "H_SDIO_TX_FAIL_STREAK_MAX") -and
+    ($content -match "QMX_SDIO_INIT_FAIL_TOLERANT")) {
     Write-Host "Already patched - nothing to do." -ForegroundColor Green
     exit 0
 }
