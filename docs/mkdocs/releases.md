@@ -6,7 +6,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.11.3** — 2026-09-06
 
-**Two things a user told us were still broken after we had said they were fixed. Both of them were.**
+**Two things a user told me were still broken after I had said they were fixed. Both of them were right.**
 
 - **The power-cycle relay was held closed from boot** for anyone using an active level of Low *(Randy N4OPI)*. The two pins were driven Low at every startup, under a comment reasoning that closing a contact should require a deliberate pulse — which is right, and is the opposite of what that did for an active-Low station, because Low is their asserted level. On a line wired to a radio's power input the relay therefore sat closed from power-on until the first pulse released it. The pins now rest on the inactive side of the polarity you chose, and follow it the moment you change it.
 - **A corrected log file can now be imported** *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Restoring a log merges on callsign, date and time — exactly the three fields a correction does not change — so a record fixed in another logger looked like a duplicate, was skipped, and was reported as "already in the log". Choose **corrections** at the first prompt and an incoming record replaces the one already logged; the result says how many were replaced, and those contacts go to QRZ, eQSL and LoTW again, since the copy held there is the one carrying the error.

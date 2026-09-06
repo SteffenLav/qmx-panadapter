@@ -112,8 +112,8 @@ on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF loggin
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.11.3 — two things a user told us were still broken after we said
-they were fixed, and both of them were.** The power-cycle relay was held
+**New in v1.11.3 — two things a user told me were still broken after I said
+they were fixed, and both of them were right.** The power-cycle relay was held
 **closed** from boot for anyone using an active level of Low, on a line wired to
 a radio's power input; the pins now rest on the inactive side of the polarity
 you chose. And a log file corrected in another logger could not be imported —
