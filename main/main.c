@@ -320,6 +320,39 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: forced wifi_enabled=%d (BENCH_WIFI_ENABLED=%d)",
              (BENCH_WIFI_ENABLED == -1), BENCH_WIFI_ENABLED);
     #endif
+    // ⛔ WAIT FOR THE SD BOOT PROBE BEFORE STARTING WiFi (2026-09-06).
+    //
+    // sd_archive.h has said for a long time that sd_archive_wait_mounted() is
+    // "intended for one caller: app_main ... BEFORE panadapter_wifi_start() -
+    // the only window in which SD writes are reliable on this board". It had
+    // ZERO callers, so that ordering was never actually enforced and the two
+    // simply raced.
+    //
+    // Measured on the dev bench, same build, two consecutive boots:
+    //
+    //   mount finished 5.703 s, esp_hosted_init 5.842 s -> mounted FIRST TRY,
+    //     one attempt, 51 KB of MALLOC_CAP_DMA taken and held (the card's own
+    //     working buffers - legitimate, not a leak)
+    //   attempt 1 at 5.62 s, esp_hosted_init 5.88 s      -> all FIVE attempts
+    //     failed 0x108/0x109/0x103/0x104, DMA fell 135 KB -> 4.4 KB, and that
+    //     same boot took an Instruction access fault in sdio_read with
+    //     MEPC=0x00000000
+    //
+    // A ~200 ms scheduling difference decided it. That is precisely CLAUDE.md's
+    // long-standing "mount fails intermittently with 0x108, observed on 2 of 5
+    // boots" - not bad luck, a race that was documented as being prevented.
+    //
+    // The cost is bounded: the probe is 5 tries with a short gap, ~1.2 s worst
+    // case, and returns as soon as a card mounts (typically ~0.5 s). A unit
+    // with no card pays the full window once per boot, before WiFi - which is
+    // the same trade the probe itself already makes.
+    //
+    // ⚠ This does NOT claim to fix the SD/WiFi wedge. It removes one race that
+    // was making the mount a coin toss; whether the wedge survives it is a
+    // separate question and needs its own soak.
+    if (!sd_archive_wait_mounted(3000))
+        ESP_LOGW(TAG, "SD: no card mounted in the boot window - starting WiFi anyway");
+
     #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
     #else
