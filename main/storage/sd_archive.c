@@ -735,9 +735,9 @@ static void sd_archive_task(void *arg)
     // of panadapter_wifi_start in app_main).
     for (int i = 0; i < SD_BOOT_MOUNT_TRIES && !s_mounted; i++) {
         if (i) vTaskDelay(pdMS_TO_TICKS(SD_BOOT_MOUNT_GAP_MS));
-        xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+        if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
         bool got = try_mount();
-        xSemaphoreGive(s_sd_mutex);
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
         if (got) {
             if (i) ESP_LOGW(TAG, "SD mounted on boot attempt %d/%d",
                             i + 1, SD_BOOT_MOUNT_TRIES);
@@ -807,9 +807,9 @@ static void sd_archive_task(void *arg)
                 if (now_us - s_mount_retry_last_us >= (int64_t)MOUNT_RETRY_MS * 1000) {
                     s_mount_retry_last_us = now_us;
                     s_mount_retries++;
-                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                    if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         bool ok = try_mount();
-                        xSemaphoreGive(s_sd_mutex);
+                        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                         if (ok) {
                             // Say it plainly: this is the answer to whether a
                             // post-boot mount is possible at all, and it was
@@ -843,7 +843,7 @@ static void sd_archive_task(void *arg)
                 int64_t now_us = esp_timer_get_time();
                 if (now_us - s_slow_last_us >= (int64_t)SLOW_LOG_MS * 1000) {
                     s_slow_last_us = now_us;
-                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                    if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
                         // recovery branch, which would have written the same
                         // chunk to the card a second time.
@@ -898,7 +898,7 @@ static void sd_archive_task(void *arg)
                                      s_slow_fail);
                             s_slow_fail = 0;
                         }
-                        xSemaphoreGive(s_sd_mutex);
+                        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                     }
                 }
             }
@@ -929,11 +929,11 @@ static void sd_archive_task(void *arg)
 
         // Hold the SD mutex for the whole work burst so a concurrent web
         // download of the SD log can't interleave FatFs I/O with ours.
-        xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+        if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
 
         if (!s_mounted) {
             if (!try_mount()) {
-                xSemaphoreGive(s_sd_mutex);
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                 vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
                 continue;
             }
@@ -996,7 +996,7 @@ static void sd_archive_task(void *arg)
             if (s_consec_write_fail < SD_WRITE_FAIL_UNMOUNT) {
                 ESP_LOGW(TAG, "SD write failed (%d/%d) - retrying on live handle",
                          s_consec_write_fail, SD_WRITE_FAIL_UNMOUNT);
-                xSemaphoreGive(s_sd_mutex);
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                 vTaskDelay(pdMS_TO_TICKS(WORK_MS));
                 continue;
             }
@@ -1004,7 +1004,7 @@ static void sd_archive_task(void *arg)
                      s_consec_write_fail);
             s_consec_write_fail = 0;
             unmount("write failures");
-            xSemaphoreGive(s_sd_mutex);
+            if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
         }
@@ -1029,12 +1029,12 @@ static void sd_archive_task(void *arg)
         // continuously below.
         if (wifi_on) {
             park_snapshot();
-            xSemaphoreGive(s_sd_mutex);
+            if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
             continue;
         }
 
 
-        xSemaphoreGive(s_sd_mutex);
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
 
         // 30 s heartbeat: proves SD is alive + shows how hard it's writing, so
         // any concurrent WiFi/FT8 disturbance in the log has an SD reference.

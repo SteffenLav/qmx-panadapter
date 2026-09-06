@@ -52,6 +52,14 @@ PATCHES = [
      "WiFi transport buffers stay in scarce internal DRAM; the device reboots "
      "under QMX+FT8 load when WiFi TX bursts"),
 
+    ("apply_lv_event_chain_guard.ps1", "repo",
+     "managed_components/lvgl__lvgl/src/misc/lv_event.c",
+     "qmx_lv_event_chain_bad",
+     "LVGL walks its in-flight event chain on EVERY object destruction; a "
+     "corrupt link takes a Load access fault and reboots the device, and the "
+     "marker is the COUNTER symbol because a silent tolerant patch is "
+     "indistinguishable from a missing one (#189/#329)"),
+
     ("apply_esp_hosted_sdio_recovery.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "SDIO RX oversize",

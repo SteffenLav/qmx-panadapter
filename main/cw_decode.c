@@ -241,7 +241,18 @@ static void sd_transcript_putc(char c)
 size_t cw_decode_take_pending(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0 || !s_lock) return 0;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t n = s_sd_pend_len;
     if (n > out_sz) n = out_sz;
     memcpy(out, s_sd_pend, n);
@@ -251,7 +262,7 @@ size_t cw_decode_take_pending(char *out, size_t out_sz)
     } else {
         s_sd_pend_len = 0;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return n;
 }
 
@@ -277,7 +288,7 @@ void cw_decode_feed(const char *resp)
     int n = cw_decode_parse_tb(resp, chunk, sizeof(chunk), NULL);
     if (n <= 0) return;   // malformed, or simply nothing decoded this poll
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < n; i++) {
         char rel[CW_SQUELCH_HOLD + 2];
         int m = cw_squelch_push(&s_squelch, chunk[i], rel, sizeof(rel));
@@ -300,7 +311,7 @@ void cw_decode_feed(const char *resp)
         }
         s_total += (unsigned)m;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 }
 
 size_t cw_decode_line(char *out, size_t out_sz)
@@ -309,7 +320,7 @@ size_t cw_decode_line(char *out, size_t out_sz)
     out[0] = '\0';
     if (!s_ring) return 0;
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t n = CW_LINE_COLS;
     if (n > out_sz - 1) n = out_sz - 1;
     memcpy(out, s_line, n);
@@ -321,7 +332,7 @@ size_t cw_decode_line(char *out, size_t out_sz)
         if (idx < n) out[idx] = ' ';
     }
     out[n] = '\0';
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return n;
 }
 
@@ -333,7 +344,7 @@ int cw_decode_wpm(void)
     if (!s_ring) return 0;
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int      in_window = 0;
     uint32_t oldest    = now;
     for (int i = 0; i < s_stamp_count; i++) {
@@ -343,7 +354,7 @@ int cw_decode_wpm(void)
         in_window++;
         oldest = t;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 
     if (in_window < CW_WPM_MIN_CHARS) return 0;
     return cw_wpm_estimate(in_window, now - oldest);
@@ -356,13 +367,13 @@ size_t cw_decode_tail(char *out, size_t out_sz)
     out[0] = '\0';
     if (!s_ring) return 0;
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t want = out_sz - 1;
     if (want > s_count) want = s_count;
     size_t start = (s_head + CW_RING_CAP - want) % CW_RING_CAP;
     for (size_t i = 0; i < want; i++) out[i] = s_ring[(start + i) % CW_RING_CAP];
     out[want] = '\0';
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return want;
 }
 
@@ -379,13 +390,13 @@ unsigned cw_decode_total(void)
 void cw_decode_clear(void)
 {
     if (!s_ring) return;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_head = s_count = 0;
     s_stamp_head = s_stamp_count = 0;
     memset(&s_squelch, 0, sizeof(s_squelch));
     memset(s_line, ' ', sizeof(s_line));
     s_line_col = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 }
 
 #endif /* ESP_PLATFORM */

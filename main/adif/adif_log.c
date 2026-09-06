@@ -485,10 +485,21 @@ void adif_log_record(const adif_qso_t *qso)
         return;                      // do NOT count it, do NOT mirror it
     }
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count++;
     cache_add(qso->their_call, freq_to_band(qso->freq_hz));
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 
     ESP_LOGI(TAG, "Logged QSO #%d: %s @ %.4f MHz (%s/%s)",
              s_count, qso->their_call,
@@ -501,9 +512,9 @@ void adif_log_record(const adif_qso_t *qso)
 
 int adif_log_count(void)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int n = s_count;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return n;
 }
 
@@ -515,12 +526,12 @@ const char *adif_log_file_path(void)
 bool adif_log_contains_call(const char *call)
 {
     if (!call || !call[0]) return false;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
         if (strcmp(s_worked[i].call, call) == 0) found = true;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return found;
 }
 
@@ -536,13 +547,13 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
     // any band is the conservative direction for a filter whose job is
     // avoiding duplicates.
     bool any_band = (band[0] == '\0');
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
         if (strcmp(s_worked[i].call, call) == 0 &&
             (any_band || strcmp(s_worked[i].band, band) == 0)) found = true;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return found;
 }
 
@@ -874,10 +885,10 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     if (removed_below_eqsl) settings_set_eqsl_uploaded_n(cur_eqsl - removed_below_eqsl);
     if (removed_below_lotw) settings_set_lotw_uploaded_n(cur_lotw - removed_below_lotw);
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
     s_worked_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     load_from_file();
 
     ESP_LOGI(TAG, "batch delete: removed %d record(s) in one rewrite (%d remain)", removed, s_count);
@@ -988,10 +999,10 @@ bool adif_log_delete_record(int idx)
 
     // Rebuild count + worked cache from the rewritten file (the deleted
     // record may have been the only QSO with that call/band).
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
     s_worked_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     load_from_file();
 
     ESP_LOGI(TAG, "Deleted QSO record #%d (%d remain)", idx, s_count);
@@ -1001,10 +1012,10 @@ bool adif_log_delete_record(int idx)
 
 void adif_log_clear(void)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count       = 0;
     s_worked_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 
     remove(FILE_PATH);
     FILE *f = fopen(FILE_PATH, "w");
@@ -1194,9 +1205,9 @@ int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
     }
 
     if (added > 0) {
-        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
         s_count += added;
-        xSemaphoreGive(s_lock);
+        if (s_lock) xSemaphoreGive(s_lock);
         sd_archive_mark_adif_dirty();
     }
     ESP_LOGI(TAG, "ADIF import: %d found, %d added, %d duplicate, %d unreadable; log now has %d",

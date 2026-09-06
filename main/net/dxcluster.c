@@ -477,7 +477,12 @@ void dxcluster_init(void)
     if (s) return;
     s = heap_caps_calloc(1, sizeof(dxc_state_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s) { ESP_LOGE(TAG, "no PSRAM for state"); return; }
-    psram_task_create(dxc_task, "dxcluster", 5120, NULL, 2, tskNO_AFFINITY);
+    /* 5120 -> 7168: measured 2026-09-06 at 388 B of headroom, then 260 B after
+       a session of use - the only task observed still FALLING, which means the
+       deep path had not finished running when the first reading was taken (the
+       tab5_kb lesson in CLAUDE.md: a high-water mark only describes the paths
+       that actually ran). PSRAM stack, so no internal RAM cost. */
+    psram_task_create(dxc_task, "dxcluster", 7168, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));
 }

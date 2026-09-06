@@ -2527,9 +2527,9 @@ static esp_err_t qrz_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2539,13 +2539,13 @@ static esp_err_t qrz_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_QRZ };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2596,9 +2596,9 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2608,13 +2608,13 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_EQSL };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2686,9 +2686,9 @@ static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
     if (!s_upload_queue)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2698,13 +2698,13 @@ static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_CLOUDLOG };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2813,9 +2813,9 @@ static esp_err_t lotw_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2825,13 +2825,13 @@ static esp_err_t lotw_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_LOTW };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2963,10 +2963,10 @@ static const httpd_uri_t uri_log_saved = {
 // GET /api/upload_status — check result of last QRZ or eQSL upload
 static esp_err_t upload_status_handler(httpd_req_t *req)
 {
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     cJSON *root = cJSON_CreateObject();
     if (!root) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_500(req);
     }
 
@@ -2982,7 +2982,7 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
         if (s_last_upload.note[0])
             cJSON_AddStringToObject(root, "note", s_last_upload.note);
     }
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -4844,37 +4844,37 @@ static void upload_task(void *arg)
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_EQSL) {
             eqsl_upload_result_t result;
             eqsl_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_CLOUDLOG) {
             cloudlog_upload_result_t result;
             cloudlog_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_LOTW) {
             lotw_upload_result_t result;
             lotw_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
@@ -4882,7 +4882,7 @@ static void upload_task(void *arg)
             strncpy(s_last_upload.note, result.note, sizeof(s_last_upload.note) - 1);
             s_last_upload.note[sizeof(s_last_upload.note) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         }
         // Stagger the resume - releasing the SD lock, the WS pause, and the
         // DSP quiet all at once (as this used to) means the SD archive

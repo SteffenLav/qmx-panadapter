@@ -369,8 +369,19 @@ static int64_t next_slot_sec(bool match_parity, bool want_even, ftx_protocol_t p
     return next_ms / 1000;
 }
 
-static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
-static inline void unlock(void) { xSemaphoreGive(s_lock); }
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+static inline void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
+static inline void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 /* Remember the partner's grid the first time it is seen in this exchange, with
  * the callsign it belongs to - see s_their_grid. */

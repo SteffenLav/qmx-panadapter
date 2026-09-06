@@ -295,3 +295,22 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # from the 70% that broke fft_task when taskLVGL was moved there - but WATCH THE
 # AUDIO DROP COUNTER after changing this, because that is the canary (#51).
 CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
+#
+# #329: trap a stack overflow AT THE WRITE, with the culprit task's name.
+#
+# CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY only inspects a few bytes at a
+# CONTEXT SWITCH, so a task that overruns its stack, corrupts whatever is
+# adjacent and returns before the next switch is COMPLETELY UNDETECTED. That is
+# the shape of the ADIF-viewer crash: LVGL's event chain read a link that was
+# not a pointer (0x6a9d5caa, then 0x0000ffff), i.e. someone else's data landed
+# in it, with nothing anywhere reporting a fault. Measured the same day:
+# settings_flush had 232 B of stack left, dxcluster 260 B and FALLING, ws_push
+# 364 B - three tasks one deep call from doing exactly that.
+#
+# This puts a hardware watchpoint on the running task's stack limit, so the
+# overflowing write traps immediately and the panic names the task instead of
+# some innocent subsystem faulting on the corruption minutes later.
+#
+# Costs one debug watchpoint register and a little context-switch time. If a
+# future session needs that register for gdb, turn it off then - not casually.
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y

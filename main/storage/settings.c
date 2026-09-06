@@ -669,7 +669,14 @@ void settings_init(void)
     load_from_nvs(&s_pending);
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
-    s_flush_task = psram_task_create(flush_task, "settings_flush", 3072, NULL, 3, tskNO_AFFINITY);
+    /* 3072 -> 4608: measured 2026-09-06 with only 232 BYTES of headroom left
+       (/api/cmd {"action":"stacks"}), which is one deep call from writing past
+       the end - and with CANARY-only checking that write would corrupt a
+       neighbour silently rather than fault here. This task already caused a
+       crash loop once by taking settings_load_all() on its stack, and CLAUDE.md
+       records its bound as 3064 B from that crash dump. The stack is in PSRAM
+       (psram_task_create), so the extra 1.5 KB costs no internal RAM. */
+    s_flush_task = psram_task_create(flush_task, "settings_flush", 4608, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "ready");
 }
 

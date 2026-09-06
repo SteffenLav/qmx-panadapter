@@ -618,7 +618,13 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
         // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
         // names ws_push_task as latency-critical.
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 3072, NULL, 3, &s_push_task);
+        /* 3072 -> 4096: measured 2026-09-06 with 364 B of headroom left. This
+           stack stays INTERNAL deliberately - CLAUDE.md lists ws_push_task
+           among the latency-critical tasks that must not take a PSRAM stack -
+           so the extra 1 KB is paid out of the scarce pool on purpose, because
+           an overflow here corrupts a neighbour and, with canary-only checking,
+           says nothing when it does. */
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;
