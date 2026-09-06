@@ -814,6 +814,40 @@ static bool cache_load(int total)
     return true;
 }
 
+/* ⛔ A SCROLLABLE OBJECT MUST NOT BE SIZED BY ITS CONTENT.
+ *
+ * s_list was created LV_SIZE_CONTENT with a max_height, which reads as "as tall
+ * as it needs, up to a limit" and is self-referential the moment it scrolls:
+ * SIZE_CONTENT is computed from where the children ARE, scrolling MOVES them,
+ * so the height changes, which changes how much is scrollable, which moves them
+ * again. On the device that is a list that gets shorter as you scroll down and
+ * last rows you can never settle on - reported from the bench 2026-09-06 as
+ * "scrolling to the bottom I cannot get to the last two lines without the list
+ * becoming shorter and shorter", and present for a long time before that.
+ *
+ * So: content-sized while everything fits (a one-row search result must not sit
+ * in a 370 px box), and a FIXED height the moment it does not. Called after
+ * every build, since which of those is true changes with the rows.
+ *
+ * The max_height stays as the cap and as the belt to this braces. */
+static void fit_list_height(void)
+{
+    if (!s_list) return;
+    lv_coord_t cap = lv_obj_get_style_max_height(s_list, LV_PART_MAIN);
+
+    // Ask what the content wants, with the layout up to date...
+    lv_obj_set_height(s_list, LV_SIZE_CONTENT);
+    lv_obj_update_layout(s_list);
+
+    // ...and pin it the moment the answer is "more than fits". lv_obj_get_height
+    // already returns the CAPPED value here, so this comparison is the test for
+    // "the content overflowed", not an approximation of it.
+    if (lv_obj_get_height(s_list) >= cap) {
+        lv_obj_set_height(s_list, cap);
+        lv_obj_update_layout(s_list);
+    }
+}
+
 // Build the next chunk of rows from s_match, newest first. Returns how many
 // rows exist afterwards. Safe to call when there is nothing left to do.
 static int build_more_rows(void)
@@ -860,6 +894,7 @@ static int build_more_rows(void)
         lv_obj_set_style_pad_top(s_more_lbl, 8, 0);
         lv_obj_set_style_pad_bottom(s_more_lbl, 8, 0);
     }
+    fit_list_height();
     return s_built;
 }
 
@@ -878,7 +913,14 @@ static void list_scroll_cb(lv_event_t *e)
      * footer label, and this runs inside LVGL's SCROLL dispatch. See the rule
      * at the top of this file. The chunk lands on the next timer tick, which
      * on this display is the same frame or the one after it. */
-    if (bottom < 400) { s_more_dirty = true; if (s_search_timer) lv_timer_ready(s_search_timer); }
+    /* 400 was WIDER THAN THE LIST ITSELF (ADIF_LIST_MAX_H is 370), so the
+       trigger was satisfied at essentially any scroll position and re-fired
+       continuously near the end. Half a viewport is enough to have the next
+       chunk ready before it is reached. */
+    if (bottom < ADIF_LIST_MAX_H / 2) {
+        s_more_dirty = true;
+        if (s_search_timer) lv_timer_ready(s_search_timer);
+    }
 }
 
 /* ⛔ TIMER ONLY - never call this from an event callback. Use
@@ -917,6 +959,7 @@ static void list_render_now(void)
         lv_label_set_text(lbl, "No QSOs logged yet");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        fit_list_height();
         return;
     }
 
@@ -1167,6 +1210,7 @@ static void kb_hide(void)
 {
     if (s_search_kb) lv_obj_add_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN);
     if (s_list)  lv_obj_set_style_max_height(s_list,  ADIF_LIST_MAX_H, 0);
+    fit_list_height();   // the cap moved, so re-take the fixed/content decision
     if (s_panel) {
         lv_obj_set_style_max_height(s_panel, ADIF_PANEL_MAX_H, 0);
         lv_obj_set_align(s_panel, LV_ALIGN_CENTER);
@@ -1195,6 +1239,7 @@ static void kb_show(void)
     // reason to shrink anything.
     if (lv_obj_has_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN)) return;
     if (s_list)  lv_obj_set_style_max_height(s_list,  ADIF_LIST_MAX_H_KB, 0);
+    fit_list_height();   // ditto - the keyboard just took ~260 px off the cap
     if (s_panel) {
         lv_obj_set_style_max_height(s_panel, ADIF_PANEL_MAX_H_KB, 0);
         lv_obj_set_align(s_panel, LV_ALIGN_TOP_MID);
@@ -1409,7 +1454,7 @@ static void modal_build(void)
     // as it can be") so the panel - header + this list + the Close button - fits
     // on-screen with Close fully visible. Must stay in step with the panel's
     // max_height below (chrome ~230 px + this = the panel height).
-    lv_obj_set_style_max_height(s_list, 430, 0);
+    lv_obj_set_style_max_height(s_list, ADIF_LIST_MAX_H, 0);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
@@ -1419,6 +1464,8 @@ static void modal_build(void)
     // Grow the list on the way down (#321) - only about a screenful is built
     // when the window opens.
     lv_obj_add_event_cb(s_list, list_scroll_cb, LV_EVENT_SCROLL, NULL);
+    /* Height is settled by fit_list_height() after every build - see there for
+       why LV_SIZE_CONTENT on a SCROLLABLE object cannot be left in place. */
 
     // Bottom strip: "Delete all" (left) + Close (right). Deliberately NOT in
     // the top header - the header is where the harmless Today/All toggle
