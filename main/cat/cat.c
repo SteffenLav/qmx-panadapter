@@ -31,6 +31,10 @@ static const char *TAG = "cat";
 
 #define EVT_DEV_CONNECTED  BIT0
 #define EVT_DEV_GONE       BIT1
+/* How long the radio may say nothing while we are polling it every 50 ms
+ * before the link is treated as dead. Generous by a factor of a hundred: the
+ * failure this catches lasted ten minutes and counting. */
+#define CAT_RX_DEAD_US     (5 * 1000000)
 
 // USB Audio Class descriptor sub-types we care about
 #define USB_CLASS_AUDIO              0x01
@@ -525,7 +529,20 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
 {
     switch (event->type) {
     case CDC_ACM_HOST_ERROR:
-        ESP_LOGE(TAG, "CDC-ACM error: %d", event->data.error);
+        /* Logged and otherwise IGNORED, until 2026-09-07. Caught live on the
+         * bench: one of these arrived and CAT RECEIVE NEVER CAME BACK - ID;,
+         * VN; and every MM Get went unanswered for the following ten minutes,
+         * while the poll heartbeat kept printing "FA/MD/FW cycling" and
+         * /api/status kept serving a frozen frequency and mode as though they
+         * were live. Audio was unaffected throughout, because UAC is a separate
+         * interface, so nothing on either screen suggested a fault.
+         *
+         * A DISCONNECTED event below runs the whole reconnect path. An error
+         * did nothing at all, which is the gap. It is not fixed HERE, though -
+         * one transient error is not proof of a dead link, and this callback
+         * cannot know. The watchdog in poll_task decides, on the only evidence
+         * that settles it: whether bytes are still arriving. */
+        ESP_LOGE(TAG, "CDC-ACM error: %d - watching for RX to stop", event->data.error);
         break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
         ESP_LOGW(TAG, "QMX disconnected");
@@ -538,8 +555,16 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
     }
 }
 
+/* Last time ANY byte arrived from the radio. The CAT link is polled at 50 ms,
+ * so on a healthy link this is never more than a few tens of ms old - which is
+ * what makes a multi-second silence unambiguous rather than a judgement call. */
+static volatile int64_t s_last_rx_us = 0;
+
+int64_t cat_last_rx_us(void) { return s_last_rx_us; }
+
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
 {
+    if (data_len) s_last_rx_us = esp_timer_get_time();
     for (size_t i = 0; i < data_len; i++) {
         char c = (char)data[i];
         if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
@@ -1348,15 +1373,50 @@ static void poll_task(void *arg)
      * when something is actually owed, which is almost never. */
     wspr_pa_guard_reclaim_on_link();
 
+    /* ⛔ CAT RX WATCHDOG. The link is polled every 50 ms, so a healthy radio
+     * cannot be silent for seconds; silence that long means the receive path is
+     * gone even though the writes still appear to succeed.
+     *
+     * Observed on the bench 2026-09-07 after a single "CDC-ACM error: 1": ten
+     * minutes of no reply to anything, with the poll heartbeat still announcing
+     * that it was cycling and /api/status still serving a frozen frequency. The
+     * frozen values are the dangerous part - a dead link that reads as a live
+     * one is worse than one that reads as dead, and it would explain a "the
+     * radio stopped responding to the browser" report perfectly.
+     *
+     * EVT_DEV_GONE is what a real disconnect raises, so this reuses the entire
+     * existing teardown-and-reopen path rather than inventing a second one. */
+    int64_t last_wd_check = esp_timer_get_time();
+
     int phase = 0;
     int poll_fail = 0;   // consecutive poll-TX failures; one transient timeout must not kill the poll
     while (s_cdc_dev != NULL) {
+        /* RX watchdog - see the note above the declaration. Checked once a
+         * second so the arithmetic costs nothing at the 50 ms poll rate, and
+         * only while we are actually polling: a paused link (FT8 burst, the
+         * operator pause, a terminal session) is legitimately silent and the
+         * timer is re-armed on each of those paths below. */
+        int64_t now_wd = esp_timer_get_time();
+        if (now_wd - last_wd_check > 1000000) {
+            last_wd_check = now_wd;
+            if (s_last_rx_us && (now_wd - s_last_rx_us) > (int64_t)CAT_RX_DEAD_US) {
+                ESP_LOGE(TAG, "CAT RX silent for %lld s while polling - the link is "
+                              "gone even though writes still report success. Tearing "
+                              "it down so the normal reconnect can run.",
+                         (long long)((now_wd - s_last_rx_us) / 1000000));
+                s_last_rx_us = now_wd;          /* do not fire again while it reconnects */
+                xEventGroupSetBits(s_evt_group, EVT_DEV_GONE);
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;
+            }
+        }
         // v0.12.0: an FT8 TX burst owns the CDC-ACM link exclusively for its
         // ~12.7s duration (precise 160ms-cadence TA<freq>; sequence) - an
         // interleaved poll here would desync its timing or garble the
         // stream. Cooperative check only (never vTaskSuspend - that risks
         // deadlocking on the driver's internal mutex mid-transfer).
         if (s_poll_paused) {
+            s_last_rx_us = esp_timer_get_time();   /* a TX burst owns the link; silence is expected */
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -1365,6 +1425,7 @@ static void poll_task(void *arg)
         // poll landing in the middle of the QMX's menu is exactly what this
         // control exists to prevent. Poll slowly here; nothing is waiting on us.
         if (s_user_paused) {
+            s_last_rx_us = esp_timer_get_time();   /* radio handed to its own panel; silence is expected */
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }

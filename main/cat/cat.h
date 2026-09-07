@@ -101,6 +101,12 @@ int cat_get_cw_offset_hz(void);
 // receiver as well. Clearing RIT to zero is always allowed.
 bool cat_cw_tx_offset_engaged(void);
 
+/* When the radio last sent us ANY byte, in esp_timer_get_time() units.
+ * The link is polled every 50 ms, so a healthy radio is never quiet for long -
+ * which is what lets poll_task treat a multi-second silence as a dead link
+ * rather than a slow one. See the RX watchdog in cat.c. */
+int64_t cat_last_rx_us(void);
+
 // How many CDC (virtual COM) interfaces this QMX exposes: 1, 2 or 3, or -1 if no
 // radio is open. Read-only - it opens and immediately closes the extra ones and
 // writes nothing to the radio.
