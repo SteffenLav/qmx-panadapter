@@ -3700,6 +3700,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // the IF trim are per-unit calibration you set once and forget, which is
     // exactly the kind of thing you do not want to need the glass for; the charge
     // limit matters most when the Tab5 is somewhere you are not.
+    cJSON_AddNumberToObject(root, "tune_snap_hz",   (double)settings_get_tune_snap_hz());
     cJSON_AddNumberToObject(root, "cw_pitch_hz",     (double)ui_get_cw_pitch_hz());
     /* CW PROFILES (#359, Uwe DL8UG). Four slots of {name, centre, filter mask}.
      * An empty slot is centre 0 and is sent as such, so the page renders it as
@@ -3934,6 +3935,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
         settings_set_cw_cal_hz((int16_t)it->valuedouble);
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tune_snap_hz")))
+        settings_set_tune_snap_hz((uint16_t)it->valuedouble);   /* #347 - the setter clamps to the offered values */
 
     /* CW profiles, same array shape they are served in. ABSENT means "not
      * edited" - a page from an older firmware posts every field it knows, and

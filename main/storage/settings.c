@@ -50,6 +50,7 @@ static const char *TAG = "settings";
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_CW_PROF     "cw_prof"   /* CW profiles blob (#359) */
+#define KEY_TUNE_SNAP   "tune_snap"  /* tap-to-tune grid, Hz (#347) */
 #define KEY_KBD_BIND   "kbd_bind"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
@@ -358,6 +359,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 #define DIRTY_CW_DECODE     111   /* decoded-CW line on the panadapter */
+#define DIRTY_TUNE_SNAP     115   /* tap-to-tune grid (#347) */
 #define DIRTY_CW_PROFILES   114   /* CW profiles blob (#359) - 113 is DIRTY_FREQ_SEP */
 #define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
 
@@ -502,6 +504,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_test(&dirty_local, DIRTY_CW_PROFILES))  nvs_set_blob(s_nvs, KEY_CW_PROF, s_pending.cw_profile, sizeof(s_pending.cw_profile));
+        if (dirty_test(&dirty_local, DIRTY_TUNE_SNAP))    nvs_set_u16(s_nvs, KEY_TUNE_SNAP, s_pending.tune_snap_hz);
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
@@ -707,6 +710,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
+    /* 500 Hz is today's SSB/digital grid, so an existing unit's behaviour does
+       not change when this setting appears. Must be set here, not left zeroed -
+       a zeroed default would silently turn snapping OFF for everyone (#347). */
+    out->tune_snap_hz = 500;
     /* Decoded CW is ON by default - it is the point of the feature - so like
        rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
     out->cw_decode_en = true;
@@ -979,6 +986,7 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+    nvs_get_u16(s_nvs, KEY_TUNE_SNAP, &out->tune_snap_hz);
     { size_t psz = sizeof(out->cw_profile);
       nvs_get_blob(s_nvs, KEY_CW_PROF, out->cw_profile, &psz); }
     sz = sizeof(out->kbd_bindings);
@@ -2447,6 +2455,27 @@ void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
     if (grid_out && grid_sz)
         snprintf(grid_out, grid_sz, "%s", s_pending.my_grid);
     xSemaphoreGive(s_mutex);
+}
+
+uint16_t settings_get_tune_snap_hz(void)
+{
+    if (!s_ready) return 500;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.tune_snap_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_tune_snap_hz(uint16_t hz)
+{
+    if (!s_ready) return;
+    /* Only the offered values, so a bad import cannot leave a grid nothing in
+       the UI can express or undo. 0 is legal and means off. */
+    if (hz != 0 && hz != 250 && hz != 500 && hz != 1000) hz = 500;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.tune_snap_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TUNE_SNAP);
 }
 
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,

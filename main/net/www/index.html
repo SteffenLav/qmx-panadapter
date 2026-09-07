@@ -4094,6 +4094,12 @@ const SET_FIELDS = [
      "Reports what you HEAR to the wsprnet database"],
 
   ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
+  /* #347 - Samuel W7STF asked twice. Off means tune exactly where you tap;
+     the grid only governs SSB and the digital modes (CW keeps 10 Hz, AM/FM
+     1 kHz, and tap-to-RIT overrides all of them). */
+  ["Display & waterfall", "tune_snap_hz", "sel", "Tune snap (SSB & digital)",
+   "the grid a tap lands on; Off tunes exactly where you tap",
+   [["0","Off - tune exactly where I tap"],["250","250 Hz"],["500","500 Hz"],["1000","1 kHz"]]],
   ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
   ["Display & waterfall", "display.wf_contrast_db", "num", "Waterfall contrast (dB)", "dB span filling the colour ramp; default 45"],
   /* NO "Adaptive floor (%)" ROW, DELIBERATELY. It cross-fades between a global noise

@@ -384,6 +384,23 @@ typedef struct {
         uint8_t  mask;          // enabled filter widths, bit i = CW_FILTER_WIDTHS[i]
     } cw_profile[4];
 
+    /* TUNE SNAP (#347, Samuel W7STF - asked twice). The grid a tap-to-tune
+     * lands on, in Hz, for SSB and the digital modes. 0 = OFF, tune exactly
+     * where the finger went.
+     *
+     * ⚠ This is NOT the old "snap to signal" setting he remembers - that was
+     * snap-to-peak, removed in 2026-08, and it has had nothing to control
+     * since. What he is actually hitting is the mode grid, which was 250 Hz in
+     * SSB until v1.9.3 when it was DOUBLED to 500 for Dave KX3DX (who asked for
+     * 1 kHz). So this is two operators wanting opposite things, and the setting
+     * exists so neither has to lose.
+     *
+     * CW is deliberately NOT covered: it snaps to 10 Hz, which is fine enough
+     * that nobody has complained, and tap-to-RIT overrides the grid entirely
+     * because a few-hundred-Hz offset onto one caller needs resolution, not
+     * tidiness. */
+    uint16_t tune_snap_hz;      // 0=off, else 250/500/1000; default 500
+
     uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
     bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
     uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
@@ -802,6 +819,11 @@ bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask);
 void settings_set_cw_profile(int idx, const char *name,
                              uint16_t centre_hz, uint8_t mask);
+
+/* Tune snap (#347). Narrow accessor - the touch handler reads this on every
+ * tap and must not copy the whole settings struct onto taskLVGL's stack. */
+uint16_t settings_get_tune_snap_hz(void);
+void settings_set_tune_snap_hz(uint16_t hz);
 
 // Resource-monitor floating overlay: shown/hidden, and its dragged position
 // (offset in pixels from the screen's top-left, debounced flush). Position

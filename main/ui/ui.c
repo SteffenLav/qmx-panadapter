@@ -2452,6 +2452,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
                                  // made the web UI unreachable (#307). Built only
                                  // when a static address is actually configured.
+#define DRAWER_SEC_TUNESNAP  41  /* #347: the tap-to-tune grid, or off */
 #define DRAWER_SEC_CWPROF    40  /* #359: apply a stored CW profile (centre +
                                   * which filter widths the radio offers). The
                                   * profiles themselves are EDITED on the web
@@ -2528,7 +2529,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
 // object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
 // "Settings drawer built". Raise this when adding a section, and keep headroom.
-#define N_DRAWER_SECTIONS     41
+#define N_DRAWER_SECTIONS     42
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2618,6 +2619,9 @@ static const drawer_item_t GRP_SPECTRUM[] = {
      * and an operator who dislikes the still display must be able to find it
      * without first discovering that an Advanced view exists. */
     { DRAWER_SEC_STILL, "Still spectrum", true },
+    /* Advanced by the operator's call: most people never want to think about
+     * the tune grid, and the two who do are the two who disagreed about it. */
+    { DRAWER_SEC_TUNESNAP, "Tune snap", false },
     { DRAWER_SEC_PRESETS, "Presets", false },
     { DRAWER_SEC_DBRANGE, "dB Range", false },
     /* Flat Spectrum sits with the level controls, not below the waterfall
@@ -2880,6 +2884,7 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
         id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
         id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
+        id == DRAWER_SEC_TUNESNAP ||
         id == DRAWER_SEC_CMAP) return !ft8 && !wspr;
     return true;
 }
@@ -3014,6 +3019,18 @@ static void drawer_cw_decode_cb(lv_event_t *e)
 
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
+/* #347. Index -> Hz; 0 is OFF, meaning tune exactly where the finger went. */
+static const uint16_t s_tune_snap_opts[] = { 0, 250, 500, 1000 };
+
+static void drawer_dropdown_tunesnap_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t i = lv_dropdown_get_selected(dd);
+    if (i >= sizeof(s_tune_snap_opts) / sizeof(s_tune_snap_opts[0])) return;
+    settings_set_tune_snap_hz(s_tune_snap_opts[i]);
+    ESP_LOGI(TAG, "tune snap: %u Hz", (unsigned)s_tune_snap_opts[i]);
+}
+
 static void drawer_dropdown_freqsep_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
@@ -9173,9 +9190,24 @@ static void touch_event_cb(lv_event_t *e)
             // grid cannot land on the very exception he named - 500 Hz reaches
             // both. Also a materially easier finger drag: half as many stops
             // across the same span.
-            if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 500;
-            else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
-                     || strstr(s_current_mode, "DiGi")) snap = 500;
+            //
+            // ⭐ THE SSB/DIGITAL GRID IS NOW A SETTING (#347, Samuel W7STF, who
+            // asked twice: "it really is something that detracts more than
+            // adds... I am asking that you make it configurable"). He is not
+            // asking for the old snap-to-peak back - that was removed in
+            // 2026-08 and has had nothing to control since; he is hitting THIS
+            // grid, which he can only escape by not tapping. Two operators want
+            // opposite things here and the setting is how neither loses.
+            //
+            // AM/FM keep 1 kHz and CW keeps 10 Hz: nobody complained about
+            // either, 10 Hz is already fine enough to be nearly no grid at all,
+            // and tap-to-RIT overrides everything below anyway.
+            const uint16_t user_snap = settings_get_tune_snap_hz();
+            if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB") ||
+                strstr(s_current_mode, "FT")  || strstr(s_current_mode, "DIG") ||
+                strstr(s_current_mode, "RTTY") || strstr(s_current_mode, "DiGi")) {
+                snap = user_snap ? (int)user_snap : 1;   // 0 = off, i.e. land exactly where the finger went
+            }
             else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
             else if (strstr(s_current_mode, "CW")) snap = 10;
             // Tap-to-RIT overrides the grid, because the two are answering
@@ -11918,6 +11950,35 @@ static void drawer_build(void)
            choice at all, because the second format is the whole point of the
            control. This one lifts the cap and sizes to content. */
         lv_obj_add_event_cb(dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
+    }
+
+    /* Tune snap (#347). Only SSB and the digital modes are governed here - CW
+       keeps its 10 Hz and AM/FM their 1 kHz, and tap-to-RIT overrides all of
+       them, so the label says which modes it is talking about rather than
+       promising more than it does. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_TUNESNAP, y, 100);
+        lv_obj_t *ts_hdr = lv_label_create(sec);
+        lv_label_set_text(ts_hdr, "Tune snap (SSB & digital)");
+        lv_obj_set_style_text_color(ts_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ts_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(ts_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *ts = lv_dropdown_create(sec);
+        lv_dropdown_set_options(ts, "Off - tune exactly where I tap\n250 Hz\n500 Hz\n1 kHz");
+        lv_obj_set_size(ts, DRAWER_W - 32, 50);
+        lv_obj_align(ts, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(ts, &lv_font_montserrat_28, 0);
+        {
+            uint16_t cur = settings_get_tune_snap_hz();
+            uint32_t sel = 2;                       /* 500 Hz */
+            for (uint32_t i = 0; i < sizeof(s_tune_snap_opts) / sizeof(s_tune_snap_opts[0]); i++)
+                if (s_tune_snap_opts[i] == cur) { sel = i; break; }
+            lv_dropdown_set_selected(ts, sel);
+        }
+        lv_obj_add_event_cb(ts, drawer_dropdown_tunesnap_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(ts, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
         y += 100;
     }
 
