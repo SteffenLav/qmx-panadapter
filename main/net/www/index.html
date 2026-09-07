@@ -6261,6 +6261,20 @@ function drawFreqAxisTicks() {
 tick();
 setInterval(tick, 1000);
 
+/* ⛔ A BACKGROUND TAB IS NOT POLLING ONCE A SECOND. Chrome throttles timers in
+   hidden tabs to roughly one a minute, harder still after five - so everything
+   on this page can be minutes stale the moment you come back to it, and it
+   catches up only on the next throttled tick.
+   Caught on the bench 2026-09-07: the firmware-changed banner took two to three
+   minutes to appear after a flash, and showed up only once the operator closed
+   the page he had switched to. The banner was right; the poll simply had not
+   run. Every other field was equally stale and just looked plausible, which is
+   the worse half.
+   So: poll immediately on becoming visible. One extra request per tab switch. */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") tick();
+});
+
 
 /* =====================================================================
    Click / drag to tune
