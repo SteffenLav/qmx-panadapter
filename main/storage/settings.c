@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "util/format_freq.h"   // #302: g_freq_style, applied on set
 #include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
+#include "ui.h"                 // CW_CENTER_* - the grid the radio accepts (#359)
 #include "sd_archive.h"
 
 #include <string.h>
@@ -48,6 +49,7 @@ static const char *TAG = "settings";
 #define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
+#define KEY_CW_PROF     "cw_prof"   /* CW profiles blob (#359) */
 #define KEY_KBD_BIND   "kbd_bind"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
@@ -356,6 +358,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
 #define DIRTY_CW_DECODE     111   /* decoded-CW line on the panadapter */
+#define DIRTY_CW_PROFILES   114   /* CW profiles blob (#359) - 113 is DIRTY_FREQ_SEP */
 #define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
@@ -498,6 +501,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap.cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_CW_PROFILES))  nvs_set_blob(s_nvs, KEY_CW_PROF, s_pending.cw_profile, sizeof(s_pending.cw_profile));
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
@@ -975,6 +979,8 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+    { size_t psz = sizeof(out->cw_profile);
+      nvs_get_blob(s_nvs, KEY_CW_PROF, out->cw_profile, &psz); }
     sz = sizeof(out->kbd_bindings);
     nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
     if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
@@ -2441,6 +2447,43 @@ void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
     if (grid_out && grid_sz)
         snprintf(grid_out, grid_sz, "%s", s_pending.my_grid);
     xSemaphoreGive(s_mutex);
+}
+
+bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
+                             uint16_t *centre_hz, uint8_t *mask)
+{
+    if (!s_ready || idx < 0 || idx >= CW_PROFILE_COUNT) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t c = s_pending.cw_profile[idx].centre_hz;
+    if (c) {
+        if (name && name_sz) snprintf(name, name_sz, "%s", s_pending.cw_profile[idx].name);
+        if (centre_hz) *centre_hz = c;
+        if (mask)      *mask      = s_pending.cw_profile[idx].mask;
+    }
+    xSemaphoreGive(s_mutex);
+    return c != 0;
+}
+
+void settings_set_cw_profile(int idx, const char *name,
+                             uint16_t centre_hz, uint8_t mask)
+{
+    if (!s_ready || idx < 0 || idx >= CW_PROFILE_COUNT) return;
+    /* centre_hz 0 clears the slot. Anything else is clamped to the CW centre
+     * grid the radio actually accepts - see ui.h; a profile that cannot be
+     * applied is worse than no profile. */
+    if (centre_hz) {
+        if (centre_hz < CW_CENTER_MIN_HZ) centre_hz = CW_CENTER_MIN_HZ;
+        if (centre_hz > CW_CENTER_MAX_HZ) centre_hz = CW_CENTER_MAX_HZ;
+        centre_hz = (uint16_t)(((centre_hz + CW_CENTER_STEP_HZ / 2) / CW_CENTER_STEP_HZ)
+                               * CW_CENTER_STEP_HZ);
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(s_pending.cw_profile[idx].name, sizeof(s_pending.cw_profile[idx].name),
+             "%s", name ? name : "");
+    s_pending.cw_profile[idx].centre_hz = centre_hz;
+    s_pending.cw_profile[idx].mask      = mask;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PROFILES);
 }
 
 void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)

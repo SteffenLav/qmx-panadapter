@@ -366,6 +366,24 @@ typedef struct {
     // localStorage - Randy N4OPI, 2026-09-06: the web form reset to
     // GP53/HIGH/1000 ms on every page load, and pulsing the wrong pin or the
     // wrong polarity into a real relay is not a cosmetic mistake.
+    /* CW PROFILES (#359, Uwe DL8UG). A profile is the pair an operator actually
+     * thinks in: a sidetone/centre they like, and the filter widths worth
+     * offering with it. "Setting this on the QMX is always a bit of a chore,
+     * and half the time you do not have the right values in your head anyway."
+     *
+     * Stored here rather than on the radio because the radio holds exactly ONE
+     * of them - that is the whole complaint. Four is enough for the three he
+     * gave as examples plus one spare, and keeps this struct's growth honest:
+     * it is copied onto task stacks (see settings_load_all's warnings).
+     *
+     * centre_hz 0 means "an empty slot", so an unused profile costs nothing and
+     * cannot be applied by accident. */
+    struct {
+        char     name[12];      // what the operator calls it, "" for unnamed
+        uint16_t centre_hz;     // CW centre, 0 = slot unused
+        uint8_t  mask;          // enabled filter widths, bit i = CW_FILTER_WIDTHS[i]
+    } cw_profile[4];
+
     uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
     bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
     uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
@@ -766,6 +784,16 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
 // settings_load_all() - that is a multi-kilobyte struct and this is read from
 // the web handler; see the task-stack notes in CLAUDE.md.
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
+
+/* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a
+ * multi-hundred-byte struct and CLAUDE.md records four crash-loops from doing
+ * it on a small task stack. idx is 0..CW_PROFILE_COUNT-1.
+ * Returns false for an unused slot (centre_hz == 0). */
+#define CW_PROFILE_COUNT 4
+bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
+                             uint16_t *centre_hz, uint8_t *mask);
+void settings_set_cw_profile(int idx, const char *name,
+                             uint16_t centre_hz, uint8_t mask);
 
 // Resource-monitor floating overlay: shown/hidden, and its dragged position
 // (offset in pixels from the screen's top-left, debounced flush). Position

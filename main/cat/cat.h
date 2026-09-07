@@ -112,6 +112,21 @@ int cat_get_cw_offset_hz(void);
 uint8_t  cat_cw_filter_mask(void);
 uint16_t cat_cw_filter_width(int idx);
 
+/* Apply a CW profile to the radio: a centre frequency and the set of filter
+ * widths to offer with it (#359, Uwe DL8UG - "it would save all the tedious
+ * fiddling on the QMX").
+ *
+ * Queued for the poll task, never sent from the caller's thread - the poll owns
+ * the CDC pipe and a write from anywhere else interleaves with FA/MD/FW and is
+ * answered with ?;. Returns false only if CAT is not up.
+ *
+ * ⛔ THIS IS NOT A CHEAP CALL AND MUST NOT GO ON A HOT PATH. An MM Set is
+ * STORED, not applied, until the radio reloads its configuration - so this ends
+ * with MU;, which reloads everything and DROPS IQ mode, and Q9 1; then has to be
+ * re-asserted or the spectrum goes flat. It is nine MM writes, a reload and a
+ * handshake: a deliberate, twice-a-session action. */
+bool cat_apply_cw_profile(uint16_t centre_hz, uint8_t mask);
+
 bool cat_cw_tx_offset_engaged(void);
 
 /* When the radio last sent us ANY byte, in esp_timer_get_time() units.

@@ -166,6 +166,12 @@ static volatile bool s_force_rx_pending = false;
 static volatile uint32_t s_pending_af_gain_p1 = 0;
 // Set when someone wants the radio's current AF gain read back (drawer open).
 static volatile bool s_af_gain_query_pending = false;
+/* Pending CW profile (#359), drained by the poll task. centre_hz 0 = nothing
+ * queued. One slot: a second request before the first is applied simply
+ * replaces it, which is what a picker's double-tap should do anyway. */
+static volatile uint16_t s_pending_prof_centre = 0;
+static volatile uint8_t  s_pending_prof_mask   = 0;
+
 // CW filter width pending write, drained by the poll task as "MMCW|CW passband=".
 // Same poll-task ownership as SSB: a direct cross-thread write (e.g. from the
 // web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
@@ -1206,6 +1212,69 @@ static void cw_filters_read(void)
     s_cw_filter_mask = mask;
 }
 
+/* Defined further down, beside the link-up sequence that also uses it. */
+static bool iq_mode_handshake(int max_attempts);
+
+bool cat_apply_cw_profile(uint16_t centre_hz, uint8_t mask)
+{
+    if (!s_cdc_dev || !centre_hz) return false;
+    s_pending_prof_mask   = mask;
+    s_pending_prof_centre = centre_hz;   /* set LAST - it is the "go" flag */
+    return true;
+}
+
+/* Drain of the above, on the poll task. Returns true if it used the pipe.
+ *
+ * Order matters: the mask rows first, the centre last, then ONE reload. The
+ * centre is what visibly changes for the operator, so it is the write closest
+ * to the reload and least likely to be lost if anything goes wrong earlier. */
+static bool cw_profile_apply_pending(void)
+{
+    uint16_t centre = s_pending_prof_centre;
+    if (!centre) return false;
+    uint8_t mask = s_pending_prof_mask;
+    s_pending_prof_centre = 0;           /* claim it before the slow part */
+
+    ESP_LOGI(TAG, "CW profile: centre %u Hz, filters mask 0x%02X - applying",
+             (unsigned)centre, mask);
+
+    char cmd[48];
+    for (int i = 0; i < CW_FILTER_COUNT; i++) {
+        /* By INDEX, never by name: the row names ARE the numbers, so
+         * "MMCW|Choose filters|50=..." is read as a path index (#350). */
+        int n = snprintf(cmd, sizeof(cmd), "MMCW|Choose filters|%d=%s;",
+                         i, (mask & (1u << i)) ? "ENABLED" : "DISABLED");
+        if (n > 0)
+            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(40));   /* an MM write sprays ANSI back; let it drain */
+    }
+
+    int n = snprintf(cmd, sizeof(cmd), "MMCW|CW center=%u;", (unsigned)centre);
+    if (n > 0)
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+    vTaskDelay(pdMS_TO_TICKS(60));
+
+    /* ⛔ WITHOUT THIS THE RADIO HAS STORED EVERYTHING AND APPLIED NOTHING.
+     * "MM Effect" defaults to on-demand, so an MM Set does not take effect until
+     * a menu is entered or the host reloads - which is what cost a bench session
+     * on the WSPR PA guard, where the read-back agreed and the radio still ran
+     * at full power. */
+    const char *mu = "MU;";
+    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mu, 3, 200);
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    /* ⛔ AND MU; DROPS IQ MODE. Q9 is session state, so the reload leaves the
+     * radio streaming ordinary audio and the spectrum goes flat - measured, and
+     * documented in CLAUDE.md against exactly this command. */
+    iq_mode_handshake(4);
+
+    /* Our cached mask is read at link-up only, so update it here rather than
+     * leaving the BW list wrong until the next reconnect. */
+    s_cw_filter_mask = mask;
+    ESP_LOGI(TAG, "CW profile applied; IQ mode re-asserted, filter mask now 0x%02X", mask);
+    return true;
+}
+
 static bool cw_offset_refresh(void)
 {
     if (s_last_mode_digit != '3' && s_last_mode_digit != '7') return false;
@@ -1723,6 +1792,14 @@ static void poll_task(void *arg)
             esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
             ESP_LOGI(TAG, "CW passband -> %lu Hz (%s)", (unsigned long)cwbw,
                      e == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        /* An operator-requested CW profile (#359). Ahead of the routine
+         * maintainers because it is a deliberate action that was asked for and
+         * is waiting, and it ends with MU; + the IQ handshake - so nothing else
+         * should be half-done around it. */
+        if (cw_profile_apply_pending()) {
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
