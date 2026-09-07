@@ -869,6 +869,15 @@
      activity, MY_SIG/MY_SIG_INFO ours. It is only Park-to-Park when both are in
      parks, so the old heading claimed something the data does not. */
   #adifv-table td.sigedit.set { color: var(--accent); }
+  /* Gyula HA3HZ: "It's quite difficult to notice in the log viewer/editor that I
+     want to modify it when I click on a dash." The dash is drawn exactly where a
+     field is MISSING, which is precisely the case he needs to correct - so the way
+     in was least visible where it mattered most. Hence a labelled pencil. */
+  #adifv-table td.qedit { cursor: pointer; text-align: center; color: var(--dim); }
+  #adifv-table td.qedit:hover { color: var(--accent); }
+  #qso-edit-grid { display: grid; grid-template-columns: max-content 1fr; gap: 9px 14px; align-items: center; }
+  #qso-edit-grid .ro { color: var(--dim); }
+  #qso-edit-grid input { width: 100%; box-sizing: border-box; }
   #adifv-table td.del:hover { color: #ff9090; }
 
   /* ---- Frequency keypad (tap the VFO to open) ---- */
@@ -2684,7 +2693,7 @@ function adifImportMessage(j) {
       const k = KEYS[i];
       const arrow = (sortCol === k) ? (sortAsc ? " ▲" : " ▼") : "";
       return "<th data-col='" + k + "' style='cursor:pointer' title='Sort by " + h + "'>" + h + arrow + "</th>";
-    }).join("") + "<th></th>";
+    }).join("") + "<th></th><th></th>";
   }
   head.innerHTML = headHtml();
 
@@ -2787,11 +2796,11 @@ function adifImportMessage(j) {
     title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s") +
       (query ? "  ·  " + shown.length + " matching" : "");
     if (!recs.length) {
-      body.innerHTML = "<tr><td colspan='12' style='color:#888'>No QSOs logged</td></tr>";
+      body.innerHTML = "<tr><td colspan='13' style='color:#888'>No QSOs logged</td></tr>";
       return;
     }
     if (!shown.length) {
-      body.innerHTML = "<tr><td colspan='12' style='color:#888'>Nothing in the log matches " +
+      body.innerHTML = "<tr><td colspan='13' style='color:#888'>Nothing in the log matches " +
                        esc(query) + " — so this one has not been worked.</td></tr>";
       return;
     }
@@ -2833,6 +2842,7 @@ function adifImportMessage(j) {
         "</td><td class='sigedit" + (r.SIG_INFO ? " set" : "") + "' data-k='" + k + "'" +
         " title='The park or summit THEY were activating. Fills itself in from a spot; click to enter or correct it. Counts as Park-to-Park only if you were activating too.'>" +
         esc(r.SIG_INFO || "-") + "</td>" +
+        "<td class='qedit' data-k='" + k + "' title='Edit this QSO'>&#9998;</td>" +
         "<td class='del' data-k='" + k + "' title='Delete this QSO'>&#10005;</td></tr>");
     }
     body.innerHTML = rows.join("");
@@ -2856,13 +2866,13 @@ function adifImportMessage(j) {
   }
 
   async function load() {
-    body.innerHTML = "<tr><td colspan='12' style='color:#888'>Loading …</td></tr>";
+    body.innerHTML = "<tr><td colspan='13' style='color:#888'>Loading …</td></tr>";
     try {
       const r = await fetch("/api/adif");
       if (!r.ok) throw new Error("HTTP " + r.status);
       recs = parseAdif(await r.text());
     } catch (err) {
-      body.innerHTML = "<tr><td colspan='12' style='color:#ff6055'>Load failed: " +
+      body.innerHTML = "<tr><td colspan='13' style='color:#ff6055'>Load failed: " +
                        esc(err.message) + "</td></tr>";
       return;
     }
@@ -2883,6 +2893,83 @@ function adifImportMessage(j) {
   function uploadedWarning(r) {
     return "\n\nNote: if this QSO has already been uploaded, this corrects the " +
            "Tab5's log only — the copy QRZ/eQSL/LoTW hold is unchanged.";
+  }
+
+  /* Write one field without reloading the list or alerting - the panel saves
+     several at once, so it needs to know which failed and to reload once at the
+     end. postEdit() below stays as it is for the single-cell path. */
+  async function putField(r, field, val) {
+    try {
+      const resp = await fetch("/api/adif/edit?idx=" + r._idx +
+                               "&call=" + encodeURIComponent(r.CALL) +
+                               "&field=" + field +
+                               "&value=" + encodeURIComponent(val), { method: "POST" });
+      return resp.ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  const QSO_EDIT_FIELDS = [
+    ["RST_SENT",   "RST sent",   "Like -07 or +03. Empty = none exchanged."],
+    ["RST_RCVD",   "RST rcvd",   "Like -07 or +03. Empty = none exchanged."],
+    ["GRIDSQUARE", "Their grid", "Like JN45 or JN45bc. Empty = none received."],
+    ["SIG_INFO",   "Their ref",  "US-1241, G/LD-049 or DLFF-0123. Empty = none."],
+  ];
+
+  function openQsoEditor(r) {
+    const back = document.createElement("div");
+    back.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1200;";
+    const mode = r.SUBMODE || r.MODE || "";
+    const ro = (label, val) =>
+      "<div class='ro'>" + label + "</div><div class='ro'>" + esc(val || "--") + "</div>";
+    back.innerHTML =
+      "<div style='max-width:520px; margin:6vh auto; background:#161616; border:1px solid #494949;" +
+      " border-radius:10px; padding:16px 20px; color:#e8e8e8;'>" +
+      "<div style='display:flex; align-items:center; margin-bottom:14px;'>" +
+      "<strong style='color:#ffa040; font-size:17px;'>Edit QSO &mdash; " + esc(r.CALL) + "</strong>" +
+      "<div style='flex:1'></div></div>" +
+      "<div id='qso-edit-grid'>" +
+      ro("Callsign", r.CALL) +
+      ro("Date / time", (r.QSO_DATE || "") + "  " + (r.TIME_ON || "") + " UTC") +
+      ro("Band / mode", (r.BAND || "--") + "  " + mode) +
+      ro("Frequency", r.FREQ ? (+r.FREQ).toFixed(3) + " MHz" : "--") +
+      QSO_EDIT_FIELDS.map(([k, label, hint]) =>
+        "<div>" + label + "</div><div><input id='qe-" + k + "' value='" +
+        esc(r[k] || "") + "' title='" + esc(hint) + "' placeholder='" + esc(hint) + "'></div>"
+      ).join("") +
+      "</div>" +
+      "<p style='color:var(--dim); font-size:13px; margin:14px 0 0'>Callsign, date, time, " +
+      "band and mode cannot be corrected here &mdash; they are what QRZ, eQSL and LoTW match " +
+      "a contact on, and a LoTW record is signed over them. A wrong one is a delete and " +
+      "re-log. An edit changes the Tab5's log only; a copy already uploaded is unchanged.</p>" +
+      "<div style='display:flex; justify-content:flex-end; gap:8px; margin-top:16px'>" +
+      "<button id='qe-save' class='btn-ok'>Save</button>" +
+      "<button id='qe-cancel' class='btn-neutral'>Cancel</button></div></div>";
+    document.body.appendChild(back);
+
+    const close = () => back.remove();
+    back.querySelector("#qe-cancel").onclick = close;
+    back.addEventListener("click", (ev) => { if (ev.target === back) close(); });
+
+    back.querySelector("#qe-save").onclick = async () => {
+      let changed = 0, failed = 0;
+      for (const [k] of QSO_EDIT_FIELDS) {
+        const el = back.querySelector("#qe-" + k);
+        if (!el) continue;
+        const v = el.value.trim();
+        if (v === (r[k] || "")) continue;    /* untouched - do not rewrite it */
+        changed++;
+        if (!(await putField(r, k, v))) failed++;
+      }
+      close();
+      if (changed) load();
+      /* Silent when nothing was typed. Loud when something was asked for and
+         did not happen - the failure mode this whole thread is about is an edit
+         that quietly does not stick. */
+      if (failed) alert(failed + " of " + changed + " change(s) could not be saved. " +
+                        "The log may have changed since this page loaded - reload and try again.");
+    };
   }
 
   /* Post one field edit and re-sync. Returns nothing - the list is always
@@ -2956,6 +3043,24 @@ function adifImportMessage(j) {
         (uploadedWarning(r) || ""), cur);
       if (v === null) return;
       await postEdit(r, fld, v.trim());
+      return;
+    }
+    /* One labelled panel instead of four hidden cell-clicks.
+       Gyula HA3HZ asked for this after using sbitx's log editor, and his reason
+       is the right one: the editable cells render "-" when empty, and empty is
+       exactly the case he needs to correct, so the door was invisible precisely
+       where it was needed. The four cell-clicks still work; this is a second,
+       obvious way to the same four fields.
+
+       It deliberately does NOT widen what may be changed. Callsign, date, time,
+       band and mode are shown as context and stay read-only - they are what
+       QRZ, eQSL and LoTW match a contact on and what a LoTW signature covers
+       (the decision in #327) - and the panel now SAYS so, rather than leaving
+       someone to discover it by being refused. */
+    const ed = e.target.closest("td.qedit");
+    if (ed) {
+      const r = recs[+ed.dataset.k];
+      if (r) openQsoEditor(r);
       return;
     }
     const td = e.target.closest("td.del");
