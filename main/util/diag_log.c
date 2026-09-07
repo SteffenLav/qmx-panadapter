@@ -340,7 +340,15 @@ static void diag_persist_task(void *arg)
                 // path never got the fix.
                 int werr = errno;      /* before clearerr or any other call */
                 clearerr(f);
-                if (++fail_streak == 1 || (fail_streak % 20) == 0) {
+                /* Report at the streaks that MEAN something - 1, and each
+                 * point where the next tick escalates. The old "1, then every
+                 * 20th" hid streaks 4-8 and 10-14 entirely, so the log went
+                 * quiet between the reopens and read exactly like a recovery.
+                 * I misread it as one within minutes of writing it. A
+                 * diagnostic whose silence is ambiguous is worse than none. */
+                ++fail_streak;
+                if (fail_streak == 1 || fail_streak == 2 || fail_streak == 8 ||
+                    fail_streak == 14 || (fail_streak % 20) == 0) {
                     ESP_LOGW(TAG, "flash-persist: write failed (errno %d, %s) - "
                                   "streak %d, %u bytes pending",
                              werr, werr ? strerror(werr) : "no errno set",
