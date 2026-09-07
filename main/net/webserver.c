@@ -502,6 +502,11 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON *c = cJSON_CreateObject();
             if (c) {
                 cJSON_AddStringToObject(c, "line", line);
+                /* The write position, so the browser can colour the two passes
+                 * the way the Tab5 does. Sent rather than re-derived - the
+                 * whole reason cw_decode.c owns the one line model is that two
+                 * copies of "where does the next character go" drift. */
+                cJSON_AddNumberToObject(c, "col", cw_decode_line_col());
                 cJSON_AddNumberToObject(c, "wpm", cw_decode_wpm());
                 cJSON_AddItemToObject(root, "cw", c);
             }

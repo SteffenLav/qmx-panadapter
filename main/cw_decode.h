@@ -136,6 +136,12 @@ unsigned cw_decode_total(void);
 // overwritten. Always NUL-terminated; returns the number of columns written.
 size_t cw_decode_line(char *out, size_t out_sz);
 
+/* The write position within that line, in columns: everything BEFORE it was
+ * written on the current pass, everything after it survives from the previous
+ * one. Both screens colour the two runs differently so the boundary shows where
+ * the text is being overwritten (Samuel W7STF). */
+int cw_decode_line_col(void);
+
 // Estimated speed of what is being received, words per minute, over the last
 // few tens of seconds. 0 means "not enough to say" - which is the honest answer
 // on a quiet band and is what the UI should show rather than a stale number.

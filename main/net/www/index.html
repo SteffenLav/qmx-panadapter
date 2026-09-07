@@ -587,6 +587,10 @@
      "column 40" a different place on every update. The device sends the line
      already rendered, gap and all, precisely so the browser cannot disagree
      with it. */
+  /* The current pass and the previous one. Same two colours the Tab5 uses:
+     cyan for what has just been written, green for what it is overwriting. */
+  .cw-now  { color: #30E0E0; }
+  .cw-prev { color: #30E060; }
   #cw-line { position: absolute; left: 0; right: 0; bottom: 6px;
              font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
              font-size: clamp(0.7rem, 1.15vw, 1.05rem); line-height: 1.5;
@@ -5817,7 +5821,20 @@ async function tick() {
         if (cw && typeof cw.line === "string") {
           const w = (cw.wpm > 0) ? String(Math.min(99, cw.wpm)).padStart(2, "0") : "??";
           document.getElementById("cw-head").textContent = "CW ~" + w + "wpm:  ";
-          document.getElementById("cw-text").textContent = cw.line;
+          /* Two passes, two colours, and the boundary is the cursor - the same
+             thing the Tab5 draws (cw_strip_paint in ui.c). Everything before
+             cw.col was written on this pass; the rest survives from the last
+             one. Samuel W7STF could not see where the overwriting had got to,
+             and this shows it without a cursor glyph.
+             Falls back to one colour if an older firmware sends no col. */
+          const cwEl = document.getElementById("cw-text");
+          if (typeof cw.col === "number" && cw.col >= 0 && cw.col <= cw.line.length) {
+            cwEl.innerHTML =
+              "<span class='cw-now'>"  + esc(cw.line.slice(0, cw.col)) + "</span>" +
+              "<span class='cw-prev'>" + esc(cw.line.slice(cw.col))    + "</span>";
+          } else {
+            cwEl.textContent = cw.line;
+          }
           el.hidden = false;
         } else {
           /* Absent means not in CW, or switched off. Either way: nothing to

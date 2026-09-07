@@ -314,6 +314,26 @@ void cw_decode_feed(const char *resp)
     if (s_lock) xSemaphoreGive(s_lock);
 }
 
+/* Where the next character will land - i.e. the cursor, in grid columns.
+ *
+ * Exposed so both screens can COLOUR the line either side of it. Samuel W7STF:
+ * "I wish the current cursor position was more clearly indicated as the
+ * over-writing continues" - a wrap-around line that overwrites in place gives
+ * the reader no way to tell the newest character from the oldest, which is the
+ * one thing that makes it readable. The operator's idea, and it needs no cursor
+ * glyph at all: draw what this pass has written in one colour and what survives
+ * from the previous pass in the other, and the BOUNDARY between them is the
+ * cursor. */
+int cw_decode_line_col(void)
+{
+    if (!s_ring) return 0;
+    int c;
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    c = s_line_col;
+    if (s_lock) xSemaphoreGive(s_lock);
+    return c;
+}
+
 size_t cw_decode_line(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0) return 0;

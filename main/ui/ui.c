@@ -3483,6 +3483,8 @@ static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
  * The full scrollback belongs on the CW page; this is the glance-at-it line.
  * ------------------------------------------------------------------------ */
 static lv_obj_t *s_cw_strip;
+/* The same grid, same place, holding the OTHER pass - see cw_strip_paint(). */
+static lv_obj_t *s_cw_strip_prev;
 static unsigned  s_cw_seen;          /* change detector - repaint only on new text */
 
 /* The line is a fixed grid of columns that WRAPS and overwrites itself, the way
@@ -3592,6 +3594,7 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_cw_prefix);
         lv_obj_move_foreground(s_cw_strip);
+        if (s_cw_strip_prev) lv_obj_add_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
@@ -3600,7 +3603,40 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * into. */
     char disp[CW_LINE_COLS + 1];
     cw_decode_line(disp, sizeof(disp));   /* grid + the gap, already applied */
-    lv_label_set_text(s_cw_strip, disp);
+
+    /* TWO PASSES, TWO COLOURS, and the boundary is the cursor.
+     *
+     * Columns before the write position were written on this pass; the rest
+     * survive from the previous one. Drawing them in different colours shows
+     * where the overwriting has got to without adding a cursor glyph, which is
+     * what Samuel W7STF asked for ("I wish the current cursor position was more
+     * clearly indicated as the over-writing continues").
+     *
+     * The two labels are DISJOINT rather than overlaid - each blanks the other's
+     * columns - because two glyphs drawn at the same position in different
+     * colours leave an anti-aliased fringe of the one underneath. Spaces paint
+     * nothing, so the two halves interleave cleanly on one line.
+     *
+     * LVGL 9.2 has no label recolour, and the existing comment below already
+     * chose separate labels over colour markup to keep the column arithmetic
+     * honest. This follows it. */
+    char now_s[CW_LINE_COLS + 1], prev_s[CW_LINE_COLS + 1];
+    int  col = cw_decode_line_col();
+    if (col < 0) col = 0;
+    if (col > CW_LINE_COLS) col = CW_LINE_COLS;
+    for (int i = 0; i < CW_LINE_COLS; i++) {
+        char c = disp[i] ? disp[i] : ' ';
+        now_s[i]  = (i <  col) ? c : ' ';
+        prev_s[i] = (i >= col) ? c : ' ';
+    }
+    now_s[CW_LINE_COLS] = prev_s[CW_LINE_COLS] = '\0';
+
+    lv_label_set_text(s_cw_strip, now_s);
+    if (s_cw_strip_prev) {
+        lv_label_set_text(s_cw_strip_prev, prev_s);
+        lv_obj_clear_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_cw_strip_prev);
+    }
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_cw_prefix);
@@ -3655,6 +3691,25 @@ static void cw_strip_init(void)
     lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_cw_strip, UI_FLAG_NOT_HOT);
+
+    /* The previous pass, in the prefix's green, on exactly the same grid. No
+     * background of its own - the cyan label underneath already draws one, and
+     * a second translucent black over it would darken half the line. */
+    s_cw_strip_prev = lv_label_create(lv_scr_act());
+    lv_label_set_long_mode(s_cw_strip_prev, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_cw_strip_prev, CW_LINE_COLS * CW_COL_PX);
+    lv_obj_align(s_cw_strip_prev, LV_ALIGN_BOTTOM_LEFT,
+                 4 + CW_PREFIX_COLS * CW_COL_PX, y_off);
+    lv_obj_set_style_text_font(s_cw_strip_prev, &qmx_mono_25, 0);
+    lv_obj_set_style_text_color(s_cw_strip_prev, lv_color_hex(0x30E060), 0);   /* green */
+    lv_obj_set_style_bg_opa(s_cw_strip_prev, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_top(s_cw_strip_prev, 4, 0);
+    lv_obj_set_style_pad_bottom(s_cw_strip_prev, 4, 0);
+    lv_obj_set_style_pad_left(s_cw_strip_prev, 0, 0);
+    lv_obj_set_style_pad_right(s_cw_strip_prev, 4, 0);
+    lv_obj_add_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_cw_strip_prev, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_cw_strip_prev, UI_FLAG_NOT_HOT);
 
     /* 4 Hz: fast enough that text does not arrive in visible clumps, slow
      * enough to be nothing on a core that is already the constraint. */
