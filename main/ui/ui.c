@@ -2889,6 +2889,7 @@ static lv_obj_t *s_lbl_pause_btn  = NULL;
  * unticked, so greying is the honest form of it. */
 static void drawer_db_sliders_set_live(bool live);
 
+static lv_obj_t *s_db_preset_btn[4] = { NULL, NULL, NULL, NULL };
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
 static lv_obj_t *s_slider_alpha = NULL;
@@ -3084,7 +3085,14 @@ static void flat_req_drain(void)
 
 static void drawer_db_sliders_set_live(bool live)
 {
-    lv_obj_t *o[] = { s_slider_db_min, s_slider_db_max, s_lbl_db_min, s_lbl_db_max };
+    /* The four presets belong here too - each one only sets a dB range, so in
+       flat mode they are exactly as inert as the sliders they drive. Greying
+       the sliders and leaving the buttons live would have been worse than
+       greying neither: it says the range still matters if you go through this
+       door. Reported from the bench in the same breath as the sliders. */
+    lv_obj_t *o[] = { s_slider_db_min, s_slider_db_max, s_lbl_db_min, s_lbl_db_max,
+                      s_db_preset_btn[0], s_db_preset_btn[1],
+                      s_db_preset_btn[2], s_db_preset_btn[3] };
     for (unsigned i = 0; i < sizeof(o) / sizeof(o[0]); i++) {
         if (!o[i]) continue;
         lv_obj_set_style_opa(o[i], live ? LV_OPA_COVER : LV_OPA_40, 0);
@@ -11496,6 +11504,10 @@ static void drawer_build(void)
             lv_obj_set_size(btn, btn_w, btn_h);
             lv_obj_align(btn, LV_ALIGN_TOP_LEFT, i * (btn_w + gap), 36);
             lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
+            /* Kept so flat mode can grey them: each preset only sets a dB
+               range, which flat mode ignores entirely. */
+            if (i < (int)(sizeof(s_db_preset_btn) / sizeof(s_db_preset_btn[0])))
+                s_db_preset_btn[i] = btn;
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, preset_names[i]);
             // 4 across is tighter than 3 was, so the label steps down a size or
@@ -12412,6 +12424,13 @@ static void drawer_build(void)
     // Keep the frozen header above all the sections created after it (z-order
     // follows creation order, so without this the sections would draw over it).
     lv_obj_move_foreground(hdr_bg);
+
+    /* Apply the flat-mode greying now the widgets exist. ui_set_flat_mode() is
+       called at boot to restore the stored setting, but that happens BEFORE the
+       drawer is built (it is lazy, on first open), so the pointers were all
+       NULL and the very first open would have shown live-looking controls in
+       flat mode - the exact thing this greying exists to prevent. */
+    drawer_db_sliders_set_live(!ui_get_flat_mode());
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 
