@@ -898,7 +898,22 @@ static esp_err_t status_handler(httpd_req_t *req)
             // cap - i.e. it was already truncating, the same way SPOTS_MAX's
             // first cut did (see spots.h). The count that was found is sent as
             // spots_total regardless, so a truncation can never be silent.
-            const int MAXSP = 96;
+            /* ⛔ SPOTS_MAX, THE SAME CAP THE TAB5 USES - not a number of its
+             * own. This was 96 while spots_lane.c took 200 from the same store
+             * over the same band range, so on a busy band the browser was
+             * working from a TRUNCATED list: the operator photographed both
+             * screens seconds apart on 20 m CW and the Tab5 showed six spots
+             * and "106 >" where the page showed three and "82 >".
+             *
+             * The comment above spots_lane.c's own query records him reporting
+             * this same class on 2026-08-09 - "the off-screen arrows disagreed,
+             * and the two never showed the same overview". A second cap is a
+             * second rule, and two rules is what that fixed.
+             *
+             * The payload only grows on a band that actually has more than 96,
+             * and it is sent at most once per spot-store refresh thanks to ?sv,
+             * not once a second. */
+            const int MAXSP = SPOTS_MAX;
             spot_t *sp = heap_caps_malloc(sizeof(spot_t) * MAXSP,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (sp) {
