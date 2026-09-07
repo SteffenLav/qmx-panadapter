@@ -7464,6 +7464,20 @@ function drawRitMarker(ctx, W, H) {
    are deliberately unused now; they are kept so that IF audio.c's reset is ever fixed,
    this file has the matching implementation to switch back to - and the same day, the
    "Adaptive floor" setting will start meaning something on both screens. */
+/* The filter edges, drawn IN FRONT of the trace.
+   Recomputed rather than passed in: both spectrum painters want them at the
+   same point in their own draw order, and passing three numbers through would
+   mean two call sites that can disagree about which passband they mean. */
+function drawPassbandEdges(sctx, W, H) {
+  const pb = passbandBins();
+  if (!pb) return;
+  const x1 = Math.round(pb.loBin * W / SPEC_W);
+  const x2 = Math.round(pb.hiBin * W / SPEC_W);
+  sctx.fillStyle = "#7a9aaa";
+  if (x1 >= 0 && x1 < W) sctx.fillRect(x1 - 1, 0, 2, H);
+  if (x2 >= 0 && x2 < W) sctx.fillRect(x2 - 1, 0, 2, H);
+}
+
 function drawSpectrumFlat(bytes) {
   if (FLOOR_TRACKING) {
     /* The DESIGNED behaviour: a per-bin floor that converges. Unreachable while the
@@ -7510,10 +7524,15 @@ function drawSpectrumFlat(bytes) {
     const x2 = Math.round(pb.hiBin * W / SPEC_W);
     const bx1 = Math.max(0, Math.min(W, x1));
     const bx2 = Math.max(0, Math.min(W, x2));
+    /* The TINT stays here, behind the trace - it is a wash over the band and
+       reads correctly with signals drawn on top of it. The EDGE LINES do not:
+       they were drawn here too, and the trace is filled opaque "#003800" and
+       stroked over them immediately afterwards, so the filter edges vanished
+       under any signal (Samuel W7STF: "The filter extents on the Web-view are
+       occluded by the PSD"). They are now drawn by drawPassbandEdges() next to
+       the VFO marker, which was already - correctly - painted after the trace
+       and was therefore always visible. That inconsistency is the bug. */
     if (bx2 > bx1) { sctx.fillStyle = "rgba(74,85,96,0.38)"; sctx.fillRect(bx1, 0, bx2-bx1, H); }
-    sctx.fillStyle = "#7a9aaa";
-    if (x1 >= 0 && x1 < W) sctx.fillRect(x1 - 1, 0, 2, H);
-    if (x2 >= 0 && x2 < W) sctx.fillRect(x2 - 1, 0, 2, H);
   }
 
   /* Zoom: render only windowBins centred on the IF-shifted centre.
@@ -7559,6 +7578,7 @@ function drawSpectrumFlat(bytes) {
   for (let i = 1; i < W; i++) sctx.lineTo(i, yOf(i));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
 
+  drawPassbandEdges(sctx, W, H);
   const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
   drawRitMarker(sctx, W, H);
@@ -7593,10 +7613,15 @@ function drawSpectrumRaw(bytes) {
     const x2 = Math.round(pb.hiBin * W / SPEC_W);
     const bx1 = Math.max(0, Math.min(W, x1));
     const bx2 = Math.max(0, Math.min(W, x2));
+    /* The TINT stays here, behind the trace - it is a wash over the band and
+       reads correctly with signals drawn on top of it. The EDGE LINES do not:
+       they were drawn here too, and the trace is filled opaque "#003800" and
+       stroked over them immediately afterwards, so the filter edges vanished
+       under any signal (Samuel W7STF: "The filter extents on the Web-view are
+       occluded by the PSD"). They are now drawn by drawPassbandEdges() next to
+       the VFO marker, which was already - correctly - painted after the trace
+       and was therefore always visible. That inconsistency is the bug. */
     if (bx2 > bx1) { sctx.fillStyle = "rgba(74,85,96,0.38)"; sctx.fillRect(bx1, 0, bx2-bx1, H); }
-    sctx.fillStyle = "#7a9aaa";
-    if (x1 >= 0 && x1 < W) sctx.fillRect(x1 - 1, 0, 2, H);
-    if (x2 >= 0 && x2 < W) sctx.fillRect(x2 - 1, 0, 2, H);
   }
 
   /* Prefer the device's own viewport. The fallback below is the OLD path, kept
@@ -7629,6 +7654,7 @@ function drawSpectrumRaw(bytes) {
     sctx.lineTo(i, H - 1 - Math.round(bytes[getBinR(i)] * (H-1) / 255));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
 
+  drawPassbandEdges(sctx, W, H);
   const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
   drawRitMarker(sctx, W, H);
