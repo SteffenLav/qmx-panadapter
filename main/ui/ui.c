@@ -9753,6 +9753,23 @@ static void drawer_scrim_cb(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED) {
         s_drawer_scrim_swipe_start_x = (int)p.x;
+        /* ⭐ CLOSE ON THE PRESS, NOT THE LIFT. Operator, 2026-09-07: "a bit of
+         * a stick/slip experience when closing the drawer, especially using the
+         * touch outside... it needs to look for touches outside immediately."
+         *
+         * Waiting for RELEASED cost a whole finger-lift of latency, and worse,
+         * made closing depend on the release actually being delivered - a press
+         * that drifts a few pixels is a scroll gesture as far as LVGL is
+         * concerned, and this scrim was SCROLLABLE (lv_obj_create's default),
+         * so it could consume one. Neither mattered when the handler read the
+         * swipe direction, but that has been vestigial since tap-to-dismiss
+         * landed: the start x is cast to (void) below and every release closes
+         * regardless. So there is nothing left that needs the lift.
+         *
+         * A press out here has exactly one meaning - the scrim exists only
+         * while the drawer is open, covers only the area outside it, and
+         * absorbs the touch so nothing behind it can be retuned. */
+        drawer_close();
         return;
     }
     if (code == LV_EVENT_RELEASED) {
@@ -10494,6 +10511,12 @@ static void drawer_build(void)
     lv_obj_set_style_radius(s_drawer_scrim, 0, 0);
     lv_obj_set_style_pad_all(s_drawer_scrim, 0, 0);
     lv_obj_set_scrollbar_mode(s_drawer_scrim, LV_SCROLLBAR_MODE_OFF);
+    /* Hiding the scrollbar is not the same as not scrolling. lv_obj_create()
+       makes an object SCROLLABLE by default, so a press that drifts a few
+       pixels became a scroll gesture on a surface with nothing to scroll -
+       swallowing the very gesture this object exists to receive. Same shape as
+       the v1.3.5 fix that cleared SCROLL_CHAIN_VER on the drawer's own sliders. */
+    lv_obj_remove_flag(s_drawer_scrim, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_RELEASED, NULL);

@@ -1228,6 +1228,55 @@ bool cat_apply_cw_profile(uint16_t centre_hz, uint8_t mask)
  * Order matters: the mask rows first, the centre last, then ONE reload. The
  * centre is what visibly changes for the operator, so it is the write closest
  * to the reload and least likely to be lost if anything goes wrong earlier. */
+/* Write MMCW|CW center= and CONFIRM it, retrying.
+ *
+ * ⛔ THE WRITE IS NOT THE POINT - THE READ-BACK IS. Caught on the bench
+ * 2026-09-07: inside the profile burst this write was refused (the radio
+ * answered ?;) while the eight mask rows before it all landed, and the apply
+ * still logged success because it had only ever checked that it SENT the bytes.
+ * That is the WSPR PA-guard trap exactly - four indicators agreeing about
+ * STORED state while the radio did something else.
+ *
+ * The cause is spacing, not syntax: the same command sent on its own answers
+ * MM700; first time. An MM write makes the radio redraw its menu and spray ANSI
+ * cursor codes back down the CAT port (measured - "[1;253H[2;253H[0;0H"), and a
+ * command arriving into that redraw is rejected. So each attempt gets real
+ * quiet time, and each is checked rather than hoped for. */
+static bool cw_center_write_confirmed(uint16_t centre_hz)
+{
+    for (int attempt = 1; attempt <= 4; attempt++) {
+        char cmd[40];
+        int n = snprintf(cmd, sizeof(cmd), "MMCW|CW center=%u;", (unsigned)centre_hz);
+        if (n > 0)
+            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(200));      /* let the menu redraw finish */
+
+        s_mm_resp_len = 0;
+        const char *q = "MMCW|CW center;";
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                          strlen(q), 200) != ESP_OK) continue;
+        for (int wi = 0; wi < 30 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+        if (s_mm_resp_len >= 4 && strncmp(s_mm_resp, "MM", 2) == 0 &&
+            atoi(s_mm_resp + 2) == (int)centre_hz) {
+            if (attempt > 1)
+                ESP_LOGI(TAG, "CW profile: centre %u Hz confirmed on attempt %d",
+                         (unsigned)centre_hz, attempt);
+            return true;
+        }
+        ESP_LOGW(TAG, "CW profile: centre %u Hz not confirmed (attempt %d/4, radio said '%s')",
+                 (unsigned)centre_hz, attempt, s_mm_resp_len ? s_mm_resp : "nothing");
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    return false;
+}
+
+/* Drain of cat_apply_cw_profile(), on the poll task. Returns true if it used
+ * the pipe.
+ *
+ * Order matters: the mask rows first, the centre last, then ONE reload. And
+ * NOTHING here is taken on trust - the centre is read back per attempt, and the
+ * mask is re-read from the radio at the end rather than assumed, so a partial
+ * apply is visible instead of silent. */
 static bool cw_profile_apply_pending(void)
 {
     uint16_t centre = s_pending_prof_centre;
@@ -1241,18 +1290,20 @@ static bool cw_profile_apply_pending(void)
     char cmd[48];
     for (int i = 0; i < CW_FILTER_COUNT; i++) {
         /* By INDEX, never by name: the row names ARE the numbers, so
-         * "MMCW|Choose filters|50=..." is read as a path index (#350). */
+         * "MMCW|Choose filters|50=..." is read as a path index (#350).
+         * ENABLED/DISABLED is the radio's own wording, confirmed by reading a
+         * row back (it answers MMENABLED;). */
         int n = snprintf(cmd, sizeof(cmd), "MMCW|Choose filters|%d=%s;",
                          i, (mask & (1u << i)) ? "ENABLED" : "DISABLED");
         if (n > 0)
             cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
-        vTaskDelay(pdMS_TO_TICKS(40));   /* an MM write sprays ANSI back; let it drain */
+        /* 120 ms, not 40: an MM write sprays a menu redraw back at us and the
+         * next command must not arrive into it. 40 ms was measured refusing the
+         * write that followed the eighth row. */
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
 
-    int n = snprintf(cmd, sizeof(cmd), "MMCW|CW center=%u;", (unsigned)centre);
-    if (n > 0)
-        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
-    vTaskDelay(pdMS_TO_TICKS(60));
+    bool centre_ok = cw_center_write_confirmed(centre);
 
     /* ⛔ WITHOUT THIS THE RADIO HAS STORED EVERYTHING AND APPLIED NOTHING.
      * "MM Effect" defaults to on-demand, so an MM Set does not take effect until
@@ -1268,10 +1319,21 @@ static bool cw_profile_apply_pending(void)
      * documented in CLAUDE.md against exactly this command. */
     iq_mode_handshake(4);
 
-    /* Our cached mask is read at link-up only, so update it here rather than
-     * leaving the BW list wrong until the next reconnect. */
-    s_cw_filter_mask = mask;
-    ESP_LOGI(TAG, "CW profile applied; IQ mode re-asserted, filter mask now 0x%02X", mask);
+    /* Ask the RADIO what its filters are now, rather than storing what we asked
+     * for. Costs eight MM reads, which are clean (only writes spray), and it is
+     * the difference between the BW list describing the radio and describing an
+     * intention. */
+    cw_filters_read();
+
+    if (centre_ok && s_cw_filter_mask == mask) {
+        ESP_LOGI(TAG, "CW profile applied: centre %u Hz, filters 0x%02X, IQ mode re-asserted",
+                 (unsigned)centre, s_cw_filter_mask);
+    } else {
+        ESP_LOGW(TAG, "CW profile only PARTLY applied - centre %s, filters asked 0x%02X "
+                      "but radio reports 0x%02X. Try again; if it repeats, apply it on "
+                      "the radio's own CW menu.",
+                 centre_ok ? "ok" : "REFUSED", mask, s_cw_filter_mask);
+    }
     return true;
 }
 
