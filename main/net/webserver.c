@@ -1049,7 +1049,34 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
             uint32_t hz = (uint32_t)item->valuedouble;
-            cat_set_frequency(hz);
+            /* FORCED, because every caller of this action is a COMMIT.
+             *
+             * It used to be the rate-limited cat_set_frequency(), whose return
+             * value was discarded - so an entry landing within 200 ms of any
+             * other write was dropped in silence. Samuel W7STF: "sometimes when
+             * attempting to direct enter from say 7.046MHz, to 3.5MHz, and
+             * selecting Save, the frequency entry popup is dismissed, but the
+             * VFO and band do not change" (#341). Same class as the mode fix in
+             * #340, on the other command.
+             *
+             * The reason it was left rate-limited was the fear that a drag
+             * would stream writes down the CDC pipe. It does not: all five
+             * senders in the page are one-shots - the spot tap, the release of
+             * a tune drag, the release of a band-plan drag, the DEBOUNCED wheel
+             * commit and the keypad Save - and the drag preview is drawn
+             * locally with drawBandplan(targetHz) without sending anything.
+             * Checked, not assumed.
+             *
+             * This is what the Tab5 already does for the same gestures:
+             * cat_set_frequency_forced() at ui.c's band button and at its own
+             * wheel-to-tune, and the header of that function prescribes exactly
+             * this use - "deliberate user actions (e.g. preset taps) where the
+             * write must go through".
+             *
+             * rigctld's own F command is deliberately NOT changed with it: a
+             * rigctld client is a program, not a finger, and nobody has
+             * reported losing a frequency there. */
+            cat_set_frequency_forced(hz);
             /* ⭐ TELL THE UI NOW, do not wait to be told (#298 phase 5).
              *
              * This called cat_set_frequency() and stopped, so the Tab5 learned
