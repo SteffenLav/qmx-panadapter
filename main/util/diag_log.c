@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "psram_task.h"
 #include "esp_app_desc.h"
+#include "esp_spiffs.h"   // esp_spiffs_check() on the recovery path
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -319,6 +320,13 @@ static void diag_persist_task(void *arg)
             uint64_t next = s_flash_cursor;
             size_t got = diag_log_read_from(s_flash_cursor, buf, sizeof(buf), &next);
             if (got == 0) break;
+            /* errno is only meaningful if THIS call set it. A short fwrite
+             * does not guarantee that, so without clearing it first the log
+             * can name a completely unrelated earlier failure - which is how
+             * "No such file or directory" ended up printed 19 times a boot for
+             * a file that was open and present. Measure the byte, not the
+             * word. */
+            errno = 0;
             if (fwrite(buf, 1, got, f) != got) {
                 // A failed write leaves the stream's ERROR FLAG SET, and every
                 // later fwrite on that handle then fails too - so without the
@@ -330,22 +338,61 @@ static void diag_persist_task(void *arg)
                 // reboot, so its silent death cost the diagnosis of a reboot.
                 // The SD mirror learned the same lesson (see CLAUDE.md); this
                 // path never got the fix.
+                int werr = errno;      /* before clearerr or any other call */
                 clearerr(f);
                 if (++fail_streak == 1 || (fail_streak % 20) == 0) {
-                    ESP_LOGW(TAG, "flash-persist: write failed (%s) - streak %d, "
-                                  "%u bytes pending; SPIFFS may be full",
-                             strerror(errno), fail_streak,
+                    ESP_LOGW(TAG, "flash-persist: write failed (errno %d, %s) - "
+                                  "streak %d, %u bytes pending",
+                             werr, werr ? strerror(werr) : "no errno set",
+                             fail_streak,
                              (unsigned)(diag_log_total() - s_flash_cursor));
                 }
-                // Out of space is not transient: drop the older generation so
-                // the next tick has somewhere to go, rather than waiting for
-                // room that nothing will free.
-                if (errno == ENOSPC) {
+
+                /* ⛔ RETRYING A DEAD HANDLE FOR EVER IS THE SAME SILENT DEATH
+                 * clearerr() WAS ADDED TO FIX, ONE LEVEL UP. Only ENOSPC had a
+                 * recovery; every other error just cleared the flag and tried
+                 * the identical broken stream again on the next tick, for the
+                 * rest of the session.
+                 *
+                 * Caught 2026-09-07: diag.log sat at exactly 31,982 bytes
+                 * across every boot of a whole evening, failing on the FIRST
+                 * write each time and never writing another byte - so the one
+                 * log that survives a reboot was dead all day, which is
+                 * precisely what this file exists to prevent.
+                 *
+                 * Escalate instead. Reopen first, since that is what recovers
+                 * a stale or broken descriptor; only if that does not take does
+                 * it drop a generation. */
+                if (fail_streak == 3 || fail_streak == 9) {
+                    ESP_LOGW(TAG, "flash-persist: reopening %s after %d failures",
+                             DIAG_FLASH_PATH, fail_streak);
                     fclose(f);
+                    f = fopen(DIAG_FLASH_PATH, "a");
+                    if (f) {
+                        long p2 = ftell(f);
+                        bytes = (p2 > 0) ? (size_t)p2 : 0;
+                        break;                          /* try again next tick */
+                    }
+                    ESP_LOGW(TAG, "flash-persist: reopen failed (%s)", strerror(errno));
+                    /* fall through to the rotate below with f == NULL */
+                }
+
+                /* Out of space is not transient, and neither is a handle that
+                 * will not reopen: drop the older generation so the next tick
+                 * has somewhere to go, rather than waiting for room that
+                 * nothing will free. */
+                if (werr == ENOSPC || !f || fail_streak >= 15) {
+                    if (f) fclose(f);
+                    /* Give SPIFFS a chance to reclaim orphaned index pages
+                     * before assuming the space is really gone - the same
+                     * check/gc adif_log_init() runs at mount, which is what
+                     * made a merely-fragmented partition self-heal there. */
+                    esp_spiffs_check("storage");
                     remove(DIAG_FLASH_PATH_0);
                     rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
                     f = fopen(DIAG_FLASH_PATH, "w");
                     bytes = 0;
+                    fail_streak = 0;
                     if (!f) {
                         ESP_LOGE(TAG, "flash-persist: rotate-on-full failed (%s) - "
                                       "giving up; /api/log/saved will be stale",
@@ -354,6 +401,7 @@ static void diag_persist_task(void *arg)
                         return;
                     }
                     ESP_LOGW(TAG, "flash-persist: rotated to free space");
+                    break;
                 }
                 break;                                  // retry on the next tick
             }
