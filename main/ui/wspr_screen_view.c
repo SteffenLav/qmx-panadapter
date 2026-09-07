@@ -857,6 +857,7 @@ static uint32_t  s_wf_seen;
 
 
 static int   s_last_spot_count = -1;
+static bool  s_rows_miles;        /* the unit the visible rows were formatted in */
 static char  s_last_status[48];
 
 /* ---- THE STORED DIAL HAS TO BE PUSHED TO THE RADIO -------------------
@@ -1747,7 +1748,19 @@ void wspr_screen_view_tick(void)
      * list and the header below for five hours of the 2026-08-24 overnight run
      * while the receiver decoded normally throughout. */
     int n = (int)wspr_spots_seq();
-    if (n == s_last_spot_count) return;
+    /* ⭐ A UNIT CHANGE IS A REASON TO REPAINT, and the sequence number is not
+       the only thing that makes the rows wrong. This guard exists so a quiet
+       band does not rebuild an unchanged list every second - but it also meant
+       that switching to miles converted nothing already on screen until the
+       next decode arrived, which on WSPR can be two minutes away or, on a dead
+       band, never. Reported straight after the heading was fixed: "decoded data
+       does not change either".
+
+       Generalise it: a change-detected repaint must key on everything the
+       render READS, not just on the data it lists. */
+    const bool mi_now = wspr_dist_in_miles();
+    if (n == s_last_spot_count && mi_now == s_rows_miles) return;
+    s_rows_miles = mi_now;
     s_last_spot_count = n;
 
     /* BOTH numbers, because one of them alone is misread. "Heard 12 stations"

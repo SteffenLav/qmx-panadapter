@@ -5154,8 +5154,14 @@ async function pollWspr() {
        is dead", which an absent panel does not. */
     wsprRenderExtras(j);
 
+    /* ⭐ REBUILT WHEN THE UNIT CHANGES, not only when it is empty. One of these
+       headings names a unit, so "build it once" froze KM in place while every
+       value under it converted - the same fault the Tab5's own header had, in
+       the same hour, for the same reason. A build-once guard is only safe for
+       something that genuinely cannot change. */
     const head = document.getElementById("wspr-head");
-    if (!head.children.length) {
+    if (!head.children.length || head.dataset.miles !== String(wsprMiles)) {
+      head.dataset.miles = String(wsprMiles);
       head.innerHTML = wsprCols().map(c =>
         "<th style='text-align:left; padding:3px 6px; border-bottom:1px solid #333; color:var(--dim)'>" +
         c[1] + "</th>").join("");
