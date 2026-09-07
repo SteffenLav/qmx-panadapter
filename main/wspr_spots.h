@@ -29,6 +29,7 @@
 #define WSPR_SPOT_CTY_MAX    4   /* DXCC alpha-3, as the FT8 list uses */
 #define WSPR_SNR_UNKNOWN     (-32768)  /* see snr_db below */
 #define WSPR_DRIFT_UNKNOWN   (-32768)  /* likewise - 0 Hz is a REAL reading */
+#define WSPR_DT_UNKNOWN     ((int16_t)-32768)  /* dt not measured (pre-field spot) */
 #define WSPR_SPOT_RING       256 /* ~8 cycles of a busy band, ~10 KB in PSRAM */
 
 typedef struct {
@@ -46,6 +47,21 @@ typedef struct {
      * fifty stations reported drift 0 for our own transmission - so a default of
      * 0 would be indistinguishable from a real clean reading. That is precisely
      * why it needs a sentinel rather than a "harmless" zero. */
+    /* DT - how far into the two-minute cycle the transmission actually
+     * started, in tenths of a second, signed (Samuel W7STF asked for it:
+     * "is there a reason why you are not displaying the DT").
+     *
+     * The decoder already searches for this - it is `best_dt_samples` in
+     * wspr_decode_result_t, the offset that best aligned the sync vector - it
+     * simply was never carried out here. Nominal is +1.0 s, because a WSPR
+     * transmission starts one second into its even minute; a value far from
+     * that means the sender's clock is off, which is exactly what the column
+     * is worth reading for.
+     *
+     * Tenths, not float: the struct sits in a 256-entry ring and one decimal
+     * is all any WSPR tool shows. WSPR_DT_UNKNOWN for a spot that predates
+     * this field, so an old spot cannot print a fabricated 0.0. */
+    int16_t  dt_tenths;
     int16_t  drift_hz;
     int16_t  power_dbm;     /* as REPORTED by that station - never inferred */
     /* ⭐ THE DIAL THIS SPOT WAS HEARD ON. freq_hz above is only the audio offset

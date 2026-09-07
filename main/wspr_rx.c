@@ -302,6 +302,11 @@ static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc,
     sp.power_dbm = (int16_t)r->power_dbm;
     sp.snr_db    = (int16_t)snr_db;
     sp.drift_hz  = (int16_t)drift_hz;        /* 0 Hz is a REAL value, not "unset" */
+    /* DT: the decoder's own alignment, in tenths of a second. Nominal +1.0 s
+       (a WSPR transmission starts one second into the minute), so a value far
+       from that is a clock the far end should look at. */
+    sp.dt_tenths = (int16_t)lround((double)r->best_dt_samples * 10.0
+                                   / (double)WSPR_SAMPLE_RATE_HZ);
     sp.km = -1; sp.bearing_deg = -1;
 
     const char *cty = dxcc_lookup_alpha3(r->callsign);
@@ -1564,7 +1569,16 @@ static void wspr_rx_task(void *arg)
             if (elapsed > WSPR_CYCLE_MS - 500 && got > 0) break;  /* boundary */
             /* "captur." not "capturing": the line also carries "| dec n/20"
              * and the full word ran past the left panel's right edge. */
-            set_status("captur. %d/120 s", got / (int)WSPR_SAMPLE_RATE_HZ);
+            /* ⭐ NO SECOND COUNTDOWN. This used to read "captur. NN/120 s"
+             * while the header two inches away already showed
+             * "cycle m:ss / 2:00" - the same 120 seconds, twice, in two
+             * formats (Samuel W7STF: "why the redundant capture time
+             * count-downs, one in mm:ss and another in seconds?").
+             *
+             * The word is still worth having: it distinguishes capturing from
+             * transmitting, simulating and idle, and it is what the "cap | dec"
+             * pairing reads against while a decode runs. Only the number went. */
+            set_status("capturing");
             vTaskDelay(pdMS_TO_TICKS(500));
         }
         dsp_ft8_capture_finish(2000);

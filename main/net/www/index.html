@@ -1143,6 +1143,10 @@
         <div>
           <h4>WSPRNET</h4>
           <div id="wspr-net">-</div>
+          <!-- Where Samuel W7STF asked for it: below the stations-per-cycle
+               graph and beside the publishable count. -->
+          <button id="wspr-clear" type="button" title="Clear the decode list"
+                  style="margin-top:6px; background:#1e242b; color:#ddd; border:1px solid #3a4149; border-radius:4px; padding:3px 10px; cursor:pointer; font-size:13px">Clear decodes</button>
         </div>
       </div>
       <div id="wspr-scroll">
@@ -4881,10 +4885,21 @@ const DEC_SORT = {
    propagation log by SNR would scramble the time sequence that IS the
    measurement.
    --------------------------------------------------------------------------- */
-const WSPR_COLS = [
-  ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
-  ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"], ["km", "KM"], ["brg", "BRG"],
-];
+/* The distance heading follows the DEVICE's unit, which arrives on /api/wspr -
+   the page does not decide it and does not keep a second copy of the setting.
+   Built per render for that reason, rather than being a const. */
+let wsprMiles = false;
+function wsprCols() {
+  return [
+    ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
+    ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"],
+    ["km", wsprMiles ? "MILES" : "KM"], ["brg", "BRG"],
+    /* DT - how far into the cycle the transmission started. Nominal +1.0 s, so
+       a value far from that is the sender's clock, which is the whole reason
+       Samuel W7STF asked for the column. */
+    ["dt", "DT"],
+  ];
+}
 
 /* The device sends null for anything it did not actually measure - see
    WSPR_SNR_UNKNOWN / WSPR_DRIFT_UNKNOWN. Render that as an em dash and never as
@@ -4908,6 +4923,12 @@ function wsprFmt(k, r) {
     return v + " dBm (" + ws + ")";
   }
   if (k === "brg")   return v + "°";
+  /* km on the wire ALWAYS - the device sends the measurement and a separate
+     flag for how to show it, so the conversion lives in one place instead of
+     the two screens each keeping their own idea of the unit (which is exactly
+     how the Tab5 ended up printing km to an operator who had chosen miles). */
+  if (k === "km")    return wsprMiles ? Math.round(v * 0.621371) : v;
+  if (k === "dt")    return (v > 0 ? "+" : "") + Number(v).toFixed(1);
   return v;
 }
 
@@ -4980,7 +5001,31 @@ async function wsprFillBands() {
 /* Best DX / stations-per-cycle / wsprnet - the rest of the Tab5's left pane.
    Presentation only: every figure is decided on the device, so the two screens
    read from one source and cannot disagree about the band. */
+/* ⛔ CONFIRM FIRST. The ring this empties is also the UPLOAD QUEUE: spots not
+   yet sent to wsprnet go with it, and the heard-more-than-once gate is computed
+   from the same ring, so clearing resets which stations are publishable. A
+   mis-click should not silently discard someone's unpublished spots. The Tab5's
+   own button arms with a second tap for the same reason. */
+(function () {
+  const b = document.getElementById("wspr-clear");
+  if (!b) return;
+  b.addEventListener("click", async () => {
+    if (!confirm("Clear the WSPR decode list?\n\nAny spots not yet published to "
+               + "wsprnet are discarded with it, and the publishable count resets."))
+      return;
+    try {
+      await fetch("/api/cmd", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "wspr_clear" }) });
+      pollWspr();                       /* redraw now rather than at the next tick */
+    } catch (e) { /* offline - the next poll shows the truth either way */ }
+  });
+})();
+
 function wsprRenderExtras(j) {
+  /* The device's unit, taken here so both the table heading and the best-DX
+     line below use the same answer on the same render. */
+  if (typeof j.miles === "boolean") wsprMiles = j.miles;
   /* ⚠ Built from text nodes, not innerHTML. The callsign and country come off
      the air, and this page's own esc() is nested inside the ADIF viewer and out
      of scope here - so the choice was a second copy of an escape function or no
@@ -4994,7 +5039,8 @@ function wsprRenderExtras(j) {
     where.textContent = d.country || d.grid || "";
     const sub = document.createElement("span");
     sub.className = "sub";
-    sub.textContent = Math.round(d.km) + " km · " + d.pwr + " dBm";
+    sub.textContent = (wsprMiles ? Math.round(d.km * 0.621371) + " mi"
+                                 : Math.round(d.km) + " km") + " · " + d.pwr + " dBm";
     dx.append(d.call + " ", where, document.createElement("br"), sub);
   } else {
     dx.textContent = "-";
@@ -5028,7 +5074,15 @@ function wsprRenderExtras(j) {
        heard-more-than-once rule that gates publication. */
     const cnt = document.createElement("span");
     cnt.style.fontSize = "13px";
-    cnt.textContent = j.net.confirmed + "/" + j.net.calls + " confirmed";
+    /* "confirmed" alone meant nothing - Samuel W7STF had to ask what it was.
+       It is the publication gate: a call reaches wsprnet only once it has been
+       heard more than once, so this says how many of the calls heard are
+       eligible. It also answers why wspr.rocks shows fewer unique calls than
+       this page reports hearing. Same wording as the Tab5. */
+    cnt.textContent = j.net.confirmed + " of " + j.net.calls + " publishable";
+    cnt.title = "A station is only sent to wsprnet after it has been heard "
+              + "more than once, so this is how many of the calls heard so far "
+              + "are eligible to publish.";
     net.append(j.net.status || "-", document.createElement("br"), cnt);
   } else {
     net.textContent = "-";
@@ -5102,14 +5156,14 @@ async function pollWspr() {
 
     const head = document.getElementById("wspr-head");
     if (!head.children.length) {
-      head.innerHTML = WSPR_COLS.map(c =>
+      head.innerHTML = wsprCols().map(c =>
         "<th style='text-align:left; padding:3px 6px; border-bottom:1px solid #333; color:var(--dim)'>" +
         c[1] + "</th>").join("");
     }
 
     const body = document.getElementById("wspr-body");
     if (!j.spots.length) {
-      body.innerHTML = "<tr><td colspan='" + WSPR_COLS.length +
+      body.innerHTML = "<tr><td colspan='" + wsprCols().length +
         "' style='padding:8px; color:var(--dim)'>No spots yet.</td></tr>";
       return;
     }
@@ -5118,11 +5172,11 @@ async function pollWspr() {
     for (const sp of j.spots) {
       if (sp.utc !== lastCycle) {
         lastCycle = sp.utc;
-        html += "<tr><td colspan='" + WSPR_COLS.length +
+        html += "<tr><td colspan='" + wsprCols().length +
           "' style='padding:4px 6px; color:#ffa040; background:#1c2128; " +
           "border-top:1px solid #333'>" + wsprCycleLabel(sp.utc) + "</td></tr>";
       }
-      html += "<tr>" + WSPR_COLS.map(c =>
+      html += "<tr>" + wsprCols().map(c =>
         "<td style='padding:2px 6px; border-bottom:1px solid #222'>" +
         wsprFmt(c[0], sp) + "</td>").join("") + "</tr>";
     }

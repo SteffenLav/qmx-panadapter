@@ -1812,6 +1812,20 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  bad ? "false" : "true", bad);
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "wspr_clear") == 0) {
+        /* Clear the WSPR decode list (Samuel W7STF asked for the button; this
+         * is what the browser's copy of it calls).
+         *
+         * ⛔ THE RING IS ALSO THE UPLOAD QUEUE. Anything not yet published to
+         * wsprnet goes with it, and the heard-more-than-once gate is computed
+         * from the same ring - so this resets which stations are publishable,
+         * not just what is on screen. Both screens confirm before calling it. */
+        wspr_spots_clear();
+        ESP_LOGI(TAG, "WSPR decode list cleared from the web");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        cJSON_Delete(root);
+        return ESP_OK;
     } else if (action && strcmp(action, "cw_profile") == 0) {
         /* Apply a stored CW profile to the radio (#359).
          *
@@ -4461,6 +4475,10 @@ static esp_err_t wspr_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "spots_held",   total);
     cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
+    /* The distance unit is the DEVICE's setting, so it travels with the data.
+       km is always what the spots carry; this says how to label and convert
+       them, so the two screens cannot disagree the way they just did. */
+    cJSON_AddBoolToObject(root, "miles", settings_get_distance_in_miles());
     cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
     cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
     /* The radio's OWN measurement of the last burst, and the PA voltage in
@@ -4600,6 +4618,11 @@ static esp_err_t wspr_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "pwr",   snap[i].power_dbm);
         cJSON_AddNumberToObject(o, "km",    snap[i].km);
         cJSON_AddNumberToObject(o, "brg",   snap[i].bearing_deg);
+        /* DT - where in the cycle the transmission started, seconds. null when
+           it was never measured, same rule as snr and drift: a spot from before
+           this field existed must not print a fabricated 0.0. */
+        if (snap[i].dt_tenths == WSPR_DT_UNKNOWN) cJSON_AddNullToObject(o, "dt");
+        else cJSON_AddNumberToObject(o, "dt", snap[i].dt_tenths / 10.0);
         cJSON_AddItemToArray(arr, o);
     }
 

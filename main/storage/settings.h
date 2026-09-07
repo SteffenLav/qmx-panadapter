@@ -551,6 +551,10 @@ uint8_t settings_get_swr_limit_x10(void);
 bool settings_get_cw_decode_en(void);
 void settings_set_cw_decode_en(bool v);
 void settings_set_distance_in_miles(bool v);
+/* Narrow read - the WSPR decode list formats up to 18 rows per repaint on
+ * taskLVGL, where settings_load_all()'s multi-kilobyte copy has crashed this
+ * project four times. See the stack notes in CLAUDE.md. */
+bool settings_get_distance_in_miles(void);
 /* #302: how a frequency is punctuated. 0 = dots (what the Tab5 has always
    shown), 1 = comma thousands with a decimal point, which is the USA/HP
    calculator reading Don N2VGU asked for. Both keep a DECIMAL POINT between

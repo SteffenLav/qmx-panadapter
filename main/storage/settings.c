@@ -2457,6 +2457,15 @@ void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
     xSemaphoreGive(s_mutex);
 }
 
+bool settings_get_distance_in_miles(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.distance_in_miles;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 uint16_t settings_get_tune_snap_hz(void)
 {
     if (!s_ready) return 500;

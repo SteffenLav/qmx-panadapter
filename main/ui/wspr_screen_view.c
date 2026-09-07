@@ -19,7 +19,15 @@
 #include "esp_heap_caps.h"
 #include "util/dxcc.h"
 #include "wspr_tx.h"
+#include <math.h>
+#include "esp_timer.h"
 #include "storage/settings.h"
+
+/* One narrow read per call, never settings_load_all() - this runs once per row
+   on taskLVGL and that struct is kilobytes (CLAUDE.md lists four crashes from
+   exactly that). Defined here, above every user: the best-DX panel needs it
+   long before the row formatter does. */
+static inline bool wspr_dist_in_miles(void) { return settings_get_distance_in_miles(); }
 #include "wspr_sim.h"
 
 /* JetBrains Mono, already compiled in for the QMX terminal page (#147). The
@@ -56,6 +64,23 @@ LV_FONT_DECLARE(qmx_mono_25);
  * waterfall on top, the decode log underneath. */
 #define RIGHT_X    (LEFT_W + 8)
 #define RIGHT_W    (MID_W - RIGHT_X - 8)
+
+/* ⭐ THE DECODE TABLE STARTS FURTHER LEFT THAN THE WATERFALL, and that is the
+ * point rather than an oversight (operator, 2026-09-07: "there is plenty of
+ * space left of the utc - not above, but leave that as is with the wf").
+ *
+ * LEFT_W cannot shrink: it is 372 so "MODE: WSPR" fits at 48 pt, and moving
+ * RIGHT_X would drag the waterfall left with it. But NOTHING in the left pane
+ * below the waterfall needs its full width, so the TABLE alone reclaims 60 px
+ * - four characters at qmx_mono_25's exact 15.0 px advance - which is what
+ * paid for the DT column. The lower-left widgets are narrowed to match
+ * (EX_W_LOW) so nothing collides.
+ *
+ * ⛔ The waterfall and its axis keep RIGHT_X/RIGHT_W. Do not "tidy" these into
+ * one pair of macros - they describe two different columns on purpose. */
+#define LIST_SHIFT 60
+#define LIST_X     (RIGHT_X - LIST_SHIFT)
+#define LIST_W     (RIGHT_W + LIST_SHIFT)
 #define WF_Y       6
 #define WF_H       200
 #define AXIS_Y     (WF_Y + WF_H + 2)
@@ -222,6 +247,12 @@ static void dial_changed_cb(lv_event_t *e)
  */
 #define EX_X      16
 #define EX_W      (LEFT_W - 32)
+/* ⛔ WIDGETS BELOW THE WATERFALL MUST BE NARROWER, because the decode table
+ * reaches LIST_SHIFT px further left than the waterfall does (see LIST_X). The
+ * table's left edge is LIST_X, so anything in this pane at that height has to
+ * end before it. Everything ABOVE the table - the MODE header, the dial
+ * dropdown, the cycle bar - keeps the full EX_W. */
+#define EX_W_LOW  (EX_W - LIST_SHIFT)
 /* ⭐ TX SITS AT THE BOTTOM AND EVERYTHING ELSE MOVED UP (Roy KI0ER, 2026-09-01:
  * the TX button "is still where you have to touch to switch to the Panadapter";
  * operator's call: "lets move it to the bottom then - and free up the space in
@@ -262,6 +293,9 @@ static void dial_changed_cb(lv_event_t *e)
 static lv_obj_t *s_lbl_dx;
 static lv_obj_t *s_hist_bar[HIST_BARS];
 static lv_obj_t *s_lbl_net;
+static lv_obj_t *s_btn_clr;        /* clear the decode list (Samuel W7STF) */
+static lv_obj_t *s_lbl_clr;
+static int64_t   s_clr_armed_us;   /* two-tap arming, 0 = not armed */
 static lv_obj_t *s_hop_cb[16];
 static uint8_t   s_hop_band[16];   /* kBands index behind each checkbox */
 static int       s_hop_n;
@@ -270,6 +304,26 @@ static lv_obj_t *s_lbl_hop;        /* says which bands are ticked */
 static lv_obj_t *s_hop_modal;      /* NULL when closed */
 
 static void hop_button_refresh(void);
+
+/* Two taps, because this discards spots that may not have been published yet -
+   see the note beside the button. The armed state expires so a stray first tap
+   cannot leave it primed for the rest of the session. */
+#define CLR_ARM_WINDOW_US  4000000
+static void clear_spots_cb(lv_event_t *e)
+{
+    (void)e;
+    const int64_t now = esp_timer_get_time();
+    if (s_clr_armed_us && (now - s_clr_armed_us) < CLR_ARM_WINDOW_US) {
+        s_clr_armed_us = 0;
+        wspr_spots_clear();
+        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Clear");
+        ESP_LOGI(TAG, "WSPR decode list cleared by the operator");
+        ui_toast("Decodes cleared");
+        return;
+    }
+    s_clr_armed_us = now;
+    if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Sure?");
+}
 
 static void hop_toggled_cb(lv_event_t *e)
 {
@@ -468,7 +522,7 @@ static void build_left_extras(void)
     lv_label_set_text(s_lbl_dx, "-");
     lv_obj_set_style_text_font(s_lbl_dx, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_dx, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_width(s_lbl_dx, EX_W);
+    lv_obj_set_width(s_lbl_dx, EX_W_LOW);
     lv_obj_set_pos(s_lbl_dx, EX_X, EX_DX_Y + 22);
 
     /* ---- cycle history ---- */
@@ -493,8 +547,34 @@ static void build_left_extras(void)
      * readable on this screen at arm's length, and it went in here anyway. */
     lv_obj_set_style_text_font(s_lbl_net, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_net, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_width(s_lbl_net, EX_W);
+    lv_obj_set_width(s_lbl_net, EX_W_LOW - 100);
     lv_obj_set_pos(s_lbl_net, EX_X, EX_NET_Y);
+
+    /* ---- Clear, beside the confirmed line ----
+     *
+     * Samuel W7STF asked for it exactly here: "a button, perhaps below the
+     * stations per cycle and to the right of xx/yy confirmed, for clearing the
+     * decodes".
+     *
+     * ⛔ IT CLEARS THE RING, WHICH IS ALSO THE UPLOAD QUEUE. Anything not yet
+     * published to wsprnet goes with it, and the heard-more-than-once gate is
+     * computed from the same ring - so clearing resets which stations are
+     * confirmed, not just what is on screen. That is why it asks first: a
+     * mis-tap should not silently discard spots the operator was waiting to
+     * publish. Same two-tap arming the ADIF delete-all uses. */
+    s_btn_clr = lv_btn_create(s_container);
+    lv_obj_set_size(s_btn_clr, 92, 40);
+    lv_obj_set_pos(s_btn_clr, EX_X + EX_W_LOW - 92, EX_NET_Y - 4);
+    lv_obj_set_style_radius(s_btn_clr, 8, 0);
+    lv_obj_set_style_bg_color(s_btn_clr, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_border_color(s_btn_clr, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_btn_clr, 1, 0);
+    lv_obj_add_event_cb(s_btn_clr, clear_spots_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_clr = lv_label_create(s_btn_clr);
+    lv_label_set_text(s_lbl_clr, "Clear");
+    lv_obj_set_style_text_font(s_lbl_clr, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(s_lbl_clr, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(s_lbl_clr);
 
     /* ---- band hop ----
      *
@@ -612,9 +692,14 @@ static void refresh_left_extras(void)
             const char *full = dxcc_lookup(dx.call);
             const char *where = (full && full[0]) ? full
                               : (dx.cty[0] ? dx.cty : dx.grid);
-            snprintf(t, sizeof(t), "%s  %s\n%ld km  %d dBm",
+            /* Miles if that is what the operator asked for - the same switch
+             * the table's KM/MI column follows. This line said "km"
+             * unconditionally, which is half of Samuel W7STF's report. */
+            const bool mi = wspr_dist_in_miles();
+            snprintf(t, sizeof(t), "%s  %s\n%ld %s  %d dBm",
                      dx.call, where,
-                     (long)dx.km, (int)dx.power_dbm);
+                     mi ? lround(dx.km * 0.621371) : (long)dx.km,
+                     mi ? "mi" : "km", (int)dx.power_dbm);
         } else {
             snprintf(t, sizeof(t), "-");
         }
@@ -659,6 +744,14 @@ static void refresh_left_extras(void)
      * The confirmed count stays, because it is the part the operator cannot
      * get anywhere else: how many of the calls heard are eligible under the
      * heard-more-than-once rule that gates publication. */
+    /* Let a forgotten "Sure?" fall back to "Clear" on its own, so the button
+       never sits armed waiting for a tap the operator stopped intending. */
+    if (s_clr_armed_us &&
+        (esp_timer_get_time() - s_clr_armed_us) >= CLR_ARM_WINDOW_US) {
+        s_clr_armed_us = 0;
+        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Clear");
+    }
+
     if (s_lbl_net) {
         char t[96];
         const int rpt = wspr_spots_repeat_calls();
@@ -671,7 +764,15 @@ static void refresh_left_extras(void)
          * line already caused once when its counts reached double figures.
          * Both halves are kept short at the source rather than trimmed here:
          * see the note beside s_status in wsprnet.c. */
-        snprintf(t, sizeof(t), "wsprnet: %s\n%d/%d confirmed",
+        /* ⭐ "confirmed" ALONE MEANT NOTHING - Samuel W7STF had to ask what it
+         * was ("what is the meaning of the display for xx/yy confirmed?").
+         * It is the publication gate: a call is only sent to wsprnet once it
+         * has been heard more than once, so this is how many of the calls
+         * heard are eligible. "publishable" names the consequence rather than
+         * the internal state - and it also answers his OTHER question, why
+         * wspr.rocks shows fewer unique calls than this screen says we heard.
+         * The two numbers are the two ends of this one line. */
+        snprintf(t, sizeof(t), "wsprnet: %s\n%d of %d publishable",
                  wsprnet_status(), rpt, all);
         lv_label_set_text(s_lbl_net, t);
     }
@@ -829,12 +930,20 @@ static void arm_dial_push(const char *why)
 /* The pane holds RIGHT_W / 15 characters (qmx_mono_25 advances exactly 15 px).
  * Checked against the real widths at first paint - see fmt_header(). Two stale
  * comments in this file claimed 62 and 59 while the row had grown to 63. */
-#define WSPR_ROW_MAX_CHARS  (RIGHT_W / 15)
+/* LIST_W / 15 = 63 characters (qmx_mono_25 advances exactly 15.0 px). It was
+ * 59 against RIGHT_W; the table's 60 px shift left bought four, and BAND
+ * giving up its unused fourth column bought the fifth - which is exactly what
+ * DT costs including its separating space. */
+#define WSPR_ROW_MAX_CHARS  (LIST_W / 15)
 #define W_UTC   5
 /* Which band the spot was HEARD on. Beside UTC because it answers the same kind
  * of question - the circumstances of the hearing, not a property of the station.
  * Blank for spots recorded before the dial was kept (Roy KI0ER, 2026-08-31). */
-#define W_BAND  4
+/* THREE, not four: the longest name in kBands is "160". The fourth column was
+ * blank on every row ever printed, and it is one of the five characters the DT
+ * column needed - the heading goes to "BND" for it, the same trade DRF already
+ * made. */
+#define W_BAND  3
 #define W_CALL  7
 #define W_GRID  4
 #define W_CTY   7
@@ -844,11 +953,14 @@ static void arm_dial_push(const char *why)
 #define W_PWR   3
 #define W_KM    5
 #define W_BRG   3
+/* DT in seconds to one decimal, signed: "+1.0", "-0.4". Four is exactly enough
+ * for the range WSPR produces and one more than the heading needs. */
+#define W_DT    4
 
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
+#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s %"                       STRINGIFY(W_DT)   "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
@@ -878,7 +990,7 @@ static const char *country_field(const wspr_spot_t *sp)
 
 static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
 {
-    char snr[16], drift[16], hz[16], pwr[16], km[20], brg[16];
+    char snr[16], drift[16], hz[16], pwr[16], km[20], brg[16], dt[16];
 
     /* An unmeasured value prints as a dash, never as a number. WSPR_SNR_UNKNOWN
      * and WSPR_DRIFT_UNKNOWN exist precisely so this cannot quietly become a
@@ -892,15 +1004,28 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
     snprintf(hz,  sizeof(hz),  "%.1f", (double)sp->freq_hz);
     snprintf(pwr, sizeof(pwr), "%d", (int)sp->power_dbm);
 
+    /* ⭐ MILES IF THE OPERATOR ASKED FOR MILES (Samuel W7STF: "I have miles
+     * selected, but it is showing KM"). The setting has existed since v0.18.6
+     * and the FT8 list has honoured it all along; this list simply never
+     * looked. The heading follows the same switch - see fmt_header() - because
+     * a number in the wrong unit under the right label is worse than either. */
     if (sp->km < 0) snprintf(km, sizeof(km), "--");
+    else if (wspr_dist_in_miles())
+        snprintf(km, sizeof(km), "%d", (int)lround(sp->km * 0.621371));
     else snprintf(km, sizeof(km), "%d", (int)sp->km);
 
     if (sp->bearing_deg < 0) snprintf(brg, sizeof(brg), "--");
     else snprintf(brg, sizeof(brg), "%d", (int)sp->bearing_deg);
 
+    /* An unmeasured DT prints as a dash, never as 0.0 - a spot recorded before
+       this field existed has no alignment to report, and a fabricated zero
+       would read as a perfectly-timed station. Same rule as SNR and drift. */
+    if (sp->dt_tenths == WSPR_DT_UNKNOWN) snprintf(dt, sizeof(dt), "--");
+    else snprintf(dt, sizeof(dt), "%+.1f", sp->dt_tenths / 10.0);
+
     const char *bnd = wspr_band_name_for_dial(sp->dial_hz);
     snprintf(out, n, ROW_FMT, utc, bnd ? bnd : "", sp->call, sp->grid,
-             country_field(sp), snr, drift, hz, pwr, km, brg);
+             country_field(sp), snr, drift, hz, pwr, km, brg, dt);
 }
 
 static void fmt_header(char *out, size_t n)
@@ -913,13 +1038,13 @@ static void fmt_header(char *out, size_t n)
      * "TONE" rather than "HZ": every column here is a number in some unit, so
      * "HZ" named the unit while the others name the quantity. What the column
      * holds is the station's audio tone within the 200 Hz window. */
-    char h[11][16];   /* 11 columns since BND was added - keep in step with raw[]/w[] */
+    char h[12][16];   /* 12 columns since DT was added - keep in step with raw[]/w[] */
     /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
      * so the unit belongs in the heading and not repeated on every row. */
-    const char *raw[11] = { "UTC", "BAND", "CALL", "GRID", "COUNTRY", "SNR",
-                            "DR", "TONE", "PWR", "KM", "BRG" };
-    const int   w[11]   = { W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
-                            W_DRF, W_TONE, W_PWR, W_KM, W_BRG };
+    const char *raw[12] = { "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
+                            "DR", "TONE", "PWR", wspr_dist_in_miles() ? "MI" : "KM", "BRG", "DT" };
+    const int   w[12]   = { W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
+                            W_DRF, W_TONE, W_PWR, W_KM, W_BRG, W_DT };
     /* ⭐ BIAS THE HEADING THE WAY ITS DATA IS ALIGNED (operator, 2026-09-01:
      * "KM header should be moved one character right to centre properly above
      * the column").
@@ -936,8 +1061,8 @@ static void fmt_header(char *out, size_t n)
      * hand - which matters here, because the hand-spaced header is exactly what
      * drifted out of step with the rows before ROW_FMT was made to serve both. */
     /* BAND is right-aligned with the other numbers. */
-    const bool right_aligned[11] = { false, true, false, false, false,
-                                     true, true, true, true, true, true };
+    const bool right_aligned[12] = { false, true, false, false, false,
+                                     true, true, true, true, true, true, true };
     /* ⛔ A HEADING LONGER THAN ITS COLUMN SILENTLY WIDENS THE ROW. printf does
      * not truncate, so an over-long title pushes every later column right and
      * the last one off the pane - invisible in code review, obvious only on
@@ -948,8 +1073,8 @@ static void fmt_header(char *out, size_t n)
         static bool checked = false;
         if (!checked) {
             checked = true;
-            int total = 10;   /* the single spaces between 11 columns */
-            for (int i = 0; i < 11; i++) {
+            int total = 11;   /* the single spaces between 12 columns */
+            for (int i = 0; i < 12; i++) {
                 total += w[i];
                 if ((int)strlen(raw[i]) > w[i])
                     ESP_LOGE(TAG, "column %d: heading '%s' is %d chars in a %d "
@@ -962,7 +1087,7 @@ static void fmt_header(char *out, size_t n)
                          total, WSPR_ROW_MAX_CHARS);
         }
     }
-    for (int i = 0; i < 11; i++) {
+    for (int i = 0; i < 12; i++) {
         const int len  = (int)strlen(raw[i]);
         const int pad  = w[i] > len ? w[i] - len : 0;
         /* ⭐ THE HEADING IS ALIGNED THE SAME WAY ITS DATA IS - not centred.
@@ -985,7 +1110,7 @@ static void fmt_header(char *out, size_t n)
         h[i][k] = '\0';
     }
     snprintf(out, n, ROW_FMT, h[0], h[1], h[2], h[3], h[4],
-             h[5], h[6], h[7], h[8], h[9], h[10]);
+             h[5], h[6], h[7], h[8], h[9], h[10], h[11]);
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)
@@ -1192,7 +1317,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * hand goes for the swipe grip. It now sits at the bottom (EX_TX_Y); see
      * the layout note beside EX_DX_Y. */
     s_btn_tx = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_tx, LEFT_W - 48, 56);
+    lv_obj_set_size(s_btn_tx, EX_W_LOW - 24, 56);
     lv_obj_set_pos(s_btn_tx, 40, EX_TX_Y);
     lv_obj_set_style_radius(s_btn_tx, 8, 0);
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
@@ -1263,8 +1388,8 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(hdr, RIGHT_X, LIST_Y);
 
     s_list = lv_obj_create(s_container);
-    lv_obj_set_size(s_list, RIGHT_W, MID_H - LIST_Y - 34);
-    lv_obj_set_pos(s_list, RIGHT_X, LIST_Y + 30);
+    lv_obj_set_size(s_list, LIST_W, MID_H - LIST_Y - 34);
+    lv_obj_set_pos(s_list, LIST_X, LIST_Y + 30);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
