@@ -106,26 +106,36 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.11.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.12.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.11.3 — two things a user told me were still broken after I said
-they were fixed, and both of them were right.** The power-cycle relay was held
-**closed** from boot for anyone using an active level of Low, on a line wired to
-a radio's power input; the pins now rest on the inactive side of the polarity
-you chose. And a log file corrected in another logger could not be imported —
-a merge matches on callsign, date and time, which is exactly what a correction
-keeps, so the fix looked like a duplicate and was skipped. You can now choose to
-let an incoming record replace the one already logged.
+**New in v1.12.0 — CW profiles.** The QMX holds one CW centre and one set of filter
+widths, and changing them means walking two separate menus on the radio. Four profiles
+now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths
+to offer with it — edited on the web settings page and applied from there or from a
+picker in the settings drawer. Applying one writes the radio's own configuration, so
+every write is read back and retried rather than assumed. The bandwidth list also asks
+the radio which filters it actually has, instead of offering all eight regardless.
 
-A grid square can now be corrected by hand, which matters because a bug that could
-log one station under another's locator is fixed in this release. Frequencies can be
-punctuated `14.074.000` or `14,074,000`, whichever you read fluently. Decoded CW is
-written to the microSD card with timestamps. And three crashes are gone, one of them
-present and unrecognised for many versions.
+**A CAT link could die and go on reporting itself healthy.** One transient USB error
+could stop the Tab5 hearing the radio for good while the poll kept saying the link was
+fine — so the screen asked you to restart a radio that was working perfectly. Caught in
+a soak at four hours fifty-six minutes, with the link then dead for the following four.
+A watchdog now forces a reconnect after five seconds of silence.
+
+**WSPR** gains a DT column on both screens, distances that follow the km/miles setting
+(they were always kilometres), a Clear button for the decode list, one capture countdown
+instead of two, hover-a-trace-to-name-the-station on the waterfall, and a band picker you
+drag through rather than a dropdown that commits wherever your finger lifts.
+
+**Tune snap can be switched off** — Off / 250 Hz / 500 Hz / 1 kHz, defaulting to the
+present behaviour. And on the web page, the spectrum above ×1 zoom had no frequency scale
+at all, which is why clicking a signal tuned to the wrong place, the passband sat
+elsewhere than on the Tab5, and the band-plan slider came apart as it was dragged. Every
+field in a QSO can now be corrected, not four.
 
 **In v1.11.1 — decoded CW along the bottom of the panadapter.** In CW or CW-R the
 Morse the radio is decoding runs along the bottom of the waterfall, with an estimate
@@ -166,7 +176,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.11.3.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

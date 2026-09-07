@@ -12,21 +12,23 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.11.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.12.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.11.3 — the power-cycle relay rests correctly from boot, and a corrected log file can be imported.**
+> **New in v1.12.0 — CW profiles, WSPR gains a DT column and honours miles, and a CAT link that died silently now recovers.**
 >
-> **The web decode list no longer jumps**, for real this time *(Randy N4OPI)*. The v1.10.8 fix sized the status box against the wrong "worst case" text and still moved on an armed transmit or a busy exchange; the actual cause turned out to be the box disappearing entirely (`display:none`) while idle rather than staying reserved at a fixed size — every hide path now uses `visibility:hidden` instead, so its footprint never collapses. The countdown is now its own badge that can't be truncated away, Cancel clears immediately with no leftover "Cancelling" text, and the box no longer exceeds the width of the occupancy strip below it.
+> **CW profiles** *(Uwe DL8UG)*. The QMX holds one CW centre and one set of filter widths, and changing them means walking two separate menus on the radio. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's configuration, so every write is read back and retried rather than assumed. **The bandwidth list also asks the radio which filters it actually has**, instead of offering all eight regardless.
 >
-> **The "Calling you" pileup list now ages out after an hour and clears on a band change** *(Randy N4OPI)* — it previously had no expiry at all and could show a station heard 17 hours earlier on a different band.
+> **A CAT link could die and go on reporting itself healthy** *(Samuel W7STF)*. One transient USB error could stop the Tab5 hearing the radio for good, while the poll kept saying the link was fine — so the screen asked you to restart a radio that was working perfectly. Caught in a soak at four hours fifty-six minutes, with the link then dead for four hours. A watchdog now forces a reconnect after five seconds of silence.
 >
-> **WSPR's finals-protection PA-voltage guard is now confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. The restore-on-leaving-WSPR was a single CAT write with nothing checking it landed; a background check now confirms it and resends if not — verified on hardware with a real 11.5 V → 6.0 V → 11.5 V round trip against the radio's own read-back. The WSPR countdown appearing to hit zero and restart on the first cycle is also fixed: the PA-voltage query now starts the moment WSPR TX is turned on instead of waiting for the first 120 s cycle to ask, so it has the full cycle to get an answer.
+> **WSPR** *(Samuel W7STF)*: a **DT column** on both screens, **distances that follow the km/miles setting** (they were always kilometres), a **Clear button** for the decode list, one capture countdown instead of two, **hover a trace on the waterfall to see whose it is**, and a band picker you **drag through** rather than a dropdown that commits wherever your finger lifts.
 >
-> **New: a remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. A "Power-cycle relay" control under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen duration — wire a home-automation relay to it and your QMX's PWR_ON/GND **signals**, and a remote firmware upgrade (which needs a manual QMX power cycle) no longer needs someone at the bench. **The QMX has no PWR_ON/GND jack** — those signals have to be brought out of the radio to a connector of your own first, so this is an experimenter feature *(Randy N4OPI)*.
+> **Tune snap can be switched off** *(Samuel W7STF, who asked twice)* — Off / 250 Hz / 500 Hz / 1 kHz, defaulting to the present behaviour.
+>
+> **The web page above ×1 zoom had no frequency scale at all**, which is why clicking a signal tuned to the wrong place, the passband sat elsewhere than on the Tab5, and the band-plan slider came apart. **Every field in a QSO can now be corrected**, not four. And **the two screens no longer disagree about spots**.
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.11.3.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.0.pdf).
 
 <!-- USERGUIDE:START -->
 

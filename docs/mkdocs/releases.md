@@ -4,6 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.12.0** — 2026-09-08
+
+**CW profiles, a WSPR page that answers more questions, and a CAT link that could die while reporting itself healthy.**
+
+- **CW profiles** *(Uwe DL8UG: "it would save all the tedious fiddling on the QMX")*. The radio holds one CW centre and one set of filter widths, and changing them means walking two separate menus. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's own configuration, so each write is read back and retried, and the filter list is re-read from the radio afterwards rather than assumed.
+- **The bandwidth list offers only the filters your radio has** *(Uwe DL8UG)*. The QMX lets you enable any subset of its eight CW filters; the Tab5 offered all eight regardless, so picking one the radio did not have did nothing. A radio that does not answer still gets the full list — never an empty one.
+- **A CAT link could die and go on reporting itself healthy** *(Samuel W7STF)*. One transient USB error could stop the Tab5 hearing the radio for good while the poll kept saying the link was fine, so the screen asked you to restart a radio that was working perfectly. Caught in a soak at four hours fifty-six minutes, with the link then dead for four hours. A watchdog now forces a reconnect after five seconds of silence.
+- **WSPR** *(Samuel W7STF)*: a **DT column** on both screens — how far into the cycle each transmission started, nominally +1.0 s, so a value far from that is the other station's clock. **Distances follow the km/miles setting**, which they never did. A **Clear button** for the decode list, which asks first because the list is also the upload queue. **One capture countdown instead of two.** **"xx/yy confirmed" now reads "N of M publishable"**, which is what it always meant — a station reaches wsprnet only after being heard more than once, and that also explains why a site like wspr.rocks shows fewer unique calls than the Tab5 reports hearing. **Point at a trace on the waterfall and it names the station**, with the tone and the report. And the **band picker is a list you drag through**, not a dropdown that commits wherever your finger lifts.
+- **Tune snap can be switched off** *(Samuel W7STF, who asked twice)* — Off / 250 Hz / 500 Hz / 1 kHz, in the drawer under Advanced and in the web settings, defaulting to the present behaviour.
+- **Every field in a QSO can be corrected** *(Gyula HA3HZ)*, not the four the previous release allowed. Which record a logbook matches is a decision for the logbook.
+- **The web spectrum above ×1 zoom had no frequency scale at all**, which is why clicking a signal tuned to the wrong place, the passband overlay sat elsewhere than on the Tab5, and the band-plan slider came apart as it was dragged — one missing answer behind all three. The dB scale labels were fixed values only correct for the default range, the zoom list now offers ×24, a frequency typed twice quickly keeps the second one, and a mode or band change from the browser is no longer silently dropped.
+- **The two screens no longer disagree about spots** — the mode filter was applied on the Tab5 and not in the browser, and the browser was sent a truncated list on a busy band.
+- **Flat spectrum is one setting shared with the browser**, the dB controls grey out while it is on because flat mode ignores them, the settings drawer remembers where you scrolled to, and every checkbox in it now reflects a change made from the browser — there were twenty that did not.
+
+## Previous Releases
+
 **v1.11.3** — 2026-09-06
 
 **Two things a user told me were still broken after I had said they were fixed. Both of them were right.**
@@ -11,9 +27,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The power-cycle relay was held closed from boot** for anyone using an active level of Low *(Randy N4OPI)*. The two pins were driven Low at every startup, under a comment reasoning that closing a contact should require a deliberate pulse — which is right, and is the opposite of what that did for an active-Low station, because Low is their asserted level. On a line wired to a radio's power input the relay therefore sat closed from power-on until the first pulse released it. The pins now rest on the inactive side of the polarity you chose, and follow it the moment you change it.
 - **A corrected log file can now be imported** *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Restoring a log merges on callsign, date and time — exactly the three fields a correction does not change — so a record fixed in another logger looked like a duplicate, was skipped, and was reported as "already in the log". Choose **corrections** at the first prompt and an incoming record replaces the one already logged; the result says how many were replaced, and those contacts go to QRZ, eQSL and LoTW again, since the copy held there is the one carrying the error.
 - **The web page tells you when it is older than the Tab5.** A browser tab left open across an update keeps working perfectly while missing every control added since it loaded — which is indistinguishable from a feature that was never shipped, and cost a round trip about an editor that was present all along. It now offers a Reload when the firmware version changes underneath it.
-
-
-## Previous Releases
 
 **v1.11.2** — 2026-09-06
 
@@ -628,7 +641,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.11.3.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.12.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

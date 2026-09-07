@@ -25,7 +25,7 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 | Column | Meaning |
 |---|---|
 | **UTC** | The cycle this spot came from |
-| **M** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
+| **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
 | **GRID** | Their Maidenhead locator, as transmitted |
 | **COUNTRY** | Country from the callsign prefix |
@@ -33,19 +33,37 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 | **DRF** | Drift, in Hz per minute. A stable transmitter reads 0 |
 | **TONE** | Where in the 200 Hz sub-band they were heard |
 | **PWR** | The power **they declared**, not a measurement |
-| **KM / BRG** | Great-circle distance and bearing from your grid |
+| **KM / BRG** | Great-circle distance and bearing from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md) |
+| **DT** | How far into the two-minute cycle that transmission actually started, in seconds. **Nominal is +1.0**, because a WSPR transmission begins one second into its even minute — so a value far from that is the other station's clock rather than anything at your end |
 
 Below the list:
 
 - **DX** — the furthest station of the session, which is usually the number you actually want.
 - **HISTORY** — stations per cycle, oldest on the left. A single snapshot cannot tell an opening band from a closing one; a row of bars can.
-- **WSPRNET** — whether spots are being published, and whether they can be.
+- **WSPRNET** — whether spots are being published, and how many can be. **"N of M publishable"** is the publication gate: a station is only sent to wsprnet once it has been heard **more than once**, so N is how many of the M calls heard so far are eligible. This is also why a site like wspr.rocks can show fewer unique calls than this page reports hearing — it only ever received the publishable ones.
+- **Clear** — empties the decode list. It asks first, because the list is also the upload queue: anything not yet sent to wsprnet goes with it, and the publishable count resets.
+
+!!! tip "With a mouse, point at a trace to see whose it is"
+
+    Hovering a trace on the waterfall names the station, its tone and its signal
+    report, beside the pointer. It matches within about half a WSPR signal's
+    width, so you have to be on the trace rather than near it. There is no hover
+    on a touchscreen, so this adds to the list rather than replacing it —
+    everything it shows is in the table underneath.
 
 The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR's whole sub-band is narrower than a single FT8 signal, so this is a very close-up view: individual beacons appear as near-horizontal lines, and a sloping line is a drifting transmitter.
 
 **On a cycle you transmit, the waterfall does not advance** — the receiver is stood down for the whole two minutes, so there is nothing to draw. Rather than leave the previous cycle's picture sitting there looking frozen, the display lays down its cycle-boundary marker and keeps the last received image below it, so you can still see what was there before you transmitted. The status line reads **transmitting** throughout.
 
 **The panadapter spectrum is not available while WSPR runs.** The receiver takes the IQ stream for the whole cycle, so there is nothing left to draw a live spectrum from. This is expected, not a fault.
+
+---
+
+**Changing band** — tap the button at the top of the left pane and a list drops
+below it. Touch a line and it lights up; if it is the wrong one, keep your finger
+down and drag until you are on the one you want, then lift to choose it.
+Releasing outside the list chooses nothing. The band you are on is named in
+amber.
 
 ---
 

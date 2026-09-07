@@ -3254,3 +3254,122 @@ I had just said was fixed is still not fixed, and both of them were right.
 - **A corrected log file can now be imported** *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Restoring a log merges on callsign, date and time — which are exactly the three fields a correction does not change. So a record fixed in another logger looked identical to the wrong one already on the device, was counted as a duplicate, and was skipped; the report said "duplicate", which reads as "already fine". An import could add contacts and never replace one, making it useless for repairing a log. Choosing "update existing records" now lets an incoming record replace the one already logged, and the result says how many were replaced. Corrected contacts are sent to QRZ, eQSL and LoTW again afterwards, since the copy held there is the one carrying the error. Callsign, date and time still cannot be changed this way — a contact with a wrong date is a different contact, and those three are what every logbook matches on.
 - **The web page now tells you when it is older than the Tab5.** A browser tab left open across a firmware update keeps working perfectly — it polls, it draws, it responds — while missing every control added since it was loaded, which is indistinguishable from a feature that was never shipped. It cost a round trip with a user reporting a missing editor that was present and being served correctly. The page remembers which firmware served it and offers a Reload when the Tab5 reports a different one.
 - **A diagnostic for the web server going quiet.** The socket table filling up stops the web server and the rigctld port answering while everything else — ping, the radio, decoding — carries on, so nothing on screen suggests a fault. The firmware can now name which connection is holding each of the sixteen slots, and says so on its own when the number in use reaches a new high. This is groundwork for a fault seen on a long unattended run; it changes nothing in normal use.
+
+
+### Shipped in v1.12.0 — 2026-09-08
+
+Almost all of this came from users, and several items are a user telling me that
+something I had shipped was wrong.
+
+**CW profiles** *(Uwe DL8UG: "it would be great if you could pick a profile...
+it would save all the tedious fiddling on the QMX")*
+
+The QMX holds one CW centre and one set of filter widths, and changing them
+means walking two separate menus on the radio. Four profiles now live on the
+Tab5 — a name, a centre frequency, and which of the eight filter widths to offer
+with it — edited on the web settings page and applied from there or from a
+picker in the Tab5's settings drawer. His own examples: 700 Hz with 100/200/300/400,
+675 Hz with 50/150/250, 650 Hz with 100/200/300/500.
+
+Applying one writes the radio's configuration, so it verifies rather than hopes:
+each write is read back and retried, and the filter list is re-read from the
+radio afterwards rather than assumed. That mattered on the first real test — the
+centre write was refused and the retry is what got it there.
+
+**The bandwidth list offers only the filters your radio has** *(Uwe DL8UG)*. The
+QMX lets you enable any subset of its eight CW filters, and the Tab5 was offering
+all eight regardless, so choosing one the radio did not have did nothing. It now
+asks at connect. A radio that does not answer, or an older firmware that does not
+know the question, still gets the full list — never an empty one.
+
+**WSPR** *(Samuel W7STF)*
+
+- **A DT column**, on both screens: how far into the two-minute cycle each
+  transmission actually started. Nominal is +1.0 s, so a value far from that is
+  the other station's clock. The decoder had been measuring it all along and
+  simply never handed it over.
+- **Distances follow the km/miles setting.** They were always printed in
+  kilometres, on both the decode list and the Best DX panel, while the setting
+  had existed since v0.18.6 and the FT8 list had always honoured it. The setting
+  is also now reachable from the WSPR page, which it was not.
+- **A Clear button** for the decode list, beside the publishable count. It asks
+  first: the list is also the upload queue, so clearing it discards spots not yet
+  sent to wsprnet.
+- **One capture countdown instead of two.** The seconds one is gone; the cycle
+  clock beside it was saying the same thing.
+- **"xx/yy confirmed" now reads "N of M publishable"**, because the old wording
+  meant nothing without explanation. It is the publication gate — a station
+  reaches wsprnet only after it has been heard more than once — and it also
+  answers why a site like wspr.rocks shows fewer unique calls than the Tab5
+  reports hearing.
+- **Point at a trace on the waterfall and it names the station**, with the tone
+  and the signal report. Mouse only, since a touchscreen has no hover, so it adds
+  to the list rather than replacing it.
+- **The band picker is a list you drag through**, not a dropdown: touch it, the
+  line lights up, drag until you are on the one you want, release to choose.
+  Releasing outside chooses nothing. A dropdown commits on whatever line your
+  finger happens to lift over, and getting it wrong retunes the radio.
+
+**A CAT link that died and said it was healthy** *(Samuel W7STF, reporting that
+the "Now turn on or reboot your QMX/+" prompt was back)*
+
+A single transient USB error could stop the Tab5 receiving anything from the
+radio, permanently, while the poll went on reporting itself healthy — so the
+screen asked you to restart a radio that was working perfectly. Found in a
+soak of v1.11.3: it fired at four hours fifty-six minutes and the link stayed
+dead for the following four hours. A watchdog now forces a reconnect after five
+seconds of silence.
+
+**Tune snap is a setting again, including Off** *(Samuel W7STF, who asked
+twice)*. Tapping the spectrum lands on a grid — 500 Hz in SSB and the digital
+modes — and there was no way to turn it off. It is now Off / 250 Hz / 500 Hz /
+1 kHz in the settings drawer under Advanced and in the web settings, defaulting
+to the present behaviour. CW keeps its 10 Hz grid and tap-to-RIT still overrides
+it, since neither was what anyone objected to.
+
+**The web page**
+
+- **Every field in a QSO can be corrected** *(Gyula HA3HZ)*, not the four the
+  previous release allowed. Which record a logbook matches is a decision for the
+  logbook, not something the Tab5 should decide on its behalf.
+- **The spectrum above ×1 zoom had no frequency scale at all**, so clicking a
+  signal tuned to the wrong place, the passband overlay sat somewhere else than
+  on the Tab5, and the band-plan slider came apart as it was dragged. All three
+  were the same missing answer, and the device now sends the viewport it is
+  actually drawing.
+- **The dB scale labels were fixed values** that were only correct for the
+  default range: at −120 to −40 two of the printed labels named levels that were
+  not on the scale at all. The device works them out and the page prints what it
+  is told.
+- **The zoom list offers ×24**, and the passband in digital modes matches the
+  Tab5's.
+- **A frequency typed in twice quickly no longer loses the second one**, and a
+  mode or band change from the browser or from rigctld is no longer silently
+  dropped.
+- **The two screens showed different spots.** The mode filter was applied on the
+  Tab5 and not in the browser, and the browser was sent a truncated list on a
+  busy band — 20 of 116 spots were being lost.
+- **A tab left in the background stops polling**, so everything on it can be
+  minutes out of date the moment you look at it. It now refreshes the instant it
+  is brought back to the front.
+
+**Everything else**
+
+- **Flat spectrum is one setting shared with the browser**, rather than each
+  screen keeping its own idea of it, and the dB range controls grey out while it
+  is on — flat mode ignores them entirely, so they could not do anything.
+- **The settings drawer remembers where you scrolled to**, until the Tab5 is
+  restarted. Flat Spectrum has moved up beside the controls it governs, and IF
+  calibration has moved to the Radio group above CW centre, where it belongs.
+- **Every checkbox in the drawer now reflects a change made from the browser.**
+  They were read once when the drawer was built, so any setting changed from the
+  web showed the opposite of the truth until a restart. There were twenty.
+- **The web interface stalls for less time.** An incomplete request — a phone
+  that slept mid-request, a tab closed while loading — held the single-threaded
+  web server for five seconds; that is now two.
+- **The diagnostic log on internal flash had stopped being written**, silently,
+  and would retry a broken file for the rest of the session. It now recovers, and
+  says what actually went wrong rather than a stale error from something else.
+- **The decoded-CW pane is two lines** rather than one, wrapping down and then
+  overwriting the first, with the overwritten text in a second colour so the
+  newest character can be found.

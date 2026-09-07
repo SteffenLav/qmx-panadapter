@@ -56,6 +56,36 @@ Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
 
 **Show decoded CW** — the line along the bottom of the panadapter carrying the Morse the radio is decoding, in CW/CW-R. On by default. The QMX does the decoding itself, so switching this off frees no processing — only the screen space; see the Decoded CW section of the [Panadapter](panadapter.md) guide for what the line shows and how the noise is filtered. The same setting is in the browser under **Radio & display**.
 
+**CW profiles** — a CW centre frequency together with the filter widths to offer
+with it, so a setup you use often is one tap rather than two menus on the radio
+(suggested by Uwe DL8UG: *"setting this on the QMX is always a bit of a chore,
+and half the time you do not have the right values in your head anyway"*).
+
+There are four slots. Edit them in the **browser's Settings window**, under
+**CW profiles**: a name, a centre frequency, and a tick for each width you want
+the bandwidth list to offer. Apply one from the button beside it, or from
+**CW profiles** in the Tab5's settings drawer, where the four slots appear as
+four buttons.
+
+- The centre must be **500–950 Hz in steps of 25**, which is what the radio
+  accepts. Anything else is corrected as you leave the box, so what you see is
+  what will be stored.
+- Names are cut to nine characters — that is what fits on the Tab5's buttons.
+- Leave the centre empty to clear a slot.
+
+!!! warning "Applying a profile changes your radio's stored configuration"
+
+    It writes the CW centre and all eight filter rows, then asks the radio to
+    reload — which takes about a second, and briefly interrupts reception. It is
+    a deliberate, once-a-session action rather than something to tap while
+    operating. Every write is read back and retried, and the bandwidth list is
+    re-read from the radio afterwards, so what the Tab5 offers is what the radio
+    really has.
+
+    Note that setting the CW centre also moves the radio's CW offset and
+    sidetone with it, which is the QMX's own behaviour and not something the
+    panadapter chooses.
+
 **CW transmit offset** — transmit a little away from the station you are listening to,
 so a QRP call is not buried in the pile of everyone zero-beating the DX (suggested by
 Roy KI0ER). The centre of the slider is off, and the sign chooses whether you transmit
@@ -246,7 +276,21 @@ whole 48 kHz the radio sends, so there is no room to hold it still. The full beh
 including when the view re-frames, is in
 [Panadapter → Still Spectrum](panadapter.md#9-still-spectrum).
 
-**Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
+**Tune snap** *(Advanced)* — the grid a tap on the spectrum lands on, in SSB and
+the digital modes: **Off**, 250 Hz, 500 Hz or 1 kHz. The default is 500 Hz, which
+is what earlier versions always did.
+
+Choose **Off** to tune exactly where you tap (asked for by Samuel W7STF). The
+grid exists because SSB stations sit on whole kilohertz and the ones that stray
+are usually at the half, so landing on a round number is normally what you want —
+but it is a preference, and now it is one you can set. CW keeps its own 10 Hz
+grid, AM and FM their 1 kHz, and tap-to-RIT overrides all of them, because an
+offset onto one caller's tone needs resolution rather than tidiness.
+
+**Distance in Miles** — show distances in miles instead of kilometres, in the FT8
+decode list **and on the WSPR page** (off by default). Until v1.12.0 the WSPR
+list and its Best DX panel always printed kilometres regardless of this setting,
+and the control was not reachable from the WSPR page at all.
 
 **Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
