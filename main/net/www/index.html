@@ -4489,18 +4489,30 @@ function setBuildForm(cfg, ft8Opts) {
    its own deliberate button, and it applies what is STORED, which is why it
    saves first. */
 let cwProfWidths = [];
+/* The centre grid and the name limit come from /api/settings, not from numbers
+   typed into this page - the device is the authority on what its radio accepts,
+   and a second copy here is what makes the two screens disagree. Fallbacks only
+   cover an older firmware that does not send them. */
+let cwProfLim = { min: 500, max: 950, step: 25, nameMax: 9 };
 
 function cwProfRender(cfg, body) {
   cwProfWidths = Array.isArray(cfg.cw_filter_widths) ? cfg.cw_filter_widths : [];
+  if (Number(cfg.cw_centre_min_hz))    cwProfLim.min     = Number(cfg.cw_centre_min_hz);
+  if (Number(cfg.cw_centre_max_hz))    cwProfLim.max     = Number(cfg.cw_centre_max_hz);
+  if (Number(cfg.cw_centre_step_hz))   cwProfLim.step    = Number(cfg.cw_centre_step_hz);
+  if (Number(cfg.cw_profile_name_max)) cwProfLim.nameMax = Number(cfg.cw_profile_name_max);
   const profs = Array.isArray(cfg.cw_profiles) ? cfg.cw_profiles : [];
   if (!profs.length) return;
 
   const wrap = document.createElement("div");
   let h = '<div style="margin:14px 0 6px"><strong style="color:#ffa040">CW profiles</strong></div>' +
           '<div style="color:var(--dim);font-size:13px;margin-bottom:8px">' +
-          'A CW centre and the filter widths to offer with it. Leave the centre empty ' +
-          'to clear a slot. Apply writes it to the radio - the radio reloads its ' +
-          'configuration, which takes about a second.</div>';
+          'A CW centre and the filter widths to offer with it. Centre ' +
+          cwProfLim.min + '-' + cwProfLim.max + ' Hz in steps of ' + cwProfLim.step +
+          ' - anything else is corrected as you leave the box. Leave it empty to ' +
+          'clear a slot. Names are shown on the Tab5 picker, so they are cut to ' +
+          'to ' + cwProfLim.nameMax + ' characters. Apply writes the profile to the ' +
+          'radio - it reloads its configuration, which takes about a second.</div>';
 
   h += '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:13px">';
   h += "<tr><th style='text-align:left;padding:4px 8px'>Name</th>" +
@@ -4512,7 +4524,8 @@ function cwProfRender(cfg, body) {
     const pr = profs[i] || {};
     const mask = Number(pr.mask) || 0;
     h += "<tr>";
-    h += "<td style='padding:3px 8px'><input id='cwp-name-" + i + "' type='text' maxlength='11' value='" +
+    h += "<td style='padding:3px 8px'><input id='cwp-name-" + i + "' type='text' maxlength='" +
+         cwProfLim.nameMax + "' value='" +
          escHtml(pr.name || "") + "' style=\"width:100px;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:3px\"></td>";
     h += "<td style='padding:3px 8px'><input id='cwp-hz-" + i + "' type='text' inputmode='numeric' value='" +
          (Number(pr.centre_hz) ? String(pr.centre_hz) : "") +
@@ -4526,11 +4539,44 @@ function cwProfRender(cfg, body) {
   }
   h += "</table></div><div id='cwp-status' style='color:var(--dim);font-size:13px;margin-top:6px'></div>";
   wrap.innerHTML = h;
-  body.appendChild(wrap);
+  /* Placed by the group it belongs WITH, not by where the loop happened to
+     finish. CW profiles are a radio setting, so they go after "Radio & display"
+     and before WSPR - appending put them below the beacon settings, which is
+     nowhere near anything else about CW. Falls back to the end if that heading
+     is ever renamed, so a rename cannot make the block vanish. */
+  let before = null;
+  for (const st of body.querySelectorAll("strong")) {
+    if (st.textContent.trim() === "WSPR") { before = st.parentElement; break; }
+  }
+  if (before) body.insertBefore(wrap, before);
+  else        body.appendChild(wrap);
 
   for (let i = 0; i < profs.length; i++) {
     const b = document.getElementById("cwp-apply-" + i);
     if (b) b.addEventListener("click", () => cwProfApply(i));
+    const hz = document.getElementById("cwp-hz-" + i);
+    if (hz) {
+      /* The device clamps and snaps whatever it is sent, which on its own is a
+         SILENT correction: type 1200 and the radio gets 950 while the box still
+         says 1200. Doing the same arithmetic on blur makes the box say what will
+         actually be stored. It is not a second rule - the limits came from the
+         device a moment ago. */
+      hz.dataset.last = hz.value;
+      hz.addEventListener("blur", () => {
+        const raw = hz.value.trim();
+        if (raw === "") { hz.dataset.last = ""; return; }   /* deliberate clear */
+        const n = Number(raw);
+        /* A typo that is not a number must NOT read as "clear this slot" -
+           deleting a profile has to be a deliberate empty box. */
+        if (!isFinite(n) || n <= 0) { hz.value = hz.dataset.last || ""; return; }
+        const st = cwProfLim.step;
+        let v = Math.round(n / st) * st;
+        if (v < cwProfLim.min) v = cwProfLim.min;
+        if (v > cwProfLim.max) v = cwProfLim.max;
+        hz.value = String(v);
+        hz.dataset.last = hz.value;
+      });
+    }
   }
 }
 

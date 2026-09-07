@@ -790,6 +790,14 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
  * it on a small task stack. idx is 0..CW_PROFILE_COUNT-1.
  * Returns false for an unused slot (centre_hz == 0). */
 #define CW_PROFILE_COUNT 4
+/* Longest profile name that can be READ on the Tab5. Not a storage limit - the
+ * field is 12 bytes - but the limit that matters, because the drawer picker is
+ * four buttons across a 520 px drawer, i.e. 116 px each, and at montserrat_20 a
+ * name longer than this cannot be shown whole. Enforced in
+ * settings_set_cw_profile() rather than in the two callers, so the web form and
+ * a config import obey the same rule. The button also ellipsizes, so a name
+ * from an older store can never spill into its neighbour. */
+#define CW_PROFILE_NAME_MAX 9
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask);
 void settings_set_cw_profile(int idx, const char *name,

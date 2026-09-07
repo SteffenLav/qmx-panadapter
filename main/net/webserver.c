@@ -3709,6 +3709,15 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
      * owns which widths exist and the page must not carry a second copy of that
      * list. Same rule that fixed the spot filter and the viewport today. */
     {
+        /* The LIMITS come from the device too, for the same reason the widths
+         * do. The page has to clamp a typed centre so the operator sees what
+         * will really be stored, and a copy of 500/950/25 typed into the page
+         * is a second source of truth that can drift from the radio's. */
+        cJSON_AddNumberToObject(root, "cw_centre_min_hz",  (double)CW_CENTER_MIN_HZ);
+        cJSON_AddNumberToObject(root, "cw_centre_max_hz",  (double)CW_CENTER_MAX_HZ);
+        cJSON_AddNumberToObject(root, "cw_centre_step_hz", (double)CW_CENTER_STEP_HZ);
+        cJSON_AddNumberToObject(root, "cw_profile_name_max", (double)CW_PROFILE_NAME_MAX);
+
         cJSON *w = cJSON_AddArrayToObject(root, "cw_filter_widths");
         for (int i = 0; w && i < CW_FILTER_COUNT; i++)
             cJSON_AddItemToArray(w, cJSON_CreateNumber((double)cat_cw_filter_width(i)));

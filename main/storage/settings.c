@@ -2477,9 +2477,14 @@ void settings_set_cw_profile(int idx, const char *name,
         centre_hz = (uint16_t)(((centre_hz + CW_CENTER_STEP_HZ / 2) / CW_CENTER_STEP_HZ)
                                * CW_CENTER_STEP_HZ);
     }
+    /* Truncated HERE, not in the form: the length that matters is what the Tab5
+     * button can show, and a config import must obey it as well. */
+    char nm[CW_PROFILE_NAME_MAX + 1];
+    snprintf(nm, sizeof(nm), "%s", name ? name : "");
+
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     snprintf(s_pending.cw_profile[idx].name, sizeof(s_pending.cw_profile[idx].name),
-             "%s", name ? name : "");
+             "%s", nm);
     s_pending.cw_profile[idx].centre_hz = centre_hz;
     s_pending.cw_profile[idx].mask      = mask;
     xSemaphoreGive(s_mutex);

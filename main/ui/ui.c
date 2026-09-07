@@ -11565,8 +11565,16 @@ static void drawer_build(void)
                                 (void *)(intptr_t)i);
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, "-");
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+            /* montserrat_20, not the drawer's usual 28: four buttons across a
+               520 px drawer is 116 px each, and a name is a word, not a number.
+               Fixed width + DOT so a name from an older store, or one a future
+               longer limit allows, ellipsizes instead of spilling into the
+               button beside it. */
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_width(l, bw - 12);
+            lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(l);
             s_cwprof_btn[i] = b;
             s_cwprof_lbl[i] = l;
@@ -12243,15 +12251,30 @@ static void drawer_build(void)
     drawer_set_mode(ui_mode_get());
 }
 
+/* Where the drawer was scrolled to when it was last closed.
+ *
+ * ⭐ A PLAIN STATIC, DELIBERATELY - not NVS. Operator, 2026-09-07: "make the
+ * scroll position persistent WITHIN A SESSION - revert to top on a reboot or
+ * power off." That is the right split: coming back to the control you were just
+ * adjusting is the whole point, but a boot is when you have lost your place
+ * anyway, and a drawer that opens part-way down on a cold start reads as an
+ * empty drawer whose content has to be swiped back into view - which is the
+ * exact complaint drawer_open() was scrolling to 0 to prevent.
+ *
+ * It is also reset by anything that RESTACKS the sections, because a remembered
+ * offset means nothing once the content above it has changed height. */
+static int s_drawer_scroll_y = 0;
+
 static void drawer_open(void)
 {
     drawer_build();  // lazy build on first open
     if (!s_drawer || s_drawer_open) return;
-    // Always open scrolled to the top so the "Settings" title is visible.
-    // Restacking sections for FT8 mode (drawer_set_ft8_mode) can leave the
-    // scroll position part-way down, which looked like an empty drawer whose
-    // content had to be swiped back down into view.
-    lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
+    /* Back where it was left this session (0 on the first open after a boot,
+       and after anything that restacked the sections). The original reason this
+       line existed still holds and is now handled at the source: a restack
+       zeroes s_drawer_scroll_y, so the drawer can never open part-way down a
+       layout that has changed underneath the remembered offset. */
+    lv_obj_scroll_to_y(s_drawer, s_drawer_scroll_y, LV_ANIM_OFF);
     if (s_drawer_scrim) {
         lv_obj_clear_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_drawer_scrim);
@@ -12311,6 +12334,10 @@ void ui_set_drawer_expert(bool expert)
     settings_set_drawer_expert(expert);
     drawer_expert_paint();
     drawer_set_mode(ui_mode_get());
+    /* Basic/Advanced restacks every section, so a remembered offset now points
+       at different content. Forget it as well as scrolling, or the next open
+       would put it straight back. */
+    s_drawer_scroll_y = 0;
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
@@ -12329,6 +12356,10 @@ void ui_set_drawer_scroll_y(int y)
 static void drawer_close(void)
 {
     if (!s_drawer || !s_drawer_open) return;
+    /* Read BEFORE the close animation starts. It only moves x, but taking the
+       position while the drawer is still where the finger left it means this
+       cannot become sensitive to what the animation does later. */
+    s_drawer_scroll_y = (int)lv_obj_get_scroll_y(s_drawer);
     if (s_drawer_scrim) lv_obj_add_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_anim_t a;
     lv_anim_init(&a);
@@ -12355,6 +12386,19 @@ static void drawer_set_mode(ui_mode_t mode)
 {
     const bool ft8 = (mode == UI_MODE_FT8);   /* legacy local, still used below */
     if (!s_drawer) return;
+    /* A different screen means a different set of sections at different heights,
+       so the remembered scroll position (see s_drawer_scroll_y) now points at
+       something else entirely - forget it. Guarded on the mode having actually
+       CHANGED, because this function is also re-run for reasons that do not
+       restack anything, and zeroing on every call would quietly delete the
+       feature rather than protect it. */
+    {
+        static ui_mode_t s_laid_out_for = (ui_mode_t)-1;
+        if (s_laid_out_for != mode) {
+            s_laid_out_for = mode;
+            s_drawer_scroll_y = 0;
+        }
+    }
     static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
