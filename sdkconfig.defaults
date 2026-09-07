@@ -314,3 +314,11 @@ CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
 # Costs one debug watchpoint register and a little context-switch time. If a
 # future session needs that register for gdb, turn it off then - not casually.
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# Chrome's own header set plus a revalidating reload's If-None-Match overruns
+# the 512-byte default, and esp_http_server answers "Header fields are too
+# long" instead of the page - reproduced on the bench 2026-09-07 by pressing
+# the stale-page banner's own Reload button. HTTPD_SCRATCH_BUF is ONE buffer in
+# the server struct (esp_httpd_priv.h), not one per connection, so this costs
+# 512 bytes once.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

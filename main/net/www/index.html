@@ -7256,7 +7256,12 @@ function checkPageIsStale(running) {
   const btn = document.createElement("button");
   btn.textContent = "Reload";
   btn.style.cssText = "font:600 15px system-ui,sans-serif;padding:5px 14px;cursor:pointer";
-  btn.onclick = () => location.reload(true);
+  /* Plain reload. The deprecated `true` argument is ignored by current
+     browsers but asks older ones for a HARD reload, which adds Cache-Control
+     and Pragma to an already-long header set - and this button is exactly where
+     "Header fields are too long" was reproduced. The page carries no-cache and
+     an ETag, so a normal reload already fetches the current version. */
+  btn.onclick = () => location.reload();
   bar.appendChild(txt); bar.appendChild(btn);
   document.body.appendChild(bar);
 }
