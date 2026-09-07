@@ -3075,6 +3075,10 @@ static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
 static void drawer_refresh_cw_profiles(void);
+static lv_obj_t *s_check_cw_decode;
+static lv_obj_t *s_check_pskrep;
+static lv_obj_t *s_check_wspr_net;
+static void drawer_refresh_checkboxes(void);
 static void drawer_slider_qmx_rf_cb(lv_event_t *e);
 static void drawer_refresh_qmx_rf(void);
 static void gain_resolve_start(void);   // repaint a read-back that answers late
@@ -10687,6 +10691,58 @@ static void drawer_cwprof_cb(lv_event_t *e)
 /* Re-read on every drawer open: the profiles are edited on the WEB page, so
  * what was true when the drawer was BUILT (once, during ui_init) is not what is
  * stored now. Same reasoning as drawer_refresh_wspr() - #291. */
+/* ⭐ EVERY SETTINGS-BACKED CHECKBOX, RE-READ ON EVERY DRAWER OPEN.
+ *
+ * Each of these was set once when the drawer was built and never again, so any
+ * one of them changed from the WEB left the Tab5 showing the opposite of the
+ * truth until a reboot. Reported for the km/miles box (Samuel W7STF, 2026-09-07:
+ * "the checkbox in the drawer on tab5 was still unchecked") - but that box was
+ * simply the one he happened to tick. There are twenty, and they all had it.
+ *
+ * ⛔ SWEEP THE CLASS, NOT THE INSTANCE. This is the fourth build-once fault in
+ * one evening (the Tab5 header, the browser header, both repaint guards) and
+ * fixing only the reported box would have left nineteen waiting.
+ *
+ * ONE settings_load_all for the lot - it is a multi-kilobyte struct and this
+ * runs on taskLVGL, so it must not be done per control. Same precedent as
+ * drawer_refresh_wspr() right above. */
+static void sync_cb(lv_obj_t *cb, bool on)
+{
+    if (!cb || !lv_obj_is_valid(cb)) return;
+    if (on) lv_obj_add_state(cb, LV_STATE_CHECKED);
+    else    lv_obj_remove_state(cb, LV_STATE_CHECKED);
+}
+
+static void drawer_refresh_checkboxes(void)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+    sync_cb(s_check_distance_miles, c.distance_in_miles);
+    sync_cb(s_check_ft8_early,      c.ft8_early_decode);
+    sync_cb(s_check_pskrep,         c.pskreporter_en);
+    sync_cb(s_check_sim_mode,       c.sim_mode_en);
+    sync_cb(s_check_spots,          c.spots_en);
+    sync_cb(s_check_rbn,            c.rbn_en);
+    sync_cb(s_check_cluster,        c.cluster_en);
+    sync_cb(s_check_sota,           c.sota_en);
+    sync_cb(s_check_spotmode,       c.spots_mode_filter);
+    sync_cb(s_check_cw_decode,      c.cw_decode_en);
+    sync_cb(s_check_wspr_net,       c.wspr_net_en);
+    sync_cb(s_check_charge_limit,   c.charge_limit_en);
+    sync_cb(s_switch_otadl,         c.ota_autodl);
+    sync_cb(s_cb_bt,                c.bt_mouse_en);
+    sync_cb(s_check_rit_pill,       c.rit_pill_show);
+    /* These three are owned by a module rather than read straight from the
+       struct, so they are asked rather than copied. */
+    sync_cb(s_switch_iq,            iq_balance_is_enabled());
+    sync_cb(s_switch_flat,          ui_get_flat_mode());
+    sync_cb(s_check_still,          ui_get_still_view());
+    sync_cb(s_check_flip,           display_is_flipped());
+    /* s_check_cwaudio is deliberately NOT here - it is forced off while CW
+       audio is shelved, and syncing it would let a stored value re-tick a
+       control that does nothing. */
+}
+
 static void drawer_refresh_cw_profiles(void)
 {
     for (int i = 0; i < CW_PROFILE_COUNT; i++) {
@@ -11760,9 +11816,9 @@ static void drawer_build(void)
         {
             /* cwcfg is already loaded above in this scope - no second copy of a
                multi-kilobyte struct on the stack. */
-            lv_obj_t *cbx = make_drawer_checkbox(sec, cwcfg.cw_decode_en,
+            s_check_cw_decode = make_drawer_checkbox(sec, cwcfg.cw_decode_en,
                                                  drawer_cw_decode_cb, NULL);
-            lv_obj_align(cbx, LV_ALIGN_TOP_LEFT, 0, 240);
+            lv_obj_align(s_check_cw_decode, LV_ALIGN_TOP_LEFT, 0, 240);
             lv_obj_t *dl = lv_label_create(sec);
             lv_label_set_text(dl, "Show decoded CW");
             lv_obj_set_style_text_color(dl, lv_color_hex(0xFFFFFF), 0);
@@ -12172,8 +12228,8 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(psk_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(psk_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(psk_lbl, LV_ALIGN_TOP_LEFT, 0, 122);
-        lv_obj_t *psk_cb = make_drawer_checkbox(sec, scfg_dist.pskreporter_en, drawer_check_pskrep_cb, NULL);
-        lv_obj_align(psk_cb, LV_ALIGN_TOP_RIGHT, 0, 118);
+        s_check_pskrep = make_drawer_checkbox(sec, scfg_dist.pskreporter_en, drawer_check_pskrep_cb, NULL);
+        lv_obj_align(s_check_pskrep, LV_ALIGN_TOP_RIGHT, 0, 118);
         y += 168;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
@@ -12397,8 +12453,8 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
         lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 10);
-        lv_obj_t *cb = make_drawer_checkbox(sec, ws.wspr_net_en, drawer_check_wspr_net_cb, NULL);
-        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
+        s_check_wspr_net = make_drawer_checkbox(sec, ws.wspr_net_en, drawer_check_wspr_net_cb, NULL);
+        lv_obj_align(s_check_wspr_net, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
 
@@ -12590,6 +12646,8 @@ static void drawer_open(void)
     drawer_refresh_wspr();
     /* Profiles are edited on the web page, so re-read them here (#359). */
     drawer_refresh_cw_profiles();
+    /* ...and so is every other checkbox in here - see drawer_refresh_checkboxes. */
+    drawer_refresh_checkboxes();
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.

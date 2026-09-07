@@ -1223,12 +1223,19 @@ void wspr_screen_view_init(lv_obj_t *parent)
     s_dd_dial = lv_dropdown_create(s_container);
     s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
     rebuild_dial_options();
-    lv_obj_set_size(s_dd_dial, LEFT_W - 48, 56);   /* SHIFTED clear of the swipe zone, not shrunk */
+    /* ⭐ BACK TO THE PANEL'S OWN LEFT EDGE, aligned with everything else in it
+     * (operator, 2026-09-07). It was shifted right in v1.10.5 to keep it out of
+     * the 30 px edge-swipe strip - but the control genuinely at risk there was
+     * the TX BUTTON, which sat across the middle of the left edge where a hand
+     * reaches for the page-swipe grip, and that has since moved to the bottom.
+     * A dropdown near the top is not on the path of that gesture, and the
+     * misalignment was visible on every visit to the page. */
+    lv_obj_set_size(s_dd_dial, EX_W, 56);
     /* 40, not 16: same reason as the TX button below - a CONTROL on this pane
      * must clear the 30 px left edge-swipe zone, or a gesture aimed at the
      * panadapter lands on it. The labels around it stay at 16; they cannot be
      * pressed, so they cost nothing there. */
-    lv_obj_set_pos(s_dd_dial, 40, 70);
+    lv_obj_set_pos(s_dd_dial, EX_X, 70);
     lv_obj_set_style_radius(s_dd_dial, 8, 0);
     lv_obj_set_style_border_width(s_dd_dial, 1, 0);
     /* 28, not 24 and certainly not 20. Read on the actual screen at arm's
