@@ -1514,6 +1514,25 @@ operation manual gives `CW offset` as valid **600-800** only ("so as to stay wit
 bandwidth of the CW filter"); the 500-950 25 Hz grid above is `CW center`. Everything in
 this section's first paragraph is about the centre. Do not apply one range to the other.
 
+⭐ **AND THAT SPRAY REFUSES THE NEXT COMMAND — measured 2026-09-07, and it is
+the reason a burst of MM writes needs spacing AND a read-back.** The CW-profile
+apply (#359) sends eight `MMCW|Choose filters|N=…;` rows and then
+`MMCW|CW center=…;`. At 40 ms spacing the eight rows all landed and the centre
+was **refused** — the radio answered `?;` and stayed on its old value — while
+the apply logged success, because it had only ever checked that it SENT the
+bytes. Sent by hand with the port idle, the identical command answers `MM700;`
+first time. So the fault is spacing, not syntax.
+
+**Two rules from it.** Give an MM write **120 ms**, not 40, before the next
+command. And **read the value back and retry** rather than trusting the write:
+on the first real hardware test after the fix the centre still needed **three
+attempts** (attempt 1 read back the OLD value, attempt 2 answered nothing,
+attempt 3 confirmed), so even 200 ms of quiet is marginal. This is the WSPR
+PA-guard trap in a new place — indicators agreeing about stored state while the
+radio did something else — and the same answer applies: **`cw_filters_read()` is
+called after the reload so the cached mask comes from the RADIO, not from what
+was asked for.**
+
 ⚠ **An MM *write* sprays ANSI cursor-positioning bytes onto the CAT port.** Measured:
 `MMCW|CW center=650;` came back as `[1;253H`, `[2;253H`, `[0;0H` and then `FA00014074000;`
 — the radio redraws its menu and the escape codes land in the CAT stream. Our parser
