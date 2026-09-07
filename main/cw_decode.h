@@ -130,6 +130,21 @@ unsigned cw_decode_total(void);
 // line by the same column. That assert is what caught it.
 #define CW_LINE_COLS 72
 
+/* TWO display lines, not one (operator, 2026-09-07). Text fills the first, then
+ * wraps DOWN to the second; when that is full it starts overwriting the first
+ * again, exactly as the single line used to overwrite itself.
+ *
+ * So the grid is one buffer of CW_LINE_ROWS * CW_LINE_COLS and the write
+ * position runs straight through it - the row boundary is not a special case,
+ * which is what keeps the cursor, the two-column gap and the pass colouring
+ * working across it without a second rule.
+ *
+ * ⛔ The SECOND line must be indented to the width of the "CW ~20wpm:" prefix
+ * on the first, or the two grids do not line up and the wrap reads as a jump.
+ * Both screens do that; see CW_PREFIX_COLS in ui.c and #cw-line in index.html. */
+#define CW_LINE_ROWS 2
+#define CW_GRID_CELLS (CW_LINE_ROWS * CW_LINE_COLS)
+
 // Copy the line as it should be DRAWN: the grid, with two blank columns laid
 // over it at the write position. After the line has wrapped that gap is the
 // only thing separating what has just been decoded from what is about to be

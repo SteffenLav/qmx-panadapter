@@ -3485,6 +3485,10 @@ static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
 static lv_obj_t *s_cw_strip;
 /* The same grid, same place, holding the OTHER pass - see cw_strip_paint(). */
 static lv_obj_t *s_cw_strip_prev;
+/* Row 2 of the grid - same pair again. Row 1 sits one line higher than the
+ * single line used to, so the bottom edge is unchanged. */
+static lv_obj_t *s_cw_strip2;
+static lv_obj_t *s_cw_strip2_prev;
 static unsigned  s_cw_seen;          /* change detector - repaint only on new text */
 
 /* The line is a fixed grid of columns that WRAPS and overwrites itself, the way
@@ -3594,14 +3598,16 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_cw_prefix);
         lv_obj_move_foreground(s_cw_strip);
-        if (s_cw_strip_prev) lv_obj_add_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_strip_prev)  lv_obj_add_flag(s_cw_strip_prev,  LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_strip2)      lv_obj_add_flag(s_cw_strip2,      LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_strip2_prev) lv_obj_add_flag(s_cw_strip2_prev, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
     /* Paint the grid, then lay the gap over it AT the write position, so
      * it wraps with the text instead of being a fixed slot the text runs
      * into. */
-    char disp[CW_LINE_COLS + 1];
+    char disp[CW_GRID_CELLS + 1];
     cw_decode_line(disp, sizeof(disp));   /* grid + the gap, already applied */
 
     /* TWO PASSES, TWO COLOURS, and the boundary is the cursor.
@@ -3620,22 +3626,34 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * LVGL 9.2 has no label recolour, and the existing comment below already
      * chose separate labels over colour markup to keep the column arithmetic
      * honest. This follows it. */
-    char now_s[CW_LINE_COLS + 1], prev_s[CW_LINE_COLS + 1];
+    char now_s[CW_LINE_ROWS][CW_LINE_COLS + 1], prev_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
     int  col = cw_decode_line_col();
     if (col < 0) col = 0;
-    if (col > CW_LINE_COLS) col = CW_LINE_COLS;
-    for (int i = 0; i < CW_LINE_COLS; i++) {
-        char c = disp[i] ? disp[i] : ' ';
-        now_s[i]  = (i <  col) ? c : ' ';
-        prev_s[i] = (i >= col) ? c : ' ';
+    if (col > CW_GRID_CELLS) col = CW_GRID_CELLS;
+    /* One walk over the whole grid, split into rows only at the end. The row
+     * boundary is not a special case for the cursor or the colouring - the
+     * write position runs straight through, so the wrap down to line two is the
+     * same event as any other character. */
+    for (int r = 0; r < CW_LINE_ROWS; r++) {
+        for (int i = 0; i < CW_LINE_COLS; i++) {
+            int  g = r * CW_LINE_COLS + i;
+            char c = disp[g] ? disp[g] : ' ';
+            now_s[r][i]  = (g <  col) ? c : ' ';
+            prev_s[r][i] = (g >= col) ? c : ' ';
+        }
+        now_s[r][CW_LINE_COLS] = prev_s[r][CW_LINE_COLS] = '\0';
     }
-    now_s[CW_LINE_COLS] = prev_s[CW_LINE_COLS] = '\0';
 
-    lv_label_set_text(s_cw_strip, now_s);
-    if (s_cw_strip_prev) {
-        lv_label_set_text(s_cw_strip_prev, prev_s);
-        lv_obj_clear_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_cw_strip_prev);
+    lv_label_set_text(s_cw_strip, now_s[0]);
+    if (s_cw_strip_prev)  lv_label_set_text(s_cw_strip_prev,  prev_s[0]);
+    if (s_cw_strip2)      lv_label_set_text(s_cw_strip2,      now_s[1]);
+    if (s_cw_strip2_prev) lv_label_set_text(s_cw_strip2_prev, prev_s[1]);
+
+    lv_obj_t *const shown[] = { s_cw_strip_prev, s_cw_strip2, s_cw_strip2_prev };
+    for (size_t i = 0; i < sizeof(shown) / sizeof(shown[0]); i++) {
+        if (!shown[i]) continue;
+        lv_obj_clear_flag(shown[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(shown[i]);
     }
     lv_obj_clear_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
@@ -3656,11 +3674,18 @@ static void cw_strip_init(void)
      * tap-to-tune - a label that ate those taps would be a bug, not a feature.
      * The bottom edge is also the memory-channel swipe zone. */
     const int y_off = -(BOTTOM_BAR_H + BANDPLAN_H + CW_LIFT_PX);
+    /* Row height from the FONT rather than a guessed constant, plus the 4+4 of
+     * vertical padding the labels carry, so the two rows sit exactly one line
+     * apart whatever the font is changed to later. Row 2 keeps the old single
+     * line's y, and row 1 lifts above it - so the strip grows UPWARD and the
+     * bottom edge, which sits just above the band-plan, does not move. */
+    const int row_px = (int)lv_font_get_line_height(&qmx_mono_25) + 8;
+    const int y_row1 = y_off - row_px;
 
     s_cw_prefix = lv_label_create(lv_scr_act());
     lv_label_set_long_mode(s_cw_prefix, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(s_cw_prefix, CW_PREFIX_COLS * CW_COL_PX);
-    lv_obj_align(s_cw_prefix, LV_ALIGN_BOTTOM_LEFT, 0, y_off);
+    lv_obj_align(s_cw_prefix, LV_ALIGN_BOTTOM_LEFT, 0, y_row1);
     lv_obj_set_style_text_font(s_cw_prefix, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_cw_prefix, lv_color_hex(0x30E060), 0);   /* green */
     lv_obj_set_style_bg_color(s_cw_prefix, lv_color_hex(0x000000), 0);
@@ -3679,7 +3704,7 @@ static void cw_strip_init(void)
     /* Starts exactly where the prefix ends - both are the same monospace font,
      * so this is arithmetic rather than a guess. */
     lv_obj_align(s_cw_strip, LV_ALIGN_BOTTOM_LEFT,
-                 4 + CW_PREFIX_COLS * CW_COL_PX, y_off);
+                 4 + CW_PREFIX_COLS * CW_COL_PX, y_row1);
     lv_obj_set_style_text_font(s_cw_strip, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_cw_strip, lv_color_hex(0x30E0E0), 0);   /* cyan */
     lv_obj_set_style_bg_color(s_cw_strip, lv_color_hex(0x000000), 0);
@@ -3699,7 +3724,7 @@ static void cw_strip_init(void)
     lv_label_set_long_mode(s_cw_strip_prev, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(s_cw_strip_prev, CW_LINE_COLS * CW_COL_PX);
     lv_obj_align(s_cw_strip_prev, LV_ALIGN_BOTTOM_LEFT,
-                 4 + CW_PREFIX_COLS * CW_COL_PX, y_off);
+                 4 + CW_PREFIX_COLS * CW_COL_PX, y_row1);
     lv_obj_set_style_text_font(s_cw_strip_prev, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_cw_strip_prev, lv_color_hex(0x30E060), 0);   /* green */
     lv_obj_set_style_bg_opa(s_cw_strip_prev, LV_OPA_TRANSP, 0);
@@ -3710,6 +3735,42 @@ static void cw_strip_init(void)
     lv_obj_add_flag(s_cw_strip_prev, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cw_strip_prev, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_cw_strip_prev, UI_FLAG_NOT_HOT);
+
+    /* ROW 2, the pair again, at the old single-line y.
+     *
+     * ⛔ INDENTED TO THE SAME x AS ROW 1's TEXT - 4 + CW_PREFIX_COLS columns -
+     * even though there is no prefix label beside it. That indent is the whole
+     * point: the text wraps from the end of row 1 to the start of row 2, and if
+     * the two grids did not line up vertically the wrap would read as a jump
+     * rather than a continuation. */
+    struct { lv_obj_t **obj; uint32_t colour; } row2[] = {
+        { &s_cw_strip2,      0x30E0E0 },   /* this pass, cyan, as row 1 */
+        { &s_cw_strip2_prev, 0x30E060 },   /* the previous pass, green */
+    };
+    for (size_t i = 0; i < sizeof(row2) / sizeof(row2[0]); i++) {
+        lv_obj_t *l = lv_label_create(lv_scr_act());
+        *row2[i].obj = l;
+        lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(l, CW_LINE_COLS * CW_COL_PX);
+        lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 4 + CW_PREFIX_COLS * CW_COL_PX, y_off);
+        lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(row2[i].colour), 0);
+        /* Only the first of the pair paints a background, for the reason the
+         * row-1 pair already documents: two translucent blacks would darken it. */
+        if (i == 0) {
+            lv_obj_set_style_bg_color(l, lv_color_hex(0x000000), 0);
+            lv_obj_set_style_bg_opa(l, LV_OPA_70, 0);
+        } else {
+            lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
+        }
+        lv_obj_set_style_pad_top(l, 4, 0);
+        lv_obj_set_style_pad_bottom(l, 4, 0);
+        lv_obj_set_style_pad_left(l, 0, 0);
+        lv_obj_set_style_pad_right(l, 4, 0);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(l, UI_FLAG_NOT_HOT);
+    }
 
     /* 4 Hz: fast enough that text does not arrive in visible clumps, slow
      * enough to be nothing on a core that is already the constraint. */

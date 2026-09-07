@@ -598,7 +598,14 @@
              background: rgba(0,0,0,.7); padding: 2px 6px;
              pointer-events: none; }   /* the waterfall under it is click-to-tune */
   #cw-head { color: #30e060; }         /* green header, as on the Tab5 */
-  #cw-text { color: #30e0e0; }         /* cyan decoded text */
+  #cw-text, #cw-text2 { color: #30e0e0; }   /* cyan decoded text */
+  /* ⛔ ROW 2 IS INDENTED BY THE HEADER'S OWN WIDTH, not by a guessed number of
+     spaces. #cw-indent is filled with exactly the characters #cw-head holds, in
+     the same monospace font, and made invisible - so the two grids line up
+     whatever the header says ("CW ~08wpm:" and "CW ~??wpm:" are not the same
+     length as a percentage of the line). The text wraps from the end of row 1
+     to the start of row 2, and a misaligned wrap reads as a jump. */
+  #cw-indent { visibility: hidden; }
 
   #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
@@ -1051,7 +1058,7 @@
 
   <div id="split-handle" title="Drag to resize"></div>
 
-  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><span id="cw-head"></span><span id="cw-text"></span></div></div>
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div><span id="cw-indent"></span><span id="cw-text2"></span></div></div></div>
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
@@ -5827,13 +5834,28 @@ async function tick() {
              one. Samuel W7STF could not see where the overwriting had got to,
              and this shows it without a cursor glyph.
              Falls back to one colour if an older firmware sends no col. */
-          const cwEl = document.getElementById("cw-text");
-          if (typeof cw.col === "number" && cw.col >= 0 && cw.col <= cw.line.length) {
-            cwEl.innerHTML =
-              "<span class='cw-now'>"  + esc(cw.line.slice(0, cw.col)) + "</span>" +
-              "<span class='cw-prev'>" + esc(cw.line.slice(cw.col))    + "</span>";
-          } else {
-            cwEl.textContent = cw.line;
+          /* The grid is CW_LINE_ROWS rows of CW_LINE_COLS; the device sends it
+             as one string and the write position runs straight through, so the
+             row split happens here and nowhere else. Row 2 is indented by a
+             copy of the header text (hidden) so the two grids line up - see the
+             CSS note on #cw-indent. */
+          const COLS = 72;
+          document.getElementById("cw-indent").textContent =
+            document.getElementById("cw-head").textContent;
+          const rowEls = [document.getElementById("cw-text"),
+                          document.getElementById("cw-text2")];
+          const haveCol = (typeof cw.col === "number" &&
+                           cw.col >= 0 && cw.col <= cw.line.length);
+          for (let r = 0; r < rowEls.length; r++) {
+            const from = r * COLS, to = from + COLS;
+            const rowTxt = cw.line.slice(from, to);
+            if (!haveCol) { rowEls[r].textContent = rowTxt; continue; }
+            /* Where the cursor falls inside THIS row: before it means the whole
+               row is this pass, after it means none of it is. */
+            const cut = Math.max(0, Math.min(rowTxt.length, cw.col - from));
+            rowEls[r].innerHTML =
+              "<span class='cw-now'>"  + esc(rowTxt.slice(0, cut)) + "</span>" +
+              "<span class='cw-prev'>" + esc(rowTxt.slice(cut))    + "</span>";
           }
           el.hidden = false;
         } else {

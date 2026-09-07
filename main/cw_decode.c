@@ -156,7 +156,7 @@ int cw_wpm_estimate(int chars, unsigned elapsed_ms)
 #define CW_WPM_MIN_CHARS   12
 
 static cw_squelch_t     s_squelch;
-static char             s_line[CW_LINE_COLS];   /* the wrapping display grid */
+static char             s_line[CW_GRID_CELLS];  /* the wrapping display grid, CW_LINE_ROWS rows */
 static int              s_line_col;             /* where the next character lands */
 static uint32_t        *s_stamp;
 static int              s_stamp_head, s_stamp_count;
@@ -298,7 +298,7 @@ void cw_decode_feed(const char *resp)
             if (s_count < CW_RING_CAP) s_count++;
             /* ...and into the wrapping line both screens draw from. */
             s_line[s_line_col] = rel[k];
-            s_line_col = (s_line_col + 1) % CW_LINE_COLS;
+            s_line_col = (s_line_col + 1) % CW_GRID_CELLS;
             // Timestamp every accepted character for the speed estimate. Noise
             // never reaches here, so it cannot drag the figure around.
             s_stamp[s_stamp_head] = (uint32_t)(esp_timer_get_time() / 1000);
@@ -341,14 +341,17 @@ size_t cw_decode_line(char *out, size_t out_sz)
     if (!s_ring) return 0;
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
-    size_t n = CW_LINE_COLS;
+    size_t n = CW_GRID_CELLS;
     if (n > out_sz - 1) n = out_sz - 1;
     memcpy(out, s_line, n);
     /* Two blank columns at the write position - see the header. Applied to the
      * COPY, so the grid itself keeps the characters that are about to be
-     * overwritten and nothing is lost early. */
+     * overwritten and nothing is lost early.
+     *
+     * Wrapped over the WHOLE grid, so the gap crosses the row boundary with the
+     * text instead of stopping at the end of the first line. */
     for (int i = 0; i < 2; i++) {
-        size_t idx = (size_t)((s_line_col + i) % CW_LINE_COLS);
+        size_t idx = (size_t)((s_line_col + i) % CW_GRID_CELLS);
         if (idx < n) out[idx] = ' ';
     }
     out[n] = '\0';
