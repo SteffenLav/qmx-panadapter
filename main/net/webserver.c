@@ -2423,7 +2423,12 @@ static esp_err_t adif_delete_handler(httpd_req_t *req)
 static esp_err_t adif_edit_handler(httpd_req_t *req)
 {
     char query[192] = "", idx_s[12] = "", call_raw[24] = "", call[24] = "";
-    char field[24] = "", value_raw[32] = "", value[32] = "";
+    /* Widened from 32 with the whitelist removal: a COMMENT or a long
+     * portable callsign no longer has to fit in a report-sized buffer. Over-long
+     * input is REFUSED below rather than truncated - a silently shortened
+     * callsign written into someone's log is the same class of fault as the
+     * silently dropped edit this whole thread is about. */
+    char field[24] = "", value_raw[160] = "", value[160] = "";
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
         httpd_query_key_value(query, "idx", idx_s, sizeof(idx_s)) != ESP_OK ||
         httpd_query_key_value(query, "call", call_raw, sizeof(call_raw)) != ESP_OK ||
@@ -2458,14 +2463,54 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     //                        (Gyula HA3HZ, 2026-09-06, who was correcting them
     //                        in a Windows ADIF editor instead). #322 fixes the
     //                        cause; this fixes the records already logged.
+    /* THE WHITELIST IS GONE - EVERY FIELD IS EDITABLE (operator, 2026-09-07).
+     *
+     * This used to refuse everything but the four "safe" fields, on the
+     * reasoning quoted above: call, band, mode, date and time are what QRZ,
+     * eQSL and LoTW match a contact on, so correcting them here could not
+     * correct the copy those logbooks hold. That reasoning is still true and it
+     * is no longer OURS to act on. The operator's decision, reversing #327:
+     *
+     *   "ALL fields should be editable... It is not up to us to rule what to be
+     *    edited. The later matching on the various log platforms is what
+     *    matters."
+     *
+     * Which is the right line. An operator repairing records that earlier
+     * firmware logged badly (Gyula HA3HZ's whole case) may well need the
+     * callsign or the date, and a logger that refuses is a logger they stop
+     * using - he had already gone to a Windows ADIF editor.
+     *
+     * ⛔ WHAT IS STILL REFUSED IS MALFORMED BYTES, NOT UNWISE EDITS. The
+     * difference matters: which field is worth changing is a judgement about
+     * radio, and this file has no business making it; whether the result still
+     * parses as ADIF is a property of the file, and a record that does not
+     * parse can break the log for every other reader of it. So the format
+     * checks below stay, and QSO_DATE/TIME_ON gain their own.
+     *
+     * The idx+CALL match guard is unaffected and still fires: the caller sends
+     * the call the record has NOW, so renaming a callsign still cannot land on
+     * the wrong record. */
     bool is_rst  = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
     bool is_ref  = (strcmp(field, "SIG_INFO") == 0);
     bool is_grid = (strcmp(field, "GRIDSQUARE") == 0);
-    if (!is_rst && !is_ref && !is_grid) {
+    bool is_date = (strcmp(field, "QSO_DATE") == 0);
+    bool is_time = (strcmp(field, "TIME_ON") == 0);
+    /* An ADIF field name: letters, digits and underscore. Anything else would
+     * be written straight into the record's tag and corrupt it. */
+    for (const char *f = field; *f; f++) {
+        if (!isalnum((unsigned char)*f) && *f != '_') {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "field name may contain only letters, digits and underscore");
+            return ESP_FAIL;
+        }
+    }
+    if (!field[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "field required");
+        return ESP_FAIL;
+    }
+    if (strlen(value_raw) >= sizeof(value_raw) - 1) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "only RST_SENT, RST_RCVD, SIG_INFO and GRIDSQUARE are editable - "
-                            "call, band, mode, date and time are what QRZ/eQSL/LoTW match a "
-                            "contact on, so delete and re-log instead");
+                            "value is too long for one ADIF field");
         return ESP_FAIL;
     }
     // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).
@@ -2495,6 +2540,43 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
         if (!okfmt) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                 "report must be like -07 or +03, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    /* YYYYMMDD and HHMM[SS], because every other reader of this file - our own
+     * loader, the uploads, and whatever the operator opens it in - takes them
+     * by position. A date of "yesterday" would not be an unwise edit, it would
+     * be an unreadable record. Empty is allowed: clearing a field is how you
+     * say it was never exchanged, and that is true of these too. */
+    if (is_date && value[0]) {
+        bool okfmt = (strlen(value) == 8);
+        for (const char *v = value; okfmt && *v; v++)
+            if (!isdigit((unsigned char)*v)) okfmt = false;
+        if (okfmt) {
+            int mm = (value[4] - '0') * 10 + (value[5] - '0');
+            int dd = (value[6] - '0') * 10 + (value[7] - '0');
+            if (mm < 1 || mm > 12 || dd < 1 || dd > 31) okfmt = false;
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "date must be YYYYMMDD, like 20260907, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    if (is_time && value[0]) {
+        size_t n = strlen(value);
+        bool okfmt = (n == 4 || n == 6);
+        for (const char *v = value; okfmt && *v; v++)
+            if (!isdigit((unsigned char)*v)) okfmt = false;
+        if (okfmt) {
+            int hh = (value[0] - '0') * 10 + (value[1] - '0');
+            int mi = (value[2] - '0') * 10 + (value[3] - '0');
+            if (hh > 23 || mi > 59) okfmt = false;
+            if (n == 6 && ((value[4] - '0') * 10 + (value[5] - '0')) > 59) okfmt = false;
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "time must be HHMM or HHMMSS in UTC, like 0816, or empty to clear");
             return ESP_FAIL;
         }
     }

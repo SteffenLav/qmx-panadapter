@@ -2910,39 +2910,51 @@ function adifImportMessage(j) {
     }
   }
 
+  /* EVERY field, in the order sbitx's editor shows them - the operator's call
+     (2026-09-07), reversing the four-field limit: "ALL fields should be
+     editable... It is not up to us to rule what to be edited. The later
+     matching on the various log platforms is what matters."
+
+     The device still refuses MALFORMED values - a date that is not YYYYMMDD, a
+     report that is not +/-NN, a grid that is not Maidenhead - because those
+     would leave a record the log itself cannot read. It no longer refuses
+     UNWISE ones. */
   const QSO_EDIT_FIELDS = [
-    ["RST_SENT",   "RST sent",   "Like -07 or +03. Empty = none exchanged."],
-    ["RST_RCVD",   "RST rcvd",   "Like -07 or +03. Empty = none exchanged."],
-    ["GRIDSQUARE", "Their grid", "Like JN45 or JN45bc. Empty = none received."],
-    ["SIG_INFO",   "Their ref",  "US-1241, G/LD-049 or DLFF-0123. Empty = none."],
+    ["CALL",       "Callsign",    "The station worked."],
+    ["QSO_DATE",   "Date",        "YYYYMMDD, like 20260907."],
+    ["TIME_ON",    "Time UTC",    "HHMM or HHMMSS, like 0816."],
+    ["BAND",       "Band",        "Like 20M."],
+    ["MODE",       "Mode",        "FT8, CW, SSB. FT4 is stored as MFSK - see Submode."],
+    ["SUBMODE",    "Submode",     "FT4 lives here, with MODE=MFSK. Usually empty."],
+    ["FREQ",       "Freq MHz",    "Like 14.074188."],
+    ["RST_SENT",   "RST sent",    "Like -07 or +03. Empty = none exchanged."],
+    ["RST_RCVD",   "RST rcvd",    "Like -07 or +03. Empty = none exchanged."],
+    ["GRIDSQUARE", "Their grid",  "Like JN45 or JN45bc. Empty = none received."],
+    ["SIG_INFO",   "Their ref",   "US-1241, G/LD-049 or DLFF-0123. Empty = none."],
+    ["COMMENT",    "Comment",     "Free text, kept in the log and uploaded."],
   ];
 
   function openQsoEditor(r) {
     const back = document.createElement("div");
     back.style.cssText = "position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1200;";
     const mode = r.SUBMODE || r.MODE || "";
-    const ro = (label, val) =>
-      "<div class='ro'>" + label + "</div><div class='ro'>" + esc(val || "--") + "</div>";
-    back.innerHTML =
+      back.innerHTML =
       "<div style='max-width:520px; margin:6vh auto; background:#161616; border:1px solid #494949;" +
       " border-radius:10px; padding:16px 20px; color:#e8e8e8;'>" +
       "<div style='display:flex; align-items:center; margin-bottom:14px;'>" +
       "<strong style='color:#ffa040; font-size:17px;'>Edit QSO &mdash; " + esc(r.CALL) + "</strong>" +
       "<div style='flex:1'></div></div>" +
       "<div id='qso-edit-grid'>" +
-      ro("Callsign", r.CALL) +
-      ro("Date / time", (r.QSO_DATE || "") + "  " + (r.TIME_ON || "") + " UTC") +
-      ro("Band / mode", (r.BAND || "--") + "  " + mode) +
-      ro("Frequency", r.FREQ ? (+r.FREQ).toFixed(3) + " MHz" : "--") +
       QSO_EDIT_FIELDS.map(([k, label, hint]) =>
         "<div>" + label + "</div><div><input id='qe-" + k + "' value='" +
         esc(r[k] || "") + "' title='" + esc(hint) + "' placeholder='" + esc(hint) + "'></div>"
       ).join("") +
       "</div>" +
-      "<p style='color:var(--dim); font-size:13px; margin:14px 0 0'>Callsign, date, time, " +
-      "band and mode cannot be corrected here &mdash; they are what QRZ, eQSL and LoTW match " +
-      "a contact on, and a LoTW record is signed over them. A wrong one is a delete and " +
-      "re-log. An edit changes the Tab5's log only; a copy already uploaded is unchanged.</p>" +
+      "<p style='color:var(--dim); font-size:13px; margin:14px 0 0'>Editing the " +
+      "callsign, date, time, band or mode changes what QRZ, eQSL and LoTW would match " +
+      "this contact on &mdash; and an edit only changes the Tab5's log, so a QSO already " +
+      "uploaded keeps whatever those sites already hold. Correct freely; just know which " +
+      "copy you are correcting.</p>" +
       "<div style='display:flex; justify-content:flex-end; gap:8px; margin-top:16px'>" +
       "<button id='qe-save' class='btn-ok'>Save</button>" +
       "<button id='qe-cancel' class='btn-neutral'>Cancel</button></div></div>";
@@ -3052,11 +3064,11 @@ function adifImportMessage(j) {
        where it was needed. The four cell-clicks still work; this is a second,
        obvious way to the same four fields.
 
-       It deliberately does NOT widen what may be changed. Callsign, date, time,
-       band and mode are shown as context and stay read-only - they are what
-       QRZ, eQSL and LoTW match a contact on and what a LoTW signature covers
-       (the decision in #327) - and the panel now SAYS so, rather than leaving
-       someone to discover it by being refused. */
+       Every field is editable (operator, 2026-09-07, reversing #327): "It is not
+       up to us to rule what to be edited. The later matching on the various log
+       platforms is what matters." The device still refuses values that would
+       leave a record unreadable - a date that is not YYYYMMDD, a report that is
+       not +/-NN - and no longer refuses ones that are merely unwise. */
     const ed = e.target.closest("td.qedit");
     if (ed) {
       const r = recs[+ed.dataset.k];
