@@ -5507,6 +5507,32 @@ esp_err_t webserver_start(void)
     // not what fills the table; a real browser is.
     config.max_open_sockets = 8;
 
+    /* #345 - "stalls spanning a few seconds" (Samuel W7STF), and the mechanism
+     * was REPRODUCED FROM A DESK rather than inferred: plain TCP connections to
+     * port 80 sending a PARTIAL request (headers, no terminating blank line)
+     * and held open were closed STRICTLY ONE AT A TIME, 5.1 s apart, at the IDF
+     * default recv_wait_timeout.
+     *
+     * esp_http_server has ONE worker task and no multi-worker option, so an
+     * incomplete request holds it for the whole timeout and N of them stall the
+     * entire web UI for 5N seconds. Nothing exotic produces one: a phone that
+     * slept mid-request, a tab closed while loading, a client that walked out of
+     * WiFi range.
+     *
+     * ⛔ THIS IS NOT #313 AND MUST NOT BE FOLDED INTO IT. During that test the
+     * socket table peaked at 11 of 16 with zero SOCKET TABLE EXHAUSTED and zero
+     * accept errors. The two are indistinguishable from a browser and are
+     * different faults.
+     *
+     * ⚠ 2 s is a JUDGEMENT, not a measurement. It cuts each stall by 60%, and a
+     * few hundred bytes of request headers are well inside 2 s even on poor
+     * WiFi since TCP retransmits sooner - but a genuinely slow client now gets
+     * less grace, and that lands on exactly the people least likely to report
+     * it. If anyone reports requests failing on a weak link, this is the first
+     * thing to put back. It SHORTENS a stall; it does not remove one - the real
+     * cure would be a second worker, which this server cannot do. */
+    config.recv_wait_timeout = 2;
+
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
