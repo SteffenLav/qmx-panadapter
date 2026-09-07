@@ -3141,7 +3141,8 @@ static lv_obj_t *s_db_min_label = NULL;
 // Normal mode = absolute dBm; flat mode = relative dB above the noise floor.
 // The gridlines are drawn per-frame into the canvas (see ui_push_spectrum);
 // these overlay labels persist and are repositioned on range/mode change.
-#define DB_SCALE_MAX_LBLS 5
+/* DB_SCALE_MAX_LBLS now lives in util/db_gridlines.h - one definition,
+ * shared with the web path that draws the same scale. */
 static lv_obj_t *s_db_scale_lbl[DB_SCALE_MAX_LBLS] = {0};
 // Evenly-spaced dBm ticks, each label centered on its gridline. The old -30/-130
 // corner labels are hidden (see update_db_scale) so the scale reads as one clean
@@ -7352,6 +7353,18 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
 }
 
 // Exported wrapper for render_waterfall.c's noise-floor-within-passband calc.
+int ui_zoom_presets(const float **out_list)
+{
+    if (out_list) *out_list = ZOOM_PRESETS;
+    return (int)(sizeof(ZOOM_PRESETS) / sizeof(ZOOM_PRESETS[0]));
+}
+
+void ui_get_db_range(float *out_min, float *out_max)
+{
+    if (out_min) *out_min = DB_MIN_DISPLAY;
+    if (out_max) *out_max = DB_MAX_DISPLAY;
+}
+
 void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high)
 {
     compute_passband_edges_hz(out_low, out_high);

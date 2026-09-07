@@ -49,6 +49,7 @@
 #include "util/ip_guard.h"    // #307: a static IP must not lock the operator out
 #include "util/sock_probe.h"  // #313: how many LWIP sockets are left
 #include "util/sock_owners.h"  // #313: and WHO is holding them
+#include "util/db_gridlines.h" // the dB scale the browser must draw too
 #include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
@@ -577,10 +578,17 @@ static esp_err_t status_handler(httpd_req_t *req)
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
         add_ft8_tx_status(root);
-    // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
     {
         uint32_t bw = ui_get_passband_width_hz();
         if (bw == 0) {
+            /* Mode defaults, for the width READOUT only, before CAT has
+             * answered FW;. This block used to carry the comment "matches Tab5
+             * compute_passband_edges_hz" - i.e. it admitted to being a copy of a
+             * rule that lives elsewhere, and there were then THREE
+             * implementations of the passband: this one, the real one in ui.c,
+             * and a fourth-hand version in the browser. The EDGES below are now
+             * asked for rather than re-derived, so this survives only to put a
+             * plausible number next to "BW" on a radio that has not spoken yet. */
             const char *m = ui_get_mode_str();
             if      (strstr(m, "CW"))   bw = 300;
             else if (strstr(m, "AM"))   bw = 6000;
@@ -588,6 +596,54 @@ static esp_err_t status_handler(httpd_req_t *req)
             else                        bw = 2700;  // USB/LSB/DiGi
         }
         cJSON_AddNumberToObject(root, "passband_hz", (double)bw);
+
+        /* ⭐ THE PASSBAND EDGES THEMSELVES, FROM THE ONE FUNCTION THAT KNOWS.
+         *
+         * The browser worked them out again and got DIGITAL WRONG AT BOTH ENDS:
+         * it treated DiGi as USB, drawing 200..200+FW, where the QMX uses one
+         * fixed 150..3200 filter for digital modes AND reports FW; as that
+         * filter's TOP EDGE rather than its width. So in FT8 the Tab5 drew
+         * 150..3200 and the page drew 200..3400 - which is the other half of
+         * Samuel W7STF's "the pass-band filter being centered on the Tab5, but
+         * totally in a different place on the Web-UI" (#342), the half the zoom
+         * viewport fix did not touch.
+         *
+         * Sent, not derived. Same rule as the CW line, the spot filter and the
+         * viewport: one implementation, and the page draws what it is told. */
+        int32_t pb_lo = 0, pb_hi = 0;
+        ui_get_passband_edges_hz(&pb_lo, &pb_hi);
+        cJSON_AddNumberToObject(root, "pb_lo_hz", (double)pb_lo);
+        cJSON_AddNumberToObject(root, "pb_hi_hz", (double)pb_hi);
+    }
+
+    /* The dB scale and its round gridline values, from util/db_gridlines.c -
+     * the same numbers the Tab5 prints up its right-hand edge. The page had
+     * -40/-60/-80/-100/-120 baked in, which stops being true the moment the
+     * dB-range sliders move; that is exactly the bug db_gridlines.c was written
+     * to fix on the Tab5 (Samuel W7STF, v1.8.3) and the browser never got it. */
+    {
+        float db_lo = 0, db_hi = 0;
+        ui_get_db_range(&db_lo, &db_hi);
+        cJSON_AddNumberToObject(root, "db_lo", (double)db_lo);
+        cJSON_AddNumberToObject(root, "db_hi", (double)db_hi);
+        float lines[DB_SCALE_MAX_LBLS];
+        int nl = db_gridlines_build(db_lo, db_hi, DB_SCALE_MAX_LBLS, lines);
+        cJSON *arr = cJSON_AddArrayToObject(root, "db_lines");
+        if (arr)
+            for (int i = 0; i < nl; i++)
+                cJSON_AddItemToArray(arr, cJSON_CreateNumber((double)lines[i]));
+    }
+
+    /* The zoom steps the Tab5 offers. The page's own list was already one short
+     * - {1,2,4,8,16} against {1,2,4,8,16,24} - so x24 could not be selected from
+     * the browser at all. */
+    {
+        const float *zp = NULL;
+        int nz = ui_zoom_presets(&zp);
+        cJSON *arr = cJSON_AddArrayToObject(root, "zoom_steps");
+        if (arr && zp)
+            for (int i = 0; i < nz; i++)
+                cJSON_AddItemToArray(arr, cJSON_CreateNumber((double)zp[i]));
     }
 
     float peak_dbm = -999.0f;

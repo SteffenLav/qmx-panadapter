@@ -118,6 +118,18 @@ int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the di
 // Passband edges in Hz, relative to VFO/dial (mode + CAT-width dependent).
 void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 
+/* The dB scale the spectrum is drawn against, and the round gridline values
+ * derived from it (util/db_gridlines.c). Exposed so the browser can draw the
+ * SAME scale instead of the hardcoded -40..-120 it carried, which stopped being
+ * true the moment anyone moved the dB-range sliders - the fault db_gridlines.c
+ * was written to fix on the Tab5 (Samuel W7STF, v1.8.3). */
+void ui_get_db_range(float *out_min, float *out_max);
+
+/* The zoom steps the Tab5 offers. The page had its own list and it was already
+ * one short - {1,2,4,8,16} against {1,2,4,8,16,24} - so x24 could not be reached
+ * from the browser at all. Returns the count; pass NULL to just ask how many. */
+int ui_zoom_presets(const float **out_list);
+
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);
 void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text);
