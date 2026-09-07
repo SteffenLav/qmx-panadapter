@@ -1770,17 +1770,36 @@ function paintViewStale(stale) {
     n.style.cssText = "position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:50;" +
                       "background:rgba(31,78,121,0.92);color:#fff;padding:6px 12px;border-radius:6px;" +
                       "font-size:13px;text-align:center;pointer-events:none";
-    n.textContent = "Lost contact with the Tab5 - not drawing, because the frequency scale " +
-                    "would be out of date. Signals would appear in the wrong place.";
+    n.textContent = "Lost contact with the Tab5 - not drawing, the frequency scale would be out of date.";
     host.appendChild(n);
   } else if (!stale && n) {
     n.remove();
   }
 }
-/* Off the poll, so it still fires when the poll is what stopped. */
+/* Off the poll, so it still fires when the poll is what stopped.
+ *
+ * ⛔ THE BANNER AND THE DECISION TO STOP DRAWING ARE NOT THE SAME EVENT, and
+ * conflating them is what made this intrusive. Reported from the bench:
+ * "I see the blue big sign across the screen far too often - it is pretty
+ * intrusive when it shows."
+ *
+ * Stopping the trace at VIEW_STALE_MS is about CORRECTNESS and must stay tight:
+ * a frame drawn against an axis four seconds old puts signals in the wrong
+ * place. Saying so out loud is about the OPERATOR, and four seconds of silence
+ * is not yet news - a WS reconnect, a hidden tab waking, one SDIO wobble or a
+ * single dropped poll all clear on their own within a second or two, and the
+ * banner was announcing every one of them.
+ *
+ * So the trace still blanks immediately and the banner waits for the condition
+ * to persist. It disappears the instant one frame or one poll arrives, so a
+ * recovery is never left looking like a fault. */
+const VIEW_STALE_SAY_TICKS = 8;      /* ~8 s on top of VIEW_STALE_MS */
+let viewStaleTicks = 0;
 setInterval(() => {
   const onPanadapter = (lastScreen || "panadapter") === "panadapter";
-  paintViewStale(onPanadapter && lastView !== null && !viewIsFresh());
+  const stale = onPanadapter && lastView !== null && !viewIsFresh();
+  viewStaleTicks = stale ? viewStaleTicks + 1 : 0;
+  paintViewStale(viewStaleTicks >= VIEW_STALE_SAY_TICKS);
 }, 1000);
 
 /* ⛔ THE RADIO'S FREQUENCY, NEVER THE OPTIMISTIC ONE - and the distinction is
@@ -4438,6 +4457,11 @@ function setBuildForm(cfg, ft8Opts) {
     html += "</div>";
   }
   body.innerHTML = html + "</div>";
+  /* CW profiles (#359) get their own block rather than a SET_FIELDS row: a
+     profile is a name, a centre and eight checkboxes, which the generic
+     one-control-per-line renderer has no shape for. General settings only -
+     it has nothing to do with FT8 options. */
+  if (!ft8Opts) cwProfRender(cfg, body);
   // Re-tint a warning select as soon as the choice changes, not on save - the
   // point of the colour is to be seen while deciding.
   body.querySelectorAll("select[data-tintable]").forEach(sel => {
@@ -4446,6 +4470,112 @@ function setBuildForm(cfg, ft8Opts) {
       sel.style.color = (o && o.dataset.tint) ? o.dataset.tint : "#ddd";
     });
   });
+}
+
+/* ---- CW profiles (#359, Uwe DL8UG) ---------------------------------------
+   "It would be great if you could pick a profile... it would save all the
+   tedious fiddling on the QMX." Each profile is a CW centre plus the set of
+   filter widths the radio should offer with it - the pair he actually thinks
+   in, and the pair the QMX makes you set separately in two different menus.
+
+   ⛔ THE EIGHT WIDTHS COME FROM THE DEVICE (cw_filter_widths), never from a
+   list typed here. That is the rule the whole of 2026-09-07 was about: every
+   place this page re-implemented a device rule instead of being handed the
+   answer ended up disagreeing with the Tab5. If the radio ever offers a
+   different set, this page follows with no change.
+
+   Applying is NOT part of Save. Save stores; Apply writes the operator's radio
+   configuration - nine MM Sets, a config reload and an IQ re-assert - so it is
+   its own deliberate button, and it applies what is STORED, which is why it
+   saves first. */
+let cwProfWidths = [];
+
+function cwProfRender(cfg, body) {
+  cwProfWidths = Array.isArray(cfg.cw_filter_widths) ? cfg.cw_filter_widths : [];
+  const profs = Array.isArray(cfg.cw_profiles) ? cfg.cw_profiles : [];
+  if (!profs.length) return;
+
+  const wrap = document.createElement("div");
+  let h = '<div style="margin:14px 0 6px"><strong style="color:#ffa040">CW profiles</strong></div>' +
+          '<div style="color:var(--dim);font-size:13px;margin-bottom:8px">' +
+          'A CW centre and the filter widths to offer with it. Leave the centre empty ' +
+          'to clear a slot. Apply writes it to the radio - the radio reloads its ' +
+          'configuration, which takes about a second.</div>';
+
+  h += '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:13px">';
+  h += "<tr><th style='text-align:left;padding:4px 8px'>Name</th>" +
+       "<th style='text-align:left;padding:4px 8px'>Centre Hz</th>";
+  for (const w of cwProfWidths) h += "<th style='padding:4px 6px'>" + w + "</th>";
+  h += "<th></th></tr>";
+
+  for (let i = 0; i < profs.length; i++) {
+    const pr = profs[i] || {};
+    const mask = Number(pr.mask) || 0;
+    h += "<tr>";
+    h += "<td style='padding:3px 8px'><input id='cwp-name-" + i + "' type='text' maxlength='11' value='" +
+         escHtml(pr.name || "") + "' style=\"width:100px;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:3px\"></td>";
+    h += "<td style='padding:3px 8px'><input id='cwp-hz-" + i + "' type='text' inputmode='numeric' value='" +
+         (Number(pr.centre_hz) ? String(pr.centre_hz) : "") +
+         "' style=\"width:70px;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:3px\"></td>";
+    for (let b = 0; b < cwProfWidths.length; b++)
+      h += "<td style='text-align:center;padding:3px 6px'><input type='checkbox' id='cwp-b-" + i + "-" + b + "'" +
+           ((mask & (1 << b)) ? " checked" : "") + "></td>";
+    h += "<td style='padding:3px 8px'><button type='button' id='cwp-apply-" + i +
+         "' style=\"background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:3px 10px;cursor:pointer\">Apply</button></td>";
+    h += "</tr>";
+  }
+  h += "</table></div><div id='cwp-status' style='color:var(--dim);font-size:13px;margin-top:6px'></div>";
+  wrap.innerHTML = h;
+  body.appendChild(wrap);
+
+  for (let i = 0; i < profs.length; i++) {
+    const b = document.getElementById("cwp-apply-" + i);
+    if (b) b.addEventListener("click", () => cwProfApply(i));
+  }
+}
+
+/* Read the block back into the same array shape /api/settings serves. */
+function cwProfCollect() {
+  const out = [];
+  for (let i = 0; ; i++) {
+    const nm = document.getElementById("cwp-name-" + i);
+    const hz = document.getElementById("cwp-hz-" + i);
+    if (!nm || !hz) break;
+    let mask = 0;
+    for (let b = 0; b < cwProfWidths.length; b++) {
+      const c = document.getElementById("cwp-b-" + i + "-" + b);
+      if (c && c.checked) mask |= (1 << b);
+    }
+    out.push({ name: nm.value, centre_hz: Number(hz.value) || 0, mask: mask });
+  }
+  return out;
+}
+
+/* Save first, then apply - the device applies what is STORED, so applying an
+   edit the operator has not saved would put a different profile on the radio
+   from the one on the screen. */
+async function cwProfApply(idx) {
+  const st = document.getElementById("cwp-status");
+  if (st) st.textContent = "Saving and applying...";
+  try {
+    let r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cw_profiles: cwProfCollect() })
+    });
+    if (!r.ok) { if (st) st.textContent = "Could not save (HTTP " + r.status + ")"; return; }
+    r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cw_profile", idx: idx })
+    });
+    let j = null;
+    try { j = await r.json(); } catch (e) { /* fall through to the status code */ }
+    if (st) st.textContent = r.ok
+      ? "Sent to the radio - it reloads its configuration, about a second."
+      : ((j && j.error) ? j.error : "Apply failed (HTTP " + r.status + ")");
+  } catch (e) {
+    if (st) st.textContent = "Apply failed (" + e.message + ")";
+  }
+  setTimeout(() => { const n = document.getElementById("cwp-status"); if (n) n.textContent = ""; }, 8000);
 }
 
 async function setOpen(ft8Opts) {
@@ -4479,6 +4609,10 @@ async function setSave() {
     if (path === "wifi_pass" && !v) continue;
     setPut(patch, path, v);
   }
+  /* CW profiles ride along with the ordinary Save. Only when the block is on
+     screen - the FT8 Options panel does not render it, and posting an empty
+     array from there would clear all four slots. */
+  if (document.getElementById("cwp-name-0")) patch.cw_profiles = cwProfCollect();
   const st = document.getElementById("set-status");
   st.textContent = "Saving...";
   try {

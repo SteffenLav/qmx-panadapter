@@ -1812,6 +1812,43 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  bad ? "false" : "true", bad);
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "cw_profile") == 0) {
+        /* Apply a stored CW profile to the radio (#359).
+         *
+         * The Tab5 drawer picker and this endpoint both come here, so the two
+         * screens cannot disagree about what applying a profile means.
+         *
+         * NOT a cheap action: eight filter rows, the centre, then MU; to make
+         * the radio act on any of it, then the IQ handshake because MU; drops
+         * IQ mode. It is queued for the poll task and takes about a second, so
+         * a 200 here means "asked for", never "done" - the log line
+         * "CW profile applied" is the one that means done. */
+        cJSON *ix = cJSON_GetObjectItem(root, "idx");
+        int idx = cJSON_IsNumber(ix) ? (int)ix->valuedouble : -1;
+        char nm[12] = "";
+        uint16_t centre = 0;
+        uint8_t  mask = 0;
+        if (!settings_get_cw_profile(idx, nm, sizeof(nm), &centre, &mask)) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"no such profile, or that slot is empty\"}");
+            return ESP_OK;
+        }
+        if (!cat_apply_cw_profile(centre, mask)) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"the radio is not connected\"}");
+            return ESP_OK;
+        }
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req,
+            "{\"ok\":true,\"note\":\"queued - the radio reloads its config, about a second\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "sockets") == 0) {
         /* #313. Names every holder of the 16-entry LWIP socket table. Costs no
            socket of its own, so it is safe to fire while the table is full -
@@ -3664,6 +3701,32 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // exactly the kind of thing you do not want to need the glass for; the charge
     // limit matters most when the Tab5 is somewhere you are not.
     cJSON_AddNumberToObject(root, "cw_pitch_hz",     (double)ui_get_cw_pitch_hz());
+    /* CW PROFILES (#359, Uwe DL8UG). Four slots of {name, centre, filter mask}.
+     * An empty slot is centre 0 and is sent as such, so the page renders it as
+     * empty rather than inventing a default the operator never chose.
+     *
+     * The eight widths go WITH them, from cat_cw_filter_width() - the device
+     * owns which widths exist and the page must not carry a second copy of that
+     * list. Same rule that fixed the spot filter and the viewport today. */
+    {
+        cJSON *w = cJSON_AddArrayToObject(root, "cw_filter_widths");
+        for (int i = 0; w && i < CW_FILTER_COUNT; i++)
+            cJSON_AddItemToArray(w, cJSON_CreateNumber((double)cat_cw_filter_width(i)));
+
+        cJSON *arr = cJSON_AddArrayToObject(root, "cw_profiles");
+        for (int i = 0; arr && i < CW_PROFILE_COUNT; i++) {
+            char nm[12] = "";
+            uint16_t centre = 0;
+            uint8_t  mask = 0;
+            settings_get_cw_profile(i, nm, sizeof(nm), &centre, &mask);
+            cJSON *o = cJSON_CreateObject();
+            if (!o) continue;
+            cJSON_AddStringToObject(o, "name", nm);
+            cJSON_AddNumberToObject(o, "centre_hz", (double)centre);
+            cJSON_AddNumberToObject(o, "mask", (double)mask);
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
     cJSON_AddNumberToObject(root, "if_cal_hz",       (double)ui_get_if_cal_hz());
     cJSON_AddBoolToObject  (root, "charge_limit_en",  c.charge_limit_en);
     cJSON_AddNumberToObject(root, "charge_limit_pct", (double)c.charge_limit_pct);
@@ -3858,6 +3921,28 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
         settings_set_cw_cal_hz((int16_t)it->valuedouble);
+
+    /* CW profiles, same array shape they are served in. ABSENT means "not
+     * edited" - a page from an older firmware posts every field it knows, and
+     * must not silently clear four slots it never showed. Present-but-empty
+     * (centre 0) is a deliberate clear and is honoured. */
+    {
+        cJSON *arr = cJSON_GetObjectItem(root, "cw_profiles");
+        if (cJSON_IsArray(arr)) {
+            int n = cJSON_GetArraySize(arr);
+            if (n > CW_PROFILE_COUNT) n = CW_PROFILE_COUNT;
+            for (int i = 0; i < n; i++) {
+                cJSON *o = cJSON_GetArrayItem(arr, i);
+                if (!cJSON_IsObject(o)) continue;
+                const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(o, "name"));
+                cJSON *c = cJSON_GetObjectItem(o, "centre_hz");
+                cJSON *m = cJSON_GetObjectItem(o, "mask");
+                settings_set_cw_profile(i, nm ? nm : "",
+                                        cJSON_IsNumber(c) ? (uint16_t)c->valuedouble : 0,
+                                        cJSON_IsNumber(m) ? (uint8_t)m->valuedouble : 0);
+            }
+        }
+    }
 
     // ⛔ sim_mode_en is exposed on purpose and is the one to be careful with: it
     // is what lets a test drive full QSOs with NO radio attached, and ft8_tx.c

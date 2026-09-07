@@ -2452,6 +2452,13 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
                                  // made the web UI unreachable (#307). Built only
                                  // when a static address is actually configured.
+#define DRAWER_SEC_CWPROF    40  /* #359: apply a stored CW profile (centre +
+                                  * which filter widths the radio offers). The
+                                  * profiles themselves are EDITED on the web
+                                  * settings page - Uwe asked for a config page
+                                  * and said quick access was not needed - so
+                                  * what lives on the glass is only the picking.
+                                  * ⛔ N_DRAWER_SECTIONS raised to 41 with it. */
 #define DRAWER_SEC_FREQSEP   39  /* #302: how a frequency is punctuated -
                                      14.074.000 or 14,074,000 (Don N2VGU) */
                                  // NOTE ids 0..39 used, N_DRAWER_SECTIONS is 40.
@@ -2521,7 +2528,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
 // object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
 // "Settings drawer built". Raise this when adding a section, and keep headroom.
-#define N_DRAWER_SECTIONS     40
+#define N_DRAWER_SECTIONS     41
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2557,6 +2564,7 @@ static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
     { DRAWER_SEC_QMXRF, "RF gain", true },
     { DRAWER_SEC_CW, "CW centre & transmit offset", false },
+    { DRAWER_SEC_CWPROF, "CW profiles", false },
     { DRAWER_SEC_RITPILL, "Show RIT button", false },
     { DRAWER_SEC_SWRLIM, "SWR protection", true },
     { DRAWER_SEC_TUNE2, "Antenna Tune", true },
@@ -3006,6 +3014,7 @@ static void drawer_cluster_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
+static void drawer_refresh_cw_profiles(void);
 static void drawer_slider_qmx_rf_cb(lv_event_t *e);
 static void drawer_refresh_qmx_rf(void);
 static void gain_resolve_start(void);   // repaint a read-back that answers late
@@ -10411,6 +10420,64 @@ void ui_toast_ms(const char *msg, uint32_t ms)
 }
 
 // Build the drawer once. Hidden off-screen on the right initially.
+/* CW PROFILES (#359, Uwe DL8UG). Four buttons; a tap applies that profile to
+ * the radio.
+ *
+ * ⛔ THIS TAP WRITES THE OPERATOR'S RADIO CONFIGURATION - nine MM Sets, a
+ * config reload and an IQ re-assert. It is deliberately a plain tap and not a
+ * long-press, because Uwe's whole complaint is the fiddling; but it is also
+ * deliberately NOT on the panadapter screen, only in the drawer, so a stray
+ * brush during operating cannot reach it.
+ *
+ * The apply itself lives in cat.c and is shared with the web action, so the two
+ * screens cannot end up meaning different things by "apply". */
+static lv_obj_t *s_cwprof_btn[CW_PROFILE_COUNT];
+static lv_obj_t *s_cwprof_lbl[CW_PROFILE_COUNT];
+
+static void drawer_cwprof_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    char nm[12] = "";
+    uint16_t centre = 0;
+    uint8_t  mask = 0;
+    if (!settings_get_cw_profile(idx, nm, sizeof(nm), &centre, &mask)) {
+        /* An empty slot says where profiles come from rather than doing
+           nothing - a control that ignores a tap reads as broken. */
+        ui_toast("Empty slot - set profiles up in the web Settings window");
+        return;
+    }
+    if (!cat_apply_cw_profile(centre, mask)) {
+        ui_toast("The radio is not connected");
+        return;
+    }
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Applying %s: %u Hz", nm[0] ? nm : "profile",
+             (unsigned)centre);
+    ui_toast(msg);
+}
+
+/* Re-read on every drawer open: the profiles are edited on the WEB page, so
+ * what was true when the drawer was BUILT (once, during ui_init) is not what is
+ * stored now. Same reasoning as drawer_refresh_wspr() - #291. */
+static void drawer_refresh_cw_profiles(void)
+{
+    for (int i = 0; i < CW_PROFILE_COUNT; i++) {
+        if (!s_cwprof_lbl[i]) continue;
+        char nm[12] = "";
+        uint16_t centre = 0;
+        uint8_t  mask = 0;
+        bool used = settings_get_cw_profile(i, nm, sizeof(nm), &centre, &mask);
+        char txt[20];
+        if (!used)          snprintf(txt, sizeof(txt), "-");
+        else if (nm[0])     snprintf(txt, sizeof(txt), "%s", nm);
+        else                snprintf(txt, sizeof(txt), "%u", (unsigned)centre);
+        lv_label_set_text(s_cwprof_lbl[i], txt);
+        /* Dim an empty slot rather than hiding it: four fixed positions mean
+           the one you want stays where you last left it. */
+        lv_obj_set_style_opa(s_cwprof_btn[i], used ? LV_OPA_COVER : LV_OPA_40, 0);
+    }
+}
+
 static void drawer_build(void)
 {
     if (s_drawer) return;
@@ -11468,6 +11535,47 @@ static void drawer_build(void)
         y += 244 + 60;
     }
 
+    /* CW profiles (#359). Its own section directly under the CW controls: a
+     * profile IS a CW centre plus a filter set, so it belongs where an operator
+     * already looks for both, and keeping it separate leaves the section above
+     * (whose height and advance have to agree) untouched. */
+    {
+        const int SEC_H = 130;
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWPROF, y, SEC_H);
+
+        lv_obj_t *hdr = lv_label_create(sec);
+        /* Says where they are edited, because nothing else on the Tab5 does and
+           four unlabelled buttons would otherwise be a puzzle. */
+        lv_label_set_text(hdr, "CW profiles (edit on the web)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 4);
+
+        const int gap = 8;
+        const int bw  = ((DRAWER_W - 32) - gap * (CW_PROFILE_COUNT - 1)) / CW_PROFILE_COUNT;
+        for (int i = 0; i < CW_PROFILE_COUNT; i++) {
+            lv_obj_t *b = lv_btn_create(sec);
+            lv_obj_set_size(b, bw, 54);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (bw + gap), 52);
+            lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE), 0);
+            lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+            lv_obj_set_style_border_width(b, 1, 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            lv_obj_add_event_cb(b, drawer_cwprof_cb, LV_EVENT_CLICKED,
+                                (void *)(intptr_t)i);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, "-");
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_center(l);
+            s_cwprof_btn[i] = b;
+            s_cwprof_lbl[i] = l;
+        }
+        drawer_refresh_cw_profiles();   /* fill them in for the first open */
+
+        y += SEC_H;
+    }
+
     // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
     // (only active in CW/CW-R mode). Header row carries the on/off checkbox;
     // a volume slider sits below.
@@ -12169,6 +12277,8 @@ static void drawer_open(void)
     // PUBLISHED to wsprnet - so the dropdown must state the stored value, not
     // whatever it was built with (#291).
     drawer_refresh_wspr();
+    /* Profiles are edited on the web page, so re-read them here (#359). */
+    drawer_refresh_cw_profiles();
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.
