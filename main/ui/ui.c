@@ -2563,6 +2563,13 @@ static const drawer_item_t GRP_STATION[] = {
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
     { DRAWER_SEC_QMXRF, "RF gain", true },
+    /* Above CW centre (operator, 2026-09-07). It was filed under Spectrum with
+     * the drawing controls, but it is not one: it trims the 12 kHz IF offset so
+     * a signal lands where the dial says it is, which is the same conversation
+     * as the CW centre sitting under it - and CLAUDE.md records a whole field
+     * report (Roy KI0ER, #165) where a stale CW offset and this trim had to be
+     * reasoned about together. */
+    { DRAWER_SEC_IFCAL, "IF calibration", false },
     { DRAWER_SEC_CW, "CW centre & transmit offset", false },
     { DRAWER_SEC_CWPROF, "CW profiles", false },
     { DRAWER_SEC_RITPILL, "Show RIT button", false },
@@ -2623,7 +2630,9 @@ static const drawer_item_t GRP_SPECTRUM[] = {
     { DRAWER_SEC_SMOOTHING, "Smoothing", false },
     { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window", false },
     { DRAWER_SEC_IQ, "IQ Balance", false },
-    { DRAWER_SEC_IFCAL, "IF calibration", false },
+    /* IF calibration moved to the Radio group, above CW centre - it trims where
+     * the radio's signals land, which is the same conversation as the CW centre
+     * and the transmit offset, not a drawing setting like everything else here. */
 };
 static const drawer_item_t GRP_DEVICE[] = {
     { DRAWER_SEC_CHARGE, "Battery care", false },
