@@ -2473,7 +2473,8 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
                                    // Only the pill's VISIBILITY - the control itself stays where
                                    // it is; RIT is not operated from the drawer (operator).
 #define DRAWER_SEC_BPREGION   16
-#define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
+#define DRAWER_SEC_DISTANCE   17  // distance unit (km/miles) - shown in FT8 AND WSPR,
+                                  // since both decode lists honour it
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
 #define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
@@ -2856,7 +2857,19 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
     /* Simulation belongs to BOTH decode pages - one setting drives the FT8
      * phantoms and the WSPR ones (see wspr_sim.h). */
     if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
-    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_FT8SYNC) return ft8;
+    /* ⭐ DISTANCE IS NOT FT8-ONLY ANY MORE. The WSPR decode list and its BEST DX
+       line now honour the same km/miles setting, so the control has to be
+       reachable from the WSPR page - it was invisible there, which is how an
+       operator ended up choosing miles from the web because the Tab5 offered
+       him nowhere to do it (Samuel W7STF, 2026-09-07: "cant see the km/mls
+       checkbox in settings drawer?").
+       ⚠ Fast pounce and PSK Reporter share this section and ARE FT8-only. They
+       are harmless on the WSPR page - both simply do nothing there - and
+       splitting the section to hide two rows would cost the reflow this file
+       warns about repeatedly. Better a control that idles than a setting that
+       cannot be reached. */
+    if (id == DRAWER_SEC_DISTANCE) return ft8 || wspr;
+    if (id == DRAWER_SEC_FT8SYNC) return ft8;
     /* ⛔ THE FALL-THROUGH AT THE BOTTOM OF THIS FUNCTION IS `return true`, so a
      * section nobody names here appears on EVERY page. Three were doing that and
      * should not have been (found 2026-08-31, operator: "we have ft8 settings in

@@ -293,6 +293,8 @@ static void dial_changed_cb(lv_event_t *e)
 static lv_obj_t *s_lbl_dx;
 static lv_obj_t *s_hist_bar[HIST_BARS];
 static lv_obj_t *s_lbl_net;
+static lv_obj_t *s_lbl_hdr;        /* the column headings over the decode list */
+static bool      s_hdr_miles;      /* the unit the headings were built for */
 static lv_obj_t *s_btn_clr;        /* clear the decode list (Samuel W7STF) */
 static lv_obj_t *s_lbl_clr;
 static int64_t   s_clr_armed_us;   /* two-tap arming, 0 = not armed */
@@ -304,6 +306,23 @@ static lv_obj_t *s_lbl_hop;        /* says which bands are ticked */
 static lv_obj_t *s_hop_modal;      /* NULL when closed */
 
 static void hop_button_refresh(void);
+
+/* ⭐ THE HEADINGS ARE NOT CONSTANT - one of them names a UNIT. Built once at
+   page construction, the KM/MI heading froze at whatever the setting was then,
+   so ticking miles converted every VALUE and left the title saying KM. Rebuilt
+   whenever the unit changes, and only then - the string is 63 characters and
+   nothing else in it can move. */
+static void fmt_header(char *out, size_t n);
+static void wspr_header_refresh(void)
+{
+    if (!s_lbl_hdr) return;
+    const bool mi = wspr_dist_in_miles();
+    if (lv_label_get_text(s_lbl_hdr)[0] && s_hdr_miles == mi) return;
+    s_hdr_miles = mi;
+    char h[224];
+    fmt_header(h, sizeof(h));
+    lv_label_set_text(s_lbl_hdr, h);
+}
 
 /* Two taps, because this discards spots that may not have been published yet -
    see the note beside the button. The armed state expires so a stray first tap
@@ -744,6 +763,11 @@ static void refresh_left_extras(void)
      * The confirmed count stays, because it is the part the operator cannot
      * get anywhere else: how many of the calls heard are eligible under the
      * heard-more-than-once rule that gates publication. */
+    /* The KM/MI heading follows the setting, which can change from the web
+       while this page is open. Cheap: it returns at once unless the unit
+       actually moved. */
+    wspr_header_refresh();
+
     /* Let a forgotten "Sure?" fall back to "Clear" on its own, so the button
        never sits armed waiting for a tap the operator stopped intending. */
     if (s_clr_armed_us &&
@@ -1381,11 +1405,15 @@ void wspr_screen_view_init(lv_obj_t *parent)
     }
 
     /* ---------------- right pane, lower: the log ---------------- */
-    lv_obj_t *hdr = lv_label_create(s_container);
-    { char h[224]; fmt_header(h, sizeof(h)); lv_label_set_text(hdr, h); }
-    lv_obj_set_style_text_font(hdr, &qmx_mono_25, 0);
-    lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_pos(hdr, RIGHT_X, LIST_Y);
+    /* ⛔ LIST_X, NOT RIGHT_X. The header sits over the rows, so it moves with
+       the TABLE and not with the waterfall. Left at RIGHT_X it was indented
+       60 px past its own columns and its last heading fell off the pane - which
+       is exactly how DT arrived with data in every row and no title over it. */
+    s_lbl_hdr = lv_label_create(s_container);
+    lv_obj_set_style_text_font(s_lbl_hdr, &qmx_mono_25, 0);
+    lv_obj_set_style_text_color(s_lbl_hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_pos(s_lbl_hdr, LIST_X, LIST_Y);
+    wspr_header_refresh();
 
     s_list = lv_obj_create(s_container);
     lv_obj_set_size(s_list, LIST_W, MID_H - LIST_Y - 34);
