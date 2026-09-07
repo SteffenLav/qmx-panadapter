@@ -1606,6 +1606,31 @@ implementation, so picking the wrong one compiled, ran, and did nothing.
 Two things follow for the swipe gestures: the edge grips accept a **mouse click** (gated on the mouse indev, so a finger still behaves as before — a tap on the bottom strip must stay inert so reaching for it cannot retune), and the drawer and Memory Channels grew tappable handles on their **travelling** edge. The drawer's went on the right first and was wrong: that edge is pinned to the screen, so the handle sat still while the panel appeared from under it.
 
 ### No transition animations on this display — 220 ms is three frames (v1.5.0)
+
+⭐ **MEASURED on the drawer, 2026-09-07, 12 gestures** — the figure above was
+reasoned from the frame rate; these are the numbers. Temporary instrument in
+`ui.c` behind `DRAWER_TIMING_DIAG` (left in place at **0**; flip it to 1 and
+reflash to get them again):
+
+| | total, press to settled | frames | worst gap inside it |
+|---|---|---|---|
+| drawer open | 253–288 ms | 3–4 | ~150 ms |
+| drawer close | 263–457 ms | 2–4 | 119–268 ms |
+
+So a 250 ms animation gets **two to four stills**, one of which can be a
+**268 ms freeze** — which reads as stuck-then-jump, and is what the operator
+called "stick/slip". Closes are slower and far more variable than opens: the
+drawer is still fully drawn while it slides away, so there is more to
+composite.
+
+⚠ **And the animation is only half of it.** The same instrument measured the
+worst **taskLVGL timer-pass gap** at **98–233 ms**, i.e. how long a finger can
+rest on the glass before LVGL samples the touch at all. The event handler
+itself was **1–8 ms every time**. So when a gesture feels slow on this board,
+the handler is almost certainly innocent and the two real costs are *sampling*
+and *frames* — check those before changing any UI code. Two fixes were made to
+the drawer's scrim on the strength of feel before this was measured; both were
+reasonable and neither could have touched the actual latency.
 Landscape runs at ~13 fps (every flush goes through the software 90° rotation), so the Reader's 220 ms slide-in was **about three frames**: not motion, just two or three discrete snapshots at intermediate offsets, which reads as a flicker going in and as an unrelated page surfacing coming out. A cross-fade is the same three frames at 33/66/100 % opacity, so animating *differently* is not the answer — **one correct frame in, one out**. Generalise this before adding any transition: at 13 fps the only honest animation is none. (Related, different failure: `transform_rotation`/`transform_scale` on a large object can hang taskLVGL outright — see the watermark and wastebin notes.)
 
 ### No long interrupts-off critical sections — ANYWHERE — or the panel blanks (cyan flash)

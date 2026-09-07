@@ -9570,8 +9570,96 @@ void ui_set_cw_pitch_hz(uint16_t hz)
 
 
 // Animate x position. Used for slide-in/out.
+/* ---- DRAWER TOUCH/PAINT TIMING (temporary bench instrument) --------------
+ * Operator, 2026-09-07: "some of the tries were pretty laggy" - and the felt
+ * lag could not be told apart from the load, because nothing logs the touch.
+ *
+ * It answers ONE question: when a press is slow, is it slow to be NOTICED or
+ * slow to be DRAWN? Those have different fixes and this session already guessed
+ * once. The press itself is delivered BY an LVGL timer pass, so "how long since
+ * the last pass" is always ~0 at that moment and tells us nothing; the number
+ * that bounds how long a finger can sit unseen is the WORST pass gap, which is
+ * why that is what is kept.
+ *
+ * ⚠ Set to 0 before release - this is a diagnostic, not a feature. It logs only
+ * on a drawer open/close, so it costs nothing while idle, but a shipped build
+ * should not carry it (the lv_anim.c guard that found the v1.10.8 crash was
+ * stripped for the same reason). */
+#define DRAWER_TIMING_DIAG 0
+
+#if DRAWER_TIMING_DIAG
+static int64_t s_lv_pass_us       = 0;   /* when taskLVGL last ran a timer pass */
+static int64_t s_lv_worst_gap_us  = 0;   /* worst pass gap in the current window */
+static int64_t s_lv_worst_at_us   = 0;   /* when that window started */
+static int64_t s_drawer_press_us  = 0;   /* the press being timed, 0 = none */
+static int     s_drawer_frames    = 0;
+static int64_t s_drawer_frame_us  = 0;
+static int64_t s_drawer_frame_max = 0;
+static const char *s_drawer_what  = "";
+
+/* Runs on every LVGL timer-handler pass (period 1 ms, so it is scheduled as
+   often as the handler runs and no more). Two stores and a compare. */
+static void lv_pass_probe_cb(lv_timer_t *t)
+{
+    (void)t;
+    int64_t now = esp_timer_get_time();
+    if (s_lv_pass_us) {
+        int64_t gap = now - s_lv_pass_us;
+        /* A rolling 2 s window, so a press reports what it was actually
+           competing with rather than an all-time worst from minutes ago. */
+        if (now - s_lv_worst_at_us > 2000000) {
+            s_lv_worst_gap_us = 0;
+            s_lv_worst_at_us  = now;
+        }
+        if (gap > s_lv_worst_gap_us) s_lv_worst_gap_us = gap;
+    }
+    s_lv_pass_us = now;
+}
+
+/* Called the instant a gesture is delivered to us. */
+static void drawer_timing_begin(const char *what)
+{
+    s_drawer_press_us  = esp_timer_get_time();
+    s_drawer_frames    = 0;
+    s_drawer_frame_us  = 0;
+    s_drawer_frame_max = 0;
+    s_drawer_what      = what;
+    ESP_LOGI(TAG, "drawer timing: %s - worst taskLVGL pass gap in the last 2 s was %d ms "
+                  "(that is how long a finger can go unseen)",
+             what, (int)(s_lv_worst_gap_us / 1000));
+}
+
+static void drawer_timing_done(lv_anim_t *a)
+{
+    (void)a;
+    if (!s_drawer_press_us) return;
+    int64_t total = (esp_timer_get_time() - s_drawer_press_us) / 1000;
+    ESP_LOGI(TAG, "drawer timing: %s finished %d ms after the press - %d frames, "
+                  "worst frame gap %d ms (250 ms animation)",
+             s_drawer_what, (int)total, s_drawer_frames,
+             (int)(s_drawer_frame_max / 1000));
+    s_drawer_press_us = 0;
+}
+#endif  /* DRAWER_TIMING_DIAG */
+
 static void drawer_anim_x_cb(void *obj, int32_t v)
 {
+#if DRAWER_TIMING_DIAG
+    if (s_drawer_press_us) {
+        int64_t now = esp_timer_get_time();
+        if (s_drawer_frames == 0) {
+            /* The one number that says "it looked unresponsive": how long the
+               operator stared at a still drawer after touching it. */
+            ESP_LOGI(TAG, "drawer timing: %s first frame drawn %d ms after the press",
+                     s_drawer_what, (int)((now - s_drawer_press_us) / 1000));
+        } else {
+            int64_t g = now - s_drawer_frame_us;
+            if (g > s_drawer_frame_max) s_drawer_frame_max = g;
+        }
+        s_drawer_frame_us = now;
+        s_drawer_frames++;
+    }
+#endif
     lv_obj_set_x((lv_obj_t *)obj, v);
 }
 
@@ -9753,6 +9841,9 @@ static void drawer_scrim_cb(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED) {
         s_drawer_scrim_swipe_start_x = (int)p.x;
+#if DRAWER_TIMING_DIAG
+        drawer_timing_begin("tap outside -> close");
+#endif
         /* ⭐ CLOSE ON THE PRESS, NOT THE LIFT. Operator, 2026-09-07: "a bit of
          * a stick/slip experience when closing the drawer, especially using the
          * touch outside... it needs to look for touches outside immediately."
@@ -10503,6 +10594,9 @@ static void drawer_build(void)
 
     // Scrim: covers the area left of the drawer, blocks touches to underlying
     // content, and closes the drawer on a rightward swipe.
+#if DRAWER_TIMING_DIAG
+    lv_timer_create(lv_pass_probe_cb, 1, NULL);
+#endif
     s_drawer_scrim = lv_obj_create(scr);
     lv_obj_set_size(s_drawer_scrim, DISPLAY_H_RES - DRAWER_W, DISPLAY_V_RES);
     lv_obj_set_pos(s_drawer_scrim, 0, 0);
@@ -12292,6 +12386,11 @@ static void drawer_open(void)
 {
     drawer_build();  // lazy build on first open
     if (!s_drawer || s_drawer_open) return;
+#if DRAWER_TIMING_DIAG
+    /* After drawer_build(), so the one-off construction on the very first open
+       is not charged to the gesture. */
+    drawer_timing_begin("open");
+#endif
     /* Back where it was left this session (0 on the first open after a boot,
        and after anything that restacked the sections). The original reason this
        line existed still holds and is now handled at the source: a restack
@@ -12310,6 +12409,12 @@ static void drawer_open(void)
     lv_anim_set_values(&a, DISPLAY_H_RES, DISPLAY_H_RES - DRAWER_W);
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+#if DRAWER_TIMING_DIAG
+    /* Only timed if something already called drawer_timing_begin() - the open
+       has several entry points (grip, burger, swipe) and an untimed one simply
+       reports nothing rather than reporting a wrong start. */
+    lv_anim_set_completed_cb(&a, drawer_timing_done);
+#endif
     lv_anim_start(&a);
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
     drawer_refresh_activation();
@@ -12391,6 +12496,9 @@ static void drawer_close(void)
     lv_anim_set_values(&a, DISPLAY_H_RES - DRAWER_W, DISPLAY_H_RES);
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+#if DRAWER_TIMING_DIAG
+    lv_anim_set_completed_cb(&a, drawer_timing_done);
+#endif
     lv_anim_start(&a);
     s_drawer_open = false;
     gain_resolve_stop();      // nothing to repaint into once it is shut
