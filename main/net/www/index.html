@@ -1698,6 +1698,8 @@ const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
  * pan_view deliberately does not describe. Every consumer must fall back to its
  * old path rather than assume zero. */
 let lastView = null;   /* {lo, hi, capLo, capHi, span} in absolute Hz */
+/* Bitmask of the CW filter widths the radio has enabled; 0 = show all (#350). */
+let lastCwFilterMask = 0;
 /* ⛔ WHEN THE VIEWPORT WAS LAST CONFIRMED, and why that has to be tracked.
  *
  * The spectrum frames and the viewport arrive on DIFFERENT channels - frames on
@@ -5546,7 +5548,16 @@ function buildBwDropdown() {
   const isSSB = m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0;
 
   if (isCW) {
-    const widths = [50, 100, 150, 200, 250, 300, 400, 500];
+    /* Only the widths the RADIO has enabled (#350, Uwe DL8UG) - the same list
+       the Tab5's own BW popup offers, from the same mask, so the two screens
+       cannot disagree about what the radio will accept.
+       ⛔ A mask of 0 means SHOW ALL EIGHT. That is not a guard against older
+       firmware alone: a radio whose CW > Choose filters menu has never been
+       opened reports every width disabled while happily using one, and hiding
+       them there would leave no bandwidth to pick at all. */
+    const ALL = [50, 100, 150, 200, 250, 300, 400, 500];
+    const mask = (typeof lastCwFilterMask === "number") ? lastCwFilterMask : 0;
+    const widths = mask ? ALL.filter((w, i) => (mask >> i) & 1) : ALL;
     widths.forEach(w => {
       const btn = document.createElement("button");
       btn.textContent = w + " Hz";
@@ -5657,6 +5668,7 @@ async function tick() {
     radioFreqHz = s.freq_hz || 0;      /* always - see its declaration */
     if (Date.now() >= wheelHoldUntil) lastFreqHz = s.freq_hz || 0;
     lastPassbandHz = s.passband_hz || 0;
+    lastCwFilterMask = (typeof s.cw_filter_mask === "number") ? s.cw_filter_mask : 0;
     lastRitHz      = s.rit_hz     || 0;
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
     lastAct        = s.activation || {type:0, ref:'', qsos:0};

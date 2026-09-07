@@ -497,7 +497,12 @@ static esp_err_t status_handler(httpd_req_t *req)
         const char *m = cat_get_mode_str();
         bool cw = m && (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0);
         if (cw && settings_get_cw_decode_en()) {
-            char line[CW_LINE_COLS + 1];
+            /* CW_GRID_CELLS, not CW_LINE_COLS - the grid is CW_LINE_ROWS rows
+             * and cw_decode_line() fills whatever it is given, so a one-row
+             * buffer silently truncated the second line away and the browser
+             * drew an empty lower row while the Tab5 drew both. Caught on the
+             * bench the same evening the two-line pane shipped. */
+            char line[CW_GRID_CELLS + 1];
             cw_decode_line(line, sizeof(line));
             cJSON *c = cJSON_CreateObject();
             if (c) {
@@ -691,6 +696,10 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     cJSON_AddNumberToObject(root, "audio_backlog_pairs",
                             (double)audio_ring_backlog_pairs());
+    /* Which CW filter widths the RADIO offers (#350, Uwe DL8UG). 0 = it did not
+     * say, or says none - and then BOTH screens must show all eight, never an
+     * empty list. See cat.c for why zero is a real state and not just a guard. */
+    cJSON_AddNumberToObject(root, "cw_filter_mask", (double)cat_cw_filter_mask());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
