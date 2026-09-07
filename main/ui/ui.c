@@ -2613,9 +2613,15 @@ static const drawer_item_t GRP_SPECTRUM[] = {
     { DRAWER_SEC_STILL, "Still spectrum", true },
     { DRAWER_SEC_PRESETS, "Presets", false },
     { DRAWER_SEC_DBRANGE, "dB Range", false },
+    /* Flat Spectrum sits with the level controls, not below the waterfall
+     * settings where it used to be (operator, 2026-09-07). It is the switch
+     * that decides whether the two sections above mean anything at all - flat
+     * mode draws dB above the measured floor over a fixed window and ignores
+     * the dB range entirely, which is why those controls grey out when it is
+     * on. A switch that disables its neighbours belongs beside them. */
+    { DRAWER_SEC_FLAT, "Flat Spectrum", false },
     { DRAWER_SEC_SMOOTHING, "Smoothing", false },
     { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window", false },
-    { DRAWER_SEC_FLAT, "Flat Spectrum", false },
     { DRAWER_SEC_IQ, "IQ Balance", false },
     { DRAWER_SEC_IFCAL, "IF calibration", false },
 };
