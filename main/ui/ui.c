@@ -1126,10 +1126,35 @@ static void bw_popup_open(void)
     const uint32_t *bw_list;
     const char **lbl_list;
     int n_bw;
+    /* Offer only the CW widths the RADIO has enabled (Uwe DL8UG - #350): he
+     * sets that list once in CW > Choose filters, and the other five are just
+     * something to mis-tap. Read from the radio at CAT link-up.
+     *
+     * ⛔ A mask of 0 means show all eight, and that is load-bearing rather than
+     * defensive: on this bench, before that menu had ever been opened, the radio
+     * reported ALL EIGHT disabled while running a 200 Hz filter. Filtering
+     * there would leave no bandwidth to choose at all. It covers older
+     * firmware and a failed read for free. */
+    static uint32_t cw_bw_en[CW_FILTER_COUNT];
+    static const char *cw_lbl_en[CW_FILTER_COUNT];
     if (strcmp(cur_mode, "CW") == 0 || strcmp(cur_mode, "CW-R") == 0) {
-        bw_list = cw_bw;
-        lbl_list = cw_lbl;
-        n_bw = 8;
+        uint8_t mask = cat_cw_filter_mask();
+        if (mask == 0) {
+            bw_list = cw_bw;
+            lbl_list = cw_lbl;
+            n_bw = 8;
+        } else {
+            int k = 0;
+            for (int i = 0; i < CW_FILTER_COUNT; i++) {
+                if (!(mask & (1u << i))) continue;
+                cw_bw_en[k]  = cw_bw[i];
+                cw_lbl_en[k] = cw_lbl[i];
+                k++;
+            }
+            bw_list = cw_bw_en;
+            lbl_list = cw_lbl_en;
+            n_bw = k;
+        }
     } else if (strcmp(cur_mode, "USB") == 0 || strcmp(cur_mode, "LSB") == 0) {
         bw_list = ssb_bw;
         lbl_list = ssb_lbl;

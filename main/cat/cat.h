@@ -99,6 +99,19 @@ int cat_get_cw_offset_hz(void);
 // RIT is refused while this is true - the two are mutually exclusive, since the
 // offset is implemented as split (the QMX has no XIT) and RIT would move the
 // receiver as well. Clearing RIT to zero is always allowed.
+/* The CW filter widths the QMX offers, and which of them it has ENABLED.
+ *
+ * The radio keeps its own list (CW > Choose filters) and an operator sets it
+ * once; offering the other five in the Tab5's BW menu is just something to
+ * mis-tap (Uwe DL8UG). Read once at CAT link-up.
+ *
+ * ⛔ A mask of 0 means SHOW ALL EIGHT - it covers "the radio says none", which
+ * is a real state on a radio whose menu has never been opened, as well as older
+ * firmware and a failed read. Never render an empty bandwidth list from it. */
+#define CW_FILTER_COUNT 8
+uint8_t  cat_cw_filter_mask(void);
+uint16_t cat_cw_filter_width(int idx);
+
 bool cat_cw_tx_offset_engaged(void);
 
 /* When the radio last sent us ANY byte, in esp_timer_get_time() units.

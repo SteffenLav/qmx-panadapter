@@ -1122,6 +1122,90 @@ static int64_t s_cw_off_last_us = 0;
 // FW;-style re-assert side effect, which is what makes polling it safe at all.
 //
 // Returns true if it used the pipe this cycle.
+/* Which CW filter widths the radio itself offers, as a bitmask over
+ * CW_FILTER_WIDTHS. 0 means "not known, or the radio says none" - see below.
+ *
+ * Uwe DL8UG: the Tab5 lists all eight widths in CW while his QMX has only a few
+ * enabled, and he "keeps mis-tapping them with my fat fingers". He configures
+ * the set once, in CW > Choose filters, and asked us to read it on first
+ * connect.
+ *
+ * ⭐ VERIFIED ON HARDWARE 2026-09-07, including the case that matters. The rows
+ * are a Mask menu (type 7, list type 6 = DISABLED/ENABLED) and are read one at a
+ * time by INDEX:
+ *
+ *     MMCW|Choose filters|0;   ->   MMENABLED;  /  MMDISABLED;
+ *
+ * ⛔ By index and never by name: the row names ARE the numbers, so
+ * "MMCW|Choose filters|50;" is parsed as a path index and returns ?; - the CAT
+ * manual states this explicitly. Index order is 50 100 150 200 250 300 400 500,
+ * confirmed by discovery (MMCW|Choose filters|N?; -> MM7|6|<width>;) and then by
+ * disabling exactly 50 and 400 on the radio and reading back exactly those two.
+ *
+ * ⛔⛔ AND THE ALL-ZERO CASE IS REAL, NOT DEFENSIVE. On this bench, before the
+ * menu had ever been opened, all eight read DISABLED while the radio was quite
+ * happily running a 200 Hz filter - the mask appears not to be written until
+ * something visits that menu. Hiding the disabled ones there would leave the
+ * operator with NO CW bandwidth at all. So zero means "show everything", which
+ * is also exactly right for older firmware, a radio that does not answer, and a
+ * link that dies mid-read. */
+static const uint16_t s_cw_filter_width[CW_FILTER_COUNT] = {
+    50, 100, 150, 200, 250, 300, 400, 500
+};
+uint16_t cat_cw_filter_width(int idx)
+{
+    if (idx < 0 || idx >= CW_FILTER_COUNT) return 0;
+    return s_cw_filter_width[idx];
+}
+
+static uint8_t s_cw_filter_mask = 0;
+
+uint8_t cat_cw_filter_mask(void) { return s_cw_filter_mask; }
+
+/* Read all eight rows. Called once from link_task, deliberately not polled:
+ * Uwe asked for "the first initial connect", it is eight round trips, and the
+ * CAT link is the one thing on this board that must not be given extra work.
+ * Changing the set on the radio therefore needs a reconnect to be picked up,
+ * which is the same bargain the radio's own menus make. */
+static void cw_filters_read(void)
+{
+    uint8_t mask = 0;
+    for (int i = 0; i < CW_FILTER_COUNT; i++) {
+        char q[40];
+        int  n = snprintf(q, sizeof(q), "MMCW|Choose filters|%d;", i);
+        s_mm_resp_len = 0;
+        if (n <= 0 || cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                                    (size_t)n, 200) != ESP_OK) {
+            ESP_LOGW(TAG, "CW filters: write failed at index %d - offering all widths", i);
+            s_cw_filter_mask = 0;
+            return;
+        }
+        for (int wi = 0; wi < 20 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+        if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) {
+            /* No answer, or ?; - older firmware, or a radio that does not have
+             * this menu. Not an error worth alarming about: fall back. */
+            ESP_LOGI(TAG, "CW filters: no answer at index %d - offering all widths", i);
+            s_cw_filter_mask = 0;
+            return;
+        }
+        if (strncmp(s_mm_resp + 2, "ENABLED", 7) == 0) mask |= (uint8_t)(1u << i);
+    }
+
+    if (mask == 0) {
+        ESP_LOGI(TAG, "CW filters: the radio reports none enabled - offering all widths "
+                      "(its CW > Choose filters menu has probably never been opened)");
+    } else {
+        char list[64] = "";
+        size_t o = 0;
+        for (int i = 0; i < CW_FILTER_COUNT; i++)
+            if (mask & (1u << i))
+                o += (size_t)snprintf(list + o, sizeof(list) - o, "%s%u",
+                                      o ? " " : "", (unsigned)cat_cw_filter_width(i));
+        ESP_LOGI(TAG, "CW filters enabled on the radio: %s Hz (mask 0x%02X)", list, mask);
+    }
+    s_cw_filter_mask = mask;
+}
+
 static bool cw_offset_refresh(void)
 {
     if (s_last_mode_digit != '3' && s_last_mode_digit != '7') return false;
@@ -1825,6 +1909,12 @@ static void link_task(void *arg)
             s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
             settings_set_wspr_pa_saved_x10(0);
             iq_mode_handshake(4);
+            /* The radio's own CW filter set, once, here (Uwe DL8UG - #350).
+             * Link-up rather than polled: eight round trips is a lot to repeat,
+             * and the CAT link is the last thing on this board that wants extra
+             * work. It runs on link_task, which owns the pipe before the poll
+             * task starts, so it cannot interleave with FA/MD/FW. */
+            cw_filters_read();
             // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
             // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
             // VOX serves no purpose here. It is disabled defensively: with VOX on
