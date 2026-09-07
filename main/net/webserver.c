@@ -1060,7 +1060,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // the new band. Doing it from the browser must not be the loophole.
             ft8_band_change_stand_down("band changed");
             uint32_t want = target ? target : center_hz;
-            cat_set_frequency(want);
+            /* Forced, exactly as the Tab5's own band button does (ui.c
+             * band_preset_cb). A band change is a deliberate one-shot, and the
+             * plain call is droppable: tune, then change band within 200 ms,
+             * and the band change is discarded while the display has already
+             * been moved to it optimistically below - which reads as "I
+             * selected 80 m and it put me back where I was" (Samuel W7STF). */
+            cat_set_frequency_forced(want);
             /* Same reason as set_freq above: the Tab5's own band buttons move
              * the display immediately (ui.c band_preset_cb) and this path did
              * not, so a band change from the browser left the Tab5 mapping a
@@ -1070,7 +1076,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         }
     } else if (action && strcmp(action, "set_mode") == 0) {
         const char *mode = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
-        if (mode) cat_set_mode(mode);
+        /* ⛔ cat_request_mode(), NOT cat_set_mode(). This was the direct
+         * call, whose return value was discarded - and cat_set_mode() SHARES
+         * THE 200 ms RATE LIMIT with cat_set_frequency() and returns
+         * ESP_ERR_TIMEOUT when it loses. The page clicks a spot with
+         *
+         *     sendCmd({action:"set_freq", ...});
+         *     sendCmd({action:"set_mode", ...});
+         *
+         * back to back, so the frequency took the budget and the mode was
+         * dropped on the floor, silently, every time. Reported as "it is not
+         * changing mode after the spot type" (operator) and, decisively, by
+         * Samuel W7STF as an ASYMMETRY: "selecting the change via the Tab5, the
+         * change is honored properly" - because every Tab5 path already goes
+         * through the poll task (spots_lane.c, memory_modal.c, tune_modal.c,
+         * ui.c) and only the browser did not.
+         *
+         * This is the same bug the FT8-entry and memory-recall paths had in
+         * v0.18.6, fixed there the same way and recorded in ui.c:2058 as "the
+         * radio stayed in the previous mode. cat_request_mode is retried". */
+        if (mode) cat_request_mode(mode);
     } else if (action && strcmp(action, "set_bw") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
