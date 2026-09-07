@@ -98,6 +98,14 @@ int64_t ui_get_pan_offset_hz(void);
  * Returns false when the zoom FFT is active and pan_view does not apply. */
 bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
 
+/* The on-screen viewport in absolute Hz, valid on BOTH FFT paths - unlike
+ * ui_pan_view_current(), which describes the BIN mapping and so declines while
+ * the zoom FFT is driving. Ask this when you need to know what frequencies are
+ * on screen; ask that when you need to know which bin a frequency is in.
+ * See ui.c for the four separate bug reports that came from the browser having
+ * no viewport at all above zoom x1. */
+void ui_screen_view_hz(int64_t *lo_out, int32_t *span_out);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:

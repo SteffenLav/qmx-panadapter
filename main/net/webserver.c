@@ -590,7 +590,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "zoom",        (double)ui_get_zoom_factor());
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
 
-    /* ⭐ THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
+    /* THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
      *
      * index.html computes `panHz = lastPanBins * HZ_PER_BIN` in six separate
      * places and masks a centre bin with `& (SPEC_W - 1)`. That is the pan
@@ -614,12 +614,35 @@ static esp_err_t status_handler(httpd_req_t *req)
     {
         pan_view_cfg_t pvc;
         pan_view_t     pv;
+        /* ⭐ THE VIEWPORT GOES OUT ON BOTH PATHS; ONLY THE BIN MAPPING IS
+         * CONDITIONAL. This whole block used to sit inside the
+         * ui_pan_view_current() test, which declines while the zoom FFT is
+         * driving - so above zoom x1 the browser was sent NO axis at all and
+         * fell back to a dial-centred guess. Samuel W7STF reported the four
+         * consequences separately (#342 #343 #344 #346); see ui.c's
+         * ui_screen_view_hz() for the full account.
+         *
+         * The distinction is real, not a workaround: which frequencies are on
+         * screen is knowable on either path (ui_view_lo_now() is explicitly
+         * "whichever FFT is driving the display"), while which BIN a frequency
+         * lands in is not, because dsp_set_zoom() has mixed the pan target to
+         * DC. So the page always gets lo/hi/span, and cap_lo/cap_hi, if_offset and n_bins -
+         * which exist only to map Hz to a bin - still appear only when they
+         * mean something. The page already guards on if_offset_hz being
+         * undefined before using them. */
+        {
+            int64_t vlo = 0;
+            int32_t vspan = 0;
+            ui_screen_view_hz(&vlo, &vspan);
+            if (vspan > 0) {
+                cJSON_AddNumberToObject(root, "view_lo_hz", (double)vlo);
+                cJSON_AddNumberToObject(root, "view_hi_hz", (double)(vlo + vspan));
+                cJSON_AddNumberToObject(root, "span_hz",    (double)vspan);
+            }
+        }
         if (ui_pan_view_current(&pvc, &pv, DSP_FFT_SIZE)) {
-            cJSON_AddNumberToObject(root, "view_lo_hz", (double)pv.lo_hz);
-            cJSON_AddNumberToObject(root, "view_hi_hz", (double)pv.hi_hz);
             cJSON_AddNumberToObject(root, "cap_lo_hz",  (double)pv.cap_lo_hz);
             cJSON_AddNumberToObject(root, "cap_hi_hz",  (double)pv.cap_hi_hz);
-            cJSON_AddNumberToObject(root, "span_hz",    (double)pv.span_hz);
             /* Sent, not re-derived. It is IF_OFFSET_HZ plus the CW centre plus
              * the per-unit trim minus RIT, and a browser rebuilding that from
              * four separate fields is one more place for the two screens to

@@ -1947,6 +1947,38 @@ static int64_t ui_view_lo_now(int32_t *span_out)
  * already mixed the pan target to DC, so the bins mean something else and
  * pan_view does not apply. The caller keeps its own path for that, exactly as
  * ui_push_spectrum does. */
+/* The on-screen viewport in absolute Hz, valid on BOTH FFT paths.
+ *
+ * ⛔ WRITTEN BECAUSE THE BROWSER HAD NO FREQUENCY MAPPING AT ALL ABOVE ZOOM x1.
+ * ui_pan_view_current() returns false while the zoom FFT drives the display -
+ * correctly, because the BINS mean something else there - and both the status
+ * poll and the WebSocket header derive their viewport from it. So above x1 the
+ * page was told nothing, and every consequence of that was reported separately
+ * by Samuel W7STF on v1.11.3:
+ *
+ *   - the passband overlay "totally in a different place" from the Tab5 (#342)
+ *   - clicking a signal tuning somewhere else, "in LSB mode at 2x" (#343)
+ *   - "Lost contact with the Tab5" over a stream drawing fine (#344) - the
+ *     browser stamps its axis-freshness only when it is GIVEN an axis, so at
+ *     zoom nothing refreshed it and it went stale after four seconds, forever
+ *   - the band-plan line and rectangle coming apart (#346)
+ *
+ * The viewport itself was never the doubtful part: ui_view_lo_now() already
+ * says in its own comment that it is "whichever FFT is driving the display.
+ * One definition." Only the bin mapping is path-specific. So this hands out the
+ * part that is always true, and callers that need bins keep asking
+ * ui_pan_view_current() and keep being told no.
+ *
+ * One mapping, per pan_view.h - this is the SAME function the Tab5 draws from,
+ * not a second copy of the arithmetic. */
+void ui_screen_view_hz(int64_t *lo_out, int32_t *span_out)
+{
+    int32_t span = 0;
+    int64_t lo   = ui_view_lo_now(&span);
+    if (lo_out)   *lo_out   = lo;
+    if (span_out) *span_out = span;
+}
+
 bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
 {
     if (!c || !v) return false;
