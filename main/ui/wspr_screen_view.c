@@ -102,7 +102,7 @@ static lv_obj_t *s_bar_cycle;
 static lv_obj_t *s_lbl_status;
 static lv_obj_t *s_lbl_heard;
 
-static lv_obj_t *s_dd_dial;
+static lv_obj_t *s_btn_dial;       /* opens the band picker; carries s_lbl_dial */
 static lv_obj_t *s_btn_tx;
 static lv_obj_t *s_lbl_tx;
 
@@ -183,50 +183,28 @@ static int     s_navail;
 /* The picker lists only the bands the radio has, so its selection index is into
  * s_avail[], never into kBands[] directly. Getting that wrong would silently
  * tune the wrong band. */
-static void rebuild_dial_options(void)
-{
-    if (!s_dd_dial) return;
-    char opts[N_BANDS * 32];   /* "160 m  1.836.600" plus newline and headroom */
-    size_t used = 0;
-    opts[0] = 0;
-    for (int k = 0; k < s_navail; k++) {
-        /* Built from the dial, in the operator's chosen punctuation (#302).
-           The old hardcoded label had no thousands grouping at all, so the
-           WSPR picker was the one place on the device that ignored the
-           setting - and it was a second copy of dial_hz that could drift. */
-        char fs[20];
-        format_freq_hz(kBands[s_avail[k]].dial_hz, g_freq_style, fs, sizeof(fs));
-        used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s m  %s",
-                                 k ? "\n" : "", kBands[s_avail[k]].name, fs);
-    }
-    lv_dropdown_set_options(s_dd_dial, opts);
-}
+/* rebuild_dial_options() is GONE with the dropdown it filled. The band picker
+ * composes its rows in bp_open() from the same kBands table and the same
+ * format_freq_hz(), so a frequency-format change is picked up the next time it
+ * is opened rather than needing the list rewritten in place (#302). */
 
 /* #302: the band picker's option list is composed when the dropdown is built
    and never again, so a frequency-format change leaves it showing the
    punctuation it was created with - reported from the bench as "changing it
    does not change WSPR". Rebuilding the options is all it takes; the selected
    index is preserved because the order is unchanged. */
+/* Declared here because the frequency-format hook below is the FIRST user and
+   sits well above the picker's own code. */
+static void bp_button_refresh(void);
+
 void wspr_screen_view_freq_style_changed(void)
 {
-    if (!s_dd_dial) return;
-    uint16_t sel = lv_dropdown_get_selected(s_dd_dial);
-    rebuild_dial_options();
-    lv_dropdown_set_selected(s_dd_dial, sel);
+    /* The BUTTON carries the frequency now, and the picker's rows are composed
+       fresh every time it opens - so a format change needs only the button
+       repainting, and the list looks after itself. */
+    bp_button_refresh();
 }
 
-static void dial_changed_cb(lv_event_t *e)
-{
-    uint16_t k = lv_dropdown_get_selected(lv_event_get_target(e));
-    if (k >= (uint16_t)s_navail) return;
-    const int i = s_avail[k];
-    settings_set_wspr_dial_hz(kBands[i].dial_hz);
-    /* Forced: the ordinary setter shares a 200 ms rate limit with the CAT
-     * poll, and a band change the operator just asked for must not be the
-     * write that gets dropped. */
-    wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
-    cat_set_frequency_forced(kBands[i].dial_hz);
-}
 
 /* ---- THE LOWER HALF OF THE LEFT PANEL ------------------------------------
  *
@@ -295,6 +273,7 @@ static lv_obj_t *s_hist_bar[HIST_BARS];
 static lv_obj_t *s_lbl_net;
 static lv_obj_t *s_lbl_hdr;        /* the column headings over the decode list */
 static bool      s_hdr_miles;      /* the unit the headings were built for */
+static bool      s_hdr_built;      /* have WE written the headings yet */
 static lv_obj_t *s_btn_clr;        /* clear the decode list (Samuel W7STF) */
 static lv_obj_t *s_lbl_clr;
 static int64_t   s_clr_armed_us;   /* two-tap arming, 0 = not armed */
@@ -306,6 +285,257 @@ static lv_obj_t *s_lbl_hop;        /* says which bands are ticked */
 static lv_obj_t *s_hop_modal;      /* NULL when closed */
 
 static void hop_button_refresh(void);
+/* ---- HOVER THE WATERFALL TO NAME A TRACE ----------------------------------
+ *
+ * Samuel W7STF asked for hover readouts; the operator picked the version worth
+ * having: point at a trace and be told WHOSE it is. On a WSPR waterfall the
+ * traces are the whole picture and the list underneath is the answer key, and
+ * matching one to the other by eye means reading a tone off the axis and then
+ * hunting the TONE column.
+ *
+ * ⛔ MOUSE ONLY, AND THAT IS FINE HERE. A touchscreen has no hover - a finger
+ * is either not there or is a press - so this can only ever be an extra. It
+ * adds nothing that is not already in the list, which is what makes it
+ * acceptable for it to be unavailable to most operators. Nothing may become
+ * reachable ONLY this way.
+ *
+ * The match is by tone, within half a WSPR signal's width either side. A WSPR
+ * transmission is about 6 Hz wide, so +/-4 Hz is "the trace under the pointer"
+ * without claiming the neighbour 20 Hz away. The NEAREST spot wins when two
+ * are in range, and a repeat station shows its most recent hearing. */
+#define HOVER_TOL_HZ   4.0f
+#define HOVER_PERIOD   100      /* ms - a tooltip does not need 30 Hz */
+
+static lv_obj_t *s_hover_lbl;
+
+static void hover_hide(void)
+{
+    if (s_hover_lbl && !lv_obj_has_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_add_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void hover_tick_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!s_hover_lbl || !s_container ||
+        lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) { hover_hide(); return; }
+
+    lv_point_t p;
+    if (!ui_mouse_pointer(&p)) { hover_hide(); return; }
+    if (p.x < RIGHT_X || p.x >= RIGHT_X + RIGHT_W ||
+        p.y < WF_Y    || p.y >= WF_Y + WF_H) { hover_hide(); return; }
+
+    /* x -> tone, the exact inverse of the tick placement above. */
+    const float hz = WSPR_WF_LO_HZ +
+        (float)(p.x - RIGHT_X) * (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ) / (float)RIGHT_W;
+
+    /* ⛔ A BOUNDED SNAPSHOT ON THIS TASK'S STACK IS NOT AN OPTION - the ring
+       holds 256 spots and taskLVGL has crashed this project on kB-scale locals
+       more than once. wspr_spots_get() copies into a caller buffer, so this
+       walks a SMALL window of the newest entries instead: a trace on screen was
+       decoded in the last cycle or two, so the newest handful is all that can
+       possibly match what is being pointed at. */
+    wspr_spot_t recent[12];
+    const int n = wspr_spots_get(recent, (int)(sizeof(recent) / sizeof(recent[0])));
+    int best = -1;
+    float bestd = HOVER_TOL_HZ;
+    for (int i = 0; i < n; i++) {
+        const float d = fabsf(recent[i].freq_hz - hz);
+        if (d <= bestd) { bestd = d; best = i; }
+    }
+    if (best < 0) { hover_hide(); return; }
+
+    const wspr_spot_t *sp = &recent[best];
+    char t[64];
+    if (sp->snr_db == WSPR_SNR_UNKNOWN)
+        snprintf(t, sizeof(t), "%s  %.1f Hz", sp->call, (double)sp->freq_hz);
+    else
+        snprintf(t, sizeof(t), "%s  %.1f Hz  %+d dB",
+                 sp->call, (double)sp->freq_hz, sp->snr_db);
+    lv_label_set_text(s_hover_lbl, t);
+    lv_obj_clear_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_hover_lbl);
+
+    /* Placed BESIDE the pointer, never under it, and flipped to the left near
+       the right-hand edge so the text can never run off the screen. */
+    lv_obj_update_layout(s_hover_lbl);
+    const int w = lv_obj_get_width(s_hover_lbl);
+    int x = p.x + 16;
+    if (x + w > MID_W - 4) x = p.x - 16 - w;
+    if (x < RIGHT_X) x = RIGHT_X;
+    int y = p.y - 34;
+    if (y < WF_Y) y = p.y + 20;
+    lv_obj_set_pos(s_hover_lbl, x, y);
+}
+
+/* ---- BAND PICKER: a dense drag-to-pick list, not a dropdown ---------------
+ *
+ * Operator, 2026-09-07: "make the band selector dropdown list like the other
+ * dense lists we have - so you touch and the line you hit lights up, and if it
+ * was the wrong one then drag up and down till you hit it."
+ *
+ * That is the Reader Contents panel's gesture and the FT8 decode list's, and it
+ * is the right one for a touchscreen: an lv_dropdown commits on the cell your
+ * finger happens to LIFT over, with no way to see what you are about to choose
+ * and no way to change your mind without reopening it. Here the highlight
+ * follows the finger and only the RELEASE commits, so a mis-landing costs a
+ * drag rather than a wrong band and a CAT write.
+ *
+ * ⛔ THE ROWS ARE THE HIT TEST, and the panel owns the gesture - individual
+ * rows are NOT clickable. LVGL delivers a press to one object and then sends
+ * PRESSING to that same object wherever the finger goes, so a per-row handler
+ * would light the row you started on and never follow you off it. Same reason
+ * reader_view.c does it this way. */
+#define BP_ROW_H   52
+
+static lv_obj_t *s_bp_panel;                 /* NULL when closed */
+static lv_obj_t *s_bp_row[N_BANDS];
+static int       s_bp_n;
+static int       s_bp_hi = -1;               /* highlighted row, -1 = none */
+
+static void bp_highlight(int k)
+{
+    if (k == s_bp_hi) return;
+    if (s_bp_hi >= 0 && s_bp_hi < s_bp_n && lv_obj_is_valid(s_bp_row[s_bp_hi]))
+        lv_obj_set_style_bg_opa(s_bp_row[s_bp_hi], LV_OPA_TRANSP, 0);
+    s_bp_hi = k;
+    if (k >= 0 && k < s_bp_n && lv_obj_is_valid(s_bp_row[k])) {
+        lv_obj_set_style_bg_color(s_bp_row[k], lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_bg_opa(s_bp_row[k], LV_OPA_40, 0);
+    }
+}
+
+static void bp_close(void)
+{
+    if (!s_bp_panel) return;
+    lv_obj_del(s_bp_panel);
+    s_bp_panel = NULL;
+    s_bp_hi = -1;
+    s_bp_n = 0;
+}
+
+static void bp_apply(int k);
+
+static void bp_drag_cb(lv_event_t *e)
+{
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
+        lv_indev_t *indev = lv_event_get_indev(e);
+        if (!indev) return;
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        int hit = -1;
+        for (int k = 0; k < s_bp_n; k++) {
+            lv_area_t ar;
+            lv_obj_get_coords(s_bp_row[k], &ar);
+            if (p.x >= ar.x1 && p.x <= ar.x2 && p.y >= ar.y1 && p.y <= ar.y2) { hit = k; break; }
+        }
+        bp_highlight(hit);
+    } else if (code == LV_EVENT_RELEASED) {
+        const int k = s_bp_hi;
+        /* ⛔ READ THE CHOICE BEFORE CLOSING - bp_close() clears s_bp_hi, and
+           applying afterwards would always read -1. */
+        bp_close();
+        if (k >= 0) bp_apply(k);
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        /* A finger that leaves the panel entirely chooses nothing. Releasing
+           OUTSIDE is how you cancel, which is what a list like this should
+           mean by it. */
+        bp_close();
+    }
+}
+
+static void bp_open(void)
+{
+    if (s_bp_panel) { bp_close(); return; }   /* a second tap on the button closes it */
+    s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
+    if (s_navail <= 0) return;
+    s_bp_n = s_navail;
+
+    const int h = BP_ROW_H * s_bp_n + 8;
+    s_bp_panel = lv_obj_create(s_container);
+    lv_obj_set_size(s_bp_panel, EX_W, h);
+    /* Directly under the button, and clamped so a long list cannot run off the
+       bottom of the panel. */
+    int y = 70 + 56 + 4;
+    if (y + h > MID_H - 8) y = MID_H - 8 - h;
+    if (y < 8) y = 8;
+    lv_obj_set_pos(s_bp_panel, EX_X, y);
+    lv_obj_set_style_bg_color(s_bp_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(s_bp_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_bp_panel, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(s_bp_panel, 1, 0);
+    lv_obj_set_style_radius(s_bp_panel, 8, 0);
+    lv_obj_set_style_pad_all(s_bp_panel, 4, 0);
+    lv_obj_clear_flag(s_bp_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(s_bp_panel);
+
+    qmx_settings_t cs;
+    settings_load_all(&cs);
+    const uint32_t cur = cs.wspr_dial_hz;
+    for (int k = 0; k < s_bp_n; k++) {
+        lv_obj_t *r = lv_obj_create(s_bp_panel);
+        lv_obj_set_size(r, EX_W - 16, BP_ROW_H - 2);
+        lv_obj_set_pos(r, 0, k * BP_ROW_H);
+        lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(r, 0, 0);
+        lv_obj_set_style_radius(r, 6, 0);
+        lv_obj_set_style_pad_all(r, 0, 0);
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_SCROLLABLE);
+        /* NOT clickable - the panel owns the gesture, see the note above. */
+        lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+
+        char fs[20];
+        format_freq_hz(kBands[s_avail[k]].dial_hz, g_freq_style, fs, sizeof(fs));
+        char txt[40];
+        snprintf(txt, sizeof(txt), "%s m  %s", kBands[s_avail[k]].name, fs);
+        lv_obj_t *l = lv_label_create(r);
+        lv_label_set_text(l, txt);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        /* The band in force is named in the accent colour, so the list says
+           where you ARE as well as offering where to go. */
+        lv_obj_set_style_text_color(l,
+            lv_color_hex(kBands[s_avail[k]].dial_hz == cur ? UI_COLOR_PRIMARY : 0xFFFFFF), 0);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 10, 0);
+        s_bp_row[k] = r;
+    }
+
+    lv_obj_add_event_cb(s_bp_panel, bp_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_bp_panel, bp_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_bp_panel, bp_drag_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_bp_panel, bp_drag_cb, LV_EVENT_PRESS_LOST, NULL);
+}
+
+/* The button's own label, so it always names the band in force - including
+   after a band HOP, which changes the dial without anyone touching this. */
+static void bp_button_refresh(void)
+{
+    if (!s_lbl_dial) return;
+    qmx_settings_t bs;
+    settings_load_all(&bs);
+    const uint32_t hz = bs.wspr_dial_hz;
+    const char *bn = wspr_band_name_for_dial(hz);
+    char fs[20], t[44];
+    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
+    snprintf(t, sizeof(t), "%s m  %s", bn ? bn : "--", fs);
+    lv_label_set_text(s_lbl_dial, t);
+}
+
+static void bp_apply(int k)
+{
+    if (k < 0 || k >= s_navail) return;
+    const int i = s_avail[k];
+    settings_set_wspr_dial_hz(kBands[i].dial_hz);
+    /* Forced: the ordinary setter shares a 200 ms rate limit with the CAT
+     * poll, and a band change the operator just asked for must not be the
+     * write that gets dropped. */
+    wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
+    cat_set_frequency_forced(kBands[i].dial_hz);
+    bp_button_refresh();
+}
+
+static void bp_button_cb(lv_event_t *e) { (void)e; bp_open(); }
+
 
 /* ⭐ THE HEADINGS ARE NOT CONSTANT - one of them names a UNIT. Built once at
    page construction, the KM/MI heading froze at whatever the setting was then,
@@ -317,7 +547,16 @@ static void wspr_header_refresh(void)
 {
     if (!s_lbl_hdr) return;
     const bool mi = wspr_dist_in_miles();
-    if (lv_label_get_text(s_lbl_hdr)[0] && s_hdr_miles == mi) return;
+    /* ⛔ AN EXPLICIT FLAG, NOT "is the label empty yet". A fresh
+       lv_label_create() starts with LVGL's own placeholder text "Text", so
+       testing the label for content answered "already built" the very first
+       time and skipped the only build that mattered - the headings never
+       appeared at all until a unit change forced a rebuild, which is precisely
+       what the operator saw ("the header labels are gone and only come up
+       after a km/mi change"). Never ask a widget whether YOU have written to
+       it; remember that yourself. */
+    if (s_hdr_built && s_hdr_miles == mi) return;
+    s_hdr_built = true;
     s_hdr_miles = mi;
     char h[224];
     fmt_header(h, sizeof(h));
@@ -684,10 +923,7 @@ static void hop_maybe(void)
     settings_set_wspr_dial_hz(kBands[pick].dial_hz);
     wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
     cat_set_frequency_forced(kBands[pick].dial_hz);
-    if (s_dd_dial) {
-        for (int k = 0; k < s_navail; k++)
-            if (s_avail[k] == pick) { lv_dropdown_set_selected(s_dd_dial, (uint16_t)k); break; }
-    }
+    bp_button_refresh();   /* the hop changed the dial - say so on the button */
     ESP_LOGI(TAG, "band hop -> %s m (%lu Hz) for the cycle starting in %llds",
              kBands[pick].name, (unsigned long)kBands[pick].dial_hz,
              (long long)(120 - (now % 120)));
@@ -1220,66 +1456,37 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * A dropdown is already a styleable box. Styling it directly gives one
      * frame, full panel width, and the same left edge as the cycle bar and the
      * TX buttons underneath. */
-    s_dd_dial = lv_dropdown_create(s_container);
-    s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
-    rebuild_dial_options();
-    /* ⭐ BACK TO THE PANEL'S OWN LEFT EDGE, aligned with everything else in it
-     * (operator, 2026-09-07). It was shifted right in v1.10.5 to keep it out of
-     * the 30 px edge-swipe strip - but the control genuinely at risk there was
-     * the TX BUTTON, which sat across the middle of the left edge where a hand
-     * reaches for the page-swipe grip, and that has since moved to the bottom.
-     * A dropdown near the top is not on the path of that gesture, and the
-     * misalignment was visible on every visit to the page. */
-    lv_obj_set_size(s_dd_dial, EX_W, 56);
-    /* 40, not 16: same reason as the TX button below - a CONTROL on this pane
-     * must clear the 30 px left edge-swipe zone, or a gesture aimed at the
-     * panadapter lands on it. The labels around it stay at 16; they cannot be
-     * pressed, so they cost nothing there. */
-    lv_obj_set_pos(s_dd_dial, EX_X, 70);
-    lv_obj_set_style_radius(s_dd_dial, 8, 0);
-    lv_obj_set_style_border_width(s_dd_dial, 1, 0);
-    /* 28, not 24 and certainly not 20. Read on the actual screen at arm's
-     * length this was the smallest thing in the column and the one carrying
-     * the frequency. The panel is 372 px wide now, so "20 m  14.095600" at
-     * 28 pt is ~230 px inside a 340 px control - it fits with the chevron. */
-    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_28, 0);
-    /* Dark like everything else on this page; the stock dropdown is white. */
-    lv_obj_set_style_bg_color(s_dd_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-    lv_obj_set_style_text_color(s_dd_dial, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_set_style_border_color(s_dd_dial, lv_color_hex(UI_COLOR_BORDER), 0);
-    {
-        lv_obj_t *list = lv_dropdown_get_list(s_dd_dial);
-        if (list) {
-            lv_obj_set_style_bg_color(list, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-            lv_obj_set_style_text_color(list, lv_color_hex(UI_COLOR_TEXT), 0);
-            lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
-            /* SHOW EVERY BAND WITHOUT SCROLLING. The stock list caps itself
-             * well below what this panel has room for, so a six-entry picker
-             * arrived scrollable for no reason - and a scrollbar on a list that
-             * would fit is a control asking to be fumbled on a touch screen.
-             * Bounded by the pane rather than unbounded, because a QMX+ offers
-             * eleven bands and the list must not run off the bottom. */
-            lv_obj_set_style_max_height(list, MID_H - 90, 0);
-        }
-    }
-    /* Start on the STORED dial, not on entry 0.
+    /* ⭐ A BUTTON THAT OPENS A DRAG-TO-PICK LIST, not an lv_dropdown
+     * (operator, 2026-09-07). See bp_open() for why the gesture matters: a
+     * dropdown commits on whatever cell your finger lifts over, with nothing
+     * shown first and no way to change your mind. Here the highlight follows
+     * the finger and only the release commits.
      *
-     * A screenshot caught this: with the radio wedged cat_get_frequency()
-     * returns 0, the tick's sync never runs, and the picker sat on "160 m"
-     * while the stored dial was 20 m. A control that displays a band it is not
-     * set to is worse than one that displays nothing. */
-    {
-        qmx_settings_t ds;
-        settings_load_all(&ds);
-        for (int k = 0; k < s_navail; k++) {
-            if (kBands[s_avail[k]].dial_hz == ds.wspr_dial_hz) {
-                lv_dropdown_set_selected(s_dd_dial, (uint16_t)k);
-                break;
-            }
-        }
-    }
-    lv_obj_add_event_cb(s_dd_dial, dial_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    s_lbl_dial = NULL;   /* the dropdown IS the dial readout now */
+     * Left edge is EX_W at EX_X, aligned with everything else in the panel. It
+     * was shifted right in v1.10.5 to clear the 30 px edge-swipe strip, but the
+     * control genuinely at risk there was the TX BUTTON, sitting across the
+     * middle of the left edge where a hand reaches for the page-swipe grip -
+     * and that moved to the bottom. A control near the TOP is not on the path
+     * of that gesture. */
+    s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
+    s_btn_dial = lv_btn_create(s_container);
+    lv_obj_set_size(s_btn_dial, EX_W, 56);
+    lv_obj_set_pos(s_btn_dial, EX_X, 70);
+    lv_obj_set_style_radius(s_btn_dial, 8, 0);
+    lv_obj_set_style_border_width(s_btn_dial, 1, 0);
+    lv_obj_set_style_bg_color(s_btn_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+    lv_obj_set_style_border_color(s_btn_dial, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_add_event_cb(s_btn_dial, bp_button_cb, LV_EVENT_CLICKED, NULL);
+
+    s_lbl_dial = lv_label_create(s_btn_dial);
+    lv_obj_set_style_text_font(s_lbl_dial, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_lbl_dial, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_align(s_lbl_dial, LV_ALIGN_LEFT_MID, 8, 0);
+    /* Names the STORED dial, not entry 0. A screenshot caught the old control
+       sitting on "160 m" while the stored dial was 20 m, because a wedged radio
+       makes cat_get_frequency() return 0 and the tick's sync never runs. A
+       control that displays a band it is not set to is worse than a blank one. */
+    bp_button_refresh();
 
     /* The cycle: plain language above, one 120 s bar below. It orients - "am I
      * receiving, how long left" - rather than urging, because nothing in WSPR
@@ -1417,10 +1624,28 @@ void wspr_screen_view_init(lv_obj_t *parent)
        the TABLE and not with the waterfall. Left at RIGHT_X it was indented
        60 px past its own columns and its last heading fell off the pane - which
        is exactly how DT arrived with data in every row and no title over it. */
+    /* The hover readout, and its own timer. Created last so nothing built after
+       it can end up on top; re-foregrounded on each show in any case. */
+    s_hover_lbl = lv_label_create(s_container);
+    lv_label_set_text(s_hover_lbl, "");
+    lv_obj_add_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_hover_lbl, UI_FLAG_NOT_HOT);      /* a readout, not a control */
+    lv_obj_clear_flag(s_hover_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(s_hover_lbl, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_hover_lbl, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(s_hover_lbl, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(s_hover_lbl, 1, 0);
+    lv_obj_set_style_radius(s_hover_lbl, 6, 0);
+    lv_obj_set_style_pad_all(s_hover_lbl, 6, 0);
+    lv_obj_set_style_text_font(s_hover_lbl, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(s_hover_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_timer_create(hover_tick_cb, HOVER_PERIOD, NULL);
+
     s_lbl_hdr = lv_label_create(s_container);
     lv_obj_set_style_text_font(s_lbl_hdr, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_lbl_hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_pos(s_lbl_hdr, LIST_X, LIST_Y);
+    s_hdr_built = false;          /* a new label - ours has not been written yet */
     wspr_header_refresh();
 
     s_list = lv_obj_create(s_container);
@@ -1598,21 +1823,17 @@ void wspr_screen_view_tick(void)
      * where we actually are rather than what was last tapped. A dial that is
      * not a standard WSPR frequency leaves the selection alone - the operator
      * has tuned off the sub-band and the picker should not pretend otherwise. */
-    uint32_t f = cat_get_frequency();
-    if (f && s_dd_dial) {
-        /* The radio may only have answered its band list AFTER the page was
-         * built, so re-take it here; the picker is otherwise stuck with
-         * whatever was known at construction (every band, if CAT was down). */
+    /* The radio may only have answered its band list AFTER the page was built,
+     * so re-take it here - the picker is otherwise stuck with whatever was
+     * known at construction (every band, if CAT was down). */
+    {
         int n = wspr_bands_available(s_avail, (int)sizeof(s_avail));
-        if (n != s_navail) { s_navail = n; rebuild_dial_options(); }
-        for (int k = 0; k < s_navail; k++) {
-            if (kBands[s_avail[k]].dial_hz == f) {
-                if (lv_dropdown_get_selected(s_dd_dial) != (uint16_t)k)
-                    lv_dropdown_set_selected(s_dd_dial, (uint16_t)k);
-                break;
-            }
-        }
+        if (n != s_navail) s_navail = n;
     }
+    /* And the button names whatever dial is in force, however it got there -
+     * a hop, the web, or the radio's own knob. It is a label, so re-writing an
+     * unchanged string costs nothing; lv_label_set_text early-outs on equal. */
+    bp_button_refresh();
 
     /* TX and Duty, from settings so the web UI and the buttons cannot drift.
      *

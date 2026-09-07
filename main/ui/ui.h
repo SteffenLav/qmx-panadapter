@@ -13,6 +13,11 @@ void ui_init(lv_display_t *disp);
 // hidden until a mouse is actually present. Safe to call even with no mouse.
 void ui_mouse_init(void);
 
+/* Where the mouse pointer is, in SCREEN coordinates, or false when no mouse is
+ * present. For hover readouts - a touchscreen has no hover, so anything built
+ * on this must be an extra rather than the only way to learn something. */
+bool ui_mouse_pointer(lv_point_t *out);
+
 // Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
 // Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // and audio/cat init have completed.

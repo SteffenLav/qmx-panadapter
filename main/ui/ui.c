@@ -5995,6 +5995,13 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
+bool ui_mouse_pointer(lv_point_t *out)
+{
+    if (!hid_cursor_present()) return false;
+    if (out) *out = s_mouse_pt;
+    return true;
+}
+
 void ui_mouse_init(void)
 {
     display_lock(portMAX_DELAY);
