@@ -2875,6 +2875,20 @@ static lv_obj_t *s_lbl_qmx_vol    = NULL;
 static lv_obj_t *s_slider_qmx_rf  = NULL;
 static lv_obj_t *s_lbl_qmx_rf     = NULL;
 static lv_obj_t *s_lbl_pause_btn  = NULL;
+/* Flat mode does not use the dB range AT ALL - it draws dB above the measured
+ * noise floor over a fixed 30 dB window, with gridlines hardcoded {10,20,30}.
+ * So while it is on, these two sliders cannot change anything.
+ *
+ * Reported from the bench 2026-09-07: "sliders have no effect if flat has been
+ * checked". They are greyed rather than hidden, because a control that vanishes
+ * makes the operator hunt for it - and because greying says WHY (something else
+ * is in charge) where a gap says nothing. Same judgement that removed the
+ * Adaptive-floor slider in v1.8.3: a control that cannot change anything is
+ * worse than a missing one, since it invites tuning something that is not
+ * there. That one was dead permanently; this one comes back the moment Flat is
+ * unticked, so greying is the honest form of it. */
+static void drawer_db_sliders_set_live(bool live);
+
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
 static lv_obj_t *s_slider_alpha = NULL;
@@ -3044,6 +3058,43 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
 static int  spur_mode_to_menu_idx(uint8_t mode);
 bool ui_get_flat_mode(void);
+/* FLAT MODE IS ONE SETTING FOR BOTH SCREENS (operator's call, 2026-09-07 -
+ * "one shared setting"). The browser used to keep its own copy in
+ * localStorage, seeded from the device once on first connect and never written
+ * back, so the two screens could disagree indefinitely about how the same bytes
+ * were drawn.
+ *
+ * ⛔ The web request CANNOT call ui_set_flat_mode() directly - it arrives on the
+ * httpd task and that function moves LVGL objects. So it leaves a flag and the
+ * 500 ms top-bar reconcile applies it, which is the pattern this file already
+ * uses for web Call CQ. -1 means nothing pending. */
+static volatile int8_t s_flat_req = -1;
+
+void ui_request_flat_mode(bool on) { s_flat_req = on ? 1 : 0; }
+
+static void flat_req_drain(void)
+{
+    int8_t want = s_flat_req;
+    if (want < 0) return;
+    s_flat_req = -1;
+    if (ui_get_flat_mode() == (want != 0)) return;   /* already there */
+    ui_set_flat_mode(want != 0);
+    ESP_LOGI(TAG, "flat-spectrum mode: %s (from the web)", want ? "ON" : "OFF");
+}
+
+static void drawer_db_sliders_set_live(bool live)
+{
+    lv_obj_t *o[] = { s_slider_db_min, s_slider_db_max, s_lbl_db_min, s_lbl_db_max };
+    for (unsigned i = 0; i < sizeof(o) / sizeof(o[0]); i++) {
+        if (!o[i]) continue;
+        lv_obj_set_style_opa(o[i], live ? LV_OPA_COVER : LV_OPA_40, 0);
+        /* Not clickable either - greying that still accepts a drag is a lie
+           told twice, since the value would move and nothing would happen. */
+        if (live) lv_obj_add_flag(o[i], LV_OBJ_FLAG_CLICKABLE);
+        else      lv_obj_remove_flag(o[i], LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
@@ -7131,6 +7182,7 @@ void ui_update_band(const char *band)
 // it cannot fail the way the writer did.
 static void topbar_reconcile_cb(lv_timer_t *t)
 {
+    flat_req_drain();   /* the web asked for a flat-mode change (#357) */
     (void)t;
 
     // A band change from any source stands auto-answer down (#144, Roy KI0ER):
@@ -12677,6 +12729,7 @@ void ui_set_flat_mode(bool on)
         }
     }
     update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
+    drawer_db_sliders_set_live(!on);
 }
 
 /* Says which way is which. "Still spectrum: off" is not self-evidently "the
@@ -12706,20 +12759,14 @@ static void drawer_check_still_cb(lv_event_t *e)
 static void drawer_switch_flat_cb(lv_event_t *e)
 {
     lv_obj_t *sw = lv_event_get_target(e);
-    s_flat_mode = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    s_flat_ready = false;  /* re-seed floor next time flat mode draws */
-    ESP_LOGI(TAG, "flat-spectrum mode: %s", s_flat_mode ? "ON" : "OFF");
-    settings_set_flat_mode(s_flat_mode);
-    if (s_db_min_label && s_db_max_label) {
-        if (s_flat_mode) {
-            lv_obj_add_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_remove_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    /* One implementation, not two. This used to repeat every line of
+       ui_set_flat_mode() - the label hiding, the floor re-seed, the scale
+       switch - which is how the browser and the drawer ended up able to do
+       different amounts of the same job. */
+    ui_set_flat_mode(on);
+    settings_set_flat_mode(on);
+    ESP_LOGI(TAG, "flat-spectrum mode: %s", on ? "ON" : "OFF");
 }
 
 // Antenna Tune entry point: closes the drawer and opens tune_modal.c's own

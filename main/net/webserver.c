@@ -3893,8 +3893,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // also retunes the radio and clears the decode list, so it has its own
     // action ("set_ft8_mode") that defers to the LVGL task rather than writing
     // a setting behind the UI's back.
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode")))
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode"))) {
+        /* Store AND apply. Storing alone left the live spectrum on whatever it
+           was until the next boot, so the setting agreed with nothing. */
         settings_set_flat_mode(cJSON_IsTrue(it));
+        ui_request_flat_mode(cJSON_IsTrue(it));
+    }
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "cw_decode_en")))
         settings_set_cw_decode_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))

@@ -6227,15 +6227,17 @@ async function tick() {
       document.title = "QMX+ Panadapter";
     }
 
-    /* Sync flat mode from device on first connect - ONLY when this browser has
-       no saved preference yet (localStorage wins once the user has toggled). */
-    if (firstStatus && s.flat_mode !== undefined) {
-      if (specFlattenSaved === null) {
-        specFlatten = !!s.flat_mode;
-        updateFlatBtn();
-      }
-      firstStatus = false;
+    /* Flat mode follows the DEVICE, every poll - not just the first. It is one
+       setting shared with the Tab5, so a change made on the glass has to reach
+       the browser too, and this is the only channel that carries it. Held off
+       briefly after our own toggle so an in-flight poll carrying the old value
+       cannot flip the button back. */
+    if (s.flat_mode !== undefined && Date.now() >= flatPendingUntil &&
+        specFlatten !== !!s.flat_mode) {
+      specFlatten = !!s.flat_mode;
+      updateFlatBtn();
     }
+    if (firstStatus) firstStatus = false;
 
     /* lastFreqHz, NOT s.freq_hz. The guard further up holds lastFreqHz against
        the poll while a wheel gesture is in flight - and this line went straight
@@ -7109,8 +7111,22 @@ let specSmoothReady = false;
    back to the device's flat_mode on first /api/status (see the sync below).
    NOT written to the device: driving the Tab5's flat_mode from the httpd task
    would touch LVGL widgets off the display thread. */
-const specFlattenSaved = localStorage.getItem("specFlatten");   // "1" | "0" | null
-let specFlatten     = (specFlattenSaved !== null) ? (specFlattenSaved === "1") : true;
+/* ⭐ ONE SETTING FOR BOTH SCREENS (operator, 2026-09-07: "one shared setting").
+   This used to live in localStorage, seeded from the device once on first
+   connect and never written back, so the browser and the Tab5 could disagree
+   indefinitely about how the same bytes were drawn - and did.
+
+   The old comment justified that by saying the device could not be driven from
+   httpd without touching LVGL off the display thread. True, and beside the
+   point: ui_request_flat_mode() leaves a flag that the 500 ms reconcile
+   applies, which is the pattern web Call CQ already used. The obstacle was to
+   calling LVGL directly, never to sharing the setting.
+
+   So: the device owns it, every poll carries it, and the F button asks the
+   device rather than deciding for itself. localStorage is not read any more -
+   a stale per-browser copy is exactly what was being fixed. */
+let specFlatten = true;
+let flatPendingUntil = 0;   /* ignore polls while our own change is in flight */
 
 const SPEC_SMOOTH_ALPHA     = 0.25;
 const SPEC_FLOOR_UP_ALPHA   = 0.002;
@@ -7145,9 +7161,19 @@ function updateFlatBtn() {
   document.getElementById("flatbtn").classList.toggle("on", specFlatten);
 }
 function setFlatten(v) {
+  /* Optimistic: the button lights immediately and the very next WS frame is
+     drawn the new way, because waiting for a 1 Hz poll to confirm would make
+     the button feel broken on a display already short of frames. The poll is
+     held off for a moment so it cannot answer with the pre-change value and
+     flip the button back under the operator. */
   specFlatten = v;
-  localStorage.setItem("specFlatten", v ? "1" : "0");   // persist per-browser
+  flatPendingUntil = Date.now() + 2500;
   updateFlatBtn();
+  fetch("/api/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ flat_mode: v })
+  }).catch(() => { /* offline - the view still changed here, and the next
+                      successful poll will put us back in step with the Tab5 */ });
 }
 updateFlatBtn();
 document.getElementById("flatbtn").addEventListener("click", () => setFlatten(!specFlatten));

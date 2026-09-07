@@ -295,6 +295,10 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
+/* Flat mode from the web (#357). ui_set_flat_mode() moves LVGL objects and so
+ * may only be called on the display thread; this leaves a request that the
+ * 500 ms reconcile applies. Safe from httpd. */
+void ui_request_flat_mode(bool on);
 void ui_flat_mode_reset(void);  // re-seed flat-spectrum floor on first audio after QMX (re)connect
 
 // Phase 5.4: update dB label text (called by autoscale)
