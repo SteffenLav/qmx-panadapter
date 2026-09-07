@@ -94,6 +94,19 @@ int  spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_h
 // anything actually changed without copying the table first.
 uint32_t spots_version(void);
 
+/* The radio's CAT mode string as the spot store classifies modes.
+ *
+ * Shared so the Tab5's lane and the web page's array are filtered by ONE rule.
+ * It lived privately in spots_lane.c, and the browser therefore had no filter at
+ * all: with "Mode filter the spots" on, the Tab5 dropped every spot that was not
+ * your mode while the page still drew all of them, so the two screens showed
+ * visibly different lanes from the same setting (operator, 2026-09-07).
+ *
+ * Returns SPOT_MODE_OTHER for anything unrecognised, which the filter reads as
+ * "do not filter" - failing OPEN on purpose. A mode we do not know about should
+ * show you every spot, not hide the band. */
+spot_mode_t spot_mode_from_cat(const char *cat_mode);
+
 // Replace every spot belonging to `src` with `list`, leaving the other sources'
 // entries alone. This is how a second producer joins the store: POTA and RBN
 // each own their slice and neither can wipe the other's. `list` must not point

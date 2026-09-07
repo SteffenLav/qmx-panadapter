@@ -1700,6 +1700,21 @@ const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
 let lastView = null;   /* {lo, hi, capLo, capHi, span} in absolute Hz */
 /* Bitmask of the CW filter widths the radio has enabled; 0 = show all (#350). */
 let lastCwFilterMask = 0;
+
+/* ⛔ HTML-escape, AT MODULE SCOPE. There was exactly one esc() on this page and
+   it lived INSIDE the ADIF-viewer closure, so anything outside that closure
+   calling it threw ReferenceError - and the status poll swallows exceptions, so
+   the page simply stopped updating with nothing in the console. That is how the
+   two-line CW renderer and the Edit QSO panel both shipped broken on
+   2026-09-07: band, mode, frequency, clock and battery all "--" while the
+   WebSocket spectrum ran at 9.6 fps and every /api/status returned 200.
+   Escaping is a page-wide need; it does not belong to one widget. */
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+/* Painting exceptions swallowed by the status catch - see there. */
+let statusPaintErrs = 0;
 /* ⛔ WHEN THE VIEWPORT WAS LAST CONFIRMED, and why that has to be tracked.
  *
  * The spectrum frames and the viewport arrive on DIFFERENT channels - frames on
@@ -2719,9 +2734,10 @@ function adifImportMessage(j) {
     render();
   });
 
+  /* Kept as a name the surrounding code already uses; the implementation is
+     module-scope escHtml() so there is only one of them. */
   function esc(s) {
-    return (s || "").replace(/[&<>"]/g,
-      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    return escHtml(s);
   }
 
   /* #263 "check my log". Says what is MISSING, never that a file will be
@@ -5866,8 +5882,8 @@ async function tick() {
                row is this pass, after it means none of it is. */
             const cut = Math.max(0, Math.min(rowTxt.length, cw.col - from));
             rowEls[r].innerHTML =
-              "<span class='cw-now'>"  + esc(rowTxt.slice(0, cut)) + "</span>" +
-              "<span class='cw-prev'>" + esc(rowTxt.slice(cut))    + "</span>";
+              "<span class='cw-now'>"  + escHtml(rowTxt.slice(0, cut)) + "</span>" +
+              "<span class='cw-prev'>" + escHtml(rowTxt.slice(cut))    + "</span>";
           }
           el.hidden = false;
         } else {
@@ -6138,7 +6154,24 @@ async function tick() {
     if (!bpDragging) drawBandplan();  // don't fight an in-progress drag's preview
 
     rebuildOpenDropdown();
-  } catch(e) { /* leave previous values */ }
+  } catch(e) {
+    /* ⛔ THIS USED TO BE A BARE "leave previous values" AND IT HID A REAL BUG
+       FOR AS LONG AS IT EXISTED. Keeping the last good values is right for a
+       dropped request - but the same catch also swallows any exception thrown
+       by the ~500 lines of painting below, and then EVERY field keeps whatever
+       it had, which on a fresh page is "--". The operator saw exactly that on
+       2026-09-07: /api/status returning 200 once a second in the Network tab, a
+       WebSocket spectrum running at 9.6 fps, nothing in the console, and band,
+       mode, frequency, clock and battery all showing "--".
+       A network failure and a painting bug must not look identical. */
+    if (!(e instanceof TypeError) || !String(e.message).match(/fetch|network/i)) {
+      statusPaintErrs++;
+      if (statusPaintErrs <= 3)
+        console.error("status paint failed (values left stale):", e);
+      else if (statusPaintErrs === 4)
+        console.error("status paint still failing - further errors suppressed");
+    }
+  }
   finally { statusInFlight = false; }
 }
 

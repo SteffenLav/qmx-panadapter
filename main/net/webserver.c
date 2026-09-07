@@ -871,6 +871,16 @@ static esp_err_t status_handler(httpd_req_t *req)
             // array only when it is stale. spots_v is ALWAYS sent, so "no spots
             // key" is never ambiguous: it means "you are up to date".
             uint32_t sv = spots_version();
+            /* ⛔ THE VERSION HAS TO COVER THE FILTER, NOT JUST THE STORE.
+             * The array now depends on the radio's MODE as well as on the spot
+             * store, and spots_version() only moves when a source refreshes. So
+             * a mode change would have left the browser holding the previous
+             * mode's spots until POTA next updated - minutes of a lane that
+             * quietly disagrees with the Tab5, which is the very fault being
+             * fixed here. Folding the filter state and the mode into the
+             * version makes a mode change invalidate the cache by itself. */
+            if (cfg.spots_mode_filter)
+                sv = sv * 8u + (uint32_t)spot_mode_from_cat(cat_get_mode_str()) + 4u;
             cJSON_AddNumberToObject(root, "spots_v", (double)sv);
             char qbuf[64] = {0}, svbuf[16] = {0};
             bool want = true;
@@ -893,6 +903,23 @@ static esp_err_t status_handler(httpd_req_t *req)
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (sp) {
                 int ns = spots_get_in_range(sp, MAXSP, sp_segs[0].lo_hz, sp_segs[sp_nseg - 1].hi_hz);
+                /* The SAME mode filter the Tab5's lane applies (spots_lane.c).
+                 * It used to be applied only there, so with "Mode filter the
+                 * spots" on the Tab5 dropped every spot that was not your mode
+                 * while this array still carried all of them - two visibly
+                 * different lanes from one setting. Filtering here rather than
+                 * in the page keeps ONE rule: a second copy in JavaScript is
+                 * exactly what produced the difference. */
+                if (cfg.spots_mode_filter) {
+                    spot_mode_t want = spot_mode_from_cat(cat_get_mode_str());
+                    if (want != SPOT_MODE_OTHER) {
+                        int keep = 0;
+                        for (int i = 0; i < ns; i++)
+                            if (sp[i].mode == want || sp[i].mode == SPOT_MODE_OTHER)
+                                sp[keep++] = sp[i];
+                        ns = keep;
+                    }
+                }
                 cJSON *sarr = cJSON_AddArrayToObject(root, "spots");
                 int64_t now = (int64_t)time(NULL);
                 for (int i = 0; i < ns; i++) {
@@ -5276,15 +5303,40 @@ esp_err_t webserver_start(void)
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
     // session can be LRU-purged instead of bouncing new connects off ENFILE.
     //
-    // 10 -> 13, i.e. all of the safe budget (#232). Eviction is not theoretical
-    // here: the spectrum WebSocket was being purged repeatedly because its LRU
-    // position never refreshed, and every purge costs the browser a reconnect.
-    // That specific bug is fixed in webserver_ws.c, but the pressure that made
-    // it fire is real - the page polls /api/status and /api/decodes, the feeds
-    // open outbound connections, and each of ours competes for the same table.
-    // Three more slots is free headroom against a mechanism we have now watched
-    // misfire, so there is no reason to hold any of it back.
-    config.max_open_sockets = 13;
+    // 13 -> 8, and the three slots given back in #232 come with them.
+    //
+    // ⛔⛔ 13 IS IDF's CEILING FOR A DEVICE WHERE httpd IS THE ONLY USER OF THE
+    // TABLE, and this one is not. httpd_main.c refuses anything above
+    // CONFIG_LWIP_MAX_SOCKETS - 3, so 13 reserves the ENTIRE 16 for httpd and
+    // its three internals - while rigctld's listener, RBN, the DX cluster,
+    // pskreporter's UDP socket, mDNS and every outbound TLS feed draw on the
+    // same table.
+    //
+    // The consequence is not that httpd is merely greedy. It is that httpd can
+    // NEVER REACH ITS OWN LIMIT, so lru_purge_enable - the mechanism that exists
+    // to reclaim an idle session - can never fire. lwIP runs out first and every
+    // new connection is refused, for ever, while httpd sits there believing it
+    // has room.
+    //
+    // ⭐ WATCHED HAPPENING, 2026-09-07, which is what settles it. With ONE
+    // browser open and its other tabs closed, sock_owners reported 15 of 16 in
+    // use with NINE httpd sessions to that browser, unchanged 145 s later - and
+    // churning, three peer ports changed between two readings, so sessions were
+    // being replaced while the total never fell. The WebSocket had taken the
+    // last slot and every /api/status poll was refused: the page drew a live
+    // spectrum at 9.6 fps with band, mode, frequency, clock and battery all
+    // showing "--".
+    //
+    // At 8, httpd hits its own limit while lwIP still has ~5 free, so the purge
+    // engages and evicts httpd's OWN oldest idle session instead of everyone
+    // being refused. The WebSocket is not the victim: webserver_ws.c refreshes
+    // its LRU position on every send (the v1.9.x fix), which is precisely the
+    // bug that made 10 unsafe before and is fixed.
+    //
+    // ⚠ A ramp test that morning did NOT reproduce this and I wrongly used that
+    // to argue the arithmetic was not the whole story. Half-open connections are
+    // not what fills the table; a real browser is.
+    config.max_open_sockets = 8;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);

@@ -87,11 +87,9 @@ static const char *TAG = "spots_ui";
 // is the same KIND of spot, only better evidenced.
 #define COL_CONFIRMED 0xFFF0B0
 
-// The radio's mode string as the spot store classifies modes. Returns
-// SPOT_MODE_OTHER for anything unrecognised, which the filter reads as "do not
-// filter" - failing OPEN on purpose. A mode we do not know about should show
-// you every spot, not hide the band.
-static spot_mode_t spot_mode_from_cat(const char *m)
+// Declared in spots.h and shared with the web path - see there for why. The
+// Tab5 and the browser must classify a mode identically or their lanes differ.
+spot_mode_t spot_mode_from_cat(const char *m)
 {
     if (!m || !m[0]) return SPOT_MODE_OTHER;
     if (strstr(m, "CW"))  return SPOT_MODE_CW;
