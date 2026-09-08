@@ -689,9 +689,25 @@ static void process_cat_message(const char *msg, size_t len)
         };
         const char *mode_str = kw_modes[d - '0'];
         if (d != s_last_mode_digit) {
+            const bool was_cw = (s_last_mode_digit == '3' || s_last_mode_digit == '7');
+            const bool is_cw  = (d == '3' || d == '7');
             s_last_mode_digit = d;
             ESP_LOGI(TAG, "Mode = %s (raw %c)", mode_str, d);
             ui_update_mode(mode_str);
+
+            // Leaving CW throws the decoded line away (Gyula HA3HZ, 2026-09-08).
+            // The pane hides itself outside CW/CW-R, so nothing was visibly
+            // wrong at the time - but the text survived, and coming back to CW
+            // minutes later it was still sitting there, reading as freshly
+            // decoded. There is no way to tell it from live text: the radio
+            // hands over finished characters with no timing, so the pane cannot
+            // age them. What it CAN do is not show a line it has no reason to
+            // believe in. Fires on the transition only, so a CW session is
+            // untouched.
+            if (was_cw && !is_cw) {
+                cw_decode_clear();
+                ESP_LOGI(TAG, "left CW - cleared the decoded line");
+            }
 
             // #214 (Samuel W7STF): coming back INTO SSB with a filter pinned,
             // repaint the width from the pin - nothing else ever will.

@@ -764,6 +764,22 @@ static void sd_archive_task(void *arg)
             // WiFi is switched off is deliberately not attempted here - it is an
             // untested path, and a reboot with WiFi off gives the verified
             // continuous-mirroring behaviour.
+            // ⚠ AND SAY WHAT ELSE STOPS, because a feature that silently does
+            // nothing reads as a broken feature. Uwe DL8UG switched the CW
+            // transcript on, worked a CW session, pulled the card and found no
+            // cw-decode.txt - it is mirrored by the background burst, which is
+            // exactly what parking turns off. Nothing was wrong and nothing said
+            // so. Once per session, and only if there is really CW being decoded
+            // that would otherwise have been written.
+            static bool s_noted_cw_parked = false;
+            if (wifi_on && !s_noted_cw_parked && cw_decode_total() > 0 &&
+                settings_get_cw_decode_en()) {
+                s_noted_cw_parked = true;
+                ESP_LOGW(TAG, "decoded CW is NOT being written to " SD_CW_PATH
+                              " this session: WiFi is on, so the background "
+                              "mirror is parked (the card is still mounted and "
+                              "readable). Switch WiFi off and reboot to record it.");
+            }
             static bool s_noted_wifi_off = false;
             if (!wifi_on && !s_noted_wifi_off) {
                 s_noted_wifi_off = true;
