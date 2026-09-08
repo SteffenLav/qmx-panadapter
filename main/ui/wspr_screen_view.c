@@ -395,6 +395,9 @@ static void hover_tick_cb(lv_timer_t *timer)
  * reader_view.c does it this way. */
 #define BP_ROW_H   52
 
+/* Quiet window after this page pushes the dial, so the mismatch check below
+ * does not fire on our own write while the FA poll is still catching up. */
+static int64_t   s_dial_settle_us = 0;
 static lv_obj_t *s_bp_panel;                 /* NULL when closed */
 static lv_obj_t *s_bp_row[N_BANDS];
 static int       s_bp_n;
@@ -1982,6 +1985,7 @@ void wspr_screen_view_tick(void)
                      * this page hears anything at all must not be the one that
                      * gets dropped. */
                     cat_set_frequency_forced(want);
+                    s_dial_settle_us = esp_timer_get_time() + 3000000;
                     ESP_LOGW(TAG, "dial: pushed %lu Hz to the radio (was %lu)",
                              (unsigned long)want, (unsigned long)have);
                 } else if (want) {
@@ -2016,7 +2020,13 @@ void wspr_screen_view_tick(void)
             settings_load_all(&ms);
             const uint32_t want = ms.wspr_dial_hz;
             const uint32_t have = cat_get_frequency();
-            if (cat_now && want && have && have != want) {
+            /* ⚠ NOT WHILE OUR OWN PUSH IS STILL IN FLIGHT. cat_get_frequency()
+             * reports the last FA POLL, which lags a write by up to ~150 ms, so
+             * without this the check fires on the push it was triggered by and
+             * cries mismatch on every entry to this page - observed doing
+             * exactly that, 2 ms after the push line. */
+            if (cat_now && want && have && have != want &&
+                esp_timer_get_time() > s_dial_settle_us) {
                 if (have != s_last_mismatch) {
                     s_last_mismatch = have;
                     ESP_LOGW(TAG, "dial MISMATCH: the radio is on %lu Hz but WSPR "
