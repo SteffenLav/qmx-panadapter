@@ -1803,7 +1803,7 @@ static inline uint16_t wf_rgb565(uint8_t v)
  * characters that can actually appear: A-Z, '?' for a candidate that did not
  * decode, and '*' for the 27th decode in one cycle, which cannot happen while
  * the candidate cap is 20 but is not worth being undefined about. */
-static const uint8_t GLYPH5x7[27][7] = {
+static const uint8_t GLYPH5x7[38][7] = {
     {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, /* A */
     {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}, /* B */
     {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, /* C */
@@ -1831,12 +1831,28 @@ static const uint8_t GLYPH5x7[27][7] = {
     {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}, /* Y */
     {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}, /* Z */
     {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}, /* ? (index 26) */
+    /* Digits and a colon, for the cycle timestamp printed at the left end of
+     * the marker row - see the note there for why the row carries its own
+     * time rather than relying on position alone. */
+    {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, /* 0 (27) */
+    {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, /* 1 */
+    {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, /* 2 */
+    {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}, /* 3 */
+    {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, /* 4 */
+    {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}, /* 5 */
+    {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}, /* 6 */
+    {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
+    {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, /* 8 */
+    {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}, /* 9 */
+    {0x00,0x04,0x04,0x00,0x04,0x04,0x00}, /* : (37) */
 };
 
 static const uint8_t *glyph_for(char ch)
 {
     if (ch >= 'A' && ch <= 'Z') return GLYPH5x7[ch - 'A'];
     if (ch == '?')              return GLYPH5x7[26];
+    if (ch >= '0' && ch <= '9') return GLYPH5x7[27 + (ch - '0')];
+    if (ch == ':')              return GLYPH5x7[37];
     return NULL;   /* '*' and anything else: draw nothing rather than a lie */
 }
 
@@ -1850,29 +1866,59 @@ static const uint8_t *glyph_for(char ch)
 #define MARK_SCALE 3
 #define MARK_BOX_W (7 * MARK_SCALE)   /* 5 glyph + 1 px surround either side */
 #define MARK_BOX_H (9 * MARK_SCALE)
+/* Leader length below a glyph, into the cycle it describes. Long enough to read
+ * as pointing somewhere, short enough not to obscure the trace it points at. */
+#define MARK_STEM_PX 10
 
 /* Blit one glyph, with a black surround so it stays readable over a bright
  * trace. Clipped to the pane; a mark whose box would fall off the edge is
  * nudged inward rather than dropped, because the edge tones are real. */
-static void blit_glyph(uint16_t *px, int x0, int y0, char ch, uint16_t fg)
+static void blit_glyph_s(uint16_t *px, int x0, int y0, char ch, uint16_t fg, int sc)
 {
     const uint8_t *g = glyph_for(ch);
     if (!g) return;
+    const int bw = 7 * sc, bh = 9 * sc;
     if (x0 < 0) x0 = 0;
-    if (x0 + MARK_BOX_W > RIGHT_W) x0 = RIGHT_W - MARK_BOX_W;
+    if (x0 + bw > RIGHT_W) x0 = RIGHT_W - bw;
     if (y0 < 0) y0 = 0;
-    if (y0 + MARK_BOX_H > WF_H) y0 = WF_H - MARK_BOX_H;
+    if (y0 + bh > WF_H) y0 = WF_H - bh;
     for (int r = -1; r <= 7; r++) {
         for (int c = -1; c <= 5; c++) {
             const bool on = (r >= 0 && r < 7 && c >= 0 && c < 5) &&
                             ((g[r] >> (4 - c)) & 1);
             const uint16_t v = on ? fg : 0x0000;
-            for (int sy = 0; sy < MARK_SCALE; sy++) {
-                uint16_t *dst = &px[(y0 + (r + 1) * MARK_SCALE + sy) * RIGHT_W
-                                    + x0 + (c + 1) * MARK_SCALE];
-                for (int sx = 0; sx < MARK_SCALE; sx++) dst[sx] = v;
+            for (int sy = 0; sy < sc; sy++) {
+                uint16_t *dst = &px[(y0 + (r + 1) * sc + sy) * RIGHT_W
+                                    + x0 + (c + 1) * sc];
+                for (int sx = 0; sx < sc; sx++) dst[sx] = v;
             }
         }
+    }
+}
+
+static void blit_glyph(uint16_t *px, int x0, int y0, char ch, uint16_t fg)
+{
+    blit_glyph_s(px, x0, y0, ch, fg, MARK_SCALE);
+}
+
+/* A short vertical leader from the bottom of a glyph down into the cycle it
+ * describes. ⭐ THIS IS THE WHOLE POINT OF THE LAYOUT, not decoration: the
+ * dashed line sits BETWEEN two cycles, so a glyph drawn on it belongs to
+ * neither and the operator has to guess (he did, and said so). The marks
+ * describe the cycle BELOW - wf_mark_boundary() runs after a cycle's rows are
+ * published, and row 0 is the newest, so the line closes off the data beneath
+ * it. Glyph below the line, stem pointing further down: adjacency and
+ * direction both say the same thing. */
+static void blit_stem(uint16_t *px, int cx, int y0, int len, uint16_t fg)
+{
+    if (cx < 1) cx = 1;
+    if (cx > RIGHT_W - 2) cx = RIGHT_W - 2;
+    for (int y = y0; y < y0 + len && y < WF_H; y++) {
+        if (y < 0) continue;
+        px[y * RIGHT_W + cx]     = fg;
+        px[y * RIGHT_W + cx - 1] = 0x0000;   /* a dark edge so it reads over a
+                                              * bright trace */
+        px[y * RIGHT_W + cx + 1] = 0x0000;
     }
 }
 
@@ -1914,16 +1960,36 @@ static void repaint_waterfall(void)
         static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
         static int         nmarks = 0;
         uint32_t seq = wspr_rx_marks_seq();
+        static int64_t cycle_utc = 0;
         if (seq != marks_seq_seen) {
             marks_seq_seen = seq;
-            nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, NULL);
+            nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, &cycle_utc);
         }
         int mark_row = -1;
         for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
             if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
         }
-        if (nmarks > 0 && mark_row >= 0) {
-            int y0 = mark_row * WF_H / WSPR_WF_HIST_ROWS - MARK_BOX_H / 2;
+        /* ⛔ BELOW THE LINE, NEVER ON IT (operator, 2026-09-08: "right now you
+         * write on top of the dashed line and one can be in doubt what to
+         * assign them to"). He is right, and centring them there was the
+         * mistake: a boundary is BETWEEN two cycles, so a glyph straddling it
+         * belongs to neither.
+         *
+         * The marks describe the cycle BELOW - wf_mark_boundary() runs after a
+         * cycle's rows are published and row 0 is the newest, so the line
+         * closes off the data beneath it. Everything now says so three times
+         * over: the glyph sits wholly under the line, a stem runs from it
+         * further down into that cycle, and the row carries the cycle's own UTC
+         * time at its left end.
+         *
+         * ⚠ If the boundary has scrolled far enough down that the glyph row
+         * will not fit under it, NOTHING is drawn. The alternative is clamping,
+         * which puts the marks back above the line - i.e. onto the wrong cycle,
+         * silently, exactly at the moment they are hardest to check. */
+        const int line_y = mark_row * WF_H / WSPR_WF_HIST_ROWS;
+        if (nmarks > 0 && mark_row >= 0 &&
+            line_y + 3 + MARK_BOX_H + MARK_STEM_PX <= WF_H) {
+            const int y0 = line_y + 3;
             /* Green for a decode - the same light green as the boundary line,
              * so a letter reads as belonging to it - and a dim grey for a
              * candidate that did not decode, which is a question rather than a
@@ -1959,7 +2025,26 @@ static void repaint_waterfall(void)
                     if (clash && !decoded) continue;
                     if (nplaced < WSPR_MARKS_MAX) placed[nplaced++] = x;
                     blit_glyph(px, x, y0, marks[i].ch, decoded ? FG_OK : FG_NO);
+                    blit_stem(px, x + MARK_BOX_W / 2, y0 + MARK_BOX_H,
+                              MARK_STEM_PX, decoded ? FG_OK : FG_NO);
                 }
+            }
+
+            /* The cycle's own time, small, at the left end of the row. Position
+             * and a leader already say WHICH cycle; this says WHEN, so a row
+             * can be matched to a UTC group in the list below without counting
+             * boundaries. Scale 2 rather than 3 - it is a caption, not a
+             * marker, and five characters at scale 3 would cover 105 px of
+             * band. */
+            if (cycle_utc > 0) {
+                time_t tt = (time_t)cycle_utc;
+                struct tm tmv;
+                gmtime_r(&tt, &tmv);
+                char ts[6];
+                snprintf(ts, sizeof(ts), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+                for (int i = 0; ts[i]; i++)
+                    blit_glyph_s(px, 2 + i * (5 * 2 + 1), y0 + 2, ts[i],
+                                 FG_NO, 2);
             }
         }
     }
