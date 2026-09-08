@@ -1836,23 +1836,38 @@ static const uint8_t *glyph_for(char ch)
     return NULL;   /* '*' and anything else: draw nothing rather than a lie */
 }
 
-/* Blit one glyph, with a one-pixel black surround so it stays readable over a
- * bright trace. Clipped to the pane; a mark whose box would fall off the edge
- * is nudged inward rather than dropped, because the edge tones are real. */
+/* ⚠ SCALED, because 5x7 on a 1280 px panel is about a third of the list font
+ * and the operator's reaction on first sight was "what is the font size - 10?".
+ * Integer scale only: a bitmap font resampled by a fraction loses strokes, and
+ * these have to be read at a glance from across a desk. 3 puts a glyph at
+ * 15x21, which is the same 15 px advance qmx_mono_25 uses in the list right
+ * below it, so the letters on the carpet and the letters in the S column are
+ * the same size. */
+#define MARK_SCALE 3
+#define MARK_BOX_W (7 * MARK_SCALE)   /* 5 glyph + 1 px surround either side */
+#define MARK_BOX_H (9 * MARK_SCALE)
+
+/* Blit one glyph, with a black surround so it stays readable over a bright
+ * trace. Clipped to the pane; a mark whose box would fall off the edge is
+ * nudged inward rather than dropped, because the edge tones are real. */
 static void blit_glyph(uint16_t *px, int x0, int y0, char ch, uint16_t fg)
 {
     const uint8_t *g = glyph_for(ch);
     if (!g) return;
     if (x0 < 0) x0 = 0;
-    if (x0 + 7 > RIGHT_W) x0 = RIGHT_W - 7;
+    if (x0 + MARK_BOX_W > RIGHT_W) x0 = RIGHT_W - MARK_BOX_W;
     if (y0 < 0) y0 = 0;
-    if (y0 + 9 > WF_H) y0 = WF_H - 9;
+    if (y0 + MARK_BOX_H > WF_H) y0 = WF_H - MARK_BOX_H;
     for (int r = -1; r <= 7; r++) {
-        uint16_t *dst = &px[(y0 + 1 + r) * RIGHT_W + x0];
         for (int c = -1; c <= 5; c++) {
-            bool on = (r >= 0 && r < 7 && c >= 0 && c < 5) &&
-                      ((g[r] >> (4 - c)) & 1);
-            dst[1 + c] = on ? fg : 0x0000;
+            const bool on = (r >= 0 && r < 7 && c >= 0 && c < 5) &&
+                            ((g[r] >> (4 - c)) & 1);
+            const uint16_t v = on ? fg : 0x0000;
+            for (int sy = 0; sy < MARK_SCALE; sy++) {
+                uint16_t *dst = &px[(y0 + (r + 1) * MARK_SCALE + sy) * RIGHT_W
+                                    + x0 + (c + 1) * MARK_SCALE];
+                for (int sx = 0; sx < MARK_SCALE; sx++) dst[sx] = v;
+            }
         }
     }
 }
@@ -1904,24 +1919,43 @@ static void repaint_waterfall(void)
             if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
         }
         if (nmarks > 0 && mark_row >= 0) {
-            int y0 = mark_row * WF_H / WSPR_WF_HIST_ROWS - 4;
+            int y0 = mark_row * WF_H / WSPR_WF_HIST_ROWS - MARK_BOX_H / 2;
             /* Green for a decode - the same light green as the boundary line,
              * so a letter reads as belonging to it - and a dim grey for a
              * candidate that did not decode, which is a question rather than a
              * result. */
             const uint16_t FG_OK = (uint16_t)(((144 >> 3) << 11) | ((238 >> 2) << 5) | (144 >> 3));
             const uint16_t FG_NO = (uint16_t)(((150 >> 3) << 11) | ((150 >> 2) << 5) | (150 >> 3));
-            int last_x = -100;
-            for (int i = 0; i < nmarks; i++) {
-                int x = (int)((marks[i].freq_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
-                              (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - 3;
-                /* Marks are published in tone order, so a left-to-right sweep
-                 * only ever has to push a crowded one RIGHT - no sorting here,
-                 * and the letters stay in the order the list shows them. */
-                if (x < last_x + 8) x = last_x + 8;
-                last_x = x;
-                blit_glyph(px, x, y0, marks[i].ch,
-                           marks[i].ch == '?' ? FG_NO : FG_OK);
+            /* ⛔ A MARK MUST NOT BE MOVED AWAY FROM ITS OWN TONE. The first
+             * version pushed a crowded mark right until it fitted, which on a
+             * quiet band produced what the operator actually saw: the candidate
+             * cap is 20 and it saturates, so twenty '?' got shoved into one
+             * continuous run of punctuation pointing at nothing in particular.
+             * A marker whose position is a lie is worse than a missing one.
+             *
+             * So: DECODES ARE PLACED FIRST and never dropped - they are the
+             * join to the S column and there are only ever a handful. Then the
+             * '?' marks fill whatever room is left, each at its true tone or
+             * not at all. What survives is a picture that can be trusted: every
+             * glyph sits over the signal it describes. */
+            int placed[WSPR_MARKS_MAX];
+            int nplaced = 0;
+            for (int pass = 0; pass < 2; pass++) {
+                for (int i = 0; i < nmarks; i++) {
+                    const bool decoded = (marks[i].ch != '?');
+                    if (decoded != (pass == 0)) continue;
+                    int x = (int)((marks[i].freq_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
+                                  (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_BOX_W / 2;
+                    bool clash = false;
+                    for (int k = 0; k < nplaced; k++)
+                        if (x < placed[k] + MARK_BOX_W && placed[k] < x + MARK_BOX_W)
+                            { clash = true; break; }
+                    /* A decode is drawn regardless - overlapping two letters is
+                     * ugly, losing one breaks the join to the list. */
+                    if (clash && !decoded) continue;
+                    if (nplaced < WSPR_MARKS_MAX) placed[nplaced++] = x;
+                    blit_glyph(px, x, y0, marks[i].ch, decoded ? FG_OK : FG_NO);
+                }
             }
         }
     }
