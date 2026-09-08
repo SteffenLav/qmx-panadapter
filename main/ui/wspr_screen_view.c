@@ -1824,6 +1824,10 @@ static lv_obj_t *s_mark_time_lbl;
 /* What a mark occupies for the de-crowding test: qmx_mono_25 advances exactly
  * 15.0 px, plus 2 px of plate padding either side. */
 #define MARK_W 19
+/* Half the width a WSPR transmission occupies: 4-FSK, 1.4648 Hz between tones,
+ * so 3 spacings from the lowest tone to the highest and the centre is 1.5 of
+ * them above the base tone the decoder reports. */
+#define WSPR_TX_HALF_WIDTH_HZ 2.2f
 
 static void mark_labels_clear(void)
 {
@@ -1940,7 +1944,27 @@ static void repaint_waterfall(void)
                 for (int i = 0; i < nmarks && s_mark_lbl_n < MARK_LBL_MAX; i++) {
                     const bool decoded = (marks[i].ch != '?');
                     if (decoded != (pass == 0)) continue;
-                    int x = (int)((marks[i].freq_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
+                    /* ⭐ CENTRE THE MARK ON THE TRANSMISSION, NOT ON ITS
+                     * LOWEST TONE. A WSPR signal is 4-FSK at 1.4648 Hz
+                     * spacing, so it occupies 3 x 1.4648 = 4.4 Hz and the
+                     * decoder reports the BASE tone - which put every mark on
+                     * the left-hand edge of a trace about 20 px wide rather
+                     * than on it. Operator, 2026-09-08: "even the real signals
+                     * are marked strange places compared to the signals you can
+                     * truly see."
+                     *
+                     * Measured before changing anything, by profiling the
+                     * column energy of a real screenshot against the decoded
+                     * tones: IK6ZEW decoded 1480.2 and peaked at 1484.2,
+                     * E79Q decoded 1548.0 and peaked at 1544.7. Scatter either
+                     * way and no systematic bias, i.e. the x mapping itself was
+                     * right and the width was the whole story.
+                     *
+                     * ⚠ Applied to the DRAWING only. marks[i].freq_hz stays the
+                     * decoder's own figure, because that is what the S column
+                     * matches a spot by and what the log reports. */
+                    const float centre_hz = marks[i].freq_hz + WSPR_TX_HALF_WIDTH_HZ;
+                    int x = (int)((centre_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
                                   (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_W / 2;
                     bool clash = false;
                     for (int k = 0; k < s_mark_lbl_n; k++)
