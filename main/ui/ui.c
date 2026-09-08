@@ -7282,51 +7282,84 @@ static void topbar_reconcile_cb(lv_timer_t *t)
     }
 }
 
-// Band/Mode/BW/Zoom top-bar controls open popups that don't apply in FT8
-// mode (frequency/mode/passband there are driven by the FT8 screen itself,
-// and zoom is a panadapter-only concept). The click handlers already ignore
-// taps while ui_mode == UI_MODE_FT8; this dims the labels too so it's
-// visually obvious they're inert.
-static void top_bar_set_ft8_dim(bool dim)
+/* ⭐ THE ONE OWNER of the top bar's live/inert state, and it takes NO ARGUMENT
+ * ON PURPOSE.
+ *
+ * It used to be top_bar_set_ft8_dim(bool), called at each transition with the
+ * caller's belief about what the mode was about to be. Two faults came out of
+ * that shape, one after the other:
+ *
+ *  1. sync_nav_affordances() ALSO owned LV_OBJ_FLAG_CLICKABLE on the hit zones,
+ *     the two disagreed, and the 1 Hz one won - which is how the WSPR page's
+ *     Band zone came back to life and retuned the radio to an FT8 frequency.
+ *  2. A caller can simply forget. ui_apply_saved_mode()'s WSPR branch never
+ *     called it at all, so a Tab5 that WOKE UP on WSPR (which it now does, that
+ *     being where it was left) had a bar that was bright and fully live, while
+ *     the same page entered by swiping was correctly inert. The zones were
+ *     dropped by the 1 Hz sweep, but the LABELS carry their own 90-110 px
+ *     ext_click_area halos, so all four controls stayed reachable through the
+ *     text. Screenshotted on the bench 2026-09-08: every label at full opacity.
+ *
+ * Deriving the whole thing from ui_mode_get() removes both by construction: no
+ * second owner, and nothing to forget. sync_nav_affordances() calls this, so a
+ * path that misses the transition call self-heals within a second instead of
+ * staying wrong for the session.
+ *
+ * THE RULE THE OPERATOR ASKED FOR, and it is now uniform: greyed means inert,
+ * bright means it works. A bright control that does nothing is the same broken
+ * promise as a green mouse pointer over dead pixels. */
+static void top_bar_apply_mode(void)
 {
-    lv_opa_t opa = dim ? LV_OPA_30 : LV_OPA_COVER;
-    /* ⚠ The freq LABEL carries its own 90-110 px click halo, so it has to be
-     * exempted here too or WSPR's one live top-bar control is reachable through
-     * its hit zone and dead on the text itself. See sync_nav_affordances(). */
-    const bool keep_freq = (ui_mode_get() == UI_MODE_WSPR);
-    if (s_band_label) lv_obj_set_style_text_opa(s_band_label, opa, 0);
-    if (s_mode_label) lv_obj_set_style_text_opa(s_mode_label, opa, 0);
-    if (s_bw_label)   lv_obj_set_style_text_opa(s_bw_label, opa, 0);
-    if (s_zoom_label) lv_obj_set_style_text_opa(s_zoom_label, opa, 0);
+    const bool owned = reader_view_is_active() || help_triage_is_open()
+                       || qmx_term_view_is_open();
+    const ui_mode_t m = ui_mode_get();
 
-    // Also drop these hit-zones out of hit-testing entirely in FT8 mode -
-    // see s_topbar_hit_zones comment for why their callback's own FT8 bail
-    // isn't enough (the touch is still won/swallowed at the screen z-order
-    // level, blocking FT8's own controls underneath, e.g. decode rows 1-3
-    // and the Preset button, which both sit under y=200).
+    /* ⛔ NOT "is this FT8" - "is this the panadapter". Band, Mode, BW and Zoom
+     * are all the panadapter's idea of the radio; every other page owns the
+     * dial itself. */
+    const bool inert = owned || (m != UI_MODE_PANADAPTER);
+
+    /* ⭐ FREQ STAYS LIVE ON THE WSPR PAGE, and nothing else does (operator,
+     * 2026-09-08: "from the top bar i should not be able to activate any of the
+     * features. Only the Freq if you find a non standard wspr signal - all the
+     * rest greyed out"). WSPR frequencies are a convention, not a law, and a
+     * beacon found off the standard dial can only be chased by typing it in.
+     *
+     * ⚠ FT8 keeps ALL FIVE inert: its decode rows and Preset button sit under
+     * y=200 where the Freq zone lands, and swallowing taps meant for those is
+     * why these zones are dropped from hit-testing there at all. WSPR's list
+     * starts lower and has nothing underneath. */
+    const bool freq_live = (m == UI_MODE_WSPR) && !owned;
+
+    /* Same order as the hit_zones[] table this indexes - Band, Mode, BW, Freq,
+     * Zoom - so TOPBAR_ZONE_FREQ addresses the label and its zone together. */
+    lv_obj_t *labels[N_TOPBAR_HIT_ZONES] = { s_band_label, s_mode_label, s_bw_label,
+                                             s_freq_label, s_zoom_label };
+
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
-        lv_obj_t *hit = s_topbar_hit_zones[i];
-        if (!hit) continue;
-        if (dim) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        else     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-    }
+        const bool live = !inert || (i == TOPBAR_ZONE_FREQ && freq_live);
 
-    // The LABELS are clickable too, in their own right and with click halos of
-    // 90-110 px (ext_click_area, so they are hittable on glass) - which together
-    // blanket the whole top bar. Dropping only the zones left those live, so in
-    // FT8 mode the bar still swallowed presses whose handlers then bailed out,
-    // and with a mouse the pointer went green right across a bar where nothing
-    // was actually available (operator, v1.8.0).
-    lv_obj_t *labels[] = { s_band_label, s_mode_label, s_bw_label,
-                           s_freq_label, s_zoom_label };
-    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
-        if (!labels[i]) continue;
-        if (labels[i] == s_freq_label && keep_freq) {
-            lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
-            continue;
+        /* The LABELS are clickable in their own right, with 90-110 px click
+         * halos (ext_click_area, so they are hittable on glass) that between
+         * them blanket the whole bar. Dropping only the zones left those live,
+         * so the bar still swallowed presses whose handlers then bailed out,
+         * and with a mouse the pointer went green right across a bar where
+         * nothing was available (operator, v1.8.0). */
+        if (labels[i]) {
+            lv_obj_set_style_text_opa(labels[i], live ? LV_OPA_COVER : LV_OPA_30, 0);
+            if (live) lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
+            else      lv_obj_clear_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
         }
-        if (dim) lv_obj_clear_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
-        else     lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
+
+        /* And the transparent hit zones on top - see the s_topbar_hit_zones
+         * comment for why the callbacks' own mode bail is not enough: the touch
+         * is won and swallowed at the screen z-order level, blocking whatever
+         * is genuinely underneath. Also why the Reader's own Back/Exit/Contents
+         * buttons could not be tapped - the BW zone sits directly on them. */
+        if (s_topbar_hit_zones[i]) {
+            if (live) lv_obj_add_flag(s_topbar_hit_zones[i], LV_OBJ_FLAG_CLICKABLE);
+            else      lv_obj_clear_flag(s_topbar_hit_zones[i], LV_OBJ_FLAG_CLICKABLE);
+        }
     }
 }
 
@@ -7344,25 +7377,6 @@ static void sync_nav_affordances(void)
 {
     const bool owned = reader_view_is_active() || help_triage_is_open()
                        || qmx_term_view_is_open();
-    /* ⛔ NOT "is this FT8" - "is this the panadapter", which is the same rule
-     * top_bar_set_ft8_dim() is CALLED with (next != UI_MODE_PANADAPTER).
-     *
-     * These two functions both own LV_OBJ_FLAG_CLICKABLE on the top-bar hit
-     * zones and they disagreed, and this one runs at 1 Hz - so it WON. Entering
-     * WSPR correctly dropped the zones out of hit-testing, and a second later
-     * this put them straight back.
-     *
-     * The cost was not cosmetic. The Band zone is x 0..180 and up to 200 px
-     * deep, and v1.12.0 moved the WSPR band button left to align with the rest
-     * of that panel - putting it underneath. Tapping it opened the PANADAPTER's
-     * band dropdown, and picking from that wrote an FT8 frequency straight to
-     * the radio: caught on the bench 2026-09-08 with the radio sitting on
-     * 1.840 MHz while WSPR carried on capturing and believing it was on
-     * 7.038600, i.e. decoding one band and about to file spots against another.
-     *
-     * The FT8 page was only ever safe here by luck - its own controls happened
-     * to sit clear of x<180 in the top 200 px. */
-    const bool ft8   = (ui_mode_get() != UI_MODE_PANADAPTER);
 
     lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
     for (size_t i = 0; i < sizeof(nav) / sizeof(nav[0]); i++) {
@@ -7379,37 +7393,12 @@ static void sync_nav_affordances(void)
         else      lv_obj_clear_flag(nav[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // The top-bar Band/Mode/BW/Freq/Zoom zones are direct children of the screen,
-    // foregrounded above EVERYTHING built before them - including the Reader
-    // overlay. That is why the Reader's own Back/Exit/Contents buttons could not be
-    // tapped: the BW zone sits directly on top of them. LVGL hit-tests a parent's
-    // children in reverse creation order and descends into the first match without
-    // considering siblings, so the zone WINS the touch and swallows it. Dropping
-    // them out of hit-testing is the same remedy top_bar_set_ft8_dim() already uses.
-    for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
-        lv_obj_t *hit = s_topbar_hit_zones[i];
-        if (!hit) continue;
-        /* ⭐ FREQ STAYS LIVE ON THE WSPR PAGE, and nothing else does (operator,
-         * 2026-09-08: "from the top bar i should not be able to activate any of
-         * the features. Only the Freq if you find a non standard wspr signal -
-         * all the rest greyed out").
-         *
-         * That is the right split for a reason. Band, Mode, BW and Zoom all
-         * belong to the panadapter's idea of the radio, and on WSPR the page
-         * owns the dial through its own band picker - which is exactly what
-         * went wrong when the Band zone was reachable there. But WSPR's
-         * frequencies are a convention, not a law, and a beacon found off the
-         * standard dial can only be chased by typing the frequency in.
-         *
-         * ⚠ FT8 keeps ALL FIVE inert: its decode rows and Preset button sit
-         * under y=200 where the Freq zone lands, and the reason these zones are
-         * dropped from hit-testing there is that they swallow taps meant for
-         * those. WSPR's list starts lower and has nothing under it. */
-        const bool keep_freq = (i == TOPBAR_ZONE_FREQ) &&
-                               (ui_mode_get() == UI_MODE_WSPR) && !owned;
-        if ((owned || ft8) && !keep_freq) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        else                              lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-    }
+    /* The top bar has ONE owner and this is not it - see top_bar_apply_mode().
+     * Re-asserting it here every second is what makes a missed transition call
+     * self-healing rather than a session-long fault (which is exactly what the
+     * WSPR wake-up path was). It reads the same `owned` overlay state this
+     * function does, so the two cannot disagree the way they used to. */
+    top_bar_apply_mode();
 }
 
 void ui_help_overlay_changed(void)
@@ -13871,6 +13860,12 @@ void ui_apply_saved_mode(void)
         wspr_screen_view_show();
         wspr_rx_start();
         spots_lane_set_visible(false);
+        /* ⛔ THIS LINE WAS MISSING, and its absence was invisible because the
+         * same page entered by SWIPING was correct - only a Tab5 that woke up
+         * here had a bright, fully live top bar. Operator, 2026-09-08: "they
+         * are still active all of them". It is derived rather than told, so
+         * there is no belief to get wrong; see top_bar_apply_mode(). */
+        top_bar_apply_mode();
         apply_edge_grips_for_mode(UI_MODE_WSPR);
         ESP_LOGI(TAG, "UI mode restored from NVS: WSPR");
         return;
@@ -13889,7 +13884,7 @@ void ui_apply_saved_mode(void)
     if (s_bp_catch)      lv_obj_add_flag(s_bp_catch,      LV_OBJ_FLAG_HIDDEN);  // no strip, no catcher
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     spots_lane_set_visible(false);
-    top_bar_set_ft8_dim(true);
+    top_bar_apply_mode();
     drawer_set_mode(UI_MODE_FT8);
     // FT8 is a digital mode - force the radio into DiGi regardless of
     // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll task
@@ -13958,7 +13953,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     settings_set_last_ui_mode((uint8_t)next);
     /* Both overlay pages dim the panadapter's top-bar controls; only FT8 wants
      * the drawer's FT8 sections. */
-    top_bar_set_ft8_dim(next != UI_MODE_PANADAPTER);
+    top_bar_apply_mode();
     drawer_set_mode(next);
     apply_edge_grips_for_mode(next);
 
