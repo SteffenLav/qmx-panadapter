@@ -4953,6 +4953,7 @@ let wsprPollInFlight = false;
 /* The band list is fetched ONCE - it never changes - exactly like the FT8
    presets, and from the device rather than hardcoded here. */
 let wsprBandsLoaded = false;
+let wsprBandPendingUntil = 0;   /* ignore polls briefly after our own change */
 async function wsprFillBands() {
   if (wsprBandsLoaded) return;
   try {
@@ -4982,6 +4983,7 @@ async function wsprFillBands() {
   const btn = document.getElementById("wspr-tx");
   if (sel) sel.addEventListener("change", async () => {
     const hz = parseInt(sel.value, 10);
+    wsprBandPendingUntil = Date.now() + 2500;
     if (hz) await fetch("/api/settings", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wspr_dial_hz: hz }) });
@@ -5026,6 +5028,23 @@ function wsprRenderExtras(j) {
   /* The device's unit, taken here so both the table heading and the best-DX
      line below use the same answer on the same render. */
   if (typeof j.miles === "boolean") wsprMiles = j.miles;
+
+  /* ⭐ THE BAND CONTROL FOLLOWS THE RADIO, not the last thing clicked here.
+     It was filled once and never touched again, so a band hop left it naming a
+     band the radio had left - and with hopping on it never moved at all (Dirk
+     DK7CVD). The Tab5's own control was rebuilt for this yesterday; this is the
+     same fix on the other screen.
+
+     Held off briefly after a change made HERE, so an in-flight poll carrying the
+     old dial cannot snap the operator's own choice back. */
+  if (typeof j.dial_hz === "number" && j.dial_hz > 0 && Date.now() >= wsprBandPendingUntil) {
+    const sel = document.getElementById("wspr-band");
+    if (sel && sel.options.length && sel.value !== String(j.dial_hz)) {
+      /* Only if the device's dial is one we actually list - an operator who has
+         tuned off the WSPR sub-band should not have the control lie about it. */
+      for (const o of sel.options) if (o.value === String(j.dial_hz)) { sel.value = o.value; break; }
+    }
+  }
   /* ⚠ Built from text nodes, not innerHTML. The callsign and country come off
      the air, and this page's own esc() is nested inside the ADIF viewer and out
      of scope here - so the choice was a second copy of an escape function or no

@@ -875,7 +875,14 @@ static void build_left_extras(void)
  * already means "stay there", so a separate enable switch would only be a
  * second thing to get wrong.
  */
-#define HOP_LEAD_SEC 3
+/* ⭐ SIX, NOT THREE. The hop is attempted from a 1 Hz tick, so a 3 s window
+ * gave it about three chances per cycle - and a MISS is not neutral, it leaves
+ * the radio on the band it was already on, so misses accumulate into "it nearly
+ * always transmits on one band" (Dirk DK7CVD, 2026-09-08). Core 0 on this board
+ * runs at 0-7 % idle and the worst measured taskLVGL pass gap is 233 ms, so a
+ * tick landing late is ordinary rather than exotic. Six costs nothing - the
+ * s_hop_done_cycle guard makes a second attempt in the same window a no-op. */
+#define HOP_LEAD_SEC 6
 
 static int64_t s_hop_done_cycle = -1;
 
@@ -887,6 +894,13 @@ static void hop_maybe(void)
 
     const uint16_t mask = hs.wspr_hop_mask;
     if (__builtin_popcount(mask) < 2) return;
+
+    /* The reachability test below reads s_avail, which is filled when the page
+       is BUILT. Now that hopping runs with the page hidden - and the page is
+       built lazily - it can be empty here, which would silently reject every
+       band and stop hopping altogether. Fill it on demand. */
+    if (s_navail <= 0) s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
+    if (s_navail <= 0) return;
 
     const time_t now = time(NULL);
     if (now < 1600000000) return;                /* clock not set yet */
@@ -931,8 +945,6 @@ static void hop_maybe(void)
 
 static void refresh_left_extras(void)
 {
-    hop_maybe();
-
     /* Best DX. An ACCESSOR, not a snapshot - see wspr_spots.h for why a 10 KB
      * copy must not land on taskLVGL. */
     if (s_lbl_dx) {
@@ -1772,6 +1784,24 @@ static void repaint_waterfall(void)
 
 void wspr_screen_view_tick(void)
 {
+    /* ⭐ BEFORE THE VISIBILITY GUARD, AND THAT IS THE WHOLE FIX (Dirk DK7CVD,
+     * 2026-09-08: "it nearly always transmits on 40m and seldom on the other
+     * two").
+     *
+     * Band hopping RETUNES THE RADIO. It was being driven from
+     * refresh_left_extras(), i.e. from a screen repaint - so it only happened
+     * while the WSPR page was the one on display. Swipe to the panadapter and
+     * hopping silently stopped, while WSPR itself carried on transmitting on
+     * whatever band it was left on. A radio action must not depend on which
+     * screen the operator is looking at.
+     *
+     * ⚠ Everything below this line still belongs to the page and stays behind
+     * the guard - hop_maybe() is the only thing here that acts on the world
+     * rather than on pixels. It is safe on a hidden page: its own writes are
+     * settings + CAT, and the one UI call it makes (bp_button_refresh) returns
+     * immediately when the page has not been built. */
+    hop_maybe();
+
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
     /* After the visibility guard: these read the spot store under its mutex and

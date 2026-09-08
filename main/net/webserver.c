@@ -4479,6 +4479,12 @@ static esp_err_t wspr_handler(httpd_req_t *req)
        km is always what the spots carry; this says how to label and convert
        them, so the two screens cannot disagree the way they just did. */
     cJSON_AddBoolToObject(root, "miles", settings_get_distance_in_miles());
+    /* The dial IN FORCE, so the browser's band control can follow a band hop.
+       It was set once when the list was built and never again, so it went on
+       naming the band the operator chose while the radio had moved on (Dirk
+       DK7CVD, 2026-09-08). */
+    { qmx_settings_t ws; settings_load_all(&ws);
+      cJSON_AddNumberToObject(root, "dial_hz", (double)ws.wspr_dial_hz); }
     cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
     cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
     /* The radio's OWN measurement of the last burst, and the PA voltage in
