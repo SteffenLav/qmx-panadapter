@@ -1990,6 +1990,45 @@ void wspr_screen_view_tick(void)
                 s_dial_push_left = 0;    /* one shot - never fight manual tuning */
             }
         }
+
+        /* ⛔ AND SAY SO IF THEY EVER DISAGREE AGAIN.
+         *
+         * The push above is deliberately one-shot, so that this page never
+         * fights a deliberate manual tune. The consequence is that if the radio
+         * moves afterwards, WSPR carries on decoding whatever is arriving and
+         * files every spot against `wspr_dial_hz` - the SETTING, which
+         * wspr_rx_cycle_dial_hz() reads, not the radio. So the band on each
+         * spot is simply wrong, and it is wrong silently.
+         *
+         * Found the hard way on 2026-09-08: the WSPR band button had drifted
+         * under the top bar's Band hit zone, one tap opened the PANADAPTER's
+         * band list, and the radio went to 1.840 MHz while this page kept
+         * capturing and labelling everything 40 m. That cause is fixed in
+         * ui.c, but the silence was the part that made it hard to see.
+         *
+         * Change-detected, so it says it once per disagreement rather than
+         * every second. Deliberately a warning and not a correction: which of
+         * the two is right is the operator's to decide, and this page must not
+         * start yanking the dial back from under them. */
+        {
+            static uint32_t s_last_mismatch = 0;
+            qmx_settings_t ms;
+            settings_load_all(&ms);
+            const uint32_t want = ms.wspr_dial_hz;
+            const uint32_t have = cat_get_frequency();
+            if (cat_now && want && have && have != want) {
+                if (have != s_last_mismatch) {
+                    s_last_mismatch = have;
+                    ESP_LOGW(TAG, "dial MISMATCH: the radio is on %lu Hz but WSPR "
+                                  "is set to %lu Hz - every spot this cycle will be "
+                                  "filed against the WSPR setting, so its band is "
+                                  "wrong. Re-pick the band on this page to agree.",
+                             (unsigned long)have, (unsigned long)want);
+                }
+            } else {
+                s_last_mismatch = 0;
+            }
+        }
     }
 
     /* Dial: select the standard entry matching the radio, so the picker shows

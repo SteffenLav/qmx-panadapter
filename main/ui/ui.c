@@ -7332,7 +7332,25 @@ static void sync_nav_affordances(void)
 {
     const bool owned = reader_view_is_active() || help_triage_is_open()
                        || qmx_term_view_is_open();
-    const bool ft8   = (ui_mode_get() == UI_MODE_FT8);
+    /* ⛔ NOT "is this FT8" - "is this the panadapter", which is the same rule
+     * top_bar_set_ft8_dim() is CALLED with (next != UI_MODE_PANADAPTER).
+     *
+     * These two functions both own LV_OBJ_FLAG_CLICKABLE on the top-bar hit
+     * zones and they disagreed, and this one runs at 1 Hz - so it WON. Entering
+     * WSPR correctly dropped the zones out of hit-testing, and a second later
+     * this put them straight back.
+     *
+     * The cost was not cosmetic. The Band zone is x 0..180 and up to 200 px
+     * deep, and v1.12.0 moved the WSPR band button left to align with the rest
+     * of that panel - putting it underneath. Tapping it opened the PANADAPTER's
+     * band dropdown, and picking from that wrote an FT8 frequency straight to
+     * the radio: caught on the bench 2026-09-08 with the radio sitting on
+     * 1.840 MHz while WSPR carried on capturing and believing it was on
+     * 7.038600, i.e. decoding one band and about to file spots against another.
+     *
+     * The FT8 page was only ever safe here by luck - its own controls happened
+     * to sit clear of x<180 in the top 200 px. */
+    const bool ft8   = (ui_mode_get() != UI_MODE_PANADAPTER);
 
     lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
     for (size_t i = 0; i < sizeof(nav) / sizeof(nav[0]); i++) {
