@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>            // strcasecmp() - admonition type matching
 #include <ctype.h>
 #include <stdlib.h>
 
@@ -646,9 +647,9 @@ typedef struct {
 // A list item: a flex row of [marker][text]. The text label flex-grows and
 // wraps within its own (indented) box, so wrapped lines hang under the text
 // rather than sliding back under the marker.
-static void add_list_item(const char *marker, const char *text, int indent)
+static lv_obj_t *add_list_item(const char *marker, const char *text, int indent)
 {
-    if (!s_body) return;
+    if (!s_body) return NULL;
     lv_obj_t *row = lv_obj_create(s_body);
     lv_obj_remove_style_all(row);
     lv_obj_set_width(row, LV_PCT(100));
@@ -669,6 +670,52 @@ static void add_list_item(const char *marker, const char *text, int indent)
     lv_obj_t *sg = add_rich_span(row, text && text[0] ? text : " ",
                                  &lv_font_montserrat_24, UI_COLOR_TEXT);
     if (sg) lv_obj_set_flex_grow(sg, 1);
+    return row;
+}
+
+/* --- admonitions (TODO #364) ---------------------------------------------
+ *
+ * The manual is written in Material's admonition syntax:
+ *
+ *     !!! warning "Use this button, not the top bar"
+ *         On the WSPR page the top bar's Band, Mode and BW are greyed out...
+ *
+ * The Reader has always shown the TITLE - it just showed nothing else. Two
+ * things were missing and both matter more than they sound:
+ *
+ *   - The TYPE was dropped whenever a title was present, so a warning and an
+ *     aside rendered identically in the same gold. On a screen read in the
+ *     field, the whole point of a warning is that it does not look like the
+ *     paragraph above it.
+ *   - The body was emitted as ordinary paragraphs at ordinary indent, so
+ *     nothing said where the callout ended.
+ *
+ * Both are fixed by borrowing the treatment the blockquote path in this same
+ * file already uses: a coloured bar down the left edge, carried from the
+ * heading through every block of the body.
+ */
+static uint32_t admon_color_for(const char *type)
+{
+    if (!strcasecmp(type, "warning") || !strcasecmp(type, "danger") ||
+        !strcasecmp(type, "caution") || !strcasecmp(type, "attention") ||
+        !strcasecmp(type, "failure")  || !strcasecmp(type, "bug") ||
+        !strcasecmp(type, "error"))                       return UI_COLOR_DANGER_BORDER;
+    if (!strcasecmp(type, "tip")     || !strcasecmp(type, "success") ||
+        !strcasecmp(type, "check")   || !strcasecmp(type, "done") ||
+        !strcasecmp(type, "hint"))                        return UI_COLOR_SUCCESS_BORDER;
+    return UI_COLOR_ACCENT_GOLD;                          /* note/info/abstract/... */
+}
+
+/* The bar itself. Same shape as the blockquote path so the two read as one
+ * family, and applied to EVERY block of the callout - that is what makes the
+ * end of it visible. */
+static void admon_bar(lv_obj_t *o, uint32_t col)
+{
+    if (!o) return;
+    lv_obj_set_style_border_side(o, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(o, 3, 0);
+    lv_obj_set_style_border_color(o, lv_color_hex(col), 0);
+    lv_obj_set_style_pad_left(o, 16, 0);
 }
 
 // Render one markdown document (mutated in place: line terminators are consumed
@@ -692,14 +739,22 @@ static void render_markdown(char *buf)
     bool in_table = false;   // accumulating consecutive '|' rows into `code`
     bool in_frontmatter = false;
     int  block_count = 0;
+    /* Inside an admonition body: every block gets the bar until a non-blank
+     * line comes back out to the marker's own indent. The marker can itself be
+     * indented (web-ui.md's relay warning sits inside a list item), so the test
+     * is against the MARKER's indent, never against zero. */
+    bool     admon_active = false;
+    int      admon_indent = 0;
+    uint32_t admon_col    = UI_COLOR_ACCENT_GOLD;
 
     char *p = buf;
     bool first_line = true;
 
     #define FLUSH_PARA() do {                                              \
         if (para_len) {                                                    \
-            add_rich(para, &lv_font_montserrat_24, UI_COLOR_TEXT,          \
-                     block_count ? 14 : 0, 0);                             \
+            lv_obj_t *_pb = add_rich(para, &lv_font_montserrat_24,         \
+                     UI_COLOR_TEXT, block_count ? 14 : 0, 0);              \
+            if (admon_active) admon_bar(_pb, admon_col);                   \
             block_count++; para_len = 0; para[0] = '\0';                   \
         } } while (0)
 
@@ -761,6 +816,14 @@ static void render_markdown(char *buf)
 
         // blank line -> paragraph break
         if (t[0] == '\0') { FLUSH_PARA(); continue; }
+
+        // End of an admonition body: the first non-blank line back at (or left
+        // of) the marker's own indent. Flush FIRST, so the callout's last
+        // paragraph still carries the bar, and only then drop out of it.
+        if (admon_active && leading_indent(line) <= admon_indent) {
+            FLUSH_PARA();
+            admon_active = false;
+        }
 
         // headings
         if (t[0] == '#') {
@@ -826,21 +889,43 @@ static void render_markdown(char *buf)
         if (strncmp(t, "!!!", 3) == 0 || strncmp(t, "???", 3) == 0) {
             FLUSH_PARA();
             const char *rest = skip_ws(t + 3);
-            char head[120] = {0};
-            // pull the quoted title if present, else the admonition type word
+
+            /* The TYPE, always - it is what says whether this is a caution or
+             * an aside, and it used to be thrown away the moment a title was
+             * present. */
+            char type[24] = {0};
+            size_t tn = 0;
+            while (rest[tn] && rest[tn] != ' ' && rest[tn] != '"' && tn < sizeof(type) - 1) {
+                type[tn] = rest[tn]; tn++;
+            }
+            type[tn] = '\0';
+            if (!type[0]) snprintf(type, sizeof(type), "note");
+
+            char head[144];
             const char *q = strchr(rest, '"');
             if (q) {
                 const char *q2 = strchr(q + 1, '"');
                 size_t n = q2 ? (size_t)(q2 - q - 1) : strlen(q + 1);
-                if (n >= sizeof(head)) n = sizeof(head) - 1;
-                memcpy(head, q + 1, n); head[n] = '\0';
+                char title_txt[110];
+                if (n >= sizeof(title_txt)) n = sizeof(title_txt) - 1;
+                memcpy(title_txt, q + 1, n); title_txt[n] = '\0';
+                snprintf(head, sizeof(head), "%s", type);
+                for (char *u = head; *u; u++) *u = (char)toupper((unsigned char)*u);
+                size_t hl = strlen(head);
+                snprintf(head + hl, sizeof(head) - hl, " - %s", title_txt);
             } else {
-                size_t n = 0; while (rest[n] && rest[n] != ' ' && n < sizeof(head)-1) { head[n] = (char)toupper((unsigned char)rest[n]); n++; }
-                head[n] = '\0';
+                snprintf(head, sizeof(head), "%s", type);
+                for (char *u = head; *u; u++) *u = (char)toupper((unsigned char)*u);
             }
-            add_label(head[0] ? head : "NOTE", &lv_font_montserrat_22, UI_COLOR_ACCENT_GOLD, 14, 0);
+
+            admon_col    = admon_color_for(type);
+            admon_indent = leading_indent(line);
+            admon_active = true;
+
+            lv_obj_t *hl2 = add_label(head, &lv_font_montserrat_22, admon_col, 14, 0);
+            admon_bar(hl2, admon_col);
             block_count++;
-            continue;   // the indented body lines that follow render as normal paragraphs
+            continue;   // the indented body follows, and now carries the bar
         }
 
         // block quote
@@ -869,14 +954,17 @@ static void render_markdown(char *buf)
             if (bullet || numbered) {
                 FLUSH_PARA();
                 int lvl = indent / 2;   // ~2 leading spaces per nest level
+                lv_obj_t *_li;
                 if (bullet) {
-                    add_list_item(LV_SYMBOL_BULLET, skip_ws(t + 1), lvl);   // raw (add_rich_span handles **bold**)
+                    _li = add_list_item(LV_SYMBOL_BULLET, skip_ws(t + 1), lvl);   // raw (add_rich_span handles **bold**)
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
-                    add_list_item(num, skip_ws(nptr + 1), lvl);
+                    _li = add_list_item(num, skip_ws(nptr + 1), lvl);
                 }
+                /* A bulleted list inside a callout is still the callout. */
+                if (admon_active) admon_bar(_li, admon_col);
                 block_count++;
                 continue;
             }
@@ -1814,6 +1902,23 @@ void reader_view_show(void)
     // this display. One correct frame is.
     lv_obj_set_x(s_overlay, 0);
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    /* ⛔ AND RAISE IT. Un-hiding is not enough: the overlay is built once at
+     * init, so every object created or foregrounded AFTER that sits above it in
+     * the screen's child list, and LVGL draws in that order. The WSPR page's
+     * own container is a near-full-screen opaque pane that
+     * wspr_screen_view_show() explicitly foregrounds, so opening the manual
+     * from WSPR drew the WSPR page straight over the page you had just asked
+     * for - header bar visible, body gone. Reproduced three times, and clean on
+     * the panadapter, which is what pinned it on the foreground order rather
+     * than on the rendering.
+     *
+     * This is the DRAWING half of the rule CLAUDE.md already records for
+     * hit-testing ("a foregrounded screen child wins over a full-screen
+     * overlay"): ui_help_overlay_changed() below stands the top bar and the
+     * edge strips down so they cannot STEAL TOUCHES, and that was mistaken for
+     * the whole problem. Nothing was standing the pages themselves down, and
+     * nothing should have to - an overlay just has to be on top. */
+    lv_obj_move_foreground(s_overlay);
     s_active = true;
 
     // Stand the Panadapter's touch navigation down. Without this the top-bar

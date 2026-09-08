@@ -1118,6 +1118,25 @@ Two hits (TOC and body) is correct; one hit is a chapter that does not exist.
 ### LVGL hit-tests children in REVERSE CREATION ORDER and ignores siblings — a foregrounded screen child wins over a full-screen overlay (v1.5.0)
 The Reader's own **Back / Exit / Contents** buttons could not be tapped at all, and it looked like an overlay z-order bug. It is not: the top-bar Band/Mode/BW **hit zones are direct children of the screen** and are `lv_obj_move_foreground()`ed as a keepalive, so they sit above the Reader overlay in the screen's child list — and LVGL walks a parent's children in reverse creation order, taking the first hit, **without comparing siblings' areas or z-intent**. The BW zone therefore swallowed every touch aimed at the overlay's header. Same root cause produced three siblings of the same bug in one screenshot: panadapter edge-swipe strips staying live over the manual, the QMX-wait prompt's own keepalive re-foregrounding itself over the drawer, and the FT8 drawer reflow stacking on itself (that one from a hardcoded `y` under a comment warning it had to be kept in step by hand).
 
+⛔ **AND THE SAME ORDER DECIDES DRAWING, WHICH COST A SECOND ROUND (2026-09-09).**
+Everything above is about who wins a TOUCH, and the remedy — standing the top bar
+and the edge strips down — was mistaken for the whole problem. It is not:
+`reader_view_show()` only cleared `LV_OBJ_FLAG_HIDDEN` and **never
+`lv_obj_move_foreground(s_overlay)`**. The overlay is built once at init, so every
+object created or foregrounded afterwards sits above it and is DRAWN over it.
+`wspr_screen_view_show()` explicitly foregrounds its own near-full-screen opaque
+container, so opening the manual from the WSPR page drew the WSPR page straight
+over it — header bar visible, body gone, and the operator looking at a screen that
+said "Settings & Configuration" above a WSPR waterfall.
+
+**How it was pinned, because reading the code would not have done it:** three
+`/ss.bmp` captures — broken on WSPR, clean on the panadapter, broken again on
+WSPR. That alternation is what ruled out the markdown renderer I had just changed
+and pointed at foreground order. ⚠ The first two captures of the session were
+*fine on WSPR*, so a single observation would have exonerated it. **An overlay has
+to raise itself every time it is shown; nothing else should have to stand down for
+it.**
+
 **Rules that came out of it.** (1) Anything that re-foregrounds itself on a timer must ALSO stand down — `ui_help_overlay_changed()` is the single notification, and the hide is re-asserted every second so nothing can get stuck hidden. (2) **Hiding the edge strips is the operation, not clearing `LV_OBJ_FLAG_CLICKABLE`** — the breathing grips are CHILD objects with their own hit areas, and the drawer grip is a separate `s_burger_btn` entirely, so clearing the parent's flag leaves three live targets. (3) `ext_click_area` is clipped to the parent: the Reader's header buttons are children of the OVERLAY, not of the header bar, precisely so their enlarged hit area can reach below the bar.
 
 ### ⛔ A per-mode UI state applied at the TRANSITION is not applied on the path that has no transition (v1.12.1)
