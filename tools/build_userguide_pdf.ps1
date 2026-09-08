@@ -91,6 +91,71 @@ $fixLinks = {
 $userGuidePart = & $fixLinks $userGuidePart
 $appendixPart  = & $fixLinks $appendixPart
 
+# --- admonitions -> blockquotes (TODO #364) ----
+#
+# The guide pages are written in Material for MkDocs' admonition syntax:
+#
+#     !!! warning "Use this button, not the top bar"
+#         On the WSPR page the top bar's Band, Mode and BW are greyed out...
+#
+# Pandoc is handed the raw markdown with -f gfm, which has never heard of that
+# syntax, so the marker, the quoted title AND any **bold** inside the indented
+# block all survived verbatim into the printed page. The shipped v1.12.1 guide
+# had 35 of them, reading like an editing mistake - and they land on exactly
+# the sentences that matter most, because most of them are warnings.
+#
+# ⛔ The fix belongs HERE and not in the source. Those blocks render correctly
+# as coloured boxes on the website and in the on-device Reader, and they are
+# the house style there; rewriting them to plain paragraphs would break two
+# outputs to fix a third.
+#
+# A blockquote is the honest equivalent in a printed document, and the CSS
+# below already styles one. The type becomes the start of a bold first line
+# ("Warning - Use this button..."), so a reader can still tell a caution from
+# an aside.
+#
+# ⚠ The leading indent is PRESERVED, because an admonition can sit inside a
+# list item (web-ui.md's relay warning does). Stripping it would silently pull
+# the block out of its bullet.
+function Convert-Admonitions([string]$md) {
+    $lines = $md -split "`n"
+    $out   = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $lines.Count) {
+        $m = [regex]::Match($lines[$i],
+            '^(?<ind>[ \t]*)(?:!!!|\?\?\?\+?)\s+(?<type>[A-Za-z][\w-]*)(?:\s+"(?<title>[^"]*)")?\s*$')
+        if (-not $m.Success) { $out.Add($lines[$i]); $i++; continue }
+
+        $ind  = $m.Groups['ind'].Value
+        $type = (Get-Culture).TextInfo.ToTitleCase($m.Groups['type'].Value.ToLower())
+
+        # Body = every following line that is blank, or indented at least four
+        # spaces deeper than the marker. The first line that is neither ends it.
+        $body = New-Object System.Collections.Generic.List[string]
+        $j = $i + 1
+        while ($j -lt $lines.Count) {
+            $bl = $lines[$j]
+            if ($bl.Trim() -eq '')                 { $body.Add(''); $j++; continue }
+            if ($bl.StartsWith($ind + '    '))     { $body.Add($bl.Substring($ind.Length + 4)); $j++; continue }
+            break
+        }
+        while ($body.Count -gt 0 -and $body[$body.Count - 1] -eq '') { $body.RemoveAt($body.Count - 1) }
+
+        $head = if ($m.Groups['title'].Success -and $m.Groups['title'].Value.Trim() -ne '') {
+            "$type - $($m.Groups['title'].Value)"
+        } else { $type }
+
+        $out.Add("$ind> **$head**")
+        if ($body.Count -gt 0) { $out.Add("$ind>") }
+        foreach ($b in $body) {
+            if ($b -eq '') { $out.Add("$ind>") } else { $out.Add("$ind> $b") }
+        }
+        $out.Add('')
+        $i = $j
+    }
+    return ($out -join "`n")
+}
+
 # --- define chapters and their guide files ----
 $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
@@ -128,6 +193,10 @@ foreach ($c in $chapters) {
     # Inject guide file content if available
     if ($c.GuideFile -and (Test-Path $c.GuideFile)) {
         $guideContent = (Get-Content -Raw -Encoding UTF8 $c.GuideFile) -replace "`r`n", "`n"
+
+        # Before anything else, so the heading passes below never see an
+        # admonition's indented body (TODO #364).
+        $guideContent = Convert-Admonitions $guideContent
 
         # Remove the top-level heading (# Title)
         $guideContent = $guideContent -replace '(?m)^# [^\n]+\n+', ''

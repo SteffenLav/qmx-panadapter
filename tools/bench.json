@@ -8,40 +8,34 @@
     "Runtime state (who holds the build lock, who holds the antenna) lives in",
     "the lock file, NOT here. This file is the plan; the lock is the moment."
   ],
-
   "lock_file": "C:/dev/bench.lock",
   "idf_export": "C:/esp/v5.4.4/esp-idf/export.ps1",
   "capture_script": "C:/dev/qmx-panadapter/tools/cap_serial_reboot.ps1",
   "capture_seconds": 315360000,
-
   "antenna": {
     "count": 1,
     "band": "20m",
     "note": "One antenna, two radios, a 2-way switch. Only ONE bench is on air at a time. The spare switch position feeds a dummy load, so a TX on the off-antenna bench is safe. Record the holder with 'bench antenna <name>' - decode counts and noise floor from the antenna-less bench are meaningless."
   },
-
   "benches": [
     {
       "name": "dev",
-      "role": "MAIN, on v1.11.3 (released 2026-09-06 late). Carries sock_owners.c (#313): the LWIP socket-owner dump, which fires on a new high-water mark and on exhaustion. A standing passive capture is running to scratchpad/capture-v1113.txt - LEAVE IT, it is the #313 soak. The leak shows as the table high-water stepping up and not coming back down, with the holders named.",
+      "role": "MAIN, on v1.12.1 (released 2026-09-09, tag on 4262566). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-v1121.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
-       "This bench normally runs the newest main commit. It was loaned to",
-       "Track A (Tab5-native RX audio out + binaural CW, see memory",
-       "project_rx_audio_track.md in the C:/dev/qmx-panadapter-audio",
-       "worktree) 2026-09-04, then reclaimed the SAME DAY for a batch of",
-       "main-branch feedback fixes (web pileup aging, decode-list layout",
-       "jump, WSPR PA-restore reliability) that needed a real bench before",
-       "going further. Track A's own session that evening also hit an",
-       "unresolved rpc_core/SDIO crash on this exact bench - see memory",
-       "project_20260904_sdio_wifi_crashes_audio_session.md - worth keeping",
-       "in mind if anything looks unstable here that main's own diff should",
-       "not cause. tree/branch below describe WHAT IS ACTUALLY ON IT, because",
-       "that is what 'bench flash dev' builds from. A stale entry here does",
-       "not read as wrong - it silently flashes the other tree's firmware",
-       "over this one and then PASSES the MAC verify, because the board is",
-       "the right board. Put dev back to Track A (C:/dev/qmx-panadapter-audio",
-       "+ feat/rx-audio-output) once these fixes are verified, or move Track",
-       "A to 'lab' if that is free by then."
+        "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
+        "what 'bench flash dev' builds from. A stale entry here does not read",
+        "as wrong - it silently flashes the other tree's firmware over this",
+        "one and then PASSES the MAC verify, because the board is the right",
+        "board. That is the one thing in this entry worth re-reading.",
+        "This bench has been loaned out before (Track A, the Tab5-native RX",
+        "audio work in C:/dev/qmx-panadapter-audio on feat/rx-audio-output)",
+        "and reclaimed the same day. If it is loaned again, change tree and",
+        "branch here at the same time, not afterwards.",
+        "It still carries util/sock_owners.c, the LWIP socket-owner dump from",
+        "#313 - it fires on a new high-water mark and on exhaustion. #313",
+        "itself is CLOSED (it was the arithmetic: max_open_sockets 13 -> 8),",
+        "so the dump is now background instrumentation rather than an active",
+        "soak. Nothing is waiting on it."
       ],
       "board": "Tab5 #1",
       "mac": "30:ED:A0:EA:DD:57",
@@ -54,22 +48,22 @@
       "radio_note": "Swapped 2026-09-05: was the small QMX. That radio's finals were worn down by WSPR TX at FULL power (110 s of key-down every 120 s) until it drew excessive current on plain RX; it is away being re-finalled. This is the real-world case the WSPR PA guard exists for - CLAUDE.md measures the finals at 4.69 W unguarded vs 1.12 W at the 6.0 V target. The QMX+ here reports 'QMX GPS source: QMX+ Internal' at CAT link-up and its second-tick phase-locks to SNTP within ~10 ms, so time_src reads GPS legitimately on this bench (NOT the #173 false-GPS case).",
       "tree": "C:/dev/qmx-panadapter",
       "branch": "main",
-      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-dev.txt",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-v1121.txt",
       "usb_flash": "yes"
     },
     {
       "name": "lab",
       "role": "Feature branch of the day. NOT WIRED UP - no COM port assigned, so its work is running on 'dev' instead.",
       "role_note": [
-       "The old occupant, feat/wspr-page, shipped and merged to main 2026-08-28.",
-       "This folder was repurposed 2026-09-04 for Track C - PC/browser binaural",
-       "audio (feat/web-audio-v2, a fresh restart, NOT a resurrection of the",
-       "7-week-stale feat/web-audio-phase1 branch: that one had drifted to a",
-       "396-file/96k-deletion diff against main, nearly all noise from being",
-       "so far behind). See feat/rx-audio-output (Track A - Tab5-native RX",
-       "audio + binaural CW, worktree C:/dev/qmx-panadapter-audio) for the",
-       "other half of the same feature request - that one has NO bench slot",
-       "yet either, since neither track has been assigned a physical board."
+        "The old occupant, feat/wspr-page, shipped and merged to main 2026-08-28.",
+        "This folder was repurposed 2026-09-04 for Track C - PC/browser binaural",
+        "audio (feat/web-audio-v2, a fresh restart, NOT a resurrection of the",
+        "7-week-stale feat/web-audio-phase1 branch: that one had drifted to a",
+        "396-file/96k-deletion diff against main, nearly all noise from being",
+        "so far behind). See feat/rx-audio-output (Track A - Tab5-native RX",
+        "audio + binaural CW, worktree C:/dev/qmx-panadapter-audio) for the",
+        "other half of the same feature request - that one has NO bench slot",
+        "yet either, since neither track has been assigned a physical board."
       ],
       "board": "Tab5 #3 (new)",
       "mac": "UNKNOWN - fill in from the first boot line",
