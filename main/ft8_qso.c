@@ -2203,6 +2203,29 @@ static bool final_resend_if_still_asked(int64_t slot_sec)
     return true;
 }
 
+bool ft8_qso_msg_is_for_us(const char *text)
+{
+    if (!text || !text[0]) return false;
+    lock();
+    const bool busy = (s_state != FT8_QSO_IDLE && s_state != FT8_QSO_DONE &&
+                       s_state != FT8_QSO_TIMEOUT);
+    char me[FT8_CALL_MAX_LEN];
+    strncpy(me, s_my_call, sizeof(me) - 1);
+    me[sizeof(me) - 1] = 0;
+    unlock();
+    if (!busy || !me[0]) return false;
+
+    /* The FIRST field of an FT8 message is who it is FOR. Compare only that:
+     * our callsign as the SENDER of somebody else's decode, or sitting inside a
+     * longer call, is not a message to us. */
+    const char *p = text;
+    while (*p == ' ') p++;
+    size_t n = 0;
+    while (p[n] && p[n] != ' ') n++;
+    if (n != strlen(me)) return false;
+    return strncasecmp(p, me, n) == 0;
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
     /* ⛔ THE EXPIRY CHECK IS NOT CALLED HERE ANY MORE.

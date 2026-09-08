@@ -138,6 +138,14 @@ int             ft8_qso_get_cq_calls_sent(void);
 // modal to refuse a competing Auto Pounce / Transmit tap instead of silently
 // overwriting the in-progress exchange.
 bool ft8_qso_is_busy(char *target_buf, size_t len);
+
+/* Is this decoded message addressed to US, while a QSO is running?
+ *
+ * Exists for ONE caller: the decode loop's early-advance (see ft8_test.c). It
+ * is deliberately cheap and deliberately narrow - it answers "would advancing
+ * now be worth it", nothing more, and it must not be used to decide anything
+ * about the QSO itself. */
+bool ft8_qso_msg_is_for_us(const char *text);
 // Extra field of the current outgoing message (grid / report / R-report / RR73 / 73).
 // Empty string when IDLE or no message is armed.
 void            ft8_qso_get_cur_extra(char *buf, size_t len);
