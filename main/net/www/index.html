@@ -6252,6 +6252,17 @@ async function tick() {
           eoState = f;
           if (changed) eoDraw();
         }
+        /* ⭐ THE BUTTON NAMES THE TONE, as the Tab5's does (Gyula HA3HZ,
+           2026-09-08: "the TX pitch (tone) does not follow the changes in
+           Tab5"). It said only "TX tone", so a tone changed on the glass gave
+           the browser no visible sign at all - and the value was already
+           arriving on every poll, unused. Same fault as the twenty drawer
+           checkboxes: the data was there and nothing read it. */
+        if (typeof f.tone_hz === "number" && f.tone_hz > 0) {
+          const b = document.getElementById("tone-btn");
+          const want = "TX " + f.tone_hz + " Hz";
+          if (b && b.textContent !== want) b.textContent = want;
+        }
         if (typeof f.slot_ms === "number" && f.slot_ms > 0) {
           slotAnchor = { posMs: f.slot_pos_ms || 0, slotMs: f.slot_ms,
                          even: !!f.slot_even, at: performance.now() };
