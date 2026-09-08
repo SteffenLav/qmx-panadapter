@@ -86,6 +86,11 @@ static const char *TAG = "wspr_rx";
  * shows stations appearing only when the cap is lifted, this is the number to
  * raise; do not raise it on the strength of a reference file that says no. */
 #define WSPR_MAX_CANDS    20
+/* How far above the cycle's MEDIAN candidate score an undecoded candidate has
+ * to sit before it earns a '?' on the waterfall (#360). See the long note where
+ * it is applied - the finder pads its list out of the noise, so without this
+ * every cycle drew twenty marks and most pointed at nothing. */
+#define WSPR_MARK_MIN_X_MEDIAN 2.0f
 _Static_assert(WSPR_MARKS_MAX == WSPR_MAX_CANDS,
                "WSPR_MARKS_MAX (wspr_rx.h) must track WSPR_MAX_CANDS");
 
@@ -932,6 +937,7 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * would just duplicate them. Successes are stamped in by frequency below,
      * on whichever pass they land. */
     wspr_mark_t marks[WSPR_MARKS_MAX];
+    float       mscore[WSPR_MARKS_MAX];   /* the finder's comb score per mark */
     int nmarks = 0;
 
   next_pass:
@@ -942,6 +948,7 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
         for (int i = 0; i < nmarks; i++) {
             marks[i].freq_hz = (float)cands[i].freq_hz;
             marks[i].ch      = '?';   /* until something decodes here */
+            mscore[i]        = (float)cands[i].comb_score;
         }
     }
     found_in_pass = 0;
@@ -1054,7 +1061,7 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             /* A decode with no candidate near it can only come from a later
              * pass finding something the first pass did not list at all. It is
              * a real station, so it gets its own mark rather than being lost. */
-            if (bi < 0 && nmarks < WSPR_MARKS_MAX) bi = nmarks++;
+            if (bi < 0 && nmarks < WSPR_MARKS_MAX) { bi = nmarks++; mscore[bi] = 0.0f; }
             if (bi >= 0) {
                 marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
                                                          * is the accurate one */
@@ -1112,6 +1119,59 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                  (long long)cycle_utc, skipped, pass, (long long)dec_ms,
                  pass > 1 ? " - second-look only, the band was fully scanned"
                           : " - lower WSPR_MAX_CANDS or make the decode faster");
+    /* ⛔ THE CANDIDATE LIST IS PADDED WITH NOISE, AND MARKING ALL OF IT WAS
+     * WRONG. Operator, 2026-09-08: "I am still quite puzzled about where you
+     * mark the signals - it does not really make sense compared to what you
+     * see." He was right, and the fault was mine rather than the display's.
+     *
+     * wspr_find_candidates() returns its best WSPR_MAX_CANDS by correlation
+     * score, and that cap SATURATES every cycle - a fact already recorded at
+     * the top of this file. Once it runs out of real signals it fills the rest
+     * of the list from the noise, so a '?' was being drawn over blank carpet.
+     * Measured on this bench, one ordinary cycle:
+     *
+     *     cand 0   1.71e5  DECODED        cand 12  2.70e4
+     *     cand 1   1.54e5                 ...      (flat)
+     *     cand 5   7.49e4                 cand 19  2.52e4
+     *
+     * The tail is eight entries within 7 % of each other - the correlator's own
+     * floor, not signals.
+     *
+     * So an undecoded candidate earns a '?' only if it stands clearly above
+     * that floor. The test is against the cycle's own MEDIAN score, which needs
+     * no absolute calibration and rescales itself with band noise and with the
+     * band in use. A DECODE is always kept whatever its score: it is a fact,
+     * and it is the join to the S column.
+     *
+     * ⚠ The multiplier is a judgement about presentation, not a detection
+     * threshold - nothing here changes what the decoder attempts. On the two
+     * cycles measured it leaves 5 and 6 marks instead of 20. */
+    if (nmarks > 1) {
+        float sorted[WSPR_MARKS_MAX];
+        memcpy(sorted, mscore, (size_t)nmarks * sizeof(sorted[0]));
+        for (int i = 1; i < nmarks; i++) {          /* insertion sort, ascending */
+            float t = sorted[i]; int j = i - 1;
+            while (j >= 0 && sorted[j] > t) { sorted[j + 1] = sorted[j]; j--; }
+            sorted[j + 1] = t;
+        }
+        const float median = (nmarks & 1) ? sorted[nmarks / 2]
+                                          : 0.5f * (sorted[nmarks / 2 - 1] + sorted[nmarks / 2]);
+        const float floor_score = median * WSPR_MARK_MIN_X_MEDIAN;
+        int keep = 0;
+        for (int i = 0; i < nmarks; i++) {
+            if (marks[i].ch != '?' || mscore[i] >= floor_score) {
+                marks[keep] = marks[i];
+                mscore[keep] = mscore[i];
+                keep++;
+            }
+        }
+        if (keep != nmarks)
+            ESP_LOGI(TAG, "marks: %d of %d candidates shown (median score %.3g, "
+                          "floor %.3g) - the rest are the finder's noise tail",
+                     keep, nmarks, (double)median, (double)floor_score);
+        nmarks = keep;
+    }
+
     /* #360: sort by tone and hand out the letters LEFT TO RIGHT, so A is
      * always the leftmost mark on the carpet and the list needs no legend.
      * Insertion sort on at most 20 entries, once every two minutes. */
