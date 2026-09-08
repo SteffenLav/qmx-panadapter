@@ -3373,3 +3373,85 @@ it, since neither was what anyone objected to.
 - **The decoded-CW pane is two lines** rather than one, wrapping down and then
   overwriting the first, with the overwritten text in a second colour so the
   newest character can be found.
+
+### Shipped in v1.12.1 — 2026-09-09
+
+**A feedback release: seven things testers reported in a day, and the remote
+power-switch modification documented properly.**
+
+**WSPR**
+
+- **Letters on the waterfall, and an `S` column to read them by.** Every trace
+  the decoder looks at gets a letter — **A, B, C… left to right by tone** — drawn
+  on the carpet in the decode list's own font, with the cycle's UTC time at the
+  left end of the row. The same letter appears in a new first column of the list,
+  so a line of text and a mark on the waterfall are the same station. A trace the
+  decoder tried and could not read is marked `?`, which is how a signal that is
+  present but too weak becomes visible instead of simply absent *(from Samuel
+  W7STF's request to be able to name a trace)*.
+- **A `?` now has to earn its place.** The candidate finder returns up to twenty
+  entries per cycle and it always fills that quota, so most of them were its own
+  noise floor rather than signals — measured, in one cycle, as eight entries
+  within 7 % of each other. A mark needs a score of at least twice the cycle's
+  median, which leaves five or six real ones instead of twenty pieces of
+  punctuation.
+- **A crowded mark is left out rather than moved.** They used to be nudged
+  sideways until they fitted, which is worse than saying nothing: a marker whose
+  position is wrong points at the wrong signal. Decoded stations are placed
+  first and never dropped.
+- **⛔ The WSPR page's Band button opened the *panadapter's* band list and
+  retuned the radio.** The top bar's own Band area sits above the WSPR panel and
+  was winning the touch, so picking a band from it wrote an FT8 frequency
+  straight to the QMX — leaving the radio on one band while WSPR carried on
+  capturing and labelling spots with another. **If you have used the WSPR page on
+  v1.12.0, check the band your radio is actually on.** The top bar is now inert
+  and greyed on the WSPR page, except the frequency, which stays live so a beacon
+  found off the standard dial can still be chased.
+- **A Tab5 that woke up on the WSPR page had a live top bar anyway.** The fix
+  above was applied when you swiped to the page, and not when the Tab5 restarted
+  onto it — which, since the page is remembered across a power cycle, is how most
+  units would meet it.
+- **The dial-mismatch warning no longer fires on the page's own retune.**
+- **The screenshot endpoint says when it is out of memory** instead of reporting
+  an unexpected error. WSPR uses most of the PSRAM, and a screenshot needs 1.8 MB
+  of it in one piece.
+
+**FT8**
+
+- **A reply can now make its own slot** *(Gyula HA3HZ)*. After a slot ends the
+  decoder works through every candidate it found, often well over a hundred, and
+  only then did the QSO logic look at what had been decoded. A message addressed
+  to you could therefore sit decoded and unread while the band was ground
+  through, and a reply that misses its window by any amount at all costs a full
+  fifteen seconds. It now acts the moment a message for you decodes. *(This is
+  not a regression from v1.11.1 — between that release and v1.12.0 there are
+  exactly three changes anywhere in the FT8 code and none of them touches reply
+  timing. What differs between releases is how long a decode takes.)*
+- **A band change during a transmission is no longer lost** *(Randy N4OPI)*. A
+  burst owns the link to the radio for its whole 12.7 seconds; a frequency sent
+  into that was rejected as a garble and silently discarded, while the dropdown
+  had already moved. It is now held and sent as soon as the link is free. If you
+  spin through several, the last one wins.
+- **The web TX tone button names the tone** *(Gyula HA3HZ)* rather than saying
+  only that a tone is set.
+
+**Elsewhere**
+
+- **WSPR band hopping stopped whenever you looked at another screen** *(Dirk
+  DK7CVD)*. A beacon's band schedule is not a property of what is on the display.
+- **The decoded-CW line is cleared when you leave CW** *(Gyula HA3HZ)*, rather
+  than sitting there showing text from a mode you are no longer in.
+- **The CW transcript on the SD card says when it is not being written** *(Uwe
+  DL8UG)*. With WiFi on, the card takes one snapshot at boot and then stops — the
+  arrangement that keeps SD writes from wedging the WiFi link — and the transcript
+  is written by the pass that stops. Switch WiFi off and reboot to record one.
+
+**Documentation**
+
+- **The remote power-switch modification is in the manual, with a schematic**
+  *(designed, built and documented by Randy N4OPI, published with his
+  permission)*. The relay control has been in the web UI since v1.10.9, but the
+  hardware it drives was described only as "wire it to PWR_ON and GND" — and the
+  QMX has no such connector to wire to. The manual now carries the whole job:
+  the 2.5 mm jack you fit to the radio, the two-component optoisolator interface,
+  the parts, the settings that work, and why only GPIO53 and GPIO54 are offered.

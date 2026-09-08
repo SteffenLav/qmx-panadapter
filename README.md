@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.12.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.12.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.12.0 — CW profiles, WSPR gains a DT column and honours miles, and a CAT link that died silently now recovers.**
+> **New in v1.12.1 — letters on the WSPR waterfall, and a Band button that no longer retunes your radio.** Every trace the WSPR decoder looks at is lettered A, B, C... left to right by tone, matched by a new first column in the decode list; a trace it could not read is marked `?`. On the WSPR page the top bar's Band control was sitting over the page's own band panel and winning the touch, so picking a band there wrote an FT8 frequency to the radio while WSPR carried on labelling spots with the old one - **if you used WSPR on v1.12.0, check which band your radio is really on.** An FT8 reply can now make its own slot instead of waiting for the whole band to finish decoding, a band change during a transmission is held rather than lost, and the remote power-switch modification is documented with a schematic, by Randy N4OPI.
 >
 > **CW profiles** *(Uwe DL8UG)*. The QMX holds one CW centre and one set of filter widths, and changing them means walking two separate menus on the radio. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's configuration, so every write is read back and retried rather than assumed. **The bandwidth list also asks the radio which filters it actually has**, instead of offering all eight regardless.
 >
@@ -28,7 +28,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -498,7 +498,15 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
 
-**Remote QMX power-cycle relay (new in v1.10.9).** **Miscellaneous ▲ → Power-cycle relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header) for a chosen duration and level. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. Same control is reachable as `POST /api/cmd {"action":"gpio_pulse","pin":53,"level":1,"ms":1000}` if you want to script it.
+**Remote QMX power-cycle relay (new in v1.10.9).** **Miscellaneous ▲ → Power-cycle relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header) for a chosen duration and level. Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. Same control is reachable as `POST /api/cmd {"action":"gpio_pulse","pin":53,"level":1,"ms":1000}` if you want to script it.
+
+**Building the interface — Randy N4OPI's design**, published here with his permission. Two components and a connector, plus one modification inside the radio.
+
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio](docs/mkdocs/img/relay-schematic-n4opi.png)
+
+The QMX has **no PWR_ON/GND jack from the factory** — fitting one is the job. Wire a **2.5 mm TRS jack** into the case with **tip to PWR_ON and sleeve to GND** (Randy brought his out on the rear panel beside the ATU RF input). Then build the interface: a **4-pin Grove plug** into the Tab5's EXT socket, the chosen pin (**G53** or **G54**) through **R1, 100 Ω ¼ W** into a **PC817C optoisolator**, and the optoisolator's phototransistor across an **STX-2550-3NM 2.5 mm jack**, so a pulse briefly connects PWR_ON to GND. The `EXT 5V` pin is unused, and the phototransistor side is polarity-sensitive — follow the schematic. Randy: *"with just 2 components it could just as easily be connected point to point and sealed up inside a piece of heatshrink tubing. Make sure you insulate your wires so the heatshrink doesn't squeeze them together and create a short."* Settings that work: the pin you wired, active level **High**, **2000 ms**.
+
+The optoisolator is what keeps the Tab5 and the radio electrically apart, and it is why only **G53/G54** are offered: they sit on a *keyed* connector and are held as driven outputs from boot. The bottom-edge Dupont pins would give a neater cable run, but that connector is unkeyed and sits beside 12 V IN — Randy's own reason for dropping the idea — and `G0`/`G1` are the snap-on keyboard's I2C bus.
 
 **Whole-band plan strip & adjustable split (new in v0.20.0).** Along the bottom of the browser view (above the status bar), a colour-coded CW/Digi/Phone strip spans the entire band with a draggable "visible window" (drag or tap to retune) and a VFO marker, mirroring the Tab5's own strip. Drag the divider between the spectrum and the waterfall to give either more room — the split is remembered in the browser. **Tab5Shot** now captures any open pop-up (band/mode dropdown) too, and the frequency keypad is draggable with a standard 10-key layout.
 

@@ -4,6 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.12.1** — 2026-09-09
+
+**A feedback release: seven things testers reported in a day, and the remote power-switch modification documented properly.**
+
+- **⛔ The WSPR page's Band button opened the *panadapter's* band list and retuned the radio.** The top bar's own Band area sits above the WSPR panel and was winning the touch, so picking a band from it wrote an FT8 frequency straight to the QMX — leaving the radio on one band while WSPR carried on capturing and labelling its spots with another. **If you have used the WSPR page on v1.12.0, check which band your radio is actually on.** The top bar is now inert and greyed there, except the frequency, which stays live so a beacon found off the standard dial can still be chased. A Tab5 that *woke up* on the WSPR page was missed by the first fix and is covered too.
+- **Letters on the WSPR waterfall, and an `S` column to read them by.** Every trace the decoder looks at gets a letter — A, B, C… left to right by tone — drawn on the carpet in the decode list's own font, with the cycle's UTC time at the left of the row; the same letter appears in a new first column of the list. A trace it tried and could not read is marked `?`, so a signal that is present but too weak is visible rather than simply absent *(from Samuel W7STF's request to be able to name a trace)*. A `?` has to earn its place — most of them were the finder's own noise floor — and a mark too crowded to place honestly is left out rather than nudged somewhere it does not belong.
+- **An FT8 reply can now make its own slot** *(Gyula HA3HZ)*. After a slot ends the decoder works through every candidate it found, often well over a hundred, and only then did the QSO logic look at what had decoded — so a message addressed to you could sit unread while the rest of the band was ground through, and missing the reply window by any amount costs a full fifteen seconds. It now acts the moment a message for you decodes.
+- **A band change during a transmission is no longer lost** *(Randy N4OPI)*. A burst owns the link to the radio for its whole 12.7 seconds; a frequency sent into that was rejected and silently discarded while the dropdown had already moved. It is now held and sent as soon as the link is free.
+- **WSPR band hopping stopped whenever you looked at another screen** *(Dirk DK7CVD)*. A beacon's schedule is not a property of what is on the display.
+- **The remote power-switch modification is in the manual, with a schematic** *(designed, built and documented by **Randy N4OPI**, published with his permission)*. The relay control has been in the web UI since v1.10.9, but the hardware it drives was described only as "wire it to PWR_ON and GND" — and the QMX has no such connector to wire to. The manual now carries the whole job: the 2.5 mm jack you fit to the radio, the two-component optoisolator interface, the parts, the settings that work, and why only GPIO53 and GPIO54 are offered. See [Web UI → Power-cycle relay](guide/web-ui.md#power-cycle-relay-building-the-interface).
+- **Smaller things**: the decoded-CW line is cleared when you leave CW and the SD transcript says when it is not being written *(Gyula HA3HZ, Uwe DL8UG)*, the web TX tone button names the tone *(Gyula HA3HZ)*, and the screenshot endpoint says when it is out of memory rather than reporting an unexpected error.
+
+## Previous Releases
+
 **v1.12.0** — 2026-09-08
 
 **CW profiles, a WSPR page that answers more questions, and a CAT link that could die while reporting itself healthy.**
@@ -17,8 +31,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The web spectrum above ×1 zoom had no frequency scale at all**, which is why clicking a signal tuned to the wrong place, the passband overlay sat elsewhere than on the Tab5, and the band-plan slider came apart as it was dragged — one missing answer behind all three. The dB scale labels were fixed values only correct for the default range, the zoom list now offers ×24, a frequency typed twice quickly keeps the second one, and a mode or band change from the browser is no longer silently dropped.
 - **The two screens no longer disagree about spots** — the mode filter was applied on the Tab5 and not in the browser, and the browser was sent a truncated list on a busy band.
 - **Flat spectrum is one setting shared with the browser**, the dB controls grey out while it is on because flat mode ignores them, the settings drawer remembers where you scrolled to, and every checkbox in it now reflects a change made from the browser — there were twenty that did not.
-
-## Previous Releases
 
 **v1.11.3** — 2026-09-06
 
@@ -641,7 +653,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.12.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.12.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

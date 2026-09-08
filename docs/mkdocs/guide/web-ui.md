@@ -326,12 +326,14 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
 - **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 
-    !!! warning "Experimenter feature — the connector does not exist yet"
+    !!! warning "Experimenter feature — you fit the connector yourself"
         **The QMX does not have a PWR_ON/GND jack.** Those signals have to be
-        extended from the main board or the front panel out to a connector you
-        add yourself. Do not go looking for an existing socket, and do not
-        connect them to some other connector that looks plausible *(Randy
-        N4OPI)*.
+        extended from the main board out to a connector you add yourself. Do not
+        go looking for an existing socket, and do not connect them to some other
+        connector that looks plausible *(Randy N4OPI)*. Randy has documented the
+        whole modification, including a schematic — see
+        [Power-cycle relay: building the interface](#power-cycle-relay-building-the-interface)
+        below.
 
         Both pins are held as **driven outputs** from boot — they never float.
         From v1.11.3 they rest on the **inactive side of the active level you
@@ -343,6 +345,68 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Keyboard shortcuts** — assign what the Tab5's snap-on keyboard does (see below)
 - **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
 - **Reset WiFi** — clear just the WiFi/network state
+
+### Power-cycle relay: building the interface
+
+*Designed, built and documented by **Randy N4OPI**, and published here with his
+permission. The Tab5 side of this — the pin, the level and the pulse length —
+is all the firmware does; everything below is the hardware that turns a pulse
+into a QMX that switches itself on.*
+
+**Why bother.** A Tab5 firmware upgrade is a warm reset, and a warm reset with
+the radio attached always leaves the QMX needing a manual power cycle. That one
+step is what otherwise keeps a remote station from being upgradeable from
+another room — or another country.
+
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio](../img/relay-schematic-n4opi.png)
+
+#### Parts
+
+| Ref | Part | Notes |
+|-----|------|-------|
+| P1 | 4-pin Grove plug (HY2.0-4P) | Into the Tab5's side EXT socket. Its four pins are `EXT 5V`, `G53`, `G54`, `GND` |
+| R1 | 100 Ω, ¼ W, 5 % | In series with the optoisolator's LED |
+| U1 | PC817C optoisolator | Keeps the Tab5 and the radio electrically apart — the reason this is safe |
+| J1 | STX-2550-3NM 2.5 mm TRS jack | The output side |
+| — | 3.5 mm to 2.5 mm TRS patch cable | Randy's module ends in 3.5 mm and reaches the radio through a patch lead |
+
+#### Wiring
+
+1. **In the radio.** Fit a **2.5 mm TRS jack** somewhere accessible on the case
+   and wire it internally: **tip to `PWR_ON`, sleeve to `GND`**. This is the
+   only irreversible part of the job, and the only part that involves opening
+   the QMX. Randy brought his out on the rear panel beside the ATU RF input.
+2. **The interface.** The Tab5 pin you choose — **G53 or G54** — goes through
+   **R1** into the PC817C's LED, with the Grove plug's `GND` completing that
+   side. The PC817C's phototransistor goes across the jack's tip and sleeve, so
+   a pulse from the Tab5 briefly connects `PWR_ON` to `GND`. **The
+   phototransistor side is polarity-sensitive — follow the schematic**, and note
+   that the `EXT 5V` pin is not used at all.
+3. **Assembly.** In Randy's words: *"I built it onto a small chunk of
+   breadboard, but with just 2 components it could just as easily be connected
+   point to point and sealed up inside a piece of heatshrink tubing. Make sure
+   you insulate your wires so the heatshrink doesn't squeeze them together and
+   create a short."*
+
+#### Settings that work
+
+In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53** or
+**G54**), active level **High**, and **2000 ms** — *"I've found 2000ms to be
+sufficient"*. The firmware's own default is 1000 ms, so this is one to set and
+save; it is remembered from v1.10.9 on.
+
+!!! note "Why the bottom-edge Dupont pins are not offered"
+    A neater cable run would leave the Tab5's bottom edge rather than the side,
+    and Randy asked about exposing `G0`, `G1`, `G49` and `G50` for it — then
+    talked himself out of it in the same message: *"The Dupont connector isn't
+    keyed, so a person could make a disastrous mistake if they are also trying
+    to power the Tab5 using the 12V IN pin."*
+
+    There is a second reason he could not have known: **`G0` and `G1` are the
+    I2C bus for the snap-on keyboard**, so a relay pulse there would fight a
+    keyboard on any Tab5 that has one. `G53` and `G54` are on a keyed connector
+    and are held as driven outputs from boot, which is what makes them safe to
+    hand to people — so those two are the only pins the firmware will pulse.
 
 ### Keyboard shortcuts
 

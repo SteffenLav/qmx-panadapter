@@ -24,6 +24,7 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 
 | Column | Meaning |
 |---|---|
+| **S** | The letter this station is marked with on the waterfall for that cycle — see [Which trace is which](#which-trace-is-which) below. Blank once the cycle it belongs to has scrolled out of the picture |
 | **UTC** | The cycle this spot came from |
 | **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
@@ -57,6 +58,38 @@ The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR
 
 **The panadapter spectrum is not available while WSPR runs.** The receiver takes the IQ stream for the whole cycle, so there is nothing left to draw a live spectrum from. This is expected, not a fault.
 
+#### Which trace is which
+
+Each time a cycle finishes, the traces the decoder examined are lettered on the
+waterfall — **A, B, C… from left to right by tone** — and the cycle's UTC time is
+printed at the left end of the row. The same letter appears in the list's **S**
+column, so a line of text and a mark on the carpet are the same station, and you
+can tell at a glance which of five traces produced the report you are reading.
+
+The letters describe the cycle **below** the boundary line they sit under, since
+that is the cycle that just finished. They scroll down the carpet with it and are
+gone once it leaves the picture, which is why an older row's **S** column is
+blank.
+
+- **A `?` is a trace the decoder tried and could not read.** That is worth
+  seeing: it is the difference between "nothing was there" and "something was
+  there and was too weak", which is the whole question when you are judging an
+  antenna or a band. It usually means a signal a few dB below the decode
+  threshold, but a birdie or a carrier sitting in the sub-band will also collect
+  one.
+- **Not everything gets a mark.** The candidate finder always returns a full
+  quota of possibilities, most of which are its own noise floor rather than
+  signals, so a `?` is only drawn for a candidate well above the middle of that
+  cycle's crop. Expect a handful, not a row of punctuation.
+- **A mark that cannot be placed honestly is left out.** Where several traces are
+  too close together to letter separately, decoded stations are placed first and
+  the rest are dropped rather than nudged aside — a marker pointing at the wrong
+  trace is worse than no marker.
+- The letter is drawn a couple of Hz above the tone in the table. A WSPR
+  transmission is four tones about 4.4 Hz wide and the reported frequency is the
+  lowest of them, so the mark sits on the middle of the trace rather than its
+  left-hand edge.
+
 ---
 
 **Changing band** — tap the button at the top of the left pane and a list drops
@@ -64,6 +97,18 @@ below it. Touch a line and it lights up; if it is the wrong one, keep your finge
 down and drag until you are on the one you want, then lift to choose it.
 Releasing outside the list chooses nothing. The band you are on is named in
 amber.
+
+!!! warning "Use *this* button, not the top bar"
+    On the WSPR page the top bar's **Band**, **Mode**, **BW** and **Zoom** are
+    greyed out and do nothing: they belong to the panadapter's idea of the radio,
+    while this page owns the dial. Only **Freq** stays live, so a beacon found off
+    the standard dial frequency can still be chased by typing it in.
+
+    On **v1.12.0 only**, the top bar's Band control overlapped this panel and took
+    the touch — picking a band from it wrote an FT8 frequency to the radio while
+    WSPR carried on capturing and labelling its spots with the band it thought it
+    was on. If you used the WSPR page on that release, check which band your radio
+    is actually on.
 
 ---
 

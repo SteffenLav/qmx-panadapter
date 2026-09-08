@@ -106,13 +106,25 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.12.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.12.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.12.0 — CW profiles.** The QMX holds one CW centre and one set of filter
+**New in v1.12.1 — letters on the WSPR waterfall, and a Band button that no longer
+retunes your radio.** Every trace the decoder looks at is lettered A, B, C… left to right
+by tone, matched by a new first column in the decode list, so a line of text and a mark on
+the waterfall are the same station; a trace it could not read is marked `?`. And on the
+WSPR page the top bar's Band control was sitting over the page's own band panel and
+winning the touch, so picking a band there wrote an FT8 frequency to the radio while WSPR
+carried on labelling spots with the old one — **if you used WSPR on v1.12.0, check which
+band your radio is really on.** An FT8 reply can now make its own slot instead of waiting
+for the whole band to finish decoding, a band change during a transmission is held rather
+than lost, and the remote power-switch modification is documented in the manual with a
+schematic, by Randy N4OPI.
+
+**In v1.12.0 — CW profiles.** The QMX holds one CW centre and one set of filter
 widths, and changing them means walking two separate menus on the radio. Four profiles
 now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths
 to offer with it — edited on the web settings page and applied from there or from a
@@ -176,7 +188,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
