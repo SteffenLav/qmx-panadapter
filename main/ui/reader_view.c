@@ -833,11 +833,25 @@ static void render_markdown(char *buf)
                 FLUSH_PARA();
                 h = skip_ws(h);
                 md_inline_clean(h, cleaned, MD_CLEANED_SZ);
+                /* ⛔ A HEADING MUST NOT BE SMALLER THAN ITS OWN PROSE.
+                 * h4 used to be montserrat_22 in plain white while the body
+                 * around it is 24 - so a sub-heading read as a stray sentence
+                 * rather than as a heading at all ("Which trace is which" in
+                 * the WSPR chapter was the example that got noticed).
+                 *
+                 * ⚠ Every heading is gold now, so the LADDER has to carry the
+                 * level on its own, and h3 was already sitting at the body's
+                 * own 24. That is why CONFIG_LV_FONT_MONTSERRAT_26 was turned
+                 * on (sdkconfig AND sdkconfig.defaults - a fullclean
+                 * regenerates the former): without it h4 could only be smaller
+                 * than the prose or identical to h3. 32 / 28 / 26 / 24 keeps
+                 * four distinct levels with the smallest still matching the
+                 * body, which is what a lowest-level heading should do. */
                 const lv_font_t *f = (level == 1) ? &lv_font_montserrat_32 :
                                      (level == 2) ? &lv_font_montserrat_28 :
-                                     (level == 3) ? &lv_font_montserrat_24 :
-                                                    &lv_font_montserrat_22;
-                uint32_t col = (level <= 3) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+                                     (level == 3) ? &lv_font_montserrat_26 :
+                                                    &lv_font_montserrat_24;
+                uint32_t col = UI_COLOR_ACCENT_GOLD;
                 lv_obj_t *hl = add_label(cleaned, f, col, block_count ? 22 : 4, 0);
                 block_count++;
                 // Context help: remember the first heading that matches the
