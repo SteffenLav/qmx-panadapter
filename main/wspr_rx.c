@@ -126,7 +126,7 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out)
 
 uint32_t wspr_rx_marks_seq(void) { return s_marks_seq; }
 
-char wspr_rx_mark_for_freq(float freq_hz)
+char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
 {
     if (!s_marks_mtx) return 0;
     char ch = 0;
@@ -135,9 +135,13 @@ char wspr_rx_mark_for_freq(float freq_hz)
                           * transmission occupies, so it cannot claim a
                           * neighbour's letter. */
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    for (int i = 0; i < s_marks_n; i++) {
-        float d = fabsf(s_marks[i].freq_hz - freq_hz);
-        if (d < best) { best = d; ch = s_marks[i].ch; }
+    /* Only the cycle the carpet is showing - see the header. A tone is reused
+     * cycle after cycle, so without this an older row wears a current letter. */
+    if (cycle_utc == s_marks_cycle) {
+        for (int i = 0; i < s_marks_n; i++) {
+            float d = fabsf(s_marks[i].freq_hz - freq_hz);
+            if (d < best) { best = d; ch = s_marks[i].ch; }
+        }
     }
     xSemaphoreGive(s_marks_mtx);
     /* A '?' is a mark, not an answer: it means nothing decoded there, so it can

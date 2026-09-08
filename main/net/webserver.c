@@ -4652,7 +4652,8 @@ static esp_err_t wspr_handler(httpd_req_t *req)
          * it to point at, and a letter that pointed at the wrong one would be
          * worse than none. */
         {
-            char sc[2] = { wspr_rx_mark_for_freq(snap[i].freq_hz), 0 };
+            char sc[2] = { wspr_rx_mark_for_freq(snap[i].freq_hz,
+                                                 snap[i].cycle_utc), 0 };
             cJSON_AddStringToObject(o, "s", sc[0] ? sc : "");
         }
         cJSON_AddItemToArray(arr, o);

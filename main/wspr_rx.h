@@ -173,10 +173,17 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
  * change. */
 uint32_t wspr_rx_marks_seq(void);
 
-/* The letter for a spot, matched by frequency against the current mark set -
- * 0 if that spot is not from the cycle on display or is not matched. Kept here
- * rather than in the view so both screens ask the same question. */
-char wspr_rx_mark_for_freq(float freq_hz);
+/* The letter for a spot: 0 unless the spot is FROM THE CYCLE ON THE CARPET and
+ * its tone matches a mark in it. Kept here rather than in the view so both
+ * screens ask the same question.
+ *
+ * ⛔ THE CYCLE IS NOT OPTIONAL. WSPR stations keep the same tone from cycle to
+ * cycle, so matching on frequency alone hands an older row the letter of
+ * whoever is on that tone NOW. Caught on the bench 2026-09-08: G7SYO, decoded
+ * at 20:42 on 1556.1 Hz, was labelled D - and D was G3JKF, decoded at 20:46 on
+ * the same tone. The letter pointed at a trace belonging to somebody else,
+ * which is precisely what a blank is for. */
+char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc);
 
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".

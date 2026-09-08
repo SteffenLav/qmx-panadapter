@@ -1324,7 +1324,7 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
      * Tab5 and the browser cannot number the same cycle differently. It answers
      * only for the cycle currently on the carpet, so an older row gets a space
      * rather than a letter belonging to somebody else. */
-    char sch[2] = { wspr_rx_mark_for_freq(sp->freq_hz), 0 };
+    char sch[2] = { wspr_rx_mark_for_freq(sp->freq_hz, sp->cycle_utc), 0 };
     if (!sch[0]) sch[0] = ' ';
 
     snprintf(out, n, ROW_FMT, sch, utc, bnd ? bnd : "", sp->call, sp->grid,
