@@ -2099,7 +2099,23 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     size_t size;
     uint32_t w, h;
     if (screenshot_capture_rgb565(&buf, &size, &w, &h) != ESP_OK) {
-        return httpd_resp_send_500(req);
+        /* ⛔ NOT a bare 500. "Server has encountered an unexpected error" in a
+         * browser tab is the least useful sentence this firmware can produce -
+         * it names nothing, and the operator reported exactly that. A full
+         * frame is 1.8 MB of CONTIGUOUS PSRAM, and on the WSPR page, whose
+         * capture windows are megabytes each, that is simply not always
+         * available. Say so, and say what to do about it. */
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req,
+            "Screenshot unavailable: could not reserve 1.8 MB of contiguous "
+            "PSRAM for the frame.\n\n"
+            "This is most likely because WSPR is running - its capture windows "
+            "are megabytes each. Try again from the panadapter page, or between "
+            "WSPR cycles.\n\n"
+            "The diagnostic log records the free and largest-block figures at "
+            "the moment it failed.\n");
+        return ESP_OK;
     }
 
     /* Crop window, defaulting to the whole frame. Clamped to the image rather

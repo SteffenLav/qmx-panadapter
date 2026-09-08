@@ -85,7 +85,20 @@ esp_err_t screenshot_capture_rgb565(uint8_t **out_buf, size_t *out_size,
 
     void *buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
-        ESP_LOGE(TAG, "heap_caps_malloc failed for %u bytes", (unsigned)buf_size);
+        /* ⚠ SAY WHICH OF THE TWO IT IS. A full frame is 1280x720x2 = 1.8 MB and
+         * it has to be CONTIGUOUS, so this fails either because PSRAM is
+         * genuinely low or because it is merely fragmented - and those want
+         * completely different fixes. Reported on the bench 2026-09-08 as
+         * "Server has encountered an unexpected error" from /ss.bmp while the
+         * WSPR page was running, with psram free down at 1.4-2.6 MB against
+         * 16 MB at boot: WSPR's ping-pong capture windows are megabytes each,
+         * so a full-screen snapshot is the first thing to be squeezed out.
+         * Without the largest-block figure there was no way to tell. */
+        ESP_LOGE(TAG, "heap_caps_malloc failed for %u bytes - PSRAM free=%u "
+                      "largest block=%u (a screenshot needs it CONTIGUOUS)",
+                 (unsigned)buf_size,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
 
