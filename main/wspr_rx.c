@@ -86,6 +86,65 @@ static const char *TAG = "wspr_rx";
  * shows stations appearing only when the cap is lifted, this is the number to
  * raise; do not raise it on the strength of a reference file that says no. */
 #define WSPR_MAX_CANDS    20
+_Static_assert(WSPR_MARKS_MAX == WSPR_MAX_CANDS,
+               "WSPR_MARKS_MAX (wspr_rx.h) must track WSPR_MAX_CANDS");
+
+/* ---- Waterfall letter markers (#360) ----------------------------------
+ * Published once per completed cycle; see the long note in wspr_rx.h for what
+ * they are for. Guarded by its own mutex rather than the waterfall's: the
+ * decode task writes this at the END of a cycle while the capture task is
+ * already publishing carpet rows, and making them share a lock would put the
+ * decoder behind the row pump for no reason. */
+static wspr_mark_t s_marks[WSPR_MARKS_MAX];
+static int         s_marks_n;
+static int64_t     s_marks_cycle;
+static uint32_t    s_marks_seq;
+static SemaphoreHandle_t s_marks_mtx;
+
+static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc)
+{
+    if (!s_marks_mtx) return;
+    if (n > WSPR_MARKS_MAX) n = WSPR_MARKS_MAX;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    memcpy(s_marks, m, (size_t)n * sizeof(*m));
+    s_marks_n     = n;
+    s_marks_cycle = cycle_utc;
+    s_marks_seq++;
+    xSemaphoreGive(s_marks_mtx);
+}
+
+int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out)
+{
+    if (!out || max <= 0 || !s_marks_mtx) return 0;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    int n = s_marks_n < max ? s_marks_n : max;
+    memcpy(out, s_marks, (size_t)n * sizeof(*out));
+    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle;
+    xSemaphoreGive(s_marks_mtx);
+    return n;
+}
+
+uint32_t wspr_rx_marks_seq(void) { return s_marks_seq; }
+
+char wspr_rx_mark_for_freq(float freq_hz)
+{
+    if (!s_marks_mtx) return 0;
+    char ch = 0;
+    float best = 3.0f;   /* Hz - wider than the decoder's own frequency spread
+                          * on one signal, far narrower than the ~6 Hz a WSPR
+                          * transmission occupies, so it cannot claim a
+                          * neighbour's letter. */
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    for (int i = 0; i < s_marks_n; i++) {
+        float d = fabsf(s_marks[i].freq_hz - freq_hz);
+        if (d < best) { best = d; ch = s_marks[i].ch; }
+    }
+    xSemaphoreGive(s_marks_mtx);
+    /* A '?' is a mark, not an answer: it means nothing decoded there, so it can
+     * never belong to a spot in the list. */
+    return (ch == '?') ? 0 : ch;
+}
+
 
 /* Decode is ~7.9 s per candidate, and with the ping-pong it has a full 120 s
  * cycle. Stop at 105 s so the buffer is handed back before the next capture
@@ -863,10 +922,24 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * subtraction is the same reception report, not a second one. */
     char seen[WSPR_MAX_CANDS][7];
     int nseen = 0;
+    /* #360: one mark per candidate the search found, whether it decoded or not.
+     * Seeded from the FIRST pass only - a later pass re-runs the finder over
+     * audio with signals removed and returns the same tones, so re-seeding
+     * would just duplicate them. Successes are stamped in by frequency below,
+     * on whichever pass they land. */
+    wspr_mark_t marks[WSPR_MARKS_MAX];
+    int nmarks = 0;
 
   next_pass:
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                   cands, WSPR_MAX_CANDS);
+    if (pass == 0) {
+        nmarks = ncand > WSPR_MARKS_MAX ? WSPR_MARKS_MAX : ncand;
+        for (int i = 0; i < nmarks; i++) {
+            marks[i].freq_hz = (float)cands[i].freq_hz;
+            marks[i].ch      = '?';   /* until something decodes here */
+        }
+    }
     found_in_pass = 0;
     tried_this_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {
@@ -966,6 +1039,25 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
 
         decoded++;
         found_in_pass++;
+        /* Stamp the mark this decode belongs to. Matched by frequency rather
+         * than by index because a later pass has its own candidate ordering. */
+        {
+            float best = 3.0f; int bi = -1;
+            for (int k = 0; k < nmarks; k++) {
+                float d = fabsf(marks[k].freq_hz - (float)r.freq_hz);
+                if (d < best) { best = d; bi = k; }
+            }
+            /* A decode with no candidate near it can only come from a later
+             * pass finding something the first pass did not list at all. It is
+             * a real station, so it gets its own mark rather than being lost. */
+            if (bi < 0 && nmarks < WSPR_MARKS_MAX) bi = nmarks++;
+            if (bi >= 0) {
+                marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
+                                                         * is the accurate one */
+                marks[bi].ch = 'A';   /* placeholder - the letters are assigned
+                                       * by tone order once the cycle is done */
+            }
+        }
         wspr_accepted_add(&accepted, r.freq_hz);
         /* `agree` is the re-encode score - how well the received audio actually
          * supports this message (wspr_decode.h). It is logged on EVERY decode
@@ -1016,6 +1108,27 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                  (long long)cycle_utc, skipped, pass, (long long)dec_ms,
                  pass > 1 ? " - second-look only, the band was fully scanned"
                           : " - lower WSPR_MAX_CANDS or make the decode faster");
+    /* #360: sort by tone and hand out the letters LEFT TO RIGHT, so A is
+     * always the leftmost mark on the carpet and the list needs no legend.
+     * Insertion sort on at most 20 entries, once every two minutes. */
+    for (int i = 1; i < nmarks; i++) {
+        wspr_mark_t t = marks[i];
+        int j = i - 1;
+        while (j >= 0 && marks[j].freq_hz > t.freq_hz) { marks[j + 1] = marks[j]; j--; }
+        marks[j + 1] = t;
+    }
+    {
+        char next = 'A';
+        for (int i = 0; i < nmarks; i++) {
+            if (marks[i].ch == '?') continue;
+            /* Past Z the letters would start repeating, which is worse than
+             * saying nothing - a duplicate letter joins a trace to the wrong
+             * callsign. 26 decodes in one cycle has never been seen (the
+             * candidate cap is 20), so this is a guard, not a case. */
+            marks[i].ch = (next <= 'Z') ? next++ : '*';
+        }
+    }
+    marks_publish(marks, nmarks, cycle_utc);
     hist_push(decoded);
     set_dec_status("%d decoded", decoded);
 }
@@ -1791,6 +1904,7 @@ bool wspr_rx_start(void)
      * every reader needs "exists", and on this board the gap between the two is
      * long enough to matter. */
     if (!s_wf_mtx) s_wf_mtx = xSemaphoreCreateMutex();
+    if (!s_marks_mtx) s_marks_mtx = xSemaphoreCreateMutex();
     /* Only if untouched: a wspr_guards dev action set before the page is
      * entered must survive starting the loop, or an experiment silently
      * reverts to defaults the moment it is run. */

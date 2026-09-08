@@ -4629,6 +4629,16 @@ static esp_err_t wspr_handler(httpd_req_t *req)
            this field existed must not print a fabricated 0.0. */
         if (snap[i].dt_tenths == WSPR_DT_UNKNOWN) cJSON_AddNullToObject(o, "dt");
         else cJSON_AddNumberToObject(o, "dt", snap[i].dt_tenths / 10.0);
+        /* The waterfall letter (#360), asked of the device rather than derived
+         * in the page: the marks are assigned once, here, so the Tab5 and the
+         * browser can never number the same cycle differently. Empty for a spot
+         * whose cycle has scrolled off the carpet - there is no trace left for
+         * it to point at, and a letter that pointed at the wrong one would be
+         * worse than none. */
+        {
+            char sc[2] = { wspr_rx_mark_for_freq(snap[i].freq_hz), 0 };
+            cJSON_AddStringToObject(o, "s", sc[0] ? sc : "");
+        }
         cJSON_AddItemToArray(arr, o);
     }
 

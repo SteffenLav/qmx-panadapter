@@ -78,7 +78,14 @@ LV_FONT_DECLARE(qmx_mono_25);
  *
  * ⛔ The waterfall and its axis keep RIGHT_X/RIGHT_W. Do not "tidy" these into
  * one pair of macros - they describe two different columns on purpose. */
-#define LIST_SHIFT 60
+/* 90, not 60: the extra 30 px is the `S` column and its separator (#360) - two
+ * characters at qmx_mono_25's exact 15.0 px advance. The row was 63 of 63, so
+ * there was nowhere else it could come from, and the operator named this as the
+ * place: "there is still dead space enough on the right side of the WSPR
+ * panel. We could easily cut out 30px or more and then just narrow the TX
+ * button." EX_W_LOW is derived from this, and the TX button from EX_W_LOW, so
+ * this one number moves all three. */
+#define LIST_SHIFT 90
 #define LIST_X     (RIGHT_X - LIST_SHIFT)
 #define LIST_W     (RIGHT_W + LIST_SHIFT)
 #define WF_Y       6
@@ -1208,6 +1215,13 @@ static void arm_dial_push(const char *why)
  * giving up its unused fourth column bought the fifth - which is exactly what
  * DT costs including its separating space. */
 #define WSPR_ROW_MAX_CHARS  (LIST_W / 15)
+/* ⭐ THE JOIN BETWEEN A ROW AND A TRACE (#360). One letter, matching the mark
+ * drawn over that station on the waterfall - A is the leftmost mark, B the next
+ * and so on, so no legend is needed. Blank for a spot from an earlier cycle:
+ * the carpet only holds one cycle, so an older row has no trace to point at and
+ * an invented letter would point at the wrong one. First column, because the
+ * letters are read left to right on the carpet too. */
+#define W_S     1
 #define W_UTC   5
 /* Which band the spot was HEARD on. Beside UTC because it answers the same kind
  * of question - the circumstances of the hearing, not a property of the station.
@@ -1233,7 +1247,7 @@ static void arm_dial_push(const char *why)
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s %"                       STRINGIFY(W_DT)   "s"
+#define ROW_FMT "%-" STRINGIFY(W_S) "s %-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s %"                       STRINGIFY(W_DT)   "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
@@ -1297,7 +1311,16 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
     else snprintf(dt, sizeof(dt), "%+.1f", sp->dt_tenths / 10.0);
 
     const char *bnd = wspr_band_name_for_dial(sp->dial_hz);
-    snprintf(out, n, ROW_FMT, utc, bnd ? bnd : "", sp->call, sp->grid,
+
+    /* The waterfall letter for this station, asked of wspr_rx.c rather than
+     * worked out here - the marks are assigned on the device precisely so the
+     * Tab5 and the browser cannot number the same cycle differently. It answers
+     * only for the cycle currently on the carpet, so an older row gets a space
+     * rather than a letter belonging to somebody else. */
+    char sch[2] = { wspr_rx_mark_for_freq(sp->freq_hz), 0 };
+    if (!sch[0]) sch[0] = ' ';
+
+    snprintf(out, n, ROW_FMT, sch, utc, bnd ? bnd : "", sp->call, sp->grid,
              country_field(sp), snr, drift, hz, pwr, km, brg, dt);
 }
 
@@ -1311,12 +1334,12 @@ static void fmt_header(char *out, size_t n)
      * "TONE" rather than "HZ": every column here is a number in some unit, so
      * "HZ" named the unit while the others name the quantity. What the column
      * holds is the station's audio tone within the 200 Hz window. */
-    char h[12][16];   /* 12 columns since DT was added - keep in step with raw[]/w[] */
+    char h[13][16];   /* 13 columns since S was added - keep in step with raw[]/w[] */
     /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
      * so the unit belongs in the heading and not repeated on every row. */
-    const char *raw[12] = { "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
+    const char *raw[13] = { "S", "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
                             "DR", "TONE", "PWR", wspr_dist_in_miles() ? "MI" : "KM", "BRG", "DT" };
-    const int   w[12]   = { W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
+    const int   w[13]   = { W_S, W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
                             W_DRF, W_TONE, W_PWR, W_KM, W_BRG, W_DT };
     /* ⭐ BIAS THE HEADING THE WAY ITS DATA IS ALIGNED (operator, 2026-09-01:
      * "KM header should be moved one character right to centre properly above
@@ -1334,7 +1357,7 @@ static void fmt_header(char *out, size_t n)
      * hand - which matters here, because the hand-spaced header is exactly what
      * drifted out of step with the rows before ROW_FMT was made to serve both. */
     /* BAND is right-aligned with the other numbers. */
-    const bool right_aligned[12] = { false, true, false, false, false,
+    const bool right_aligned[13] = { false, false, true, false, false, false,
                                      true, true, true, true, true, true, true };
     /* ⛔ A HEADING LONGER THAN ITS COLUMN SILENTLY WIDENS THE ROW. printf does
      * not truncate, so an over-long title pushes every later column right and
@@ -1346,8 +1369,8 @@ static void fmt_header(char *out, size_t n)
         static bool checked = false;
         if (!checked) {
             checked = true;
-            int total = 11;   /* the single spaces between 12 columns */
-            for (int i = 0; i < 12; i++) {
+            int total = 12;   /* the single spaces between 13 columns */
+            for (int i = 0; i < 13; i++) {
                 total += w[i];
                 if ((int)strlen(raw[i]) > w[i])
                     ESP_LOGE(TAG, "column %d: heading '%s' is %d chars in a %d "
@@ -1360,7 +1383,7 @@ static void fmt_header(char *out, size_t n)
                          total, WSPR_ROW_MAX_CHARS);
         }
     }
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 13; i++) {
         const int len  = (int)strlen(raw[i]);
         const int pad  = w[i] > len ? w[i] - len : 0;
         /* ⭐ THE HEADING IS ALIGNED THE SAME WAY ITS DATA IS - not centred.
@@ -1383,7 +1406,7 @@ static void fmt_header(char *out, size_t n)
         h[i][k] = '\0';
     }
     snprintf(out, n, ROW_FMT, h[0], h[1], h[2], h[3], h[4],
-             h[5], h[6], h[7], h[8], h[9], h[10], h[11]);
+             h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12]);
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)
@@ -1761,6 +1784,76 @@ static inline uint16_t wf_rgb565(uint8_t v)
  * row-by-row is roughly once per WSPR symbol (~1.5 Hz) while a capture is
  * filling, NOT once per cycle as this comment used to claim. That is the
  * reason the direct-buffer rule above is load-bearing rather than a nicety. */
+/* ---- 5x7 glyphs for the waterfall letter markers (#360) ---------------
+ *
+ * ⛔ A BITMAP BLITTED STRAIGHT INTO px[], not an LVGL label. There is one mark
+ * per candidate, up to 20, and they move every time the carpet scrolls - that
+ * is ~1.5 object rebuilds a second on the task that is already 73.9 % of core
+ * 0. The direct-buffer rule at the top of repaint_waterfall() exists for
+ * exactly this, and a draw call inside that loop is the thing it forbids.
+ *
+ * Rows are top to bottom, bit 4 is the leftmost of the five columns. Only the
+ * characters that can actually appear: A-Z, '?' for a candidate that did not
+ * decode, and '*' for the 27th decode in one cycle, which cannot happen while
+ * the candidate cap is 20 but is not worth being undefined about. */
+static const uint8_t GLYPH5x7[27][7] = {
+    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, /* A */
+    {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}, /* B */
+    {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, /* C */
+    {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}, /* D */
+    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, /* E */
+    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}, /* F */
+    {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}, /* G */
+    {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}, /* H */
+    {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}, /* I */
+    {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}, /* J */
+    {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, /* K */
+    {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}, /* L */
+    {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}, /* M */
+    {0x11,0x19,0x15,0x13,0x11,0x11,0x11}, /* N */
+    {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}, /* O */
+    {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}, /* P */
+    {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}, /* Q */
+    {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}, /* R */
+    {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}, /* S */
+    {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}, /* T */
+    {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}, /* U */
+    {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}, /* V */
+    {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}, /* W */
+    {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}, /* X */
+    {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}, /* Y */
+    {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}, /* Z */
+    {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}, /* ? (index 26) */
+};
+
+static const uint8_t *glyph_for(char ch)
+{
+    if (ch >= 'A' && ch <= 'Z') return GLYPH5x7[ch - 'A'];
+    if (ch == '?')              return GLYPH5x7[26];
+    return NULL;   /* '*' and anything else: draw nothing rather than a lie */
+}
+
+/* Blit one glyph, with a one-pixel black surround so it stays readable over a
+ * bright trace. Clipped to the pane; a mark whose box would fall off the edge
+ * is nudged inward rather than dropped, because the edge tones are real. */
+static void blit_glyph(uint16_t *px, int x0, int y0, char ch, uint16_t fg)
+{
+    const uint8_t *g = glyph_for(ch);
+    if (!g) return;
+    if (x0 < 0) x0 = 0;
+    if (x0 + 7 > RIGHT_W) x0 = RIGHT_W - 7;
+    if (y0 < 0) y0 = 0;
+    if (y0 + 9 > WF_H) y0 = WF_H - 9;
+    for (int r = -1; r <= 7; r++) {
+        uint16_t *dst = &px[(y0 + 1 + r) * RIGHT_W + x0];
+        for (int c = -1; c <= 5; c++) {
+            bool on = (r >= 0 && r < 7 && c >= 0 && c < 5) &&
+                      ((g[r] >> (4 - c)) & 1);
+            dst[1 + c] = on ? fg : 0x0000;
+        }
+    }
+}
+
 static void repaint_waterfall(void)
 {
     if (!s_wf_canvas || !s_wf_data || !s_wf_buf) return;
@@ -1778,6 +1871,56 @@ static void repaint_waterfall(void)
         const uint8_t *src = &s_wf_data[rowmap[y] * WSPR_WF_COLS];
         uint16_t *dst = &px[y * RIGHT_W];
         for (int x = 0; x < RIGHT_W; x++) dst[x] = wf_rgb565(src[colmap[x]]);
+    }
+
+    /* ---- letter markers (#360) ----
+     *
+     * ⭐ DRAWN FROM THE HISTORY, NOT BURNED INTO IT. The pixel loop above
+     * rewrites the whole canvas from s_wf_data every time, so anything written
+     * into that buffer would be erased on the next repaint. The marks live in
+     * wspr_rx.c and their y is derived here from the SAME rowmap the carpet
+     * uses - so they scroll with their own cycle and age off the top for free,
+     * with no per-frame objects.
+     *
+     * The anchor is the cycle-boundary line, found by scanning the display
+     * buffer for the dashed marker rather than counting rows: the marker IS the
+     * join between the cycle that just decoded and the one now filling, which
+     * is exactly what these letters label. Centred on it, so the glyph sits
+     * half in each - the darkest part of the carpet in both directions. */
+    {
+        static wspr_mark_t marks[WSPR_MARKS_MAX];
+        static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
+        static int         nmarks = 0;
+        uint32_t seq = wspr_rx_marks_seq();
+        if (seq != marks_seq_seen) {
+            marks_seq_seen = seq;
+            nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, NULL);
+        }
+        int mark_row = -1;
+        for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
+            if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
+        }
+        if (nmarks > 0 && mark_row >= 0) {
+            int y0 = mark_row * WF_H / WSPR_WF_HIST_ROWS - 4;
+            /* Green for a decode - the same light green as the boundary line,
+             * so a letter reads as belonging to it - and a dim grey for a
+             * candidate that did not decode, which is a question rather than a
+             * result. */
+            const uint16_t FG_OK = (uint16_t)(((144 >> 3) << 11) | ((238 >> 2) << 5) | (144 >> 3));
+            const uint16_t FG_NO = (uint16_t)(((150 >> 3) << 11) | ((150 >> 2) << 5) | (150 >> 3));
+            int last_x = -100;
+            for (int i = 0; i < nmarks; i++) {
+                int x = (int)((marks[i].freq_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
+                              (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - 3;
+                /* Marks are published in tone order, so a left-to-right sweep
+                 * only ever has to push a crowded one RIGHT - no sorting here,
+                 * and the letters stay in the order the list shows them. */
+                if (x < last_x + 8) x = last_x + 8;
+                last_x = x;
+                blit_glyph(px, x, y0, marks[i].ch,
+                           marks[i].ch == '?' ? FG_NO : FG_OK);
+            }
+        }
     }
     lv_obj_invalidate(s_wf_canvas);
 }

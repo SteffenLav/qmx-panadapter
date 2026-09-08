@@ -4891,6 +4891,11 @@ const DEC_SORT = {
 let wsprMiles = false;
 function wsprCols() {
   return [
+    /* The waterfall letter (#360). The device assigns it - A is the leftmost
+       mark on the Tab5's carpet, B the next - so the two screens cannot number
+       a cycle differently, and a letter here names the same trace it names
+       there. Blank once the cycle scrolls off the carpet. */
+    ["s", "S"],
     ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
     ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"],
     ["km", wsprMiles ? "MILES" : "KM"], ["brg", "BRG"],
@@ -4908,6 +4913,10 @@ function wsprCols() {
    indistinguishable from a genuine clean measurement. */
 function wsprFmt(k, r) {
   const v = r[k];
+  /* An empty S is a spot with no trace on the carpet any more, which is a real
+     answer - it prints blank rather than the em dash used for a measurement
+     that was never taken. */
+  if (k === "s") return v ? v : "";
   if (v === null || v === undefined) return "—";
   if (k === "snr")   return (v > 0 ? "+" : "") + v;
   if (k === "drift") return (v > 0 ? "+" : "") + v;

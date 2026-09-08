@@ -139,6 +139,45 @@ bool wspr_rx_get_waterfall(uint8_t *out);
  * instead of every tick. */
 uint32_t wspr_rx_waterfall_seq(void);
 
+/* ---- Waterfall letter markers (#360) ----------------------------------
+ *
+ * ⭐ THE POINT IS THE SIGNALS THAT DID *NOT* DECODE. The sync search finds
+ * every candidate on the band and the decoder then succeeds on some of them;
+ * until now only the successes were visible anywhere, so "is there something
+ * there we are missing?" could only be answered by eye (Samuel W7STF). One
+ * mark per candidate answers it by machine: a letter where a station decoded,
+ * a '?' where one did not. A '?' returning to the same tone cycle after cycle
+ * is a real station just under the threshold.
+ *
+ * Letters run A, B, C... LEFT TO RIGHT BY TONE, so A is always the leftmost
+ * and no legend is needed. The same letter goes in the decode list's `S`
+ * column, which is what joins a trace to a callsign - and it is assigned HERE,
+ * on the device, so the Tab5 and the browser cannot number a cycle differently.
+ *
+ * Only the most recently completed cycle is published: WSPR_WF_CYCLES is 1, so
+ * that is all the carpet can show. */
+/* Must equal WSPR_MAX_CANDS, which is private to wspr_rx.c - a _Static_assert
+ * there ties the two together, so a change to one fails the build. */
+#define WSPR_MARKS_MAX 20
+
+typedef struct {
+    float freq_hz;   /* audio tone, same scale as a spot's freq */
+    char  ch;        /* 'A'..'Z' if it decoded, '?' if it did not */
+} wspr_mark_t;
+
+/* Copy the marks for the last completed cycle. Returns the count; 0 before the
+ * first cycle finishes. `cycle_utc_out` may be NULL. */
+int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
+
+/* Bumped each time a cycle publishes a new set, so a view can rebuild only on
+ * change. */
+uint32_t wspr_rx_marks_seq(void);
+
+/* The letter for a spot, matched by frequency against the current mark set -
+ * 0 if that spot is not from the cycle on display or is not matched. Kept here
+ * rather than in the view so both screens ask the same question. */
+char wspr_rx_mark_for_freq(float freq_hz);
+
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);
