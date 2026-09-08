@@ -398,6 +398,10 @@ static void hover_tick_cb(lv_timer_t *timer)
 /* Quiet window after this page pushes the dial, so the mismatch check below
  * does not fire on our own write while the FA poll is still catching up. */
 static int64_t   s_dial_settle_us = 0;
+/* Which mark set the rows on screen were rendered against - see the guard in
+ * the tick. The S column is drawn from wspr_rx_mark_for_freq(), so a new set of
+ * marks makes every row stale. */
+static uint32_t  s_rows_marks_seq = 0;
 static lv_obj_t *s_bp_panel;                 /* NULL when closed */
 static lv_obj_t *s_bp_row[N_BANDS];
 static int       s_bp_n;
@@ -2243,8 +2247,19 @@ void wspr_screen_view_tick(void)
        Generalise it: a change-detected repaint must key on everything the
        render READS, not just on the data it lists. */
     const bool mi_now = wspr_dist_in_miles();
-    if (n == s_last_spot_count && mi_now == s_rows_miles) return;
+    /* ⛔ AND THE MARKS ARE A THIRD THING THE ROWS READ (#360), which the rule
+     * stated immediately above would have caught if I had applied it to my own
+     * new column. Spots are filed DURING the decode loop, so wspr_spots_seq()
+     * moves and the list rebuilds - and marks_publish() only happens at the END
+     * of that cycle's decode, a moment later. So the rows were built before any
+     * letter existed and the S column came out blank on every row, while the
+     * carpet above showed A and B perfectly. Caught on the bench 2026-09-08 in
+     * the first cycle that decoded anything. */
+    const uint32_t mk_now = wspr_rx_marks_seq();
+    if (n == s_last_spot_count && mi_now == s_rows_miles && mk_now == s_rows_marks_seq)
+        return;
     s_rows_miles = mi_now;
+    s_rows_marks_seq = mk_now;
     s_last_spot_count = n;
 
     /* BOTH numbers, because one of them alone is misread. "Heard 12 stations"
