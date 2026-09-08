@@ -128,6 +128,11 @@ static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for F
 static volatile char s_pending_mode_digit = 0;
 static char hamlib_mode_to_digit(const char *mode);  // forward declaration
 
+// Pending frequency (Hz) requested while a TX burst owned the pipe. Drained by
+// the poll task once the burst releases it. 0 = nothing pending. See the long
+// note in cat_set_frequency() - Randy N4OPI's band change that never took.
+static volatile uint32_t s_pending_freq_hz = 0;
+
 // Pending SSB filter bandwidth (Hz) requested from the LVGL thread. The poll
 // task drains it on its next cycle so the write happens on the one thread that
 // owns the CDC pipe - writing MMSSB|Bandwidth= directly from the UI thread
@@ -352,6 +357,7 @@ void cat_user_pause_set(bool paused)
         // operator has since changed by hand in the very menu they paused us
         // to use.
         s_pending_mode_digit    = 0;
+        s_pending_freq_hz       = 0;
         s_pending_ssb_bw        = 0;
         s_pending_cw_passband   = 0;
         s_pending_af_gain_p1    = 0;
@@ -1672,6 +1678,18 @@ static void poll_task(void *arg)
         // Target the committed "Filter RX" menu item - that's what FW; reads
         // and what shows in the QMX SSB menu (the "Bandwidth" token is a live
         // value that the QMX reverts). FW; will read the new width back.
+        // A frequency the operator asked for while a TX burst held the pipe.
+        // Drained FIRST: a band change also implies a mode change on its way,
+        // and the QMX should land on the new frequency before anything else.
+        uint32_t pf = s_pending_freq_hz;
+        if (pf != 0) {
+            s_pending_freq_hz = 0;
+            s_last_tx_us = 0;            // it already waited; don't rate-limit it away
+            ESP_LOGI(TAG, "sending deferred freq %lu Hz", (unsigned long)pf);
+            cat_set_frequency(pf);       // s_poll_paused is false here, so it writes
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         char md = s_pending_mode_digit;
         if (md != 0) {
             s_pending_mode_digit = 0;
@@ -2456,6 +2474,48 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
 {
     if (s_cdc_dev == NULL) {
         return ESP_ERR_INVALID_STATE;  // QMX not connected
+    }
+
+    /* ⛔ SOMETHING ELSE MAY OWN THE PIPE, AND THIS USED TO WRITE ANYWAY.
+     *
+     * Randy N4OPI, 2026-09-08: "I use the pull-down to change bands and the
+     * pull down box changes, but the actual operating frequency doesn't" - with
+     * a screenshot showing 7.074.000 Hz on the readout, "20 m 14.074" in the
+     * dropdown, and a QSO in progress reading TX IN ~29s.
+     *
+     * That is the whole explanation. An FT8 burst owns the CDC link for its
+     * ~12.7 s, sending 79 TA<freq>; commands on a 160 ms cadence, and
+     * s_poll_paused exists to keep everything else off the pipe for exactly
+     * that reason. This function never checked it, so a band change landed in
+     * the middle of the tone sequence: the radio got a garble, answered ?;, and
+     * the frequency write was simply lost. The UI had already moved
+     * optimistically, so the two disagreed until the next poll.
+     *
+     * It is now DEFERRED rather than dropped, which is the pattern this file
+     * already uses for mode (s_pending_mode_digit) and the SSB filter. The poll
+     * task sends it the moment it owns the pipe again - a second or so later at
+     * worst, and the operator's band change is not silently thrown away.
+     *
+     * ⚠ LAST ONE WINS on purpose: a single slot, not a queue. Someone spinning
+     * a band dropdown during a burst means the last choice, not a stack of
+     * retunes to replay afterwards. */
+    if (s_poll_paused) {
+        s_pending_freq_hz = freq_hz;
+        ESP_LOGI(TAG, "freq %lu Hz deferred - a TX burst owns the pipe; the "
+                      "poll task will send it when the burst ends",
+                 (unsigned long)freq_hz);
+        return ESP_OK;
+    }
+    /* The operator pause is NOT deferred, it is refused. That one is unbounded
+     * - it lasts until they press Resume - and a retune arriving minutes later,
+     * into a radio whose band they have since changed by hand in the very menu
+     * they paused us to use, is the exact hazard cat_user_pause_set() drops its
+     * other queued writes for. Refusing also fixes a smaller bug in passing:
+     * this used to write anyway, straight into the QMX's own menu. */
+    if (s_user_paused) {
+        ESP_LOGW(TAG, "freq %lu Hz refused - the radio is released to the operator",
+                 (unsigned long)freq_hz);
+        return ESP_ERR_INVALID_STATE;
     }
     // Rate-limit: drop calls that arrive within 200 ms of previous TX
     uint64_t now = esp_timer_get_time();
