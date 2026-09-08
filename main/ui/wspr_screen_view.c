@@ -34,7 +34,9 @@ static inline bool wspr_dist_in_miles(void) { return settings_get_distance_in_mi
  * spot list is space-padded columns of short tokens, and in a PROPORTIONAL font
  * those do not line up - the header would sit visibly off its own rows. Reusing
  * the font that is already in the binary costs nothing and is the difference
- * between a table and a mess. */
+ * between a table and a mess. It is also what the waterfall letter markers use
+ * (#360), so a letter on the carpet and its letter in the S column below are
+ * the same glyph at the same size. */
 LV_FONT_DECLARE(qmx_mono_25);
 
 /* Duplicated from ui.c / ft8_screen_view.c, which already each carry their own
@@ -1791,135 +1793,67 @@ static inline uint16_t wf_rgb565(uint8_t v)
  * row-by-row is roughly once per WSPR symbol (~1.5 Hz) while a capture is
  * filling, NOT once per cycle as this comment used to claim. That is the
  * reason the direct-buffer rule above is load-bearing rather than a nicety. */
-/* ---- 5x7 glyphs for the waterfall letter markers (#360) ---------------
+/* ---- Waterfall letter markers (#360): LVGL LABELS, not a bitmap -------
  *
- * ⛔ A BITMAP BLITTED STRAIGHT INTO px[], not an LVGL label. There is one mark
- * per candidate, up to 20, and they move every time the carpet scrolls - that
- * is ~1.5 object rebuilds a second on the task that is already 73.9 % of core
- * 0. The direct-buffer rule at the top of repaint_waterfall() exists for
- * exactly this, and a draw call inside that loop is the thing it forbids.
+ * The first version blitted a hand-drawn 5x7 font straight into the pixel
+ * buffer, to honour the direct-buffer rule at the top of repaint_waterfall().
+ * The operator's verdict was fair: "the font used is very coarse... can you
+ * just use the same font as in the decoded lines?"
  *
- * Rows are top to bottom, bit 4 is the leftmost of the five columns. Only the
- * characters that can actually appear: A-Z, '?' for a candidate that did not
- * decode, and '*' for the 27th decode in one cycle, which cannot happen while
- * the candidate cap is 20 but is not worth being undefined about. */
-static const uint8_t GLYPH5x7[38][7] = {
-    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, /* A */
-    {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}, /* B */
-    {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, /* C */
-    {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}, /* D */
-    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, /* E */
-    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}, /* F */
-    {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}, /* G */
-    {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}, /* H */
-    {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}, /* I */
-    {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}, /* J */
-    {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, /* K */
-    {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}, /* L */
-    {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}, /* M */
-    {0x11,0x19,0x15,0x13,0x11,0x11,0x11}, /* N */
-    {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}, /* O */
-    {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}, /* P */
-    {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}, /* Q */
-    {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}, /* R */
-    {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}, /* S */
-    {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}, /* T */
-    {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}, /* U */
-    {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}, /* V */
-    {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}, /* W */
-    {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}, /* X */
-    {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}, /* Y */
-    {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}, /* Z */
-    {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}, /* ? (index 26) */
-    /* Digits and a colon, for the cycle timestamp printed at the left end of
-     * the marker row - see the note there for why the row carries its own
-     * time rather than relying on position alone. */
-    {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, /* 0 (27) */
-    {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, /* 1 */
-    {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, /* 2 */
-    {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}, /* 3 */
-    {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, /* 4 */
-    {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}, /* 5 */
-    {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}, /* 6 */
-    {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
-    {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, /* 8 */
-    {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}, /* 9 */
-    {0x00,0x04,0x04,0x00,0x04,0x04,0x00}, /* : (37) */
-};
+ * ⭐ THE RULE FORBIDS DRAW CALLS INSIDE THE PIXEL LOOP, WHICH IS NOT THE SAME
+ * AS FORBIDDING OBJECTS. What it protects against is per-pixel work on
+ * taskLVGL - lv_canvas_set_px() over 188,800 pixels. A FIXED set of at most 21
+ * labels, created only when the mark set changes (once every two minutes) and
+ * repositioned as the carpet scrolls (~1.5 Hz), is a different order of cost
+ * entirely: roughly 30 lv_obj_set_pos() calls a second, against the 4.7 Mpx/s
+ * the waterfall already invalidates.
+ *
+ * ⚠ It is also NOT the vertical-callsign idea that was rejected. That needed
+ * one label PER CHARACTER, rebuilt continuously, ~48 objects; this is one
+ * label per mark, reused until the cycle changes.
+ *
+ * They use qmx_mono_25 - the SAME font as the decode list directly below,
+ * so a letter on the carpet and its letter in the S column are visibly the
+ * same character. Each carries a black background plate, which reads better
+ * over a bright trace than the hand-drawn outline it replaces. */
+#define MARK_LBL_MAX WSPR_MARKS_MAX
+static lv_obj_t *s_mark_lbl[MARK_LBL_MAX];
+static int       s_mark_lbl_x[MARK_LBL_MAX];
+static int       s_mark_lbl_n;
+static lv_obj_t *s_mark_time_lbl;
+/* What a mark occupies for the de-crowding test: qmx_mono_25 advances exactly
+ * 15.0 px, plus 2 px of plate padding either side. */
+#define MARK_W 19
 
-static const uint8_t *glyph_for(char ch)
+static void mark_labels_clear(void)
 {
-    if (ch >= 'A' && ch <= 'Z') return GLYPH5x7[ch - 'A'];
-    if (ch == '?')              return GLYPH5x7[26];
-    if (ch >= '0' && ch <= '9') return GLYPH5x7[27 + (ch - '0')];
-    if (ch == ':')              return GLYPH5x7[37];
-    return NULL;   /* '*' and anything else: draw nothing rather than a lie */
-}
-
-/* ⚠ SCALED, because 5x7 on a 1280 px panel is about a third of the list font
- * and the operator's reaction on first sight was "what is the font size - 10?".
- * Integer scale only: a bitmap font resampled by a fraction loses strokes, and
- * these have to be read at a glance from across a desk. 3 puts a glyph at
- * 15x21, which is the same 15 px advance qmx_mono_25 uses in the list right
- * below it, so the letters on the carpet and the letters in the S column are
- * the same size. */
-#define MARK_SCALE 3
-#define MARK_BOX_W (7 * MARK_SCALE)   /* 5 glyph + 1 px surround either side */
-#define MARK_BOX_H (9 * MARK_SCALE)
-/* Leader length below a glyph, into the cycle it describes. Long enough to read
- * as pointing somewhere, short enough not to obscure the trace it points at. */
-#define MARK_STEM_PX 10
-
-/* Blit one glyph, with a black surround so it stays readable over a bright
- * trace. Clipped to the pane; a mark whose box would fall off the edge is
- * nudged inward rather than dropped, because the edge tones are real. */
-static void blit_glyph_s(uint16_t *px, int x0, int y0, char ch, uint16_t fg, int sc)
-{
-    const uint8_t *g = glyph_for(ch);
-    if (!g) return;
-    const int bw = 7 * sc, bh = 9 * sc;
-    if (x0 < 0) x0 = 0;
-    if (x0 + bw > RIGHT_W) x0 = RIGHT_W - bw;
-    if (y0 < 0) y0 = 0;
-    if (y0 + bh > WF_H) y0 = WF_H - bh;
-    for (int r = -1; r <= 7; r++) {
-        for (int c = -1; c <= 5; c++) {
-            const bool on = (r >= 0 && r < 7 && c >= 0 && c < 5) &&
-                            ((g[r] >> (4 - c)) & 1);
-            const uint16_t v = on ? fg : 0x0000;
-            for (int sy = 0; sy < sc; sy++) {
-                uint16_t *dst = &px[(y0 + (r + 1) * sc + sy) * RIGHT_W
-                                    + x0 + (c + 1) * sc];
-                for (int sx = 0; sx < sc; sx++) dst[sx] = v;
-            }
-        }
+    for (int i = 0; i < s_mark_lbl_n; i++) {
+        if (s_mark_lbl[i] && lv_obj_is_valid(s_mark_lbl[i])) lv_obj_del(s_mark_lbl[i]);
+        s_mark_lbl[i] = NULL;
     }
+    s_mark_lbl_n = 0;
+    if (s_mark_time_lbl && lv_obj_is_valid(s_mark_time_lbl)) lv_obj_del(s_mark_time_lbl);
+    s_mark_time_lbl = NULL;
 }
 
-static void blit_glyph(uint16_t *px, int x0, int y0, char ch, uint16_t fg)
+static lv_obj_t *mark_label_new(const char *txt, uint32_t colour)
 {
-    blit_glyph_s(px, x0, y0, ch, fg, MARK_SCALE);
-}
-
-/* A short vertical leader from the bottom of a glyph down into the cycle it
- * describes. ⭐ THIS IS THE WHOLE POINT OF THE LAYOUT, not decoration: the
- * dashed line sits BETWEEN two cycles, so a glyph drawn on it belongs to
- * neither and the operator has to guess (he did, and said so). The marks
- * describe the cycle BELOW - wf_mark_boundary() runs after a cycle's rows are
- * published, and row 0 is the newest, so the line closes off the data beneath
- * it. Glyph below the line, stem pointing further down: adjacency and
- * direction both say the same thing. */
-static void blit_stem(uint16_t *px, int cx, int y0, int len, uint16_t fg)
-{
-    if (cx < 1) cx = 1;
-    if (cx > RIGHT_W - 2) cx = RIGHT_W - 2;
-    for (int y = y0; y < y0 + len && y < WF_H; y++) {
-        if (y < 0) continue;
-        px[y * RIGHT_W + cx]     = fg;
-        px[y * RIGHT_W + cx - 1] = 0x0000;   /* a dark edge so it reads over a
-                                              * bright trace */
-        px[y * RIGHT_W + cx + 1] = 0x0000;
-    }
+    lv_obj_t *l = lv_label_create(s_container);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
+    /* The plate. Not fully opaque: it must stay readable over a bright trace
+     * without hiding the trace it is pointing at. */
+    lv_obj_set_style_bg_color(l, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(l, LV_OPA_70, 0);
+    lv_obj_set_style_pad_hor(l, 2, 0);
+    lv_obj_set_style_radius(l, 3, 0);
+    lv_obj_add_flag(l, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
+    /* ⛔ NOT_HOT: these sit over the waterfall and a mouse must not turn green
+     * on them - they are a caption, not a control (see ui_theme.h). */
+    lv_obj_add_flag(l, UI_FLAG_NOT_HOT);
+    return l;
 }
 
 static void repaint_waterfall(void)
@@ -1943,108 +1877,111 @@ static void repaint_waterfall(void)
 
     /* ---- letter markers (#360) ----
      *
-     * ⭐ DRAWN FROM THE HISTORY, NOT BURNED INTO IT. The pixel loop above
-     * rewrites the whole canvas from s_wf_data every time, so anything written
-     * into that buffer would be erased on the next repaint. The marks live in
-     * wspr_rx.c and their y is derived here from the SAME rowmap the carpet
-     * uses - so they scroll with their own cycle and age off the top for free,
-     * with no per-frame objects.
+     * ⭐ POSITIONED FROM THE HISTORY, NEVER BURNED INTO IT. The pixel loop
+     * above rewrites the whole canvas from s_wf_data every time, so anything
+     * written into that buffer is erased on the next repaint. The marks live in
+     * wspr_rx.c; their y is derived here from the same row map the carpet uses,
+     * so they scroll with their own cycle and age off the bottom for free.
      *
      * The anchor is the cycle-boundary line, found by scanning the display
-     * buffer for the dashed marker rather than counting rows: the marker IS the
-     * join between the cycle that just decoded and the one now filling, which
-     * is exactly what these letters label. Centred on it, so the glyph sits
-     * half in each - the darkest part of the carpet in both directions. */
+     * buffer for the dashed marker rather than by counting rows.
+     *
+     * ⛔ BELOW THE LINE, NEVER ON IT (operator, 2026-09-08: "right now you
+     * write on top of the dashed line and one can be in doubt what to assign
+     * them to"). A boundary is BETWEEN two cycles, so a glyph straddling it
+     * belongs to neither. The marks describe the cycle BELOW:
+     * wf_mark_boundary() runs after a cycle's rows are published and row 0 is
+     * the newest, so the line closes off the data beneath it. The row also
+     * carries that cycle's own UTC time at its left end, so it can be matched
+     * to a UTC group in the list without counting boundaries.
+     *
+     * ⚠ If the boundary has scrolled far enough down that the row will not fit
+     * beneath it, the labels are HIDDEN. The alternative is clamping, which
+     * puts them back above the line - onto the wrong cycle, silently, exactly
+     * when they are hardest to check. */
     {
         static wspr_mark_t marks[WSPR_MARKS_MAX];
         static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
         static int         nmarks = 0;
-        uint32_t seq = wspr_rx_marks_seq();
-        static int64_t cycle_utc = 0;
-        if (seq != marks_seq_seen) {
+        static int64_t     cycle_utc = 0;
+        const uint32_t seq = wspr_rx_marks_seq();
+        const bool fresh = (seq != marks_seq_seen);
+        if (fresh) {
             marks_seq_seen = seq;
             nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, &cycle_utc);
         }
+
         int mark_row = -1;
         for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
             if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
         }
-        /* ⛔ BELOW THE LINE, NEVER ON IT (operator, 2026-09-08: "right now you
-         * write on top of the dashed line and one can be in doubt what to
-         * assign them to"). He is right, and centring them there was the
-         * mistake: a boundary is BETWEEN two cycles, so a glyph straddling it
-         * belongs to neither.
-         *
-         * The marks describe the cycle BELOW - wf_mark_boundary() runs after a
-         * cycle's rows are published and row 0 is the newest, so the line
-         * closes off the data beneath it. Everything now says so three times
-         * over: the glyph sits wholly under the line, a stem runs from it
-         * further down into that cycle, and the row carries the cycle's own UTC
-         * time at its left end.
-         *
-         * ⚠ If the boundary has scrolled far enough down that the glyph row
-         * will not fit under it, NOTHING is drawn. The alternative is clamping,
-         * which puts the marks back above the line - i.e. onto the wrong cycle,
-         * silently, exactly at the moment they are hardest to check. */
-        const int line_y = mark_row * WF_H / WSPR_WF_HIST_ROWS;
-        if (nmarks > 0 && mark_row >= 0 &&
-            line_y + 3 + MARK_BOX_H + MARK_STEM_PX <= WF_H) {
-            const int y0 = line_y + 3;
-            /* Green for a decode - the same light green as the boundary line,
-             * so a letter reads as belonging to it - and a dim grey for a
-             * candidate that did not decode, which is a question rather than a
-             * result. */
-            const uint16_t FG_OK = (uint16_t)(((144 >> 3) << 11) | ((238 >> 2) << 5) | (144 >> 3));
-            const uint16_t FG_NO = (uint16_t)(((150 >> 3) << 11) | ((150 >> 2) << 5) | (150 >> 3));
-            /* ⛔ A MARK MUST NOT BE MOVED AWAY FROM ITS OWN TONE. The first
+        const int line_y = (mark_row >= 0)
+                         ? mark_row * WF_H / WSPR_WF_HIST_ROWS : -1;
+        const int row_h  = lv_font_get_line_height(&qmx_mono_25);
+        const bool room  = (line_y >= 0) && (line_y + 3 + row_h <= WF_H);
+
+        /* Rebuild only when the cycle changes - every two minutes, not every
+         * repaint. Positions are updated below on every repaint, which is the
+         * cheap half. */
+        if (fresh) {
+            mark_labels_clear();
+            /* ⛔ A MARK MUST NOT BE MOVED AWAY FROM ITS OWN TONE. An earlier
              * version pushed a crowded mark right until it fitted, which on a
-             * quiet band produced what the operator actually saw: the candidate
-             * cap is 20 and it saturates, so twenty '?' got shoved into one
+             * quiet band produced exactly what the operator saw: the candidate
+             * cap is 20 and it saturates, so twenty '?' were shoved into one
              * continuous run of punctuation pointing at nothing in particular.
              * A marker whose position is a lie is worse than a missing one.
              *
-             * So: DECODES ARE PLACED FIRST and never dropped - they are the
-             * join to the S column and there are only ever a handful. Then the
-             * '?' marks fill whatever room is left, each at its true tone or
-             * not at all. What survives is a picture that can be trusted: every
-             * glyph sits over the signal it describes. */
-            int placed[WSPR_MARKS_MAX];
-            int nplaced = 0;
+             * DECODES ARE PLACED FIRST and never dropped - they are the join to
+             * the S column and there are only ever a handful. The '?' marks
+             * then fill whatever room is left, each at its true tone or not at
+             * all. */
             for (int pass = 0; pass < 2; pass++) {
-                for (int i = 0; i < nmarks; i++) {
+                for (int i = 0; i < nmarks && s_mark_lbl_n < MARK_LBL_MAX; i++) {
                     const bool decoded = (marks[i].ch != '?');
                     if (decoded != (pass == 0)) continue;
                     int x = (int)((marks[i].freq_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
-                                  (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_BOX_W / 2;
+                                  (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_W / 2;
                     bool clash = false;
-                    for (int k = 0; k < nplaced; k++)
-                        if (x < placed[k] + MARK_BOX_W && placed[k] < x + MARK_BOX_W)
+                    for (int k = 0; k < s_mark_lbl_n; k++)
+                        if (x < s_mark_lbl_x[k] + MARK_W && s_mark_lbl_x[k] < x + MARK_W)
                             { clash = true; break; }
-                    /* A decode is drawn regardless - overlapping two letters is
+                    /* A decode is drawn regardless - two letters overlapping is
                      * ugly, losing one breaks the join to the list. */
                     if (clash && !decoded) continue;
-                    if (nplaced < WSPR_MARKS_MAX) placed[nplaced++] = x;
-                    blit_glyph(px, x, y0, marks[i].ch, decoded ? FG_OK : FG_NO);
-                    blit_stem(px, x + MARK_BOX_W / 2, y0 + MARK_BOX_H,
-                              MARK_STEM_PX, decoded ? FG_OK : FG_NO);
+                    if (x < 0) x = 0;
+                    if (x + MARK_W > RIGHT_W) x = RIGHT_W - MARK_W;
+                    char t[2] = { marks[i].ch, 0 };
+                    /* Light green for a decode, matching the boundary line it
+                     * belongs to; dim grey for a candidate that did not decode,
+                     * which is a question rather than a result. */
+                    lv_obj_t *l = mark_label_new(t, decoded ? 0x90EE90 : 0x969696);
+                    if (!l) break;
+                    s_mark_lbl_x[s_mark_lbl_n] = x;
+                    s_mark_lbl[s_mark_lbl_n++] = l;
                 }
             }
-
-            /* The cycle's own time, small, at the left end of the row. Position
-             * and a leader already say WHICH cycle; this says WHEN, so a row
-             * can be matched to a UTC group in the list below without counting
-             * boundaries. Scale 2 rather than 3 - it is a caption, not a
-             * marker, and five characters at scale 3 would cover 105 px of
-             * band. */
             if (cycle_utc > 0) {
                 time_t tt = (time_t)cycle_utc;
                 struct tm tmv;
                 gmtime_r(&tt, &tmv);
-                char ts[6];
+                char ts[8];
                 snprintf(ts, sizeof(ts), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
-                for (int i = 0; ts[i]; i++)
-                    blit_glyph_s(px, 2 + i * (5 * 2 + 1), y0 + 2, ts[i],
-                                 FG_NO, 2);
+                s_mark_time_lbl = mark_label_new(ts, 0xC8C8C8);
+            }
+        }
+
+        for (int i = 0; i < s_mark_lbl_n; i++) {
+            if (!s_mark_lbl[i] || !lv_obj_is_valid(s_mark_lbl[i])) continue;
+            if (!room) { lv_obj_add_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN); continue; }
+            lv_obj_clear_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(s_mark_lbl[i], RIGHT_X + s_mark_lbl_x[i], WF_Y + line_y + 3);
+        }
+        if (s_mark_time_lbl && lv_obj_is_valid(s_mark_time_lbl)) {
+            if (!room) lv_obj_add_flag(s_mark_time_lbl, LV_OBJ_FLAG_HIDDEN);
+            else {
+                lv_obj_clear_flag(s_mark_time_lbl, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_pos(s_mark_time_lbl, RIGHT_X + 2, WF_Y + line_y + 3);
             }
         }
     }

@@ -207,6 +207,10 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 // hit-zone from hit-testing entirely, letting the touch fall through to
 // whatever's actually underneath it (FT8 rows, the Preset button, etc).
 #define N_TOPBAR_HIT_ZONES 5
+/* Index into s_topbar_hit_zones[] / hit_zones[] - Band, Mode, BW, Freq, Zoom in
+ * that order. Named because the WSPR page keeps this one live and disables the
+ * other four; see sync_nav_affordances(). */
+#define TOPBAR_ZONE_FREQ   3
 static lv_obj_t *s_topbar_hit_zones[N_TOPBAR_HIT_ZONES] = {0};
 
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
@@ -7286,6 +7290,10 @@ static void topbar_reconcile_cb(lv_timer_t *t)
 static void top_bar_set_ft8_dim(bool dim)
 {
     lv_opa_t opa = dim ? LV_OPA_30 : LV_OPA_COVER;
+    /* ⚠ The freq LABEL carries its own 90-110 px click halo, so it has to be
+     * exempted here too or WSPR's one live top-bar control is reachable through
+     * its hit zone and dead on the text itself. See sync_nav_affordances(). */
+    const bool keep_freq = (ui_mode_get() == UI_MODE_WSPR);
     if (s_band_label) lv_obj_set_style_text_opa(s_band_label, opa, 0);
     if (s_mode_label) lv_obj_set_style_text_opa(s_mode_label, opa, 0);
     if (s_bw_label)   lv_obj_set_style_text_opa(s_bw_label, opa, 0);
@@ -7313,6 +7321,10 @@ static void top_bar_set_ft8_dim(bool dim)
                            s_freq_label, s_zoom_label };
     for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
         if (!labels[i]) continue;
+        if (labels[i] == s_freq_label && keep_freq) {
+            lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
+            continue;
+        }
         if (dim) lv_obj_clear_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
         else     lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
     }
@@ -7377,8 +7389,26 @@ static void sync_nav_affordances(void)
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
         lv_obj_t *hit = s_topbar_hit_zones[i];
         if (!hit) continue;
-        if (owned || ft8) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        else              lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        /* ⭐ FREQ STAYS LIVE ON THE WSPR PAGE, and nothing else does (operator,
+         * 2026-09-08: "from the top bar i should not be able to activate any of
+         * the features. Only the Freq if you find a non standard wspr signal -
+         * all the rest greyed out").
+         *
+         * That is the right split for a reason. Band, Mode, BW and Zoom all
+         * belong to the panadapter's idea of the radio, and on WSPR the page
+         * owns the dial through its own band picker - which is exactly what
+         * went wrong when the Band zone was reachable there. But WSPR's
+         * frequencies are a convention, not a law, and a beacon found off the
+         * standard dial can only be chased by typing the frequency in.
+         *
+         * ⚠ FT8 keeps ALL FIVE inert: its decode rows and Preset button sit
+         * under y=200 where the Freq zone lands, and the reason these zones are
+         * dropped from hit-testing there is that they swallow taps meant for
+         * those. WSPR's list starts lower and has nothing under it. */
+        const bool keep_freq = (i == TOPBAR_ZONE_FREQ) &&
+                               (ui_mode_get() == UI_MODE_WSPR) && !owned;
+        if ((owned || ft8) && !keep_freq) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        else                              lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
     }
 }
 
