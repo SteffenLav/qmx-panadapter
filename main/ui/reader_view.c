@@ -954,14 +954,68 @@ static void render_markdown(char *buf)
             if (bullet || numbered) {
                 FLUSH_PARA();
                 int lvl = indent / 2;   // ~2 leading spaces per nest level
+
+                /* ⛔ JOIN THE ITEM'S CONTINUATION LINES FIRST.
+                 *
+                 * This walker handles one SOURCE LINE at a time, and the manual
+                 * is hard-wrapped - so a bullet written the ordinary markdown
+                 * way
+                 *
+                 *     - **A `?` is a trace the decoder could not read.** That
+                 *       is worth seeing: it is the difference between...
+                 *
+                 * used to render as a one-line bullet followed by an orphan
+                 * full-width paragraph starting LEFT of its own bullet. Every
+                 * other renderer joins these (it is markdown's lazy
+                 * continuation), so the source is right and we were wrong.
+                 * Measured across the manual: 101 of 1013 list items.
+                 *
+                 * A following line continues this item when it is non-blank and
+                 * indented deeper - but NOT when it starts a block of its own. A
+                 * nested bullet is the case that matters: it is also indented
+                 * deeper, and swallowing it would flatten the sub-list into its
+                 * parent. */
+                const char *body_start = bullet ? skip_ws(t + 1) : skip_ws(nptr + 1);
+                char  *item = cleaned;
+                size_t il   = (size_t)snprintf(item, MD_CLEANED_SZ, "%s", body_start);
+                if (il >= MD_CLEANED_SZ) il = MD_CLEANED_SZ - 1;
+                while (*p) {
+                    char  *le  = strchr(p, '\n');
+                    size_t len = le ? (size_t)(le - p) : strlen(p);
+                    char   sv  = p[len];
+                    p[len] = '\0';
+                    const char *ct = skip_ws(p);
+                    bool cont = (ct[0] != '\0') && (leading_indent(p) > indent);
+                    if (cont) {
+                        if (((ct[0] == '-' || ct[0] == '*' || ct[0] == '+') && ct[1] == ' ') ||
+                            ct[0] == '#' || ct[0] == '|' || ct[0] == '>' ||
+                            strncmp(ct, "```", 3) == 0 || strncmp(ct, "~~~", 3) == 0 ||
+                            strncmp(ct, "!!!", 3) == 0 || strncmp(ct, "???", 3) == 0) {
+                            cont = false;
+                        } else if (isdigit((unsigned char)ct[0])) {
+                            const char *d = ct;
+                            while (isdigit((unsigned char)*d)) d++;
+                            if ((*d == '.' || *d == ')') && d[1] == ' ') cont = false;
+                        }
+                    }
+                    if (!cont) { p[len] = sv; break; }
+                    if (il + 1 < MD_CLEANED_SZ) {
+                        int w = snprintf(item + il, MD_CLEANED_SZ - il, " %s", ct);
+                        il = (w > 0 && (size_t)w < MD_CLEANED_SZ - il) ? il + (size_t)w
+                                                                       : MD_CLEANED_SZ - 1;
+                    }
+                    p[len] = sv;
+                    p = le ? le + 1 : p + len;
+                }
+
                 lv_obj_t *_li;
                 if (bullet) {
-                    _li = add_list_item(LV_SYMBOL_BULLET, skip_ws(t + 1), lvl);   // raw (add_rich_span handles **bold**)
+                    _li = add_list_item(LV_SYMBOL_BULLET, item, lvl);   // raw (add_rich_span handles **bold**)
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
-                    _li = add_list_item(num, skip_ws(nptr + 1), lvl);
+                    _li = add_list_item(num, item, lvl);
                 }
                 /* A bulleted list inside a callout is still the callout. */
                 if (admon_active) admon_bar(_li, admon_col);
