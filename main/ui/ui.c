@@ -13851,45 +13851,54 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 // main.c after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // (and audio/cat init) have run -- ft8_screen_view_show() and ft8_self_test()
 // touch state set up by those.
-void ui_apply_saved_mode(void)
-{
-    ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
+/* ⭐ THE PAGE IS RESTORED BEFORE THE BACKLIGHT COMES UP, THE ENGINES LATER.
+ *
+ * This used to be one function called from a step in app_main, and it kept
+ * arriving far too late to be what decides the screen - 7.9 s on an idle
+ * board, 46.3 s and 106.1 s on two boots with the radio streaming. The
+ * operator: *"it needs to wake up in that mode - not like 30sec later"*.
+ *
+ * ⚠ AND MOVING THE CALL EARLIER IN app_main DID NOT WORK, which is the
+ * finding worth keeping. It was first blamed on the four self-tests below it,
+ * two of which synthesise GFSK audio and run the real decoder - a reasonable
+ * guess, never measured, and wrong. The measured boot says the whole tail of
+ * app_main crawls: "Init complete" at 23.2 s, ft8_screen_init finishing at
+ * 46.6 s, pskreporter_init at 105.4 s. Those are a mutex and an 11 KB
+ * allocation. The main task is starved on core 0, so NO position in that
+ * sequence is early and reordering bought nothing.
+ *
+ * So the work is split by what it actually needs:
+ *
+ *   ui_apply_saved_mode_view()  - widgets only. Called from app_main between
+ *       ui_init() and display_fade_in_backlight(), so the right page is
+ *       composed before the screen is ever revealed. It needs the FT8/WSPR
+ *       DATA LAYERS, which is why their five init calls now run before
+ *       ui_init().
+ *
+ *   ui_apply_saved_mode_start() - the receiver, the FT8 task and the DiGi mode
+ *       write. Those genuinely need audio, dsp and cat, so they stay where the
+ *       single call used to be. Being late costs nothing visible: the page is
+ *       already up and fills as data arrives. */
 
-    /* ⛔ A LIVE CHOICE OUTRANKS A STORED ONE. This runs on the main task while
-     * taskLVGL is already taking gestures, so without this the two can
-     * interleave - and on 2026-09-09 they did: the restore set WSPR, the swipe
-     * handler saw WSPR 2 ms later and cycled it to Panadapter, and that wrote
-     * Panadapter to NVS. The screen and the stored value disagreed from then
-     * on and every boot came up on the panadapter.
-     *
-     * The call has also been moved ahead of app_main's self-tests, which is
-     * what made the window seconds-to-minutes wide rather than milliseconds.
-     * That shrinks the race; this removes it. Keep both - a narrower race is
-     * still a race, and this file already records two fixes falsified for
-     * exactly that reason. */
-    if (s_user_chose_mode) {
-        ESP_LOGI(TAG, "not restoring: the operator has already chosen a mode");
-        return;
-    }
+/* Common to both halves: has the operator already decided? A live choice
+ * outranks a stored one however the timing falls out. */
+static bool restore_declined(const char *what)
+{
+    if (!s_user_chose_mode) return false;
+    ESP_LOGI(TAG, "not restoring %s: the operator has already chosen a mode", what);
+    return true;
+}
+
+void ui_apply_saved_mode_view(void)
+{
+    ESP_LOGI(TAG, "restore: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
+    if (restore_declined("the view")) return;
 
     /* WSPR resumes too, as of the 2026-08-28 launch. It used to fall through to
      * Panadapter on purpose - "a mode that ships dark should not be sticky
      * across a reboot" - and that reason ended when the page joined the swipe
-     * cycle. The operator asked for the plain thing: where the Tab5 was left is
-     * where it wakes up.
-     *
-     * Still gated on the feature being enabled, so turning WSPR off cannot
-     * leave a unit booting into a page it no longer offers.
-     *
-     * ⚠ WHAT THIS MEANS IN PRACTICE, because it is more than a screen: entering
-     * the page starts the receiver (8.6 MB), and if the operator left
-     * transmitting enabled with a non-zero duty cycle the station RESUMES
-     * BEACONING after a power cycle with nobody present. For a WSPR beacon that
-     * is the wanted behaviour - it is what a beacon is - but it is a real
-     * change from a device that only ever transmitted after somebody pressed
-     * something, and it will happen after an unplanned restart as readily as an
-     * intended one. The guards are the ones that were already there: TX is
-     * opt-in, callsign and grid are required, and SWR protection still trips. */
+     * cycle. Still gated on the feature being enabled, so turning WSPR off
+     * cannot leave a unit booting into a page it no longer offers. */
     if (s_saved_ui_mode == UI_MODE_WSPR && wspr_feature_enabled()) {
         ui_mode_set(UI_MODE_WSPR);
         drawer_set_mode(UI_MODE_WSPR);
@@ -13897,7 +13906,6 @@ void ui_apply_saved_mode(void)
         lv_obj_t *f = ft8_screen_view_get_container();
         if (f) { ft8_screen_view_hide(); lv_obj_set_x(f, 0); }
         wspr_screen_view_show();
-        wspr_rx_start();
         spots_lane_set_visible(false);
         /* ⛔ THIS LINE WAS MISSING, and its absence was invisible because the
          * same page entered by SWIPING was correct - only a Tab5 that woke up
@@ -13925,13 +13933,31 @@ void ui_apply_saved_mode(void)
     spots_lane_set_visible(false);
     top_bar_apply_mode();
     drawer_set_mode(UI_MODE_FT8);
-    // FT8 is a digital mode - force the radio into DiGi regardless of
-    // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll task
-    // (reliable, retried) rather than a rate-limit-droppable direct write.
-    cat_request_mode("DIGI");
     ft8_screen_view_show();
-    ft8_self_test();
     ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
+}
+
+void ui_apply_saved_mode_start(void)
+{
+    if (restore_declined("the engine")) return;
+    /* The view half decided the mode; if anything has moved it since, that
+     * decision is newer than this one. */
+    if (ui_mode_get() != s_saved_ui_mode) return;
+
+    if (s_saved_ui_mode == UI_MODE_WSPR && wspr_feature_enabled()) {
+        wspr_rx_start();
+        ESP_LOGI(TAG, "restore: WSPR receiver started");
+        return;
+    }
+    if (s_saved_ui_mode == UI_MODE_FT8) {
+        // FT8 is a digital mode - force the radio into DiGi regardless of
+        // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll
+        // task (reliable, retried) rather than a rate-limit-droppable direct
+        // write.
+        cat_request_mode("DIGI");
+        ft8_self_test();
+        ESP_LOGI(TAG, "restore: FT8 engine started");
+    }
 }
 
 // Switch the operating (base) mode between Panadapter and FT8. `animate` slides

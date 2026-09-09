@@ -272,9 +272,21 @@ void wspr_screen_view_freq_style_changed(void)
  * never reach it. */
 #define EX_HOP_Y  (MID_H - 90)
 
-#define HIST_BARS  WSPR_CYCLE_HISTORY
 #define HIST_BAR_W 6
 #define HIST_GAP   1
+/* ⛔ HOW MANY BARS FIT, not how many cycles are remembered. Those had been the
+ * same number, and 40 of them run to x=295 while the left pane's own controls
+ * stop at x=266 - so the strip reached under the decode list and collided with
+ * the S column (operator, 2026-09-09: "the mini dashed line for STATIONS PER
+ * CYCLE collides with the S letter column"). Derived from the pane width so it
+ * cannot drift out of step with the Clear button beside it, whose right edge is
+ * the same EX_X + EX_W_LOW; at 372/250 that is 35 bars ending flush at 266.
+ *
+ * The HISTORY is still WSPR_CYCLE_HISTORY deep - only the drawing is capped,
+ * and it draws the NEWEST that many. */
+#define HIST_BARS  ((EX_W_LOW + HIST_GAP) / (HIST_BAR_W + HIST_GAP))
+_Static_assert(HIST_BARS <= WSPR_CYCLE_HISTORY,
+               "the strip cannot show more cycles than are kept");
 #define HIST_H     30
 
 static lv_obj_t *s_lbl_dx;
@@ -993,15 +1005,20 @@ static void refresh_left_extras(void)
      * fixed ceiling: what matters is the SHAPE - rising or falling - and a fixed
      * scale would flatten a quiet band into nothing. */
     {
-        uint8_t h[HIST_BARS];
-        int n = wspr_rx_cycle_history(h, HIST_BARS);
+        uint8_t h[WSPR_CYCLE_HISTORY];
+        int n = wspr_rx_cycle_history(h, WSPR_CYCLE_HISTORY);
+        /* ⛔ SHOW THE NEWEST ONES. The store is deeper than the strip now, and
+         * h[0] is the oldest - taking the first HIST_BARS would pin the display
+         * to ancient history and never move again once the store filled. */
+        const int first = (n > HIST_BARS) ? (n - HIST_BARS) : 0;
+        const int shown = n - first;
         int peak = 1;
-        for (int i = 0; i < n; i++) if (h[i] > peak) peak = h[i];
+        for (int i = first; i < n; i++) if (h[i] > peak) peak = h[i];
         for (int i = 0; i < HIST_BARS; i++) {
             if (!s_hist_bar[i]) continue;
             /* Oldest at the left, so a partly-filled history grows rightwards
              * the way the decode list does. */
-            int v = (i < n) ? h[i] : -1;
+            int v = (i < shown) ? h[first + i] : -1;
             int px = (v <= 0) ? 2 : 2 + (v * (HIST_H - 2)) / peak;
             lv_obj_set_size(s_hist_bar[i], HIST_BAR_W, px);
             lv_obj_set_pos(s_hist_bar[i], EX_X + i * (HIST_BAR_W + HIST_GAP),
@@ -1776,7 +1793,14 @@ static inline uint16_t wf_rgb565(uint8_t v)
      * produce, because wspr_rx.c clamps real intensities to 254. Deliberately
      * NOT a value picked out of the ramp - a strong signal passes through green
      * on its way to red, so a palette green would still be ambiguous. */
-    if (v == WSPR_WF_MARK) return (uint16_t)(((144 >> 3) << 11) | ((238 >> 2) << 5) | (144 >> 3));
+    /* ⭐ DIM GREY, NOT LIGHT GREEN (operator, 2026-09-09: "change the dashed
+     * green line to something less prominent: dim grey line"). It was
+     * 144,238,144 - brighter than most of the traces it separates, so the eye
+     * went to the divider instead of to the signals. It only has to be
+     * findable, and the dashes already make it unmistakable: nothing real is
+     * uniform across 205 bins. Grey is also outside the signal ramp entirely,
+     * so it cannot be confused with a level. */
+    if (v == WSPR_WF_MARK) return (uint16_t)(((100 >> 3) << 11) | ((100 >> 2) << 5) | (100 >> 3));
     if (v < 64)        { r = 0; g = 0;                      b = (uint8_t)(v * 3); }
     else if (v < 128)  { r = 0; g = (uint8_t)((v - 64) * 4); b = 255; }
     else if (v < 192)  { r = (uint8_t)((v - 128) * 4); g = 255; b = (uint8_t)(255 - (v - 128) * 4); }
@@ -1853,16 +1877,28 @@ static void mark_time_clear(void)
     s_mark_time_lbl = NULL;
 }
 
-static lv_obj_t *mark_label_new(const char *txt, uint32_t colour)
+/* `plate` is the background; pass 0x000000 for the dim slab the '?' marks and
+ * the cycle time use, 0xFFFFFF for a decode.
+ *
+ * ⭐ A DECODE IS BLACK ON WHITE, AND FULLY OPAQUE (Samuel W7STF, 2026-09-09:
+ * *"is there any chance you can present the letters in black on a white
+ * background ... or otherwise in some other color besides yellow ... not used
+ * in the traces"*). They were light green, which the signal ramp passes
+ * straight through on the way to red, so a letter could sit on a trace of very
+ * nearly its own colour. White is the one thing the ramp cannot make. The '?'
+ * marks keep the dim treatment: a question is not a result, and giving both
+ * the same weight would lose that. */
+static lv_obj_t *mark_label_new(const char *txt, uint32_t colour, uint32_t plate)
 {
     lv_obj_t *l = lv_label_create(s_container);
     lv_label_set_text(l, txt);
     lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
-    /* The plate. Not fully opaque: it must stay readable over a bright trace
-     * without hiding the trace it is pointing at. */
-    lv_obj_set_style_bg_color(l, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(l, LV_OPA_70, 0);
+    /* The plate. A '?' stays translucent so it does not hide the trace it is
+     * pointing at; a decode is opaque, because legibility is the whole request
+     * and a decode has earned the pixels. */
+    lv_obj_set_style_bg_color(l, lv_color_hex(plate), 0);
+    lv_obj_set_style_bg_opa(l, (plate == 0x000000) ? LV_OPA_70 : LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(l, 2, 0);
     lv_obj_set_style_radius(l, 3, 0);
     lv_obj_add_flag(l, LV_OBJ_FLAG_IGNORE_LAYOUT);
@@ -2019,7 +2055,13 @@ static void repaint_waterfall(void)
                     /* Light green for a decode, matching the boundary line it
                      * belongs to; dim grey for a candidate that did not decode,
                      * which is a question rather than a result. */
-                    lv_obj_t *l = mark_label_new(t, decoded ? 0x90EE90 : 0x969696);
+                    /* Same plate for both (operator, 2026-09-09: "you also
+                     * forgot to print the ? the same way as the letters").
+                     * Legibility over the carpet is the whole point and a '?'
+                     * needs it as much as a letter; the character already says
+                     * which it is. */
+                    lv_obj_t *l = mark_label_new(t, 0x000000, 0xFFFFFF);
+                    (void)decoded;
                     if (!l) break;
                     s_mark_lbl_x[s_mark_lbl_n] = x;
                     s_mark_lbl[s_mark_lbl_n++] = l;
@@ -2041,9 +2083,19 @@ static void repaint_waterfall(void)
                 time_t tt = (time_t)line_cycle;
                 struct tm tmv;
                 gmtime_r(&tt, &tmv);
+                /* ⭐ THE MINUTE RANGE, NOT A CLOCK TIME (operator, 2026-09-09:
+                 * "print 30-32 instead of 17:30 - then you have the range it
+                 * represents where it matters: the minutes"). A WSPR cycle is
+                 * two minutes wide, and the rows under this line are the whole
+                 * of it, so a single instant understates what the label covers.
+                 * The hour is dropped because it never disambiguates anything
+                 * on a pane holding one cycle, and the four characters it costs
+                 * are the ones the range needs. Wraps through the hour on its
+                 * own: 58-00. */
                 char ts[8];
-                snprintf(ts, sizeof(ts), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
-                s_mark_time_lbl = mark_label_new(ts, 0xC8C8C8);
+                snprintf(ts, sizeof(ts), "%02d-%02d",
+                         tmv.tm_min, (tmv.tm_min + 2) % 60);
+                s_mark_time_lbl = mark_label_new(ts, 0xC8C8C8, 0x000000);
             }
         }
 
@@ -2401,7 +2453,15 @@ void wspr_screen_view_tick(void)
                   uniq, uniq == 1 ? "" : "s", held, held == 1 ? "" : "s");
     lv_label_set_text(s_lbl_heard, h);
 
-    if (n == 0) {
+    /* ⛔ `held`, NOT `n`. `n` is the SEQUENCE - the name s_last_spot_count is a
+     * fossil from when it really was a count - so after Clear it is whatever it
+     * had climbed to and this test was simply never true with an empty ring.
+     * The rows then fell through to the render below, which with nothing to
+     * list writes nothing into a STATIC buffer and hands back its previous
+     * contents. Tapping Clear looked like it did nothing at all until the next
+     * decode overwrote the buffer. Operator, twice: "it does not clear it until
+     * it rewrites at the next decode cycle". */
+    if (held == 0) {
         /* ⭐ NOT "Listening..." WHILE THE RADIO IS KEYED (Roy KI0ER, 2026-09-01:
          * "while TX ON AIR is showing, over in the empty decodes list, it still
          * says listening ...").
@@ -2436,6 +2496,11 @@ void wspr_screen_view_tick(void)
      * code path is taken or not). Safe as a static because this runs only on
      * taskLVGL, the same reasoning snap[] above uses. */
     EXT_RAM_BSS_ATTR static char buf[VIEW_ROWS * 120 + 256];
+    /* ⛔ TERMINATE IT FIRST. It is static, so an early exit from the loop below
+     * would otherwise publish the previous rebuild's text - see the note on the
+     * `held == 0` test above, which is the same trap reached by a shorter
+     * route. */
+    buf[0] = 0;
     size_t off = 0;
     int64_t last_cycle = 0;
     for (int i = 0; i < got && off < sizeof(buf) - 96; i++) {

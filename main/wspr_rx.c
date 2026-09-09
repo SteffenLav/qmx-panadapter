@@ -106,7 +106,9 @@ static int64_t     s_marks_cycle;
 static uint32_t    s_marks_seq;
 static SemaphoreHandle_t s_marks_mtx;
 
-/* Sort by tone, hand out the letters left to right, publish. Works on a COPY
+/* Sort by tone and publish. The LETTER is not assigned here - see
+ * next_mark_letter(); each decode claims one when it decodes and keeps it.
+ * Works on a COPY
  * because the caller's array is still the live working set - indexed by
  * candidate and mutated as later passes decode - and must not be reordered
  * underneath that.
@@ -124,21 +126,79 @@ static SemaphoreHandle_t s_marks_mtx;
  * 20-slot quota with its own noise floor - and a median is not known until
  * every candidate has been scored. A decode needs no such test: it decoded.
  *
- * ⚠ AND THE LETTERS RE-LETTER AS THEY ARRIVE. Candidates are tried strongest
- * first, not left to right, so a decode at a lower tone than one already shown
- * takes the earlier one's letter and pushes it along. That is inherent to
- * #360's left-to-right rule, which exists so the list needs no legend; the
- * alternative is lettering in decode order, which never changes but makes the
- * carpet unreadable without one. The final state is identical either way. */
+ * ⭐ NOTHING RE-LETTERS. An earlier version of this handed the letters out
+ * left to right on every publish, so a decode arriving at a lower tone took
+ * the letter of one already on screen and pushed it along - visible churn,
+ * and briefly a wrong join to the S column. Claiming the letter at decode
+ * time removes that by construction. */
 static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc);
 
-static void marks_letter_and_publish(const wspr_mark_t *src, int n,
-                                     int64_t cycle_utc, bool decoded_only)
+/* ⭐ THE ALPHABET RUNS ON ACROSS CYCLES AND DOES NOT RESTART (Samuel W7STF,
+ * 2026-09-09: *"when you decode the next cycle, if you echo the same A,B,C,D
+ * then it gets a little confusing as to what traces they belong to"*).
+ * Restarting at A every two minutes meant the letter said WHICH station within
+ * a cycle and nothing about WHICH cycle, so two adjacent 'A's on the carpet
+ * were unrelated stations and the S column had to be read against the clock to
+ * tell them apart.
+ *
+ * It advances only when a letter is actually taken, so a cycle that decodes
+ * nothing leaves the position alone - a gap in the alphabet would otherwise
+ * imply a station nobody saw. Wraps Z to A, which is 26 decodes of separation
+ * and far more than the carpet holds.
+ *
+ * ⚠ THE PRICE, AND IT IS A REAL ONE: within a cycle the letters are now in
+ * DECODE order, which is by candidate score, rather than left to right across
+ * the carpet. Those two cannot both hold while letters also appear as each
+ * trace decodes - candidates resolve strongest-first, not by tone. #360's
+ * left-to-right rule existed so that A was always the leftmost mark and the
+ * list needed no legend; once the alphabet rolls, A is not the leftmost
+ * anything, so that mnemonic has already gone and the letter itself is the
+ * join. */
+static char s_next_letter = 'A';
+
+static char next_mark_letter(void)
 {
+    const char c = s_next_letter;
+    s_next_letter = (s_next_letter >= 'Z') ? 'A' : (char)(s_next_letter + 1);
+    return c;
+}
+
+static void marks_letter_and_publish(const wspr_mark_t *src, const float *mscore,
+                                     int n, int64_t cycle_utc)
+{
+    /* ⭐ THE NOISE-TAIL FILTER LIVES HERE, so every publish applies it and the
+     * '?' marks can go up the moment the candidate list exists (operator,
+     * 2026-09-09: *"then also do those ? the same way as soon as they are
+     * discovered"*). It used to run once, at the end of the cycle, which is
+     * why they were the one thing still arriving late.
+     *
+     * ⭐ AND IT CAN RUN THAT EARLY, which is what makes this cheap: the score
+     * it tests against is `cands[i].comb_score`, copied into mscore[] when the
+     * candidate list is built, before a single decode is attempted. The median
+     * was never a product of decoding - it only looked that way because the
+     * filter happened to sit at the bottom of the function.
+     *
+     * A candidate below 2x the cycle MEDIAN is the finder's own noise floor:
+     * the search saturates its 20-slot quota on a quiet band, and #360 records
+     * what that looked like on screen - twenty '?' in one run of punctuation
+     * pointing at nothing. A DECODE is never filtered; it decoded. */
     wspr_mark_t out[WSPR_MARKS_MAX];
     int nout = 0;
+    float floor_score = 0.0f;
+    if (n > 1) {
+        float sorted[WSPR_MARKS_MAX];
+        memcpy(sorted, mscore, (size_t)n * sizeof(sorted[0]));
+        for (int i = 1; i < n; i++) {            /* insertion sort, ascending */
+            float t = sorted[i]; int j = i - 1;
+            while (j >= 0 && sorted[j] > t) { sorted[j + 1] = sorted[j]; j--; }
+            sorted[j + 1] = t;
+        }
+        const float median = (n & 1) ? sorted[n / 2]
+                                     : 0.5f * (sorted[n / 2 - 1] + sorted[n / 2]);
+        floor_score = median * WSPR_MARK_MIN_X_MEDIAN;
+    }
     for (int i = 0; i < n && nout < WSPR_MARKS_MAX; i++) {
-        if (decoded_only && src[i].ch == '?') continue;
+        if (src[i].ch == '?' && mscore[i] < floor_score) continue;
         out[nout++] = src[i];
     }
     for (int i = 1; i < nout; i++) {
@@ -146,15 +206,6 @@ static void marks_letter_and_publish(const wspr_mark_t *src, int n,
         int j = i - 1;
         while (j >= 0 && out[j].freq_hz > t.freq_hz) { out[j + 1] = out[j]; j--; }
         out[j + 1] = t;
-    }
-    char next = 'A';
-    for (int i = 0; i < nout; i++) {
-        if (out[i].ch == '?') continue;
-        /* Past Z the letters would start repeating, which is worse than saying
-         * nothing - a duplicate letter joins a trace to the wrong callsign.
-         * 26 decodes in one cycle has never been seen (the candidate cap is
-         * 20), so this is a guard, not a case. */
-        out[i].ch = (next <= 'Z') ? next++ : '*';
     }
     marks_publish(out, nout, cycle_utc);
 }
@@ -557,8 +608,12 @@ static void wf_mark_boundary(int64_t cycle_utc)
     if (!s_wf) return;
     s_wf_boundary_cycle = cycle_utc;
     uint8_t row[WSPR_WF_COLS];
-    for (int c = 0; c < WSPR_WF_COLS; c++)
-        row[c] = ((c / 4) & 1) ? 0 : WSPR_WF_MARK;
+    /* ⭐ CONTINUOUS, NOT DASHED (operator, 2026-09-09). The dashes were there to
+     * stop the line reading as signal, and that job is now done by the colour:
+     * it renders as a dim grey the signal ramp cannot produce at any level. An
+     * unbroken rule is quieter than a dotted one and reads as a divider at a
+     * glance, which is all it has to do. */
+    for (int c = 0; c < WSPR_WF_COLS; c++) row[c] = WSPR_WF_MARK;
     /* ⛔ TWO rows, not one. The view downsamples HIST_ROWS into a 200 px pane
      * nearest-neighbour - a step of 1.76 - so a single row is SKIPPED whenever
      * the map jumps by 2, i.e. the marker would silently vanish on roughly two
@@ -1014,6 +1069,13 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             marks[i].ch      = '?';   /* until something decodes here */
             mscore[i]        = (float)cands[i].comb_score;
         }
+        /* ⭐ THE '?' MARKS GO UP NOW, before a single decode is attempted
+         * (operator, 2026-09-09: "also do those ? the same way as soon as they
+         * are discovered"). The noise-tail filter runs inside the publish and
+         * needs only these comb scores, so there is nothing to wait for - the
+         * carpet shows where the search is about to look, and each mark turns
+         * into its letter as that line decodes. */
+        marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
     }
     found_in_pass = 0;
     tried_this_pass = 0;
@@ -1129,11 +1191,14 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             if (bi >= 0) {
                 marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
                                                          * is the accurate one */
-                marks[bi].ch = 'A';   /* any non-'?' - the real letter is
-                                       * assigned by tone order below */
+                /* Claimed here and kept - see next_mark_letter(). Only if
+                 * this mark has not already got one: a later pass can decode
+                 * the same station again, and it must not consume a second
+                 * letter or change the one the operator is already reading. */
+                if (marks[bi].ch == '?') marks[bi].ch = next_mark_letter();
             }
-            /* Straight to the carpet, decodes only. */
-            marks_letter_and_publish(marks, nmarks, cycle_utc, true);
+            /* Straight to the carpet. */
+            marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
         }
         wspr_accepted_add(&accepted, r.freq_hz);
         /* `agree` is the re-encode score - how well the received audio actually
@@ -1212,36 +1277,10 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * ⚠ The multiplier is a judgement about presentation, not a detection
      * threshold - nothing here changes what the decoder attempts. On the two
      * cycles measured it leaves 5 and 6 marks instead of 20. */
-    if (nmarks > 1) {
-        float sorted[WSPR_MARKS_MAX];
-        memcpy(sorted, mscore, (size_t)nmarks * sizeof(sorted[0]));
-        for (int i = 1; i < nmarks; i++) {          /* insertion sort, ascending */
-            float t = sorted[i]; int j = i - 1;
-            while (j >= 0 && sorted[j] > t) { sorted[j + 1] = sorted[j]; j--; }
-            sorted[j + 1] = t;
-        }
-        const float median = (nmarks & 1) ? sorted[nmarks / 2]
-                                          : 0.5f * (sorted[nmarks / 2 - 1] + sorted[nmarks / 2]);
-        const float floor_score = median * WSPR_MARK_MIN_X_MEDIAN;
-        int keep = 0;
-        for (int i = 0; i < nmarks; i++) {
-            if (marks[i].ch != '?' || mscore[i] >= floor_score) {
-                marks[keep] = marks[i];
-                mscore[keep] = mscore[i];
-                keep++;
-            }
-        }
-        if (keep != nmarks)
-            ESP_LOGI(TAG, "marks: %d of %d candidates shown (median score %.3g, "
-                          "floor %.3g) - the rest are the finder's noise tail",
-                     keep, nmarks, (double)median, (double)floor_score);
-        nmarks = keep;
-    }
-
-    /* The final set, now that the median is known and the '?' marks can be
-     * judged. Same lettering as every interim publish, so the letters do not
-     * move at the end of a cycle - only the '?' marks appear. */
-    marks_letter_and_publish(marks, nmarks, cycle_utc, false);
+    /* The final set. Identical treatment to every interim publish, so nothing
+     * jumps at the end of a cycle - a later pass may simply have added a mark
+     * or turned a '?' into a letter. */
+    marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
     hist_push(decoded);
     set_dec_status("%d decoded", decoded);
 }

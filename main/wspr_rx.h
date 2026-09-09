@@ -108,8 +108,10 @@ bool wspr_rx_running(void);
 #define WSPR_WF_CYCLES 1
 #define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 176 */
 
-/* Value written across a whole row to mark a cycle boundary, dashed so it
- * cannot be read as signal - nothing real is uniform across 205 bins. It
+/* Value written across a whole row to mark a cycle boundary. It was dashed so
+ * it could not be read as signal; it is a continuous line now, and the colour
+ * carries that instead - the view renders it as a dim grey no level in the
+ * signal ramp can produce (operator, 2026-09-09, wanting it quieter). It
  * also marks the ~68 s the receiver is genuinely DEAF while decoding (see
  * the every-other-cycle note in wspr_rx.c): without it the carpet simply
  * stops, which looks identical to a hung display. */
@@ -173,7 +175,7 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
  * change. */
 uint32_t wspr_rx_marks_seq(void);
 
-/* The cycle the newest dashed boundary line CLOSES - the one whose waterfall
+/* The cycle the newest boundary line CLOSES - the one whose waterfall
  * rows lie beneath it. 0 before the first boundary of a session.
  *
  * ⛔ The marks are NOT necessarily for this cycle. A window is decoded while

@@ -215,8 +215,34 @@ void app_main(void)
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());
 
+    /* ⛔ THE DATA LAYERS COME BEFORE THE UI, so the saved page can be restored
+     * before the screen is revealed. These are mutexes and PSRAM buffers -
+     * nothing here touches audio, dsp, cat or the network - and they used to
+     * sit ~180 lines further down purely by accident of when they were added.
+     * Leaving them there is what forced the mode restore to happen late. */
+    ft8_screen_init();
+    ft8_status_init();
+    ft8_tx_init();
+    wspr_tx_init();
+    wspr_spots_init();
+
     ui_init(disp);
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
+
+    /* ⭐ RESTORE THE PAGE BEFORE THE BACKLIGHT, so the Tab5 is ON the page it
+     * was left on from the first frame anybody sees, rather than switching to
+     * it once the rest of boot has crawled past. The engines follow later, in
+     * ui_apply_saved_mode_start(), where audio/dsp/cat exist.
+     *
+     * ⛔ Under display_lock: this moves LVGL widgets and shows whole views, and
+     * we are the main task, not taskLVGL. */
+    if (display_lock(2000)) {
+        ui_apply_saved_mode_view();
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - the saved page will not be restored");
+    }
+
     display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // === BENCH HOOK - MUST be 0 in shipping builds =======================
@@ -395,11 +421,10 @@ void app_main(void)
     // Step 4b v0.10: boot directly into FT8 mode so the existing
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
-    ft8_screen_init();
-    ft8_status_init();
-    ft8_tx_init();
-    wspr_tx_init();
-    wspr_spots_init();
+    /* ⬆ ft8_screen_init / ft8_status_init / ft8_tx_init / wspr_tx_init /
+     * wspr_spots_init MOVED ABOVE ui_init() - see the block there. They are
+     * mutexes and buffers with no dependency on anything between here and
+     * there, and the mode restore needs them before it can show a page. */
     wsprnet_init();          /* OFF unless the operator enabled it */
     ft8_qso_init();
     ft8_pileup_init();
@@ -434,12 +459,10 @@ void app_main(void)
     // Restore last UI mode (Panadapter/FT8/WSPR), persisted across reboots.
     // ⛔ Under display_lock: it moves LVGL widgets and shows whole views, and
     // this is the main task, not taskLVGL.
-    if (display_lock(2000)) {
-        ui_apply_saved_mode();
-        display_unlock();
-    } else {
-        ESP_LOGW(TAG, "could not take the display lock to restore the UI mode");
-    }
+    /* The page itself went up before the backlight; this starts what needs
+     * audio, dsp and cat. Late is fine - the page is already correct and fills
+     * as data arrives. */
+    ui_apply_saved_mode_start();
 
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();

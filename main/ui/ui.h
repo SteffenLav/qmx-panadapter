@@ -21,7 +21,11 @@ bool ui_mouse_pointer(lv_point_t *out);
 // Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
 // Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // and audio/cat init have completed.
-void ui_apply_saved_mode(void);
+/* Split in two - see the comment above ui_apply_saved_mode_view() in ui.c.
+ * The view goes up before the backlight; the engines start later, when audio,
+ * dsp and cat exist. */
+void ui_apply_saved_mode_view(void);
+void ui_apply_saved_mode_start(void);
 
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
