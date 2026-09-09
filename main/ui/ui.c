@@ -3682,6 +3682,22 @@ _Static_assert(84 - CW_PREFIX_COLS == CW_LINE_COLS,
 
 static lv_obj_t *s_cw_prefix;
 
+/* The decoded line is FIVE objects, not one: a prefix, and two rows each drawn
+ * as a this-pass / previous-pass pair (see cw_strip_paint()). Standing it down
+ * therefore has to name all five - hiding only the pair the "listening..."
+ * branch happens to use left the other three on screen for the rest of the
+ * session, which is Gyula HA3HZ's two lines of green text still sitting over
+ * the FT8 and panadapter screens after leaving CW. Everything that hides the
+ * line goes through here so a sixth object cannot be forgotten again. */
+static void cw_strip_hide_all(void)
+{
+    if (s_cw_prefix)      lv_obj_add_flag(s_cw_prefix,      LV_OBJ_FLAG_HIDDEN);
+    if (s_cw_strip)       lv_obj_add_flag(s_cw_strip,       LV_OBJ_FLAG_HIDDEN);
+    if (s_cw_strip_prev)  lv_obj_add_flag(s_cw_strip_prev,  LV_OBJ_FLAG_HIDDEN);
+    if (s_cw_strip2)      lv_obj_add_flag(s_cw_strip2,      LV_OBJ_FLAG_HIDDEN);
+    if (s_cw_strip2_prev) lv_obj_add_flag(s_cw_strip2_prev, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void cw_strip_tick_cb(lv_timer_t *t)
 {
     (void)t;
@@ -3698,10 +3714,12 @@ static void cw_strip_tick_cb(lv_timer_t *t)
                 (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
                 (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0);
     if (!want) {
-        if (!lv_obj_has_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(s_cw_strip, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
-        }
+        /* Unconditional, not gated on s_cw_strip's own flag: the row-2 pair can
+         * be visible while s_cw_strip is hidden, so testing one of the five
+         * says nothing about the other four. Five add_flag calls on an already
+         * hidden object cost nothing - LVGL does not invalidate when the flag
+         * is unchanged. */
+        cw_strip_hide_all();
         return;
     }
 
