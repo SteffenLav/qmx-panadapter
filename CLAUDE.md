@@ -67,10 +67,22 @@ version:
   already partially flashed a Tab5 binary onto the Waveshare and boot-looped it.
   Use `bench flash <name>`, which resolves the port from the registry and then
   **verifies the `serial(MAC)=` line in the boot header afterwards**.
-- **ONE build at a time, all four trees.** Not an IDF limitation — the CPU is 2
-  cores, so a second build starves both. (The earlier "the pinned IDF Python
-  environment isn't concurrency-safe" explanation was wrong; nothing was
-  locking.) `bench build`/`bench flash` take `C:/dev/bench.lock`.
+- **The lock is about the PORT and the BUILD DIR now, not the CPU.** This rule
+  used to read "ONE build at a time, all four trees ... the CPU is 2 cores, so a
+  second build starves both" — that described the **old i7-7600U laptop**.
+  Measured 2026-09-09: this machine is an **AMD Ryzen 7 5800H, 8 physical / 16
+  logical cores, 61 GB RAM @ 3200 MT/s**. So the CPU justification is gone, and
+  that line has now been wrong twice (its previous explanation, "the pinned IDF
+  Python environment isn't concurrency-safe", is also marked wrong in the same
+  sentence). ⚠ I have NOT timed two concurrent builds, so this is not a claim
+  that they are free — two `idf.py build`s put ~32 ninja jobs on 16 threads, so
+  expect each to slow; it is a claim that neither starves.
+  **What the lock is still genuinely for:** two builds in the SAME build dir
+  would have ninja and CMake fighting over the same outputs, which is corruption
+  rather than slowness; and flashing wants serialising because `bench flash`
+  stops and restarts the capture, and two of those interleaving is exactly how
+  COM9 ended up held during a flash on 2026-09-09.
+  `bench build`/`bench flash` take `C:/dev/bench.lock`.
 - **ONE antenna, two radios, a switch.** Decode counts, SNR and noise floor from
   the bench that does NOT hold the antenna are meaningless. `bench antenna
   <name>` records the holder; ask before believing any receive measurement.
