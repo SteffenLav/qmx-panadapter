@@ -252,13 +252,48 @@ function Invoke-Idf {
     } finally { Pop-Location }
 }
 
+function Get-IdfArgs {
+    # Per-bench build dir / sdkconfig. A bench with none behaves exactly as
+    # before, so the Tab5 benches are untouched.
+    param($b, [string[]] $tail)
+    $a = @()
+    if ($b.build_dir)         { $a += @("-B", $b.build_dir) }
+    if ($b.sdkconfig)         { $a += @("-D", "SDKCONFIG=$($b.sdkconfig)") }
+    if ($b.sdkconfig_defaults){ $a += @("-D", "SDKCONFIG_DEFAULTS=$($b.sdkconfig_defaults)") }
+    return $a + $tail
+}
+
+function Assert-BoardMatches {
+    # ⛔ THE GUARD THAT WAS MISSING. `idf.py -B <dir> flash` with no
+    # -D SDKCONFIG= builds the ROOT sdkconfig - on a fork's tree that can be
+    # a DIFFERENT BOARD's config - and flashes it happily. This board has already been
+    # bricked that way once (see the bench's own `warning`). One grep of the
+    # generated header is the whole check, and it is the same one
+    # docs/PORT_NOTES.md tells a human to run.
+    param($b)
+    if (-not $b.expect_board_macro) { return }
+    # No ternary here: Windows PowerShell 5.1 has none (CLAUDE.md).
+    $bd = "build"
+    if ($b.build_dir) { $bd = $b.build_dir }
+    $hdr = Join-Path $b.tree (Join-Path $bd "config/sdkconfig.h")
+    if (-not (Test-Path $hdr)) { throw "Cannot verify the board: $hdr does not exist. Build first." }
+    $want = "#define $($b.expect_board_macro) 1"
+    if (-not (Select-String -Path $hdr -SimpleMatch $want -Quiet)) {
+        throw ("REFUSING TO FLASH bench '$($b.name)'.`n" +
+               "  $hdr does not define $($b.expect_board_macro).`n" +
+               "  That build is for a DIFFERENT BOARD - flashing it is the documented brick.`n" +
+               "  Rebuild with: idf.py -B $($b.build_dir) -D SDKCONFIG=$($b.sdkconfig) build")
+    }
+    Write-Host "board check OK: $($b.expect_board_macro) is set in this build." -ForegroundColor Green
+}
+
 function Cmd-Build {
     param($reg, $b)
     if (-not $b.tree -or $b.tree -eq "n/a") { throw "Bench '$($b.name)' has no source tree." }
     $took = Take-Lock $reg "build" $b.name
     try {
         Write-Host "Building $($b.tree) for bench '$($b.name)'..." -ForegroundColor Cyan
-        $rc = Invoke-Idf $reg $b.tree @("build")
+        $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("build"))
         if ($rc -ne 0) { Write-Host "Build FAILED (exit $rc)" -ForegroundColor Red } else { Write-Host "Build OK" -ForegroundColor Green }
     } finally { if ($took) { Release-Lock $reg } }
 }
@@ -272,6 +307,9 @@ function Cmd-Flash {
     if (-not ((Get-PresentPorts) -contains $b.com)) { throw "$($b.com) is not present - is bench '$($b.name)' plugged in?" }
     if ($b.warning) { Write-Host "NOTE: $($b.warning)" -ForegroundColor Yellow }
 
+    # Before anything else: is the built image even for THIS board?
+    Assert-BoardMatches $b
+
     # What are we about to overwrite? Worth one line, because "which build is on
     # that board" has been wrong in writing before.
     Cmd-Status $reg $b
@@ -282,7 +320,7 @@ function Cmd-Flash {
     if (Test-Path $b.capture) { $preLen = (Get-Item $b.capture).Length }
     try {
         if ($hadCapture) { Cmd-StopCapture $reg $b; Start-Sleep -Seconds 1 }
-        $rc = Invoke-Idf $reg $b.tree @("-p", $b.com, "flash")
+        $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("-p", $b.com, "flash"))
         if ($rc -ne 0) { Write-Host "Flash FAILED (exit $rc)" -ForegroundColor Red }
     } finally {
         # Restarting the capture is a finally block, not a step - the crash you

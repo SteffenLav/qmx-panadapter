@@ -91,24 +91,6 @@
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-field.txt",
       "usb_flash": "NO",
       "usb_flash_reason": "This unit has never been USB-flashed. That provenance is what makes an OTA result credible - it is the only board that proves an update path a real user would take. Update it over the air only. If it must ever be recovered by USB, say so explicitly and update this field, because the OTA evidence resets with it."
-    },
-    {
-      "name": "port",
-      "role": "Multi-board port to the Waveshare P4. Private remote.",
-      "board": "Waveshare P4 7B",
-      "board_note": "ESP32-P4-WIFI6-Touch-LCD-7B, 1024x600 native landscape, EK79007 + GT911.",
-      "mac": "E8:F6:0A:E0:91:8F",
-      "ip": "192.168.1.123",
-      "com": "COM9",
-      "com_planned": "COM23",
-      "com_note": "COM9 measured 2026-09-09, not the COM12 this file used to claim. Identified POSITIVELY, not by elimination: the boot header on that port reads board_ws7b / EK79007 / GT911 / 1024x600, which no Tab5 can print. It was the ONLY port present at the time.",
-      "radio": "QMX+",
-      "radio_note": "A QMX+ IS attached and has been overnight (operator, 2026-09-09) - this entry said 'none' and it was wrong. So every flash of this bench wedges that radio (#74) and needs a manual power cycle, exactly like dev.",
-      "tree": "C:/dev/qmx-panadapter-p4",
-      "branch": "main",
-      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-port.txt",
-      "usb_flash": "yes",
-      "warning": "This board was once partially flashed with Tab5 firmware at 94% and boot-looped, because VID_303A was assumed to mean Tab5. It is NOT a Tab5 and must never receive a qmx-panadapter main-tree binary."
     }
   ]
 }
