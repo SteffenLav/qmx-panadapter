@@ -327,6 +327,44 @@ static void mirror_cw(void)
 
     bool committed = false;
     bool fresh = (access(SD_CW_PATH, F_OK) != 0);
+
+    /* ⛔ CLOSE THE PREVIOUS SESSION'S DANGLING LINE, ONCE PER BOOT.
+     *
+     * cw_decode.c writes a line's CRLF when the NEXT line starts, not when the
+     * line ends - the stamp carries the time of the line's first character, so
+     * it cannot be written until there is a first character. `s_sd_line_len`
+     * is RAM, so a reboot loses the fact that a line was open while the file
+     * keeps the unterminated line, and the next boot's stamp lands on the end
+     * of it. Measured on the bench 2026-09-10, three sessions on one line:
+     *
+     *   2026-09-07 14:10:18Z   A2026-09-07 19:57:07Z  O G O2026-09-09 22:45:27Z  K D E OE5POP ...
+     *
+     * ⚠ It is not new and it is not Uwe's patch - but his fix is what makes it
+     * MATTER, because the file is now appended to all session instead of once
+     * in the boot burst, so every reboot from here on would weld another
+     * session onto the same line.
+     *
+     * Checked once, from the file itself rather than from any flag we keep:
+     * the question is what is on the CARD, and only the card can answer it. */
+    static bool s_bol_checked = false;
+    if (!fresh && !s_bol_checked) {
+        FILE *r = fopen(SD_CW_PATH, "rb");
+        if (r) {
+            char last = '\n';
+            if (fseek(r, -1, SEEK_END) == 0) {
+                int ch = fgetc(r);
+                if (ch != EOF) last = (char)ch;
+            }
+            fclose(r);
+            s_bol_checked = true;
+            if (last != '\n') {
+                FILE *t = fopen(SD_CW_PATH, "ab");
+                if (t) { fputs("\r\n", t); fflush(t); fsync(fileno(t)); fclose(t); }
+            }
+        }
+        /* A failed open leaves it unchecked so the next tick tries again. */
+    }
+
     FILE *f = fopen(SD_CW_PATH, "ab");
     if (!f) {
         // Left in the staging buffer - retried on the next tick. Only becomes
