@@ -489,9 +489,20 @@ static void wf_publish(int idx, const uint8_t *bytes)
 
 /* One dashed row marking a cycle boundary - and the ~68 s of deafness that
  * follows it while the decoder runs. See WSPR_WF_MARK. */
-static void wf_mark_boundary(void)
+/* The cycle the newest dashed line CLOSES, i.e. the one whose rows lie beneath
+ * it. Published here rather than derived in the view from the wall clock,
+ * because the line is drawn when the capture actually ends and only this side
+ * knows that instant. The view needs it for two things: to print the time on
+ * the line the moment it appears, and to refuse to draw a set of marks under a
+ * line belonging to a different cycle. */
+static volatile int64_t s_wf_boundary_cycle;
+
+int64_t wspr_rx_boundary_cycle(void) { return s_wf_boundary_cycle; }
+
+static void wf_mark_boundary(int64_t cycle_utc)
 {
     if (!s_wf) return;
+    s_wf_boundary_cycle = cycle_utc;
     uint8_t row[WSPR_WF_COLS];
     for (int c = 0; c < WSPR_WF_COLS; c++)
         row[c] = ((c / 4) & 1) ? 0 : WSPR_WF_MARK;
@@ -694,12 +705,12 @@ static void wf_finalise(void)
 /* Whole-window build, used by the simulator, which has the entire window at
  * once. Identical output to the incremental path - same row function, same
  * finalise - so the two cannot drift apart. */
-static void build_waterfall(const int16_t *pcm, long n)
+static void build_waterfall(const int16_t *pcm, long n, int64_t cycle_utc)
 {
     if (!wf_begin()) return;
     for (int r = 0; r < WSPR_WF_ROWS; r++) wf_row(NULL, pcm, n, r);
     wf_finalise();
-    wf_mark_boundary();
+    wf_mark_boundary(cycle_utc);
 }
 
 bool wspr_rx_get_waterfall(uint8_t *out)
@@ -1668,7 +1679,7 @@ static void wspr_rx_task(void *arg)
                 continue;
             }
             wspr_sim_build_window(s_pcm[sslot], CAP_SAMPLES, cycle_utc);
-            build_waterfall(s_pcm[sslot], CAP_SAMPLES);
+            build_waterfall(s_pcm[sslot], CAP_SAMPLES, cycle_utc);
             /* Through the SAME queue as a real window - a sim that took a
              * shortcut past the handoff would stop exercising the thing most
              * likely to be wrong about it. */
@@ -1867,7 +1878,7 @@ static void wspr_rx_task(void *arg)
         /* The carpet stops advancing from here until the next capture opens -
          * ~68 s in which the receiver is genuinely DEAF, not merely idle. Mark
          * it, or a stalled carpet is indistinguishable from a hung display. */
-        wf_mark_boundary();
+        wf_mark_boundary(cycle_utc);
 
         /* Hand the finished window to the decode task and go straight back to
          * the next boundary. THIS is what ends the every-other-cycle deafness:

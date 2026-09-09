@@ -1829,13 +1829,22 @@ static lv_obj_t *s_mark_time_lbl;
  * them above the base tone the decoder reports. */
 #define WSPR_TX_HALF_WIDTH_HZ 2.2f
 
-static void mark_labels_clear(void)
+/* ⛔ THE TIME AND THE LETTERS HAVE DIFFERENT LIFETIMES, so they are cleared
+ * separately. The time is a property of the LINE and is known the instant the
+ * line is drawn; the letters are a property of the DECODE, which lands most of
+ * a cycle later. Clearing both together is what made the time wait for a
+ * decode it does not depend on. */
+static void mark_letters_clear(void)
 {
     for (int i = 0; i < s_mark_lbl_n; i++) {
         if (s_mark_lbl[i] && lv_obj_is_valid(s_mark_lbl[i])) lv_obj_del(s_mark_lbl[i]);
         s_mark_lbl[i] = NULL;
     }
     s_mark_lbl_n = 0;
+}
+
+static void mark_time_clear(void)
+{
     if (s_mark_time_lbl && lv_obj_is_valid(s_mark_time_lbl)) lv_obj_del(s_mark_time_lbl);
     s_mark_time_lbl = NULL;
 }
@@ -1902,18 +1911,45 @@ static void repaint_waterfall(void)
      * ⚠ If the boundary has scrolled far enough down that the row will not fit
      * beneath it, the labels are HIDDEN. The alternative is clamping, which
      * puts them back above the line - onto the wrong cycle, silently, exactly
-     * when they are hardest to check. */
+     * when they are hardest to check.
+     *
+     * ⛔⛔ AND THE SAME LIE ARRIVED BY A SECOND ROUTE, WHICH THE PARAGRAPH
+     * ABOVE DID NOT COVER (operator screenshots, 2026-09-09). The scan below
+     * finds the FIRST mark row from the top, which is always the NEWEST
+     * boundary - but the marks in hand are whatever last finished DECODING,
+     * and a window is decoded while the next one is already recording. So for
+     * roughly the first 80 s of every cycle the letters and the time sat under
+     * a line belonging to a different cycle, then jumped when the decode
+     * landed. Three consecutive frames caught the whole sequence: 14:36 marks
+     * under the line closing 14:38, then 14:38 correctly, then 14:38 again
+     * under the line closing 14:40 with its own rows already scrolled off.
+     * WSPR_WF_CYCLES is 1, so there is only ever ONE line on screen and there
+     * is no older one to move them to - the honest answer is to draw them only
+     * while the line on screen is their own, and otherwise not at all.
+     *
+     * ⭐ THE TIME IS NOT SUBJECT TO ANY OF THAT and is now drawn from
+     * wspr_rx_boundary_cycle() the moment the line appears (operator: "the
+     * timestamp can be printed as soon as the dashed line is visible ... and
+     * do not need to wait for the stations to be decoded"). It labels the
+     * LINE, which knows its own cycle at the instant it is drawn; only the
+     * letters wait for the decoder. Hence two rebuild triggers and two clear
+     * helpers, not one. */
     {
         static wspr_mark_t marks[WSPR_MARKS_MAX];
         static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
         static int         nmarks = 0;
-        static int64_t     cycle_utc = 0;
+        static int64_t     cycle_utc = 0;      /* the cycle the MARKS came from */
+        static int64_t     line_cycle_seen = -1;
         const uint32_t seq = wspr_rx_marks_seq();
         const bool fresh = (seq != marks_seq_seen);
         if (fresh) {
             marks_seq_seen = seq;
             nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, &cycle_utc);
         }
+        /* The cycle the line on screen closes. The letters are only truthful
+         * beneath it when the two agree. */
+        const int64_t line_cycle = wspr_rx_boundary_cycle();
+        const bool    line_is_theirs = (line_cycle > 0) && (line_cycle == cycle_utc);
 
         int mark_row = -1;
         for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
@@ -1928,7 +1964,7 @@ static void repaint_waterfall(void)
          * repaint. Positions are updated below on every repaint, which is the
          * cheap half. */
         if (fresh) {
-            mark_labels_clear();
+            mark_letters_clear();
             /* ⛔ A MARK MUST NOT BE MOVED AWAY FROM ITS OWN TONE. An earlier
              * version pushed a crowded mark right until it fitted, which on a
              * quiet band produced exactly what the operator saw: the candidate
@@ -1985,8 +2021,20 @@ static void repaint_waterfall(void)
                     s_mark_lbl[s_mark_lbl_n++] = l;
                 }
             }
-            if (cycle_utc > 0) {
-                time_t tt = (time_t)cycle_utc;
+        }
+
+        /* Rebuilt when the LINE changes, which is once every two minutes and
+         * independent of the decoder. */
+        /* Also rebuilt if the label went away underneath us: it is now the only
+         * thing keyed off the cycle number, so a lost object would otherwise
+         * never come back - the condition that created it would stay false. */
+        const bool time_gone = (line_cycle > 0) &&
+                               (!s_mark_time_lbl || !lv_obj_is_valid(s_mark_time_lbl));
+        if (line_cycle != line_cycle_seen || time_gone) {
+            line_cycle_seen = line_cycle;
+            mark_time_clear();
+            if (line_cycle > 0) {
+                time_t tt = (time_t)line_cycle;
                 struct tm tmv;
                 gmtime_r(&tt, &tmv);
                 char ts[8];
@@ -1995,9 +2043,18 @@ static void repaint_waterfall(void)
             }
         }
 
+        /* ⛔ line_is_theirs, not just room: a letter under someone else's cycle
+         * is a false statement about which two minutes heard that station, and
+         * the whole point of putting it on the carpet is that its position
+         * means something. Kept alive and merely hidden, so it reappears the
+         * moment its own line is the current one rather than waiting for the
+         * next decode. */
         for (int i = 0; i < s_mark_lbl_n; i++) {
             if (!s_mark_lbl[i] || !lv_obj_is_valid(s_mark_lbl[i])) continue;
-            if (!room) { lv_obj_add_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN); continue; }
+            if (!room || !line_is_theirs) {
+                lv_obj_add_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN);
+                continue;
+            }
             lv_obj_clear_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_pos(s_mark_lbl[i], RIGHT_X + s_mark_lbl_x[i], WF_Y + line_y + 3);
         }

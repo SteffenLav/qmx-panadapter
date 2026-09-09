@@ -173,6 +173,15 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
  * change. */
 uint32_t wspr_rx_marks_seq(void);
 
+/* The cycle the newest dashed boundary line CLOSES - the one whose waterfall
+ * rows lie beneath it. 0 before the first boundary of a session.
+ *
+ * ⛔ The marks are NOT necessarily for this cycle. A window is decoded while
+ * the next one is already recording, so for most of a cycle the newest line
+ * belongs to a later cycle than the marks in hand. Compare this against
+ * wspr_rx_get_marks()'s cycle_utc before drawing them under it. */
+int64_t wspr_rx_boundary_cycle(void);
+
 /* The letter for a spot: 0 unless the spot is FROM THE CYCLE ON THE CARPET and
  * its tone matches a mark in it. Kept here rather than in the view so both
  * screens ask the same question.
