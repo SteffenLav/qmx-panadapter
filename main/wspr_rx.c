@@ -95,7 +95,13 @@ static const char *TAG = "wspr_rx";
  * WSPR_DECODE_BUDGET_MS. The budget check truncates gracefully - a slow cycle
  * simply tries fewer - but if the log shows the budget being hit every cycle,
  * lower this before touching the algorithm. */
-#define WSPR_MAX_CANDS    24
+/* ⛔ BACK TO 20 FROM 24, ON DEVICE EVIDENCE. At 24 with the deep pass the
+ * log read `24 candidate(s), 5 decode(s), 13 skipped (budget, pass 1),
+ * 1 pass(es), 122520 ms` EVERY cycle - only 11 candidates tried and pass 2
+ * never reached, and pass 2 is what subtracts a decoded station to uncover
+ * its neighbours. The host said 2.1x; the device measured about 4.5x.
+ * Over-running the budget costs more than the extra candidates buy. */
+#define WSPR_MAX_CANDS    20
 /* How far above the cycle's MEDIAN candidate score an undecoded candidate has
  * to sit before it earns a '?' on the waterfall (#360). See the long note where
  * it is applied - the finder pads its list out of the noise, so without this
@@ -110,9 +116,15 @@ _Static_assert(WSPR_MARKS_MAX == WSPR_MAX_CANDS,
  * decode task writes this at the END of a cycle while the capture task is
  * already publishing carpet rows, and making them share a lock would put the
  * decoder behind the row pump for no reason. */
-static wspr_mark_t s_marks[WSPR_MARKS_MAX];
-static int         s_marks_n;
-static int64_t     s_marks_cycle;
+/* ⭐ WSPR_MARKS_CYCLES SETS, NOT ONE. The carpet shows three minutes now, so
+ * more than one boundary line is on screen and each wants its own letters -
+ * and a decode lands ~40 s into the FOLLOWING cycle, so by the time a set
+ * exists its line is already the second one down. One set could only ever
+ * label the newest line, which is the one whose letters do not exist yet. */
+static wspr_mark_t s_marks[WSPR_MARKS_CYCLES][WSPR_MARKS_MAX];
+static int         s_marks_n[WSPR_MARKS_CYCLES];
+static int64_t     s_marks_cycle[WSPR_MARKS_CYCLES];
+static int         s_marks_newest;
 static uint32_t    s_marks_seq;
 static SemaphoreHandle_t s_marks_mtx;
 
@@ -225,20 +237,42 @@ static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc)
     if (!s_marks_mtx) return;
     if (n > WSPR_MARKS_MAX) n = WSPR_MARKS_MAX;
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    memcpy(s_marks, m, (size_t)n * sizeof(*m));
-    s_marks_n     = n;
-    s_marks_cycle = cycle_utc;
+    /* Same cycle republishing (the streaming publish of #372 fires once per
+     * decode) overwrites its own slot; a NEW cycle takes the next one. */
+    int slot = s_marks_newest;
+    if (s_marks_cycle[slot] != cycle_utc)
+        slot = (s_marks_newest + 1) % WSPR_MARKS_CYCLES;
+    memcpy(s_marks[slot], m, (size_t)n * sizeof(*m));
+    s_marks_n[slot]     = n;
+    s_marks_cycle[slot] = cycle_utc;
+    s_marks_newest      = slot;
     s_marks_seq++;
     xSemaphoreGive(s_marks_mtx);
+}
+
+int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max)
+{
+    if (!out || max <= 0 || !s_marks_mtx || cycle_utc <= 0) return 0;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    int n = 0;
+    for (int k = 0; k < WSPR_MARKS_CYCLES; k++) {
+        if (s_marks_cycle[k] != cycle_utc) continue;
+        n = s_marks_n[k] < max ? s_marks_n[k] : max;
+        memcpy(out, s_marks[k], (size_t)n * sizeof(*out));
+        break;
+    }
+    xSemaphoreGive(s_marks_mtx);
+    return n;
 }
 
 int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out)
 {
     if (!out || max <= 0 || !s_marks_mtx) return 0;
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    int n = s_marks_n < max ? s_marks_n : max;
-    memcpy(out, s_marks, (size_t)n * sizeof(*out));
-    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle;
+    const int slot = s_marks_newest;
+    int n = s_marks_n[slot] < max ? s_marks_n[slot] : max;
+    memcpy(out, s_marks[slot], (size_t)n * sizeof(*out));
+    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle[slot];
     xSemaphoreGive(s_marks_mtx);
     return n;
 }
@@ -256,10 +290,15 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
     /* Only the cycle the carpet is showing - see the header. A tone is reused
      * cycle after cycle, so without this an older row wears a current letter. */
-    if (cycle_utc == s_marks_cycle) {
-        for (int i = 0; i < s_marks_n; i++) {
-            float d = fabsf(s_marks[i].freq_hz - freq_hz);
-            if (d < best) { best = d; ch = s_marks[i].ch; }
+    /* Any remembered cycle, not just the newest - the S column shows rows from
+     * several cycles at once. */
+    int slot = -1;
+    for (int k = 0; k < WSPR_MARKS_CYCLES; k++)
+        if (s_marks_cycle[k] == cycle_utc) { slot = k; break; }
+    if (slot >= 0) {
+        for (int i = 0; i < s_marks_n[slot]; i++) {
+            float d = fabsf(s_marks[slot][i].freq_hz - freq_hz);
+            if (d < best) { best = d; ch = s_marks[slot][i].ch; }
         }
     }
     xSemaphoreGive(s_marks_mtx);
@@ -288,6 +327,10 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
  * the search is widened a little either side: the operator's dial calibration,
  * the QMX's own, and a transmitter's offset all move real signals about, and a
  * candidate found slightly outside the nominal window still decodes. */
+/* Matches the displayed window. Narrowing this to 1380-1610 was tried and
+ * reverted with the display - see WSPR_WF_LO_HZ. It would have saved 23 % of
+ * the peak-finder's bins, which is real, but a station at the edge that is not
+ * SEARCHED can never be decoded, and the operator can see them out there. */
 #define SEARCH_LO_HZ      1350.0
 #define SEARCH_HI_HZ      1650.0
 
@@ -1068,6 +1111,9 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
     wspr_mark_t marks[WSPR_MARKS_MAX];
     float       mscore[WSPR_MARKS_MAX];   /* the finder's comb score per mark */
     int nmarks = 0;
+
+    /* Reset the per-cycle ration of deep searches before the first pass. */
+    wspr_decode_begin_cycle();
 
   next_pass:
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,

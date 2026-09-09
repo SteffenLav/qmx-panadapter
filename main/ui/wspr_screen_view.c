@@ -91,7 +91,11 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define LIST_X     (RIGHT_X - LIST_SHIFT)
 #define LIST_W     (RIGHT_W + LIST_SHIFT)
 #define WF_Y       6
-#define WF_H       200
+/* +25 % (operator, 2026-09-09), to carry the three minutes the ring now holds
+ * without squeezing the rows. The decode list below is sized from
+ * MID_H - LIST_Y, so it gives up exactly these 50 px and shows fewer rows -
+ * which is fine, it has scrolled since it was built. */
+#define WF_H       250
 #define AXIS_Y     (WF_Y + WF_H + 2)
 #define AXIS_H     22
 #define LIST_Y     (AXIS_Y + AXIS_H + 8)
@@ -1844,11 +1848,37 @@ static inline uint16_t wf_rgb565(uint8_t v)
  * so a letter on the carpet and its letter in the S column are visibly the
  * same character. Each carries a black background plate, which reads better
  * over a bright trace than the hand-drawn outline it replaces. */
-#define MARK_LBL_MAX WSPR_MARKS_MAX
+/* Every visible cycle gets its own letters, so the pool holds them all - and
+ * each label now carries a Y as well as an X, because they no longer share
+ * one line. */
+#define MARK_LBL_MAX (WSPR_MARKS_CYCLES * WSPR_MARKS_MAX)
 static lv_obj_t *s_mark_lbl[MARK_LBL_MAX];
 static int       s_mark_lbl_x[MARK_LBL_MAX];
+static int       s_mark_lbl_y[MARK_LBL_MAX];
+/* ⛔ THE CYCLE, NOT JUST THE Y. A y computed when the label was built is
+ * stale by the next repaint - the carpet scrolls, so the line the mark
+ * belongs to moves down and the mark has to move with it. Keeping the y
+ * alone is what left the letters floating in the middle of the waterfall
+ * while their minute label tracked the line correctly (operator, 2026-09-09:
+ * "the letters and ? jump around the cycle line up and down and sometimes in
+ * the middle of the wf"). The cycle is the stable identity; the y is looked
+ * up from it every repaint. */
+static int64_t   s_mark_lbl_cycle[MARK_LBL_MAX];
+/* ⭐ WHICH ROW BENEATH ITS LINE THIS MARK SITS ON (operator, 2026-09-09: "can
+ * we offset the letters a bit down if they seem to overlap"). #360's rule was
+ * that a mark too crowded to place is LEFT OUT, because pushing it SIDEWAYS
+ * lies about its frequency - twenty '?' shoved into one run of punctuation
+ * pointing at nothing. Moving it DOWN says nothing false: the x still marks the
+ * tone, and the row is only "there was already something here". So a crowded
+ * mark now stacks instead of vanishing, and the '?' marks stop being the ones
+ * that always lose. */
+static int       s_mark_lbl_row[MARK_LBL_MAX];
+/* The tone each mark stands for, so a second candidate on the SAME signal can
+ * be recognised as such - see the merge below. */
+static float     s_mark_lbl_hz[MARK_LBL_MAX];
 static int       s_mark_lbl_n;
-static lv_obj_t *s_mark_time_lbl;
+#define MARK_TIME_MAX WSPR_MARKS_CYCLES
+static lv_obj_t *s_mark_time_lbl;   /* kept: the newest line's label */
 /* What a mark occupies for the de-crowding test: qmx_mono_25 advances exactly
  * 15.0 px, plus 2 px of plate padding either side. */
 #define MARK_W 19
@@ -1975,151 +2005,197 @@ static void repaint_waterfall(void)
      * letters wait for the decoder. Hence two rebuild triggers and two clear
      * helpers, not one. */
     {
-        static wspr_mark_t marks[WSPR_MARKS_MAX];
-        static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
-        static int         nmarks = 0;
-        static int64_t     cycle_utc = 0;      /* the cycle the MARKS came from */
-        static int64_t     line_cycle_seen = -1;
-        const uint32_t seq = wspr_rx_marks_seq();
-        const bool fresh = (seq != marks_seq_seen);
-        if (fresh) {
-            marks_seq_seen = seq;
-            nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, &cycle_utc);
-        }
-        /* The cycle the line on screen closes. The letters are only truthful
-         * beneath it when the two agree. */
-        const int64_t line_cycle = wspr_rx_boundary_cycle();
-        const bool    line_is_theirs = (line_cycle > 0) && (line_cycle == cycle_utc);
+        /* ⭐ EVERY VISIBLE CYCLE IS LABELLED, NOT JUST THE NEWEST (operator,
+         * 2026-09-09: "now that i have a 3min window to look at ... let it
+         * continue down as long as it is visible together with the new cycle -
+         * there is letters enough").
+         *
+         * This only became safe once the alphabet stopped restarting each cycle
+         * (#373): with A always meaning "leftmost of this cycle", two cycles on
+         * screen would have shown two unrelated A's. Rolling letters make each
+         * one unique across everything visible, so several cycles can be shown
+         * at once and every mark still joins exactly one row of the list.
+         *
+         * Boundaries are laid down one per cycle in order, so the k-th line from
+         * the top closes wspr_rx_boundary_cycle() - k * 120. Counting them is
+         * exact; deriving k from a row number is not, because a cycle occupies
+         * WSPR_WF_ROWS + WSPR_WF_MARK_ROWS rows. A marker is WSPR_WF_MARK_ROWS
+         * thick, so a run of marked rows counts once. */
+        static uint32_t marks_seq_seen  = 0xFFFFFFFFu;
+        static int64_t  newest_seen     = -1;
+        static lv_obj_t *time_lbl[MARK_TIME_MAX];
+        static int       time_lbl_y[MARK_TIME_MAX];
+        static int       time_lbl_n = 0;
 
-        int mark_row = -1;
-        for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
-            if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
-        }
-        const int line_y = (mark_row >= 0)
-                         ? mark_row * WF_H / WSPR_WF_HIST_ROWS : -1;
-        const int row_h  = lv_font_get_line_height(&qmx_mono_25);
-        const bool room  = (line_y >= 0) && (line_y + 3 + row_h <= WF_H);
+        const int64_t newest_cycle = wspr_rx_boundary_cycle();
+        const uint32_t marks_seq   = wspr_rx_marks_seq();
+        const int row_h = lv_font_get_line_height(&qmx_mono_25);
 
-        /* Rebuild only when the cycle changes - every two minutes, not every
-         * repaint. Positions are updated below on every repaint, which is the
-         * cheap half. */
-        if (fresh) {
+        /* Every boundary in the ring, newest first. */
+        int64_t bcyc[MARK_TIME_MAX + 2];
+        int     by[MARK_TIME_MAX + 2];
+        int     nb = 0;
+        {
+            int k = -1;
+            bool prev_mark = false;
+            for (int r = 0; r < WSPR_WF_HIST_ROWS && nb < (int)(sizeof(by)/sizeof(by[0])); r++) {
+                const bool m = (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK);
+                if (m && !prev_mark) {
+                    k++;
+                    const int y = r * WF_H / WSPR_WF_HIST_ROWS;
+                    /* No room beneath it for a row of glyphs - the line is
+                     * about to leave the pane, so say nothing rather than
+                     * clamp a label upwards onto the wrong cycle. */
+                    if (y + 3 + row_h <= WF_H) {
+                        bcyc[nb] = (newest_cycle > 0)
+                                 ? newest_cycle - (int64_t)k * 120 : 0;
+                        by[nb]   = y;
+                        nb++;
+                    }
+                }
+                prev_mark = m;
+            }
+        }
+
+        /* Rebuilt when a new line appears or a decode lands - a few times per
+         * cycle, not per repaint. Positions are refreshed below every time. */
+        if (newest_cycle != newest_seen || marks_seq != marks_seq_seen) {
+            newest_seen    = newest_cycle;
+            marks_seq_seen = marks_seq;
+
             mark_letters_clear();
-            /* ⛔ A MARK MUST NOT BE MOVED AWAY FROM ITS OWN TONE. An earlier
-             * version pushed a crowded mark right until it fitted, which on a
-             * quiet band produced exactly what the operator saw: the candidate
-             * cap is 20 and it saturates, so twenty '?' were shoved into one
-             * continuous run of punctuation pointing at nothing in particular.
-             * A marker whose position is a lie is worse than a missing one.
-             *
-             * DECODES ARE PLACED FIRST and never dropped - they are the join to
-             * the S column and there are only ever a handful. The '?' marks
-             * then fill whatever room is left, each at its true tone or not at
-             * all. */
-            for (int pass = 0; pass < 2; pass++) {
-                for (int i = 0; i < nmarks && s_mark_lbl_n < MARK_LBL_MAX; i++) {
-                    const bool decoded = (marks[i].ch != '?');
-                    if (decoded != (pass == 0)) continue;
-                    /* ⭐ CENTRE THE MARK ON THE TRANSMISSION, NOT ON ITS
-                     * LOWEST TONE. A WSPR signal is 4-FSK at 1.4648 Hz
-                     * spacing, so it occupies 3 x 1.4648 = 4.4 Hz and the
-                     * decoder reports the BASE tone - which put every mark on
-                     * the left-hand edge of a trace about 20 px wide rather
-                     * than on it. Operator, 2026-09-08: "even the real signals
-                     * are marked strange places compared to the signals you can
-                     * truly see."
-                     *
-                     * Measured before changing anything, by profiling the
-                     * column energy of a real screenshot against the decoded
-                     * tones: IK6ZEW decoded 1480.2 and peaked at 1484.2,
-                     * E79Q decoded 1548.0 and peaked at 1544.7. Scatter either
-                     * way and no systematic bias, i.e. the x mapping itself was
-                     * right and the width was the whole story.
-                     *
-                     * ⚠ Applied to the DRAWING only. marks[i].freq_hz stays the
-                     * decoder's own figure, because that is what the S column
-                     * matches a spot by and what the log reports. */
-                    const float centre_hz = marks[i].freq_hz + WSPR_TX_HALF_WIDTH_HZ;
-                    int x = (int)((centre_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
-                                  (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_W / 2;
-                    bool clash = false;
-                    for (int k = 0; k < s_mark_lbl_n; k++)
-                        if (x < s_mark_lbl_x[k] + MARK_W && s_mark_lbl_x[k] < x + MARK_W)
-                            { clash = true; break; }
-                    /* A decode is drawn regardless - two letters overlapping is
-                     * ugly, losing one breaks the join to the list. */
-                    if (clash && !decoded) continue;
-                    if (x < 0) x = 0;
-                    if (x + MARK_W > RIGHT_W) x = RIGHT_W - MARK_W;
-                    char t[2] = { marks[i].ch, 0 };
-                    /* Light green for a decode, matching the boundary line it
-                     * belongs to; dim grey for a candidate that did not decode,
-                     * which is a question rather than a result. */
-                    /* Same plate for both (operator, 2026-09-09: "you also
-                     * forgot to print the ? the same way as the letters").
-                     * Legibility over the carpet is the whole point and a '?'
-                     * needs it as much as a letter; the character already says
-                     * which it is. */
-                    lv_obj_t *l = mark_label_new(t, 0x000000, 0xFFFFFF);
-                    (void)decoded;
-                    if (!l) break;
-                    s_mark_lbl_x[s_mark_lbl_n] = x;
-                    s_mark_lbl[s_mark_lbl_n++] = l;
+            for (int i = 0; i < time_lbl_n; i++)
+                if (time_lbl[i] && lv_obj_is_valid(time_lbl[i])) lv_obj_del(time_lbl[i]);
+            time_lbl_n = 0;
+            s_mark_time_lbl = NULL;
+
+            for (int b = 0; b < nb; b++) {
+                if (bcyc[b] <= 0) continue;
+
+                /* The minute RANGE this line closes - see the note kept below. */
+                if (time_lbl_n < MARK_TIME_MAX) {
+                    time_t tt = (time_t)bcyc[b];
+                    struct tm tmv;
+                    gmtime_r(&tt, &tmv);
+                    char ts[8];
+                    snprintf(ts, sizeof(ts), "%02d-%02d",
+                             tmv.tm_min, (tmv.tm_min + 2) % 60);
+                    lv_obj_t *tl = mark_label_new(ts, 0xC8C8C8, 0x000000);
+                    if (tl) {
+                        time_lbl_y[time_lbl_n] = by[b];
+                        time_lbl[time_lbl_n++] = tl;
+                        if (b == 0) s_mark_time_lbl = tl;
+                    }
+                }
+
+                wspr_mark_t marks[WSPR_MARKS_MAX];
+                const int nmarks = wspr_rx_get_marks_for_cycle(bcyc[b], marks,
+                                                               WSPR_MARKS_MAX);
+                /* ⛔ DECODES FIRST AND NEVER DROPPED - they are the join to the
+                 * S column and there are only ever a handful. The '?' marks
+                 * then fill whatever room is left, each at its true tone or not
+                 * at all: a marker whose position is a lie is worse than a
+                 * missing one, which is what twenty '?' shoved into one run of
+                 * punctuation taught us. */
+                for (int pass = 0; pass < 2; pass++) {
+                    for (int i = 0; i < nmarks && s_mark_lbl_n < MARK_LBL_MAX; i++) {
+                        const bool decoded = (marks[i].ch != '?');
+                        if (decoded != (pass == 0)) continue;
+                        /* ⭐ CENTRE ON THE TRANSMISSION, NOT ITS LOWEST TONE. A
+                         * WSPR signal is 4-FSK at 1.4648 Hz spacing, so it is
+                         * 4.4 Hz wide and the decoder reports the BASE tone -
+                         * which put every mark on the left edge of its trace. */
+                        const float centre_hz = marks[i].freq_hz + WSPR_TX_HALF_WIDTH_HZ;
+                        int x = (int)((centre_hz - WSPR_WF_LO_HZ) * (float)RIGHT_W /
+                                      (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ)) - MARK_W / 2;
+                        /* ⛔ ONE SIGNAL, ONE MARK. The finder routinely returns
+                         * several candidates on a single transmission - a real
+                         * cycle gave 1430.79, 1434.36, 1436.37, 1440.22, 1442.14
+                         * and 1444.06, six across 13 Hz - and stacking those
+                         * vertically (which is what the first version of the
+                         * offset did) turns a pile-up into a TOWER of question
+                         * marks over one trace. That is the same fault #360
+                         * already records in another form: a mark that says
+                         * nothing true is worse than no mark.
+                         *
+                         * A '?' within a transmission's own width of a mark
+                         * already placed is therefore the SAME signal and is
+                         * dropped. A DECODE is never dropped - it carries a
+                         * callsign, so two of them close together are two real
+                         * stations, which is exactly the case the whole
+                         * cluster-resolving effort exists to show. */
+                        if (!decoded) {
+                            bool same = false;
+                            for (int k2 = 0; k2 < s_mark_lbl_n; k2++)
+                                if (s_mark_lbl_cycle[k2] == bcyc[b] &&
+                                    fabsf(s_mark_lbl_hz[k2] - marks[i].freq_hz)
+                                        < 2.0f * WSPR_TX_HALF_WIDTH_HZ) { same = true; break; }
+                            if (same) continue;
+                        }
+                        if (x < 0) x = 0;
+                        if (x + MARK_W > RIGHT_W) x = RIGHT_W - MARK_W;
+                        /* Whatever is left really is distinct, so where two of
+                         * them are too close to draw side by side the later one
+                         * steps DOWN a row. Down says nothing false - the x still
+                         * marks the tone - where sideways would. */
+                        int row = 0;
+                        while (by[b] + 3 + (row + 1) * row_h <= WF_H) {
+                            bool clash = false;
+                            for (int k2 = 0; k2 < s_mark_lbl_n; k2++)
+                                if (s_mark_lbl_cycle[k2] == bcyc[b] &&
+                                    s_mark_lbl_row[k2] == row &&
+                                    x < s_mark_lbl_x[k2] + MARK_W &&
+                                    s_mark_lbl_x[k2] < x + MARK_W) { clash = true; break; }
+                            if (!clash) break;
+                            row++;
+                        }
+                        if (by[b] + 3 + (row + 1) * row_h > WF_H) continue;
+                        char t[2] = { marks[i].ch, 0 };
+                        lv_obj_t *l = mark_label_new(t, 0x000000, 0xFFFFFF);
+                        if (!l) break;
+                        s_mark_lbl_x[s_mark_lbl_n]     = x;
+                        s_mark_lbl_y[s_mark_lbl_n]     = by[b];
+                        s_mark_lbl_row[s_mark_lbl_n]   = row;
+                        s_mark_lbl_hz[s_mark_lbl_n]    = marks[i].freq_hz;
+                        s_mark_lbl_cycle[s_mark_lbl_n] = bcyc[b];
+                        s_mark_lbl[s_mark_lbl_n++]     = l;
+                    }
                 }
             }
         }
 
-        /* Rebuilt when the LINE changes, which is once every two minutes and
-         * independent of the decoder. */
-        /* Also rebuilt if the label went away underneath us: it is now the only
-         * thing keyed off the cycle number, so a lost object would otherwise
-         * never come back - the condition that created it would stay false. */
-        const bool time_gone = (line_cycle > 0) &&
-                               (!s_mark_time_lbl || !lv_obj_is_valid(s_mark_time_lbl));
-        if (line_cycle != line_cycle_seen || time_gone) {
-            line_cycle_seen = line_cycle;
-            mark_time_clear();
-            if (line_cycle > 0) {
-                time_t tt = (time_t)line_cycle;
-                struct tm tmv;
-                gmtime_r(&tt, &tmv);
-                /* ⭐ THE MINUTE RANGE, NOT A CLOCK TIME (operator, 2026-09-09:
-                 * "print 30-32 instead of 17:30 - then you have the range it
-                 * represents where it matters: the minutes"). A WSPR cycle is
-                 * two minutes wide, and the rows under this line are the whole
-                 * of it, so a single instant understates what the label covers.
-                 * The hour is dropped because it never disambiguates anything
-                 * on a pane holding one cycle, and the four characters it costs
-                 * are the ones the range needs. Wraps through the hour on its
-                 * own: 58-00. */
-                char ts[8];
-                snprintf(ts, sizeof(ts), "%02d-%02d",
-                         tmv.tm_min, (tmv.tm_min + 2) % 60);
-                s_mark_time_lbl = mark_label_new(ts, 0xC8C8C8, 0x000000);
+        /* Positions refreshed every repaint: the lines scroll down the pane
+         * between rebuilds, and the labels have to travel with them. A label
+         * whose line has left the pane is hidden rather than clamped. */
+        for (int b = 0; b < nb && b < time_lbl_n; b++) time_lbl_y[b] = by[b];
+        /* Each mark's line, found by CYCLE. A cycle that has scrolled out of the
+         * ring has no boundary left, so its marks are hidden rather than left
+         * behind at whatever y they last had. */
+        for (int i = 0; i < s_mark_lbl_n; i++) {
+            int y = -1;
+            for (int b = 0; b < nb; b++)
+                if (bcyc[b] == s_mark_lbl_cycle[i]) { y = by[b]; break; }
+            s_mark_lbl_y[i] = y;
+        }
+        for (int i = 0; i < time_lbl_n; i++) {
+            if (!time_lbl[i] || !lv_obj_is_valid(time_lbl[i])) continue;
+            if (time_lbl_y[i] + 3 + row_h > WF_H) {
+                lv_obj_add_flag(time_lbl[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_clear_flag(time_lbl[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_pos(time_lbl[i], RIGHT_X + 2, WF_Y + time_lbl_y[i] + 3);
             }
         }
-
-        /* ⛔ line_is_theirs, not just room: a letter under someone else's cycle
-         * is a false statement about which two minutes heard that station, and
-         * the whole point of putting it on the carpet is that its position
-         * means something. Kept alive and merely hidden, so it reappears the
-         * moment its own line is the current one rather than waiting for the
-         * next decode. */
         for (int i = 0; i < s_mark_lbl_n; i++) {
             if (!s_mark_lbl[i] || !lv_obj_is_valid(s_mark_lbl[i])) continue;
-            if (!room || !line_is_theirs) {
+            const int my = (s_mark_lbl_y[i] < 0)
+                         ? -1 : s_mark_lbl_y[i] + 3 + s_mark_lbl_row[i] * row_h;
+            if (my < 0 || my + row_h > WF_H) {
                 lv_obj_add_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN);
                 continue;
             }
             lv_obj_clear_flag(s_mark_lbl[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_pos(s_mark_lbl[i], RIGHT_X + s_mark_lbl_x[i], WF_Y + line_y + 3);
-        }
-        if (s_mark_time_lbl && lv_obj_is_valid(s_mark_time_lbl)) {
-            if (!room) lv_obj_add_flag(s_mark_time_lbl, LV_OBJ_FLAG_HIDDEN);
-            else {
-                lv_obj_clear_flag(s_mark_time_lbl, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_set_pos(s_mark_time_lbl, RIGHT_X + 2, WF_Y + line_y + 3);
-            }
+            lv_obj_set_pos(s_mark_lbl[i], RIGHT_X + s_mark_lbl_x[i], WF_Y + my);
         }
     }
     lv_obj_invalidate(s_wf_canvas);

@@ -1128,6 +1128,49 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
  * resolution - refine_dt does the precision work afterwards. Kept at 8
  * rather than 16 so there is more than one point for a local maximum to be
  * a maximum OF. */
+/* ⛔ THE DEEP PASS IS RATIONED PER CYCLE, because on the device it is far
+ * dearer than the host suggested.
+ *
+ * Host arithmetic said 2.1x and the device measured about 4.5x: 24 candidates
+ * over-ran WSPR_DECODE_BUDGET_MS every cycle, only 11 were tried and pass 2
+ * never ran at all - and pass 2 is the one that subtracts a decoded station to
+ * uncover its neighbours. That is a worse receiver than before the deep pass
+ * existed, which is the shape of regression this file keeps warning about:
+ * a change measured only where it is cheap.
+ *
+ * Candidates arrive sorted by comb score, so the first failures are the most
+ * promising ones. Spending the ration on those and letting the rest take the
+ * cheap path keeps the gain while bounding the cost. */
+#ifndef WSPR_DEEP_MAX_PER_CYCLE
+/* ⛔ ZERO - THE DEEP PASS IS OFF, AND THE REASON IS NOT ITS OWN COST BUT WHAT
+ * THAT COST DOES TO THE CAPTURE. Measured across three builds on 2026-09-09:
+ *
+ *   cap 20 ration 6   arm +0..1435 ms    3, 6, 3, 0 decodes
+ *   cap 24 ration 14  arm +2671..3462    8, 2, 0, 2, 5, 5, 0
+ *   + 3-min carpet    arm +2758..4092    0, 4, 0, 0, 0
+ *
+ * The decode starves the capture task, so the window arms seconds late. A
+ * WSPR transmission starts at +1 s, so it began BEFORE the window opened -
+ * and the start-time search runs `for (dt = 0; dt <= slack_dec; ...)`, upward
+ * only, so a negative DT cannot be reached. Every candidate then fails at
+ * every DT and the Fano search runs to its ceiling, which is the
+ * `cycles=1620001` on every line of those logs.
+ *
+ * ⭐ THIS IS #51 IN A NEW COSTUME: a compute change starving a real-time path,
+ * and it presents as a decoder that has gone deaf rather than as a timing
+ * fault. Before raising this again, fix the ARMING - the capture must open on
+ * the boundary whatever the decoder is doing - and only then buy decodes with
+ * the spare time. */
+#define WSPR_DEEP_MAX_PER_CYCLE 0
+#endif
+
+/* Sub-sampling for the deep grid's start-time scan. The main coarse scan uses
+ * WSPR_COARSE_STRIDE; the deep grid only has to land within a coarse step for
+ * refine_dt to finish the job, so it can read half as much again. */
+#ifndef WSPR_DEEP_STRIDE
+#define WSPR_DEEP_STRIDE 8
+#endif
+
 #ifndef WSPR_DEEP_DF_DECIM
 #define WSPR_DEEP_DF_DECIM 8
 #endif
@@ -1178,6 +1221,9 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 #define WSPR_SOFT_DELTA_BITS  6
 #endif
 #define WSPR_SOFT_DELTA   (WSPR_SOFT_DELTA_BITS * WSPR_METRIC_SCALE)
+
+/* Deep searches left this cycle - see WSPR_DEEP_MAX_PER_CYCLE. */
+static int s_deep_left = WSPR_DEEP_MAX_PER_CYCLE;
 
 static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                              wspr_decode_result_t *result)
@@ -1551,7 +1597,17 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
         result->freq_hz = f0_hz;
         return;   /* ms_curve and ms_decode stay 0 - the gate is why */
     }
+    /* Out of ration: a candidate that only the deep path could reach is simply
+     * not reached this cycle. Better than over-running the budget, which costs
+     * every LATER candidate and the whole second pass. */
     const int deep_first = (best_score < WSPR_MIN_SYNC);
+    if (deep_first && s_deep_left <= 0) {
+        free_baseband(&bb);
+        result->sync_score = best_score;
+        result->best_dt_samples = best_dt * WSPR_DECIM;
+        result->freq_hz = f0_hz;
+        return;
+    }
 
 
     /* ---- FINE FREQUENCY, THEN THE START TIME AGAIN --------------------
@@ -1642,6 +1698,9 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     for (int attempt = 0; attempt < 2; attempt++) {
         const int deep = deep_first || (attempt == 1);
         if (attempt == 1 && (best.ok || deep_first)) break;
+        if (attempt == 1 && s_deep_left <= 0) break;   /* ration spent */
+        if (deep && attempt == 1) s_deep_left--;
+        if (deep_first && attempt == 0) s_deep_left--;
 
         /* The deep pass steps the frequency axis coarsely - it is buying a
          * start time per frequency, not a precise frequency, and refine_dt
@@ -1663,7 +1722,7 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                  * on the two axes that matter here. */
                 double bs = -1e300; long bdt = 0;
                 for (long t = 0; t <= slack_dec; t += coarse_step) {
-                    extract_tone_powers_s(&bb, &tw, t, tp, WSPR_COARSE_STRIDE);
+                    extract_tone_powers_s(&bb, &tw, t, tp, WSPR_DEEP_STRIDE);
                     const double s_t = sync_score(tp);
                     if (s_t > bs) { bs = s_t; bdt = t; }
                 }
@@ -1832,6 +1891,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
         result->cycles = worst_cycles;
     }
     result->ms_decode = ms_decode;
+}
+
+void wspr_decode_begin_cycle(void)
+{
+    s_deep_left = WSPR_DEEP_MAX_PER_CYCLE;
 }
 
 /* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */

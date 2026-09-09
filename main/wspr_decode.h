@@ -241,6 +241,11 @@ typedef enum {
 } wspr_guard_verdict_t;
 
 /* Sensible defaults: NEAR enforced (agreed low-risk), SLOW measured only. */
+/* Call once per capture, before the candidate loop. Resets the per-cycle
+ * ration of expensive deep searches - see WSPR_DEEP_MAX_PER_CYCLE in
+ * wspr_decode.c for why the deep path has to be rationed at all. */
+void wspr_decode_begin_cycle(void);
+
 void wspr_guards_defaults(wspr_guards_t *g);
 
 /* Distance in Hz to the nearest already-accepted decode, or -1.0 if none.

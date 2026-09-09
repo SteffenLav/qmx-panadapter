@@ -68,6 +68,23 @@ bool wspr_rx_running(void);
  * spacing - so each transmission reads as a clean vertical trace.
  */
 #define WSPR_WF_ROWS   176            /* symbol periods in a 120 s window */
+/* ⛔ 1350-1650, AND IT WENT TO 1380-1600 FOR ABOUT AN HOUR BEFORE COMING BACK.
+ *
+ * The narrowing looked well-founded: 484 decodes from one evening on this bench
+ * ran 1389.58 to 1611.35, with 76 in 1375-1400 and exactly ONE above 1600, so
+ * the outer 80 Hz appeared to be carrying nothing. It spreads the pane nicely -
+ * 4.29 px/Hz against 3.15, so a 4.4 Hz signal is 19 px wide instead of 14.
+ *
+ * ⚠ AND IT WAS STILL WRONG, because a night's decodes measure WHAT WE DECODED,
+ * not what is on the band. The operator watched the wider carpet and saw
+ * signals out at both edges - traces we were never going to decode and now
+ * would not even draw. A display that only shows what already worked cannot
+ * show you what is being missed, which on a page whose whole job is showing the
+ * band is the wrong way round.
+ *
+ * Generalise it: do not size a DISPLAY window from the distribution of
+ * SUCCESSES. That is the same trap as a change-detected repaint keyed on only
+ * part of what the render reads. */
 #define WSPR_WF_LO_HZ  1350.0f
 #define WSPR_WF_HI_HZ  1650.0f
 #define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
@@ -105,8 +122,19 @@ bool wspr_rx_running(void);
  * and the pane is full after a single 120 s capture. History lives in the
  * decode list, which is the right place for it: the list says WHAT was heard,
  * the carpet shows the band NOW. */
-#define WSPR_WF_CYCLES 1
-#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 176 */
+/* ⭐ THREE MINUTES, NOT TWO (operator, 2026-09-09). With the candidate cap
+ * raised the letters were reaching the bottom of the pane before the cycle
+ * had finished decoding, so the carpet was scrolling away the very thing it
+ * had just been given.
+ *
+ * The old objection to more history was 352 rows squeezed into a 200 px pane
+ * - 0.57 px per row, a carpet crawling at 0.83 px/s and six minutes to fill
+ * from black. That was TWO cycles into the OLD pane. This is one and a half
+ * cycles into a pane that also grew 25 %, which comes out at 0.95 px/row and
+ * 1.39 px/s - slower than the 1.67 px/s of before, and nowhere near the crawl
+ * that killed the earlier attempt. */
+#define WSPR_WF_MINUTES 3
+#define WSPR_WF_HIST_ROWS ((WSPR_WF_ROWS * WSPR_WF_MINUTES) / 2)   /* 264 */
 
 /* Value written across a whole row to mark a cycle boundary. It was dashed so
  * it could not be read as signal; it is a continuous line now, and the colour
@@ -160,7 +188,7 @@ uint32_t wspr_rx_waterfall_seq(void);
  * that is all the carpet can show. */
 /* Must equal WSPR_MAX_CANDS, which is private to wspr_rx.c - a _Static_assert
  * there ties the two together, so a change to one fails the build. */
-#define WSPR_MARKS_MAX 24
+#define WSPR_MARKS_MAX 20
 
 typedef struct {
     float freq_hz;   /* audio tone, same scale as a spot's freq */
@@ -174,6 +202,13 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
 /* Bumped each time a cycle publishes a new set, so a view can rebuild only on
  * change. */
 uint32_t wspr_rx_marks_seq(void);
+
+/* How many cycles of marks are remembered. The carpet shows three minutes, so
+ * more than one boundary line is visible and each needs its own letters. */
+#define WSPR_MARKS_CYCLES 2
+
+/* Marks for a SPECIFIC cycle, or 0 if that cycle is no longer remembered. */
+int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max);
 
 /* The cycle the newest boundary line CLOSES - the one whose waterfall
  * rows lie beneath it. 0 before the first boundary of a session.
