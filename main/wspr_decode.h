@@ -246,6 +246,14 @@ typedef enum {
  * wspr_decode.c for why the deep path has to be rationed at all. */
 void wspr_decode_begin_cycle(void);
 
+/* The per-cycle ration of expensive deep searches (#367), at runtime. 0 is the
+ * shipping default and means the deep pass is off; see WSPR_DEEP_MAX_PER_CYCLE
+ * in wspr_decode.c for why it is off and what has to be fixed first (#376).
+ * Set from {"action":"wspr_guards","deep":N} so the on/off comparison can be
+ * made on one band in one hour without a reflash. */
+void wspr_decode_set_deep_max(int n);
+int  wspr_decode_get_deep_max(void);
+
 void wspr_guards_defaults(wspr_guards_t *g);
 
 /* Distance in Hz to the nearest already-accepted decode, or -1.0 if none.

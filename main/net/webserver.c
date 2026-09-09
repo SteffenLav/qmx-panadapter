@@ -27,6 +27,7 @@
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
+#include "wspr_decode.h"     // the deep-search ration (#367/#376 dev action)
 #include "net/wsprnet.h"    // spot publishing (OFF by default)
 #include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
@@ -1792,10 +1793,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *js = cJSON_GetObjectItem(root, "slow");
         cJSON *jnh = cJSON_GetObjectItem(root, "near_hz");
         cJSON *jsc = cJSON_GetObjectItem(root, "slow_cycles");
-        wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
-                           jnh ? jnh->valuedouble : 0.0,
-                           js ? (cJSON_IsTrue(js) || js->valueint) : 0,
-                           jsc ? (unsigned)jsc->valueint : 0u);
+        /* ⛔ ONLY IF A GUARD FIELD IS ACTUALLY PRESENT. Every argument here
+         * DEFAULTS rather than persists - absent "near" means 1, i.e.
+         * ENFORCED - so a call that meant to set nothing but the deep-search
+         * ration below silently turned the NEAR guard on and changed what the
+         * very experiment it was setting up would measure. Caught live on
+         * 2026-09-10, one cycle after it happened, from this action's own
+         * "guards now:" line. A field that is not mentioned must not move. */
+        if (jn || js || jnh || jsc) {
+            wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
+                               jnh ? jnh->valuedouble : 0.0,
+                               js ? (cJSON_IsTrue(js) || js->valueint) : 0,
+                               jsc ? (unsigned)jsc->valueint : 0u);
+        }
+        /* "deep": N sets #367's per-cycle deep-search ration live, so the
+         * expensive and cheap decoders can be compared on the same band in the
+         * same hour instead of across a reflash - which on this bench also
+         * costs a QMX power cycle. Absent means leave it alone. */
+        cJSON *jd = cJSON_GetObjectItem(root, "deep");
+        if (cJSON_IsNumber(jd)) {
+            wspr_decode_set_deep_max(jd->valueint);
+            ESP_LOGW(TAG, "WSPR deep-search ration set to %d per cycle",
+                     wspr_decode_get_deep_max());
+        }
     } else if (action && strcmp(action, "freq_fmt_test") == 0) {
         int bad = format_freq_selftest();
         char body[64];

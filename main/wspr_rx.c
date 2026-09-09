@@ -2146,8 +2146,35 @@ bool wspr_rx_start(void)
     int reaped = psram_task_reap();
     if (reaped) ESP_LOGI(TAG, "reaped %d parked task(s) from the last visit", reaped);
 
+    /* ⛔ CORE 1, NOT tskNO_AFFINITY - AND THAT ONE WORD WAS #376.
+     *
+     * These two were the only heavy tasks in the system left free to land on
+     * core 0, where `audio_task` (pri 6, pinned to core 0) has to service the
+     * QMX's isochronous IN endpoint and taskLVGL already owns ~74 % of the
+     * core. Priority alone does not protect the audio: an isochronous endpoint
+     * that is not serviced in its interval loses those samples AT THE WIRE,
+     * with no error and no retry - the exact silence #51 documents.
+     *
+     * ⭐ MEASURED, from the `FT8 arm: head=` line's own numbers (samples the
+     * pre-ring actually received, over the wall-clock gap between two arms):
+     *
+     *   healthy build      47,910 pairs/s   11.995 - 11.936 smp/ms   3, 2, 5 decodes
+     *   deep pass on       47,717           11.937 - 11.834          8,2,0,2,5,5,0
+     *   + 3-min carpet     47,628           11.931 - 11.806          0,4,0,0,0
+     *
+     * The pre-ring rate tracks the USB delivery rate exactly, so the samples
+     * are lost before fft_task ever sees them. ⭐ AND THE ERROR IS A RATE, NOT
+     * AN OFFSET: 0.6-0.8 % over a 110.6 s WSPR transmission accumulates
+     * 0.66-0.86 s of slip, about one whole symbol, so the 162-symbol matched
+     * filter walks off its own tones no matter where it starts. That is why
+     * the late arm recorded in #376 was a CO-SYMPTOM and why the proposed
+     * negative-DT search could not have recovered anything.
+     *
+     * Priority stays at 1, below fft_task's 4, which is what CLAUDE.md already
+     * prescribes for new work: core 1, under fft_task, nothing new on core 0.
+     * FT8 has done exactly this since v0.18.0 (`ft8`/`ft8_dec` on core 1). */
     s_dec_task = psram_task_create_reapable(wspr_dec_task, "wspr_dec", 32768, NULL,
-                                   tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+                                   tskIDLE_PRIORITY + 1, 1);
     if (!s_dec_task) {
         ESP_LOGE(TAG, "could not create the decode task");
         vQueueDelete(s_dec_q); s_dec_q = NULL;
@@ -2156,8 +2183,11 @@ bool wspr_rx_start(void)
         return false;
     }
 
+    /* Core 1 for the same reason, and for one of its own: this task is what
+     * arms the capture on the UTC boundary, and on core 0 it was queueing
+     * behind taskLVGL to do it. */
     s_task = psram_task_create_reapable(wspr_rx_task, "wspr_rx", 32768, NULL,
-                               tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+                               tskIDLE_PRIORITY + 1, 1);
     if (!s_task) {
         ESP_LOGE(TAG, "could not create the slot-loop task");
         s_run = false;   /* stands the decode task down too */

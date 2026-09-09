@@ -312,8 +312,30 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
     // (180000 FT8 / 90000 FT4) if the windows tile the stream perfectly; an
     // alternating short/long delta is a direct, sample-exact measure of the
     // per-slot window misalignment under investigation. Remove when #51 closes.
-    ESP_LOGI(TAG, "FT8 arm: head=%u bf=%u start=%u",
-             (unsigned)head, (unsigned)bf, (unsigned)(head - bf));
+    // ⭐ THE RATE, NOT JUST THE POSITION (#376). The pre-ring is fed from the
+    // USB isochronous stream, so a cycle in which the CPU was too busy to
+    // service that endpoint arrives SHORT - silently, because isochronous has
+    // no retry and nothing counts a missed interval. Nominal is 12000
+    // milli-samples per ms; a window that reads 11900 has lost 0.8 % of its
+    // audio, which over a 110.6 s WSPR transmission is ~0.9 s of accumulated
+    // slip - about one whole symbol, and unrecoverable by any start-time
+    // search, because it is a RATE error and not an offset. Reading it off
+    // the head deltas by hand is what found #376; this puts it in the line so
+    // the next starved build says so itself.
+    static uint32_t s_prev_arm_head;
+    static int64_t  s_prev_arm_us;
+    int64_t now_us = esp_timer_get_time();
+    unsigned rate_mx = 0;                     /* milli-samples per ms */
+    if (s_prev_arm_us) {
+        int64_t dus = now_us - s_prev_arm_us;
+        if (dus > 0) rate_mx = (unsigned)(((uint64_t)(head - s_prev_arm_head) * 1000000ULL) / (uint64_t)dus);
+    }
+    s_prev_arm_head = head;
+    s_prev_arm_us   = now_us;
+    ESP_LOGI(TAG, "FT8 arm: head=%u bf=%u start=%u rate=%u.%03u smp/ms%s",
+             (unsigned)head, (unsigned)bf, (unsigned)(head - bf),
+             rate_mx / 1000, rate_mx % 1000,
+             (rate_mx && rate_mx < 11950) ? "  <-- AUDIO LOST" : "");
     return ESP_OK;
 }
 

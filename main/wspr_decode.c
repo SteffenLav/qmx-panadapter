@@ -1158,9 +1158,32 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
  *
  * ⭐ THIS IS #51 IN A NEW COSTUME: a compute change starving a real-time path,
  * and it presents as a decoder that has gone deaf rather than as a timing
- * fault. Before raising this again, fix the ARMING - the capture must open on
- * the boundary whatever the decoder is doing - and only then buy decodes with
- * the spare time. */
+ * fault.
+ *
+ * ⛔ CORRECTED 2026-09-10 - THE PARAGRAPH ABOVE BLAMES THE ARMING AND THAT IS
+ * WRONG. The late arm costs nothing: the pre-ring backfills the boundary-to-arm
+ * gap sample-exactly, which is what it is for. What actually kills the decode is
+ * that the audio itself is SHORT. Measured off the arm line's own head deltas
+ * (nominal 12.000 samples/ms):
+ *
+ *   pinned to core 1, this ration 0    12.007 / 11.995 / 11.988   0.03 % lost
+ *   pinned to core 1, this ration 14   11.952 / 11.941            0.49 % lost
+ *   unpinned,         ration 14        11.937 ... 11.834          up to 1.4 %
+ *
+ * ⭐ AND A MISSING FRACTION OF THE AUDIO IS A RATE ERROR, NOT AN OFFSET. At
+ * 0.5 % a 110.6 s transmission slips 0.54 s, about 0.8 of a symbol; at 1.4 % it
+ * slips 1.5 s, more than two. A 162-symbol matched filter started at ANY dt
+ * walks off its own tones before the end, which is why every candidate failed at
+ * every dt and the Fano search ran to its ceiling on all of them. No start-time
+ * search - forward, backward or exhaustive - can recover it.
+ *
+ * Pinning both WSPR tasks to core 1 (see wspr_rx.c) halved the load response and
+ * took the idle baseline to nominal, but did not remove it: with ZERO ring-full
+ * drops all session, the samples go missing at the USB wire while the decoder is
+ * not even on core 0. So the residual is a shared resource - PSRAM bandwidth,
+ * L2-cache thrash, GDMA - and belongs with #284/#285, not with the scheduler.
+ * Until it is closed, this ration stays 0 by default; set it live with
+ * {"action":"wspr_guards","deep":N} to measure, never to ship. */
 #define WSPR_DEEP_MAX_PER_CYCLE 0
 #endif
 
@@ -1224,6 +1247,24 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 
 /* Deep searches left this cycle - see WSPR_DEEP_MAX_PER_CYCLE. */
 static int s_deep_left = WSPR_DEEP_MAX_PER_CYCLE;
+/* The ration itself, settable at RUNTIME via the wspr_guards dev action.
+ * The compile-time constant is only the default.
+ *
+ * It exists because the previous session could only compare "deep pass on"
+ * against "deep pass off" by reflashing between them - and on this bench a
+ * reflash also wedges the QMX, so every hypothesis cost a power cycle and a
+ * fresh warm-up. The question the ration answers (does the decoder's cost
+ * starve the USB audio?) needs the two states back to back on the same band
+ * in the same hour, which is exactly what a reflash cannot give. */
+static int s_deep_max  = WSPR_DEEP_MAX_PER_CYCLE;
+
+void wspr_decode_set_deep_max(int n)
+{
+    if (n < 0) n = 0;
+    s_deep_max = n;
+}
+
+int wspr_decode_get_deep_max(void) { return s_deep_max; }
 
 static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                              wspr_decode_result_t *result)
@@ -1895,7 +1936,7 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 
 void wspr_decode_begin_cycle(void)
 {
-    s_deep_left = WSPR_DEEP_MAX_PER_CYCLE;
+    s_deep_left = s_deep_max;
 }
 
 /* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */
