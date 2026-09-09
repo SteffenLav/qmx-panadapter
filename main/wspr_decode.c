@@ -1092,6 +1092,28 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 #ifndef WSPR_HYPOTHESES
 #define WSPR_HYPOTHESES 1
 #endif
+
+/* Give every frequency hypothesis its own full start-time scan instead of
+ * refining around the strongest station's. Off until the gain is measured and
+ * the extra coarse scans are shown to fit the device budget. */
+#ifndef WSPR_HYP_FULL_DT
+#define WSPR_HYP_FULL_DT 0
+#endif
+
+/* Search (frequency x start time) as a product rather than sequentially, so a
+ * station sharing a candidate with a louder neighbour can be found at its own
+ * DT. Off until measured - it multiplies the coarse scan by the number of
+ * frequency steps, and the coarse scan is most of a candidate's cost. */
+#ifndef WSPR_JOINT_GRID
+#define WSPR_JOINT_GRID 0
+#endif
+
+#ifndef WSPR_HYP_TRACE
+#define WSPR_HYP_TRACE 0
+#endif
+#if WSPR_HYP_TRACE
+#include <stdio.h>
+#endif
 #ifndef WSPR_AGREE_CONFIDENT
 #define WSPR_AGREE_CONFIDENT 0.70f
 #endif
@@ -1554,11 +1576,41 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * wrong-frequency decode looks just like a right one. It is only usable
      * because the re-encode check below can tell them apart. */
     double curve[WSPR_DF_NPT];
+    long   curve_dt[WSPR_DF_NPT];
     for (int k = 0; k < WSPR_DF_NPT; k++) {
         double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP;
         build_tone_tw(&tw, df);
+#if WSPR_JOINT_GRID
+        /* ⛔ THE SEARCH IS A PRODUCT, NOT A SEQUENCE - and getting that wrong
+         * is why a cluster only ever yielded its loudest station.
+         *
+         * This curve used to be evaluated at `best_dt`, the start time found
+         * for whichever station dominates the candidate. The note above says
+         * the two axes are "nearly independent", which holds for one isolated
+         * signal and fails completely for two: a neighbour 2 Hz away is an
+         * unrelated transmission with its own DT, so at the dominant station's
+         * DT it has no clean sync peak to be found as a local maximum at all.
+         * Fixing the DT search inside the hypothesis loop cannot help, because
+         * by then the hypothesis FREQUENCIES have already been chosen off a
+         * curve taken at the wrong time.
+         *
+         * wsprd searches (frequency x lag x drift) as one grid. This is the
+         * same idea reduced to the two axes that matter here: every frequency
+         * gets its own start-time scan and the curve holds the best score at
+         * that frequency together with the DT that produced it. */
+        double bs = -1e300; long bdt = 0;
+        for (long t = 0; t <= slack_dec; t += coarse_step) {
+            extract_tone_powers_s(&bb, &tw, t, tp, WSPR_COARSE_STRIDE);
+            const double s_t = sync_score(tp);
+            if (s_t > bs) { bs = s_t; bdt = t; }
+        }
+        curve[k]    = bs;
+        curve_dt[k] = bdt;
+#else
         extract_tone_powers(&bb, &tw, best_dt, tp);
-        curve[k] = sync_score(tp);
+        curve[k]    = sync_score(tp);
+        curve_dt[k] = best_dt;
+#endif
     }
 
     /* Local maxima, strongest first. A plateau counts once (>= on the left,
@@ -1573,21 +1625,27 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * previous iteration has already written element 0. */
     double hyp_df[WSPR_HYPOTHESES] = { 0.0 };
     double hyp_sc[WSPR_HYPOTHESES] = { -1e300 };
+    long   hyp_dt[WSPR_HYPOTHESES] = { 0 };
     int nhyp = 0;
     for (int k = 0; k < WSPR_DF_NPT; k++) {
         int rise = (k == 0)                || curve[k] >= curve[k - 1];
         int fall = (k == WSPR_DF_NPT - 1)  || curve[k] >  curve[k + 1];
         if (!(rise && fall)) continue;
         double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP, sc = curve[k];
+        long   cdt = curve_dt[k];
         int pos = nhyp < WSPR_HYPOTHESES ? nhyp : WSPR_HYPOTHESES;
         while (pos > 0 && hyp_sc[pos - 1] < sc) {
-            if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = hyp_sc[pos - 1]; hyp_df[pos] = hyp_df[pos - 1]; }
+            if (pos < WSPR_HYPOTHESES) {
+                hyp_sc[pos] = hyp_sc[pos - 1];
+                hyp_df[pos] = hyp_df[pos - 1];
+                hyp_dt[pos] = hyp_dt[pos - 1];
+            }
             pos--;
         }
-        if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = sc; hyp_df[pos] = df; }
+        if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = sc; hyp_df[pos] = df; hyp_dt[pos] = cdt; }
         if (nhyp < WSPR_HYPOTHESES) nhyp++;
     }
-    if (nhyp == 0) { hyp_df[0] = 0.0; hyp_sc[0] = best_score; nhyp = 1; }
+    if (nhyp == 0) { hyp_df[0] = 0.0; hyp_sc[0] = best_score; hyp_dt[0] = best_dt; nhyp = 1; }
     best_df = hyp_df[0];
     best_score = hyp_sc[0];
 
@@ -1621,12 +1679,54 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     for (int h = 0; h < nhyp; h++) {
         double df = hyp_df[h];
         build_tone_tw(&tw, df);
-        /* Each peak gets its own start time: two stations 2 Hz apart are
-         * unrelated transmissions and will not have started together. */
+        /* ⛔ EACH PEAK GETS ITS OWN START TIME - AND FOR A LONG TIME THIS
+         * COMMENT SAID SO WHILE THE CODE DID NOT DO IT.
+         *
+         * It refined around `best_dt`, the start time found for the STRONGEST
+         * station in the cluster, with refine_dt's span of one coarse step -
+         * WSPR_DEC_SPS/8 decimated samples, about 85 ms. Two stations 2 Hz
+         * apart are unrelated transmissions and routinely start half a second
+         * apart, so the neighbour was outside the search by construction and
+         * no number of frequency hypotheses could ever reach it.
+         *
+         * Measured on the 19:10 reference window, where wsprd finds 14 and we
+         * found 6: G4FBA/PD2LEO/PA5CA share one candidate at 1473.08 Hz with
+         * DTs of -0.6, -0.4 and -1.0 s, and DK8AF/DD3MS share another. We got
+         * exactly one station from each cluster - the loudest - and the ones
+         * we missed were NOT weak (DD3MS -13 dB, the same SNR as two we did
+         * decode). This is a resolution failure, not a sensitivity floor.
+         *
+         * So a hypothesis now runs its OWN full coarse scan at its own
+         * frequency. It costs a coarse scan per hypothesis, which is the
+         * dominant per-candidate cost - see the note there - so this is not
+         * free and the device budget has to be re-checked. */
+        long dt = 0;
+        double sc = -1e300;
+#if WSPR_JOINT_GRID
+        /* The grid already found this peak's own start time; refine it at full
+         * rate rather than re-scanning, since the coarse answer is in hand. */
+        dt = hyp_dt[h];
+        extract_tone_powers(&bb, &tw, dt, tp);
+        sc = sync_score(tp);
+        dt = refine_dt(&bb, &tw, dt, coarse_step, fine_step, slack_dec, tp, &sc);
+#elif WSPR_HYP_FULL_DT
+        for (long t = 0; t <= slack_dec; t += coarse_step) {
+            extract_tone_powers_s(&bb, &tw, t, tp, WSPR_COARSE_STRIDE);
+            const double s_t = sync_score(tp);
+            if (s_t > sc) { sc = s_t; dt = t; }
+        }
+        /* Re-score at FULL rate before refining - a strided score must never
+         * seed refine_dt's incumbent. Same reasoning as the main coarse scan. */
+        extract_tone_powers(&bb, &tw, dt, tp);
+        sc = sync_score(tp);
+        dt = refine_dt(&bb, &tw, dt, coarse_step, fine_step, slack_dec, tp, &sc);
+#else
+        dt = best_dt;
         extract_tone_powers(&bb, &tw, best_dt, tp);
-        double sc = sync_score(tp);
-        long dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
-                             slack_dec, tp, &sc);
+        sc = sync_score(tp);
+        dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
+                       slack_dec, tp, &sc);
+#endif
         extract_tone_powers(&bb, &tw, dt, tp);
 
         wspr_decode_result_t r;
@@ -1645,6 +1745,10 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
              * led to one wrong conclusion already. Worst case across the
              * attempts is the informative one. */
             if (r.cycles > worst_cycles) worst_cycles = r.cycles;
+#if WSPR_HYP_TRACE
+            if (got) fprintf(stderr, "      [hyp %d/%d path %d] df=%+.2f dt=%ld '%s' '%s' agree=%.3f\n",
+                             h, nhyp, path, df, dt, r.callsign, r.grid, (double)r.agree_soft);
+#endif
             if (got && r.agree_soft > best.agree_soft) best = r;
         }
         if (best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
