@@ -1114,6 +1114,10 @@ static lv_obj_t *s_wf_canvas;
 
 static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
 static uint8_t  *s_wf_data;     /* WSPR_WF_HIST_ROWS x WSPR_WF_COLS, NEWEST ROW FIRST */
+/* Tick-level view of wspr_rx_marks_seq(), used only to decide whether a
+ * repaint is owed. The label rebuild inside repaint_waterfall() keeps its own
+ * copy; they are asking different questions and must not share one. */
+static uint32_t  s_marks_seq_seen = 0xFFFFFFFFu;
 static uint32_t  s_wf_seen;
 
 /* First logging in this file: the dial push is the one thing here that
@@ -2332,6 +2336,16 @@ void wspr_screen_view_tick(void)
             s_wf_seen = seq;
             repaint_waterfall();
         }
+    }
+    /* ⭐ A NEW LETTER MUST NOT WAIT FOR THE CARPET. The marks are drawn from
+     * inside repaint_waterfall(), which above is driven only by a new row
+     * landing - so a decode publishing mid-row would sit invisible until the
+     * carpet next moved, and during the decode-only stretch of a cycle that
+     * could be the whole point of publishing early. Cheap: this fires a few
+     * times per cycle, once per decode, not per frame. */
+    else if (s_wf_canvas && s_wf_data && wspr_rx_marks_seq() != s_marks_seq_seen) {
+        s_marks_seq_seen = wspr_rx_marks_seq();
+        repaint_waterfall();
     }
 
     /* Repainted when a spot was ADDED - not when the COUNT changed. The count

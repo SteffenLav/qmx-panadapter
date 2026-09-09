@@ -106,6 +106,59 @@ static int64_t     s_marks_cycle;
 static uint32_t    s_marks_seq;
 static SemaphoreHandle_t s_marks_mtx;
 
+/* Sort by tone, hand out the letters left to right, publish. Works on a COPY
+ * because the caller's array is still the live working set - indexed by
+ * candidate and mutated as later passes decode - and must not be reordered
+ * underneath that.
+ *
+ * ⭐ CALLED AFTER EVERY DECODE, not only at the end of the cycle (operator,
+ * 2026-09-09: "show every single letter as soon as the corresponding line is
+ * decoded - this way we would not have to wait until all (possibly 20) were
+ * decoded"). A cycle's decodes trickle in over ~40 s and used to appear all at
+ * once at the end; now the first letter is on the carpet within a second or
+ * two of its own line resolving.
+ *
+ * ⚠ THE '?' MARKS CANNOT COME EARLY and are deliberately excluded until the
+ * cycle is done. Whether a candidate is worth showing at all is decided
+ * against the MEDIAN of the whole candidate set - the finder saturates its
+ * 20-slot quota with its own noise floor - and a median is not known until
+ * every candidate has been scored. A decode needs no such test: it decoded.
+ *
+ * ⚠ AND THE LETTERS RE-LETTER AS THEY ARRIVE. Candidates are tried strongest
+ * first, not left to right, so a decode at a lower tone than one already shown
+ * takes the earlier one's letter and pushes it along. That is inherent to
+ * #360's left-to-right rule, which exists so the list needs no legend; the
+ * alternative is lettering in decode order, which never changes but makes the
+ * carpet unreadable without one. The final state is identical either way. */
+static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc);
+
+static void marks_letter_and_publish(const wspr_mark_t *src, int n,
+                                     int64_t cycle_utc, bool decoded_only)
+{
+    wspr_mark_t out[WSPR_MARKS_MAX];
+    int nout = 0;
+    for (int i = 0; i < n && nout < WSPR_MARKS_MAX; i++) {
+        if (decoded_only && src[i].ch == '?') continue;
+        out[nout++] = src[i];
+    }
+    for (int i = 1; i < nout; i++) {
+        wspr_mark_t t = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j].freq_hz > t.freq_hz) { out[j + 1] = out[j]; j--; }
+        out[j + 1] = t;
+    }
+    char next = 'A';
+    for (int i = 0; i < nout; i++) {
+        if (out[i].ch == '?') continue;
+        /* Past Z the letters would start repeating, which is worse than saying
+         * nothing - a duplicate letter joins a trace to the wrong callsign.
+         * 26 decodes in one cycle has never been seen (the candidate cap is
+         * 20), so this is a guard, not a case. */
+        out[i].ch = (next <= 'Z') ? next++ : '*';
+    }
+    marks_publish(out, nout, cycle_utc);
+}
+
 static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc)
 {
     if (!s_marks_mtx) return;
@@ -1076,9 +1129,11 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             if (bi >= 0) {
                 marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
                                                          * is the accurate one */
-                marks[bi].ch = 'A';   /* placeholder - the letters are assigned
-                                       * by tone order once the cycle is done */
+                marks[bi].ch = 'A';   /* any non-'?' - the real letter is
+                                       * assigned by tone order below */
             }
+            /* Straight to the carpet, decodes only. */
+            marks_letter_and_publish(marks, nmarks, cycle_utc, true);
         }
         wspr_accepted_add(&accepted, r.freq_hz);
         /* `agree` is the re-encode score - how well the received audio actually
@@ -1183,27 +1238,10 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
         nmarks = keep;
     }
 
-    /* #360: sort by tone and hand out the letters LEFT TO RIGHT, so A is
-     * always the leftmost mark on the carpet and the list needs no legend.
-     * Insertion sort on at most 20 entries, once every two minutes. */
-    for (int i = 1; i < nmarks; i++) {
-        wspr_mark_t t = marks[i];
-        int j = i - 1;
-        while (j >= 0 && marks[j].freq_hz > t.freq_hz) { marks[j + 1] = marks[j]; j--; }
-        marks[j + 1] = t;
-    }
-    {
-        char next = 'A';
-        for (int i = 0; i < nmarks; i++) {
-            if (marks[i].ch == '?') continue;
-            /* Past Z the letters would start repeating, which is worse than
-             * saying nothing - a duplicate letter joins a trace to the wrong
-             * callsign. 26 decodes in one cycle has never been seen (the
-             * candidate cap is 20), so this is a guard, not a case. */
-            marks[i].ch = (next <= 'Z') ? next++ : '*';
-        }
-    }
-    marks_publish(marks, nmarks, cycle_utc);
+    /* The final set, now that the median is known and the '?' marks can be
+     * judged. Same lettering as every interim publish, so the letters do not
+     * move at the end of a cycle - only the '?' marks appear. */
+    marks_letter_and_publish(marks, nmarks, cycle_utc, false);
     hist_push(decoded);
     set_dec_status("%d decoded", decoded);
 }
