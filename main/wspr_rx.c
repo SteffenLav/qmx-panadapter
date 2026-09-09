@@ -85,7 +85,17 @@ static const char *TAG = "wspr_rx";
  * station ended up below eight noisier peaks last time. If a real session ever
  * shows stations appearing only when the cap is lifted, this is the number to
  * raise; do not raise it on the strength of a reference file that says no. */
-#define WSPR_MAX_CANDS    20
+/* ⭐ 24, and the number came off a curve rather than a guess. With the deep
+ * pass the reference score is 22 of 32 at caps 24, 30 and 40 alike, and 20 at
+ * cap 20 - so 24 is where the gain arrives and everything above it is time
+ * spent for nothing (host: 489 ms at 24 against 803 ms at 40).
+ *
+ * ⚠ THE DEVICE BUDGET IS TIGHT AND MUST BE MEASURED. The deep pass costs
+ * about 2.1x the old search on the host, which puts 24 candidates near
+ * WSPR_DECODE_BUDGET_MS. The budget check truncates gracefully - a slow cycle
+ * simply tries fewer - but if the log shows the budget being hit every cycle,
+ * lower this before touching the algorithm. */
+#define WSPR_MAX_CANDS    24
 /* How far above the cycle's MEDIAN candidate score an undecoded candidate has
  * to sit before it earns a '?' on the waterfall (#360). See the long note where
  * it is applied - the finder pads its list out of the noise, so without this

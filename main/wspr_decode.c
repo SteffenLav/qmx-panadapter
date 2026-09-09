@@ -1089,8 +1089,15 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
  * agreement check meaningful - a rejected answer has somewhere to fall back to
  * - and because it should start paying once weaker signals are reachable, but
  * shipping it above 1 would be paying for a result nothing has demonstrated. */
+/* ⭐ 4, AND THE OLD NOTE SAYING 1 WAS MEASURED IS NO LONGER TRUE.
+ * It was measured against the sequential search, where extra hypotheses were
+ * worth nothing because they were all evaluated at the dominant station's
+ * start time. With the deep pass giving each peak its own start time they
+ * are what resolves a cluster. Only the deep pass uses more than one - the
+ * cheap pass still takes the single best peak, so nothing about a candidate
+ * that decodes normally has changed. */
 #ifndef WSPR_HYPOTHESES
-#define WSPR_HYPOTHESES 1
+#define WSPR_HYPOTHESES 4
 #endif
 
 /* Give every frequency hypothesis its own full start-time scan instead of
@@ -1114,8 +1121,15 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 /* Frequency-step decimation for the deep grid. The grid buys a start time per
  * frequency, not a precise frequency, so it can step coarsely and let
  * refine_dt do the rest - and its cost is linear in the number of steps. */
+/* ⭐ 8, MEASURED - and the size of it says what the deep pass is really
+ * buying. At DECIM 2 (8 frequency points) the score is 22 of 32 at 1535 ms;
+ * at 8 (2 points) it is the SAME 22 at 814 ms, and at 16 (1 point) still 22.
+ * So the gain is the per-frequency START-TIME rescan, not frequency
+ * resolution - refine_dt does the precision work afterwards. Kept at 8
+ * rather than 16 so there is more than one point for a local maximum to be
+ * a maximum OF. */
 #ifndef WSPR_DEEP_DF_DECIM
-#define WSPR_DEEP_DF_DECIM 2
+#define WSPR_DEEP_DF_DECIM 8
 #endif
 
 #ifndef WSPR_HYP_TRACE
