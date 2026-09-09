@@ -358,7 +358,7 @@ the radio attached always leaves the QMX needing a manual power cycle. That one
 step is what otherwise keeps a remote station from being upgradeable from
 another room — or another country.
 
-![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio](../img/relay-schematic-n4opi.png)
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
 
 #### Parts
 
@@ -367,8 +367,8 @@ another room — or another country.
 | P1 | 4-pin Grove plug (HY2.0-4P) | Into the Tab5's side EXT socket. Its four pins are `EXT 5V`, `G53`, `G54`, `GND` |
 | R1 | 100 Ω, ¼ W, 5 % | In series with the optoisolator's LED |
 | U1 | PC817C optoisolator | Keeps the Tab5 and the radio electrically apart — the reason this is safe |
-| J1 | STX-2550-3NM 2.5 mm TRS jack | The output side |
-| — | 3.5 mm to 2.5 mm TRS patch cable | Randy's module ends in 3.5 mm and reaches the radio through a patch lead |
+| J1 | 3.5 mm stereo audio jack | The output side, mounted on the module — **not** the jack that goes in the radio |
+| — | 3.5 mm to 2.5 mm TRS patch cable | Joins the module's 3.5 mm jack to the 2.5 mm jack in the radio. Tip to tip, sleeve to sleeve |
 
 #### Wiring
 
@@ -378,7 +378,7 @@ another room — or another country.
    the QMX. Randy brought his out on the rear panel beside the ATU RF input.
 2. **The interface.** The Tab5 pin you choose — **G53 or G54** — goes through
    **R1** into the PC817C's LED, with the Grove plug's `GND` completing that
-   side. The PC817C's phototransistor goes across the jack's tip and sleeve, so
+   side. The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
    a pulse from the Tab5 briefly connects `PWR_ON` to `GND`. **The
    phototransistor side is polarity-sensitive — follow the schematic**, and note
    that the `EXT 5V` pin is not used at all.
