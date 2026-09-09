@@ -36,12 +36,28 @@ $ErrorActionPreference = "Stop"
 
 $RegistryPath = "C:/dev/qmx-panadapter/tools/bench.json"
 $AntennaPath  = "C:/dev/bench.antenna"
+$OverlayPath  = "C:/dev/bench.local.json"   # private, outside every repo
 
 function Read-Registry {
     if (-not (Test-Path $RegistryPath)) {
         throw "Registry missing: $RegistryPath"
     }
-    return (Get-Content $RegistryPath -Raw | ConvertFrom-Json)
+    $reg = (Get-Content $RegistryPath -Raw | ConvertFrom-Json)
+
+    # ⭐ PRIVATE OVERLAY. A bench on a board that is not public has no
+    # business being described in a public registry - which is exactly the
+    # mistake this replaces. If the overlay exists its `benches` are merged
+    # (replacing a same-named entry), so a private board is fully drivable
+    # while this file says nothing about it. It lives outside every repo.
+    if (Test-Path $OverlayPath) {
+        $ov = (Get-Content $OverlayPath -Raw | ConvertFrom-Json)
+        if ($ov.benches) {
+            $names = @($ov.benches | ForEach-Object { $_.name })
+            $kept  = @($reg.benches | Where-Object { $names -notcontains $_.name })
+            $reg.benches = @($kept + $ov.benches)
+        }
+    }
+    return $reg
 }
 
 function Get-Bench {
