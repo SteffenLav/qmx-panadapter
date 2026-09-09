@@ -60,7 +60,7 @@ version:
 | **dev** | Tab5 #1 `30:ED:A0:EA:DD:57` | QMX | COM3 → COM20 | `qmx-panadapter` / `main` |
 | **lab** | Tab5 #3 | QMX+ | COM21 | `-wspr` / `-cw` |
 | **field** | Tab5 #2 `80:F1:B2:D1:45:92` | none | COM22 | last **release**, **OTA only — never USB-flash it** |
-| **port** | Waveshare P4 7B | none | COM12 → COM23 | `-p4` / `feat/board-hal-seam` |
+| **port** | Waveshare P4 7B | QMX+ | COM9 → COM23 | `-p4` / `main` |
 
 - **All four enumerate as `VID_303A&PID_1001` with no serial number**, so the COM
   number follows the SOCKET, not the board. `idf.py flash` with no `-p` has
