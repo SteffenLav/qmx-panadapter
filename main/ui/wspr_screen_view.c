@@ -285,13 +285,6 @@ static bool      s_hdr_miles;      /* the unit the headings were built for */
 static bool      s_hdr_built;      /* have WE written the headings yet */
 static lv_obj_t *s_btn_clr;        /* clear the decode list (Samuel W7STF) */
 static lv_obj_t *s_lbl_clr;
-static lv_obj_t *s_btn_hold;       /* freeze the carpet (#370) */
-static lv_obj_t *s_lbl_hold;
-static lv_obj_t *s_lbl_held;       /* the caption ON the pane while frozen */
-static bool      s_wf_hold;
-static uint32_t  s_wf_hold_rows0;  /* wspr_rx_wf_rows_total() when Hold began */
-static int       s_wf_top;         /* first visible row of the display copy */
-static void repaint_waterfall(void);
 static int64_t   s_clr_armed_us;   /* two-tap arming, 0 = not armed */
 static lv_obj_t *s_hop_cb[16];
 static uint8_t   s_hop_band[16];   /* kBands index behind each checkbox */
@@ -590,30 +583,6 @@ static void wspr_header_refresh(void)
    see the note beside the button. The armed state expires so a stray first tap
    cannot leave it primed for the rest of the session. */
 #define CLR_ARM_WINDOW_US  4000000
-/* Hold is edge-triggered on the row count, so pressing it twice in a row
- * cannot accumulate an offset, and releasing always returns to live. */
-static void wf_hold_cb(lv_event_t *e)
-{
-    (void)e;
-    s_wf_hold = !s_wf_hold;
-    if (s_wf_hold) s_wf_hold_rows0 = wspr_rx_wf_rows_total();
-    if (s_lbl_hold) lv_label_set_text(s_lbl_hold, s_wf_hold ? "Live" : "Hold");
-    if (s_btn_hold)
-        lv_obj_set_style_bg_color(s_btn_hold,
-            lv_color_hex(s_wf_hold ? UI_COLOR_ACCENT_GOLD : UI_COLOR_SURFACE), 0);
-    if (s_lbl_hold)
-        lv_obj_set_style_text_color(s_lbl_hold,
-            lv_color_hex(s_wf_hold ? 0x000000 : 0xFFFFFF), 0);
-    if (s_lbl_held) {
-        if (s_wf_hold) lv_obj_clear_flag(s_lbl_held, LV_OBJ_FLAG_HIDDEN);
-        else           lv_obj_add_flag(s_lbl_held, LV_OBJ_FLAG_HIDDEN);
-    }
-    /* Repaint at once rather than waiting for the next row: on Hold nothing
-     * moves, so without this the button would appear to do nothing until the
-     * carpet next advanced. */
-    repaint_waterfall();
-}
-
 static void clear_spots_cb(lv_event_t *e)
 {
     (void)e;
@@ -867,31 +836,6 @@ static void build_left_extras(void)
      * confirmed, not just what is on screen. That is why it asks first: a
      * mis-tap should not silently discard spots the operator was waiting to
      * publish. Same two-tap arming the ADIF delete-all uses. */
-    /* ---- Hold ----
-     *
-     * ⛔ IT MUST ANNOUNCE ITSELF. A frozen carpet is pixel-identical to a hung
-     * one - that is the whole reason wf_mark_boundary() exists at all - so the
-     * button goes amber and a HELD caption sits on the pane while it is on.
-     * Nothing here may be inferred from the picture alone.
-     *
-     * Deliberately a BUTTON and not a drag on the carpet: touch sampling on
-     * this display was measured at 98-233 ms between passes, so a drag reads
-     * as stick-and-slip, and it would repaint 944x200 px per move against the
-     * ~1.5 Hz the carpet does now - on the core that is already the wall. */
-    s_btn_hold = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_hold, 92, 40);
-    lv_obj_set_pos(s_btn_hold, EX_X + EX_W_LOW - 92 - 100, EX_NET_Y - 4);
-    lv_obj_set_style_radius(s_btn_hold, 8, 0);
-    lv_obj_set_style_bg_color(s_btn_hold, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_border_color(s_btn_hold, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_border_width(s_btn_hold, 1, 0);
-    lv_obj_add_event_cb(s_btn_hold, wf_hold_cb, LV_EVENT_CLICKED, NULL);
-    s_lbl_hold = lv_label_create(s_btn_hold);
-    lv_label_set_text(s_lbl_hold, "Hold");
-    lv_obj_set_style_text_font(s_lbl_hold, &lv_font_montserrat_22, 0);
-    lv_obj_set_style_text_color(s_lbl_hold, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(s_lbl_hold);
-
     s_btn_clr = lv_btn_create(s_container);
     lv_obj_set_size(s_btn_clr, 92, 40);
     lv_obj_set_pos(s_btn_clr, EX_X + EX_W_LOW - 92, EX_NET_Y - 4);
@@ -1681,24 +1625,6 @@ void wspr_screen_view_init(lv_obj_t *parent)
         lv_obj_set_pos(s_wf_canvas, RIGHT_X, WF_Y);
         lv_canvas_fill_bg(s_wf_canvas, lv_color_hex(0x000000), LV_OPA_COVER);
         lv_obj_add_flag(s_wf_canvas, UI_FLAG_NOT_HOT);
-
-        /* ⛔ A FROZEN CARPET LOOKS EXACTLY LIKE A HUNG ONE. The dashed boundary
-         * exists for that same reason (see WSPR_WF_MARK), so a state that stops
-         * the whole pane advancing gets its own caption rather than relying on
-         * the operator remembering which button they last pressed. Top-right,
-         * clear of the boundary time at the left end. */
-        s_lbl_held = lv_label_create(s_container);
-        lv_label_set_text(s_lbl_held, "HELD");
-        lv_obj_set_style_text_font(s_lbl_held, &lv_font_montserrat_22, 0);
-        lv_obj_set_style_text_color(s_lbl_held, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_color(s_lbl_held, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-        lv_obj_set_style_bg_opa(s_lbl_held, LV_OPA_COVER, 0);
-        lv_obj_set_style_pad_all(s_lbl_held, 3, 0);
-        lv_obj_set_style_radius(s_lbl_held, 3, 0);
-        lv_obj_set_pos(s_lbl_held, RIGHT_X + RIGHT_W - 70, WF_Y + 4);
-        lv_obj_clear_flag(s_lbl_held, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(s_lbl_held, UI_FLAG_NOT_HOT);
-        lv_obj_add_flag(s_lbl_held, LV_OBJ_FLAG_HIDDEN);
     }
 
     /* The frequency scale. Evenly spaced ticks with numbers, because a
@@ -1943,55 +1869,18 @@ static lv_obj_t *mark_label_new(const char *txt, uint32_t colour)
     return l;
 }
 
-/* ---- Hold (#370) ----
- *
- * The pane shows WSPR_WF_VIEW_ROWS of a WSPR_WF_HIST_ROWS ring, so it can be
- * pointed at rows other than the newest. Hold freezes it on whatever was
- * newest when it was pressed and lets the capture keep writing behind it.
- *
- * The offset is derived from a ROW COUNT, not accumulated per repaint: a
- * repaint that is skipped, or run twice, must not shift the view, and a
- * difference of two counter readings cannot drift. */
-/* ⚠ CLAMPED, and the clamp is a real limit rather than a formality. Past
- * WSPR_WF_HIST_ROWS - WSPR_WF_VIEW_ROWS the held rows have been overwritten by
- * the capture, so there is nothing left to hold; the view then slides forward
- * on its own rather than presenting rows that are quietly no longer the ones
- * that were frozen. At two cycles that is one full extra cycle of dwell. */
-static int wf_hold_top(void)
-{
-    if (!s_wf_hold) return 0;
-    const int max_back = WSPR_WF_HIST_ROWS - WSPR_WF_VIEW_ROWS;
-    int back = (int)(wspr_rx_wf_rows_total() - s_wf_hold_rows0);
-    if (back < 0) back = 0;
-    if (back > max_back) back = max_back;
-    return back;
-}
-
 static void repaint_waterfall(void)
 {
     if (!s_wf_canvas || !s_wf_data || !s_wf_buf) return;
     uint16_t *px = (uint16_t *)s_wf_buf;
 
-    s_wf_top = wf_hold_top();
-
-    /* Column map precomputed once instead of a divide per pixel. The row map
-     * is rebuilt only when the view actually moves, which in the normal live
-     * case is never. */
+    /* Row and column maps precomputed once instead of a divide per pixel. */
     static uint16_t colmap[RIGHT_W];
     static uint16_t rowmap[WF_H];
-    static int      rowmap_top = -1;
     for (int x = 0; x < RIGHT_W; x++) colmap[x] = (uint16_t)(x * WSPR_WF_COLS / RIGHT_W);
     /* out row 0 is the NEWEST row, so display y maps straight through and the
-     * newest data lands at the top - the panadapter's convention.
-     *
-     * ⛔ VIEW_ROWS, NOT HIST_ROWS. The pane shows one cycle at 1.14 px/row and
-     * that must not change because the ring got deeper - mapping the whole
-     * ring into 200 px is the 0.57 px/row crawl wspr_rx.h warns about. */
-    if (rowmap_top != s_wf_top) {
-        rowmap_top = s_wf_top;
-        for (int y = 0; y < WF_H; y++)
-            rowmap[y] = (uint16_t)(s_wf_top + y * WSPR_WF_VIEW_ROWS / WF_H);
-    }
+     * newest data lands at the top - the panadapter's convention. */
+    for (int y = 0; y < WF_H;    y++) rowmap[y] = (uint16_t)(y * WSPR_WF_HIST_ROWS / WF_H);
 
     for (int y = 0; y < WF_H; y++) {
         const uint8_t *src = &s_wf_data[rowmap[y] * WSPR_WF_COLS];
@@ -2047,58 +1936,27 @@ static void repaint_waterfall(void)
      * helpers, not one. */
     {
         static wspr_mark_t marks[WSPR_MARKS_MAX];
+        static uint32_t    marks_seq_seen = 0xFFFFFFFFu;
         static int         nmarks = 0;
-        static int64_t     marks_cycle_seen = -1;
-        static int64_t     line_cycle_seen  = -1;
+        static int64_t     cycle_utc = 0;      /* the cycle the MARKS came from */
+        static int64_t     line_cycle_seen = -1;
+        const uint32_t seq = wspr_rx_marks_seq();
+        const bool fresh = (seq != marks_seq_seen);
+        if (fresh) {
+            marks_seq_seen = seq;
+            nmarks = wspr_rx_get_marks(marks, WSPR_MARKS_MAX, &cycle_utc);
+        }
+        /* The cycle the line on screen closes. The letters are only truthful
+         * beneath it when the two agree. */
+        const int64_t line_cycle = wspr_rx_boundary_cycle();
+        const bool    line_is_theirs = (line_cycle > 0) && (line_cycle == cycle_utc);
 
-        /* ⛔ THE LINE IN THE PANE IS NOT NECESSARILY THE NEWEST ONE. Under Hold
-         * the view is looking further back, so which cycle the visible line
-         * closes has to be worked out rather than asked for.
-         *
-         * Boundaries are laid down one per cycle in order, so the k-th from the
-         * newest closes wspr_rx_boundary_cycle() - k * 120. Counting them is
-         * exact and needs no extra state; deriving k from a row number would
-         * not be, because a cycle occupies WSPR_WF_ROWS + WSPR_WF_MARK_ROWS
-         * rows, not WSPR_WF_ROWS. A marker is WSPR_WF_MARK_ROWS thick, so a run
-         * of marked rows counts once. */
-        int mark_row = -1, mark_ord = -1;
-        {
-            int k = -1;
-            bool prev_mark = false;
-            for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
-                const bool m = (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK);
-                if (m && !prev_mark) k++;
-                prev_mark = m;
-                if (m && r >= s_wf_top) { mark_row = r; mark_ord = k; break; }
-            }
+        int mark_row = -1;
+        for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
+            if (s_wf_data[(size_t)r * WSPR_WF_COLS] == WSPR_WF_MARK) { mark_row = r; break; }
         }
         const int line_y = (mark_row >= 0)
-                         ? (mark_row - s_wf_top) * WF_H / WSPR_WF_VIEW_ROWS : -1;
-        const int64_t newest_cycle = wspr_rx_boundary_cycle();
-        const int64_t line_cycle   = (mark_ord >= 0 && newest_cycle > 0)
-                                   ? newest_cycle - (int64_t)mark_ord * 120 : 0;
-
-        /* The letters follow the LINE, and BOTH triggers are needed.
-         *
-         * The line changing is the obvious one - Hold can leave it on an older
-         * cycle while newer decodes arrive for cycles that are not on screen.
-         * The other is a decode landing for the cycle ALREADY shown, which is
-         * the ordinary case: the line is drawn at the boundary and its marks
-         * turn up ~40 s later, with line_cycle unchanged throughout. Keying off
-         * the line alone would mean the letters never appeared at all. */
-        static uint32_t marks_seq_seen = 0xFFFFFFFFu;
-        const uint32_t  marks_seq = wspr_rx_marks_seq();
-        if (line_cycle != marks_cycle_seen || marks_seq != marks_seq_seen) {
-            marks_cycle_seen = line_cycle;
-            marks_seq_seen   = marks_seq;
-            const int prev = nmarks;
-            nmarks = wspr_rx_get_marks_for_cycle(line_cycle, marks, WSPR_MARKS_MAX);
-            /* Only tear the labels down when the set actually changed - this
-             * runs on every decode publish, including ones for other cycles. */
-            if (nmarks != prev || nmarks == 0) mark_letters_clear();
-        }
-        const bool fresh = (s_mark_lbl_n == 0 && nmarks > 0);
-        const bool line_is_theirs = (nmarks > 0);
+                         ? mark_row * WF_H / WSPR_WF_HIST_ROWS : -1;
         const int row_h  = lv_font_get_line_height(&qmx_mono_25);
         const bool room  = (line_y >= 0) && (line_y + 3 + row_h <= WF_H);
 
@@ -2475,11 +2333,6 @@ void wspr_screen_view_tick(void)
             repaint_waterfall();
         }
     }
-    /* ⭐ NO SEPARATE "the hold is ageing" REPAINT IS NEEDED, and adding one
-     * would be dead code: wf_publish() bumps the row counter and the waterfall
-     * seq together, so every row that shifts the hold offset also lands in the
-     * branch above, which recomputes the offset before painting. The only
-     * other way the view moves is the button, which repaints itself. */
 
     /* Repainted when a spot was ADDED - not when the COUNT changed. The count
      * saturates at the ring size and then never moves again, which froze this

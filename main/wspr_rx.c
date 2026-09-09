@@ -100,13 +100,9 @@ _Static_assert(WSPR_MARKS_MAX == WSPR_MAX_CANDS,
  * decode task writes this at the END of a cycle while the capture task is
  * already publishing carpet rows, and making them share a lock would put the
  * decoder behind the row pump for no reason. */
-/* WSPR_MARKS_CYCLES sets, newest at s_marks_newest, so a Hold-frozen view can
- * still find the letters for the cycle it is looking at. One set was enough
- * only while the pane could show one cycle and nothing else. */
-static wspr_mark_t s_marks[WSPR_MARKS_CYCLES][WSPR_MARKS_MAX];
-static int         s_marks_n[WSPR_MARKS_CYCLES];
-static int64_t     s_marks_cycle[WSPR_MARKS_CYCLES];
-static int         s_marks_newest;      /* index into the arrays above */
+static wspr_mark_t s_marks[WSPR_MARKS_MAX];
+static int         s_marks_n;
+static int64_t     s_marks_cycle;
 static uint32_t    s_marks_seq;
 static SemaphoreHandle_t s_marks_mtx;
 
@@ -115,11 +111,9 @@ static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc)
     if (!s_marks_mtx) return;
     if (n > WSPR_MARKS_MAX) n = WSPR_MARKS_MAX;
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    const int slot = (s_marks_newest + 1) % WSPR_MARKS_CYCLES;
-    memcpy(s_marks[slot], m, (size_t)n * sizeof(*m));
-    s_marks_n[slot]     = n;
-    s_marks_cycle[slot] = cycle_utc;
-    s_marks_newest      = slot;
+    memcpy(s_marks, m, (size_t)n * sizeof(*m));
+    s_marks_n     = n;
+    s_marks_cycle = cycle_utc;
     s_marks_seq++;
     xSemaphoreGive(s_marks_mtx);
 }
@@ -128,25 +122,9 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out)
 {
     if (!out || max <= 0 || !s_marks_mtx) return 0;
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    const int slot = s_marks_newest;
-    int n = s_marks_n[slot] < max ? s_marks_n[slot] : max;
-    memcpy(out, s_marks[slot], (size_t)n * sizeof(*out));
-    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle[slot];
-    xSemaphoreGive(s_marks_mtx);
-    return n;
-}
-
-int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max)
-{
-    if (!out || max <= 0 || !s_marks_mtx || cycle_utc <= 0) return 0;
-    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
-    int n = 0;
-    for (int k = 0; k < WSPR_MARKS_CYCLES; k++) {
-        if (s_marks_cycle[k] != cycle_utc) continue;
-        n = s_marks_n[k] < max ? s_marks_n[k] : max;
-        memcpy(out, s_marks[k], (size_t)n * sizeof(*out));
-        break;
-    }
+    int n = s_marks_n < max ? s_marks_n : max;
+    memcpy(out, s_marks, (size_t)n * sizeof(*out));
+    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle;
     xSemaphoreGive(s_marks_mtx);
     return n;
 }
@@ -164,11 +142,10 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
     xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
     /* Only the cycle the carpet is showing - see the header. A tone is reused
      * cycle after cycle, so without this an older row wears a current letter. */
-    const int slot = s_marks_newest;
-    if (cycle_utc == s_marks_cycle[slot]) {
-        for (int i = 0; i < s_marks_n[slot]; i++) {
-            float d = fabsf(s_marks[slot][i].freq_hz - freq_hz);
-            if (d < best) { best = d; ch = s_marks[slot][i].ch; }
+    if (cycle_utc == s_marks_cycle) {
+        for (int i = 0; i < s_marks_n; i++) {
+            float d = fabsf(s_marks[i].freq_hz - freq_hz);
+            if (d < best) { best = d; ch = s_marks[i].ch; }
         }
     }
     xSemaphoreGive(s_marks_mtx);
@@ -332,10 +309,6 @@ static uint8_t  *s_wf;                 /* RING: WSPR_WF_HIST_ROWS * WSPR_WF_COLS
 static int       s_wf_head;            /* ring index the NEXT row is written to */
 static int       s_wf_cycle_base;      /* ring index of this cycle's row 0 */
 static uint32_t  s_wf_seq;
-/* Rows PUBLISHED since boot. s_wf_seq cannot serve: wf_finalise() bumps it
- * too, so it counts events rather than rows, and the view needs a row count
- * to know how far the carpet moved under a held view. */
-static uint32_t  s_wf_rows_total;
 static SemaphoreHandle_t s_wf_mtx;
 
 static volatile bool s_run;
@@ -510,7 +483,6 @@ static void wf_publish(int idx, const uint8_t *bytes)
      * this cannot rewind. wf_finalise() sets the head itself and does not come
      * through here. */
     s_wf_head = (idx + 1) % WSPR_WF_HIST_ROWS;
-    s_wf_rows_total++;
     s_wf_seq++;
     if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
 }
@@ -760,7 +732,6 @@ bool wspr_rx_get_waterfall(uint8_t *out)
 }
 
 uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
-uint32_t wspr_rx_wf_rows_total(void)  { return s_wf_rows_total; }
 
 /* ---- PING-PONG: capture and decode at the same time --------------------
  *

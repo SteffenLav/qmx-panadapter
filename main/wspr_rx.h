@@ -98,31 +98,15 @@ bool wspr_rx_running(void);
  * than the pane, and the view's nearest-neighbour rowmap squeezes it into
  * the 200 px available - a 110 s trace is ~160 rows, so it survives that
  * easily. */
-/* ⭐ THE RING IS DEEPER THAN THE PANE, AND THOSE ARE TWO DIFFERENT NUMBERS.
- * Conflating them is what made "two cycles" look impossible for a whole
- * release.
- *
- * WSPR_WF_VIEW_ROWS is what the 200 px pane shows and it stays at ONE cycle.
- * The original objection stands and is the reason: squeezing 352 rows into
- * 200 px gives 0.57 px per row, so at WSPR's 1.47 rows/s the carpet crawls at
- * 0.83 px/s and takes ~6 minutes to fill from black. At one cycle a row is
- * 1.14 px and it moves at 1.67 px/s, and the pane is full after a single
- * 120 s capture. None of that changes here.
- *
- * WSPR_WF_HIST_ROWS is how much the RING REMEMBERS, and raising it does not
- * touch the scale at all - it only gives the pane somewhere to look other
- * than the newest rows. That is what Hold needs: while the view is frozen the
- * capture keeps writing, and without the extra depth it would overwrite the
- * very rows being held, after about two minutes.
- *
- * ⚠ DEEPENING THIS ALONE CHANGES NOTHING ON SCREEN. A cycle lays down
- * WSPR_WF_ROWS data rows plus WSPR_WF_MARK_ROWS boundary rows, i.e. 178, so
- * successive dashed lines are further apart than the 176 the pane shows and a
- * boundary leaves the bottom after exactly one cycle however deep the ring
- * is. The depth is a substrate for Hold, not a retention win by itself. */
-#define WSPR_WF_CYCLES 2
-#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 352 */
-#define WSPR_WF_VIEW_ROWS WSPR_WF_ROWS                      /* 176 - the pane */
+/* ONE cycle fills the pane. Two was tried first and the arithmetic killed it:
+ * 352 rows in a 200 px pane makes each row 0.57 px, so at WSPR's 1.47 rows/s
+ * the carpet crawled at 0.83 px/s and took ~6 minutes to fill from black.
+ * At one cycle each row is 1.14 px and it moves at 1.67 px/s - twice as fast -
+ * and the pane is full after a single 120 s capture. History lives in the
+ * decode list, which is the right place for it: the list says WHAT was heard,
+ * the carpet shows the band NOW. */
+#define WSPR_WF_CYCLES 1
+#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 176 */
 
 /* Value written across a whole row to mark a cycle boundary, dashed so it
  * cannot be read as signal - nothing real is uniform across 205 bins. It
@@ -188,19 +172,6 @@ int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
 /* Bumped each time a cycle publishes a new set, so a view can rebuild only on
  * change. */
 uint32_t wspr_rx_marks_seq(void);
-
-/* Marks for a SPECIFIC cycle, or 0 if that cycle is no longer remembered.
- * WSPR_MARKS_CYCLES sets are kept, matching the ring's depth, so a view held
- * on an older cycle can still show the letters that belong to it. */
-#define WSPR_MARKS_CYCLES 2
-int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max);
-
-/* Rows published since boot, monotonic. The view subtracts two readings to
- * learn how far the carpet has advanced while Hold was engaged.
- *
- * ⛔ NOT wspr_rx_waterfall_seq(), which also ticks on wf_finalise() and so
- * counts something that is not a row. */
-uint32_t wspr_rx_wf_rows_total(void);
 
 /* The cycle the newest dashed boundary line CLOSES - the one whose waterfall
  * rows lie beneath it. 0 before the first boundary of a session.
