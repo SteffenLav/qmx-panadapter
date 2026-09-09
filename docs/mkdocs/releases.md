@@ -4,6 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.12.2** — 2026-09-10
+
+**A fixes release, and two of them are things earlier releases said were working when they were not.**
+
+- **⛔ The decoded CW transcript was never written to the microSD card while WiFi was on** *(Uwe DL8UG, and Gyula HA3HZ)*. Switch it on, work a session, pull the card, and `cw-decode.txt` held only whatever the first few seconds after boot had caught: the code that writes it had one caller, inside the background burst that stops the moment WiFi comes up, so the text kept accumulating in memory and nothing ever emptied it onto the card. **v1.12.1 "fixed" this by adding a warning that said it was not happening.** It now writes on the same 30-second cycle as the diagnostic log, a failed write no longer throws the characters away — they stay in memory until the write has actually landed — and a restart no longer welds two sessions onto one line. *The fix is Uwe's, sent as a patch and applied nearly as written.*
+- **The card no longer gives up for the rest of the session.** Three failed background writes in a row used to stop the mirror permanently, sometimes within four minutes of switching on, after which nothing in memory reached the card again until a restart. It now waits longer between attempts, up to five minutes, and keeps trying — the interference it is working around comes and goes, so stopping forever threw away every later chance *(Uwe DL8UG)*.
+- **WSPR was quietly costing the receiver its own audio.** Under load the decoder ran on the same processor core as the USB audio service, and audio the radio had already sent was being lost with nothing to show for it — up to 1.4 % of it, which across a two-minute transmission is more than a whole symbol of drift and enough to stop a cycle decoding at all. It now runs on the other core, where there is room. The decoder itself was never at fault.
+- **A three-minute WSPR waterfall, with marks that stay on their own cycle.** Every visible cycle is labelled with its own time and each letter is drawn against the cycle it belongs to instead of drifting into open carpet. Letters appear as each line decodes rather than all at once at the end, the alphabet rolls on across cycles so two neighbouring cycles cannot both have an "A", and a crowded mark steps down a row instead of being nudged sideways onto the wrong signal. **Clear** now clears.
+- **The decoded CW line really does go away when you leave CW** *(Gyula HA3HZ)*. v1.12.1 addressed this and did not finish the job — the line is five separate things on screen and only two were being taken down.
+- **The Tab5 wakes up on the page it was left on**, instead of always returning to the panadapter.
+- **The manual reads properly again**, in the printable guide and on the device. Notes and warnings were coming out as literal `!!! note` markup in the PDF and as unlabelled boxes on the Tab5, a bullet split across two lines became a bullet plus a stray sentence, and a sub-heading could read as part of the paragraph above it. The Reader also drew the page underneath itself when opened from the WSPR page.
+- **The remote power-switch schematic is corrected** *(Randy N4OPI, who spotted his own error and sent a new drawing)*. The jack on the interface module is a plain 3.5 mm stereo audio jack; it was written up with a 2.5 mm part number. The jack that goes **inside the radio** is still 2.5 mm, and the lead between them is unchanged.
+
+## Previous Releases
+
 **v1.12.1** — 2026-09-09
 
 **A feedback release: seven things testers reported in a day, and the remote power-switch modification documented properly.**
@@ -14,9 +29,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A band change during a transmission is no longer lost** *(Randy N4OPI)*. A burst owns the link to the radio for its whole 12.7 seconds; a frequency sent into that was rejected and silently discarded while the dropdown had already moved. It is now held and sent as soon as the link is free.
 - **WSPR band hopping stopped whenever you looked at another screen** *(Dirk DK7CVD)*. A beacon's schedule is not a property of what is on the display.
 - **The remote power-switch modification is in the manual, with a schematic** *(designed, built and documented by **Randy N4OPI**, published with his permission)*. The relay control has been in the web UI since v1.10.9, but the hardware it drives was described only as "wire it to PWR_ON and GND" — and the QMX has no such connector to wire to. The manual now carries the whole job: the 2.5 mm jack you fit to the radio, the two-component optoisolator interface, the parts, the settings that work, and why only GPIO53 and GPIO54 are offered. See [Web UI → Power-cycle relay](guide/web-ui.md#power-cycle-relay-building-the-interface).
-- **Smaller things**: the decoded-CW line is cleared when you leave CW and the SD transcript says when it is not being written *(Gyula HA3HZ, Uwe DL8UG)*, the web TX tone button names the tone *(Gyula HA3HZ)*, and the screenshot endpoint says when it is out of memory rather than reporting an unexpected error.
-
-## Previous Releases
+- **Smaller things**: the web TX tone button names the tone *(Gyula HA3HZ)*, and the screenshot endpoint says when it is out of memory rather than reporting an unexpected error.
 
 **v1.12.0** — 2026-09-08
 

@@ -106,23 +106,36 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.12.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.12.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.12.1 — letters on the WSPR waterfall, and a Band button that no longer
+**New in v1.12.2 — the CW transcript reaches the microSD card at last, and WSPR stopped
+costing the receiver its own audio.** Switch the decoded-CW transcript on, work a session,
+pull the card, and `cw-decode.txt` held almost nothing: the code that writes it only ever
+ran in the few seconds after boot, before WiFi came up — and **v1.12.1 "fixed" that by
+adding a warning saying it was not happening.** It now writes every 30 seconds, a failed
+write no longer throws the characters away, and a restart no longer welds two sessions
+onto one line *(the fix is Uwe DL8UG's, sent as a patch)*. The card also stops giving up
+for the rest of the session after three failed writes. On **WSPR**, the decoder was
+running on the same processor core as the USB audio service and losing up to 1.4 % of the
+audio the radio had already sent — more than a whole symbol of drift across a
+transmission, and enough to stop a cycle decoding at all; it now runs on the other core.
+The waterfall shows three minutes, every cycle is labelled, and letters appear as each
+line decodes. The Tab5 wakes on the page it was left on, and the manual's notes and
+warnings render properly again in the printable guide and on the device.
+
+**In v1.12.1 — letters on the WSPR waterfall, and a Band button that no longer
 retunes your radio.** Every trace the decoder looks at is lettered A, B, C… left to right
-by tone, matched by a new first column in the decode list, so a line of text and a mark on
-the waterfall are the same station; a trace it could not read is marked `?`. And on the
-WSPR page the top bar's Band control was sitting over the page's own band panel and
-winning the touch, so picking a band there wrote an FT8 frequency to the radio while WSPR
-carried on labelling spots with the old one — **if you used WSPR on v1.12.0, check which
-band your radio is really on.** An FT8 reply can now make its own slot instead of waiting
-for the whole band to finish decoding, a band change during a transmission is held rather
-than lost, and the remote power-switch modification is documented in the manual with a
-schematic, by Randy N4OPI.
+by tone, matched by a new first column in the decode list; a trace it could not read is
+marked `?`. On the WSPR page the top bar's Band control was sitting over the page's own
+band panel and winning the touch, so picking a band there wrote an FT8 frequency to the
+radio while WSPR carried on labelling spots with the old one. An FT8 reply can now make
+its own slot instead of waiting for the whole band to finish decoding, a band change
+during a transmission is held rather than lost, and the remote power-switch modification
+is documented in the manual with a schematic, by Randy N4OPI.
 
 **In v1.12.0 — CW profiles.** The QMX holds one CW centre and one set of filter
 widths, and changing them means walking two separate menus on the radio. Four profiles
@@ -188,7 +201,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

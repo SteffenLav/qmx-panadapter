@@ -3455,3 +3455,81 @@ power-switch modification documented properly.**
   QMX has no such connector to wire to. The manual now carries the whole job:
   the 2.5 mm jack you fit to the radio, the two-component optoisolator interface,
   the parts, the settings that work, and why only GPIO53 and GPIO54 are offered.
+
+
+### Shipped in v1.12.2 — 2026-09-10
+
+**A fixes release, and two of them are things earlier releases said were working
+when they were not.**
+
+**CW**
+
+- **⛔ The decoded CW transcript was never written to the microSD card while WiFi
+  was on** *(Uwe DL8UG, and Gyula HA3HZ)*. Switch it on, work a session, pull the
+  card, and `cw-decode.txt` held only whatever the first few seconds after boot
+  had caught. The function that writes it had exactly one caller, inside the
+  background burst that stops the moment WiFi comes up — so the text kept
+  accumulating in memory and nothing ever emptied it onto the card. **v1.12.1
+  "fixed" this by adding a warning that said it was not happening.** It now
+  writes on the same 30-second cycle as the diagnostic log. *The fix is Uwe's,
+  sent as a patch and applied nearly as written.*
+- **A failed write no longer throws the text away.** The card write took the
+  characters out of memory before it knew whether the write had succeeded, so a
+  single momentary card error discarded them for good. They now stay in memory
+  until the write has actually landed, and a run of failures is reported in the
+  file rather than passing silently.
+- **A restart no longer welds two sessions onto one line.** A line's ending is
+  written when the *next* line starts, so a restart left the file with an
+  unfinished line and the next session's timestamp landed on the end of it —
+  three sessions deep, in one line, on the bench. Found by reading the file back
+  after the fix above made it fill up properly.
+- **The decoded CW line really does go away when you leave CW** *(Gyula HA3HZ)*.
+  v1.12.1 addressed this and did not finish the job: the line is five separate
+  things on screen and only two of them were being taken down.
+
+**The microSD card**
+
+- **The card no longer gives up for the rest of the session.** Three failed
+  background writes in a row used to stop the diagnostic mirror permanently —
+  sometimes within four minutes of switching on — after which nothing in memory
+  reached the card again until a restart. It now waits longer between attempts,
+  up to five minutes, and keeps trying. The interference this is working around
+  comes and goes, so stopping forever threw away every later chance. *(Uwe
+  DL8UG.)*
+
+**WSPR**
+
+- **The decoder was quietly costing the receiver its own audio.** Under load it
+  ran on the same processor core as the USB audio service, and audio the radio
+  had already sent was being lost with nothing to show for it — up to 1.4 % of
+  it, which over a two-minute WSPR transmission is more than a whole symbol of
+  drift and enough to stop the cycle decoding at all. Moved to the other core,
+  where there is room. The decoder itself was never at fault.
+- **A three-minute waterfall, and marks that stay with their own cycle.** The
+  carpet now shows three minutes instead of two, every visible cycle is labelled
+  with its own time, and each letter is drawn against the cycle it belongs to
+  rather than drifting into open carpet. Letters appear as each line decodes
+  instead of all at once at the end, the alphabet rolls on across cycles so two
+  neighbouring cycles cannot both have an "A", and crowded marks step down a row
+  instead of being nudged sideways onto the wrong signal.
+- **Clear now clears.** The button rebuilt the display from a stale check and
+  then redrew the previous text.
+
+**Elsewhere**
+
+- **The Tab5 wakes up on the page it was left on.** It always came back to the
+  panadapter, whichever page was in use when it was switched off.
+- **The manual reads properly again in the printable guide and on the device.**
+  Notes and warnings were coming out as literal `!!! note` markup in the PDF and
+  as unlabelled boxes on the Tab5; a bullet split across two lines in the source
+  became a bullet plus a stray sentence; a sub-heading could read as part of the
+  paragraph above it. The Reader also drew the page underneath itself when opened
+  from the WSPR page.
+
+**Documentation**
+
+- **The remote power-switch schematic is corrected** *(Randy N4OPI, who spotted
+  his own error and sent a new drawing)*. The jack on the interface module is a
+  plain **3.5 mm stereo audio jack**; it was written up with a 2.5 mm part
+  number. The jack that goes **inside the radio** is still 2.5 mm, and the
+  3.5 mm-to-2.5 mm lead between them is unchanged.

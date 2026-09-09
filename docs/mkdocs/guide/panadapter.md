@@ -404,6 +404,11 @@ goes to `qmx-panadapter/cw-decode.txt` with a timestamp on each line, so a calls
 you only half-caught can be resolved afterwards *(Michael K Johnson KZ4LY)*. The
 line on screen holds one screenful; the card holds the session.
 
+With WiFi on, the card is written every 30 seconds rather than continuously, so
+the last few characters of a session may still be in memory when you pull the
+card. Switch the radio off and give it half a minute if you want the very end of
+an over.
+
 **About the speed.** It is a *throughput* figure: characters per unit time,
 counting the gaps between words and between overs. During a real exchange it
 therefore reads **lower** than the other operator is actually sending, and only
