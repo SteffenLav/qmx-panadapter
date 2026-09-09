@@ -412,12 +412,39 @@ void app_main(void)
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
+    /* ⛔ RESTORE THE MODE BEFORE THE SELF-TESTS, NOT AFTER THEM.
+     *
+     * It used to sit below the four calls that follow, and two of those
+     * synthesise GFSK audio and run it through the real decoder. That is a few
+     * seconds on an idle board and far longer once the radio is streaming and
+     * the FT8/WSPR tasks are competing for core 1 - measured across three
+     * boots on 2026-09-09 at 7.9 s, 46.3 s and 91.7 s.
+     *
+     * The operator is using the Tab5 long before that, so the restore was
+     * arriving into a UI somebody was already navigating: on one of those boots
+     * it read WSPR from NVS, set the mode, and 2 ms later the swipe handler on
+     * taskLVGL saw WSPR and cycled it to Panadapter - which wrote Panadapter to
+     * NVS. The screen showed WSPR, the stored value said Panadapter, and every
+     * boot after that came up on the panadapter. Reported as "why is the Tab5
+     * always waking up in Panadapter Mode".
+     *
+     * Nothing below is a dependency: these are verification, not
+     * initialisation. What the restore actually needs is the FT8/spots
+     * subsystems above, which have all run. */
+    // Restore last UI mode (Panadapter/FT8/WSPR), persisted across reboots.
+    // ⛔ Under display_lock: it moves LVGL widgets and shows whole views, and
+    // this is the main task, not taskLVGL.
+    if (display_lock(2000)) {
+        ui_apply_saved_mode();
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "could not take the display lock to restore the UI mode");
+    }
+
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
     ft8_arrl_fd_e2e_selftest();
-    // Restore last UI mode (Panadapter/FT8), persisted across reboots.
-    ui_apply_saved_mode();
 
     // Background firmware-update poller for the docs Reader page. Self-throttles
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is

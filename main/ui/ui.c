@@ -2952,6 +2952,10 @@ static lv_obj_t *s_check_cluster     = NULL;  // DX cluster spot source
 static lv_obj_t *s_check_spotmode    = NULL;  // show only the current mode's spots
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
+/* Set the first time the OPERATOR picks a mode. ui_apply_saved_mode() then
+ * declines: a live choice outranks a stored one, whichever happens to run
+ * first. See the comment on that function. */
+static bool    s_user_chose_mode;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_dropdown_sleep = NULL;  // display-sleep idle timeout picker
@@ -13851,6 +13855,23 @@ void ui_apply_saved_mode(void)
 {
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
 
+    /* ⛔ A LIVE CHOICE OUTRANKS A STORED ONE. This runs on the main task while
+     * taskLVGL is already taking gestures, so without this the two can
+     * interleave - and on 2026-09-09 they did: the restore set WSPR, the swipe
+     * handler saw WSPR 2 ms later and cycled it to Panadapter, and that wrote
+     * Panadapter to NVS. The screen and the stored value disagreed from then
+     * on and every boot came up on the panadapter.
+     *
+     * The call has also been moved ahead of app_main's self-tests, which is
+     * what made the window seconds-to-minutes wide rather than milliseconds.
+     * That shrinks the race; this removes it. Keep both - a narrower race is
+     * still a race, and this file already records two fixes falsified for
+     * exactly that reason. */
+    if (s_user_chose_mode) {
+        ESP_LOGI(TAG, "not restoring: the operator has already chosen a mode");
+        return;
+    }
+
     /* WSPR resumes too, as of the 2026-08-28 launch. It used to fall through to
      * Panadapter on purpose - "a mode that ships dark should not be sticky
      * across a reboot" - and that reason ended when the page joined the swipe
@@ -13968,6 +13989,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     ESP_LOGI(TAG, "Base mode: %s -> %s%s",
              mode_name(cur), mode_name(next), animate ? "" : " (instant)");
     ui_mode_set(next);
+    s_user_chose_mode = true;
     settings_set_last_ui_mode((uint8_t)next);
     /* Both overlay pages dim the panadapter's top-bar controls; only FT8 wants
      * the drawer's FT8 sections. */
