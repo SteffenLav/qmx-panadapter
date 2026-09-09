@@ -22,7 +22,7 @@
 #include "adif_log.h"
 #include "config_io.h"
 #include "settings.h"   // wifi_enabled: the WiFi-aware mirroring gate
-#include "cw_decode.h"  // cw_decode_take_pending - the #323 CW transcript
+#include "cw_decode.h"  // cw_decode_peek_pending/commit_pending - the #323 CW transcript
 #include "ui.h"
 #include "psram_task.h"
 // The SD write pauses the spectrum stream around itself - see mirror_diag_slow().
@@ -59,6 +59,17 @@ static const char *TAG = "sd_arch";
 // months is roughly a tenth of the old continuous mode, and there is no held-open
 // handle for a card pull or a crash to damage.
 #define SLOW_LOG_MS       30000
+// ⚠ 2026-09-09, Uwe DL8UG, whose patch this is: the write to the card has to
+// keep being started on a cycle, or the RAM never gets emptied onto it. The
+// 3-strikes STOP below used to be permanent for the rest of
+// the session - measured on this bench giving up after as little as ~4
+// minutes some boots - after which nothing in RAM (diag ring OR the CW
+// transcript) ever reaches the card again until a reboot. The contention is
+// intermittent, not constant (mirror_diag_slow() recovers mid-session plenty
+// of times before any 3-in-a-row run), so "stop forever" throws away every
+// later window where the bus happens to be free. SLOW_LOG_MAX_MS is the cap
+// for the backoff that replaces it, below.
+#define SLOW_LOG_MAX_MS   300000   // cap: retry at least every 5 min, forever
 // Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
 // capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
 // 5 minutes apart and gives up after an hour rather than probing for ever.
@@ -292,40 +303,68 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 // Morse at a few characters a second, so it grows by orders of magnitude less
 // than the diag log, and truncating an operating session's transcript to save
 // kilobytes would defeat what it is for.
+// ⚠ Pauses the WS stream around the write (2026-09-09, same reasoning as
+// mirror_diag_slow() below): this is now also called from the #153 30 s slow
+// cadence while WiFi is on, not just from the once-per-mount boot burst, so it
+// has to observe the same SD-vs-WiFi-SDIO contention discipline every other
+// background writer on this path uses. A no-op when WiFi is off (nothing is
+// streaming to pause), so the boot-burst and continuous-mirroring callers are
+// unaffected. SAVE AND RESTORE, never set-then-clear - see the #153 note on
+// mirror_diag_slow() for why (the pause boolean is shared with ~29 other call
+// sites).
 static void mirror_cw(void)
 {
     char buf[512];
-    size_t got = cw_decode_take_pending(buf, sizeof(buf));
+    // PEEK, not take: the bytes stay queued until the write below actually
+    // lands, so a transient I/O error (measured on this board - the same
+    // SD-vs-WiFi-SDIO contention #153 documents) delays the transcript
+    // instead of silently eating it. See cw_decode_commit_pending()'s header.
+    size_t got = cw_decode_peek_pending(buf, sizeof(buf));
     if (got == 0) return;   // the normal case - nothing decoded since last time
 
+    const bool was_paused = webserver_ws_is_paused();
+    if (!was_paused) webserver_ws_set_paused(true);
+
+    bool committed = false;
     bool fresh = (access(SD_CW_PATH, F_OK) != 0);
     FILE *f = fopen(SD_CW_PATH, "ab");
     if (!f) {
-        // The text is already gone from the staging buffer, so say so rather
-        // than lose it silently. Not fatal: the next burst still writes.
-        ESP_LOGW(TAG, "cw transcript: open %s failed (%s) - %u chars lost",
+        // Left in the staging buffer - retried on the next tick. Only becomes
+        // a real loss if failures keep coming until CW_SD_PENDING_CAP fills,
+        // which cw_decode.c's own overflow notice already covers.
+        ESP_LOGW(TAG, "cw transcript: open %s failed (%s) - %u B queued, will retry",
                  SD_CW_PATH, strerror(errno), (unsigned)got);
-        return;
+    } else {
+        if (fresh) {
+            // Written once, on the file's first creation. States the limitation
+            // up front so nobody reads a gap as a decoder fault or as proof of
+            // silence.
+            fprintf(f, "QMX Panadapter - decoded CW transcript\r\n"
+                       "Times are UTC, stamped at the first character of each line.\r\n"
+                       "\r\n"
+                       "This is what the QMX's OWN decoder resolved and what the screen\r\n"
+                       "showed - not a verbatim record of everything sent. The radio's\r\n"
+                       "decode buffer holds 40 characters and is not circular, so fast or\r\n"
+                       "sustained sending overflows it and the excess is discarded before\r\n"
+                       "it ever reaches the Tab5. Unresolved characters are dropped too.\r\n"
+                       "Expect gaps; they do not mean the band was quiet.\r\n"
+                       "\r\n");
+        }
+        if (fwrite(buf, 1, got, f) == got) {
+            fflush(f);
+            fsync(fileno(f));
+            committed = true;
+        } else {
+            ESP_LOGW(TAG, "cw transcript: write failed (%s) - %u B queued, will retry",
+                     strerror(errno), (unsigned)got);
+        }
+        fclose(f);
     }
-    if (fresh) {
-        // Written once, on the file's first creation. States the limitation up
-        // front so nobody reads a gap as a decoder fault or as proof of silence.
-        fprintf(f, "QMX Panadapter - decoded CW transcript\r\n"
-                   "Times are UTC, stamped at the first character of each line.\r\n"
-                   "\r\n"
-                   "This is what the QMX's OWN decoder resolved and what the screen\r\n"
-                   "showed - not a verbatim record of everything sent. The radio's\r\n"
-                   "decode buffer holds 40 characters and is not circular, so fast or\r\n"
-                   "sustained sending overflows it and the excess is discarded before\r\n"
-                   "it ever reaches the Tab5. Unresolved characters are dropped too.\r\n"
-                   "Expect gaps; they do not mean the band was quiet.\r\n"
-                   "\r\n");
-    }
-    if (fwrite(buf, 1, got, f) != got)
-        ESP_LOGW(TAG, "cw transcript: write failed (%s)", strerror(errno));
-    fflush(f);
-    fsync(fileno(f));
-    fclose(f);
+    // Only drop the bytes from staging once they are provably on the card -
+    // a failed attempt leaves them for the next tick instead of losing them.
+    if (committed) cw_decode_commit_pending(got);
+
+    if (!was_paused) webserver_ws_set_paused(false);
 }
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
@@ -443,11 +482,14 @@ static bool mirror_diag(void)
 static bool s_parked = false;   // (forward-declared above for the temp instrument)
 static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
 static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
-/* Set once the slow diag mirror has given up for this session. The card stays
- * MOUNTED - only the 30 s background append stops. Never cleared: a path that
- * has failed three times running has earned being left alone, and the on-demand
- * consumers are unaffected. */
-static bool    s_slow_stopped = false;
+/* Current slow-mirror retry interval, in ms - starts at SLOW_LOG_MS and
+ * DOUBLES (capped at SLOW_LOG_MAX_MS) every time s_slow_fail reaches 3,
+ * resetting back to SLOW_LOG_MS on the next success. Replaces a permanent
+ * stop (2026-09-09, operator): a card that failed 3 times running gets
+ * backed off, not abandoned, so a later window where the SD/WiFi contention
+ * has cleared still gets the RAM backlog onto the card - see the note on
+ * SLOW_LOG_MAX_MS above. */
+static int     s_slow_interval_ms = SLOW_LOG_MS;
 /* Post-boot mount retries (see the watchdog in the task loop). */
 static int     s_mount_retries = 0;
 static int64_t s_mount_retry_last_us = 0;
@@ -764,22 +806,13 @@ static void sd_archive_task(void *arg)
             // WiFi is switched off is deliberately not attempted here - it is an
             // untested path, and a reboot with WiFi off gives the verified
             // continuous-mirroring behaviour.
-            // ⚠ AND SAY WHAT ELSE STOPS, because a feature that silently does
-            // nothing reads as a broken feature. Uwe DL8UG switched the CW
-            // transcript on, worked a CW session, pulled the card and found no
-            // cw-decode.txt - it is mirrored by the background burst, which is
-            // exactly what parking turns off. Nothing was wrong and nothing said
-            // so. Once per session, and only if there is really CW being decoded
-            // that would otherwise have been written.
-            static bool s_noted_cw_parked = false;
-            if (wifi_on && !s_noted_cw_parked && cw_decode_total() > 0 &&
-                settings_get_cw_decode_en()) {
-                s_noted_cw_parked = true;
-                ESP_LOGW(TAG, "decoded CW is NOT being written to " SD_CW_PATH
-                              " this session: WiFi is on, so the background "
-                              "mirror is parked (the card is still mounted and "
-                              "readable). Switch WiFi off and reboot to record it.");
-            }
+            // Uwe DL8UG's original report (Gyula HA3HZ too) - "switched the CW
+            // transcript on, worked a session, pulled the card and found no
+            // cw-decode.txt" - is fixed properly below (2026-09-09): mirror_cw()
+            // now rides the #153 30 s slow cadence like the diag log, instead of
+            // running only once in the boot burst that parking here turns off.
+            // No warning needed any more - the transcript IS being written,
+            // just on a 30 s cadence instead of continuously.
             static bool s_noted_wifi_off = false;
             if (!wifi_on && !s_noted_wifi_off) {
                 s_noted_wifi_off = true;
@@ -855,9 +888,9 @@ static void sd_archive_task(void *arg)
             // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
             // was sent to explain. Only while a card is actually mounted; the
             // no-card park below must stay silent.
-            if (s_mounted && !s_slow_stopped) {
+            if (s_mounted) {
                 int64_t now_us = esp_timer_get_time();
-                if (now_us - s_slow_last_us >= (int64_t)SLOW_LOG_MS * 1000) {
+                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
@@ -866,54 +899,84 @@ static void sd_archive_task(void *arg)
                         bool ok = mirror_diag_slow();
                         if (!ok) {
                             if (++s_slow_fail >= 3) {
-                                // ⛔ STOP THE MIRROR - DO NOT UNMOUNT.
+                                // ⛔ BACK OFF - DO NOT STOP, DO NOT UNMOUNT.
                                 //
-                                // This used to call unmount("slow mirror
-                                // failures"), and park_snapshot() a few lines
-                                // above already argues why that is wrong, in its
-                                // own words: "a remount is impossible once WiFi
-                                // is up... Unmounting would therefore make all
-                                // three report 'no SD card' with a card
-                                // physically inserted, and nothing could ever
-                                // bring it back." The failure path did it anyway.
+                                // This used to set a permanent s_slow_stopped and
+                                // give up on the card for the rest of the session.
+                                // park_snapshot() already argues why UNMOUNTING is
+                                // wrong, in its own words: "a remount is impossible
+                                // once WiFi is up... nothing could ever bring it
+                                // back." Stopping the retries outright is the same
+                                // mistake one level up: it also never comes back,
+                                // and the SD-vs-WiFi contention this is fighting is
+                                // INTERMITTENT (this same mirror recovers mid-
+                                // session plenty of times before any 3-in-a-row
+                                // run - see the ELSE branch below), so "permanent"
+                                // was throwing away every later window where the
+                                // bus happens to be free.
                                 //
-                                // What is being given up here is an OPTIONAL
-                                // background write. The full backup - qso.adi,
-                                // qmx-config.txt, the LoTW cert and key, the
-                                // README - was completed seconds after boot, and
-                                // what the card is still FOR at this point is
-                                // Save-offline, the /files browser and the SD log
-                                // download. Destroying all three because a
-                                // best-effort diag append failed three times is
-                                // the wrong trade, and it is exactly what the
-                                // operator sees as the SD dot going out.
+                                // Doubling the interval (capped at
+                                // SLOW_LOG_MAX_MS) instead means: less hammering of
+                                // a link that is currently contended (the original
+                                // concern #153 was written to address), but the
+                                // RAM backlog - diag ring AND the CW transcript
+                                // staging buffer - still reaches the card the next
+                                // time the bus is quiet, instead of never again.
+                                // Uwe DL8UG, 2026-09-09: the write has to keep
+                                // being started on a cycle, or the RAM never
+                                // gets emptied onto the card.
                                 //
-                                // Measured 2026-09-01: `SDFAIL[slowopen] err=0x5`
-                                // three times at the 30 s cadence, then unmount,
-                                // on a card that had been serving files happily
-                                // for 1 h 56 m. The card was almost certainly
-                                // still there.
+                                // ⚠ AND THE SD DOT NO LONGER GOES YELLOW HERE,
+                                // deliberately: UI_SD_SNAPSHOT_ONLY means "live
+                                // mirroring unavailable", which was true of a
+                                // permanent stop and is NOT true of a backoff -
+                                // the mirror is still running, just slower. The
+                                // state is still used by park_snapshot(), where
+                                // it is accurate.
                                 //
-                                // A genuinely REMOVED card still gets noticed -
-                                // by the on-demand paths, which fail loudly to
-                                // the operator who asked for something. That is
-                                // the only case where "card gone" is a safe
-                                // conclusion; a background write that failed is
-                                // not.
-                                s_slow_stopped = true;
-                                ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);
-                                ESP_LOGW(TAG, "slow diag mirror failed %d times - "
-                                              "stopping it for this session. The card "
-                                              "stays MOUNTED and usable for Save-offline, "
-                                              "/files and the log download; only the "
-                                              "30 s diag append is given up.",
-                                         s_slow_fail);
+                                // Measured 2026-09-01 and again 2026-09-09:
+                                // `SDFAIL[slowopen/slowwrite] err=0x5` three times
+                                // running, sometimes within 4 minutes of boot, on a
+                                // card that had been (or went straight back to)
+                                // mounting and serving files fine. The card was
+                                // never actually gone.
+                                s_slow_fail = 0;
+                                int prev_ms = s_slow_interval_ms;
+                                s_slow_interval_ms *= 2;
+                                if (s_slow_interval_ms > SLOW_LOG_MAX_MS)
+                                    s_slow_interval_ms = SLOW_LOG_MAX_MS;
+                                size_t cw_pending = cw_decode_pending_len();
+                                ESP_LOGW(TAG, "slow diag mirror failed 3 times running - "
+                                              "backing off %d s -> %d s (not stopping). "
+                                              "Card stays MOUNTED; RAM backlog (diag ring "
+                                              "+ %u B CW pending) retried at the new interval.",
+                                         prev_ms / 1000, s_slow_interval_ms / 1000,
+                                         (unsigned)cw_pending);
                             }
-                        } else if (s_slow_fail) {
-                            ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s)",
-                                     s_slow_fail);
+                        } else if (s_slow_fail || s_slow_interval_ms != SLOW_LOG_MS) {
+                            ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s) - "
+                                          "back to the %d s cadence",
+                                     s_slow_fail, SLOW_LOG_MS / 1000);
                             s_slow_fail = 0;
+                            s_slow_interval_ms = SLOW_LOG_MS;
                         }
+                        // #323 CW transcript, folded into this cadence (2026-09-09,
+                        // Uwe DL8UG / Gyula HA3HZ's report). mirror_cw() previously
+                        // ran only once, in the boot burst before park_snapshot() -
+                        // once that parked, cw_decode.c kept staging bytes into its
+                        // pending buffer but nothing ever drained it, so the
+                        // transcript went stale for the rest of any WiFi-on session
+                        // (or never appeared at all if the boot burst caught no
+                        // CW). v1.12.1's fix was a warning that it wasn't happening;
+                        // this instead makes it happen, on the same mutex and the
+                        // same (now backed-off, never-permanently-stopped) tick as
+                        // the diag mirror above, and mirror_cw() now pauses the WS
+                        // stream around its own write - see its header. A failure
+                        // here does NOT feed s_slow_fail / the backoff: losing the
+                        // diag log's crash record is a real cost, losing a few
+                        // seconds of CW transcript is not, and the two must not be
+                        // able to take each other down (#323's original design).
+                        mirror_cw();
                         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                     }
                 }

@@ -165,12 +165,35 @@ int cw_decode_wpm(void);
 // Forget everything (mode change, or the operator clearing the window).
 void cw_decode_clear(void);
 
-// Hand over the decoded text waiting to be written to the microSD transcript
-// (#323), removing what it returns. Already formatted - timestamped lines with
-// CRLF - so the caller only appends bytes and never has to know how a line is
-// shaped. Returns 0 when there is nothing pending, which is the normal case on
-// a quiet band. Called by sd_archive.c, which owns every SD write.
-size_t cw_decode_take_pending(char *out, size_t out_sz);
+// Bytes currently staged for the microSD transcript, without copying any of
+// them - for logging/diagnostics only (e.g. "N bytes still waiting" on a
+// backed-off SD write). Cheap: no buffer, just the staged length under lock.
+size_t cw_decode_pending_len(void);
+
+// Copy the decoded text waiting to be written to the microSD transcript
+// (#323), WITHOUT removing it - see cw_decode_commit_pending() below for why
+// this is peek/commit rather than a single destructive take (2026-09-08).
+// Already formatted - timestamped lines with CRLF - so the caller only
+// appends bytes and never has to know how a line is shaped. Returns 0 when
+// there is nothing pending, which is the normal case on a quiet band. Called
+// by sd_archive.c, which owns every SD write.
+size_t cw_decode_peek_pending(char *out, size_t out_sz);
+
+// Remove the first n bytes of what cw_decode_peek_pending() last returned -
+// call ONLY after the SD write of those bytes has actually succeeded.
+//
+// ⚠ Split from the peek on 2026-09-08 (#323 hardware verification): the
+// original cw_decode_take_pending() drained the staging buffer BEFORE the
+// caller knew whether the write would succeed, so any transient SD I/O error
+// (measured on this board - `SDFAIL[slowopen] err=0x5`, the same SD-vs-WiFi-
+// SDIO contention #153 documents for the diag log) silently discarded that
+// text forever with no retry. The diag mirror never has this problem because
+// it advances its own cursor only on success; this makes the CW transcript do
+// the same. A run of failures now genuinely fills CW_SD_PENDING_CAP and hits
+// the existing "[... transcript bytes lost - buffer full ...]" notice in the
+// file - the mechanism that already existed for exactly this, but which the
+// old take-then-maybe-write order never let fire.
+void cw_decode_commit_pending(size_t n);
 
 #ifdef __cplusplus
 }

@@ -238,7 +238,16 @@ static void sd_transcript_putc(char c)
     s_sd_last_ms = now_ms;
 }
 
-size_t cw_decode_take_pending(char *out, size_t out_sz)
+size_t cw_decode_pending_len(void)
+{
+    if (!s_lock) return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    size_t n = s_sd_pend_len;
+    xSemaphoreGive(s_lock);
+    return n;
+}
+
+size_t cw_decode_peek_pending(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0 || !s_lock) return 0;
 /* A mutex that does not exist yet is not a reason to kill the device.
@@ -256,6 +265,15 @@ size_t cw_decode_take_pending(char *out, size_t out_sz)
     size_t n = s_sd_pend_len;
     if (n > out_sz) n = out_sz;
     memcpy(out, s_sd_pend, n);
+    if (s_lock) xSemaphoreGive(s_lock);
+    return n;
+}
+
+void cw_decode_commit_pending(size_t n)
+{
+    if (n == 0 || !s_lock) return;
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (n > s_sd_pend_len) n = s_sd_pend_len;   // caller's copy may be stale
     if (n < s_sd_pend_len) {
         memmove(s_sd_pend, s_sd_pend + n, s_sd_pend_len - n);
         s_sd_pend_len -= n;
@@ -263,7 +281,6 @@ size_t cw_decode_take_pending(char *out, size_t out_sz)
         s_sd_pend_len = 0;
     }
     if (s_lock) xSemaphoreGive(s_lock);
-    return n;
 }
 
 void cw_decode_init(void)
