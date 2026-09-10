@@ -409,6 +409,11 @@ the last few characters of a session may still be in memory when you pull the
 card. Switch the radio off and give it half a minute if you want the very end of
 an over.
 
+While the web page is open the card writes wait, because writing the card stalls
+the spectrum stream for several seconds on this hardware. They go through anyway
+after three minutes, so nothing is lost — but if you want the transcript fully
+up to date, close the browser tab and give it half a minute.
+
 **About the speed.** It is a *throughput* figure: characters per unit time,
 counting the gaps between words and between overs. During a real exchange it
 therefore reads **lower** than the other operator is actually sending, and only

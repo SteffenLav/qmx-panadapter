@@ -4,6 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.12.3** — 2026-09-10
+
+**Everything reported in the first day of v1.12.2, and one of them was making the web page look broken.**
+
+- **The web spectrum stopped for up to half a minute at a time** *(Gyula HA3HZ)*. Writing the microSD card holds the spectrum stream while it happens, and on this hardware that write can take a very long time — measured on the bench at 3, 10, 15 and once **29 seconds**, for four kilobytes. The spot list kept updating throughout, because it arrives a different way, which is what made it look like a fault rather than a pause. Background card writes now **wait while a browser is actually watching**, and go through anyway after three minutes so a crash still reaches the card — about six times rarer rather than gone, since the underlying slowness is the card-and-WiFi contention this hardware has always had. *It was not the CW transcript added in v1.12.2, which is where I first looked; the diagnostic log has been doing it every 30 seconds since long before.*
+- **⛔ WSPR band hopping no longer retunes the radio while you are in FT8** *(Dirk DK7CVD)*. With a hop list set, it kept hopping after you left the WSPR page and wrote WSPR frequencies to the radio mid-session. It now runs only while WSPR is actually receiving — which still includes having the drawer or a window open over the page.
+- **The PA voltage is properly restored when you leave WSPR** *(Dirk DK7CVD)*. The guard reduces transmit voltage for WSPR's long key-down and puts it back afterwards; the "put it back" was sent once and never checked, so a single lost command left the radio reduced for the rest of the session and everything else transmitted at about a watt. The radio now has to confirm, and it is retried until it does.
+- **Coming back to the WSPR page no longer looks like a dead page** *(Gyula HA3HZ)*. A capture can only start on an even minute, so arriving part-way through a cycle means up to about 110 seconds with the previous cycle's picture still on screen. The waterfall now dims and says "waiting for the next cycle — N s".
+- **The settings drawer sits above the decoded-CW line** *(Michael K Johnson KZ4LY)*, instead of the CW line drawing over the drawer.
+- **The QSO log opens showing contacts** *(Gyula HA3HZ)*, rather than two counts over an empty list. The button is a straight Today / All toggle.
+
+## Previous Releases
+
 **v1.12.2** — 2026-09-10
 
 **A fixes release, and two of them are things earlier releases said were working when they were not.**

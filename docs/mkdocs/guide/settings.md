@@ -543,11 +543,18 @@ The microSD card and the WiFi co-processor share a bus on this hardware and cann
 | | What happens | SD dot |
 |---|---|---|
 | **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in | **Green** |
-| **WiFi on** | One complete backup within a few seconds of switching on, then mirroring stops | **Yellow** |
+| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds | **Yellow** |
 
 Either way your QSO log, config, and LoTW certificate and key are backed up. With WiFi on, QSOs made later in that session reach the card at the **next start-up** — so if you have been operating with WiFi up and want them on the card now, restart the Tab5.
 
 If no card is inserted the dot is absent, which is not an error.
+
+**While a browser is watching the spectrum, those 30-second writes wait.** The
+card and the WiFi co-processor share a bus, and writing the card holds the
+spectrum stream for several seconds — long enough to look like the web page has
+frozen. The writes go through regardless after three minutes, so a crash still
+reaches the card; close the browser tab if you want the card fully current
+sooner.
 
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 

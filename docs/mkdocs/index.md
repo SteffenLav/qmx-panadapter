@@ -106,13 +106,27 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.12.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.12.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.12.2 — the CW transcript reaches the microSD card at last, and WSPR stopped
+**New in v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
+other modes.** Writing the microSD card holds the spectrum stream, and on this
+hardware that write can take a very long time — measured at 3, 10, 15 and once
+29 seconds for four kilobytes, which is what made the web page look broken while
+the spot list carried on updating. Card writes now wait while a browser is
+actually watching, and go through anyway after three minutes so a crash still
+reaches the card. On **WSPR**, a band-hop list kept hopping after you left the
+page and wrote WSPR frequencies to the radio in the middle of an FT8 session, and
+the reduced transmit voltage WSPR sets for its long key-down was restored with a
+single unchecked command — so if that was lost, everything afterwards transmitted
+at about a watt. Both fixed. Returning to the WSPR page now says "waiting for the
+next cycle" instead of showing a frozen waterfall, the settings drawer sits above
+the decoded-CW line, and the QSO log opens showing contacts.
+
+**In v1.12.2 — the CW transcript reaches the microSD card at last, and WSPR stopped
 costing the receiver its own audio.** Switch the decoded-CW transcript on, work a session,
 pull the card, and `cw-decode.txt` held almost nothing: the code that writes it only ever
 ran in the few seconds after boot, before WiFi came up — and **v1.12.1 "fixed" that by
@@ -201,7 +215,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
