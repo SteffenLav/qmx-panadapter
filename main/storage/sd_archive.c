@@ -629,6 +629,12 @@ static bool mirror_diag_slow(void)
     size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
     if (got == 0) return true;              // nothing new; not a failure
 
+    /* Timed for the same reason mirror_cw() is, and it is the more important
+     * of the two: this one has been running every 30 s since #153, long before
+     * the CW transcript existed, so if it stalls for seconds then the web
+     * "freeze" is not new and not the CW path's doing. Measured on the CW
+     * instrumentation the same evening: 8,942 ms to write ONE byte. */
+    const int64_t diag_pause_t0 = esp_timer_get_time();
     const bool was_paused = webserver_ws_is_paused();
     if (!was_paused) webserver_ws_set_paused(true);
 
@@ -646,6 +652,12 @@ static bool mirror_diag_slow(void)
     }
 
     if (!was_paused) webserver_ws_set_paused(false);
+
+    const int64_t dheld = (esp_timer_get_time() - diag_pause_t0) / 1000;
+    if (dheld >= WS_PAUSE_WARN_MS)
+        ESP_LOGW(TAG, "diag mirror: held the web stream %lld ms writing %u B%s",
+                 (long long)dheld, (unsigned)got,
+                 was_paused ? " (stream was already paused)" : "");
     return ok;
 }
 
