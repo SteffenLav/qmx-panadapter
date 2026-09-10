@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.12.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.12.4.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.12.3 — the web page stops freezing, and WSPR stops reaching into your other modes.** Writing the microSD card holds the spectrum stream, and on this hardware that write can take a very long time - measured at 3, 10, 15 and once 29 seconds for four kilobytes, which is what made the web page look broken while the spot list carried on updating. Card writes now wait while a browser is actually watching, and go through anyway after three minutes so a crash still reaches the card. **WSPR**: a band-hop list kept hopping after you left the page and wrote WSPR frequencies to the radio in the middle of an FT8 session; and the reduced transmit voltage WSPR sets for its long key-down was restored with a single unchecked command, so if that command was lost everything afterwards transmitted at about a watt. Both fixed. Coming back to the WSPR page also says **"waiting for the next cycle"** instead of showing a frozen waterfall. The settings drawer now sits above the decoded-CW line, and the QSO log opens showing contacts rather than two counts over an empty list.
+> **New in v1.12.4 — tapping a spot no longer moves the spectrum away from it.** Zoomed in past x1, if you tuned away from a signal with the dial and then tapped its spot to come back, the VFO landed on the spot correctly but the spectrum and waterfall jumped by however far you had tuned - so the signal was not under the marker, and it looked as though the radio had gone to the wrong frequency. It had not: the display was holding the right frequencies and drawing the wrong ones. Present since v1.10.6; only at zoom x2 and above. Nothing else changed in this release.
 >
 > **CW profiles** *(Uwe DL8UG)*. The QMX holds one CW centre and one set of filter widths, and changing them means walking two separate menus on the radio. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's configuration, so every write is read back and retried rather than assumed. **The bandwidth list also asks the radio which filters it actually has**, instead of offering all eight regardless.
 >
@@ -28,7 +28,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.3.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.4.pdf).
 
 <!-- USERGUIDE:START -->
 

@@ -1674,8 +1674,34 @@ static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
         s_sv_push = 0; s_sv_side = 0;
         if (!fits) {
             sv_frame_on_capture();
-            dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
         }
+        /* ⛔ THE PUSH TO THE DSP MUST BE OUTSIDE THE `!fits` BRANCH.
+         *
+         * It used to sit inside it, so the HOLD path - a jump whose passband
+         * still fits - moved the pan and then returned without ever telling the
+         * FFT. Every consumer of ui_get_pan_offset_hz() (the frequency axis, the
+         * spots lane, the VFO cursor, the passband tint, the RIT marker) moved
+         * to the new absolute window while dsp kept extracting the OLD baseband
+         * slice, so the spectrum and waterfall were displaced by exactly d - the
+         * distance the operator had dialled away before tapping the spot.
+         *
+         * Bench report, 2026-09-10: "if i then tune away with the dial and then
+         * click that associated spot to get back on the same signal then it
+         * stays on the spotline but the spectrum and wf shifts several kHz".
+         * Precisely this: the spot line is an OVERLAY and was right; the trace
+         * under it was not - which is the worst shape for the fault, because it
+         * reads as the radio having tuned somewhere else.
+         *
+         * ⚠ Only reachable at zoom > 1. At x1 the view is the whole capture
+         * window, the pan is pinned, and there is no pan to leave unpublished.
+         * That is how it survived twelve releases: the still display is a
+         * x2-and-up feature and this needs a jump that still fits.
+         *
+         * sv_apply_pan_hz() deliberately does NOT publish - it is a pure state
+         * setter with several callers. So EVERY exit of this function that moved
+         * the pan owes a dsp_set_zoom(). There are five exits; this was the one
+         * that did not pay. */
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
         return;
     }
 
