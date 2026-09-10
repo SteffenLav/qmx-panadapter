@@ -70,6 +70,9 @@ static const char *TAG = "sd_arch";
 // later window where the bus happens to be free. SLOW_LOG_MAX_MS is the cap
 // for the backoff that replaces it, below.
 #define SLOW_LOG_MAX_MS   300000   // cap: retry at least every 5 min, forever
+// A web client sees ~10 fps, so 100 ms is three or four dropped frames - the
+// point at which a stall stops being invisible and starts being a stutter.
+#define WS_PAUSE_WARN_MS  100
 // Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
 // capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
 // 5 minutes apart and gives up after an hour rather than probing for ever.
@@ -322,6 +325,23 @@ static void mirror_cw(void)
     size_t got = cw_decode_peek_pending(buf, sizeof(buf));
     if (got == 0) return;   // the normal case - nothing decoded since last time
 
+    /* ⚠ AND THIS PAUSE IS NOW ON A 30 s CADENCE, WHICH IT NEVER USED TO BE.
+     *
+     * Before the #323 fix, mirror_cw() ran once in the boot burst, so the
+     * stream stall it causes happened once and nobody saw it. It now runs
+     * every 30 s for as long as CW is being decoded - and Gyula HA3HZ reported
+     * the web page "freezing" in CW mode on v1.12.2, tuned to a signal, with
+     * the Tab5's own screen unaffected. That is the shape this would produce,
+     * and the SD open is not always quick: this bench logged
+     * `SDFAIL[slowopen] err=0x5` during a CW session the same evening.
+     *
+     * ⛔ SO MEASURE IT RATHER THAN ASSUME IT. The pause is timed and reported
+     * when it exceeds WS_PAUSE_WARN_MS, because a stall that is only ever
+     * inferred from a user's description is indistinguishable from one that is
+     * not happening - the #189 lesson. If these lines show tens of
+     * milliseconds, Gyula's freeze is something else and this is exonerated;
+     * if they show seconds, this is it. */
+    const int64_t pause_t0 = esp_timer_get_time();
     const bool was_paused = webserver_ws_is_paused();
     if (!was_paused) webserver_ws_set_paused(true);
 
@@ -403,6 +423,12 @@ static void mirror_cw(void)
     if (committed) cw_decode_commit_pending(got);
 
     if (!was_paused) webserver_ws_set_paused(false);
+
+    const int64_t held_ms = (esp_timer_get_time() - pause_t0) / 1000;
+    if (held_ms >= WS_PAUSE_WARN_MS)
+        ESP_LOGW(TAG, "cw transcript: held the web stream %lld ms writing %u B"
+                      "%s", (long long)held_ms, (unsigned)got,
+                 was_paused ? " (stream was already paused)" : "");
 }
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.

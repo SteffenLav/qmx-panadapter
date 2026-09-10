@@ -3714,9 +3714,29 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * once. ⛔ The NARROW accessor, never settings_load_all(): this runs on
      * taskLVGL, which has ~8 KB of stack, and the full struct is kilobytes -
      * the mistake that boot-looped the device in #307. */
+    /* ⛔ AND IT STANDS DOWN WHILE ANYTHING IS OPEN OVER THE PAGE (Michael K
+     * Johnson KZ4LY, 2026-09-10: "the settings drawer should probably be on top
+     * of the CW decode strip - it felt a little weird to have the CW decode
+     * strip on top of the settings menu").
+     *
+     * He is right, and the cause is two lines below: this strip calls
+     * lv_obj_move_foreground() on itself every time the text changes, i.e.
+     * potentially twice a second while someone is sending. LVGL draws a
+     * parent's children in creation order, so raising itself puts it above
+     * every object built BEFORE it - which is the drawer, every modal, and the
+     * Reader. Nothing else has to be wrong for it to end up on top; it simply
+     * keeps climbing.
+     *
+     * The same predicate the QMX-wait prompt already uses, for the same reason
+     * given there: the operator reading a panel is not reading the Morse. And
+     * it is re-derived every tick rather than hooked onto the drawer's open and
+     * close, so a path that forgets to notify cannot leave it stuck either way
+     * - the v1.12.1 top-bar lesson. */
     bool want = settings_get_cw_decode_en() &&
                 (ui_mode_get() == UI_MODE_PANADAPTER) && mode &&
-                (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0);
+                (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0) &&
+                !s_drawer_open && !reader_view_is_active() &&
+                !help_triage_is_open() && !any_modal_open();
     if (!want) {
         /* Unconditional, not gated on s_cw_strip's own flag: the row-2 pair can
          * be visible while s_cw_strip is hidden, so testing one of the five
