@@ -97,6 +97,28 @@ static const char *TAG = "sd_arch";
  * is exactly the one whose crash would otherwise be lost. After this long the
  * write happens regardless and the browser takes the stutter. */
 #define WS_DEFER_MAX_MS   180000   /* 3 min: write anyway, watcher or not */
+
+/* ⛔ TEMPORARY EXPERIMENT (#378), DEFAULT 0 - REMOVE WHEN IT HAS ANSWERED.
+ *
+ * The stream pause exists to protect the SD write by quieting WiFi. But the
+ * write takes SECONDS *with the stream already paused* - up to 29,610 ms for
+ * 4 KB, measured 2026-09-10 - so the pause may be buying nothing while costing
+ * the whole freeze the operator's users report.
+ *
+ * Set to 1 and the diag mirror ALTERNATES: paused, unpaused, paused... logging
+ * which arm each write used. Alternating rather than two flashes on purpose -
+ * band conditions and WiFi load drift over minutes, and two builds an hour
+ * apart would not be comparing the same thing.
+ *
+ * It also bypasses the browser deferral, so a sample lands every 30 s instead
+ * of every 3 minutes.
+ *
+ * ⚠ The unpaused arm runs the SD write straight into WiFi contention, which is
+ * the hazard the pause was added for. Bounded to a deliberate test session with
+ * someone watching; do not ship it enabled. */
+#ifndef SD_PAUSE_EXPERIMENT
+#define SD_PAUSE_EXPERIMENT 0
+#endif
 // Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
 // capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
 // 5 minutes apart and gives up after an hour rather than probing for ever.
@@ -659,8 +681,15 @@ static bool mirror_diag_slow(void)
      * "freeze" is not new and not the CW path's doing. Measured on the CW
      * instrumentation the same evening: 8,942 ms to write ONE byte. */
     const int64_t diag_pause_t0 = esp_timer_get_time();
+#if SD_PAUSE_EXPERIMENT
+    static bool s_exp_arm = false;
+    s_exp_arm = !s_exp_arm;                     /* alternate every write */
+    const bool exp_pause = s_exp_arm;
+#else
+    const bool exp_pause = true;
+#endif
     const bool was_paused = webserver_ws_is_paused();
-    if (!was_paused) webserver_ws_set_paused(true);
+    if (exp_pause && !was_paused) webserver_ws_set_paused(true);
 
     FILE *f = fopen(SD_LOG_PATH, "ab");
     bool ok;
@@ -675,13 +704,20 @@ static bool mirror_diag_slow(void)
         if (ok) { s_diag_cursor = next; s_log_bytes += got; }
     }
 
-    if (!was_paused) webserver_ws_set_paused(false);
+    if (exp_pause && !was_paused) webserver_ws_set_paused(false);
 
     const int64_t dheld = (esp_timer_get_time() - diag_pause_t0) / 1000;
+#if SD_PAUSE_EXPERIMENT
+    ESP_LOGW(TAG, "SDEXP %s %lld ms  %u B  ok=%d%s",
+             exp_pause ? "PAUSED  " : "UNPAUSED", (long long)dheld,
+             (unsigned)got, ok ? 1 : 0,
+             was_paused ? "  (someone else had it paused)" : "");
+#else
     if (dheld >= WS_PAUSE_WARN_MS)
         ESP_LOGW(TAG, "diag mirror: held the web stream %lld ms writing %u B%s",
                  (long long)dheld, (unsigned)got,
                  was_paused ? " (stream was already paused)" : "");
+#endif
     return ok;
 }
 
@@ -996,6 +1032,9 @@ static void sd_archive_task(void *arg)
                  * rather than waiting out another full interval. */
                 static int64_t s_defer_since_us = 0;
                 bool defer = false;
+#if SD_PAUSE_EXPERIMENT
+                (void)0;   /* no deferral during the experiment - see the flag */
+#else
                 if (webserver_ws_client_streaming()) {
                     if (s_defer_since_us == 0) s_defer_since_us = now_us;
                     defer = (now_us - s_defer_since_us < (int64_t)WS_DEFER_MAX_MS * 1000);
@@ -1011,6 +1050,7 @@ static void sd_archive_task(void *arg)
                 } else {
                     s_defer_since_us = 0;   /* nobody watching - back to normal */
                 }
+#endif
                 if (!defer &&
                     now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
