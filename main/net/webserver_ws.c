@@ -158,6 +158,19 @@ void webserver_ws_set_paused(bool paused)
 
 bool webserver_ws_is_paused(void) { return s_ws_paused; }
 
+/* Is a browser actually watching the spectrum right now? Not the same question
+ * as "is the stream paused": the pause is a shared boolean with ~29 callers,
+ * so a background feed holding it says nothing about whether anyone is looking.
+ *
+ * sd_archive.c asks this before its 30 s background card writes, because those
+ * writes take SECONDS on this board (measured 2026-09-10: the diag mirror held
+ * the stream 3.1, 9.8 and 14.8 s for 4 KB) and the browser is frozen for every
+ * one of them. Nobody watching, nothing to freeze. */
+bool webserver_ws_client_streaming(void)
+{
+    return s_session_active && s_ws_fd >= 0 && !s_ws_paused;
+}
+
 // ---------------------------------------------------------------------------
 // Sending a WS frame WITHOUT the partial-write bug in IDF's own helper.
 //

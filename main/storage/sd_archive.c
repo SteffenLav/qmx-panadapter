@@ -73,6 +73,30 @@ static const char *TAG = "sd_arch";
 // A web client sees ~10 fps, so 100 ms is three or four dropped frames - the
 // point at which a stall stops being invisible and starts being a stutter.
 #define WS_PAUSE_WARN_MS  100
+/* ⛔ HOW LONG A BROWSER MAY HOLD OFF THE CARD WRITES (Gyula HA3HZ, 2026-09-10:
+ * the web page "freezing" in CW mode).
+ *
+ * A background card write takes SECONDS on this board and the spectrum stream
+ * is down for all of it - measured the same evening, with the radio on CW and
+ * a card mounted:
+ *
+ *   diag mirror   3107 ms / 9783 ms / 14767 ms   writing 4096 B
+ *   cw transcript  286 ms / 10103 ms /  3815 ms  writing 25-60 B
+ *
+ * That is the SD-vs-WiFi contention this file already documents at length, and
+ * SPI mode made it rarer rather than gone. It is not new and it is not the CW
+ * transcript's doing: the diag mirror has run every 30 s since #153, and it is
+ * the worse of the two.
+ *
+ * So while someone is actually watching the stream, the writes wait. Nobody
+ * watching, nothing to freeze - and that is the common case, since the web UI
+ * is opened to look at something rather than left running.
+ *
+ * ⚠ BUT NOT FOR EVER, and this is the load-bearing half. #153 exists so that a
+ * crash reaches the card, and an operator who leaves a browser open all session
+ * is exactly the one whose crash would otherwise be lost. After this long the
+ * write happens regardless and the browser takes the stutter. */
+#define WS_DEFER_MAX_MS   180000   /* 3 min: write anyway, watcher or not */
 // Mount-retry watchdog after the boot window (operator, 2026-09-01). Wide and
 // capped on purpose: a mount attempt touches the SD/WiFi contention, so this is
 // 5 minutes apart and gives up after an hour rather than probing for ever.
@@ -966,7 +990,29 @@ static void sd_archive_task(void *arg)
             // no-card park below must stay silent.
             if (s_mounted) {
                 int64_t now_us = esp_timer_get_time();
-                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
+                /* Defer while a browser is watching - see WS_DEFER_MAX_MS.
+                 * s_slow_last_us is NOT advanced when we defer, so the moment
+                 * the browser goes away the write happens on the next tick
+                 * rather than waiting out another full interval. */
+                static int64_t s_defer_since_us = 0;
+                bool defer = false;
+                if (webserver_ws_client_streaming()) {
+                    if (s_defer_since_us == 0) s_defer_since_us = now_us;
+                    defer = (now_us - s_defer_since_us < (int64_t)WS_DEFER_MAX_MS * 1000);
+                    if (!defer) {
+                        ESP_LOGW(TAG, "card writes deferred %d s for a watching "
+                                      "browser - writing anyway, so a crash still "
+                                      "reaches the card",
+                                 (int)((now_us - s_defer_since_us) / 1000000));
+                        /* Restart the window, or every tick from here would
+                           force a write and the deferral would be gone. */
+                        s_defer_since_us = now_us;
+                    }
+                } else {
+                    s_defer_since_us = 0;   /* nobody watching - back to normal */
+                }
+                if (!defer &&
+                    now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the

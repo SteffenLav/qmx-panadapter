@@ -48,6 +48,10 @@ void webserver_ws_set_paused(bool paused);
 // 30 s and can land inside an upload's own pause window.
 bool webserver_ws_is_paused(void);
 
+/* True while a browser is really receiving the spectrum stream. Used to defer
+ * background microSD writes, which stall it for seconds - see sd_archive.c. */
+bool webserver_ws_client_streaming(void);
+
 #ifdef __cplusplus
 }
 #endif
