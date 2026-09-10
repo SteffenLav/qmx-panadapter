@@ -234,6 +234,13 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc);
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);
+
+/* Seconds until the next cycle boundary while the receiver is WAITING for one,
+ * or -1 when it is capturing, decoding or stopped. A WSPR capture can only
+ * start on an even UTC minute, so entering the page part-way through a cycle
+ * means up to ~110 s of nothing - which looks exactly like a dead page unless
+ * the page says so. */
+int wspr_rx_waiting_secs(void);
 /* Flip guard ENFORCEMENT at runtime (dev action "wspr_guards"). Both guards
  * are measured either way; this only changes which one acts. Deliberately not
  * an NVS setting: it is an experiment knob for choosing between the two on

@@ -1132,6 +1132,8 @@ static void tx_toggle_cb(lv_event_t *e)
 static lv_obj_t *s_list;           /* right pane, one label per line */
 static lv_obj_t *s_lbl_rows;
 static lv_obj_t *s_wf_canvas;
+static lv_obj_t *s_wf_wait_lbl;   /* "waiting for the next cycle" over the carpet */
+static int       s_wf_wait_shown = -2;   /* last countdown painted; -2 = never */
 
 static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
 static uint8_t  *s_wf_data;     /* WSPR_WF_HIST_ROWS x WSPR_WF_COLS, NEWEST ROW FIRST */
@@ -1650,6 +1652,28 @@ void wspr_screen_view_init(lv_obj_t *parent)
         lv_obj_set_pos(s_wf_canvas, RIGHT_X, WF_Y);
         lv_canvas_fill_bg(s_wf_canvas, lv_color_hex(0x000000), LV_OPA_COVER);
         lv_obj_add_flag(s_wf_canvas, UI_FLAG_NOT_HOT);
+
+        /* ⭐ WHY THERE IS A LABEL ON TOP OF THE CARPET AT ALL (Gyula HA3HZ).
+         *
+         * A capture can only begin on an even UTC minute, so arriving on this
+         * page part-way through a cycle means up to ~110 s in which nothing
+         * moves. The carpet is deliberately not blanked, so what is on screen
+         * is the PREVIOUS cycle's picture - still worth reading, and
+         * indistinguishable from a page that has died. He read it as dead, and
+         * so would anyone.
+         *
+         * Discreet on purpose: the carpet behind it is real data, so this dims
+         * it rather than covering it, and both the text and the dimming go the
+         * instant the first row of the new cycle lands. */
+        s_wf_wait_lbl = lv_label_create(s_container);
+        lv_label_set_text(s_wf_wait_lbl, "");
+        lv_obj_set_style_text_font(s_wf_wait_lbl, &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_color(s_wf_wait_lbl, lv_color_hex(0xB0B0B0), 0);
+        lv_obj_set_style_text_align(s_wf_wait_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(s_wf_wait_lbl, RIGHT_W);
+        lv_obj_set_pos(s_wf_wait_lbl, RIGHT_X, WF_Y + WF_H / 2 - 14);
+        lv_obj_add_flag(s_wf_wait_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_wf_wait_lbl, UI_FLAG_NOT_HOT);
     }
 
     /* The frequency scale. Evenly spaced ticks with numbers, because a
@@ -2452,6 +2476,28 @@ void wspr_screen_view_tick(void)
     if (strncmp(st, s_last_status, sizeof(s_last_status)) != 0) {
         snprintf(s_last_status, sizeof(s_last_status), "%s", st);
         lv_label_set_text(s_lbl_status, s_last_status);
+    }
+
+    /* Waiting for the next cycle boundary: dim the stale carpet and say so.
+     * Change-detected on the SECOND, not written every tick - an identical
+     * string still costs LVGL an invalidate, and this sits over a 944x250
+     * canvas. */
+    if (s_wf_wait_lbl && s_wf_canvas) {
+        int wsec = wspr_rx_waiting_secs();
+        if (wsec != s_wf_wait_shown) {
+            s_wf_wait_shown = wsec;
+            if (wsec >= 0) {
+                char w[64];
+                snprintf(w, sizeof(w), "waiting for the next cycle - %d s", wsec);
+                lv_label_set_text(s_wf_wait_lbl, w);
+                lv_obj_clear_flag(s_wf_wait_lbl, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_move_foreground(s_wf_wait_lbl);
+                lv_obj_set_style_opa(s_wf_canvas, LV_OPA_40, 0);
+            } else {
+                lv_obj_add_flag(s_wf_wait_lbl, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_opa(s_wf_canvas, LV_OPA_COVER, 0);
+            }
+        }
     }
 
     /* the captured window, repainted only when a new one has landed */

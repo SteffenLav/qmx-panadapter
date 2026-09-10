@@ -599,6 +599,25 @@ static float  s_wf_floor;        /* rolling per-row noise floor - see wf_row() *
  * back the per-cycle step this replaced. */
 #define WF_FLOOR_ALPHA 0.25f
 static int    s_wf_rows_done;
+
+/* Seconds until the next cycle boundary while the slot loop is WAITING, or -1
+ * when it is not. The page draws this over the carpet (Gyula HA3HZ, 2026-09-10:
+ * coming back to WSPR he saw "no movement on the waterfall" and read it as a
+ * dead page).
+ *
+ * ⭐ It is not dead and it is not slow: a WSPR cycle is 120 s and the loop can
+ * only start on an even UTC minute, so re-entering the page part-way through a
+ * cycle means waiting out the remainder - up to about 110 s. Measured on the
+ * bench: slot loop up at 34 s into a cycle, next capture 86 s later, exactly
+ * 120 - 34. The carpet is deliberately NOT blanked (see wf_begin), so what is
+ * on screen meanwhile is the PREVIOUS cycle's picture, which is genuinely
+ * still worth looking at and is also indistinguishable from a frozen one.
+ *
+ * A plain integer written by the slot loop and read by taskLVGL: a torn read
+ * costs one frame of a countdown. */
+static volatile int s_wait_secs = -1;
+
+int wspr_rx_waiting_secs(void) { return s_run ? s_wait_secs : -1; }
 static kiss_fftr_cfg     s_wf_cfg;
 static kiss_fft_scalar  *s_wf_in;
 static kiss_fft_cpx     *s_wf_sp;
@@ -1617,14 +1636,17 @@ static void wspr_rx_task(void *arg)
         int64_t wait = (into <= WSPR_ARM_GRACE_MS && cyc != last_cycle_idx)
                      ? 0 : (WSPR_CYCLE_MS - into);
         set_status("waiting %llds", (long long)(wait / 1000));
+        s_wait_secs = (int)((wait + 999) / 1000);
         while (s_run && wait > 0) {
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
             vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
             t = now_ms();
             into = t % WSPR_CYCLE_MS;
             wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
+            s_wait_secs = (int)((wait + 999) / 1000);
             if (wait > WSPR_CYCLE_MS - 100) break;     /* boundary just passed */
         }
+        s_wait_secs = -1;
         if (!s_run) break;
 
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);

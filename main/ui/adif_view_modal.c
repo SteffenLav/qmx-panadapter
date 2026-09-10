@@ -160,6 +160,7 @@ static void list_render_soon(bool prompt)
 // Counts from the most recent list_render() pass, for show()'s fallback.
 static int s_last_total = 0;
 static int s_last_today = 0;
+static int s_last_matched = 0;   /* rows the last render actually put on screen */
 
 // --- Single-record delete (operator request 2026-07-16) --------------------
 // Long-press a QSO row -> selection mode (list scroll locks, dragging up/down
@@ -1020,6 +1021,7 @@ static void list_render_now(void)
 
     s_last_total = total;
     s_last_today = today_count;
+    s_last_matched = s_match_n;   /* what the operator can actually SEE */
 
     if (s_title) {
         char t[80];
@@ -1298,7 +1300,19 @@ static void render_tick_cb(lv_timer_t *t)
            inside a button event where a render may not happen. */
         if (s_fresh_open) {
             s_fresh_open = false;
-            if (s_last_today == 0 && s_last_total > 0 && s_today_only && !s_query[0]) {
+            /* ⛔ THE TEST IS WHAT IS ON SCREEN, NOT THE TODAY COUNT (Gyula
+               HA3HZ, 2026-09-10: "the initial press shows only the summary,
+               while the actual log content appears only after further
+               presses").
+
+               It used to ask `s_last_today == 0`, which is a different
+               question from "did anything render". The window is meant to be a
+               flip-flop - Today or All - and never a state that shows two
+               counts over an empty list; asking the visible count directly is
+               the only phrasing that guarantees that, whatever made Today come
+               out empty. A search that matches nothing is deliberately excluded
+               and still says so, because there an empty list IS the answer. */
+            if (s_last_matched == 0 && s_last_total > 0 && s_today_only && !s_query[0]) {
                 s_today_only = false;
                 s_render_dirty = true;      // one more pass, still on this timer
             }
