@@ -3580,3 +3580,35 @@ web page look broken.**
   KZ4LY)*, instead of the CW line drawing over the top of the drawer.
 - **The QSO log opens showing contacts** *(Gyula HA3HZ)*, rather than two counts
   over an empty list. The button is a straight Today / All toggle.
+
+
+### Shipped in v1.12.4 — 2026-09-10
+
+**One bug, twelve releases old: tapping a spot moved the spectrum away from it.**
+
+- **Tap a spot after tuning away with the dial, and the spectrum and waterfall
+  jumped several kHz** while the spot line itself stayed put *(found and fixed
+  from the Waveshare port branch)*. The overlays were the half that worked — the
+  frequency axis, the spots lane, the VFO cursor, the passband tint and the RIT
+  marker all moved to the new window, while the FFT carried on extracting the old
+  one. The trace was displaced by exactly the distance you had dialled away
+  before the tap, which reads as the radio having tuned somewhere else — the
+  worst possible shape for it.
+
+  `still_view_follow_dial()` has five exits and four of them publish the new pan
+  to the FFT. The fifth — a jump whose passband still fits the current view, so
+  the display holds — set the state and returned without publishing. That is the
+  exit a spot tap normally takes.
+
+  ⚠ **Only reachable above ×1 zoom**, because at ×1 the view is the whole capture
+  window and there is no pan to leave unpublished. The still display is a
+  ×2-and-up feature and the fault also needs a jump whose passband still fits, so
+  it survived from v1.10.6 through v1.12.3 without anyone seeing it.
+
+  ⭐ **It was introduced by the fix for a different bug** — "a picked spot only
+  re-frames when it would not fit where it is" — which was correct and added a
+  new exit. The new exit was the one that did not pay. The rule now sits at the
+  code: every exit that moved the pan owes a `dsp_set_zoom()`.
+
+  Hardware-verified on the Tab5 and independently on a second board with
+  byte-identical code. Nothing else changed in this release.

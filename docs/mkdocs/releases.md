@@ -4,6 +4,18 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.12.4** — 2026-09-10
+
+**One bug, twelve releases old: tapping a spot moved the spectrum away from it.**
+
+- **Tap a spot after tuning away with the dial, and the spectrum and waterfall jumped several kHz** while the spot line itself stayed where it was. The overlays were the half that worked — the frequency axis, the spots lane, the VFO cursor, the passband tint and the RIT marker all moved to the new window, while the FFT carried on extracting the old one, so the trace was displaced by exactly the distance you had dialled away before the tap. It reads as the radio having tuned somewhere else, which is the worst possible shape for it.
+
+    The routine that re-frames the display has five exits, and four of them publish the new position to the FFT. The fifth — a jump whose passband still fits the current view, so the picture holds still — set the position and returned without publishing it. That is the exit a spot tap normally takes.
+
+    ⚠ **Only reachable above ×1 zoom**, since at ×1 the view is the whole capture window and there is nothing to publish. The still display is a ×2-and-up feature and the fault also needs a jump whose passband still fits, which is how it survived from v1.10.6 through v1.12.3 unnoticed. Found and fixed from the Waveshare port branch, then verified on the Tab5 and independently on a second board.
+
+## Previous Releases
+
 **v1.12.3** — 2026-09-10
 
 **Everything reported in the first day of v1.12.2, and one of them was making the web page look broken.**
