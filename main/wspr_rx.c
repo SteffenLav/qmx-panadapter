@@ -2263,8 +2263,34 @@ void wspr_pa_guard_release_pending(const char *why)
     uint16_t back = settings_get_wspr_pa_saved_x10();
     if (back == 0) return;                       /* nothing outstanding */
     cat_request_pa_voltage_x10(back);
-    settings_set_wspr_pa_saved_x10(0);
-    ESP_LOGW(TAG, "PA guard: %s - Max. PA voltage restored to %u.%u V",
+    /* ⛔ THE OWED VALUE IS *NOT* CLEARED HERE, AND THAT LINE WAS THE BUG
+     * (Dirk DK7CVD, three times now, most recently 2026-09-10: "the PA
+     * limitation reset still does not work for me. The voltage limit stays at
+     * 6V after changing to FT8 operation").
+     *
+     * It used to send the write and clear the record in the same breath. That
+     * makes the restore fire-and-forget, and it defeats the very check added
+     * in v1.10.9 to catch a lost restore: wspr_pa_guard_periodic_check()
+     * begins `if (back == 0) return;`, so once this cleared it there was
+     * nothing left to retry and the radio stayed at 6.0 V for the rest of the
+     * session. wspr_pa_guard_reclaim_on_link() is shut out the same way.
+     *
+     * ⭐ AND A LOST WRITE HERE IS THE EXPECTED CASE, NOT AN EDGE ONE. This
+     * fires at the moment the operator leaves WSPR, i.e. exactly when the CAT
+     * link is also carrying the mode change, the frequency write and the IQ
+     * re-assert - and an MM write is REFUSED when it is crowded (CLAUDE.md's
+     * CW-profile note measures that: 40 ms spacing had the radio answer `?;`
+     * while the apply logged success, and even 200 ms needed three attempts).
+     *
+     * So the record stands until the RADIO says the value is back.
+     * wspr_pa_guard_periodic_check() already knows how to do that - it
+     * confirms and clears, or resends if the radio is still sitting at our
+     * reduced target - and it only runs when WSPR is not running, which is
+     * precisely this window. Same shape as the fix Uwe DL8UG sent for the CW
+     * transcript the day before: never discard the record of what is owed
+     * until the thing that owes it has confirmed. */
+    ESP_LOGW(TAG, "PA guard: %s - restore to %u.%u V sent; holding it as owed "
+                  "until the radio confirms",
              why ? why : "restoring", back / 10, back % 10);
 }
 

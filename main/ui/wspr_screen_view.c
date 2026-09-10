@@ -920,6 +920,25 @@ static int64_t s_hop_done_cycle = -1;
 
 static void hop_maybe(void)
 {
+    /* ⛔ ONLY WHILE THE WSPR RECEIVER IS ACTUALLY RUNNING (Dirk DK7CVD,
+     * 2026-09-10: "I have WSPR set to toggle 15 / 20 / 40 m band, but it is
+     * doing it in FT8 too - it sets the frequency to WSPR frequencies").
+     *
+     * ⚠ THIS IS THE OTHER HALF OF HIS OWN v1.12.0 REPORT, AND FIXING THAT ONE
+     * CAUSED THIS ONE. Hopping used to be driven from a screen repaint, so it
+     * stopped whenever the page was not on display; the fix moved the call
+     * above the visibility guard, under the correct principle written there -
+     * a radio action must not depend on which screen the operator is looking
+     * at. But it removed EVERY gate, not just the wrong one, and the receiver
+     * not running was the only thing the old placement had been implying. So a
+     * stored hop mask retuned the radio to a WSPR dial in the middle of an FT8
+     * session.
+     *
+     * "Running" is the right test and "visible" was never it: the page is also
+     * hidden by the drawer, a modal and the Reader, and hopping must carry on
+     * through all three - which is exactly what he asked for the first time. */
+    if (!wspr_rx_running()) return;
+
     qmx_settings_t hs;
     settings_load_all(&hs);
     if (!hs.wspr_hop_en) return;
