@@ -489,6 +489,28 @@ static void repaint(void)
         tick_n++;
     }
 
+    // ⛔ AND THE IN-VIEW SPOTS THAT NEVER GOT A NAME COUNT TOO (operator,
+    // 2026-09-10, comparing the two screens side by side at the same zoom on
+    // the same dial: the Tab5 labelled 12 and the browser 38, and BOTH said
+    // "17" off to the left).
+    //
+    // The counters used to mean "spots outside the span". But a spot inside the
+    // span with no row left is just as invisible, and there are far more of them
+    // than of the first kind: this lane packs at most MAX_LABELS (16) names into
+    // LABEL_ROWS (3) rows, and drops the rest silently - no label, and by the
+    // rule above, no line either. So the lane was quietly showing a fraction of
+    // what it had and reporting a number that accounted for none of it.
+    //
+    // Counted toward the side they actually sit on, so the arrow still points
+    // the right way. The limits themselves stay: 200 px of spectrum cannot hold
+    // the browser's four rows without covering the trace, and the honest fix for
+    // a display that cannot show everything is to say so, not to pretend.
+    for (int i = 0; i < vis_n; i++) {
+        if (s_w->row[i] >= 0) continue;                     // it got a name
+        if (!s_w->buf[s_w->idx[i]].call[0]) continue;       // nothing to name
+        if (s_w->x[i] < DISPLAY_H_RES / 2) off_l++; else off_r++;
+    }
+
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
     // Spelled out as "spots (N)" rather than a bare "<N": a lone number against the
