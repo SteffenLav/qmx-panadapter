@@ -6751,13 +6751,7 @@ function drawSpots(ctx, W, H) {
       }
       if (!clash) { row = r; break; }
     }
-    /* ⛔ A DROPPED LABEL IS AN INVISIBLE SPOT AND MUST BE COUNTED (operator,
-       2026-09-10). The counters used to mean "outside the span", but a spot
-       inside it that could not find a row is just as absent - no label, and by
-       the line rule below, no line. Counted toward the side it actually sits
-       on, so the arrow still points the right way. spots_lane.c does the same,
-       for the same reason and with the same wording. */
-    if (row < 0) { if (c.x < W / 2) offLo++; else offHi++; continue; }
+    if (row < 0) continue;
 
     const by = rowTop + row * rowH;
     const box = { x: bx, y: by, w: tw + 2 * padX, h: boxH,
