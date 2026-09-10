@@ -489,6 +489,23 @@ static void repaint(void)
         tick_n++;
     }
 
+    // ⛔ THESE COUNT OFF-SCREEN SPOTS ONLY, AND THAT IS NOT AN OVERSIGHT.
+    //
+    // On 2026-09-10 they were changed to include in-view spots that lost their
+    // label to a full row - which is a real gap, since MAX_LABELS (16) over
+    // LABEL_ROWS (3) drops plenty and they get no line either. It was reverted
+    // the same evening, by the operator: "the edge counters should always show
+    // what will be available when you click on it".
+    //
+    // He is right, and the reason is one line below: edge_l_click_cb() calls
+    // tune_to_spot(&s_off_l), i.e. tapping the counter TUNES to the nearest
+    // spot beyond that edge. The number is the label on a navigation control,
+    // so it has to mean what the control does. An in-view spot is not somewhere
+    // the tap can take you - you are already there.
+    //
+    // If the dropped-label gap is worth surfacing, it needs its own indicator
+    // with its own action, not a second meaning bolted onto this one.
+    //
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
     // Spelled out as "spots (N)" rather than a bare "<N": a lone number against the
