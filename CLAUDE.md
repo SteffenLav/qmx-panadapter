@@ -1043,9 +1043,16 @@ pass down a blind alley. Bound the offset too (≤256 B): plain containment let 
 `RPC_TASK_STACK_SIZE` to `(5*1024)` literally, while `sdkconfig` carries
 `CONFIG_ESP_HOSTED_DFLT_TASK_STACK=3072` doing nothing. That is the 6 × 5,376 B
 of DMA pool held by `sdio_rx_buf`/`sdio_read`/`sdio_process_rx`/`sdio_write`/
-`rpc_rx`/`rpc_tx`, whose measured peaks are 716–3,044 B. **32 KB is reclaimable
-there** — but it edits the SDIO/WiFi link, this board's most fragile subsystem,
-and would become a 7th standing patch to re-apply after every `fullclean`.
+`rpc_rx`/`rpc_tx`, whose measured peaks are 716–3,044 B.
+**DONE 2026-09-11 (`apply_esp_hosted_task_stacks.ps1`, patch #17)** after a
+boot that started with the DMA pool at 99 B crashed at 24 min: `sdio_rx_buf` and
+`sdio_write` → 3,072, `sdio_process_rx` → 4,096, `sdio_read` unchanged, and the
+RPC pair moved to **PSRAM** (`xTaskCreateWithCaps`, deleted with
+`vTaskDeleteWithCaps`). ~15 KB leaves the pool; measured +4.5 KB `dma free` and
++8 KB internal against the last healthy boot - less than 15 because freed
+internal RAM is partly re-taken by allocations that had spilled (see above).
+The `stacks` dev action now prints `PSRAM`/`int` per stack, which is how the
+move was verified - heap task tracking is not compiled in.
 
 ### ⭐ The L2 CACHE is carved out of the DMA-capable heap — 128 KB is one Kconfig line
 `CONFIG_CACHE_L2_CACHE_256KB` vs `_128KB`. `memory_layout.c` sizes the heap
