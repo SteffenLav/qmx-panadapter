@@ -1785,6 +1785,30 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                              "\"error\":\"no SD card mounted\"}", armed);
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "gapfill") == 0) {
+        /* Dev action for the capture time-base repair (dsp.c time_base_check):
+         * {"action":"gapfill","on":false}            - A/B the repair
+         * {"action":"gapfill","drop_ms":200,"every_s":10} - simulate USB loss
+         * {"action":"gapfill","every_s":0}           - stop simulating
+         * Fields not mentioned are left alone. Replies with the live state, in
+         * the BODY - this endpoint answers an unknown action with HTTP 200. */
+        cJSON *jon = cJSON_GetObjectItem(root, "on");
+        cJSON *jdm = cJSON_GetObjectItem(root, "drop_ms");
+        cJSON *jev = cJSON_GetObjectItem(root, "every_s");
+        if (cJSON_IsBool(jon)) dsp_gapfill_set_enabled(cJSON_IsTrue(jon));
+        if (cJSON_IsNumber(jev))
+            dsp_sim_audio_drop(cJSON_IsNumber(jdm) ? (uint32_t)jdm->valueint : 0,
+                               (uint32_t)jev->valueint);
+        cJSON_Delete(root);
+        char body[128];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"gapfill\":%s,\"filled_ms\":%u,\"events\":%u}",
+                 dsp_gapfill_enabled() ? "true" : "false",
+                 (unsigned)(dsp_gapfill_total_samples() / 12),
+                 (unsigned)dsp_gapfill_events());
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_guards") == 0) {
         /* Dev action: choose which false-decode guard ACTS. Both are measured
          * regardless, so this exists to compare them on real signals without
