@@ -566,6 +566,19 @@ static bool build_monitor_pool(ftx_protocol_t proto)
             return false;
         }
         monitor_init(s_mon_pool[i], &cfg);   // allocates the waterfall in PSRAM
+        /* ⛔ monitor_init() does not check its own allocations, and a NULL
+         * waterfall is only found by the first capture writing through it.
+         * Serial-captured 2026-09-11 on the dev bench: WSPR -> FT8 with WSPR
+         * still holding 11.25 MB left ~900 KB of PSRAM, the capture scratch
+         * fitted, one 163 KB waterfall did not - and `ft8` took a Store access
+         * fault at MTVAL 0 (monitor.c:181) seven seconds later, on the first
+         * slot. The pool was logged as "built" the whole time. */
+        if (!monitor_alloc_ok(s_mon_pool[i])) {
+            ESP_LOGE(TAG, "monitor %d/%d: buffers not allocated (%u KB PSRAM free)",
+                     i, FT8_NUM_BUFFERS,
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            return false;
+        }
         // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
         // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
         // threshold) - across the pool that starves internal heap (main runs at
@@ -1736,25 +1749,31 @@ static void ft8_task(void *arg)
      *
      * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
      * fixing one direction and not asking about the other is what let this
-     * through. The memory genuinely arrives - wait for it. */
-    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
-        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
-        if (s_cap_scratch) break;
+     * through. The memory genuinely arrives - wait for it.
+     *
+     * ⛔ AND WAIT FOR ALL OF IT, NOT JUST THE FIRST ALLOCATION. This loop used
+     * to retry only the scratch, on the reasoning that it is the biggest single
+     * block. It is - but it is not the whole bill. On 2026-09-11 the scratch
+     * (720 KB) fitted into ~900 KB while WSPR was still releasing, the monitor
+     * pool then could not, and the unchecked waterfall crashed the device (see
+     * build_monitor_pool). So the WHOLE set is retried: a partial pool is freed
+     * and the attempt repeated once the previous page has let go. */
+    bool pool_ok = false;
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
+        if (!s_cap_scratch)
+            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
+        free_monitor_objects();                    /* partial pool; scratch kept */
         if (attempt == 0)
-            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+            ESP_LOGW(TAG, "capture buffers not available yet (%u KB PSRAM free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
         vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
     }
-    if (!s_cap_scratch) {
-        ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
-        s_ft8_task_alive = false;
-        task_park_and_reap();
-        return;
-    }
-    if (!build_monitor_pool(proto_for_mode())) {
-        ESP_LOGE(TAG, "initial monitor pool build failed");
+    if (!pool_ok) {
+        ESP_LOGE(TAG, "PSRAM alloc for the capture pool failed (%u KB free)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         free_capture_pool();
         s_ft8_task_alive = false;
         task_park_and_reap();
@@ -2391,6 +2410,14 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
         return;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor buffers)");
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        task_park_and_reap();
+        return;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;
@@ -2526,6 +2553,12 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
         return false;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        return false;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;
