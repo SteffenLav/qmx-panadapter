@@ -214,6 +214,18 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
  * other four; see sync_nav_affordances(). */
 #define TOPBAR_ZONE_FREQ   3
 static lv_obj_t *s_topbar_hit_zones[N_TOPBAR_HIT_ZONES] = {0};
+/* ⛔ THE DEEP DEPTH IS COMPUTED ONCE AND MUST BE REMEMBERED, NOT RE-STATED.
+ * top_bar_set_hit_depth() used to write a literal 200 here, which SILENTLY
+ * UNDID the 2026-08-05 spots fix above: ui_init() derives the depth from
+ * spots_lane_top_hit_y(), and a second owner then overwrote it - at 1 Hz,
+ * because top_bar_apply_mode() re-asserts it. On the Tab5 the two agreed by
+ * coincidence (the clamp makes the computed value ui_sy(200) = 200); on the
+ * Waveshare 7B the computed value is 83 and the literal put the zones back
+ * over the whole spots lane - callsigns AND the "< spots (n)" counters, which
+ * opened the Band and Zoom dropdowns instead (operator-reported 2026-09-11).
+ * Same bug class as v1.12.1's CLICKABLE disagreement: two functions owning one
+ * property, the 1 Hz one winning. One owner now. */
+static int       s_topbar_zone_deep_h = 0;
 
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
@@ -6431,6 +6443,7 @@ void ui_init(lv_display_t *disp)
         int zone_h = spots_lane_top_hit_y() - 4;
         if (zone_h < TOP_BAR_H + 20) zone_h = TOP_BAR_H + 20;   // never smaller than the bar
         if (zone_h > 200)            zone_h = 200;              // never deeper than before
+        s_topbar_zone_deep_h = zone_h;   /* the ONE owner - see the note by s_topbar_zone_deep_h */
         ESP_LOGI(TAG, "top-bar hit zones: %d px deep (spots labels start at y=%d)",
                  zone_h, spots_lane_top_hit_y());
         static const struct {
@@ -7805,14 +7818,19 @@ static esp_err_t ui_tune_commit(uint32_t hz, bool forced)
 // dropdown hit-zones - foregrounded above every sibling - would swallow taps
 // and long-presses on the CW pane's top memory buttons, which sit under
 // y=200 (hardware-observed 2026-08-01: M1-M3 opened the Band/Mode dropdowns
-// instead of sending/editing). In CW mode the zones shrink to the 60 px bar
-// itself; the panadapter keeps the deep zones, where nothing tappable lives
-// under them except tap-to-tune, which the top strip deliberately forgoes.
+// instead of sending/editing). In CW mode the zones shrink to the bar itself;
+// the panadapter keeps the deep zones - which are NOT 200 px and never were
+// after 2026-08-05, they stop just above the live-spot callsigns.
 static void top_bar_set_hit_depth(bool deep)
 {
+    /* ⛔ NOT a literal 200/60 - see the note by s_topbar_zone_deep_h. The deep
+     * value is whatever ui_init() derived from the spots lane; the shallow one
+     * is the bar itself, which is 50 px on the Waveshare and 60 on the Tab5. */
+    int h = deep ? s_topbar_zone_deep_h : TOP_BAR_H;
+    if (h <= 0) h = TOP_BAR_H;          /* called before ui_init() got there */
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
         lv_obj_t *hit = s_topbar_hit_zones[i];
-        if (hit) lv_obj_set_height(hit, deep ? 200 : 60);
+        if (hit) lv_obj_set_height(hit, h);
     }
 }
 
