@@ -429,7 +429,7 @@ copied them just now rather than someone having typed it an hour ago.
 
 ## Spot Map
 
-**Spot map (who is hearing me)** — **Off** by default. Switches on the
+**Spot map (live reports of my signal)** — **Off** by default. Switches on the
 full-screen map of stations that have reported *your* signal, opened by swiping
 down from the top edge. Full details in [Spot Map](spot-map.md).
 
@@ -671,7 +671,7 @@ slot.
 
 ---
 
-## Propagation feedback — who is hearing me
+## Who has heard me (last 24 h)
 
 This asks PSK Reporter which receivers have copied **your** callsign recently.
 It is the reverse of the reports the panadapter *sends*, and the two are
@@ -685,8 +685,8 @@ receiving side alone it looks exactly like a dead band.
 **This one lives in the browser, not on the Tab5.** There is no drawer control
 for it — the answer is a list of stations with distances and bearings, which
 wants a screen you are already sitting in front of. In the web UI open
-**Settings -> Spots & reporting** and tick **Propagation feedback (who is hearing
-me)**, then **Miscellaneous -> Who is hearing me** for the list: receiver,
+**Settings -> Spots & reporting** and tick **Who has heard me (last 24 h)**,
+then **Miscellaneous -> Who has heard me (24 h)** for the list: receiver,
 country, distance, bearing and the signal report they gave you, sorted by
 distance.
 

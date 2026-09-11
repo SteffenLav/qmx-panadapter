@@ -2646,7 +2646,7 @@ static const drawer_item_t GRP_NETWORK[] = {
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     // Basic, not Advanced: it is off by default, so an operator who never finds
     // it never gets the feature at all.
-    { DRAWER_SEC_SPOTMAP, "Spot map (who is hearing me)", true },
+    { DRAWER_SEC_SPOTMAP, "Spot map (live reports of my signal)", true },
     { DRAWER_SEC_BT, "Bluetooth mouse", false },
 };
 // Flip 180 last: it is the least-touched control in the group (operator).
@@ -11804,25 +11804,34 @@ static void drawer_build(void)
     // Spot map: deliberately its OWN section and not a sixth row above, because
     // the section above is panadapter-only and the map's top-edge swipe is not.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTMAP, y, 100);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTMAP, y, 104);
         lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "Spot map (who is hearing me)");
+        // Two words, because the checkbox sits at TOP_RIGHT of this same
+        // section and a montserrat_28 header longer than that runs underneath
+        // it - "Spot map (live reports of my signal)" did, and the overlap is
+        // invisible from the code. The full name lives in the group list,
+        // where there is room for it.
+        lv_label_set_text(hdr, "Spot map");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 10);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 6);
         s_check_spotmap = make_drawer_checkbox(sec, settings_get_spotmap_en(),
                                                drawer_spotmap_cb, NULL);
         lv_obj_align(s_check_spotmap, LV_ALIGN_TOP_RIGHT, 0, 6);
 
-        // Says what gets switched on, because "spot map" does not convey that
-        // it opens a live connection to somebody else's broker.
+        // Says what gets switched on, because "Spot map" does not convey that
+        // it opens a live connection to somebody else's broker. Width and WRAP
+        // are set explicitly: an LVGL label defaults to one unclipped line that
+        // simply runs off the edge of the drawer, which is what the first
+        // version did with a hand-placed newline in the string.
         lv_obj_t *sub = lv_label_create(sec);
-        lv_label_set_text(sub, "Swipe down from the top edge. Connects to PSK Reporter,\n"
-                               "wsprnet and hamqsl while on.");
-        lv_obj_set_style_text_color(sub, lv_color_hex(0x909090), 0);
-        lv_obj_set_style_text_font(sub, &lv_font_montserrat_18, 0);
-        lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 0, 48);
-        y += 100;
+        lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(sub, DRAWER_W - 2 * 16 - 70);   /* drawer pad, then clear of the checkbox */
+        lv_label_set_text(sub, "live reports of my signal - swipe down from the top edge");
+        lv_obj_set_style_text_color(sub, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(sub, &lv_font_montserrat_20, 0);
+        lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 0, 44);
+        y += 104;
     }
 
     // Presets section: header + three buttons side-by-side

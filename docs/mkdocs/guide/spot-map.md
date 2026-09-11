@@ -12,7 +12,7 @@ This is Uwe DL8UG's work, contributed to the project.
 
 !!! note "Off by default"
     The spot map is **opt-in**. Switch it on in
-    **Settings -> Network -> Spot map (who is hearing me)**. Until you do, nothing connects
+    **Settings -> Network -> Spot map (live reports of my signal)**. Until you do, nothing connects
     and nothing runs — see [Why it is off until you ask](#5-why-it-is-off-until-you-ask).
 
 ---

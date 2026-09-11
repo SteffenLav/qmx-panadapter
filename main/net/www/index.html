@@ -773,7 +773,7 @@
   button.bot-btn { font: inherit; }
   .dim { color: var(--dim); font-size: 0.75rem; white-space: nowrap; }
 
-  /* "Who is hearing me" time-window chips and sortable table headers. Same
+  /* "Who has heard me" time-window chips and sortable table headers. Same
      on/off language as #flatbtn: filled+dark-text means selected. */
   .psk-win-btn {
     font: inherit; cursor: pointer; border-radius: 6px; padding: 4px 10px;
@@ -1217,7 +1217,7 @@
     <div class="bot-menu-wrap">
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
-        <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who is hearing me</a>
+        <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
         <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
@@ -1343,7 +1343,7 @@
   <!-- Memory channels: the Tab5's 4x8 grid, as a grid. Clicking one RECALLS it -
        which is just set_freq + set_mode, so the browser needs no recall endpoint
        and there is no second copy of that decision on the device. -->
-  <!-- Propagation feedback. The browser is the right home for this: it is a
+  <!-- "Who has heard me" (net/psk_rx.c). The browser is the right home for this: it is a
        table with distance and bearing, which needs width the Tab5 does not
        have. The device only ever holds the parsed reports; everything below is
        presentation. -->
@@ -1378,7 +1378,7 @@
     <div style="max-width:900px; margin:4vh auto; max-height:92vh; display:flex; flex-direction:column;
                 background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
       <div style="display:flex; align-items:center; margin-bottom:10px;">
-        <strong style="color:#ffa040; font-size:17px;">Who is hearing me</strong>
+        <strong style="color:#ffa040; font-size:17px;">Who has heard me (last 24 h)</strong>
         <div style="flex:1"></div>
         <button type="button" id="prop-close" class="bot-btn">Close</button>
       </div>
@@ -3808,7 +3808,7 @@ async function scSave(payload, note) {
     scSave({ reset: true }, "Defaults restored."));
 })();
 
-/* All state for the "Who is hearing me" modal. The device always answers
+/* All state for the "Who has heard me" modal. The device always answers
    with its fixed PSK_RX_WINDOW_S (24 h) worth of reports and each one
    carries its own heard-at timestamp, so the shorter windows (15 min / 30
    min / 6 h) and the sort are both pure client-side re-slices of that one
@@ -3936,8 +3936,8 @@ async function propOpen() {
   try {
     const d = await (await fetch("/api/psk_rx", { cache: "no-store" })).json();
     if (!d.enabled) {
-      body.innerHTML = '<p style="color:var(--dim)">Propagation feedback is switched off. ' +
-                       'Turn on "Propagation feedback" in Settings.</p>';
+      body.innerHTML = '<p style="color:var(--dim)">This is switched off. ' +
+                       'Turn on "Who has heard me" in Settings.</p>';
       return;
     }
     /* Honour the miles setting, like the decode list does (Randy N4OPI - this
@@ -4032,13 +4032,13 @@ const SET_FIELDS = [
 
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
-  ["Spots & reporting", "spotmap_en",     "bool", "Spot map (who is hearing me)", "Swipe down from the Tab5 top edge. Off by default: while on it holds a connection to PSK Reporter and polls wsprnet and hamqsl"],
+  ["Spots & reporting", "spotmap_en",     "bool", "Spot map (live reports of my signal)", "Swipe down from the Tab5 top edge. Off by default: while on it holds a connection to PSK Reporter and polls wsprnet and hamqsl"],
   ["Spots & reporting", "cluster_en",      "bool", "DX cluster spots (phone)",
      "Human-typed spots. The ONLY source of SSB spots - RBN is automated skimmers and no SSB skimmer exists. A second connection, so off by default"],
   ["Spots & reporting", "sota_en",        "bool", "SOTA spots (summits)",
      "Summit activations, from spothole.app - a volunteer-run aggregator. Fetched once every two minutes, and off by default so nobody polls it who did not ask"],
   ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],
-  ["Spots & reporting", "psk_rx_en",      "bool", "Propagation feedback (who is hearing me)",
+  ["Spots & reporting", "psk_rx_en",      "bool", "Who has heard me (last 24 h)",
      "Asks PSK Reporter which receivers have copied YOUR callsign. Read-only, at most one query every 5 minutes"],
   ["Spots & reporting", "spots_mode_filter", "bool", "Mode filter the spots",
      "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
