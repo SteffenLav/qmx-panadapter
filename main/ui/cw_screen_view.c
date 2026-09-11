@@ -26,6 +26,7 @@
 #include "settings.h"
 #include "cat.h"
 #include "cw_qso.h"
+#include "cw_decode.h"   // cw_squelch_push() - the SHARED noise filter
 #include "util/dxcc.h"
 #include "adif/adif_log.h"
 
@@ -97,13 +98,19 @@ static lv_obj_t *s_card_hint  = NULL;
 static char           s_dec_ring[DEC_RING_CAP];
 static size_t         s_dec_len = 0;          // chars currently held (<= CAP)
 static bool           s_dec_dirty = false;
-// Ticker noise-squelch state (feed context; see cw_screen_feed_decoded).
-static char           s_tick_tok[24];
-static int            s_tick_len = 0;
-static char           s_tick_last_single = 0;   // the current "noise letter"
-static int            s_tick_single_run = 0;    // consecutive lone repeats of it
-static char           s_tick_held = 0;          // one-char lookahead, 0 = none
-static char           s_tick_last_emitted = 0;  // to collapse runs of spaces
+/* ⛔ ONE SQUELCH, NOT TWO. This file used to carry its own noise filter, which
+ * keyed on repeated single letters and knew nothing about the decoder's
+ * unresolved-symbol marker - so the panadapter's CW line (cw_decode.c) dropped
+ * '*' and the CW page's ticker printed it, from the same TB; bytes. Operator,
+ * 2026-09-11: "the cw decoder needs the same filtering as we implemented on
+ * the cw decoding on the panadapter - no * for example".
+ *
+ * cw_squelch_push() is portable and host-tested, it drops '*' AND counts it
+ * toward the E/T run (so "T*T*E*T" reads as one stretch of the decoder
+ * struggling rather than as text interrupted by noise), and it is the same
+ * code the other screen uses - which is the point. Two filters over one stream
+ * is two answers to one question. */
+static cw_squelch_t   s_tick_sq;
 static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Wipe everything the decode stream produced: the ticker's ring, the copilot
@@ -118,11 +125,7 @@ void cw_screen_clear_decode(void)
     s_dec_len = 0;
     s_dec_dirty = false;
     portEXIT_CRITICAL(&s_dec_mux);
-    s_tick_len = 0;              // drop a half-built token
-    s_tick_last_single = 0;      // and the squelch's run state
-    s_tick_single_run = 0;
-    s_tick_held = 0;
-    s_tick_last_emitted = 0;
+    memset(&s_tick_sq, 0, sizeof(s_tick_sq));   // drop whatever it was holding
     cw_qso_reset();          // drops target + ladder
     cw_qso_clear_capture();  // drops the heard call and the hint
     if (s_ticker_lbl) lv_label_set_text(s_ticker_lbl, "");
@@ -130,19 +133,12 @@ void cw_screen_clear_decode(void)
     if (s_card)       lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
 }
 
-// Noise squelch for the TICKER ONLY. With no signal the QMX's decoder emits a
-// steady dribble of single characters - "T T T T T T T" (hardware-observed all
-// session, and reproduced by the simulator) - which buries real copy.
-//
-// The filter keys on REPETITION, never on which character it is: a run of the
-// same single-letter token is never real CW, while a lone R / K / N, and "EE",
-// certainly are. The first two of a run still show (so the operator can see
-// the band is noisy), the rest are dropped.
-//
-// It is applied ONLY to the display string. cw_qso_feed() below gets the raw
-// stream, so callsign capture, the copilot hints and the ESM ladder are
-// completely unaffected - the filter cannot cost a decode.
-#define NOISE_RUN_SHOW 2
+// (The bespoke ticker squelch that used to be described here is gone - the
+// ticker now shares cw_decode.c's, which additionally drops the decoder's '*'
+// unresolved-symbol marker. See the note by s_tick_sq. The important property
+// is unchanged: the filter applies ONLY to the display string, because
+// cw_qso_feed() still gets the raw stream, so callsign capture, the copilot
+// hints and the ESM ladder cannot lose a character to it.)
 
 // Append one character. Short critical section - see the cyan-flash note.
 static void ticker_emit_char(char c)
@@ -156,66 +152,25 @@ static void ticker_emit_char(char c)
     s_dec_ring[s_dec_len++] = c;
     s_dec_dirty = true;
     portEXIT_CRITICAL(&s_dec_mux);
-    s_tick_last_emitted = c;
 }
 
 void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;
     cw_qso_feed(s, n);   // RAW stream: capture / ESM / hints are never filtered
-    // Characters reach the ticker AS THEY DECODE - an operator following a
-    // QSO needs to watch it arrive letter by letter, so nothing may be held
-    // back waiting for a word to finish (operator, 2026-08-04).
+    // ⚠ Raw is right for cw_qso: its tokenizer already treats anything outside
+    // [A-Z0-9/-] as a token separator, so '*' splits tokens there instead of
+    // corrupting them, and the capture wants every character it can get.
     //
-    // The squelch therefore works on what it has ALREADY established: once
-    // the same lone letter has ended two tokens in a row it becomes the
-    // "noise letter", and only THAT letter, only as the first character of a
-    // token, is held back for a single character - just long enough to see
-    // whether a separator follows (another noise blip -> dropped) or more
-    // text does (a real word -> the held letter is emitted immediately, in
-    // order, and the squelch releases). Everything else streams with zero
-    // delay, and the delay that does exist is one character of the one
-    // letter the band is currently spewing.
+    // The TICKER is what the operator reads, and it goes through the same
+    // squelch as the panadapter's CW line - see the note by s_tick_sq.
+    // Characters reach it AS THEY DECODE apart from the few the squelch is
+    // holding to decide on, which is what an operator following a QSO needs
+    // (operator, 2026-08-04).
     for (int i = 0; i < n; i++) {
-        char c = s[i];
-        if (c == '\r' || c == '\n') c = ' ';
-
-        if (c == ' ') {
-            if (s_tick_held) {
-                // A lone noise letter: drop it and its separator, and keep
-                // the run going so the squelch stays armed.
-                s_tick_held = 0;
-                s_tick_single_run++;
-                s_tick_len = 0;
-                continue;
-            }
-            if (s_tick_len == 1) {
-                if (s_tick_tok[0] == s_tick_last_single) s_tick_single_run++;
-                else { s_tick_last_single = s_tick_tok[0]; s_tick_single_run = 1; }
-            } else if (s_tick_len > 1) {
-                s_tick_last_single = 0;   // real text breaks the run
-                s_tick_single_run  = 0;
-            }
-            s_tick_len = 0;
-            if (s_tick_last_emitted != ' ') ticker_emit_char(' ');
-            continue;
-        }
-
-        bool first_of_token = (s_tick_len == 0);
-        if (s_tick_len < (int)sizeof(s_tick_tok)) s_tick_tok[s_tick_len++] = c;
-
-        if (first_of_token && c == s_tick_last_single &&
-            s_tick_single_run >= NOISE_RUN_SHOW) {
-            s_tick_held = c;      // might be another blip - decide next char
-            continue;
-        }
-        if (s_tick_held) {        // it was not a blip after all
-            ticker_emit_char(s_tick_held);
-            s_tick_held = 0;
-            s_tick_last_single = 0;
-            s_tick_single_run  = 0;
-        }
-        ticker_emit_char(c);
+        char rel[CW_SQUELCH_HOLD + 2];
+        int m = cw_squelch_push(&s_tick_sq, s[i], rel, sizeof(rel));
+        for (int k = 0; k < m; k++) ticker_emit_char(rel[k]);
     }
 }
 
