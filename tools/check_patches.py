@@ -83,6 +83,13 @@ PATCHES = [
      "and then REBOOTED the device - a deliberate restart, so no crash record, "
      "and a warm reset with the radio attached wedges the QMX (#74)"),
 
+    ("apply_esp_hosted_sdio_sendbuf_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_SENDBUF_TOLERANT",
+     "sdio_write_task() abort()s the device when a send buffer cannot be "
+     "allocated, with the drop path one line below - captured 2026-09-11 at "
+     "24 min, after a boot that started with the DMA pool at 99 bytes"),
+
     ("apply_esp_hosted_assert_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
      "QMX_PANADAPTER_ASSERT_TOLERANT_PATCH_MARKER",
