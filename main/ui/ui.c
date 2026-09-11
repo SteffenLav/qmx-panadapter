@@ -2670,15 +2670,16 @@ static const drawer_item_t GRP_DISPLAY[] = {
     { DRAWER_SEC_FREQSEP, "Frequency format", false },
     { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
 };
+/* Order is the operator's (2026-09-11): band hopping, wsprnet and Test station
+ * directly under the WSPR heading, then the rest. */
 static const drawer_item_t GRP_WSPR[] = {
-    /* First, i.e. where the FT8 group used to sit on this page. */
-    { DRAWER_SEC_WSPRDIST, "Distance in miles (WSPR page)", true },
-    { DRAWER_SEC_WSPRTX, "WSPR transmit & power", true },
-    { DRAWER_SEC_WSPRDUTY, "WSPR duty cycle", true },
     { DRAWER_SEC_WSPRHOP, "WSPR band hopping", true },
     { DRAWER_SEC_WSPRNET, "Publish spots to wsprnet", true },
     /* Advanced, matching the FT8 page's Simulation mode row. */
     { DRAWER_SEC_WSPRTEST, "Test station (simulation)", false },
+    { DRAWER_SEC_WSPRDIST, "Distance in miles (WSPR page)", true },
+    { DRAWER_SEC_WSPRTX, "WSPR transmit & power", true },
+    { DRAWER_SEC_WSPRDUTY, "WSPR duty cycle", true },
 };
 static const drawer_item_t GRP_FT8[] = {
     { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter", true },

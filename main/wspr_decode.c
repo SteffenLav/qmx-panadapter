@@ -288,13 +288,18 @@ static void free_baseband(baseband_t *bb)
  *   (single stage today: 160 taps, -0.58 dB, -53.6 dB, 1.00x, no shared cost)
  *
  * ⚠ STAGE 1 MUST PRESERVE +/-200 Hz, not +/-34. The candidate search runs
- * 1350-1650 Hz around a 1500 Hz centre, so a candidate can sit 150 Hz out, and
+ * 1330-1630 Hz around a 1480 Hz centre, so a candidate can sit 150 Hz out, and
  * measure_noise_ref then samples 34 Hz beyond that. Narrowing stage 1 toward
  * what the decoder "reads" would quietly attenuate every off-centre candidate.
+ *
+ * The centre FOLLOWS the search window (WSPR_WF_LO_HZ/HI_HZ in wspr_rx.h, which
+ * went 1350-1650 -> 1330-1630 on 2026-09-11). Left at 1500 with the window
+ * moved, the 1330 edge would sit 170 Hz out and its noise reference 204 Hz -
+ * outside the +/-200 this stage is built to keep.
  */
 #define S1_DECIM      8
 #define S1_RATE_HZ    (WSPR_SAMPLE_RATE_HZ / S1_DECIM)   /* 1500 Hz */
-#define S1_CENTRE_HZ  1500.0                             /* middle of 1350-1650 */
+#define S1_CENTRE_HZ  1480.0                             /* middle of 1330-1630 */
 #ifndef S1_TAPS
 #define S1_TAPS       64
 #endif

@@ -100,7 +100,6 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define AXIS_H     22
 #define LIST_Y     (AXIS_Y + AXIS_H + 8)
 
-#define AXIS_TICKS 7      /* 1350..1650 every 50 Hz */
 /* Rows RENDERED, not rows visible - the pane shows about a dozen and scrolls
  * through the rest, which is what the operator asked for ("like FT8/4"). 64 is
  * a quarter of the 256-entry ring: several screenfuls to scroll back through
@@ -1524,7 +1523,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * this label and LVGL draws siblings in creation order, so without this the
      * title would be drawn UNDER the waterfall and simply disappear - the
      * opposite of what was asked for. The overlap is ~24 px into the top-left
-     * corner of the waterfall, which carries the 1350 Hz edge of the window. */
+     * corner of the waterfall, which carries the low (1330 Hz) edge of the window. */
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
     lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
@@ -1706,8 +1705,11 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * and every label pointed at the wrong column. Absolute positions cannot be
      * wrong: each label is placed by the SAME arithmetic that maps a frequency
      * to a waterfall column, then centred on it. */
-    for (int i = 0; i < AXIS_TICKS; i++) {
-        int hz = 1350 + i * 50;
+    /* Every round 50 Hz INSIDE the window, derived from it. This was a literal
+     * "1350 + i * 50" for 7 ticks, so moving the window to 1330-1630 would have
+     * put a "1650" label on the right edge of a waterfall that ends at 1630. */
+    const int first_tick = (((int)WSPR_WF_LO_HZ + 49) / 50) * 50;
+    for (int hz = first_tick; hz <= (int)WSPR_WF_HI_HZ; hz += 50) {
         int x  = (hz - (int)WSPR_WF_LO_HZ) * RIGHT_W /
                  (int)(WSPR_WF_HI_HZ - WSPR_WF_LO_HZ);
         lv_obj_t *t = lv_label_create(s_container);

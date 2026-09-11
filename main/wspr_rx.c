@@ -331,8 +331,8 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
  * reverted with the display - see WSPR_WF_LO_HZ. It would have saved 23 % of
  * the peak-finder's bins, which is real, but a station at the edge that is not
  * SEARCHED can never be decoded, and the operator can see them out there. */
-#define SEARCH_LO_HZ      1350.0
-#define SEARCH_HI_HZ      1650.0
+#define SEARCH_LO_HZ      ((double)WSPR_WF_LO_HZ)
+#define SEARCH_HI_HZ      ((double)WSPR_WF_HI_HZ)
 
 /* ---- per-cycle waterfall ----
  * Built from the captured window (see wspr_rx.h for why a LIVE spectrum is not

@@ -84,10 +84,14 @@ bool wspr_rx_running(void);
  *
  * Generalise it: do not size a DISPLAY window from the distribution of
  * SUCCESSES. That is the same trap as a change-detected repaint keyed on only
- * part of what the render reads. */
-#define WSPR_WF_LO_HZ  1350.0f
-#define WSPR_WF_HI_HZ  1650.0f
-#define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
+ * part of what the render reads.
+ *
+ * 1330-1630 since 2026-09-11 (operator): the same 300 Hz, moved 20 Hz down.
+ * The search window in wspr_rx.c and the decoder's stage-1 centre in
+ * wspr_decode.c moved with it - see both. */
+#define WSPR_WF_LO_HZ  1330.0f
+#define WSPR_WF_HI_HZ  1630.0f
+#define WSPR_WF_COLS   205            /* (1630-1330) / 1.4648 */
 
 /* ---- THE CARPET FLOWS, IT DOES NOT REDRAW ------------------------------
  *
