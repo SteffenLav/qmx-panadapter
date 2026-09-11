@@ -1755,6 +1755,36 @@ Root-caused 2026-07-13 from an FT4 field observation (one-frame full-screen cyan
 ### USB ISO pipeline depth — do NOT shrink (#51 root cause, SOLVED 2026-07-19)
 `CONFIG_UAC_NUM_ISOC_URBS=8` × `CONFIG_UAC_NUM_PACKETS_PER_URB=40` = **320 ms of queued isochronous transfers** (sdkconfig + sdkconfig.defaults). The Kconfig defaults (3×3 = **9 ms**) were the root cause of the years-long "first FT8 slots decode 60+, then collapse to a fraction" mystery: every post-decode storm (dual-core LDPC + LVGL decode-list rebuild) paused the ISO completion/resubmission pump >9 ms, the IN endpoint ran dry, and **~170–350 ms of QMX audio was lost at the USB wire every slot — zero error status, invisible to every software counter** (`drop=0`, `backlog=0` throughout; isochronous has no retry, a missed service interval is silence nobody logs). The hole clipped every signal's opening Costas sync array → same-station sync scores fell 5–13 pts with SNR unchanged → weak decodes died. Slots 0/1 were pristine only because no decode storm had happened yet. Verified fixed: capture windows tile at 180,027±152 samples (was ~175,656 ≈ −360 ms/slot); sustained 15.8 unique decodes/slot over 22 straight slots (was 6.3). Defense-in-depth shipped with it: UAC driver ringbuf 19,200 B → 288,000 B = 1 s (PSRAM — >16 KB allocs spill there), `audio_task` pri 3→6, and the fork (`components/espressif__usb_host_uac`, hand-patched — patch #2 and #3 now) WARNs+counts its formerly-silent ringbuf-overflow drop and logs 1 Hz `RX xport` ISO stats (~25 xfers/s is the NEW normal — 25×40 = the same 1000 pkts/s). Permanent cheap watchdogs for regressions: the `FT8 arm: start=` log (consecutive deltas must be ~180000 — an alternating/short delta = audio loss), per-slot `slotdiag`, per-decode `dt=`. If FT8 yield ever collapses again, **check window tiling first** — not the band, not the decoder.
 
+### ⛔ A high-priority task that WAITS on display_lock() lends LVGL its priority — and that starved the USB audio (2026-09-11)
+`handle_rx()` (the CDC-ACM data callback) runs on the driver's **"USB-CDC" task,
+priority 10, core 0**, and it parsed CAT replies there — `process_cat_message()` →
+`ui_refresh_bandplan_strip()` waits up to 100 ms for `display_lock()` on EVERY FA
+reply. Whenever LVGL was mid-draw, the USB-CDC task blocked on the LVGL mutex and
+**priority inheritance lifted taskLVGL 4 → 10**, above `audio_task` (6) and the UAC
+driver task (5) on the same core: the isochronous pump starved and audio was lost
+AT THE WIRE, and CAT stalled ("TX transfer timeout" ~1/s).
+
+Measured on a WSPR page with the spot map open (it redraws ~1,300 line segments
+per report): **11–13 % of each cycle's audio lost, 0 decodes**; after moving CAT
+parsing to `cat_rx_task` (priority 4 = LVGL's base, core 1): **0.0 % lost, 3–4
+decodes, 0 CAT timeouts**. It was also the "natural" 0.3–0.6 % loss on ordinary
+cycles, and very likely the drawer-triggered audio gaps. The tell was
+`cpu_owners` showing `taskLVGL` at **current priority 10** (base 4).
+
+**The rule:** nothing above priority 4 may block on `display_lock()`. A callback
+on a USB, BLE (`nimble_host` is 21) or timer task queues its work and lets the
+LVGL thread or a priority-≤4 task apply it — the BLE keyboard path had the same
+trap (500 ms wait on the NimBLE task) and now goes through a queue. A zero-timeout
+try-lock is also safe (no wait, no inheritance) — `qmx_term.c`'s `on_rx` does that.
+
+**Safety net:** `dsp.c` `time_base_check()` holds the FT8/WSPR capture to the wall
+clock — audio that never arrived is filled with silence where it went missing, so
+a lossy WSPR cycle still decodes (A/B at 2 % simulated loss: 0/0/0 decodes without,
+2/3/5 with). Only a shortfall persisting a whole 2 s bucket is filled (1.34 s is
+buffered upstream, so a LATE sample is never mistaken for a lost one). The arm line
+reports the arrived rate and `filled=N ms`. Dev actions `gapfill` (A/B, simulated
+loss) and `spotmap` (open the map with nobody at the screen).
+
 ### A dead UAC handle used to peg core 0 — and that was what BLOCKED re-enumeration (fixed 2026-08-05)
 `audio_task`'s `if (s_uac_dev) process_rx();` branch deliberately has **no `vTaskDelay`** (a 10 ms tick delay starved the read; #51 is the standing reminder). On a merely *silent* device that is safe, because `uac_host_device_read` honours its 25 ms timeout and the loop self-limits to ~40 Hz. On an **INVALID-STATE** device the read fails **instantly**, so the loop spun flat out at priority 6 → **core 0 at 0% idle**, LVGL starved, UI frozen, and `usbh_devs_open error: ESP_ERR_INVALID_STATE` logged every 50 ms for 100+ seconds with no task free to act on it. A Tab5 reboot was the only way out; the v1.3.6 auto-replug backstop never even ran.
 
