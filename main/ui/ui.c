@@ -299,23 +299,51 @@ static esp_err_t ui_tune_commit(uint32_t hz, bool forced);
 // of the "honour the band plan" rule (operator, 2026-08-01); everywhere else
 // it's the plain band edges. Falls back to band edges when the band has no
 // known CW segment.
+/* The CW page's operating range: the band's CW segment AND the DiGi segment.
+ *
+ * ⭐ CW IS LEGAL INSIDE THE DIGITAL SUB-BAND, BUT NOT THE REVERSE (operator,
+ * 2026-09-11), so a CW operator who is clamped to the CW segment alone is being
+ * denied half the spectrum he may actually use. Phone is never included - that
+ * one really is off limits for CW.
+ *
+ * It exists because FIVE places each hand-rolled "walk the segments and take
+ * the BP_CW one": the stroll clamp, the segment centre, the tune clamp, the
+ * band-plan drag and the strip render. Widening the rule meant changing all
+ * five in step, which is exactly the shape of bug this file keeps recording -
+ * so there is one rule now and the five call it.
+ *
+ * Returns false when the frequency is not in a known band, or the band has
+ * neither segment; callers then leave the frequency alone. */
+static bool cw_page_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
+{
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(hz,
+                bandplan_effective_region((bandplan_region_t)bp_region,
+                                          bp_grid), &segs);
+    if (n <= 0 || !segs) return false;
+    bool found = false;
+    uint32_t l = 0, h = 0;
+    for (int i = 0; i < n; i++) {
+        if (segs[i].type != BP_CW && segs[i].type != BP_DIGI) continue;
+        if (!found) { l = segs[i].lo_hz; h = segs[i].hi_hz; found = true; }
+        else {
+            if (segs[i].lo_hz < l) l = segs[i].lo_hz;
+            if (segs[i].hi_hz > h) h = segs[i].hi_hz;
+        }
+    }
+    if (!found) return false;
+    *lo = l; *hi = h;
+    return true;
+}
+
 static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
 {
     if (!legal_band_edges(center_hz, lo, hi)) return false;
     if (ui_mode_get() != UI_MODE_CW) return true;
-    uint8_t bp_region; char bp_grid[8];
-    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
-    const bp_seg_t *segs = NULL;
-    int n = bandplan_get_segments(center_hz,
-                bandplan_effective_region((bandplan_region_t)bp_region,
-                                          bp_grid), &segs);
-    for (int i = 0; i < n; i++) {
-        if (segs[i].type == BP_CW) {
-            *lo = segs[i].lo_hz;
-            *hi = segs[i].hi_hz;
-            return true;
-        }
-    }
+    uint32_t cl, ch;
+    if (cw_page_range_hz(center_hz, &cl, &ch)) { *lo = cl; *hi = ch; }
     return true;
 }
 
@@ -4764,7 +4792,7 @@ static void draw_label_ticks(void)
     memset(px, 0, (size_t)DISPLAY_H_RES * LABEL_BAR_H * 2);
     const uint16_t major_color = 0xC618;  // light grey
     const uint16_t minor_color = 0x8410;  // medium grey
-    const int x0 = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
+    const int x0 = ui_spec_x0();   /* CW_PANE_W on the CW page, 0 elsewhere */
     const int w  = DISPLAY_H_RES - x0;
     for (int i = 0; i <= 16; i++) {       // 16 steps = 4 minors per quarter
         int x = x0 + (w * i) / 16;
@@ -4890,20 +4918,25 @@ static void update_bandplan_strip(uint32_t freq_hz)
         return;
     }
 
-    // CW page: the strip shows ONLY the band's CW segment, stretched across
-    // the full width. Roaming there is clamped to the segment, so rendering
-    // the digi/phone remainder is dead space - and at whole-band scale the
-    // strip read as a copy of the panadapter page (operator, 2026-08-01).
-    bp_seg_t cw_only;
+    // CW page: the strip shows the band's CW segment AND the DiGi one beside
+    // it, stretched across the full width - never Phone. Roaming is clamped to
+    // the same pair (cw_page_range_hz), so rendering the phone remainder would
+    // be dead space, and at whole-band scale the strip read as a copy of the
+    // panadapter page (operator, 2026-08-01).
+    //
+    // ⭐ DiGi was added 2026-09-11: CW is legal inside the digital sub-band but
+    // digital modes are not legal inside the CW one, so CW-only was denying the
+    // operator spectrum he is allowed to use - and the off-screen spot counters,
+    // which are mapped across the visible span, kept pointing at spots the
+    // clamp would not let him reach. Both segments are kept SEPARATE rather
+    // than merged into one block so each keeps its own colour and label.
+    bp_seg_t cw_digi[2];
     if (ui_mode_get() == UI_MODE_CW) {
-        for (int i = 0; i < n; i++) {
-            if (segs[i].type == BP_CW) {
-                cw_only = segs[i];
-                segs = &cw_only;
-                n = 1;
-                break;
-            }
-        }
+        int cd = 0;
+        for (int i = 0; i < n && cd < 2; i++)
+            if (segs[i].type == BP_CW || segs[i].type == BP_DIGI)
+                cw_digi[cd++] = segs[i];
+        if (cd > 0) { segs = cw_digi; n = cd; }
     }
 
     uint32_t band_lo = segs[0].lo_hz;
@@ -7772,20 +7805,20 @@ static uint32_t cw_segment_center_hz(uint32_t hz)
                 bandplan_effective_region((bandplan_region_t)bp_region,
                                           bp_grid), &segs);
     if (n <= 0 || !segs) return 0;
-    for (int i = 0; i < n; i++) {
-        if (segs[i].type == BP_CW) {
-            uint32_t f = segs[i].lo_hz + (segs[i].hi_hz - segs[i].lo_hz) / 2;
-            return (f / 1000) * 1000;
-        }
-    }
-    return 0;
+    (void)segs; (void)n;
+    uint32_t cl, ch;
+    if (!cw_page_range_hz(hz, &cl, &ch)) return 0;
+    uint32_t f = cl + (ch - cl) / 2;
+    return (f / 1000) * 1000;
 }
 
-// Keep a frequency inside the band's CW segment. In-segment frequencies pass
-// through untouched; anything else moves to the segment centre. Applied to
-// EVERY tuning path while the CW page is up (tap-to-tune, keypad, band
-// change, page entry) - the page only lets you operate the CW portion, so it
-// should not be possible to leave it (operator, 2026-08-04).
+// Keep a frequency inside the CW page's range - the band's CW segment AND the
+// DiGi one (cw_page_range_hz; CW is legal in the digital sub-band, digital is
+// not legal in the CW one). In-range frequencies pass through untouched;
+// anything else moves to the range centre. Applied to EVERY tuning path while
+// the CW page is up (tap-to-tune, keypad, band change, page entry) - the page
+// only lets you operate where CW is allowed, so it should not be possible to
+// leave it (operator, 2026-08-04; widened to DiGi 2026-09-11).
 static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
 {
     uint8_t bp_region; char bp_grid[8];
@@ -7795,9 +7828,9 @@ static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
                 bandplan_effective_region((bandplan_region_t)bp_region,
                                           bp_grid), &segs);
     if (n <= 0 || !segs) return hz;   // not in a known band: leave alone
-    for (int i = 0; i < n; i++)
-        if (segs[i].type == BP_CW && hz >= segs[i].lo_hz && hz <= segs[i].hi_hz)
-            return hz;
+    (void)segs; (void)n;
+    uint32_t cl, ch;
+    if (cw_page_range_hz(hz, &cl, &ch) && hz >= cl && hz <= ch) return hz;
     uint32_t c = cw_segment_center_hz(hz);
     return c ? c : hz;
 }
@@ -9464,15 +9497,14 @@ static void touch_event_cb(lv_event_t *e)
         if (n > 0) {
             s_bp_drag_band_lo = segs[0].lo_hz;
             s_bp_drag_band_hi = segs[n - 1].hi_hz;
-            // CW page: roaming is clamped to the band's CW segment, same rule
-            // as the stroll gesture (effective_drag_edges).
+            // CW page: roaming is clamped to the CW+DiGi range, same rule as
+            // the stroll gesture and the tune clamp - all four call
+            // cw_page_range_hz() so they cannot drift apart.
             if (ui_mode_get() == UI_MODE_CW) {
-                for (int i = 0; i < n; i++) {
-                    if (segs[i].type == BP_CW) {
-                        s_bp_drag_band_lo = segs[i].lo_hz;
-                        s_bp_drag_band_hi = segs[i].hi_hz;
-                        break;
-                    }
+                uint32_t cl, ch;
+                if (cw_page_range_hz(s_last_qmx_freq_hz, &cl, &ch)) {
+                    s_bp_drag_band_lo = cl;
+                    s_bp_drag_band_hi = ch;
                 }
             }
         } else {
