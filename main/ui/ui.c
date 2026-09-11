@@ -2586,7 +2586,13 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * anything. Same setting, second checkbox - both are synced on every toggle
  * and on every drawer open, so they cannot disagree. */
 #define DRAWER_SEC_WSPRDIST   43
-#define N_DRAWER_SECTIONS     44
+/* Simulation mode's switch on the WSPR page, labelled "Test station" (operator,
+ * 2026-09-11: "FT8 settings are FT8 settings - just like the distance needed
+ * to be taken out of FT8"). Same setting as DRAWER_SEC_SIMMODE - one flag
+ * drives both the FT8 phantoms and the WSPR ones (wspr_sim.h) - so both boxes
+ * are kept in step exactly like the two km/miles boxes. */
+#define DRAWER_SEC_WSPRTEST   44
+#define N_DRAWER_SECTIONS     45
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2671,6 +2677,8 @@ static const drawer_item_t GRP_WSPR[] = {
     { DRAWER_SEC_WSPRDUTY, "WSPR duty cycle", true },
     { DRAWER_SEC_WSPRHOP, "WSPR band hopping", true },
     { DRAWER_SEC_WSPRNET, "Publish spots to wsprnet", true },
+    /* Advanced, matching the FT8 page's Simulation mode row. */
+    { DRAWER_SEC_WSPRTEST, "Test station (simulation)", false },
 };
 static const drawer_item_t GRP_FT8[] = {
     { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter", true },
@@ -2919,7 +2927,8 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * settings drawer remove ... FT8 section"). It used to show there for two
      * reasons, both recorded so nobody re-adds them blind:
      *  - Simulation drives the WSPR phantoms as well as the FT8 ones (see
-     *    wspr_sim.h). It is now switched from the FT8 page or the web only.
+     *    wspr_sim.h). The WSPR page has its own switch for it now,
+     *    DRAWER_SEC_WSPRTEST ("Test station"), in the WSPR group.
      *  - The WSPR decode list honours the km/miles setting, and the Tab5 once
      *    offered nowhere to set it from WSPR (Samuel W7STF, 2026-09-07). That
      *    is now DRAWER_SEC_WSPRDIST, a checkbox of its own in the WSPR group,
@@ -2955,7 +2964,7 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
         id == DRAWER_SEC_WSPRHOP || id == DRAWER_SEC_WSPRNET ||
-        id == DRAWER_SEC_WSPRDIST) return wspr;
+        id == DRAWER_SEC_WSPRDIST || id == DRAWER_SEC_WSPRTEST) return wspr;
     // The spectrum/waterfall controls describe a view neither decode page shows.
     if (id == DRAWER_SEC_STILL   || id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
@@ -3029,6 +3038,7 @@ static lv_obj_t *s_check_wspr_miles     = NULL;   /* DRAWER_SEC_WSPRDIST */
 static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panadapter only)
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
+static lv_obj_t *s_check_wspr_test = NULL;       // the same setting, WSPR page ("Test station")
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
 static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
                                                   // simulator (ft8_sim.c) is FT8-only for now
@@ -3462,9 +3472,12 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
             s_sim_mode_en = s.sim_mode_en;
             ESP_LOGI(TAG, "FT8 simulation mode changed elsewhere: %s",
                      s_sim_mode_en ? "ON (radio not keyed)" : "off");
-            if (s_check_sim_mode) {          // keep the drawer checkbox honest too
-                if (s_sim_mode_en) lv_obj_add_state(s_check_sim_mode, LV_STATE_CHECKED);
-                else               lv_obj_remove_state(s_check_sim_mode, LV_STATE_CHECKED);
+            // Keep BOTH drawer checkboxes honest (FT8 page + WSPR "Test station").
+            lv_obj_t *boxes[] = { s_check_sim_mode, s_check_wspr_test };
+            for (int i = 0; i < 2; i++) {
+                if (!boxes[i]) continue;
+                if (s_sim_mode_en) lv_obj_add_state(boxes[i], LV_STATE_CHECKED);
+                else               lv_obj_remove_state(boxes[i], LV_STATE_CHECKED);
             }
             ui_refresh_sim_mode_indicator();
         }
@@ -10334,8 +10347,14 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
     lv_obj_t *cb = lv_event_get_target(e);
     s_sim_mode_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_sim_mode_en(s_sim_mode_en);
+    // Shared by the FT8 box and the WSPR "Test station" box - move the other.
+    lv_obj_t *other = (cb == s_check_sim_mode) ? s_check_wspr_test : s_check_sim_mode;
+    if (other && lv_obj_is_valid(other)) {
+        if (s_sim_mode_en) lv_obj_add_state(other, LV_STATE_CHECKED);
+        else               lv_obj_remove_state(other, LV_STATE_CHECKED);
+    }
     ui_refresh_sim_mode_indicator();
-    ESP_LOGI(TAG, "FT8 simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
+    ESP_LOGI(TAG, "simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
 }
 
 // Create a transparent, full-width, non-scrollable container for one
@@ -10975,6 +10994,7 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_ft8_early,      c.ft8_early_decode);
     sync_cb(s_check_pskrep,         c.pskreporter_en);
     sync_cb(s_check_sim_mode,       c.sim_mode_en);
+    sync_cb(s_check_wspr_test,      c.sim_mode_en);
     sync_cb(s_check_spots,          c.spots_en);
     sync_cb(s_check_rbn,            c.rbn_en);
     sync_cb(s_check_spotmap,        c.spotmap_en);
@@ -12552,6 +12572,20 @@ static void drawer_build(void)
                                                   drawer_check_distance_miles_cb, NULL);
         lv_obj_align(s_check_wspr_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 72;
+    }
+    // Simulation mode's switch on the WSPR page (DRAWER_SEC_WSPRTEST). Same
+    // setting as the FT8 box above, same callback; the two are kept in step.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTEST, y, 56);
+        lv_obj_t *wt_lbl = lv_label_create(sec);
+        lv_label_set_text(wt_lbl, "Test station");
+        lv_obj_set_style_text_color(wt_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(wt_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(wt_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_wspr_test = make_drawer_checkbox(sec, s_sim_mode_en,
+                                                 drawer_check_sim_mode_cb, NULL);
+        lv_obj_align(s_check_wspr_test, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
     }
 
     /* ---- WSPR ------------------------------------------------------------
