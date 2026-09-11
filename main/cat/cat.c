@@ -694,7 +694,31 @@ static void process_cat_message(const char *msg, size_t len)
     // characters. cw_decode_feed() re-validates the whole frame and drops
     // anything malformed rather than letting it into the text.
     if (len >= 6 && msg[0] == 'T' && msg[1] == 'B') {
-        cw_decode_feed(msg);
+        /* ⛔ BOTH CONSUMERS, FROM ONE PARSE. This branch used to call only
+         * cw_decode_feed() and then return, which made the SECOND TB branch
+         * further down - the one feeding cw_screen_feed_decoded() and setting
+         * s_cw_tx_remaining - unreachable: its condition is a strict subset of
+         * this one. So from the moment cw_decode.c was added the CW page's
+         * ticker, cw_qso's callsign capture, the station card, the copilot
+         * hints and the ESM ladder all received nothing, while the panadapter
+         * line and /api/status kept working - which is exactly how it
+         * presented on the bench (operator, 2026-09-11): decoded text in the
+         * API, the placeholder still on the CW page.
+         *
+         * cw_decode_parse_tb() is the portable, fully-validating parser
+         * (host-tested in test/cw_decode_harness.c) - so parse ONCE here and
+         * hand the payload to both, rather than having two parsers of the same
+         * frame that can disagree. */
+        char cw_buf[CW_DECODE_MAX_CHUNK + 1];
+        int  tx_pending = 0;
+        int  cw_n = cw_decode_parse_tb(msg, cw_buf, sizeof(cw_buf), &tx_pending);
+        if (cw_n >= 0) {
+            s_cw_tx_remaining = tx_pending;
+            cw_decode_feed(msg);                          /* line model + web */
+            if (cw_n > 0) cw_screen_feed_decoded(cw_buf, cw_n);  /* CW page */
+        } else {
+            ESP_LOGW(TAG, "Bad TB response (len=%u)", (unsigned)len);
+        }
         return;
     }
     if (len == 14 && msg[0] == 'F' && msg[1] == 'A') {
@@ -813,18 +837,10 @@ static void process_cat_message(const char *msg, size_t len)
     // would split the tokenizer early and land here with a short len - warn
     // and drop rather than feed a truncated fragment (no ';' in the standard
     // CW charset, so this is theoretical).
-    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B' &&
-        msg[2] >= '0' && msg[2] <= '9' &&
-        msg[3] >= '0' && msg[3] <= '9' && msg[4] >= '0' && msg[4] <= '9') {
-        int nn = (msg[3] - '0') * 10 + (msg[4] - '0');
-        if ((int)len == 6 + nn) {
-            s_cw_tx_remaining = msg[2] - '0';
-            if (nn > 0) cw_screen_feed_decoded(msg + 5, nn);
-        } else {
-            ESP_LOGW(TAG, "Bad TB response: nn=%d len=%u", nn, (unsigned)len);
-        }
-        return;
-    }
+    /* (The second TB branch that used to live here is gone: it was unreachable
+     * behind the one at the top of this function, which returns for every TB
+     * response. Its two jobs - s_cw_tx_remaining and cw_screen_feed_decoded()
+     * - are done up there now, off the same single parse.) */
 
     // KS response: "KSnnn;" (also accept 1-2 digits) - keyer speed in WPM.
     if (len >= 4 && len <= 6 && msg[0] == 'K' && msg[1] == 'S') {
