@@ -64,6 +64,8 @@ static const char *TAG = "settings";
 #define KEY_QRZ_UPLOADED "qrz_upl_n"
 #define KEY_EQSL_USER    "eqsl_user"
 #define KEY_EQSL_PSWD    "eqsl_pswd"
+#define KEY_QRZ_LU_USER  "qrz_lu_user"
+#define KEY_QRZ_LU_PASS  "qrz_lu_pass"
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
 #define KEY_CL_URL       "cl_url"
 #define KEY_CL_KEY       "cl_key"
@@ -99,6 +101,7 @@ static const char *TAG = "settings";
 #define KEY_SPOTS_MODE_FLT "spot_modeflt"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
+#define KEY_SPOTMAP_EN     "spotmap_en"
 #define KEY_SOTA_EN        "sota_en"
 #define KEY_OTA_AUTODL     "ota_autodl"
 #define KEY_DRAWER_EXPERT  "drw_expert"
@@ -362,6 +365,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_TUNE_SNAP     115   /* tap-to-tune grid (#347) */
 #define DIRTY_CW_PROFILES   114   /* CW profiles blob (#359) - 113 is DIRTY_FREQ_SEP */
 #define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
+#define DIRTY_QRZ_LU_USER   116   /* QRZ Callbook (XML) lookup username, spot map */
+#define DIRTY_QRZ_LU_PASS   117   /* QRZ Callbook (XML) lookup password, spot map */
+#define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -381,14 +387,14 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
-    DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
+    DIRTY_QRZ_KEY, DIRTY_QRZ_LU_USER, DIRTY_QRZ_LU_PASS, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
     DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
-    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_SPOTMAP_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
@@ -520,6 +526,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_QRZ_UPLOADED)) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
         if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_LU_USER))   nvs_set_str(s_nvs, KEY_QRZ_LU_USER, snap.qrz_lookup_user);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_LU_PASS))   nvs_set_str(s_nvs, KEY_QRZ_LU_PASS, snap.qrz_lookup_pass);
         if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap.cloudlog_url);
         if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap.cloudlog_key);
@@ -556,6 +564,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTMAP_EN))    nvs_set_u8(s_nvs, KEY_SPOTMAP_EN,    snap.spotmap_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
@@ -749,6 +758,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->passband_width_hz = 0;
     out->qrz_api_key[0] = '\0';
     out->qrz_uploaded_n = 0;
+    out->qrz_lookup_user[0] = '\0';
+    out->qrz_lookup_pass[0] = '\0';
     out->eqsl_user[0] = '\0';
     out->eqsl_pswd[0] = '\0';
     out->eqsl_uploaded_n = 0;
@@ -780,6 +791,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // nothing until WiFi is up.
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
+    out->spotmap_en = false; // opt-in: a standing MQTT session plus three pollers, see settings.h
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
     // #239: ON, and the repeat runs are in. Under the exact failing recipe -
     // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
@@ -921,6 +933,12 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->qrz_api_key);
     nvs_get_str(s_nvs, KEY_QRZ_KEY, out->qrz_api_key, &sz);
     nvs_get_u32(s_nvs, KEY_QRZ_UPLOADED, &out->qrz_uploaded_n);
+    out->qrz_lookup_user[0] = '\0';
+    sz = sizeof(out->qrz_lookup_user);
+    nvs_get_str(s_nvs, KEY_QRZ_LU_USER, out->qrz_lookup_user, &sz);
+    out->qrz_lookup_pass[0] = '\0';
+    sz = sizeof(out->qrz_lookup_pass);
+    nvs_get_str(s_nvs, KEY_QRZ_LU_PASS, out->qrz_lookup_pass, &sz);
     out->eqsl_user[0] = '\0';
     sz = sizeof(out->eqsl_user);
     nvs_get_str(s_nvs, KEY_EQSL_USER, out->eqsl_user, &sz);
@@ -977,6 +995,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTMAP_EN, &u8v) == ESP_OK) out->spotmap_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
@@ -1545,6 +1564,34 @@ void settings_set_qrz_uploaded_n(uint32_t n)
     mark_dirty(DIRTY_QRZ_UPLOADED);
 }
 
+void settings_set_qrz_lookup_user(const char *user)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (user) {
+        strncpy(s_pending.qrz_lookup_user, user, sizeof(s_pending.qrz_lookup_user) - 1);
+        s_pending.qrz_lookup_user[sizeof(s_pending.qrz_lookup_user) - 1] = '\0';
+    } else {
+        s_pending.qrz_lookup_user[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_LU_USER);
+}
+
+void settings_set_qrz_lookup_pass(const char *pass)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pass) {
+        strncpy(s_pending.qrz_lookup_pass, pass, sizeof(s_pending.qrz_lookup_pass) - 1);
+        s_pending.qrz_lookup_pass[sizeof(s_pending.qrz_lookup_pass) - 1] = '\0';
+    } else {
+        s_pending.qrz_lookup_pass[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_LU_PASS);
+}
+
 void settings_set_eqsl_user(const char *user)
 {
     if (!s_ready) return;
@@ -1868,6 +1915,19 @@ bool settings_get_wspr_tx_en(void)
     return v;
 }
 
+// Narrow on purpose: the drawer callback and the feed tasks that read this are
+// on stacks that cannot afford a whole qmx_settings_t local - see CLAUDE.md's
+// "Task stacks on this board are TINY", where that mistake has landed four
+// times, three of them from a settings_load_all() that did not look big.
+bool settings_get_spotmap_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.spotmap_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 uint8_t settings_get_wspr_duty_pct(void)
 {
     if (!s_ready) return 0;
@@ -1911,6 +1971,17 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
     if (mask) memcpy(mask, s_pending.wifi_mask, sizeof(s_pending.wifi_mask));
     if (gw)   memcpy(gw,   s_pending.wifi_gw,   sizeof(s_pending.wifi_gw));
     if (dns)  memcpy(dns,  s_pending.wifi_dns,  sizeof(s_pending.wifi_dns));
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_get_qrz_lookup_creds(char user[40], char pass[40])
+{
+    if (user) user[0] = '\0';
+    if (pass) pass[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (user) memcpy(user, s_pending.qrz_lookup_user, sizeof(s_pending.qrz_lookup_user));
+    if (pass) memcpy(pass, s_pending.qrz_lookup_pass, sizeof(s_pending.qrz_lookup_pass));
     xSemaphoreGive(s_mutex);
 }
 
@@ -2078,6 +2149,16 @@ void settings_set_rbn_en(bool v)
     s_pending.rbn_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RBN_EN);
+}
+
+void settings_set_spotmap_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spotmap_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spotmap_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTMAP_EN);
 }
 
 void settings_set_sota_en(bool v)

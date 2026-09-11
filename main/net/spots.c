@@ -408,6 +408,16 @@ static int parse_pota(const char *json)
         sp.heard_unix = cJSON_IsString(jt) ? parse_spot_time(jt->valuestring) : 0;
         if (!sp.call[0]) continue;
 
+        // The park's real coordinates - already in this same feed, we just
+        // hadn't read them before. No lookup, no fallback needed.
+        const cJSON *jlat = cJSON_GetObjectItem(it, "latitude");
+        const cJSON *jlon = cJSON_GetObjectItem(it, "longitude");
+        if (cJSON_IsNumber(jlat) && cJSON_IsNumber(jlon)) {
+            sp.lat = (float)jlat->valuedouble;
+            sp.lon = (float)jlon->valuedouble;
+            sp.has_pos = true;
+        }
+
         s_scratch[n++] = sp;
     }
     cJSON_Delete(root);
@@ -417,18 +427,31 @@ static int parse_pota(const char *json)
 }
 
 // spothole's record shape, from the live feed rather than from the docs. Only
-// the six fields below are read; the rest of a ~1.25 KB record is ignored.
+// the fields below are read; the rest of a ~1.25 KB record is ignored.
 //
 //   dx_call    "HB0/HB9BXQ/P"       the activator
 //   freq       7031000.0            HERTZ, as a float. POTA sends kHz - getting
 //                                  this the POTA way put spots 1000x off band.
 //   mode       "CW"/"SSB"/"FM"      absent on some spots, hence mode_type
 //   mode_type  "CW"/"PHONE"/"DATA"  the coarse class, used as the fallback
-//   sig_refs[] [{"id":"G/LD-049"}]  an ARRAY: a spot can carry more than one
-//                                  reference (a summit inside a park). The
-//                                  first is the one the spot is about.
+//   sig_refs[] [{"id":"G/LD-049",   an ARRAY: a spot can carry more than one
+//                "latitude":53.9,   reference (a summit inside a park). The
+//                "longitude":-1.8}] first is the one the spot is about, and
+//                                  its lat/lon is the summit's own FIXED
+//                                  position - preferred over dx_latitude/
+//                                  dx_longitude below for exactly that reason.
+//   dx_latitude,                   the activator's reported position, used
+//   dx_longitude  53.9, -1.8       only when sig_refs carries none (a small
+//                                  minority of spots - see the comment at
+//                                  spot_t.ref in spots.h). Gated on
+//                                  dx_location_good when present, since the
+//                                  API itself flags some of these as
+//                                  estimates rather than measurements.
+//   qrt        false                see below
 //   time       1786362640.3         unix seconds, float. There is a time_iso
 //                                  too; the number needs no parsing.
+//
+// Field names verified against a live spothole.app response, 2026-09-10.
 static int parse_sota(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
@@ -474,10 +497,34 @@ static int parse_sota(const char *json)
         // station, and it is only the chase credit that is unavailable. Leaving
         // ref empty is what stops spots_activation_for_call() inventing one.
         const cJSON *jrefs = cJSON_GetObjectItem(it, "sig_refs");
+        const cJSON *r0 = NULL;
         if (cJSON_IsArray(jrefs)) {
-            const cJSON *r0 = cJSON_GetArrayItem(jrefs, 0);
+            r0 = cJSON_GetArrayItem(jrefs, 0);
             const cJSON *jid = r0 ? cJSON_GetObjectItem(r0, "id") : NULL;
             if (cJSON_IsString(jid)) snprintf(sp.ref, sizeof(sp.ref), "%s", jid->valuestring);
+        }
+
+        // Prefer the summit's own fixed position (sig_refs[0].latitude/
+        // longitude - a known, unmoving point) over the activator's reported
+        // position (dx_latitude/dx_longitude, which the API itself flags as
+        // "good" or not via dx_location_good and is sometimes an estimate).
+        // Fields verified against a live spothole.app response, 2026-09-10.
+        const cJSON *jrlat = r0 ? cJSON_GetObjectItem(r0, "latitude")  : NULL;
+        const cJSON *jrlon = r0 ? cJSON_GetObjectItem(r0, "longitude") : NULL;
+        if (cJSON_IsNumber(jrlat) && cJSON_IsNumber(jrlon)) {
+            sp.lat = (float)jrlat->valuedouble;
+            sp.lon = (float)jrlon->valuedouble;
+            sp.has_pos = true;
+        } else {
+            const cJSON *jdlat = cJSON_GetObjectItem(it, "dx_latitude");
+            const cJSON *jdlon = cJSON_GetObjectItem(it, "dx_longitude");
+            const cJSON *jgood = cJSON_GetObjectItem(it, "dx_location_good");
+            if (cJSON_IsNumber(jdlat) && cJSON_IsNumber(jdlon) &&
+                (!cJSON_IsBool(jgood) || cJSON_IsTrue(jgood))) {
+                sp.lat = (float)jdlat->valuedouble;
+                sp.lon = (float)jdlon->valuedouble;
+                sp.has_pos = true;
+            }
         }
 
         const cJSON *jt = cJSON_GetObjectItem(it, "time");

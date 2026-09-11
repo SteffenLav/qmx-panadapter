@@ -28,6 +28,7 @@ idf_component_register(
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
         "ui/reader_view.c"
+        "ui/spot_map_view.c"
         "ui/qmx_term_view.c"
         "ui/font_qmx_mono_25.c"
         "ui/reader_diagram.c"
@@ -109,6 +110,12 @@ idf_component_register(
         "hid_keycode.c"
         "net/rbn.c"
         "net/dxcluster.c"
+        "net/qrz_coords.c"
+        "net/pskr_self.c"
+        "net/wspr_self.c"
+        "net/band_conditions.c"
+        "util/geo_coords.c"
+        "util/world_map_data.c"
         "ft8_robot.c"
         "ft8_sim.c"
         "wspr_proto.c"
@@ -174,6 +181,7 @@ idf_component_register(
         spiffs
         bt            # NimBLE host for the BLE mouse (controller is on the C6)
         esp_hid
+        mqtt          # net/pskr_self.c - live PSK Reporter self-spotting
     PRIV_REQUIRES
         esp_app_format
         fatfs

@@ -1223,6 +1223,15 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
         <a href="#" id="sc-btn" title="Assign Ctrl and Alt shortcuts on the Tab5's snap-on keyboard - which key opens the radio menus, the manual, the log, and so on">Keyboard shortcuts</a>
+        <!-- QRZ.com Callbook (XML) lookup credentials - separate from the QRZ
+             Logbook API key above (qrz-creds-link): this is username+password
+             for the real-station-position lookup net/rbn.c's self-spotting
+             uses to place the skimmers that heard our own CQ on the spot
+             map, which QRZ's Callsign Lookup service has no API-key scheme
+             for. No upload action attached, so this is one always-visible
+             row rather than the link+subrow "Change ..." pattern the upload
+             credentials use. -->
+        <a href="#" id="qrz-lookup-creds-link" title="Username and password for QRZ.com's Callsign Lookup (XML) service - used to place the skimmers that heard your own CQ (RBN self-spotting) at their real station position on the spot map. Without this they show at a rough country centroid instead.">Set QRZ Callbook login</a>
         <!-- Remote QMX power cycle (Randy N4OPI): a Tab5 firmware upgrade
              wedges the QMX (#74) and needs a manual power cycle, which
              defeats doing the upgrade remotely. Pulses one of two GPIO pins
@@ -1658,6 +1667,7 @@ let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
+let qrzLuCredsSet    = false;
 let eqslCredsSet     = false;
 let cloudlogSet      = false;
 let lotwReady        = false;
@@ -2034,6 +2044,8 @@ function updateCredsRows() {
   if (e) e.style.display = eqslCredsSet ? "block" : "none";
   const c = document.getElementById("cloudlog-creds-link");
   if (c) c.style.display = cloudlogSet ? "block" : "none";
+  const ql = document.getElementById("qrz-lookup-creds-link");
+  if (ql) ql.textContent = qrzLuCredsSet ? "Change QRZ Callbook login" : "Set QRZ Callbook login";
   /* The comment above says a hidden gesture is not the answer - and LoTW, the
      one that had the Ctrl-click, was the one row that never got a visible way
      in. A certificate expires about every three years, so this is the row most
@@ -2068,6 +2080,25 @@ async function promptEqslCreds() {
 document.getElementById("qrz-creds-link").addEventListener("click", async (e) => {
   e.preventDefault();
   if (await promptQrzKey()) alert("QRZ API key saved.");
+});
+
+async function promptQrzLookupCreds() {
+  const user = prompt("Enter your QRZ.com username (for the Callsign Lookup service, not the Logbook API key above):");
+  if (!user) return false;
+  const pass = prompt("Enter your QRZ.com password:");
+  if (!pass) return false;
+  await fetch("/api/qrz_lookup_creds", {
+    method: "POST",
+    body: JSON.stringify({ user: user.trim(), pass: pass.trim() }),
+  });
+  qrzLuCredsSet = true;
+  updateCredsRows();
+  return true;
+}
+
+document.getElementById("qrz-lookup-creds-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (await promptQrzLookupCreds()) alert("QRZ Callbook login saved.");
 });
 
 document.getElementById("eqsl-creds-link").addEventListener("click", async (e) => {
@@ -4001,6 +4032,7 @@ const SET_FIELDS = [
 
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
+  ["Spots & reporting", "spotmap_en",     "bool", "Spot map (who is hearing me)", "Swipe down from the Tab5 top edge. Off by default: while on it holds a connection to PSK Reporter and polls wsprnet and hamqsl"],
   ["Spots & reporting", "cluster_en",      "bool", "DX cluster spots (phone)",
      "Human-typed spots. The ONLY source of SSB spots - RBN is automated skimmers and no SSB skimmer exists. A second connection, so off by default"],
   ["Spots & reporting", "sota_en",        "bool", "SOTA spots (summits)",
@@ -6427,6 +6459,7 @@ async function tick() {
       if (typeof ft8LoadPresets === "function") ft8LoadPresets();
     }
     qrzKeySet    = !!s.qrz_key_set;
+    qrzLuCredsSet = !!s.qrz_lu_creds_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     cloudlogSet  = !!s.cloudlog_set;
     lotwReady    = !!s.lotw_ready;

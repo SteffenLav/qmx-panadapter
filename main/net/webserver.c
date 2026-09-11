@@ -843,6 +843,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
         cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
+        cJSON_AddBoolToObject(root, "qrz_lu_creds_set", cfg.qrz_lookup_user[0] != '\0' && cfg.qrz_lookup_pass[0] != '\0');
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
@@ -3115,6 +3116,41 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
 static const httpd_uri_t uri_eqsl_creds = {
     .uri = "/api/eqsl_creds", .method = HTTP_POST, .handler = eqsl_creds_handler,
 };
+
+// POST /api/qrz_lookup_creds — JSON body {"user":"...","pass":"..."}. QRZ's
+// Callsign Lookup (XML) service has no API-key scheme, unlike the Logbook
+// upload above (qrz_key_handler) — username+password only, exchanged for a
+// session key by net/qrz_coords.c. Used to place net/rbn.c's self-spot
+// skimmers (who is hearing us on CW) at a real station position on the spot
+// map instead of a country centroid.
+static esp_err_t qrz_lookup_creds_handler(httpd_req_t *req)
+{
+    char buf[160];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+        return ESP_FAIL;
+    }
+    const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(root, "user"));
+    const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(root, "pass"));
+    settings_set_qrz_lookup_user(user);
+    settings_set_qrz_lookup_pass(pass);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static const httpd_uri_t uri_qrz_lookup_creds = {
+    .uri = "/api/qrz_lookup_creds", .method = HTTP_POST, .handler = qrz_lookup_creds_handler,
+};
 static const httpd_uri_t uri_eqsl_upload = {
     .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
 };
@@ -3740,6 +3776,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "spots_en",          c.spots_en);
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
+    cJSON_AddBoolToObject(root, "spotmap_en",        c.spotmap_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
@@ -3973,6 +4010,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "spotmap_en")))
+        settings_set_spotmap_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
         settings_set_pskreporter_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))
@@ -4122,6 +4161,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         if (cJSON_IsBool(b)) setter(cJSON_IsTrue(b)); } while (0)
     BOOLTOP("spots_en",          settings_set_spots_en);
     BOOLTOP("rbn_en",            settings_set_rbn_en);
+    BOOLTOP("spotmap_en",        settings_set_spotmap_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
     BOOLTOP("ota_autodl",        settings_set_ota_autodl);
@@ -5545,7 +5585,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 52;   // 44 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 53;   // 45 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -5653,6 +5693,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_help);
     httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
+    httpd_register_uri_handler(s_server, &uri_qrz_lookup_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     httpd_register_uri_handler(s_server, &uri_cloudlog_creds);
     httpd_register_uri_handler(s_server, &uri_cloudlog_upload);
