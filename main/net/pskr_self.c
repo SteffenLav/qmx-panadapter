@@ -163,15 +163,18 @@ static void handle_payload(const char *data, int len)
         sp.has_pos = true;
     }
 
-    // Copy sc's string out BEFORE deleting root - cJSON_GetObjectItemCaseSensitive()
+    // Copy sc's/rl's strings out BEFORE deleting root - cJSON_GetObjectItemCaseSensitive()
     // returns a pointer INTO the tree, not a copy, so sc (like every other
     // cJSON* above) is dangling the instant root is freed. Reading
     // sc->valuestring after cJSON_Delete() below is what actually crashed
     // mqtt_task on hardware (Load access fault, reliably ~30 s in) - every
     // other field here was already copied into `sp` first for the same
-    // reason, this check just wasn't.
+    // reason, this check just wasn't. rl's copy is diagnostic-only (see
+    // below), not required for correctness the way sender_call is.
     char sender_call[16] = {0};
     if (cJSON_IsString(sc)) snprintf(sender_call, sizeof(sender_call), "%s", sc->valuestring);
+    char rl_raw[24] = {0};
+    if (cJSON_IsString(rl)) snprintf(rl_raw, sizeof(rl_raw), "%.23s", rl->valuestring);
 
     cJSON_Delete(root);
 
@@ -179,6 +182,21 @@ static void handle_payload(const char *data, int len)
     // subscribed tx_call topic segment, but confirm before storing rather
     // than trusting that blindly.
     if (sp.call[0] && sender_call[0] && strcasecmp(sender_call, s_subscribed_call) == 0) {
+        // Field-reported 2026-09-11 (G4ZFQ, live FT8 test): a self-spot with
+        // no distance in ui/spot_map_view.c's LIST tab. Unlike RBN's
+        // QRZ/geo_coords fallback chain, PSK Reporter self-spots have no
+        // fallback at all - the reporting station's own "rl" (receiver
+        // locator) field IS the only source, so a report with rl missing or
+        // unparseable genuinely has nothing to draw. This confirms which,
+        // rather than guessing: an empty rl_raw means PSK Reporter itself
+        // never got a grid from that station; a non-empty one that still
+        // failed means maidenhead_to_latlon() rejected a value it should
+        // have accepted.
+        if (!sp.has_pos) {
+            ESP_LOGW(TAG, "no position for reporter '%s' - rl='%s' (len=%d, %s)",
+                     sp.call, rl_raw, (int)strlen(rl_raw),
+                     rl_raw[0] ? "grid present but unparsed" : "no grid in report");
+        }
         store_add(&sp);
     }
 }

@@ -197,6 +197,15 @@ static void parse_and_store(const char *html)
         double lat, lon;
         if (maidenhead_to_latlon(field[9], &lat, &lon)) {
             sp.lat = (float)lat; sp.lon = (float)lon; sp.has_pos = true;
+        } else {
+            // Same diagnostic shape as net/pskr_self.c's own - wsprnet.org's
+            // "loc" column IS the reporter's own grid, straight from their
+            // upload, so a miss here means the grid string itself (not a
+            // lookup, there is none for WSPR) didn't parse. field[9] is
+            // already a bounded 24-byte copy (next_td()), safe to log as-is.
+            ESP_LOGW(TAG, "no position for reporter '%s' - loc='%s' (len=%d, %s)",
+                     sp.call, field[9], (int)strlen(field[9]),
+                     field[9][0] ? "grid present but unparsed" : "no grid in report");
         }
 
         store_add(&sp);

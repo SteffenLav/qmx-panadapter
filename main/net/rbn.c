@@ -233,9 +233,27 @@ static void note_self_spot(const char *skimmer, uint32_t freq_hz, int snr, int64
     s->self[slot].freq_hz    = freq_hz;
     s->self[slot].snr_db     = snr;
     s->self[slot].heard_unix = now;
-    s->self[slot].has_pos = qrz_coords_lookup_cached(skimmer, &s->self[slot].lat, &s->self[slot].lon) ||
-                            geo_coords_for_call(skimmer, &s->self[slot].lat, &s->self[slot].lon);
-    ESP_LOGI(TAG, "self-spotted by %s, %d dB on %lu Hz", skimmer, snr, (unsigned long)freq_hz);
+
+    // Position is resolved ONCE, right here, at capture time - re-hearing the
+    // same skimmer later (the strcmp branch above) never touches it again, so
+    // a miss here is permanent for as long as this entry survives in the ring
+    // buffer. Field-reported 2026-09-11: EI4HQ and G4ZFQ both showed up with
+    // no position even though their prefixes ("EI", "G") are plainly in
+    // util/geo_coords.c's table and match in isolation (verified by hand) -
+    // this diagnostic exists to catch the ACTUAL string/state the next time
+    // it happens, rather than guessing again. %.15s + explicit length: a
+    // stray trailing byte (CR, space, a truncated dash-suffix) would compare
+    // unequal to the clean prefix and miss silently otherwise.
+    bool have_qrz = qrz_coords_lookup_cached(skimmer, &s->self[slot].lat, &s->self[slot].lon);
+    bool have_geo = have_qrz ? false : geo_coords_for_call(skimmer, &s->self[slot].lat, &s->self[slot].lon);
+    s->self[slot].has_pos = have_qrz || have_geo;
+    if (!s->self[slot].has_pos) {
+        ESP_LOGW(TAG, "no position for skimmer '%.15s' (len=%d, qrz_logged_in=%d) - "
+                      "neither QRZ nor the geo_coords.c prefix table matched",
+                 skimmer, (int)strlen(skimmer), (int)qrz_coords_is_logged_in());
+    }
+    ESP_LOGI(TAG, "self-spotted by %s, %d dB on %lu Hz%s", skimmer, snr, (unsigned long)freq_hz,
+             s->self[slot].has_pos ? "" : " [NO POSITION]");
 }
 
 static void expire_self(int64_t now)
