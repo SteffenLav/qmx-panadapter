@@ -434,7 +434,6 @@ static volatile bool    s_keyer_wpm_query_pending = false;
 static volatile int     s_keyer_wpm = -1;             // last KS readback
 static volatile int     s_cw_tx_remaining = -1;       // TB t-field, -1 unknown
 static volatile bool    s_cw_poll_active = false;     // TB; poll while CW page shown
-static int64_t          s_cw_tb_last_us = 0;          // rate-limits TB; to ~1 Hz
 
 void cat_request_cw_send(const char *text)
 {
