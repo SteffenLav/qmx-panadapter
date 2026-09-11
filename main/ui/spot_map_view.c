@@ -47,6 +47,7 @@
 #include "esp_lcd_touch.h"      // raw multi-touch read for the MAP tab's pinch-zoom
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>             // qsort() - LIST tab column sort
 #include <time.h>
 #include <math.h>
 
@@ -539,22 +540,121 @@ static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, b
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
 }
 
+// LIST tab column sort: tap a header to cycle unsorted -> ascending ->
+// descending -> unsorted for that column; tapping a DIFFERENT column while
+// one is active starts that one fresh at ascending, matching the common
+// spreadsheet/file-manager convention rather than remembering a per-column
+// direction.
+typedef enum {
+    SORT_COL_NONE = 0,
+    SORT_COL_CALL, SORT_COL_MODE, SORT_COL_BAND,
+    SORT_COL_FREQ, SORT_COL_SNR, SORT_COL_DIST, SORT_COL_AGE,
+} sort_col_t;
+typedef enum { SORT_ASC, SORT_DESC } sort_dir_t;
+
+static sort_col_t s_sort_col = SORT_COL_NONE;
+static sort_dir_t s_sort_dir = SORT_ASC;
+
+// qsort has no user-data parameter, so this reads s_sort_col/s_sort_dir
+// directly - same pattern the rest of this file already uses for filter
+// state (s_show_cw etc.).
+static int cmp_spots(const void *pa, const void *pb)
+{
+    const self_spot_t *a = (const self_spot_t *)pa;
+    const self_spot_t *b = (const self_spot_t *)pb;
+
+    // Distance is the one column with a real "no value" case (either end's
+    // position unknown, -1). Unknown always sorts to the bottom, in EITHER
+    // direction - flipping it to the top on descending would read as "these
+    // are the furthest", which is backwards for a value that isn't there.
+    if (s_sort_col == SORT_COL_DIST) {
+        bool va = a->distance_km >= 0, vb = b->distance_km >= 0;
+        if (va != vb) return va ? -1 : 1;
+        if (!va) return 0;
+    }
+
+    int cmp;
+    switch (s_sort_col) {
+    case SORT_COL_CALL: cmp = strcasecmp(a->call, b->call); break;
+    case SORT_COL_MODE: cmp = strcasecmp(a->mode, b->mode); break;
+    // Band has no numeric value of its own (it's a name derived from
+    // frequency, adif_log_band_for_freq()) - sorting on the underlying
+    // frequency gives the natural band order for free and needs no second
+    // band-name-to-rank table to maintain.
+    case SORT_COL_BAND:
+    case SORT_COL_FREQ: cmp = (a->freq_hz    > b->freq_hz)    - (a->freq_hz    < b->freq_hz); break;
+    case SORT_COL_SNR:  cmp = (a->snr_db     > b->snr_db)     - (a->snr_db     < b->snr_db); break;
+    case SORT_COL_DIST: cmp = (a->distance_km > b->distance_km) - (a->distance_km < b->distance_km); break;
+    // "Ascending age" means smallest age (most recent) first, i.e. LARGEST
+    // heard_unix first - comparing b against a here, not a against b, is
+    // what makes plain ascending/descending below read correctly as
+    // "youngest first" / "oldest first" without a separate special case.
+    case SORT_COL_AGE:  cmp = (b->heard_unix > a->heard_unix) - (b->heard_unix < a->heard_unix); break;
+    default: return 0;
+    }
+    return (s_sort_dir == SORT_DESC) ? -cmp : cmp;
+}
+
+static void rebuild_table(void);   // fwd - header_click_cb() re-renders on every sort change
+
+static void header_click_cb(lv_event_t *e)
+{
+    sort_col_t col = (sort_col_t)(intptr_t)lv_event_get_user_data(e);
+    if (s_sort_col != col)       { s_sort_col = col;          s_sort_dir = SORT_ASC; }
+    else if (s_sort_dir == SORT_ASC) { s_sort_dir = SORT_DESC; }
+    else                          { s_sort_col = SORT_COL_NONE; }   // third tap: back to unsorted
+    rebuild_table();
+}
+
+// A clickable header cell - occupies the same flex_grow slot add_col()'s
+// label would, so column boundaries stay pixel-aligned with the data rows
+// below, but wraps the label in its own lv_obj so it can be tapped
+// independently of the (deliberately non-clickable) header row itself.
+// Appends an up/down glyph when this is the active sort column.
+static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_col_t col_id)
+{
+    lv_obj_t *cell = lv_obj_create(row);
+    lv_obj_remove_style_all(cell);
+    lv_obj_set_width(cell, 0);
+    lv_obj_set_height(cell, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(cell, grow);
+    lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_ext_click_area(cell, 8);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_PRIMARY), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_30, LV_STATE_PRESSED);
+
+    bool active = (s_sort_col == col_id);
+    char buf[24];
+    if (active) snprintf(buf, sizeof(buf), "%s %s", text, s_sort_dir == SORT_ASC ? LV_SYMBOL_UP : LV_SYMBOL_DOWN);
+    else        snprintf(buf, sizeof(buf), "%s", text);
+
+    lv_obj_t *lbl = lv_label_create(cell);
+    lv_label_set_text(lbl, buf);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED), 0);
+
+    lv_obj_add_event_cb(cell, header_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)col_id);
+}
+
 static void rebuild_table(void)
 {
     if (!s_table_list) return;
     lv_obj_clean(s_table_list);
 
     lv_obj_t *hdr = make_row(s_table_list);
-    add_col(hdr, "RX",       2, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "Mode",     1, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "Band",     1, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "Freq",     2, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "SNR",      1, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "Distance", 1, UI_COLOR_TEXT_MUTED, false);
-    add_col(hdr, "Age",      1, UI_COLOR_TEXT_MUTED, false);
+    add_sort_header_col(hdr, "RX",       2, SORT_COL_CALL);
+    add_sort_header_col(hdr, "Mode",     1, SORT_COL_MODE);
+    add_sort_header_col(hdr, "Band",     1, SORT_COL_BAND);
+    add_sort_header_col(hdr, "Freq",     2, SORT_COL_FREQ);
+    add_sort_header_col(hdr, "SNR",      1, SORT_COL_SNR);
+    add_sort_header_col(hdr, "Distance", 1, SORT_COL_DIST);
+    add_sort_header_col(hdr, "Age",      1, SORT_COL_AGE);
 
     static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];   // NOT internal .bss - see the note above map_draw_cb()'s copy of this array
     int count = gather_self_spots(spots, SELF_SPOT_MAX);
+    if (s_sort_col != SORT_COL_NONE) qsort(spots, (size_t)count, sizeof(spots[0]), cmp_spots);
     int64_t now = (int64_t)time(NULL);
 
     int shown = 0;
