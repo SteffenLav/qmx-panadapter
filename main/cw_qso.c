@@ -15,6 +15,7 @@
 // so precision beats recall everywhere here.
 
 #include "cw_qso.h"
+#include "cw_callsign.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
 #include "cat/cat.h"
@@ -43,6 +44,12 @@ static char           s_my_call[CALL_MAX];
 static cw_esm_state_t s_state = CW_ESM_CQ;
 static char           s_target[CALL_MAX];
 static char           s_heard[CALL_MAX];      // latest plausible non-target call
+/* One-sighting memory for the corroboration gate below. A callsign arriving
+ * with no DE/CQ context is held here rather than shown, and only becomes a
+ * "station heard" if it arrives AGAIN. */
+static char           s_cand_call[CALL_MAX];
+static int64_t        s_cand_us;
+#define CAND_WINDOW_US  (30 * 1000000LL)
 static int64_t        s_heard_us;
 static char           s_rst_rcvd[4];
 static int64_t        s_cq_sent_us;           // our last CQ went out
@@ -102,17 +109,21 @@ static bool is_stopword(const char *t)
     return false;
 }
 
+/* ⛔ THE OLD RULE WAS "3-10 chars, a letter, a digit, nothing but [A-Z0-9/]",
+ * and that is not a callsign test - it is a character-set test. Measured
+ * against 744 real TB; responses off 20 m on 2026-09-11 it accepted
+ * SC3Z75HSC, TEE5A and E9VA, and the "new station" card showed them as
+ * stations (operator: the card "shows up immaturely and say callsigns that
+ * are far too long").
+ *
+ * The shape rule now lives in cw_callsign.c, portable and host-tested against
+ * those same real bytes (test/cw_callsign_harness.c), because a rule invented
+ * at the keyboard would have been tested against my idea of noise rather than
+ * the radio's. The stopword list stays here - it is about CW usage, not
+ * callsign shape. */
 static bool is_plausible_call(const char *t)
 {
-    size_t n = strlen(t);
-    if (n < 3 || n > 10) return false;
-    bool has_alpha = false, has_digit = false;
-    for (size_t i = 0; i < n; i++) {
-        if (isalpha((unsigned char)t[i])) has_alpha = true;
-        else if (isdigit((unsigned char)t[i])) has_digit = true;
-        else if (t[i] != '/') return false;
-    }
-    return has_alpha && has_digit && !is_stopword(t);
+    return cw_call_is_plausible(t) && !is_stopword(t);
 }
 
 // A POTA park reference: 1-2 letters, an optional hyphen, then 4-5 digits -
@@ -200,11 +211,6 @@ static void process_token_locked(const char *tok, int64_t now)
 
     if (!is_plausible_call(tok)) return;
 
-    // A senders-position call (after DE) is trusted more, but any plausible
-    // call updates the card - the operator decides what to do with it.
-    copy_small(s_heard, sizeof(s_heard), tok);
-    s_heard_us = now;
-
     // Classify this call. Strongest first:
     //   answering us  - our call, then "DE <them>"        -> act now
     //   calling CQ    - a CQ, then "DE <them>"            -> you may answer
@@ -215,6 +221,38 @@ static void process_token_locked(const char *tok, int64_t now)
                         (now - s_cq_heard_us) < CQ_PAIR_WINDOW_US;
     bool pota_sender  = cq_sender && s_pota_heard_us &&
                         (now - s_pota_heard_us) < CQ_PAIR_WINDOW_US;
+
+    /* ⭐ CORROBORATION GATE. A shape test cannot tell EV9C (real prefix,
+     * perfect shape, almost certainly noise) from a station. What can is the
+     * thing real CW already gives us for free: operators send their call
+     * TWICE, precisely because one pass may not survive the noise. So a call
+     * arriving with no context at all is remembered, not shown; it becomes a
+     * station on its second arrival within CAND_WINDOW_US.
+     *
+     * "Context" is the sender's position - after DE, or paired with a CQ - and
+     * that is trusted on the first pass, because noise does not arrange itself
+     * behind a DE. This is what stops the card appearing "immaturely"
+     * (operator, 2026-09-11).
+     *
+     * ⚠ The cost is one exchange of latency on a station that sends its call
+     * exactly once with no DE. That is not how CW is sent, and the ticker
+     * shows the raw copy throughout regardless - the gate is on the CARD, not
+     * on what the operator can read. */
+    bool has_context = was_de || answering_us || cq_sender || pota_sender;
+    if (!has_context) {
+        bool corroborated = (strcmp(s_cand_call, tok) == 0) &&
+                            (now - s_cand_us) < CAND_WINDOW_US;
+        if (!corroborated) {
+            copy_small(s_cand_call, sizeof(s_cand_call), tok);
+            s_cand_us = now;
+            return;                 /* heard once, unsupported: not a station yet */
+        }
+    }
+
+    // A senders-position call (after DE) is trusted more, but any corroborated
+    // call updates the card - the operator decides what to do with it.
+    copy_small(s_heard, sizeof(s_heard), tok);
+    s_heard_us = now;
     cw_hint_t k = answering_us ? CW_HINT_ANSWERED_YOU
                 : pota_sender  ? CW_HINT_CQ_POTA
                 : cq_sender    ? CW_HINT_CQ_FROM
@@ -263,8 +301,13 @@ void cw_qso_hint_selftest(void)
         { "OZ1LAV DE W1AW W1AW",      CW_HINT_ANSWERED_YOU, "W1AW" },
         // A bare CQ with no sender yet still says something useful.
         { "CQ CQ CQ",                 CW_HINT_CALLING_CQ,   ""     },
-        // A call with no DE and no context is just a sighting.
-        { "SM5ABC",                   CW_HINT_CALL_HEARD,   "SM5ABC" },
+        // A call with no DE and no context is a sighting - but only once it
+        // has been heard TWICE. This case used to send "SM5ABC" alone and
+        // expect the hint immediately; that is precisely the "card shows up
+        // immaturely" the corroboration gate in process_token_locked() now
+        // closes, so the case was CHANGED WITH THE BEHAVIOUR rather than left
+        // to fail. Real CW sends the call twice anyway.
+        { "SM5ABC SM5ABC",            CW_HINT_CALL_HEARD,   "SM5ABC" },
         // POTA: a park activation resolves to who is activating, and a park
         // reference is called out. Both hyphenated and bare forms, and the
         // reference must survive the tokenizer in one piece.
@@ -535,6 +578,8 @@ bool cw_qso_get_heard_park(char *out, size_t out_sz)
 
 void cw_qso_clear_capture(void)
 {
+    s_cand_call[0] = '\0';   /* a fresh page starts with no sighting */
+    s_cand_us = 0;
     portENTER_CRITICAL(&s_mux);
     s_heard[0]      = '\0';
     s_heard_us      = 0;

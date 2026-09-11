@@ -21,6 +21,7 @@ idf_component_register(
         "ui/ft8_screen_view.c"
         "ui/cw_screen_view.c"
         "cw_qso.c"
+        "cw_callsign.c"
         "ui/wspr_screen_view.c"
         "ui/ft8_tx_modal.c"
         "ui/ft8_cq_modal.c"
