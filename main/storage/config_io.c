@@ -59,6 +59,7 @@ char *config_io_export(size_t *out_len)
     APP("still_spectrum     = %s\n", yn(c.still_view));
     APP("spots              = %s\n", yn(c.spots_en));
     APP("spots_rbn          = %s\n", yn(c.rbn_en));
+    APP("spot_map           = %s\n", yn(c.spotmap_en));
     APP("spots_sota         = %s\n", yn(c.sota_en));
     APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
@@ -249,6 +250,7 @@ int config_io_import(char *text)
                                                               settings_set_still_notice_done(true); }
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
+            else if (!strcasecmp(key, "spot_map"))          settings_set_spotmap_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
             else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
             else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));

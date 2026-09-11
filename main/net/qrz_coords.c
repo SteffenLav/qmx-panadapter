@@ -373,6 +373,11 @@ static void qrz_task(void *arg)
 
         if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
 
+        // These lookups exist only to place an RBN skimmer on the spot map, so
+        // they follow the map's own opt-in (settings.h, spotmap_en). Checked
+        // every pass, so the drawer switch applies live.
+        if (!settings_get_spotmap_en()) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
+
         if (s_username[0] == '\0' || s_credentials_rejected) {
             // Not configured, or QRZ explicitly rejected these credentials
             // (see s_credentials_rejected's comment) -- idle without even

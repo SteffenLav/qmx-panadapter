@@ -2572,7 +2572,14 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
 // object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
 // "Settings drawer built". Raise this when adding a section, and keep headroom.
-#define N_DRAWER_SECTIONS     42
+/* The spot map overlay (ui/spot_map_view.c) and the three self-spot feeds
+ * behind it. Its own section rather than a fifth row inside DRAWER_SEC_SPOTS,
+ * for two reasons: that section is panadapter-only and the map opens from ANY
+ * page on a top-edge swipe, so its switch would vanish exactly where the
+ * gesture still worked; and the lane is about stations to WORK while the map
+ * is about who is hearing US - different questions. */
+#define DRAWER_SEC_SPOTMAP    42
+#define N_DRAWER_SECTIONS     43
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2637,6 +2644,9 @@ static const drawer_item_t GRP_NETWORK[] = {
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
+    // Basic, not Advanced: it is off by default, so an operator who never finds
+    // it never gets the feature at all.
+    { DRAWER_SEC_SPOTMAP, "Spot map (who is hearing me)", true },
     { DRAWER_SEC_BT, "Bluetooth mouse", false },
 };
 // Flip 180 last: it is the least-touched control in the group (operator).
@@ -10295,6 +10305,7 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
 static lv_obj_t *s_check_spots = NULL;
 static lv_obj_t *s_check_rbn   = NULL;
 static lv_obj_t *s_check_sota  = NULL;
+static lv_obj_t *s_check_spotmap = NULL;
 
 static void drawer_spots_cb(lv_event_t *e)
 {
@@ -10313,6 +10324,17 @@ static void drawer_rbn_cb(lv_event_t *e)
     settings_set_rbn_en(on);
     // The RBN task polls the setting, so there is nothing to start or stop here.
     ESP_LOGI(TAG, "RBN spot source: %s", on ? "on" : "off");
+}
+
+static void drawer_spotmap_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_spotmap_en(on);
+    // Nothing to start or stop from here: all four feeds re-read the setting on
+    // their own pass, and net/pskr_self.c starts or STOPS its MQTT session on
+    // it - stopping matters, because esp-mqtt's client task is the one
+    // allocation in this feature that cannot live in PSRAM.
+    ESP_LOGI(TAG, "spot map + self-spot feeds: %s", on ? "on" : "off");
 }
 
 static void drawer_sota_cb(lv_event_t *e)
@@ -10910,6 +10932,7 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_sim_mode,       c.sim_mode_en);
     sync_cb(s_check_spots,          c.spots_en);
     sync_cb(s_check_rbn,            c.rbn_en);
+    sync_cb(s_check_spotmap,        c.spotmap_en);
     sync_cb(s_check_cluster,        c.cluster_en);
     sync_cb(s_check_sota,           c.sota_en);
     sync_cb(s_check_spotmode,       c.spots_mode_filter);
@@ -11776,6 +11799,30 @@ static void drawer_build(void)
                                                 drawer_spotmode_cb, NULL);
         lv_obj_align(s_check_spotmode, LV_ALIGN_TOP_RIGHT, 0, 228);
         y += 278;
+    }
+
+    // Spot map: deliberately its OWN section and not a sixth row above, because
+    // the section above is panadapter-only and the map's top-edge swipe is not.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTMAP, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Spot map (who is hearing me)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_spotmap = make_drawer_checkbox(sec, settings_get_spotmap_en(),
+                                               drawer_spotmap_cb, NULL);
+        lv_obj_align(s_check_spotmap, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        // Says what gets switched on, because "spot map" does not convey that
+        // it opens a live connection to somebody else's broker.
+        lv_obj_t *sub = lv_label_create(sec);
+        lv_label_set_text(sub, "Swipe down from the top edge. Connects to PSK Reporter,\n"
+                               "wsprnet and hamqsl while on.");
+        lv_obj_set_style_text_color(sub, lv_color_hex(0x909090), 0);
+        lv_obj_set_style_text_font(sub, &lv_font_montserrat_18, 0);
+        lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 0, 48);
+        y += 100;
     }
 
     // Presets section: header + three buttons side-by-side

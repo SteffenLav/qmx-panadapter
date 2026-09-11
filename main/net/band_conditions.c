@@ -6,6 +6,7 @@
 #include "band_conditions.h"
 #include "wifi.h"
 #include "net/net_quiet.h"
+#include "storage/settings.h"
 #include "util/psram_task.h"
 
 #include "esp_http_client.h"
@@ -172,6 +173,9 @@ static void band_conditions_task(void *arg)
     }
     for (;;) {
         if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
+        // Opt-in with the rest of the spot map - see settings.h, spotmap_en.
+        // Re-read every pass so the drawer switch applies without a reboot.
+        if (!settings_get_spotmap_en()) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
         poll_once(rx_buf);
         int next_ms = s_have_conditions ? POLL_INTERVAL_MS : RETRY_INTERVAL_MS;
         vTaskDelay(pdMS_TO_TICKS(next_ms));

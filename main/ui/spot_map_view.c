@@ -1041,6 +1041,13 @@ void spot_map_view_init(lv_obj_t *parent)
 void spot_map_view_show(void)
 {
     if (!s_overlay) return;
+    // Opt-in (settings.h, spotmap_en), so with it off there is nothing behind
+    // this gesture - every feed is idle and the map would be a blank world with
+    // no explanation. Say where the switch is instead of opening an empty one.
+    if (!settings_get_spotmap_en()) {
+        ui_toast("Spot map is off - Settings, Network, \"Spot map\"");
+        return;
+    }
     s_sig_rbn_n = s_sig_psk_n = s_sig_wspr_n = -1;   // force a redraw on this open
     s_sig_rbn_t = s_sig_psk_t = s_sig_wspr_t = -1;
     refresh_own_position();

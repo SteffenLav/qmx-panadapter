@@ -206,9 +206,16 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-// Own callsign can change in the settings drawer without a reboot; this is
-// the only thing that would otherwise go stale, since the MQTT connection
-// itself is long-lived and IDF's client reconnects on its own.
+// Owns the MQTT session's whole lifetime, because two things can change under
+// it without a reboot: the operator's own callsign (the subscription), and
+// spotmap_en (whether there should be a session at all).
+//
+// The session is NOT merely idled when the map is switched off, it is STOPPED.
+// esp-mqtt creates its client task with a bare xTaskCreate() (mqtt_client.c),
+// i.e. always INTERNAL RAM with no PSRAM option - the one allocation in this
+// whole feature that cannot be moved out, which is exactly why an operator who
+// has not asked for the spot map should not be paying for it. Stopping gives
+// that task back; skipping the work would not.
 static void watchdog_task(void *arg)
 {
     (void)arg;
@@ -216,27 +223,43 @@ static void watchdog_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // Stagger past the post-Got-IP internal-RAM crunch. esp-mqtt's own
-    // client task is created with a bare xTaskCreate() (mqtt_client.c) -
-    // always INTERNAL RAM, no PSRAM option, unlike every background task
-    // this project starts itself via util/psram_task.h. SNTP, POTA, psk_rx,
-    // the web server and mDNS all start within the same second of Got IP, and
-    // starting the MQTT task right in that window is how
-    // esp_mqtt_client_start() failed outright on hardware ("E mqtt_client:
-    // Error create mqtt task") - with the return value previously unchecked,
-    // that silently killed self-spotting for the rest of the session.
-    vTaskDelay(pdMS_TO_TICKS(8000));
-
-    int backoff_ms = 2000;
-    while (esp_mqtt_client_start(s_client) != ESP_OK) {
-        ESP_LOGW(TAG, "esp_mqtt_client_start failed (internal RAM likely still tight) - retrying in %d ms", backoff_ms);
-        vTaskDelay(pdMS_TO_TICKS(backoff_ms));
-        if (backoff_ms < 30000) backoff_ms *= 2;
-    }
+    // Stagger past the post-Got-IP internal-RAM crunch, once, before the first
+    // start attempt of the session. SNTP, POTA, psk_rx, the web server and
+    // mDNS all start within the same second of Got IP, and starting the MQTT
+    // task right in that window is how esp_mqtt_client_start() failed outright
+    // on hardware ("E mqtt_client: Error create mqtt task") - with the return
+    // value previously unchecked, that silently killed self-spotting for the
+    // rest of the session. A later start from the drawer is well clear of it.
+    bool staggered = false;
+    bool started   = false;
+    int  backoff_ms = 2000;
 
     for (;;) {
+        bool want = settings_get_spotmap_en();
+
+        if (want && !started) {
+            if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }
+            if (esp_mqtt_client_start(s_client) == ESP_OK) {
+                started = true;
+                backoff_ms = 2000;
+                ESP_LOGI(TAG, "self-spotting started (%s)", BROKER_URI);
+            } else {
+                ESP_LOGW(TAG, "esp_mqtt_client_start failed (internal RAM likely still tight) - retrying in %d ms", backoff_ms);
+                vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+                if (backoff_ms < 30000) backoff_ms *= 2;
+                continue;
+            }
+        } else if (!want && started) {
+            esp_mqtt_client_stop(s_client);
+            started = false;
+            s_connected = false;
+            s_subscribed_call[0] = ' ';   // a re-enable must SUBSCRIBE again
+            ESP_LOGI(TAG, "spot map switched off - MQTT session stopped");
+        }
+
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (!s_connected) continue;
+
+        if (!started || !s_connected) continue;
         qmx_settings_t s;
         settings_load_all(&s);
         char call[16];
@@ -267,5 +290,7 @@ void pskr_self_init(void)
     esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
 
     psram_task_create(watchdog_task, "pskr_self", 4096, NULL, 3, tskNO_AFFINITY);
-    ESP_LOGI(TAG, "live self-spotting ready (MQTT, %s)", BROKER_URI);
+    // "ready", not "started" - the session itself waits on spotmap_en, and the
+    // task above says so when it actually connects.
+    ESP_LOGI(TAG, "live self-spotting ready (MQTT, %s; opt-in)", BROKER_URI);
 }

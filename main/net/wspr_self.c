@@ -257,6 +257,9 @@ static void wspr_self_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_S * 1000));
 
         if (net_quiet_active()) continue;
+        // The spot map is opt-in (settings.h, spotmap_en) and this is one of
+        // its three feeds. Read every pass so the switch applies live.
+        if (!settings_get_spotmap_en()) continue;
         // Deliberately NOT gated on settings_get_wspr_tx_en(): a query is
         // cheap (one GET, run at most every POLL_INTERVAL_S) and TX being off
         // right now says nothing about whether a report from an earlier

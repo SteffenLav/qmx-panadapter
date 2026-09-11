@@ -101,6 +101,7 @@ static const char *TAG = "settings";
 #define KEY_SPOTS_MODE_FLT "spot_modeflt"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
+#define KEY_SPOTMAP_EN     "spotmap_en"
 #define KEY_SOTA_EN        "sota_en"
 #define KEY_OTA_AUTODL     "ota_autodl"
 #define KEY_DRAWER_EXPERT  "drw_expert"
@@ -366,6 +367,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
 #define DIRTY_QRZ_LU_USER   116   /* QRZ Callbook (XML) lookup username, spot map */
 #define DIRTY_QRZ_LU_PASS   117   /* QRZ Callbook (XML) lookup password, spot map */
+#define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -392,7 +394,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
-    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_SPOTMAP_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
@@ -562,6 +564,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTMAP_EN))    nvs_set_u8(s_nvs, KEY_SPOTMAP_EN,    snap.spotmap_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
@@ -788,6 +791,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // nothing until WiFi is up.
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
+    out->spotmap_en = false; // opt-in: a standing MQTT session plus three pollers, see settings.h
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
     // #239: ON, and the repeat runs are in. Under the exact failing recipe -
     // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
@@ -991,6 +995,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTMAP_EN, &u8v) == ESP_OK) out->spotmap_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
@@ -1910,6 +1915,19 @@ bool settings_get_wspr_tx_en(void)
     return v;
 }
 
+// Narrow on purpose: the drawer callback and the feed tasks that read this are
+// on stacks that cannot afford a whole qmx_settings_t local - see CLAUDE.md's
+// "Task stacks on this board are TINY", where that mistake has landed four
+// times, three of them from a settings_load_all() that did not look big.
+bool settings_get_spotmap_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.spotmap_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 uint8_t settings_get_wspr_duty_pct(void)
 {
     if (!s_ready) return 0;
@@ -2131,6 +2149,16 @@ void settings_set_rbn_en(bool v)
     s_pending.rbn_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RBN_EN);
+}
+
+void settings_set_spotmap_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spotmap_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spotmap_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTMAP_EN);
 }
 
 void settings_set_sota_en(bool v)

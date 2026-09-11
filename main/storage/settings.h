@@ -230,6 +230,22 @@ typedef struct {
     bool     rbn_en;          // add the RBN telnet feed as a second spot source (default FALSE:
                               // a continuous firehose on this board's most fragile subsystem,
                               // so it is opt-in - see net/rbn.h)
+    // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
+    // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
+    // plus the QRZ callbook lookups that place an RBN skimmer on the map.
+    // Opt-in (default FALSE) for two reasons, neither of them about the map
+    // itself being expensive to draw:
+    //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
+    //     on the operator's own callsign, for the life of the session. An
+    //     outward-facing connection is something to ask for, not to inherit.
+    //   - measured against v1.12.4 with all four running: internal free
+    //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
+    //     the headroom that pool has left. That pool is what fails SD mounts,
+    //     USB endpoint allocation and TLS when it runs dry (#65/#284), so the
+    //     cost belongs to operators who asked for the feature.
+    // Applies live, no reboot: each feed re-reads this every pass, the same
+    // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
+    bool     spotmap_en;
     // SOTA summit activations, fetched from spothole.app. Opt-in (default
     // FALSE) for a reason that is about somebody else's server rather than
     // ours: spothole is Ian Renton M0TRT's hobby box, shared with his blog, and
@@ -581,6 +597,8 @@ void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
+void settings_set_spotmap_en(bool v);   // spot map + its self-spot feeds (see spotmap_en above)
+bool settings_get_spotmap_en(void);     // narrow: callers are on small stacks
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
 void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot

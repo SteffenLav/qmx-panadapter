@@ -3776,6 +3776,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "spots_en",          c.spots_en);
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
+    cJSON_AddBoolToObject(root, "spotmap_en",        c.spotmap_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
@@ -4009,6 +4010,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "spotmap_en")))
+        settings_set_spotmap_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
         settings_set_pskreporter_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))
@@ -4158,6 +4161,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         if (cJSON_IsBool(b)) setter(cJSON_IsTrue(b)); } while (0)
     BOOLTOP("spots_en",          settings_set_spots_en);
     BOOLTOP("rbn_en",            settings_set_rbn_en);
+    BOOLTOP("spotmap_en",        settings_set_spotmap_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
     BOOLTOP("ota_autodl",        settings_set_ota_autodl);
