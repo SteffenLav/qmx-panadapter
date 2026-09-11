@@ -4,7 +4,7 @@
 
 It is not a contact mode. Nobody replies, there is no exchange, and nothing goes in your log. That is the point: it measures propagation instead of working people.
 
-Swipe → from the left edge to cycle **Panadapter → FT8/FT4 → WSPR** and back.
+Swipe → from the left edge to cycle **Panadapter -> FT8/FT4 -> WSPR** and back.
 
 ---
 
@@ -122,7 +122,7 @@ There is no separate "allow transmitting" setting. The **TX** button on the page
 
 **It is off every time you open the WSPR page**, whatever you did last session. A beacon that resumes on its own because of how you left it a week ago is not a decision you made, so the page always starts as a pure receiver — which is a perfectly good way to use WSPR — and transmitting is something you switch on deliberately each time.
 
-**Your callsign and grid must be set**, in **Station → Callsign & Grid square**. Without them there is no transmission at all — the same rule FT8 follows. WSPR sends your callsign to every station that hears you and publishes it to a public database, so it uses the identity you entered and nothing else.
+**Your callsign and grid must be set**, in **Station -> Callsign & Grid square**. Without them there is no transmission at all — the same rule FT8 follows. WSPR sends your callsign to every station that hears you and publishes it to a public database, so it uses the identity you entered and nothing else.
 
 #### Declared power
 
@@ -198,7 +198,7 @@ With a callsign and grid set and a duty cycle above 0%, the **TX** button on the
 A few things worth knowing before you leave it running:
 
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
-- **SWR protection still applies.** If the SWR limit in **Radio → SWR protection** is exceeded, transmitting stops.
+- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops.
 - **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
 - **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **FT8 Simulation Mode** in the drawer; it interlocks WSPR TX as well.
 

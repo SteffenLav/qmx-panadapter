@@ -139,7 +139,7 @@ another room.
 
 If you left the Tab5 in FT8/FT4 and want the spectrum
 back, use the **Radio** menu in the bottom bar — it carries the
-Panadapter ↔ FT8 switch.
+Panadapter <-> FT8 switch.
 
 Next to **Call CQ** is **TXCQ ANY / EVEN / ODD**, which chooses the 15-second
 slot your CQ transmits in — the same three states as the button on the Tab5,
@@ -275,10 +275,10 @@ never navigates for you.
 The **CAT** section lets you send raw Kenwood-style commands directly to the QMX:
 
 ```
-FA;        → reads current frequency
-FA14074000;  → sets frequency to 14.074 MHz
-MD;        → reads current mode
-MD2;       → sets USB mode
+FA;        -> reads current frequency
+FA14074000;  -> sets frequency to 14.074 MHz
+MD;        -> reads current mode
+MD2;       -> sets USB mode
 ```
 
 This is for advanced troubleshooting — most users don't need it.
@@ -292,7 +292,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **Today only, dated file ↓** — just today's contacts, named `qso-YYYY-MM-DD.adi`. For anyone who files each day's log separately, the date is already in the filename rather than something to add by hand afterwards *(Gyula HA3HZ)*
 - **ADIF restore ↑** — merges a previously downloaded (or any logger's) ADIF file back into the log, skipping any contact already there (matched on callsign, date and time). For after an erase-and-reinstall: **Config upload** never touches the QSO log on purpose, so this is the only way to get worked-station history back *(Randy N4OPI)*. A prompt lets you say whether the restored contacts should be marked as already uploaded to QRZ/eQSL/LoTW (the usual answer is yes, since "restore" almost always means a log that was already sent) or as not-yet-uploaded, so the next upload sends them. **From v1.11.3 the first prompt asks whether the file contains *corrections*.** Say yes and a contact already logged with the same callsign, date and time is **replaced** by the version in the file, instead of being skipped as a duplicate — which is what a merge otherwise has to do, since a correction keeps the very fields it is matched on. This is the way to repair records in another logger and put them back *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Corrected contacts are sent to QRZ/eQSL/LoTW again afterwards, because the copy held there is the one carrying the error, and all three ignore a repeat. Callsign, date and time still cannot be changed this way — a contact with a wrong date is a different contact
-- **↳ Restore from SD card** — the same merge, but read straight off the microSD card the Tab5 already backs up to, with no file to find and nothing to choose. Contacts already logged are skipped, so pressing it twice does nothing. The card mirrors the *present*, so a deletion that survives a restart is on the card too — which is why the copy from just before the log last got smaller is kept beside it as `qso.prev.adi` (download it from **Files ▲ → SD Files** and feed it to **ADIF restore ↑** if you need it) *(Gyula HA3HZ)*
+- **↳ Restore from SD card** — the same merge, but read straight off the microSD card the Tab5 already backs up to, with no file to find and nothing to choose. Contacts already logged are skipped, so pressing it twice does nothing. The card mirrors the *present*, so a deletion that survives a restart is on the card too — which is why the copy from just before the log last got smaller is kept beside it as `qso.prev.adi` (download it from **Files ▲ -> SD Files** and feed it to **ADIF restore ↑** if you need it) *(Gyula HA3HZ)*
 - **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
 - **↳ Change QRZ API key** — appears once a key is stored, and replaces it. New in v1.8.3: before that the prompt only ever appeared when *nothing* was stored, so a key typed wrongly or later reissued could not be changed from the page at all (reported by Brian WA6JFK)
 - **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
@@ -432,9 +432,9 @@ on the very keyboard you are configuring.
 
 Uploading to ARRL's **Logbook of The World** requires an existing LoTW account and a callsign certificate (made with ARRL's TQSL program).
 
-**One-time setup:** open the **QSO Logs** menu → **LoTW setup**. A guided two-page window walks you through it:
+**One-time setup:** open the **QSO Logs** menu -> **LoTW setup**. A guided two-page window walks you through it:
 
-1. **Page 1** explains how to export your callsign certificate from the TQSL program on your PC (**Callsign Certificate → Save the Callsign Certificate**, which produces a `.p12` file), with a button that opens ARRL's own instructions.
+1. **Page 1** explains how to export your callsign certificate from the TQSL program on your PC (**Callsign Certificate -> Save the Callsign Certificate**, which produces a `.p12` file), with a button that opens ARRL's own instructions.
 2. **Page 2** imports the `.p12` file, its passphrase, and your DXCC entity (plus optional CQ/ITU zones, and **US state and county** — see below). The `.p12` is parsed **in the browser** — the passphrase never reaches the device.
 
 After setup the button reads **LoTW ↑**. Each click signs all not-yet-uploaded QSOs on the device with your certificate and uploads them to lotw.arrl.org.

@@ -100,7 +100,7 @@ passes back to the stations who are on frequency, and pick it up again without
 re-dialling anything (suggested by Roy KI0ER). A parked offset is discarded when you
 retune — it belonged to that one station.
 
-If you never use RIT, the button can be hidden: **Settings → Radio → Show RIT button**
+If you never use RIT, the button can be hidden: **Settings -> Radio -> Show RIT button**
 (also in the web settings). It is shown by default. If an offset is actually engaged the
 button appears regardless of that setting — the radio listening away from your dial is not
 something to leave unsaid on screen.
@@ -224,7 +224,7 @@ so any range other than the default was described by labels that did not belong 
 
 The **frequency axis** shows absolute MHz labels across whatever span is on screen, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision. With **Still Spectrum** on — the default above ×1 — the axis stays put as you tune and the VFO marker moves along it; with it off, the axis is centred on the QMX VFO.
 
-The **waterfall** runs newest row at the top, in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
+The **waterfall** runs newest row at the top, in a thermal SDR palette (black -> dark blue -> teal -> green -> yellow -> red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
 
 **The waterfall floor tracks the band automatically.** Its black level follows a running median sampled only from bins *inside the passband*, EMA-smoothed, so the background colour follows conditions instead of sitting at a fixed anchor. Bins outside the passband are drawn darker and excluded from that calculation, so they cannot wash out dim in-band signals.
 
@@ -329,7 +329,7 @@ Pinching sets any value in between; double-tap returns to ×1 and re-centres.
 | Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
 | Two-finger drag | Pan the zoomed window |
 | Double-tap | Reset zoom and pan to ×1.0, centred |
-| Top-bar **Zoom** → tap | Pick a preset |
+| Top-bar **Zoom** -> tap | Pick a preset |
 
 **One-finger pan (stroll).** A fast horizontal swipe — more than about 70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
 
@@ -357,7 +357,7 @@ The display holds completely still right up to the page — it is never dragged 
 
 Changing mode, filter width or zoom re-centres the view on the passband, as before.
 
-Switch it off under **Settings → Radio & display → Still spectrum**, and the display returns to re-centring on the dial at every step with the marker in the middle.
+Switch it off under **Settings -> Radio & display -> Still spectrum**, and the display returns to re-centring on the dial at every step with the marker in the middle.
 
 !!! warning "×1 is always dial-centred"
     Holding a view still needs somewhere for it to stay while the capture window slides underneath it. At ×1 the view is already the whole 48 kHz the radio sends, so there is no room and the setting has nothing to work with. Zoom to **×2 or beyond** for the still display.
@@ -381,7 +381,7 @@ The decoding is not done by the Tab5. **The QMX has its own CW decoder** and
 hands the text over the CAT link, so this costs the panadapter nothing: no
 audio processing, no effect on the spectrum, no effect on FT8. It works on QMX
 firmware 1.03 and later — there is nothing to enable on the radio for most
-people, since its own **Decoder → Enable Rx** setting is on by default
+people, since its own **Decoder -> Enable Rx** setting is on by default
 *(suggested by Uwe DL8UG)*.
 
 The line reads:
@@ -436,7 +436,7 @@ rubbish are filtered out before anything reaches the screen:
 A dropped run leaves one space behind, so words either side of it are not welded
 together.
 
-**Turning it off.** Settings drawer → **Radio** → **Show decoded CW**, beside CW
+**Turning it off.** Settings drawer -> **Radio** -> **Show decoded CW**, beside CW
 centre and the transmit offset. It is on by default and the setting is shared
 with the browser.
 
@@ -457,7 +457,7 @@ It is a readout, not a control: there is nothing to tap, and there is no peak-ho
 
 Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
 
-It is grouped — **Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a **BASIC / ADVANCED** button at the top. Basic shows what an operating session needs; Advanced holds everything, including the tuning and calibration controls you set once. Which sections sit in which view is yours to change, from the web UI's **Settings → Tab5 config**.
+It is grouped — **Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a **BASIC / ADVANCED** button at the top. Basic shows what an operating session needs; Advanced holds everything, including the tuning and calibration controls you set once. Which sections sit in which view is yours to change, from the web UI's **Settings -> Tab5 config**.
 
 **Every control, group by group, is documented once in [Settings](settings.md)** — deliberately in one place rather than summarised here as well.
 

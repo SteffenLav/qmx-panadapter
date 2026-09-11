@@ -6,7 +6,7 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
+| Swipe → | **Left edge** | Cycle Panadapter -> FT8/FT4 -> WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 | Swipe ↓ | **Top edge** | Open the [spot map](../guide/spot-map.md) (who is hearing me) |
@@ -62,7 +62,7 @@ The idle timeout is set via the **Display sleep** dropdown in the settings drawe
 
 ## Memory Channels
 
-**Swipe ↑** from bottom edge → open memory picker.
+**Swipe ↑** from bottom edge -> open memory picker.
 
 | Action | Effect |
 |---|---|
@@ -163,7 +163,7 @@ Appears when you tap a text field:
 
 | Key | Effect |
 |---|---|
-| **Shift** | Toggle case (abc → ABC) |
+| **Shift** | Toggle case (abc -> ABC) |
 | **Backspace** | Delete last character |
 | **Space** | Insert space |
 | **Numbers** | Tap to switch to number row |
@@ -171,10 +171,10 @@ Appears when you tap a text field:
 
 ## Web UI (Browser)
 
-- **Click spectrum** → tune to that frequency
-- **Scroll or pinch** → zoom
-- **Number fields** → click to edit, press Enter
-- **Buttons** → click to toggle settings
+- **Click spectrum** -> tune to that frequency
+- **Scroll or pinch** -> zoom
+- **Number fields** -> click to edit, press Enter
+- **Buttons** -> click to toggle settings
 
 All web controls mirror the Tab5 display.
 

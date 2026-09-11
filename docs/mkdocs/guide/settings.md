@@ -134,8 +134,8 @@ Tune are both refused rather than keying a radio you are holding.
 **Radio menus** — the QMX's own menu system on the Tab5's screen, so you do not have to
 reach the radio at all. Unlike the button above it, this does **not** stop the panadapter:
 it uses the radio's *second* USB serial port, so CAT keeps running while you are in the
-menus. You have to switch that port on once, on the radio — System config → GPS & Ser.
-ports → USB serial ports → 2. For a QMX+ with no control panel this is the only way into
+menus. You have to switch that port on once, on the radio — System config -> GPS & Ser.
+ports -> USB serial ports -> 2. For a QMX+ with no control panel this is the only way into
 its menus. See [Radio Menus](radio-menus.md).
 
 ## Operator Info
@@ -183,7 +183,7 @@ address the unit actually has.
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
 
 **Setting the time by hand** — there is no control for this in the drawer, despite what
-earlier versions of this guide said. The clock is set from the FT8 screen: **Options →
+earlier versions of this guide said. The clock is set from the FT8 screen: **Options ->
 Sync Time**. See [Setting the time by hand](time-sync.md#5-setting-the-time-by-hand),
 which also covers setting the seconds — the part that matters with no WiFi and no GPS.
 
@@ -274,7 +274,7 @@ you tune towards it. Switch it off and the display re-centres on the dial at eve
 with the marker in the middle. Applies from **×2 zoom up**; at ×1 the view is already the
 whole 48 kHz the radio sends, so there is no room to hold it still. The full behaviour,
 including when the view re-frames, is in
-[Panadapter → Still Spectrum](panadapter.md#9-still-spectrum).
+[Panadapter -> Still Spectrum](panadapter.md#9-still-spectrum).
 
 **Tune snap** *(Advanced)* — the grid a tap on the spectrum lands on, in SSB and
 the digital modes: **Off**, 250 Hz, 500 Hz or 1 kHz. The default is 500 Hz, which
@@ -322,7 +322,7 @@ button and drawer control becomes a click instead of a precise tap on glass.
 
 **Setting it up**
 
-1. Tick **Bluetooth mouse → Enable** in the settings drawer.
+1. Tick **Bluetooth mouse -> Enable** in the settings drawer.
 2. **Restart the Tab5.** Bluetooth can only start once the radio link to the
    wireless co-processor is up, so the switch takes effect on the next boot —
    the toast says so at the time.
@@ -353,7 +353,7 @@ and the manual all scroll.
 ### A Bluetooth keyboard
 
 A Bluetooth keyboard works the same way and needs no separate setting — the same
-**Bluetooth → Enable** switch covers both. Pair it and it types into every text
+**Bluetooth -> Enable** switch covers both. Pair it and it types into every text
 field, exactly as the snap-on keyboard does: **Enter** presses Save in any
 window, **Esc** presses Cancel, **Tab** moves to the next field, and the arrow
 keys move the cursor.
@@ -589,7 +589,7 @@ device itself.
 
 - **On the Tab5:** open the log window (**ADIF Log**) and press **Restore from
   SD**.
-- **In the browser:** **QSO Logs ▲ → ↳ Restore from SD card**.
+- **In the browser:** **QSO Logs ▲ -> ↳ Restore from SD card**.
 
 Both merge: contacts already in the log are skipped, nothing is duplicated, and
 nothing already logged is lost — so it is safe to press twice. You are told what
@@ -602,7 +602,7 @@ card, the older copy is kept as `qso.prev.adi` first. Normal logging grows the
 file and never disturbs it, so it holds the last larger version for as long as
 it takes you to notice.
 
-To use it, copy `qso.prev.adi` off the card (**Files ▲ → SD Files** in the
+To use it, copy `qso.prev.adi` off the card (**Files ▲ -> SD Files** in the
 browser, or a card reader) and restore it with **ADIF restore ↑**.
 
 ## Activation (POTA / SOTA)
@@ -685,8 +685,8 @@ receiving side alone it looks exactly like a dead band.
 **This one lives in the browser, not on the Tab5.** There is no drawer control
 for it — the answer is a list of stations with distances and bearings, which
 wants a screen you are already sitting in front of. In the web UI open
-**Settings → Spots & reporting** and tick **Propagation feedback (who is hearing
-me)**, then **Miscellaneous → Who is hearing me** for the list: receiver,
+**Settings -> Spots & reporting** and tick **Propagation feedback (who is hearing
+me)**, then **Miscellaneous -> Who is hearing me** for the list: receiver,
 country, distance, bearing and the signal report they gave you, sorted by
 distance.
 
@@ -753,7 +753,7 @@ with an **OK** button rather than a message that fades on its own. The result of
 something you asked for is worth reading, and dismissing it is how you say you
 did.
 
-Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs → View / edit log**).
+Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs -> View / edit log**).
 
 **Exclude Worked Before** — When FT8 filtering, skip stations you've already logged QSOs with (requires you to import your own prior ADIF log first).
 

@@ -46,7 +46,7 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 1. The panadapter automatically retries the IQ-mode handshake up to 4 times at connect, so this usually resolves itself within a second of the QMX showing up — no action needed.
 2. If it still happens, a **red banner appears across the top of the screen** telling you immediately. When you see it:
    - Power-cycle the QMX (forces a fresh handshake on reconnect), **or**
-   - Check the QMX's own **System Config → IQ Mode** setting is enabled
+   - Check the QMX's own **System Config -> IQ Mode** setting is enabled
 3. On firmware older than v0.19.3, this failure was silent — only visible in the diagnostic log as `QMX IQ mode NOT confirmed`. Updating is the simplest fix.
 
 ### QMX loses CAT connection after 1–2 minutes
@@ -76,7 +76,7 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 
 1. Double-check SSID spelling and password (copy-paste if possible)
 2. Try your **2.4 GHz WiFi network** instead (if you have dual-band)
-3. Forget the network and reconnect: Settings → WiFi → tap network name → Forget → re-add
+3. Forget the network and reconnect: Settings -> WiFi -> tap network name -> Forget -> re-add
 4. Restart Tab5
 5. If still failing, grab the always-on **diagnostic log** — see [Collecting Diagnostics](#collecting-diagnostics)
 
@@ -117,7 +117,7 @@ else on this page will help.
 1. Check the clock in the bottom bar, and what it says it is synced from
 2. Try the QMX on a different USB cable, connected directly — not through a hub
 3. Turn WiFi off for a few minutes and see whether decodes change
-4. Download the diagnostic log after a session (web UI **Files** menu →
+4. Download the diagnostic log after a session (web UI **Files** menu ->
    **Diagnostic download ↓**) and post it on GitHub — it records the per-slot
    decode counts and capture timing, which says immediately which of the above
    it is
@@ -138,7 +138,7 @@ else on this page will help.
 1. Check QMX firmware version (see Quick Start)
 2. Try a manual CAT command via web API: `curl "http://<ip>/api/cat" -d '{"cmd": "TX;"}' -H "Content-Type: application/json"`
 3. If that fails, you have a CAT issue (see above)
-4. Check settings → FT8 → Simulation Mode is **off**
+4. Check settings -> FT8 -> Simulation Mode is **off**
 5. Restart both devices
 
 ### Battery drains very fast
@@ -154,8 +154,8 @@ else on this page will help.
 
 **Fix:**
 
-1. Lower display brightness: Settings → Display → Brightness → 50–70%
-2. Turn off WiFi if you don't need the web UI: Settings → WiFi → off
+1. Lower display brightness: Settings -> Display -> Brightness -> 50–70%
+2. Turn off WiFi if you don't need the web UI: Settings -> WiFi -> off
 3. FT8 decoding uses more power; this is expected
 4. If battery still drains in <2 hours with low brightness + no WiFi, the battery may be failing
 
@@ -168,12 +168,12 @@ else on this page will help.
 **Fix:**
 
 1. Check if WiFi is connected (should auto-sync time via SNTP)
-2. Manually set time: Settings → Time Sync → Set Manual Time → enter UTC time
+2. Manually set time: Settings -> Time Sync -> Set Manual Time -> enter UTC time
 3. If no WiFi and no RTC set, the time will be wrong (see [Time Sync](../guide/time-sync.md))
-4. Enable FT8-derived sync: Settings → Time Sync → Use FT8-Derived Sync (optional, helps if WiFi isn't available)
+4. Enable FT8-derived sync: Settings -> Time Sync -> Use FT8-Derived Sync (optional, helps if WiFi isn't available)
 
 For POTA/portable operation without WiFi:
-- Set the RTC **before you leave home** (Settings → Time Sync → Set Manual Time)
+- Set the RTC **before you leave home** (Settings -> Time Sync -> Set Manual Time)
 - The RTC holds time for 30–40 hours without power
 
 ### Web UI won't load
@@ -208,8 +208,8 @@ For POTA/portable operation without WiFi:
 **Fix:**
 
 1. Re-enter your settings
-2. If they disappear again, download the diagnostic log (web UI **Files** menu → **Diagnostic download ↓**) and report on GitHub
-3. As a last resort: export your config via the web UI (**Files** menu → **Config download ↓**), then do a full factory reset, then re-import
+2. If they disappear again, download the diagnostic log (web UI **Files** menu -> **Diagnostic download ↓**) and report on GitHub
+3. As a last resort: export your config via the web UI (**Files** menu -> **Config download ↓**), then do a full factory reset, then re-import
 
 ### A Bluetooth mouse never connects
 
@@ -259,7 +259,7 @@ You can now reset from the web page, with no computer or flashing tool needed. I
 - **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults. Your memory channels and logs are separate.
 - **Reset WiFi** — clears just the Wi-Fi / network state, for when the connection is stuck.
 
-Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Files** menu → **Config download ↓**) if you want to restore it afterward.
+Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Files** menu -> **Config download ↓**) if you want to restore it afterward.
 
 ## Collecting Diagnostics
 
