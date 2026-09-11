@@ -161,14 +161,15 @@ $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
     @{ Id = "panadapter";    Title = "Panadapter";     Num = 2; GuideFile = (Join-Path $guideDir "panadapter.md");    Desc = "spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels" },
     @{ Id = "spots";         Title = "Live spots";     Num = 3; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
-    @{ Id = "web-ui";        Title = "Web UI";         Num = 4; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
-    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 5; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
-    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 6; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 7; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "settings";      Title = "Settings";       Num = 8; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "wspr";          Title = "WSPR";           Num = 9; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 10; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 11; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "spot-map";      Title = "Spot map";       Num = 4; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
+    @{ Id = "web-ui";        Title = "Web UI";         Num = 5; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
+    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 6; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
+    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 7; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 8; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 9; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "wspr";          Title = "WSPR";           Num = 10; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 11; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "reference";     Title = "Reference";      Num = 12; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(

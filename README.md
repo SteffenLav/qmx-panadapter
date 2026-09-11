@@ -254,6 +254,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
+- [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
@@ -487,6 +488,26 @@ many sources report it. Each source switches on separately in **Network → Live
 spots**.
 
 📖 Full chapter: [tab5.lav.dk/guide/spots](https://tab5.lav.dk/guide/spots/)
+
+---
+
+## Spot map
+
+Live spots answer "who can I work?". The spot map answers the other question:
+**who is hearing me?** A full-screen map of the stations that reported *your*
+signal — the CW skimmer that copied your CQ, the FT8 station whose decode of you
+reached PSK Reporter, the WSPR receiver that logged your beacon — each a line
+from your grid square to theirs. Contributed by **Uwe DL8UG**.
+
+**Swipe down from the top edge** to open it, from any page. Tabs for the map, a
+table of the same data, and HF band conditions. Drag to pan, pinch to zoom
+around your own QTH.
+
+**Off by default** — switch it on in **Network → Spot map**. While it is on the
+Tab5 holds a live session to PSK Reporter subscribed to your callsign, which is
+worth asking for rather than inheriting. Needs your callsign and grid square.
+
+📖 Full chapter: [tab5.lav.dk/guide/spot-map](https://tab5.lav.dk/guide/spot-map/)
 
 ---
 

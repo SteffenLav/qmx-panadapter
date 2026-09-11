@@ -9,8 +9,11 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 | Swipe → | **Left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
+| Swipe ↓ | **Top edge** | Open the [spot map](../guide/spot-map.md) (who is hearing me) |
 
-Slim **breathing grip handles** on each edge show where to swipe.
+Slim **breathing grip handles** on each edge show where to swipe. The top
+strip is thinner than the other three, because the top bar's own controls claim
+nearly the whole width just below it.
 
 ## Top Bar Taps
 
