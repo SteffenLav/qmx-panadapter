@@ -44,6 +44,7 @@ static const char *TAG = "rbn";
 #define LINE_MAX      256
 #define RX_TIMEOUT_S  30          // no data for this long: assume the link died
 
+// The self-spotting half of this file is by Uwe DL8UG, for the spot map.
 // Self-spotting (ui/spot_map_view.c): the same feed also tells us who is
 // HEARING us, not just who else is calling CQ - RBN spots our own CQ exactly
 // like any other station's the moment a skimmer copies it, we just have to

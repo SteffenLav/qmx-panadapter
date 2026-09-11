@@ -1,3 +1,7 @@
+// Contributed by Uwe DL8UG, who wrote this module and sent it as a patch.
+// Ported by him from his own rbn_monitor project. What changed on the way
+// in - the spot map being opt-in rather than always running - is in the
+// merge commit and in settings.h under spotmap_en.
 #pragma once
 
 #include <stdint.h>

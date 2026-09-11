@@ -1,3 +1,7 @@
+// Contributed by Uwe DL8UG, who wrote this module and sent it as a patch.
+// Ported by him from his own rbn_monitor project. What changed on the way
+// in - the spot map being opt-in rather than always running - is in the
+// merge commit and in settings.h under spotmap_en.
 // HF band conditions from hamqsl.com - see band_conditions.h. Ported from
 // the sibling rbn_monitor project's band_conditions_client.cpp, adapted
 // from C++ to plain C and from that project's psram-stack task helper to

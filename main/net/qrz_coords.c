@@ -1,3 +1,7 @@
+// Contributed by Uwe DL8UG, who wrote this module and sent it as a patch.
+// Ported by him from his own rbn_monitor project. What changed on the way
+// in - the spot map being opt-in rather than always running - is in the
+// merge commit and in settings.h under spotmap_en.
 // QRZ.com Callbook XML lookup -- real per-station coordinates for RBN/DX-
 // cluster spots. Ported from the sibling rbn_monitor project's qrz_client.cpp
 // (see qrz_coords.h). QRZ's Callsign Lookup service has no static API key

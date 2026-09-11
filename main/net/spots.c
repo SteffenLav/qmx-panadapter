@@ -434,6 +434,7 @@ static int parse_pota(const char *json)
 //                                  this the POTA way put spots 1000x off band.
 //   mode       "CW"/"SSB"/"FM"      absent on some spots, hence mode_type
 //   mode_type  "CW"/"PHONE"/"DATA"  the coarse class, used as the fallback
+//   The lat/lon fields below, and the map that uses them, are Uwe DL8UG's.
 //   sig_refs[] [{"id":"G/LD-049",   an ARRAY: a spot can carry more than one
 //                "latitude":53.9,   reference (a summit inside a park). The
 //                "longitude":-1.8}] first is the one the spot is about, and

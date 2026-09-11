@@ -1,3 +1,5 @@
+# Contributed by Uwe DL8UG, who found the problem this patch fixes while
+# building the spot map and wrote the fix.
 <#
 .SYNOPSIS
     Makes esp_hosted's SDIO RX task tolerate a failed buffer allocation

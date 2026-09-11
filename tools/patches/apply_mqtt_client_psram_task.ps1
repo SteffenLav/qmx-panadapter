@@ -1,3 +1,5 @@
+# Contributed by Uwe DL8UG, who found the problem this patch fixes while
+# building the spot map and wrote the fix.
 <#
 .SYNOPSIS
     Gives esp-mqtt's client task a PSRAM-backed stack instead of the

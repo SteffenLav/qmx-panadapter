@@ -1,3 +1,7 @@
+// Contributed by Uwe DL8UG, who wrote this module and sent it as a patch.
+// Ported by him from his own rbn_monitor project. What changed on the way
+// in - the spot map being opt-in rather than always running - is in the
+// merge commit and in settings.h under spotmap_en.
 // Full-screen spot-map overlay - see spot_map_view.h. Overlay skeleton (full-
 // screen hidden/foregrounded screen child, header + Exit button, sidebar +
 // lv_tabview) modelled on reader_view.c and the sibling rbn_monitor project's

@@ -324,6 +324,26 @@ main/
   net/mdns_svc.c          mDNS responder: qmx.local + _http._tcp advert. Started from wifi.c's
                           got-IP path; idempotent, and soft-fails to "IP still works"
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)
+  ui/spot_map_view.c      THE SPOT MAP - Uwe DL8UG's, contributed as a patch and the largest
+                          thing in this project not written here. Full-screen overlay on a
+                          TOP-edge swipe, MAP / LIST / CONDITIONS tabs, answering "who is
+                          hearing ME" where the spots LANE answers "who can I work". Fed by
+                          net/pskr_self.c (PSK Reporter over plain MQTT, a STANDING session
+                          subscribed on our callsign), net/wspr_self.c (wsprnet HTML scrape,
+                          180 s), rbn.c's self-spot half (a skimmer copying our own CQ), and
+                          net/qrz_coords.c (QRZ Callbook XML, to place a skimmer; DXCC-centroid
+                          fallback). net/band_conditions.c is the CONDITIONS tab (hamqsl).
+                          Drawn over util/world_map_data.c (Natural Earth outline) via
+                          util/geo_coords.c.
+                          ⛔ OPT-IN, DEFAULT OFF - settings.h `spotmap_en`, and all four feeds
+                          re-read it every pass so the drawer switch applies LIVE. It was
+                          always-on as sent, which charged every unit -6.6 KB internal and
+                          -2.6 KB of the DMA pool (about half what that pool has left, #284) for
+                          a feature they may never open, and opened an outbound connection
+                          nobody asked for. pskr_self DESTROYS its client on disable rather than
+                          stopping it: esp-mqtt's task is a bare xTaskCreate(), i.e. the one
+                          allocation here that cannot live in PSRAM. Everything of Uwe's own is
+                          in PSRAM - verified with nm
   adif/cloudlog_upload.c  Cloudlog/Wavelog QSO upload (#171). The ONLY self-hosted target, so
                           the address is the operator's and is stored, not compiled in. Batches
                           20 records; server-side dedupe makes the cursor an optimisation, not a
