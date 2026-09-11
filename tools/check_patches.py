@@ -83,6 +83,15 @@ PATCHES = [
      "and then REBOOTED the device - a deliberate restart, so no crash record, "
      "and a warm reset with the radio attached wedges the QMX (#74)"),
 
+    # Layered on the assert-tolerant patch below, which replaces os_wrapper.c
+    # wholesale - the script refuses to run before it.
+    ("apply_esp_hosted_task_stacks.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
+     "QMX_HOSTED_TASK_STACKS",
+     "esp_hosted hardcodes six 5 KB task stacks in internal DMA-capable RAM; "
+     "sized to measured use and the RPC pair moved to PSRAM, ~15 KB back to "
+     "the pool whose exhaustion crashed the device 2026-09-11"),
+
     ("apply_esp_hosted_sdio_sendbuf_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "QMX_SDIO_SENDBUF_TOLERANT",
