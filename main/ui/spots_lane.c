@@ -519,14 +519,30 @@ static void repaint(void)
     // edge of the spectrum gives no clue what it counts or that it can be tapped
     // (operator's request). The arrow still says which way they are.
     char b[24];
+    // ⛔ THE LEFT COUNTER MUST FOLLOW ui_spec_x0(), AND IT IS RE-ALIGNED EVERY
+    // REPAINT, NOT ALIGNED ONCE AT BUILD. The lane object is full width, so
+    // LV_ALIGN_BOTTOM_LEFT means the screen's left edge - which on the CW page
+    // is 256 px underneath the keyer pane. Operator-reported 2026-09-11: on the
+    // CW page only "spots (n) >" was visible, never "< spots (n)". The right
+    // one was fine because it anchors to the right edge, which no pane covers.
+    // Build-time alignment cannot work here: the pane appears and disappears as
+    // the operator swipes between pages, so the inset has to be re-applied -
+    // which is also why the right label has always been re-aligned below.
+    // Everything else in this file already respected x0 (freq_to_x(), the tick
+    // clip, the label clamp); these two objects were the gap.
+    const int ex0 = ui_spec_x0();      // CW page's keyer pane width; 0 elsewhere
     if (off_l > 0 && s_edge_l) {
         snprintf(b, sizeof(b), "< spots (%d)", off_l);
         lv_label_set_text(s_edge_l, b);
         // Coloured like the spot it will take you to, so it reads as part of the
         // same picture rather than as chrome (operator's request).
         lv_obj_set_style_text_color(s_edge_l, lv_color_hex(s_off_l.colour ? s_off_l.colour : COL_POTA), 0);
+        lv_obj_align(s_edge_l, LV_ALIGN_BOTTOM_LEFT, ex0 + EDGE_INSET, -EDGE_INSET);
         lv_obj_clear_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
-        if (s_edge_l_hit) lv_obj_clear_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
+        if (s_edge_l_hit) {
+            lv_obj_align(s_edge_l_hit, LV_ALIGN_BOTTOM_LEFT, ex0, 0);
+            lv_obj_clear_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     if (off_r > 0 && s_edge_r) {
         snprintf(b, sizeof(b), "spots (%d) >", off_r);
