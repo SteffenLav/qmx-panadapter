@@ -764,7 +764,7 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
      * cycle's own. So the display moved in one step, two minutes wide, and the
      * operator could see it happening without knowing why.
      *
-     * Now each row takes the median of its own 205 bins - robust, because WSPR
+     * Now each row takes the median of its own ~200 bins - robust, because WSPR
      * occupies only a few of them - and that feeds a short EMA. WF_FLOOR_ALPHA
      * of 1/4 settles in about three or four rows, which is the operator's own
      * instinct ("maybe 2-3 of them"): fast enough to follow a band change,
@@ -777,7 +777,7 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
      * a fully adaptive per-bin floor made steady carriers FADE OUT over ~60 s.
      * That cannot happen here because the floor is one number per row taken
      * from the MEDIAN across frequency: a carrier occupies a handful of the
-     * 205 bins and can never move it. Do not make this per-bin. */
+     * ~200 bins and can never move it. Do not make this per-bin. */
     {
         EXT_RAM_BSS_ATTR static float med[WSPR_WF_COLS];
         memcpy(med, magrow, sizeof(med));
@@ -2087,6 +2087,43 @@ bool wspr_feature_enabled(void)
     return c.wspr_en;
 }
 
+/* ⭐ A CLEAN CARPET ON EVERY ENTRY TO THE PAGE (operator, 2026-09-11: "when
+ * swiping back to the WSPR page the previous data is still there in the wf -
+ * please remove it so we have a clean screen").
+ *
+ * The ring outlives the receiver - wspr_rx_stop() frees the capture buffers but
+ * not s_wf - so coming back showed the carpet as it was when the page was left,
+ * minutes or hours earlier, with its '?' marks and "44-46" time labels still on
+ * it. That reads as live data and is not.
+ *
+ * This deliberately reverses the earlier "the carpet is deliberately not
+ * blanked" choice (see s_wf_wait_lbl in wspr_screen_view.c): that was about the
+ * wait INSIDE a session, and the "waiting for the next cycle" line still covers
+ * it. The decode LIST is not touched - that is history and has its own Clear.
+ *
+ * Marks and the boundary cycle go too: the view derives its time labels from
+ * boundary rows in the ring and only rebuilds them when the marks sequence or
+ * the newest boundary changes, so both are bumped to make it drop them. The
+ * floor is re-seeded as well, since the band may have changed while away. */
+static void wf_clear_for_entry(void)
+{
+    if (s_wf) {
+        if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+        memset(s_wf, 0, (size_t)WSPR_WF_HIST_ROWS * WSPR_WF_COLS);
+        s_wf_seq++;
+        if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+    }
+    s_wf_boundary_cycle = 0;
+    s_wf_floor = 0.0f;
+    if (s_marks_mtx) xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    for (int k = 0; k < WSPR_MARKS_CYCLES; k++) {
+        s_marks_n[k]     = 0;
+        s_marks_cycle[k] = 0;
+    }
+    s_marks_seq++;
+    if (s_marks_mtx) xSemaphoreGive(s_marks_mtx);
+}
+
 bool wspr_rx_start(void)
 {
     if (s_run) return true;
@@ -2135,6 +2172,7 @@ bool wspr_rx_start(void)
      * long enough to matter. */
     if (!s_wf_mtx) s_wf_mtx = xSemaphoreCreateMutex();
     if (!s_marks_mtx) s_marks_mtx = xSemaphoreCreateMutex();
+    wf_clear_for_entry();   /* after the mutexes exist - see its comment */
     /* Only if untouched: a wspr_guards dev action set before the page is
      * entered must survive starting the loop, or an experiment silently
      * reverts to defaults the moment it is run. */

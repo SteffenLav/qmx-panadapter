@@ -1523,7 +1523,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * this label and LVGL draws siblings in creation order, so without this the
      * title would be drawn UNDER the waterfall and simply disappear - the
      * opposite of what was asked for. The overlap is ~24 px into the top-left
-     * corner of the waterfall, which carries the low (1330 Hz) edge of the window. */
+     * corner of the waterfall, which carries the low (1360 Hz) edge of the window. */
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
     lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
@@ -1679,6 +1679,9 @@ void wspr_screen_view_init(lv_obj_t *parent)
          * is the PREVIOUS cycle's picture - still worth reading, and
          * indistinguishable from a page that has died. He read it as dead, and
          * so would anyone.
+         * (Since 2026-09-11 the carpet IS blanked on ENTRY to the page - see
+         * wf_clear_for_entry() in wspr_rx.c - so on arrival this line sits over
+         * black. Within a session nothing changes: the last cycle stays up.)
          *
          * Discreet on purpose: the carpet behind it is real data, so this dims
          * it rather than covering it, and both the text and the dimming go the
@@ -1706,8 +1709,8 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * wrong: each label is placed by the SAME arithmetic that maps a frequency
      * to a waterfall column, then centred on it. */
     /* Every round 50 Hz INSIDE the window, derived from it. This was a literal
-     * "1350 + i * 50" for 7 ticks, so moving the window to 1330-1630 would have
-     * put a "1650" label on the right edge of a waterfall that ends at 1630. */
+     * "1350 + i * 50" for 7 ticks, so moving the window at all would have put
+     * labels at frequencies the waterfall no longer covers. */
     const int first_tick = (((int)WSPR_WF_LO_HZ + 49) / 50) * 50;
     for (int hz = first_tick; hz <= (int)WSPR_WF_HI_HZ; hz += 50) {
         int x  = (hz - (int)WSPR_WF_LO_HZ) * RIGHT_W /
@@ -1856,7 +1859,7 @@ static inline uint16_t wf_rgb565(uint8_t v)
      * 144,238,144 - brighter than most of the traces it separates, so the eye
      * went to the divider instead of to the signals. It only has to be
      * findable, and the dashes already make it unmistakable: nothing real is
-     * uniform across 205 bins. Grey is also outside the signal ramp entirely,
+     * uniform across all WSPR_WF_COLS bins. Grey is also outside the signal ramp entirely,
      * so it cannot be confused with a level. */
     if (v == WSPR_WF_MARK) return (uint16_t)(((100 >> 3) << 11) | ((100 >> 2) << 5) | (100 >> 3));
     if (v < 64)        { r = 0; g = 0;                      b = (uint8_t)(v * 3); }

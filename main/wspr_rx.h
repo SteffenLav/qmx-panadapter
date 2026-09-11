@@ -86,12 +86,19 @@ bool wspr_rx_running(void);
  * SUCCESSES. That is the same trap as a change-detected repaint keyed on only
  * part of what the render reads.
  *
- * 1330-1630 since 2026-09-11 (operator): the same 300 Hz, moved 20 Hz down.
- * The search window in wspr_rx.c and the decoder's stage-1 centre in
- * wspr_decode.c moved with it - see both. */
-#define WSPR_WF_LO_HZ  1330.0f
-#define WSPR_WF_HI_HZ  1630.0f
-#define WSPR_WF_COLS   205            /* (1630-1330) / 1.4648 */
+ * 1360-1650 since 2026-09-11 (operator). It went to 1330-1630 for an hour
+ * first, on a left-edge trace he took for a WSPR station and then recognised as
+ * a wild CW transmitter - the same lesson as above from the other side: check
+ * what a trace IS before moving the window to include it. The search window in
+ * wspr_rx.c and the decoder's stage-1 centre in wspr_decode.c follow this -
+ * see both.
+ *
+ * ⚠ WSPR_WF_COLS must be (HI - LO) / 1.4648, rounded: the view maps columns to
+ * pixels and the axis maps Hz to pixels, and they only agree if the columns
+ * span exactly this window. A literal because it sizes static arrays. */
+#define WSPR_WF_LO_HZ  1360.0f
+#define WSPR_WF_HI_HZ  1650.0f
+#define WSPR_WF_COLS   198            /* (1650-1360) / 1.4648 = 197.98 */
 
 /* ---- THE CARPET FLOWS, IT DOES NOT REDRAW ------------------------------
  *
