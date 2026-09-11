@@ -4916,7 +4916,13 @@ static void update_bandplan_strip(uint32_t freq_hz)
     // (LVGL no-ops unchanged coords, so re-asserting per tick is cheap.)
     const int strip_x = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
     const int W = DISPLAY_H_RES - strip_x;
-    lv_obj_set_pos(s_bandplan_obj, strip_x, 720 - BOTTOM_BAR_H - BANDPLAN_H);
+    /* ⛔ DISPLAY_V_RES, not a literal 720. This said 720 - the Tab5's height -
+     * and on the Waveshare's 600 px panel that is y=672, i.e. the whole strip
+     * (and the knob, which is its child) parked 72 px BELOW the screen. It is
+     * created at the right place from DISPLAY_V_RES at build time and this
+     * re-assert, which runs on every band-plan update, then threw it off. The
+     * strip was simply absent on that board and nothing logged a thing. */
+    lv_obj_set_pos(s_bandplan_obj, strip_x, DISPLAY_V_RES - BOTTOM_BAR_H - BANDPLAN_H);
     lv_obj_set_width(s_bandplan_obj, W);
 
     for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
