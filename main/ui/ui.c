@@ -9700,17 +9700,37 @@ static void top_edge_swipe_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
 
+    /* ⚠ LOGGED, BECAUSE THIS GESTURE HAS FIRED WITH NOBODY TOUCHING THE SCREEN.
+     * 2026-09-11, dev bench, WSPR page: the spot map opened at 17:08:21 UTC and
+     * was closed by its Exit button at 17:10:08 while the operator was nowhere
+     * near the Tab5 - and the map's load cost that WSPR cycle every decode. No
+     * mouse or keyboard was connected and the web UI has no way to open it, so
+     * the touch panel produced both. The log did not say what the touch looked
+     * like, so a ghost could not be told from a swipe. Now it does: where it
+     * started and ended, how long it took, and which indev delivered it. Guard
+     * on evidence, not on a guess at the ghost's shape. */
+    static int64_t s_top_press_us;
+    static int     s_top_press_x;
     if (code == LV_EVENT_PRESSED) {
         s_top_edge_swipe_start_y = (int)p.y;
+        s_top_press_x  = (int)p.x;
+        s_top_press_us = esp_timer_get_time();
         return;
     }
     if (code == LV_EVENT_RELEASED) {
+        const int dur_ms = (int)((esp_timer_get_time() - s_top_press_us) / 1000);
+        bool open = false;
         if (s_top_edge_swipe_start_y >= 0 &&
             (int)p.y - s_top_edge_swipe_start_y >= EDGE_SWIPE_MIN_DY) {
-            spot_map_view_show();
+            open = true;
         } else if (grip_mouse_click(e, s_top_edge_grip)) {
-            spot_map_view_show();       // a pointer cannot swipe: see grip_mouse_click()
+            open = true;                // a pointer cannot swipe: see grip_mouse_click()
         }
+        ESP_LOGI(TAG, "top-edge gesture: (%d,%d) -> (%d,%d) in %d ms via %s -> %s",
+                 s_top_press_x, s_top_edge_swipe_start_y, (int)p.x, (int)p.y, dur_ms,
+                 indev == s_mouse_indev ? "mouse" : "touch",
+                 open ? "OPEN spot map" : "ignored");
+        if (open) spot_map_view_show();
         s_top_edge_swipe_start_y = -1;
     }
 }

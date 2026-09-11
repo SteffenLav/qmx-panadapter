@@ -35,6 +35,7 @@
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
 #include "ui/reader_view.h"   // reader_view_open_help - the /api/cmd "help" action
+#include "ui/spot_map_view.h" // the /api/cmd "spotmap" dev action
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
@@ -1784,6 +1785,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                            : "{\"ok\":false,\"dump_armed\":%d,"
                              "\"error\":\"no SD card mounted\"}", armed);
         httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "spotmap") == 0) {
+        /* Dev action: open/close the Tab5's spot map with nobody at the screen,
+         * so its cost to the audio stream can be MEASURED on a WSPR cycle
+         * (2026-09-11: a cycle with the map up lost 1.7 % of its audio and
+         * decoded nothing). {"action":"spotmap","show":true|false} */
+        cJSON *js = cJSON_GetObjectItem(root, "show");
+        bool show = cJSON_IsBool(js) ? cJSON_IsTrue(js) : true;
+        cJSON_Delete(root);
+        bool ok = false;
+        if (display_lock(500)) {
+            if (show) spot_map_view_show(); else spot_map_view_hide();
+            ok = true;
+            display_unlock();
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, ok ? (show ? "{\"ok\":true,\"spotmap\":\"shown\"}"
+                                           : "{\"ok\":true,\"spotmap\":\"hidden\"}")
+                                   : "{\"ok\":false,\"error\":\"display busy\"}");
         return ESP_OK;
     } else if (action && strcmp(action, "gapfill") == 0) {
         /* Dev action for the capture time-base repair (dsp.c time_base_check):

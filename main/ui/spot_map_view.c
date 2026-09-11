@@ -43,6 +43,7 @@
 
 #include "esp_log.h"
 #include "esp_attr.h"           // EXT_RAM_BSS_ATTR
+#include "esp_timer.h"          // the Exit button's press duration (logged)
 #include "esp_lcd_touch.h"      // raw multi-touch read for the MAP tab's pinch-zoom
 #include <string.h>
 #include <stdio.h>
@@ -921,9 +922,27 @@ static void refresh_timer_cb(lv_timer_t *t)
     }
 }
 
+/* Logged with where and how long, for the same reason the top-edge gesture that
+ * opens this map is (see top_edge_swipe_cb in ui.c): on 2026-09-11 this button
+ * closed the map at 17:10:08 UTC with nobody touching the Tab5. */
+static int64_t s_exit_press_us;
+static lv_point_t s_exit_press_pt;
+
+static void exit_btn_press_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (indev) lv_indev_get_point(indev, &s_exit_press_pt);
+    s_exit_press_us = esp_timer_get_time();
+}
+
 static void exit_btn_cb(lv_event_t *e)
 {
-    (void)e;
+    lv_indev_t *indev = lv_event_get_indev(e);
+    lv_point_t p = { 0, 0 };
+    if (indev) lv_indev_get_point(indev, &p);
+    ESP_LOGI(TAG, "Exit: (%d,%d) -> (%d,%d) in %d ms",
+             (int)s_exit_press_pt.x, (int)s_exit_press_pt.y, (int)p.x, (int)p.y,
+             (int)((esp_timer_get_time() - s_exit_press_us) / 1000));
     spot_map_view_hide();
 }
 
@@ -968,6 +987,7 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_hor(exit_btn, 20, 0);
     lv_obj_set_height(exit_btn, 46);
     lv_obj_set_ext_click_area(exit_btn, 44);
+    lv_obj_add_event_cb(exit_btn, exit_btn_press_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
     ui_kbd_set_buttons(NULL, exit_btn);   // Esc leaves the map, same as the Reader
     lv_obj_t *exit_lbl = lv_label_create(exit_btn);
