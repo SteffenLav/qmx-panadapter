@@ -352,7 +352,8 @@ static void repaint(void)
         s_w->opa[i]    = age_opa(s_w->buf[i].heard_unix, now);
     }
 
-    // The off-screen counts are scoped to the BAND we are looking at, not to all
+    // The off-screen counts are scoped to the BAND we are looking at (on the CW
+    // page, to its CW + DiGi range - see ui_page_range_hz()), not to all
     // of HF. Counting globally (the first cut) reported things like "51 <" while
     // every one of those spots was on 40 m and 80 m - an arrow inviting the
     // operator to tune somewhere that has nothing to do with where they are.
@@ -365,7 +366,10 @@ static void repaint(void)
     {
         uint32_t mid = s_view_lo + (s_view_hi - s_view_lo) / 2;
         uint32_t lo, hi;
-        if (ui_validate_band_freq_hz(mid, &lo, &hi)) { band_lo = lo; band_hi = hi; }
+        /* The PAGE's range, not merely the band's: on the CW page that is the
+         * CW + DiGi segments the tune clamp allows, and a counter pointing past
+         * it invites a jump the page will refuse. */
+        if (ui_page_range_hz(mid, &lo, &hi)) { band_lo = lo; band_hi = hi; }
     }
 
     // Split into visible / off-screen-left / off-screen-right.

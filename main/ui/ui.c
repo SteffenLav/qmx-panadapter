@@ -347,6 +347,17 @@ static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
     return true;
 }
 
+/* The range the CURRENT PAGE lets the operator reach - the band on the
+ * panadapter, the CW+DiGi segments on the CW page. Exported for the spots
+ * lane, whose off-screen counters must not point past it: they did, and on the
+ * CW page they counted phone spots the tune clamp would never let him reach
+ * (operator, 2026-09-11: "the edge spots counter go beyond the band-plan - not
+ * allowed"). Same function as the drag clamp, so the two cannot disagree. */
+bool ui_page_range_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out)
+{
+    return effective_drag_edges(hz, lo_out, hi_out);
+}
+
 static void band_preset_cb(lv_event_t *e)
 {
     uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);

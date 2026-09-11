@@ -80,6 +80,9 @@ uint32_t ui_band_last_hz(uint32_t center_hz); // 0 if never visited      // CW s
 // or in a gap between bands - used to refuse saving an out-of-band memory
 // channel frequency.
 bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
+// The range the current PAGE lets the operator tune across: the band's edges,
+// or on the CW page its CW + DiGi segments. False when hz is in no band.
+bool ui_page_range_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
 int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
