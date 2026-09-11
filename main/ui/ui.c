@@ -2238,6 +2238,15 @@ static bool s_hide_passband_now = false;       // immediately hide on pan settle
 #define PASSBAND_FADE_DURATION_MS 1000      // fade-in duration (after delay)
 // One-finger hold for tune: only tunes if held still >= TUNE_HOLD_MS.
 static uint64_t s_touch_down_us     = 0;    // timestamp of last PRESSED event
+/* True from LVGL delivering a PRESS to the spectrum or waterfall until every
+ * finger lifts. pinch_poll_cb() reads the RAW panel and cannot tell what a touch
+ * started on, so without this a swipe that belonged to an edge strip (the
+ * drawer, the page toggle) was also read as a spectrum pan - on the FT8 page
+ * too, where it put the "view 14.081.444" tooltip over the decode list and left
+ * it there once the drawer opened (operator screenshot, 2026-09-11). LVGL's own
+ * hit-testing is the authority on who owns a touch; this just records its
+ * answer, the same principle as the pointer colour. */
+static bool     s_touch_on_spectrum = false;
 #define TUNE_HOLD_MS    250                 // hold still for this long to trigger tune
 /* How still "still" has to be. Generous, because this is a 5" glass panel used
  * with a bare finger and sometimes in the field: a real dwell wanders a few
@@ -6652,6 +6661,32 @@ static void stroll_apply_offset(int off)
     wf_apply_x();
 }
 
+/* Abandon a one-finger pan WITHOUT applying it: no retune, no view move, and
+ * everything the drag painted live (tooltip, band strip, the freq readout in
+ * centred mode) put back. For a gesture something else has taken over - the
+ * drawer opening, or the page changing under it. Before this the pan was
+ * simply frozen: its tooltip stayed on screen and the next finger-lift settled
+ * it, which in centred mode RETUNES the radio. */
+static void stroll_cancel(void)
+{
+    if (s_stroll_active) {
+        stroll_apply_offset(0);
+        update_bandplan_strip(s_last_qmx_freq_hz);
+        if (s_freq_label && !sv_effective()) {
+            char fs[16], fb[32];
+            format_freq_hz(s_last_qmx_freq_hz, g_freq_style, fs, sizeof(fs));
+            snprintf(fb, sizeof(fb), "Freq: %s Hz", fs);
+            lv_label_set_text(s_freq_label, fb);
+        }
+        ESP_LOGI("pinch", "pan cancelled - the touch was taken over");
+    }
+    if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+    s_stroll_active     = false;
+    s_pan_start_x       = 0;
+    s_tune_mode_locked  = false;
+    s_touch_on_spectrum = false;
+}
+
 // === Display sleep (#34, Samuel W7STF) =====================================
 // Idle-timeout backlight-off. Backlight only - rendering, FT8, CAT, WiFi and
 // the web UI all keep running; the 5" LCD backlight is what dominates idle
@@ -6802,7 +6837,10 @@ static void pinch_poll_cb(lv_timer_t *t)
     // corrupted the anim struct or just the trigger that exposed it, the
     // drawer has no more business driving spectrum pan/tune than the
     // band-plan strip or the freq keypad do while they own the touch.
-    if (s_drawer_open) return;
+    // CANCEL, not just return: a swipe that opens the drawer can already have
+    // started a pan, and returning left it frozen - tooltip on screen for as
+    // long as the drawer stayed open, then settled (retuned) on the next lift.
+    if (s_drawer_open) { stroll_cancel(); return; }
 
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
@@ -6887,8 +6925,20 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
     }
 
+    // Everything below is SPECTRUM pan/zoom/tune, and the spectrum exists on
+    // the panadapter page only. This function reads the raw panel on every
+    // page, so on FT8 or WSPR a horizontal swipe used to start a pan of the
+    // hidden spectrum and put its tooltip over the page (and a two-finger
+    // pinch zoomed it). The sleep double-tap above stays global on purpose.
+    if (ui_mode_get() != UI_MODE_PANADAPTER) {
+        stroll_cancel();
+        s_pinch_active = false;
+        return;
+    }
+
     // No fingers: settle any active gesture.
     if (npts < 1) {
+        s_touch_on_spectrum = false;   // the touch that owned the spectrum is over
         if (s_pinch_active) {
             ESP_LOGI("pinch", "Pinch end: zoom=%.1f pan=%d", (double)s_zoom_factor, s_pan_offset_bins);
             s_pinch_active = false;
@@ -6998,6 +7048,12 @@ static void pinch_poll_cb(lv_timer_t *t)
                 s_tune_mode_locked = false;  // Reset on new touch
                 return;
             }
+            /* Only a touch LVGL delivered to the spectrum or waterfall may
+             * become a pan. A swipe that started on an edge strip (drawer,
+             * page toggle, memory) belongs to that strip. Checked every poll
+             * rather than once, so a PRESS that LVGL delivers a little late
+             * (taskLVGL can be 100-200 ms behind here) still arms the pan. */
+            if (!s_touch_on_spectrum) return;
             // Check if user is moving: activate pan only if FAST movement (>20px before 250ms).
             int movement = s_pan_start_x - lx0;
             if (movement < 0) movement = -movement;
@@ -9398,6 +9454,7 @@ static void touch_event_cb(lv_event_t *e)
         s_touch_on_bandplan = false;
         // Record touch-down time for hold-delay tune detection.
         s_touch_down_us = esp_timer_get_time();
+        s_touch_on_spectrum = true;   // see its declaration - gates the raw pan
         // Track every touch-down x so a rightward swipe anywhere on the
         // spectrum/waterfall can close the drawer when it's open.
         s_screen_swipe_start_x = (int)p.x;
