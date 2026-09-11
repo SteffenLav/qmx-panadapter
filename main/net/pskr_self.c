@@ -206,6 +206,35 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
+// The client exists only while the spot map is switched on. Both of these run
+// on watchdog_task and nowhere else, so s_client needs no lock of its own -
+// the MQTT event callback is the only other reader and it cannot fire before
+// create or after destroy.
+static bool client_create(void)
+{
+    if (s_client) return true;
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = BROKER_URI,
+        // The library default (6 KB, mqtt_config.h) sizes for a TLS
+        // handshake on this same stack. Ours is plain mqtt://, no TLS, so this
+        // can be smaller - and every KB less asked for is one KB less that
+        // esp_mqtt_client_start()'s internal xTaskCreate() (always INTERNAL
+        // RAM, see watchdog_task()'s comment) needs to find contiguous.
+        .task.stack_size = 4096,
+    };
+    s_client = esp_mqtt_client_init(&cfg);
+    if (!s_client) return false;
+    esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    return true;
+}
+
+static void client_destroy(void)
+{
+    if (!s_client) return;
+    esp_mqtt_client_destroy(s_client);   // stops the session AND frees the context
+    s_client = NULL;
+}
+
 // Owns the MQTT session's whole lifetime, because two things can change under
 // it without a reboot: the operator's own callsign (the subscription), and
 // spotmap_en (whether there should be a session at all).
@@ -239,21 +268,33 @@ static void watchdog_task(void *arg)
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }
+            if (!client_create()) {
+                ESP_LOGW(TAG, "esp_mqtt_client_init failed - retrying in %d ms", backoff_ms);
+                vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+                if (backoff_ms < 30000) backoff_ms *= 2;
+                continue;
+            }
             if (esp_mqtt_client_start(s_client) == ESP_OK) {
                 started = true;
                 backoff_ms = 2000;
                 ESP_LOGI(TAG, "self-spotting started (%s)", BROKER_URI);
             } else {
                 ESP_LOGW(TAG, "esp_mqtt_client_start failed (internal RAM likely still tight) - retrying in %d ms", backoff_ms);
+                client_destroy();   // do not sit on a client we could not start
                 vTaskDelay(pdMS_TO_TICKS(backoff_ms));
                 if (backoff_ms < 30000) backoff_ms *= 2;
                 continue;
             }
         } else if (!want && started) {
-            esp_mqtt_client_stop(s_client);
+            // DESTROY, not stop. stop() ends the session but keeps the client
+            // context and its copy of the config allocated, so switching the
+            // map off would hand back the task and keep the rest - and the
+            // whole point of the switch is that an operator who is not using
+            // this pays nothing for it.
+            client_destroy();
             started = false;
             s_connected = false;
-            s_subscribed_call[0] = ' ';   // a re-enable must SUBSCRIBE again
+            s_subscribed_call[0] = '\0';   // a re-enable must SUBSCRIBE again
             ESP_LOGI(TAG, "spot map switched off - MQTT session stopped");
         }
 
@@ -272,25 +313,17 @@ static void watchdog_task(void *arg)
 
 void pskr_self_init(void)
 {
-    if (s_client) return;
+    if (s_mutex) return;
     s_mutex = xSemaphoreCreateMutex();
 
-    esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = BROKER_URI,
-        // The library default (6 KB, mqtt_config.h) sizes for a TLS
-        // handshake on this same stack - see storage/settings.h-adjacent
-        // precedent in net/psk_rx.c's own 8 KB HTTP task comment for why that
-        // matters elsewhere. Ours is plain mqtt://, no TLS, so this can be
-        // smaller - and every KB less asked for is one KB less that
-        // esp_mqtt_client_start()'s internal xTaskCreate() (always INTERNAL
-        // RAM, see watchdog_task()'s comment) needs to find contiguous.
-        .task.stack_size = 4096,
-    };
-    s_client = esp_mqtt_client_init(&cfg);
-    esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-
+    // Nothing but the mutex and the watchdog task is created here: the MQTT
+    // client itself is built on the first enable and torn down again on
+    // disable (client_create()/client_destroy() above). esp_mqtt_client_init()
+    // allocates the client context and its own copy of the config, so calling
+    // it at boot charged that to every unit including the ones that never
+    // open the map.
     psram_task_create(watchdog_task, "pskr_self", 4096, NULL, 3, tskNO_AFFINITY);
-    // "ready", not "started" - the session itself waits on spotmap_en, and the
-    // task above says so when it actually connects.
+    // "ready", not "started" - nothing is allocated and nothing is connected
+    // until spotmap_en says so, and the task above says when it is.
     ESP_LOGI(TAG, "live self-spotting ready (MQTT, %s; opt-in)", BROKER_URI);
 }
