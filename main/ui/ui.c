@@ -22,6 +22,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"     // BLE keystroke queue - see ui_kbd_feed()
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -1907,6 +1908,11 @@ void ui_set_zoom(float zoom, int pan_bins)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
+/* BLE keystroke queue - see ui_kbd_feed() for why keys are not applied on the
+ * caller's task. Declared here because ui_init() creates it. */
+typedef struct { char text[12]; uint8_t mods; } kbd_q_ev_t;
+static QueueHandle_t s_kbd_q;
+static void kbd_q_drain_cb(lv_timer_t *t);
 static void left_edge_swipe_cb(lv_event_t *e);
 static void bottom_edge_swipe_cb(lv_event_t *e);
 static void osk_bt_retire_cb(lv_timer_t *t);   /* #273 - retire a stale on-screen keyboard */
@@ -6476,6 +6482,9 @@ void ui_init(lv_display_t *disp)
     }
     lv_timer_create(pause_banner_keepalive_cb, 1000, NULL);
     lv_timer_create(osk_bt_retire_cb, 500, NULL);   /* #273 */
+    /* BLE keystrokes, applied on this thread - see ui_kbd_feed(). */
+    s_kbd_q = xQueueCreate(32, sizeof(kbd_q_ev_t));
+    lv_timer_create(kbd_q_drain_cb, 20, NULL);
 
     // "Waiting for QMX" prompt (see qmx_wait_poll_cb above). Full-screen,
     // transparent background so it reads over whatever's underneath on any
@@ -14754,10 +14763,34 @@ static void osk_bt_retire_cb(lv_timer_t *t)
         lv_obj_add_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* ⛔ QUEUED, NOT APPLIED HERE: the caller is the NimBLE host task (priority 21),
+ * and kbd_text_cb() waits up to 500 ms for display_lock(). A high-priority task
+ * blocked on the LVGL mutex lends LVGL its priority for as long as it waits -
+ * the same inversion that let taskLVGL run at 10 over the USB audio pump when
+ * cat.c parsed CAT replies on the USB-CDC task (see handle_rx there). Keys are
+ * drained on the LVGL thread instead, by kbd_q_drain_cb(). */
+static volatile uint32_t s_kbd_q_dropped;
+
 void ui_kbd_feed(const char *text, uint8_t mods)
 {
-    if (!text || !text[0]) return;
-    kbd_text_cb(text, mods, NULL);
+    if (!text || !text[0] || !s_kbd_q) return;
+    kbd_q_ev_t ev = { .mods = mods };
+    strncpy(ev.text, text, sizeof(ev.text) - 1);
+    if (xQueueSend(s_kbd_q, &ev, 0) != pdTRUE) s_kbd_q_dropped++;
+}
+
+static void kbd_q_drain_cb(lv_timer_t *t)
+{
+    (void)t;
+    static uint32_t dropped_seen;
+    if (s_kbd_q_dropped != dropped_seen) {
+        ESP_LOGW(TAG, "kbd: %u key(s) dropped - queue full",
+                 (unsigned)(s_kbd_q_dropped - dropped_seen));
+        dropped_seen = s_kbd_q_dropped;
+    }
+    kbd_q_ev_t ev;
+    while (s_kbd_q && xQueueReceive(s_kbd_q, &ev, 0) == pdTRUE)
+        kbd_text_cb(ev.text, ev.mods, NULL);
 }
 
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn)

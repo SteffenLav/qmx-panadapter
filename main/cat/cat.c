@@ -7,7 +7,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/stream_buffer.h"
 #include "esp_log.h"
+#include "esp_attr.h"      // EXT_RAM_BSS_ATTR - the CAT RX queue's storage
+#include "util/psram_task.h"
 #include "esp_timer.h"
 #include "esp_err.h"
 
@@ -504,6 +507,9 @@ void cat_poll_set_paused(bool paused)
 static void link_task(void *arg);
 static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
+static void cat_rx_task(void *arg);
+static void cat_rx_queue_init(void);
+static bool cat_rx_queue_ready(void);
 static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx);
 static esp_err_t try_open_qmx(void);
 static void process_cat_message(const char *msg, size_t len);
@@ -523,6 +529,18 @@ err = cdc_acm_host_install(NULL);
         return err;
     }
     ESP_LOGI(TAG, "CDC-ACM host driver installed");
+
+    /* CAT RX processing, off the USB task - see handle_rx(). Created BEFORE the
+     * link task, so the first byte the radio sends has somewhere to go. */
+    cat_rx_queue_init();
+    if (!cat_rx_queue_ready()) return ESP_ERR_NO_MEM;
+    /* 4096: process_cat_message() ran on the CDC driver's 4096-byte stack until
+     * now, so that is the proven size. PSRAM is fine - this task touches no
+     * USB or DMA buffer, only the stream buffer and the UI. */
+    if (!psram_task_create(cat_rx_task, "cat_rx", 4096, NULL, 4, 1)) {
+        ESP_LOGE(TAG, "could not start cat_rx");
+        return ESP_FAIL;
+    }
 
     BaseType_t ok = xTaskCreatePinnedToCore(
         // 5120, not 8192: measured peak use 2,696 B (hwm 6,008 B free of an
@@ -574,24 +592,82 @@ static volatile int64_t s_last_rx_us = 0;
 
 int64_t cat_last_rx_us(void) { return s_last_rx_us; }
 
+/* ⛔ THE USB TASK MUST NEVER WAIT ON THE DISPLAY - SO THIS ONLY QUEUES BYTES.
+ *
+ * handle_rx() is the CDC-ACM data callback: it runs on the driver's "USB-CDC"
+ * task, PRIORITY 10, core 0. It used to parse and act on every message right
+ * here, and process_cat_message() updates the UI - ui_refresh_bandplan_strip()
+ * alone waits up to 100 ms for display_lock() on EVERY FA reply, ~7 times a
+ * second. While LVGL was busy drawing, the USB-CDC task blocked on the LVGL
+ * mutex and PRIORITY INHERITANCE lifted taskLVGL from 4 to 10 - above
+ * audio_task (6) and the UAC driver task (5) on the same core. So every heavy
+ * redraw starved the isochronous audio pump and the radio's audio was lost at
+ * the wire, and the CDC task itself stalled, which is the "TX transfer
+ * timeout" once a second.
+ *
+ * Measured 2026-09-11 on a WSPR page with the spot map open (it redraws
+ * ~1,300 line segments plus a great circle per report): 11-13 % of each
+ * cycle's audio lost and 0 decodes, against 0.3-0.6 % and 4-8 decodes with it
+ * closed. cpu_owners caught taskLVGL at CURRENT priority 10 in every sample -
+ * its base is 4 - which is what pointed here. The drawer's "gaps" have the
+ * same shape.
+ *
+ * Now the bytes go into a stream buffer and cat_rx_task does the rest, at
+ * priority 4 on core 1: equal to LVGL's base, so waiting for the display there
+ * can never raise LVGL above anything. Every CAT wait loop yields with
+ * vTaskDelay, so a lower-priority processor still gets the answer in time. */
+#define CAT_RX_SB_BYTES 1024
+static EXT_RAM_BSS_ATTR uint8_t s_rx_sb_storage[CAT_RX_SB_BYTES + 1];
+static StaticStreamBuffer_t     s_rx_sb_struct;
+static StreamBufferHandle_t     s_rx_sb;
+static volatile uint32_t        s_rx_sb_dropped;
+
+static void cat_rx_queue_init(void)
+{
+    if (!s_rx_sb)
+        s_rx_sb = xStreamBufferCreateStatic(CAT_RX_SB_BYTES, 1, s_rx_sb_storage, &s_rx_sb_struct);
+}
+static bool cat_rx_queue_ready(void) { return s_rx_sb != NULL; }
+
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
 {
-    if (data_len) s_last_rx_us = esp_timer_get_time();
-    for (size_t i = 0; i < data_len; i++) {
-        char c = (char)data[i];
-        if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
-            ESP_LOGW(TAG, "RX buffer overflow, dropping accumulated data");
+    if (!data_len) return true;
+    s_last_rx_us = esp_timer_get_time();
+    size_t sent = s_rx_sb ? xStreamBufferSend(s_rx_sb, data, data_len, 0) : 0;
+    if (sent < data_len) s_rx_sb_dropped += (uint32_t)(data_len - sent);
+    return true;
+}
+
+static void cat_rx_task(void *arg)
+{
+    (void)arg;
+    uint8_t  chunk[64];
+    uint32_t dropped_seen = 0;
+    for (;;) {
+        size_t n = xStreamBufferReceive(s_rx_sb, chunk, sizeof(chunk), portMAX_DELAY);
+        if (s_rx_sb_dropped != dropped_seen) {
+            /* Counted, never silent - and the half-assembled message is
+             * discarded, because bytes are missing from the middle of it. */
+            ESP_LOGW(TAG, "CAT RX queue full - %u byte(s) dropped",
+                     (unsigned)(s_rx_sb_dropped - dropped_seen));
+            dropped_seen = s_rx_sb_dropped;
             s_rx_len = 0;
         }
-        s_rx_buf[s_rx_len++] = c;
-        if (c == ';') {
-            s_rx_buf[s_rx_len] = '\0';
-            diag_log_rx(s_rx_buf, s_rx_len);
-            process_cat_message(s_rx_buf, s_rx_len);
-            s_rx_len = 0;
+        for (size_t i = 0; i < n; i++) {
+            char c = (char)chunk[i];
+            if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
+                ESP_LOGW(TAG, "RX buffer overflow, dropping accumulated data");
+                s_rx_len = 0;
+            }
+            s_rx_buf[s_rx_len++] = c;
+            if (c == ';') {
+                s_rx_buf[s_rx_len] = '\0';
+                diag_log_rx(s_rx_buf, s_rx_len);
+                process_cat_message(s_rx_buf, s_rx_len);
+                s_rx_len = 0;
+            }
         }
     }
-    return true;
 }
 
 // Diagnostic RX logging with poll de-duplication. The FA/MD/FW poll responses
