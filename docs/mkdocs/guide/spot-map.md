@@ -12,7 +12,7 @@ This is Uwe DL8UG's work, contributed to the project.
 
 !!! note "Off by default"
     The spot map is **opt-in**. Switch it on in
-    **Settings → Spot map (who is hearing me)**. Until you do, nothing connects
+    **Settings > Network > Spot map (who is hearing me)**. Until you do, nothing connects
     and nothing runs — see [Why it is off until you ask](#5-why-it-is-off-until-you-ask).
 
 ---
@@ -76,7 +76,7 @@ signal noise. It refreshes about hourly, which is as often as the source updates
 
 **Your grid square.** The map draws lines *from* you, so without it there is
 nothing to draw from — the sidebar says so in red, and the map stays empty.
-Set it in **Settings → Callsign & Grid**.
+Set it in **Settings > Station > Callsign & Grid square**.
 
 **Your callsign**, for the same reason: it is what the three feeds are asked
 about.
@@ -85,8 +85,12 @@ about.
 heard you, not where it is, so the map looks that up on QRZ to place it. Without
 credentials an RBN line still gets drawn, using the centre of the skimmer's DXCC
 entity — right country, wrong town. PSK Reporter and WSPR carry a grid square in
-the report itself and never need the lookup. Set them in
-**Settings → QRZ callbook**.
+the report itself and never need the lookup.
+
+These are set **in the web UI, not on the Tab5** — open `http://<tab5-ip>` in a
+browser and use **Miscellaneous > Set QRZ Callbook login**. They are your QRZ.com
+username and password for the Callsign Lookup service, which is a different thing
+from the QRZ Logbook API key used for uploading contacts.
 
 ---
 
