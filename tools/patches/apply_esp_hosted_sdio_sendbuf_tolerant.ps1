@@ -27,8 +27,12 @@
         task: sdio_write core 1 after 1429.722 s of uptime
 
     That boot started with the MALLOC_CAP_DMA pool at 99 bytes; esp_hosted then
-    failed to create an RPC semaphore, every later RPC failure leaked a little
-    internal RAM, the RX queue backed up into PSRAM, and this assert ended it.
+    failed to create an RPC semaphore, which orphaned a response in the 3-deep
+    rpc_rx_q and deadlocked the RPC receive thread against itself (see
+    apply_esp_hosted_rpc_orphan_resp.ps1 - that is the root cause, and an
+    earlier version of this paragraph wrongly called it a per-failure leak).
+    The un-read backlog behind that blocked thread then filled PSRAM, and this
+    assert ended it.
     With the drop the device degrades instead of rebooting - and a reboot with
     the radio attached is a warm reset, i.e. the documented #74 QMX wedge.
 

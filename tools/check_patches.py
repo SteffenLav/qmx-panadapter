@@ -83,6 +83,13 @@ PATCHES = [
      "and then REBOOTED the device - a deliberate restart, so no crash record, "
      "and a warm reset with the radio attached wedges the QMX (#74)"),
 
+    ("apply_esp_hosted_rpc_orphan_resp.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/rpc/core/rpc_core.c",
+     "QMX_RPC_DROP_UNCLAIMED_RESP",
+     "an RPC response whose waiter has timed out is queued with nothing left "
+     "to dequeue it; rpc_rx_q holds THREE, and the third orphan makes the RX "
+     "thread block on itself for ever - the permanent 0x126-times-out wedge"),
+
     # Layered on the assert-tolerant patch below, which replaces os_wrapper.c
     # wholesale - the script refuses to run before it.
     ("apply_esp_hosted_task_stacks.ps1", "repo",

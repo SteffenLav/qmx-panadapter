@@ -471,6 +471,73 @@ What SPI mode actually bought (real, keep it): time-to-wedge went from **~1 min 
 - **Same run, and it reframes the "still open" question below:** 27 RX recoveries in 50 minutes, **bursty** rather than steadily worsening (per-minute rate by quarter 0.34 / 2.38 / 0.72 / 0.47), two of them 652 ms apart. That clustering is what the note below says would indicate drift and warrant a prevention fix on top of the recovery — so treat "rare and isolated" as **falsified**. BLE was enabled but unconnected, i.e. scanning (TODO #109/#131).
 - **Still open (not blocking):** *why* the delta crosses 1536 — an occasional coalesced/oversized frame (looks likely: the first observed event was isolated, then clean) vs slow counter drift (block-only-xfer pads reads to 512-byte blocks but the counter advances by the unpadded length; if the C6 counts the padding, the host lags progressively). The recovery handles either. If a longer soak shows recoveries *accelerating/clustering*, that's drift and warrants a prevention (counter-accounting) fix on top; if they stay rare and isolated, the recovery alone suffices. The recovery log line captures `host_cnt`/`slave_reg` precisely so the pattern is directly observable. This **supersedes the "no auto-recovery exists once the RPC link wedges — reboot only" claim above**: on a patched build the link self-heals; that claim now applies only to *unpatched* builds.
 
+### ⭐⭐ The RPC wedge is a DEADLOCK in a three-deep queue, not a leak (patch #18, 2026-09-11)
+`0x126` timing out for ever while WiFi data keeps flowing has been in this file
+since 2026-06-30, attributed each time to the SDIO transport. The transport
+patches were all real and all necessary — and a **second, independent** cause was
+still there. It is in `rpc_core.c`, and it is a self-deadlock.
+
+`process_rpc_rx_msg()` queues a synchronous response **first** and only then looks
+for the caller waiting on it. When the waiter has gone — its 5 s
+`DEFAULT_RPC_RSP_TIMEOUT` expired, or `set_sync_resp_sem()` could not create a
+semaphore and registered a **NULL** — the response lands in `rpc_rx_q` with
+nothing left to take it out: `get_response()` is the only consumer, and it only
+runs when a semaphore is posted, which only this thread does. The element is
+immortal.
+
+⛔ **`RPC_RX_QUEUE_SIZE` is 3.** So the third orphan fills the queue and the very
+next response has **that same thread** block in `_h_queue_item()` on
+`portMAX_DELAY`, for ever — it is both the only producer and the only thing that
+could wake the consumer, so no slot can ever be freed. RPC is dead until reboot;
+the data path never notices, which is exactly why the symptom has always been
+"WiFi works, every RPC times out, reboot only".
+
+⭐ **The dev-bench capture of 2026-09-11 fits to the event, not approximately:**
+
+| uptime | what |
+|---|---|
+| 201.7 s | `sem create failed` ×2 → orphans 1 and 2 |
+| 632.2 s | `sem create failed` ×1 → orphan 3, **queue now full** |
+| 637.2 s | first `Timeout waiting for Resp for Req[0x126]` |
+| 637→1431 s | **every** 0x126 times out, 1 per 5 s, 161 of them |
+| 1103.2 s | `task still writing Rx data to queue!` ×1946 — the backlog reaches SDIO |
+| 1431.4 s | `SDIO RX buffer alloc failed`, then the `sdio_write_task` assert |
+
+Three sem failures, a queue of three, and the wedge starts 5 s after the third.
+
+⚠ **"A per-RPC-failure leak of ~125 B" was my own wrong reading and is retracted.**
+Internal free did fall 24 → 5 KB over those 160 failures (~122 B each) and PSRAM
+1867 → 278 KB, and that linearity is what made it look like a leak. It is
+**un-read RPC frames piling up behind a blocked thread** — the backlog, not an
+allocation that is never freed. Fixing the deadlock removes both. Generalise it:
+*a queue behind a stalled consumer produces a textbook-linear "leak" curve.*
+
+**Fix — `tools/patches/apply_esp_hosted_rpc_orphan_resp.ps1`**, two edits:
+- `set_sync_resp_sem()` refuses to register a **NULL** semaphore, so the request
+  is never sent and no response can arrive to be orphaned. Safe because
+  `RPC_SEND_REQ()` returns NULL without calling `rpc_wait_and_parse_sync_resp()`,
+  so the freed `app_req` is never touched again.
+- `process_rpc_rx_msg()` **asks for the waiter before queueing** and drops what
+  nobody awaits, and bounds the enqueue at 1 s instead of `portMAX_DELAY`. Same
+  precedent as the RX-oversize drain and patch #16: one frame lost, link lives.
+
+⭐ **It also closes a silent correctness bug.** With even ONE orphan in the queue,
+`get_response()` dequeues the **head** — the stale element — so every later
+synchronous RPC returned the *previous* transaction's response, with no uid check
+and no complaint. The 1 Hz RSSI/SSID poll had been reading one-behind.
+
+⚠ **Registration ordering is what makes "drop it" safe**: `set_sync_resp_sem()`
+runs **before** the request is queued for transmit, so there is no window in
+which a legitimate response can arrive ahead of its own waiter.
+
+⚠ **NOT YET CONFIRMED ON HARDWARE.** It is correct by construction and the
+capture matches exactly, but the wedge needs a memory-pressure spike to seed it,
+so it cannot be provoked on demand. Both new paths log (`no waiter for resp[..]
+uid .. - dropping`, `no sem for req[..] - not sending`), deliberately — this runs
+on a task, not in an ISR, so the #189 counter dance is unnecessary and a
+timestamped line is better. **A soak that shows `no waiter ... dropping` lines
+with no following timeout storm is the confirmation.**
+
 **RE-ENABLED 2026-07-19 (`SD_ARCHIVE_DISABLED 0`) — the FT8-collapse blocker was #51 all along.** The archive was shelved 2026-07-10 not for the WiFi wedge (exonerated above — SD-independent, self-heals) but because a live test showed FT8 decode collapsing to `cand=140/dec=0` zero-clusters with a card mounted, blamed on internal-heap starvation. That is the *exact* #51 signature (USB ISO audio lost at the wire), root-caused + fixed 2026-07-19. Re-verified on hardware: with a card mounted the internal heap still craters (min ~12 KB, lblk ~15 KB — the SD tax is real, ~14–49 KB depending on card) **yet FT8 decodes 35–54/slot with no collapse, no WiFi wedge, no SDIO-recovery events.** So the low heap was never the cause. The archive is now a full **grab-and-go station backup** (`storage/sd_archive.c`): mirrors `qso.adi`, `qmx-config.txt` (settings + secrets), `lotw_cert.b64`+`lotw_key.b64` (via `sd_archive_mark_lotw_dirty()`, hooked in the `/api/lotw_cert` handler), the diag log, and a self-describing version-stamped `README.txt` (written each mount) that warns the card holds credentials in clear (WiFi pw, QRZ/eQSL, LoTW private key) — inherent to a restorable backup. Deliberately NOT mirrored: the LoTW TQ8 (derived/regenerable, signing-on-write is heavy) and screenshots. A 30 s `sd_arch: heartbeat` + per-burst SPI timing were added as soak instrumentation. FAT32 (≤32 GB) works with no patch — the exFAT patch below is only for >32 GB exFAT cards. If FT8 ever zero-clusters *only* with a card in, the fallback is gating the mount off in FT8/FT4 mode (the tightest-heap case); not needed as of this writing.
 
 Two config requirements, both **outside the default ESP-IDF FatFs config**:
