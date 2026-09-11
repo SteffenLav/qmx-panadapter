@@ -14759,6 +14759,14 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         recompute_zoom_pan();
         draw_label_ticks();
         update_freq_axis_labels(s_cw_snapshot.freq_hz);
+        /* ⛔ The spots lane must be SHOWN here, not merely re-positioned.
+         * FT8 and WSPR hide it (spots_lane_set_visible(false)), and
+         * show_panadapter_widgets_instant() only restores its x - so every CW
+         * entry that came from one of those pages left the lane hidden, and the
+         * CW page showed no spots at any zoom while 122 were held (operator,
+         * 2026-09-11). From the panadapter it was already visible, which is why
+         * it looked like it worked. The panadapter branch below does the same. */
+        spots_lane_set_visible(true);
         cw_screen_view_show();
         return;
     }
