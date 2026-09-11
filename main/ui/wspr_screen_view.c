@@ -1829,6 +1829,15 @@ void wspr_screen_view_hide(void)
 
 lv_obj_t *wspr_screen_view_get_container(void) { return s_container; }
 
+/* The container sits at (0, MID_Y) and the canvas at (RIGHT_X, WF_Y) inside it
+ * - see wspr_screen_view_init(). */
+void wspr_screen_view_wf_geometry(int *cx, int *cy, int *w)
+{
+    if (cx) *cx = RIGHT_X + RIGHT_W / 2;
+    if (cy) *cy = MID_Y + WF_Y + WF_H / 2;
+    if (w)  *w  = RIGHT_W;
+}
+
 /* SDR-ish ramp: black -> blue -> cyan -> yellow -> red, same family the
  * panadapter's waterfall uses so the two pages read alike. Returns RGB565
  * directly - see repaint_waterfall() for why this does not go through

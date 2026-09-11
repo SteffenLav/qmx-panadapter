@@ -2579,7 +2579,14 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * gesture still worked; and the lane is about stations to WORK while the map
  * is about who is hearing US - different questions. */
 #define DRAWER_SEC_SPOTMAP    42
-#define N_DRAWER_SECTIONS     43
+/* The km/miles switch on its own, for the WSPR page (operator, 2026-09-11:
+ * "remove FT8 section - then insert: Distance in miles checkbox"). WSPR used
+ * to borrow DRAWER_SEC_DISTANCE, which dragged an "FT8" group heading and two
+ * FT8-only rows (fast pounce, PSK Reporter) onto a page where neither does
+ * anything. Same setting, second checkbox - both are synced on every toggle
+ * and on every drawer open, so they cannot disagree. */
+#define DRAWER_SEC_WSPRDIST   43
+#define N_DRAWER_SECTIONS     44
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2658,6 +2665,8 @@ static const drawer_item_t GRP_DISPLAY[] = {
     { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
 };
 static const drawer_item_t GRP_WSPR[] = {
+    /* First, i.e. where the FT8 group used to sit on this page. */
+    { DRAWER_SEC_WSPRDIST, "Distance in miles (WSPR page)", true },
     { DRAWER_SEC_WSPRTX, "WSPR transmit & power", true },
     { DRAWER_SEC_WSPRDUTY, "WSPR duty cycle", true },
     { DRAWER_SEC_WSPRHOP, "WSPR band hopping", true },
@@ -2906,21 +2915,18 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
     if (id == DRAWER_SEC_CWAUDIO) return false;   // shelved - see cw_audio.c
     if (id == DRAWER_SEC_RESMON)  return false;   // dev-only, driven by /api/cmd
     if (id == DRAWER_SEC_TUNE2)   return tune_ok;
-    /* Simulation belongs to BOTH decode pages - one setting drives the FT8
-     * phantoms and the WSPR ones (see wspr_sim.h). */
-    if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
-    /* ⭐ DISTANCE IS NOT FT8-ONLY ANY MORE. The WSPR decode list and its BEST DX
-       line now honour the same km/miles setting, so the control has to be
-       reachable from the WSPR page - it was invisible there, which is how an
-       operator ended up choosing miles from the web because the Tab5 offered
-       him nowhere to do it (Samuel W7STF, 2026-09-07: "cant see the km/mls
-       checkbox in settings drawer?").
-       ⚠ Fast pounce and PSK Reporter share this section and ARE FT8-only. They
-       are harmless on the WSPR page - both simply do nothing there - and
-       splitting the section to hide two rows would cost the reflow this file
-       warns about repeatedly. Better a control that idles than a setting that
-       cannot be reached. */
-    if (id == DRAWER_SEC_DISTANCE) return ft8 || wspr;
+    /* ⛔ THE WHOLE FT8 GROUP IS OFF THE WSPR PAGE (operator, 2026-09-11: "in
+     * settings drawer remove ... FT8 section"). It used to show there for two
+     * reasons, both recorded so nobody re-adds them blind:
+     *  - Simulation drives the WSPR phantoms as well as the FT8 ones (see
+     *    wspr_sim.h). It is now switched from the FT8 page or the web only.
+     *  - The WSPR decode list honours the km/miles setting, and the Tab5 once
+     *    offered nowhere to set it from WSPR (Samuel W7STF, 2026-09-07). That
+     *    is now DRAWER_SEC_WSPRDIST, a checkbox of its own in the WSPR group,
+     *    which is what was wanted all along: the borrowed section also carried
+     *    fast pounce and PSK Reporter, both FT8-only. */
+    if (id == DRAWER_SEC_SIMMODE) return ft8;
+    if (id == DRAWER_SEC_DISTANCE) return ft8;
     if (id == DRAWER_SEC_FT8SYNC) return ft8;
     /* ⛔ THE FALL-THROUGH AT THE BOTTOM OF THIS FUNCTION IS `return true`, so a
      * section nobody names here appears on EVERY page. Three were doing that and
@@ -2939,11 +2945,17 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * and is still panadapter-only. Group is where a control is FILED; this
      * function is where it is SHOWN. They are allowed to differ. */
     if (id == DRAWER_SEC_ACTIVATION) return !wspr;
-    if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW) return !ft8 && !wspr;
+    /* CW profiles too (operator, 2026-09-11): a profile sets the CW centre and
+     * filters, which is CW/CW-R business for the same reason as the line's
+     * other two - and it was never named here at all, so it fell through to
+     * the `return true` below and appeared on every page. */
+    if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW ||
+        id == DRAWER_SEC_CWPROF) return !ft8 && !wspr;
     /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
-        id == DRAWER_SEC_WSPRHOP || id == DRAWER_SEC_WSPRNET) return wspr;
+        id == DRAWER_SEC_WSPRHOP || id == DRAWER_SEC_WSPRNET ||
+        id == DRAWER_SEC_WSPRDIST) return wspr;
     // The spectrum/waterfall controls describe a view neither decode page shows.
     if (id == DRAWER_SEC_STILL   || id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
@@ -3013,6 +3025,7 @@ static lv_obj_t *s_check_charge_limit = NULL;   // battery-care enable checkbox
 static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
 static lv_obj_t *s_slider_charge_limit_pct = NULL;
 static lv_obj_t *s_check_distance_miles = NULL;
+static lv_obj_t *s_check_wspr_miles     = NULL;   /* DRAWER_SEC_WSPRDIST */
 static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panadapter only)
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
@@ -4074,19 +4087,42 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
         qmx_wait_start_breathing(s_qmx_wait_lbl);
     }
-    // Mode-dependent horizontal placement: +150 px in FT8 mode so the text
-    // clears the 320 px left pane; plain screen-center in Panadapter mode
-    // (no pane to avoid). Re-checked every tick so a mode toggle while the
+    // Mode-dependent placement: +150 px in FT8 mode so the text clears the
+    // 320 px left pane; plain screen-center in Panadapter mode (no pane to
+    // avoid); and ON the waterfall in WSPR mode (operator, 2026-09-11: "move
+    // the breathing 'Now turn on....' + Need help? button into wf space centred
+    // on the wf") - at screen centre it sat half over the left pane and half
+    // over the decode list. Re-checked every tick so a mode toggle while the
     // overlay is visible re-aligns it. Only re-aligned on change.
     {
-        static int s_cur_off = 0;
-        int want = (ui_mode_get() == UI_MODE_FT8) ? 150 : 0;
-        if (want != s_cur_off && s_qmx_wait_lbl) {
-            s_cur_off = want;
-            lv_obj_align(s_qmx_wait_lbl, LV_ALIGN_CENTER, want, 0);
+        static int s_cur_x = 0, s_cur_ly = 0, s_cur_hy = 90;
+        static bool s_cur_wspr = false;
+        const ui_mode_t m = ui_mode_get();
+        const bool wspr = (m == UI_MODE_WSPR);
+        int want_x = (m == UI_MODE_FT8) ? 150 : 0, want_ly = 0, want_hy = 90;
+        if (wspr) {
+            int cx, cy, w;
+            wspr_screen_view_wf_geometry(&cx, &cy, &w);
+            (void)w;
+            // The waterfall is 250 px tall. Headline above centre, help button
+            // below it, and the gap between them left for the page's own
+            // "waiting for the next cycle" line, which sits at the centre.
+            want_x  = cx - 1280 / 2;
+            want_ly = cy - 720 / 2 - 62;
+            want_hy = cy - 720 / 2 + 60;
+        }
+        if (s_qmx_wait_lbl && (want_x != s_cur_x || want_ly != s_cur_ly ||
+                               want_hy != s_cur_hy || wspr != s_cur_wspr)) {
+            s_cur_x = want_x; s_cur_ly = want_ly; s_cur_hy = want_hy;
+            s_cur_wspr = wspr;
+            // One line in WSPR: the 1040 px wrap box is wider than the 892 px
+            // waterfall and would hang off the right edge of the screen.
+            if (wspr) lv_obj_set_width(s_qmx_wait_lbl, LV_SIZE_CONTENT);
+            else      lv_obj_set_width(s_qmx_wait_lbl, 1040);
+            lv_obj_align(s_qmx_wait_lbl, LV_ALIGN_CENTER, want_x, want_ly);
             // The help button rides along, or it would drift out from under the
             // headline the first time the mode changes.
-            if (s_qmx_wait_help) lv_obj_align(s_qmx_wait_help, LV_ALIGN_CENTER, want, 90);
+            if (s_qmx_wait_help) lv_obj_align(s_qmx_wait_help, LV_ALIGN_CENTER, want_x, want_hy);
         }
     }
     lv_obj_move_foreground(s_qmx_wait_overlay);  // keepalive against later modals
@@ -10219,12 +10255,20 @@ static void iq_balance_toggle_cb(lv_event_t *e)
     if (on) iq_balance_reset();
 }
 
+// Shared by BOTH km/miles checkboxes (FT8 section and DRAWER_SEC_WSPRDIST): it
+// is one setting, so ticking either one moves the other too.
 static void drawer_check_distance_miles_cb(lv_event_t *e)
 {
     lv_obj_t *cb = lv_event_get_target(e);
     s_distance_in_miles = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_distance_in_miles(s_distance_in_miles);
-    ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
+    lv_obj_t *other = (cb == s_check_distance_miles) ? s_check_wspr_miles
+                                                     : s_check_distance_miles;
+    if (other && lv_obj_is_valid(other)) {
+        if (s_distance_in_miles) lv_obj_add_state(other, LV_STATE_CHECKED);
+        else                     lv_obj_remove_state(other, LV_STATE_CHECKED);
+    }
+    ESP_LOGI(TAG, "distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
 // Only the pill's visibility. RIT itself is still operated from the pill and the
@@ -10927,6 +10971,7 @@ static void drawer_refresh_checkboxes(void)
     qmx_settings_t c;
     settings_load_all(&c);
     sync_cb(s_check_distance_miles, c.distance_in_miles);
+    sync_cb(s_check_wspr_miles,     c.distance_in_miles);
     sync_cb(s_check_ft8_early,      c.ft8_early_decode);
     sync_cb(s_check_pskrep,         c.pskreporter_en);
     sync_cb(s_check_sim_mode,       c.sim_mode_en);
@@ -12492,6 +12537,21 @@ static void drawer_build(void)
         lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
         ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
         y += 56;
+    }
+    // The km/miles switch alone, for the WSPR page (DRAWER_SEC_WSPRDIST). Same
+    // row geometry as "Show RIT button". Its state is whatever s_distance_in_miles
+    // was just loaded as by the FT8 section above.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDIST, y, 72);
+        lv_obj_t *wd_lbl = lv_label_create(sec);
+        lv_label_set_text(wd_lbl, "Distance in miles");
+        lv_obj_set_style_text_color(wd_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(wd_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(wd_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_wspr_miles = make_drawer_checkbox(sec, s_distance_in_miles,
+                                                  drawer_check_distance_miles_cb, NULL);
+        lv_obj_align(s_check_wspr_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 72;
     }
 
     /* ---- WSPR ------------------------------------------------------------
