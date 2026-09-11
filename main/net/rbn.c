@@ -8,6 +8,8 @@
 #include "ui/ui.h"
 #include "storage/settings.h"
 #include "util/psram_task.h"
+#include "net/qrz_coords.h"
+#include "util/geo_coords.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -20,6 +22,7 @@
 #include "lwip/netdb.h"
 
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -41,6 +44,18 @@ static const char *TAG = "rbn";
 #define LINE_MAX      256
 #define RX_TIMEOUT_S  30          // no data for this long: assume the link died
 
+// Self-spotting (ui/spot_map_view.c): the same feed also tells us who is
+// HEARING us, not just who else is calling CQ - RBN spots our own CQ exactly
+// like any other station's the moment a skimmer copies it, we just have to
+// notice when the spotted call is our own and keep the SKIMMER identity
+// instead of discarding it (handle_line()'s normal path never needed the
+// skimmer field at all - see rbn_parse_skimmer()). A ring buffer of the last
+// 100 finds (operator's own cap, for overview rather than a resource limit -
+// oldest is evicted first, same eviction rule as below) plus a manual Flush
+// (rbn_self_spots_clear()) so the map can be started fresh on demand.
+#define RBN_SELF_MAX  100
+#define RBN_SELF_TTL_S 1800       // stays on the map half an hour after being heard
+
 // Bench override for bringing the feature up when there is no way to reach the
 // settings toggle (the web UI behind a hotel subnet, nobody at the screen).
 // Ships as 0 - the live socket path was verified with it at 1 on 2026-08-04:
@@ -57,9 +72,20 @@ typedef struct {
 } rbn_entry_t;
 
 typedef struct {
+    char     skimmer[16];   // matches rbn_entry_t.call's width, same reasoning
+    uint32_t freq_hz;
+    int      snr_db;
+    int64_t  heard_unix;
+    float    lat, lon;      // resolved once, at capture time (see note_self_spot)
+    bool     has_pos;
+} rbn_self_entry_t;
+
+typedef struct {
     rbn_entry_t tab[RBN_MAX];
     int         n;
     spot_t      pub[RBN_MAX];     // publish staging, never points into the store
+    rbn_self_entry_t self[RBN_SELF_MAX];
+    int         self_n;
     char        line[LINE_MAX];
     int         line_len;
     char        rx[512];
@@ -68,6 +94,7 @@ typedef struct {
 static rbn_state_t *s;            // PSRAM: ~7 KB, far too big for a task stack
 static int64_t      s_last_line_us;
 static volatile int s_pub_count;
+static char         s_mycall[16]; // set once per session() - see handle_line()
 
 int rbn_age_s(void)
 {
@@ -123,6 +150,25 @@ bool rbn_parse_line(const char *line, char *call_out, size_t call_cap,
     return true;
 }
 
+// The skimmer identity rbn_parse_line() deliberately throws away - see its
+// comment - but self-spotting needs exactly that: not who was heard (us), but
+// who did the hearing. Strips the trailing "-#"/"-N-#" flag suffix, same
+// convention net/qrz_coords.c's own normalize_call() uses.
+static bool rbn_parse_skimmer(const char *line, char *out, size_t out_cap)
+{
+    if (strncmp(line, "DX de ", 6) != 0) return false;
+    const char *start = line + 6;
+    const char *colon = strchr(start, ':');
+    if (!colon) return false;
+    size_t len = (size_t)(colon - start);
+    const char *dash = memchr(start, '-', len);
+    if (dash) len = (size_t)(dash - start);
+    if (len == 0 || len >= out_cap) return false;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return true;
+}
+
 // ---- dedupe ----------------------------------------------------------------
 
 // RBN reports the same CQ from every skimmer that hears it - ten or more copies
@@ -162,6 +208,68 @@ static void expire(int64_t now)
     s->n = keep;
 }
 
+// Same dedupe/eviction shape as note_spot(), keyed on the skimmer instead of
+// the spotted call. Position resolved once here, at capture time, rather than
+// on every read - a skimmer's callsign does not move.
+static void note_self_spot(const char *skimmer, uint32_t freq_hz, int snr, int64_t now)
+{
+    for (int i = 0; i < s->self_n; i++) {
+        if (strcmp(s->self[i].skimmer, skimmer) == 0) {
+            s->self[i].heard_unix = now;
+            if (snr > s->self[i].snr_db) { s->self[i].snr_db = snr; s->self[i].freq_hz = freq_hz; }
+            return;
+        }
+    }
+    int slot;
+    if (s->self_n < RBN_SELF_MAX) {
+        slot = s->self_n++;
+    } else {
+        slot = 0;
+        for (int i = 1; i < RBN_SELF_MAX; i++)
+            if (s->self[i].heard_unix < s->self[slot].heard_unix) slot = i;
+    }
+    snprintf(s->self[slot].skimmer, sizeof(s->self[slot].skimmer), "%s", skimmer);
+    s->self[slot].freq_hz    = freq_hz;
+    s->self[slot].snr_db     = snr;
+    s->self[slot].heard_unix = now;
+    s->self[slot].has_pos = qrz_coords_lookup_cached(skimmer, &s->self[slot].lat, &s->self[slot].lon) ||
+                            geo_coords_for_call(skimmer, &s->self[slot].lat, &s->self[slot].lon);
+    ESP_LOGI(TAG, "self-spotted by %s, %d dB on %lu Hz", skimmer, snr, (unsigned long)freq_hz);
+}
+
+static void expire_self(int64_t now)
+{
+    int keep = 0;
+    for (int i = 0; i < s->self_n; i++)
+        if (now - s->self[i].heard_unix <= RBN_SELF_TTL_S) s->self[keep++] = s->self[i];
+    s->self_n = keep;
+}
+
+int rbn_self_spots_get(rbn_self_spot_t *out, int max)
+{
+    expire_self((int64_t)time(NULL));
+    int n = s->self_n < max ? s->self_n : max;
+    for (int i = 0; i < n; i++) {
+        snprintf(out[i].skimmer, sizeof(out[i].skimmer), "%s", s->self[i].skimmer);
+        out[i].freq_hz    = s->self[i].freq_hz;
+        out[i].snr_db     = s->self[i].snr_db;
+        out[i].heard_unix = s->self[i].heard_unix;
+        out[i].lat        = s->self[i].lat;
+        out[i].lon        = s->self[i].lon;
+        out[i].has_pos    = s->self[i].has_pos;
+    }
+    return n;
+}
+
+// Manual Flush (ui/spot_map_view.c's sidebar button). No mutex around
+// self_n/self[] anywhere in this file - the RBN task only ever appends, and
+// a reader racing a reset sees at worst one stale/missing entry for a tick,
+// never torn memory (self[] is a fixed array, self_n a plain int).
+void rbn_self_spots_clear(void)
+{
+    s->self_n = 0;
+}
+
 static void publish(int64_t now)
 {
     expire(now);
@@ -179,6 +287,12 @@ static void publish(int64_t now)
         sp->source     = SPOT_SRC_RBN;
         sp->mode       = SPOT_MODE_CW;     // port 7000 is the CW/RTTY feed
         sp->heard_unix = s->tab[i].last_unix;
+        // Deliberately no position resolution here (has_pos stays false) -
+        // nothing currently displays this spot lane's coordinates (text-only
+        // overlay), and resolving one via QRZ for every CQing station on the
+        // band would compete with note_self_spot()'s lookups below for the
+        // same small pending queue (net/qrz_coords.c) for no payoff. If a
+        // future feature wants the whole lane on a map, add it back here.
     }
     spots_publish(SPOT_SRC_RBN, s->pub, n);
     s_pub_count = n;
@@ -240,6 +354,15 @@ static void handle_line(const char *line, int64_t now)
     int snr;
     if (!rbn_parse_line(line, call, sizeof(call), &hz, &snr)) return;
 
+    // Self-spotting (ui/spot_map_view.c): independent of the band filter below
+    // - the operator wants to know who is hearing them regardless of which
+    // band the panadapter itself is currently displaying.
+    if (s_mycall[0] && strcasecmp(call, s_mycall) == 0) {
+        char skimmer[16];
+        if (rbn_parse_skimmer(line, skimmer, sizeof(skimmer)))
+            note_self_spot(skimmer, hz, snr, now);
+    }
+
     // Keep only what could actually appear on screen. RBN is a GLOBAL feed and
     // the table filled to its 120-station cap within a minute during the first
     // live run, pinned there permanently - so without this the slots go to
@@ -259,6 +382,7 @@ static void session(int fd, const char *mycall)
     int ln = snprintf(login, sizeof(login), "%s\r\n", mycall);
     if (send(fd, login, ln, 0) != ln) { ESP_LOGW(TAG, "login send failed"); return; }
     ESP_LOGI(TAG, "connected as %s", mycall);
+    snprintf(s_mycall, sizeof(s_mycall), "%s", mycall);   // handle_line()'s self-spot check
 
     s->line_len = 0;
     int64_t last_pub_us = esp_timer_get_time();
@@ -273,6 +397,22 @@ static void session(int fd, const char *mycall)
         if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) { ESP_LOGI(TAG, "session ending (disabled or offline)"); return; }
+
+        // The operator can change callsign in the web UI while this session
+        // is still happily connected - an RBN session can run for hours with
+        // no reconnect to pick it up otherwise. Without this, handle_line()'s
+        // self-spot check above keeps matching the OLD callsign indefinitely,
+        // and every spot already collected for it lingers in the self buffer
+        // (net/pskr_self.c's do_subscribe() has the same fix for the MQTT
+        // side). Deliberately does NOT force a TCP reconnect - the RBN login
+        // name only affects the banner/attribution, not which spots this
+        // socket receives, so updating s_mycall in place is enough to start
+        // matching the new call on the very next line.
+        if (st.my_callsign[0] && strcasecmp(st.my_callsign, s_mycall) != 0) {
+            ESP_LOGI(TAG, "callsign changed (%s -> %s) - self-spot buffer cleared", s_mycall, st.my_callsign);
+            snprintf(s_mycall, sizeof(s_mycall), "%s", st.my_callsign);
+            rbn_self_spots_clear();
+        }
 
         int r = recv(fd, s->rx, sizeof(s->rx), 0);
         if (r == 0) { ESP_LOGW(TAG, "feed closed by peer"); return; }

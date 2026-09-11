@@ -91,6 +91,8 @@ char *config_io_export(size_t *out_len)
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
     APP("qrz_key            = %s\n", c.qrz_api_key);
+    APP("qrz_lookup_user    = %s\n", c.qrz_lookup_user);
+    APP("qrz_lookup_pass    = %s\n", c.qrz_lookup_pass);
     APP("eqsl_user          = %s\n", c.eqsl_user);
     APP("eqsl_pass          = %s\n", c.eqsl_pswd);
     APP("cloudlog_url       = %s\n", c.cloudlog_url);
@@ -291,6 +293,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));
             else if (!strcasecmp(key, "qrz_key"))           settings_set_qrz_api_key(val);
+            else if (!strcasecmp(key, "qrz_lookup_user"))   settings_set_qrz_lookup_user(val);
+            else if (!strcasecmp(key, "qrz_lookup_pass"))   settings_set_qrz_lookup_pass(val);
             else if (!strcasecmp(key, "eqsl_user"))         settings_set_eqsl_user(val);
             else if (!strcasecmp(key, "eqsl_pass"))         settings_set_eqsl_pswd(val);
             else if (!strcasecmp(key, "cloudlog_url"))      settings_set_cloudlog_url(val);

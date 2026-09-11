@@ -60,6 +60,17 @@ typedef struct {
     // than it being a self-spot typed in an hour ago. Set by the read path,
     // never by a producer; see spots_get_in_range().
     bool          rbn_confirmed;
+
+    // Real position, when the source feed happens to carry one - POTA and
+    // SOTA do (see parse_pota()/parse_sota() in spots.c), RBN and the DX
+    // cluster do not and leave has_pos false here (see net/rbn.c's own
+    // self-spot store instead, which DOES resolve a position - that is a
+    // different, much smaller set of callsigns: whoever heard US, not every
+    // station in the lane). Nothing currently reads this field - it is free
+    // to populate (POTA/SOTA already send it in the feed, no lookup needed)
+    // and here for whenever the spot lane or a future feature wants it.
+    float         lat, lon;
+    bool          has_pos;
 } spot_t;
 
 // Headroom, not a measurement: the live POTA feed returned 94 spots one day and

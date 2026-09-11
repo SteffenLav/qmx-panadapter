@@ -66,6 +66,16 @@ PATCHES = [
      "an oversized SDIO pending-byte delta livelocks the link: WiFi dies within "
      "minutes and every RPC times out forever (reboot is the only way out)"),
 
+    # NOTE sdio_drv.c carries TWO of our patches - this one and the oversize
+    # recovery above - with separate markers. Applying one does not apply the
+    # other, so each needs its own row.
+    ("apply_esp_hosted_sdio_rxbuf_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_PANADAPTER_SDIO_RXBUF_TOLERANT",
+     "sdio_read_task() abort()s the device when its RX buffer pool is "
+     "momentarily exhausted under load - observed at ~97 minutes of uptime "
+     "with WiFi + MQTT self-spotting running"),
+
     ("apply_esp_hosted_sdio_write_avail_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "QMX_SDIO_WRITE_AVAIL_TOLERANT",
@@ -130,6 +140,15 @@ PATCHES = [
      "components/fatfs/src/ffconf.h",
      "#define FF_FS_EXFAT\t1",
      "microSD cards larger than 32 GB (exFAT) will not mount"),
+
+    ("apply_mqtt_client_psram_task.ps1", "idf",
+     "components/mqtt/esp-mqtt/mqtt_client.c",
+     "PATCHED (qmx-panadapter, 2026-09-10)",
+     "esp_mqtt_client_start() always allocated its task stack from internal "
+     "RAM with no PSRAM option; on this board that RAM is chronically tight "
+     "after WiFi bring-up and the allocation failed outright, silently "
+     "killing live PSK Reporter self-spotting (net/pskr_self.c) for the "
+     "whole session"),
 ]
 
 

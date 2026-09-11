@@ -145,6 +145,13 @@ typedef struct {
     uint32_t qrz_uploaded_n;  // count of ADIF records already uploaded to QRZ
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
     char     eqsl_pswd[32];   // eQSL.cc password
+    // QRZ.com Callbook (XML) lookup credentials, for net/qrz_coords.c's
+    // real-station-position lookup (net/rbn.c's self-spot skimmers, on the
+    // spot map). Deliberately separate from qrz_api_key above: that one is
+    // the unrelated Logbook/QSO-sync API key, this is username+password for
+    // the XML Callsign Lookup service.
+    char     qrz_lookup_user[40];
+    char     qrz_lookup_pass[40];
     uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
     // Cloudlog / Wavelog (#171). Self-hosted, so the ADDRESS is the operator's -
     // the only upload target here whose host is not hardcoded. May be plain http
@@ -712,6 +719,17 @@ void settings_set_qrz_uploaded_n(uint32_t n);
 // auth eQSL's real-time interface supports.
 void settings_set_eqsl_user(const char *user);
 void settings_set_eqsl_pswd(const char *pswd);
+
+// QRZ.com Callbook (XML) lookup credentials, set via the web UI (debounced
+// flush, one field per call like the eQSL setters above). Pass NULL or empty
+// to clear. See the struct field comment in this header for why this is
+// separate from qrz_api_key.
+void settings_set_qrz_lookup_user(const char *user);
+void settings_set_qrz_lookup_pass(const char *pass);
+
+// Narrow getter for net/qrz_coords.c's background task - see the "targeted
+// getters, for code on a small stack" note above settings_get_wifi_static().
+void settings_get_qrz_lookup_creds(char user[40], char pass[40]);
 
 // Count of ADIF records already uploaded to eQSL (offset into the log file
 // for the next upload batch). Debounced flush.

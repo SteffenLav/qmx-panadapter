@@ -48,6 +48,10 @@
 #include "ft8_sim.h"
 #include "net/pskreporter.h"
 #include "net/spots.h"
+#include "net/qrz_coords.h"
+#include "net/pskr_self.h"
+#include "net/wspr_self.h"
+#include "net/band_conditions.h"
 #include "net/psk_rx.h"
 #include "bt_hid_mouse.h"
 #include "net/rbn.h"
@@ -434,6 +438,10 @@ void app_main(void)
     psk_rx_selftest();     // attribute names still match the collector's output
     psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
     bt_hid_mouse_init();   // BLE mouse over the C6 (opt-in; Stage 1 = scan only)
+    qrz_coords_start();    // real-station lookup for RBN self-spot skimmers on the spot map (opt-in via credentials)
+    pskr_self_init();      // live PSK Reporter self-spotting (MQTT) for the spot map's Digi side
+    wspr_self_init();      // wsprnet.org self-spotting query for the spot map's WSPR side
+    band_conditions_start(); // HF band conditions for the spot map's CONDITIONS tab
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)

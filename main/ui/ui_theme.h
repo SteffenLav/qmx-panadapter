@@ -128,6 +128,7 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
 #define UI_COLOR_MODE_CW   0x2477B3  /* blue      — matches bandplan BP_CW */
 #define UI_COLOR_MODE_USB  0x8B3A2B  /* brick red/brown — was steel blue, too close to CW's blue */
 #define UI_COLOR_MODE_LSB  0x633079  /* purple */
+#define UI_COLOR_MODE_WSPR 0x3D8C40  /* green     — ui/spot_map_view.c's third self-spotting source, no bandplan analogue to match */
 
 /* Map a mode string (as stored in mem_slot_t.mode / used by the freq pad's
  * mode row) to its colour. Substring match so "DiGi"/"FT8"/"FT4"/"RTTY" all

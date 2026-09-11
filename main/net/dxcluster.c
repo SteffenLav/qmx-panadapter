@@ -306,6 +306,12 @@ static void publish(int64_t now)
         o->mode       = (spot_mode_t)s->tab[i].mode;
         o->source     = SPOT_SRC_CLUSTER;
         o->heard_unix = s->tab[i].last_unix;
+        // Deliberately no position resolution here (has_pos stays false) -
+        // nothing currently displays a DX-cluster spot's coordinates (the
+        // spot lane is text-only), and resolving one via QRZ for every
+        // cluster spot would compete with net/rbn.c's self-spot lookups for
+        // the same small pending queue (net/qrz_coords.c) for no payoff. If a
+        // future feature wants cluster spots on the map, add it back here.
     }
     spots_publish(SPOT_SRC_CLUSTER, s->pub, n);
     s_pub_count = n;
