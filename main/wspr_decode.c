@@ -1089,8 +1089,120 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
  * agreement check meaningful - a rejected answer has somewhere to fall back to
  * - and because it should start paying once weaker signals are reachable, but
  * shipping it above 1 would be paying for a result nothing has demonstrated. */
+/* ⭐ 4, AND THE OLD NOTE SAYING 1 WAS MEASURED IS NO LONGER TRUE.
+ * It was measured against the sequential search, where extra hypotheses were
+ * worth nothing because they were all evaluated at the dominant station's
+ * start time. With the deep pass giving each peak its own start time they
+ * are what resolves a cluster. Only the deep pass uses more than one - the
+ * cheap pass still takes the single best peak, so nothing about a candidate
+ * that decodes normally has changed. */
 #ifndef WSPR_HYPOTHESES
-#define WSPR_HYPOTHESES 1
+#define WSPR_HYPOTHESES 4
+#endif
+
+/* Give every frequency hypothesis its own full start-time scan instead of
+ * refining around the strongest station's. Off until the gain is measured and
+ * the extra coarse scans are shown to fit the device budget. */
+#ifndef WSPR_HYP_FULL_DT
+#define WSPR_HYP_FULL_DT 0
+#endif
+
+/* Search (frequency x start time) as a product rather than sequentially, so a
+ * station sharing a candidate with a louder neighbour can be found at its own
+ * DT. Off until measured - it multiplies the coarse scan by the number of
+ * frequency steps, and the coarse scan is most of a candidate's cost. */
+/* The second, lower sync floor - below this a candidate gets no time at all.
+ * Between it and WSPR_MIN_SYNC the candidate skips the cheap path and goes
+ * straight to the deep search, because the cheap path is what cannot find it. */
+#ifndef WSPR_MIN_SYNC_DEEP
+#define WSPR_MIN_SYNC_DEEP 0.015
+#endif
+
+/* Frequency-step decimation for the deep grid. The grid buys a start time per
+ * frequency, not a precise frequency, so it can step coarsely and let
+ * refine_dt do the rest - and its cost is linear in the number of steps. */
+/* ⭐ 8, MEASURED - and the size of it says what the deep pass is really
+ * buying. At DECIM 2 (8 frequency points) the score is 22 of 32 at 1535 ms;
+ * at 8 (2 points) it is the SAME 22 at 814 ms, and at 16 (1 point) still 22.
+ * So the gain is the per-frequency START-TIME rescan, not frequency
+ * resolution - refine_dt does the precision work afterwards. Kept at 8
+ * rather than 16 so there is more than one point for a local maximum to be
+ * a maximum OF. */
+/* ⛔ THE DEEP PASS IS RATIONED PER CYCLE, because on the device it is far
+ * dearer than the host suggested.
+ *
+ * Host arithmetic said 2.1x and the device measured about 4.5x: 24 candidates
+ * over-ran WSPR_DECODE_BUDGET_MS every cycle, only 11 were tried and pass 2
+ * never ran at all - and pass 2 is the one that subtracts a decoded station to
+ * uncover its neighbours. That is a worse receiver than before the deep pass
+ * existed, which is the shape of regression this file keeps warning about:
+ * a change measured only where it is cheap.
+ *
+ * Candidates arrive sorted by comb score, so the first failures are the most
+ * promising ones. Spending the ration on those and letting the rest take the
+ * cheap path keeps the gain while bounding the cost. */
+#ifndef WSPR_DEEP_MAX_PER_CYCLE
+/* ⛔ ZERO - THE DEEP PASS IS OFF, AND THE REASON IS NOT ITS OWN COST BUT WHAT
+ * THAT COST DOES TO THE CAPTURE. Measured across three builds on 2026-09-09:
+ *
+ *   cap 20 ration 6   arm +0..1435 ms    3, 6, 3, 0 decodes
+ *   cap 24 ration 14  arm +2671..3462    8, 2, 0, 2, 5, 5, 0
+ *   + 3-min carpet    arm +2758..4092    0, 4, 0, 0, 0
+ *
+ * The decode starves the capture task, so the window arms seconds late. A
+ * WSPR transmission starts at +1 s, so it began BEFORE the window opened -
+ * and the start-time search runs `for (dt = 0; dt <= slack_dec; ...)`, upward
+ * only, so a negative DT cannot be reached. Every candidate then fails at
+ * every DT and the Fano search runs to its ceiling, which is the
+ * `cycles=1620001` on every line of those logs.
+ *
+ * ⭐ THIS IS #51 IN A NEW COSTUME: a compute change starving a real-time path,
+ * and it presents as a decoder that has gone deaf rather than as a timing
+ * fault.
+ *
+ * ⛔ CORRECTED 2026-09-10 - THE PARAGRAPH ABOVE BLAMES THE ARMING AND THAT IS
+ * WRONG. The late arm costs nothing: the pre-ring backfills the boundary-to-arm
+ * gap sample-exactly, which is what it is for. What actually kills the decode is
+ * that the audio itself is SHORT. Measured off the arm line's own head deltas
+ * (nominal 12.000 samples/ms):
+ *
+ *   pinned to core 1, this ration 0    12.007 / 11.995 / 11.988   0.03 % lost
+ *   pinned to core 1, this ration 14   11.952 / 11.941            0.49 % lost
+ *   unpinned,         ration 14        11.937 ... 11.834          up to 1.4 %
+ *
+ * ⭐ AND A MISSING FRACTION OF THE AUDIO IS A RATE ERROR, NOT AN OFFSET. At
+ * 0.5 % a 110.6 s transmission slips 0.54 s, about 0.8 of a symbol; at 1.4 % it
+ * slips 1.5 s, more than two. A 162-symbol matched filter started at ANY dt
+ * walks off its own tones before the end, which is why every candidate failed at
+ * every dt and the Fano search ran to its ceiling on all of them. No start-time
+ * search - forward, backward or exhaustive - can recover it.
+ *
+ * Pinning both WSPR tasks to core 1 (see wspr_rx.c) halved the load response and
+ * took the idle baseline to nominal, but did not remove it: with ZERO ring-full
+ * drops all session, the samples go missing at the USB wire while the decoder is
+ * not even on core 0. So the residual is a shared resource - PSRAM bandwidth,
+ * L2-cache thrash, GDMA - and belongs with #284/#285, not with the scheduler.
+ * Until it is closed, this ration stays 0 by default; set it live with
+ * {"action":"wspr_guards","deep":N} to measure, never to ship. */
+#define WSPR_DEEP_MAX_PER_CYCLE 0
+#endif
+
+/* Sub-sampling for the deep grid's start-time scan. The main coarse scan uses
+ * WSPR_COARSE_STRIDE; the deep grid only has to land within a coarse step for
+ * refine_dt to finish the job, so it can read half as much again. */
+#ifndef WSPR_DEEP_STRIDE
+#define WSPR_DEEP_STRIDE 8
+#endif
+
+#ifndef WSPR_DEEP_DF_DECIM
+#define WSPR_DEEP_DF_DECIM 8
+#endif
+
+#ifndef WSPR_HYP_TRACE
+#define WSPR_HYP_TRACE 0
+#endif
+#if WSPR_HYP_TRACE
+#include <stdio.h>
 #endif
 #ifndef WSPR_AGREE_CONFIDENT
 #define WSPR_AGREE_CONFIDENT 0.70f
@@ -1132,6 +1244,27 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 #define WSPR_SOFT_DELTA_BITS  6
 #endif
 #define WSPR_SOFT_DELTA   (WSPR_SOFT_DELTA_BITS * WSPR_METRIC_SCALE)
+
+/* Deep searches left this cycle - see WSPR_DEEP_MAX_PER_CYCLE. */
+static int s_deep_left = WSPR_DEEP_MAX_PER_CYCLE;
+/* The ration itself, settable at RUNTIME via the wspr_guards dev action.
+ * The compile-time constant is only the default.
+ *
+ * It exists because the previous session could only compare "deep pass on"
+ * against "deep pass off" by reflashing between them - and on this bench a
+ * reflash also wedges the QMX, so every hypothesis cost a power cycle and a
+ * fresh warm-up. The question the ration answers (does the decoder's cost
+ * starve the USB audio?) needs the two states back to back on the same band
+ * in the same hour, which is exactly what a reflash cannot give. */
+static int s_deep_max  = WSPR_DEEP_MAX_PER_CYCLE;
+
+void wspr_decode_set_deep_max(int n)
+{
+    if (n < 0) n = 0;
+    s_deep_max = n;
+}
+
+int wspr_decode_get_deep_max(void) { return s_deep_max; }
 
 static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                              wspr_decode_result_t *result)
@@ -1483,12 +1616,38 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 #ifndef WSPR_MIN_SYNC
 #define WSPR_MIN_SYNC 0.075
 #endif
-    if (best_score < WSPR_MIN_SYNC) {
+    /* ⛔ THIS GATE USED TO THROW AWAY THE STATIONS THE SEARCH EXISTS TO FIND.
+     *
+     * It is measured at the candidate's NOMINAL frequency, before the
+     * frequency search runs at all - so a station sitting 1 Hz off its own
+     * candidate scores badly here and is discarded before anything looks for
+     * it. Traced on the 19:10 window: `cand 4 f=1470.79 sync=0.0335 cycles=0`
+     * is G4FBA at 1471.8 Hz, one of three stations sharing a candidate.
+     *
+     * That ordering is why lowering the gate on its own measured ZERO (nothing
+     * downstream could reach the station) and why the joint grid on its own
+     * measured ZERO (the station was already gone). Only both together gain.
+     *
+     * So there are two floors now. Below WSPR_MIN_SYNC_DEEP there is no signal
+     * worth any time. Between that and WSPR_MIN_SYNC the cheap path would find
+     * nothing, so the candidate goes STRAIGHT to the deep search. */
+    if (best_score < WSPR_MIN_SYNC_DEEP) {
         free_baseband(&bb);
         result->sync_score = best_score;
         result->best_dt_samples = best_dt * WSPR_DECIM;
         result->freq_hz = f0_hz;
         return;   /* ms_curve and ms_decode stay 0 - the gate is why */
+    }
+    /* Out of ration: a candidate that only the deep path could reach is simply
+     * not reached this cycle. Better than over-running the budget, which costs
+     * every LATER candidate and the whole second pass. */
+    const int deep_first = (best_score < WSPR_MIN_SYNC);
+    if (deep_first && s_deep_left <= 0) {
+        free_baseband(&bb);
+        result->sync_score = best_score;
+        result->best_dt_samples = best_dt * WSPR_DECIM;
+        result->freq_hz = f0_hz;
+        return;
     }
 
 
@@ -1553,45 +1712,97 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * safe under "first answer wins" - it reaches neighbouring tones, and a
      * wrong-frequency decode looks just like a right one. It is only usable
      * because the re-encode check below can tell them apart. */
+    /* ⭐ TWO ATTEMPTS: THE CHEAP SEARCH, THEN THE DEEP ONE ONLY IF IT FAILED.
+     *
+     * The deep search (a joint frequency x start-time grid) is what finds a
+     * station sharing a candidate with a louder neighbour, and it costs about
+     * five times the cheap one because the coarse scan is most of a
+     * candidate's cost and the grid runs one per frequency step.
+     *
+     * Paying that on every candidate does not fit WSPR_DECODE_BUDGET_MS. It
+     * does not need to: most candidates either decode immediately on the cheap
+     * path or are noise that decodes on neither. The grid is spent only on the
+     * ones that are interesting AND unresolved. */
+    wspr_decode_result_t best;
+    memset(&best, 0, sizeof(best));
+    best.agree_soft = -1e9f;
+    unsigned int worst_cycles = 0;
+    int64_t t_curve = wspr_now_us();
+
     double curve[WSPR_DF_NPT];
-    for (int k = 0; k < WSPR_DF_NPT; k++) {
-        double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP;
-        build_tone_tw(&tw, df);
-        extract_tone_powers(&bb, &tw, best_dt, tp);
-        curve[k] = sync_score(tp);
-    }
+    long   curve_dt[WSPR_DF_NPT];
+    double hyp_df[WSPR_HYPOTHESES];
+    double hyp_sc[WSPR_HYPOTHESES];
+    long   hyp_dt[WSPR_HYPOTHESES];
+    int    nhyp = 0;
 
-    /* Local maxima, strongest first. A plateau counts once (>= on the left,
-     * > on the right), and the ends count so a station at the edge of the
-     * window is not silently dropped. */
-    /* Explicitly seeded. Element 0 is always written before it is read - by
-     * the loop's first local maximum, or by the nhyp == 0 fallback below - but
-     * that depends on `pos` being 0 on the first pass, which the compiler
-     * cannot see. It warned once the front end was restructured and inlining
-     * changed; the seed states the invariant instead of silencing it, and
-     * cannot alter behaviour because the while() below only runs when a
-     * previous iteration has already written element 0. */
-    double hyp_df[WSPR_HYPOTHESES] = { 0.0 };
-    double hyp_sc[WSPR_HYPOTHESES] = { -1e300 };
-    int nhyp = 0;
-    for (int k = 0; k < WSPR_DF_NPT; k++) {
-        int rise = (k == 0)                || curve[k] >= curve[k - 1];
-        int fall = (k == WSPR_DF_NPT - 1)  || curve[k] >  curve[k + 1];
-        if (!(rise && fall)) continue;
-        double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP, sc = curve[k];
-        int pos = nhyp < WSPR_HYPOTHESES ? nhyp : WSPR_HYPOTHESES;
-        while (pos > 0 && hyp_sc[pos - 1] < sc) {
-            if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = hyp_sc[pos - 1]; hyp_df[pos] = hyp_df[pos - 1]; }
-            pos--;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        const int deep = deep_first || (attempt == 1);
+        if (attempt == 1 && (best.ok || deep_first)) break;
+        if (attempt == 1 && s_deep_left <= 0) break;   /* ration spent */
+        if (deep && attempt == 1) s_deep_left--;
+        if (deep_first && attempt == 0) s_deep_left--;
+
+        /* The deep pass steps the frequency axis coarsely - it is buying a
+         * start time per frequency, not a precise frequency, and refine_dt
+         * plus the full-rate re-score below do the precision work. */
+        const int kstep = deep ? WSPR_DEEP_DF_DECIM : 1;
+        int nk = 0;
+        for (int k = 0; k < WSPR_DF_NPT; k += kstep) {
+            double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP;
+            build_tone_tw(&tw, df);
+            if (deep) {
+                /* ⛔ A PRODUCT, NOT A SEQUENCE. This curve used to be taken at
+                 * `best_dt`, the start time of whichever station dominates the
+                 * candidate - and a neighbour 2 Hz away is an unrelated
+                 * transmission with its own DT, so at the dominant station's
+                 * time it has no sync peak to be found as a local maximum at
+                 * all. The old note calling the two axes "nearly independent"
+                 * holds for one signal and fails for two. wsprd searches
+                 * frequency x lag x drift as one grid; this is the same idea
+                 * on the two axes that matter here. */
+                double bs = -1e300; long bdt = 0;
+                for (long t = 0; t <= slack_dec; t += coarse_step) {
+                    extract_tone_powers_s(&bb, &tw, t, tp, WSPR_DEEP_STRIDE);
+                    const double s_t = sync_score(tp);
+                    if (s_t > bs) { bs = s_t; bdt = t; }
+                }
+                curve[nk]    = bs;
+                curve_dt[nk] = bdt;
+            } else {
+                extract_tone_powers(&bb, &tw, best_dt, tp);
+                curve[nk]    = sync_score(tp);
+                curve_dt[nk] = best_dt;
+            }
+            nk++;
         }
-        if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = sc; hyp_df[pos] = df; }
-        if (nhyp < WSPR_HYPOTHESES) nhyp++;
-    }
-    if (nhyp == 0) { hyp_df[0] = 0.0; hyp_sc[0] = best_score; nhyp = 1; }
-    best_df = hyp_df[0];
-    best_score = hyp_sc[0];
 
-    result->sync_score = best_score;
+        /* Local maxima, strongest first. A plateau counts once (>= on the
+         * left, > on the right), and the ends count so a station at the edge
+         * of the window is not silently dropped. */
+        const int want_hyp = deep ? WSPR_HYPOTHESES : 1;
+        nhyp = 0;
+        hyp_df[0] = 0.0; hyp_sc[0] = -1e300; hyp_dt[0] = best_dt;
+        for (int k = 0; k < nk; k++) {
+            int rise = (k == 0)      || curve[k] >= curve[k - 1];
+            int fall = (k == nk - 1) || curve[k] >  curve[k + 1];
+            if (!(rise && fall)) continue;
+            double df = -WSPR_DF_RANGE + (double)(k * kstep) * WSPR_DF_STEP;
+            double sc = curve[k];
+            long   cdt = curve_dt[k];
+            int pos = nhyp < want_hyp ? nhyp : want_hyp;
+            while (pos > 0 && hyp_sc[pos - 1] < sc) {
+                if (pos < want_hyp) {
+                    hyp_sc[pos] = hyp_sc[pos - 1];
+                    hyp_df[pos] = hyp_df[pos - 1];
+                    hyp_dt[pos] = hyp_dt[pos - 1];
+                }
+                pos--;
+            }
+            if (pos < want_hyp) { hyp_sc[pos] = sc; hyp_df[pos] = df; hyp_dt[pos] = cdt; }
+            if (nhyp < want_hyp) nhyp++;
+        }
+        if (nhyp == 0) { hyp_df[0] = 0.0; hyp_sc[0] = best_score; hyp_dt[0] = best_dt; nhyp = 1; }
 
     /* ---- TRY, SCORE, AND KEEP THE BEST - NOT THE FIRST -----------------
      *
@@ -1610,23 +1821,45 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * Cost is paid only when needed: the loop stops as soon as an answer
      * agrees convincingly, which is the common case for anything but the
      * weakest signals. */
-    const int64_t t_curve = wspr_now_us();
-    result->ms_curve = (float)((t_curve - t_coarse) / 1000.0);
-
-    wspr_decode_result_t best;
-    memset(&best, 0, sizeof(best));
-    best.agree_soft = -1e9f;
-    unsigned int worst_cycles = 0;
+        t_curve = wspr_now_us();
+        result->ms_curve = (float)((t_curve - t_coarse) / 1000.0);
 
     for (int h = 0; h < nhyp; h++) {
         double df = hyp_df[h];
         build_tone_tw(&tw, df);
-        /* Each peak gets its own start time: two stations 2 Hz apart are
-         * unrelated transmissions and will not have started together. */
-        extract_tone_powers(&bb, &tw, best_dt, tp);
-        double sc = sync_score(tp);
-        long dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
-                             slack_dec, tp, &sc);
+        /* ⛔ EACH PEAK GETS ITS OWN START TIME - AND FOR A LONG TIME THIS
+         * COMMENT SAID SO WHILE THE CODE DID NOT DO IT.
+         *
+         * It refined around `best_dt`, the start time found for the STRONGEST
+         * station in the cluster, with refine_dt's span of one coarse step -
+         * WSPR_DEC_SPS/8 decimated samples, about 85 ms. Two stations 2 Hz
+         * apart are unrelated transmissions and routinely start half a second
+         * apart, so the neighbour was outside the search by construction and
+         * no number of frequency hypotheses could ever reach it.
+         *
+         * Measured on the 19:10 reference window, where wsprd finds 14 and we
+         * found 6: G4FBA/PD2LEO/PA5CA share one candidate at 1473.08 Hz with
+         * DTs of -0.6, -0.4 and -1.0 s, and DK8AF/DD3MS share another. We got
+         * exactly one station from each cluster - the loudest - and the ones
+         * we missed were NOT weak (DD3MS -13 dB, the same SNR as two we did
+         * decode). This is a resolution failure, not a sensitivity floor.
+         *
+         * So a hypothesis now runs its OWN full coarse scan at its own
+         * frequency. It costs a coarse scan per hypothesis, which is the
+         * dominant per-candidate cost - see the note there - so this is not
+         * free and the device budget has to be re-checked. */
+        long dt = hyp_dt[h];
+        double sc = hyp_sc[h];
+        /* Refine at full rate. In the deep pass the grid already found this
+         * peak's own start time; in the cheap pass this is the shared one, and
+         * refine_dt's span is a single coarse step (~85 ms) - which is why the
+         * cheap pass can never resolve a cluster whose members start 200-600 ms
+         * apart, and why the comment that used to sit here claiming "each peak
+         * gets its own start time" described an intention the code did not
+         * implement. */
+        extract_tone_powers(&bb, &tw, dt, tp);
+        sc = sync_score(tp);
+        dt = refine_dt(&bb, &tw, dt, coarse_step, fine_step, slack_dec, tp, &sc);
         extract_tone_powers(&bb, &tw, dt, tp);
 
         wspr_decode_result_t r;
@@ -1645,9 +1878,21 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
              * led to one wrong conclusion already. Worst case across the
              * attempts is the informative one. */
             if (r.cycles > worst_cycles) worst_cycles = r.cycles;
+#if WSPR_HYP_TRACE
+            if (got) fprintf(stderr, "      [hyp %d/%d path %d] df=%+.2f dt=%ld '%s' '%s' agree=%.3f\n",
+                             h, nhyp, path, df, dt, r.callsign, r.grid, (double)r.agree_soft);
+#endif
             if (got && r.agree_soft > best.agree_soft) best = r;
         }
-        if (best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
+            /* ⛔ NOT IN THE DEEP PASS. Stopping at the first convincing
+             * answer is right when a candidate holds one station; in a cluster
+             * the loudest always answers first, so the early exit is exactly
+             * what stops the others being looked for. */
+            if (!deep && best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
+        }
+        best_df = hyp_df[0];
+        best_score = hyp_sc[0];
+        result->sync_score = best_score;
     }
 
     /* Drift is measured only for an accepted decode, and BEFORE the baseband
@@ -1687,6 +1932,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
         result->cycles = worst_cycles;
     }
     result->ms_decode = ms_decode;
+}
+
+void wspr_decode_begin_cycle(void)
+{
+    s_deep_left = s_deep_max;
 }
 
 /* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */

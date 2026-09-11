@@ -1,5 +1,6 @@
 #include <stddef.h>   // offsetof - the layout assert below
 #include "ft8_screen_view.h"
+#include "util/format_freq.h"   // #302
 #include "ui_theme.h"
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
@@ -1237,6 +1238,8 @@ static volatile bool     s_web_preset_ft4 = false;
 #define WEB_RESULT_TTL_MS 20000
 static char          s_web_reply_result[64];
 static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
+static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
+static bool          s_web_done_said;            // DONE reported once per QSO
 
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
@@ -1249,6 +1252,45 @@ static void web_result_set(const char *fmt, ...)
     vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
     va_end(ap);
     s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = false;   // an answer to a click expires with the click
+}
+
+// A completed QSO is the one result here that nobody clicked for, so nothing
+// will come along to replace it and a 20 s timer is the wrong owner (Randy
+// N4OPI: he steps away, comes back, and wants to see that the contact
+// finished). It stands until the operator's NEXT action writes over it.
+//
+// ⭐ Why this is in web_r and not in the live status: the two obvious
+// implementations were both rejected, and this is the third. Holding the engine
+// in DONE longer blocks the next QSO - exactly what forced the 20 s expiry onto
+// the sticky TIMEOUT notice, which stops the automatic pickers while it stands.
+// Freezing the display shows DONE while the machine has moved on, which is a
+// lie about live state. web_r is neither: it is a record of something that
+// HAPPENED, it holds nothing, and this file's own comment already draws that
+// line - a live condition has its own field, an event does not.
+static void web_result_set_sticky(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void web_result_set_sticky(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
+    va_end(ap);
+    s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = true;
+}
+
+// Cancel is the one browser action that should leave NOTHING behind - the
+// operator asked for it to "just cancel and never show Cancelling... go back
+// to the initial view", not a confirmation that fades after WEB_RESULT_TTL_MS
+// (20 s). Setting s_web_reply_result_us to 0 makes the getter's own "nothing
+// has been said yet" check (`!s_web_reply_result_us`) true immediately,
+// rather than waiting for the TTL - same field, same getter, just skipping
+// straight to the state it would reach on its own in 20 s.
+static void web_result_clear(void)
+{
+    s_web_reply_result[0] = '\0';
+    s_web_reply_result_us = 0;
+    s_web_result_sticky   = false;
 }
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1282,7 +1324,8 @@ const char *ft8_screen_view_get_web_reply_result(void)
     // the LVGL task owns the buffer, and a reader must not write into another
     // task's string.
     if (!s_web_reply_result[0] || !s_web_reply_result_us) return "";
-    if (esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
+    if (!s_web_result_sticky &&
+        esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
         return "";
     return s_web_reply_result;
 }
@@ -1486,7 +1529,12 @@ static void t_clock_cb(lv_timer_t *t)
             // "mid-QSO over-ride/cancel button".
             ft8_tx_disarm();
             ft8_qso_abort();
-            web_result_set("QSO cancelled");
+            // No confirmation text - operator, 2026-09-05: "do not show
+            // anything - just go back to the initial view". Every other
+            // override outcome is worth reading (Armed/Busy/refused); Cancel
+            // is the one action whose whole point is to stop, immediately,
+            // with nothing left to look at afterward.
+            web_result_clear();
             ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
         } else {
             ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
@@ -1515,6 +1563,18 @@ static void t_clock_cb(lv_timer_t *t)
     }
 
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+
+    // The sticky QSO timeout clears itself after 20 s. THE ONLY caller: this
+    // timer runs every second, so it gives the label's countdown a figure worth
+    // printing, and it is the one place where the state is both visible and
+    // blocking. It was also called from the decode task's advance() for a
+    // browser-only case that cannot actually occur - see the note there.
+    //
+    // ⛔ BELOW THE VISIBILITY GUARD, with every other call into the engine.
+    // Above it, this ran on the panadapter screen 3.5 s after boot and took a
+    // mutex the FT8 engine creates lazily and had not created yet - an instant
+    // boot loop, caught by the #117 crash record naming the task and the uptime.
+    ft8_qso_timeout_expire_check();
 
     // Respawn watchdog: the FT8 view is visible (we're past the guard above),
     // but a lingering ft8_task from a fast Panadapter<->FT8 toggle can exit
@@ -1617,10 +1677,15 @@ static void t_clock_cb(lv_timer_t *t)
     if (s_btn_freq) {
         uint32_t hz = cat_get_frequency();
         char b[40];
-        uint32_t mhz = hz / 1000000;
-        uint32_t khz_frac = (hz / 1000) % 1000;
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)mhz, (unsigned long)khz_frac);
+        /* #302: the SAME grouped form as the top bar and the preset list.
+           This used to print "14.074 MHz", where the dot is a decimal point
+           and so is correct in either convention - which meant it did not
+           change when the operator picked the other one, and sat next to a
+           top bar that had. Consistency across the screen is the point of
+           the setting, so it follows the style like everything else. */
+        char fs[20];
+        format_freq_hz((uint32_t)hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -1676,6 +1741,9 @@ static void t_clock_cb(lv_timer_t *t)
         int  secs_until = 0;
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
+        // Re-armed for the next contact the moment this one stops being DONE,
+        // so every completed QSO announces itself exactly once.
+        if (qso_st != FT8_QSO_DONE) s_web_done_said = false;
         char b[128];
 
         // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
@@ -1836,15 +1904,37 @@ static void t_clock_cb(lv_timer_t *t)
             // Bright green: QSO complete
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
+            // Tell the browser ONCE, on the edge. DONE is transient - the
+            // machine returns to IDLE and takes the message with it, which is
+            // fine on the Tab5 (you are sitting in front of it) and useless
+            // from another room. The sticky copy survives that transition
+            // because it is a record, not a mirror of the state.
+            if (!s_web_done_said) {
+                s_web_done_said = true;
+                web_result_set_sticky("%s  QSO complete", target);
+            }
             snprintf(b, sizeof(b), "QSO %s: complete!", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);
 
         } else if (qso_st == FT8_QSO_TIMEOUT) {
-            // Orange-red: QSO timed out (tap to clear)
+            // Orange-red: QSO timed out. Tapping clears it - and so does time.
+            //
+            // ⭐ IT COUNTS ITSELF OUT (operator, 2026-09-02: "needs to disappear
+            // automatically after 20sec if not cleared by tapping - it blocks
+            // new processes"). The state is not IDLE, so while it stands the
+            // automatic pickers start nothing - a notice that stops the station
+            // working is worse than one nobody reads. The seconds are SHOWN
+            // rather than left to surprise: a label that vanishes on its own
+            // with no warning reads like a fault.
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
-            snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
+            int left = ft8_qso_timeout_secs_left();
+            if (left >= 0)
+                snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR  (%d s)",
+                         target, left);
+            else
+                snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
@@ -2194,6 +2284,22 @@ static void adif_long_press_cb(lv_event_t *e)
 
 // Update the Call CQ button label to show the currently-selected CQ message.
 // Public so the preset modal can call it after a save.
+/* #302: relabel the Preset button after the frequency punctuation changes.
+   The label is otherwise only rewritten on the 1 Hz tick and on a preset
+   change, so without this the operator sees the top bar switch and this
+   button lag behind until something else happens. */
+void ft8_screen_view_refresh_preset(void)
+{
+    if (!s_btn_freq) return;
+    uint32_t hz = cat_get_frequency();
+    if (!hz) return;
+    char fs[20], b[40];
+    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
+    snprintf(b, sizeof(b), "Preset: %s", fs);
+    lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+    if (lbl) lv_label_set_text(lbl, b);
+}
+
 void ft8_screen_view_refresh_cq_label(void)
 {
     if (!s_cq_lbl) return;
@@ -2317,7 +2423,24 @@ _Static_assert(sizeof(ft8_preset_t) == sizeof(ft8_band_freq_t) &&
 
 const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count)
 {
-#ifndef FT4_MODE_DISABLED
+/* ⛔ #if !, NOT #ifndef. FT4_MODE_DISABLED is DEFINED AS 0 when FT4 is enabled
+ * (ft8_test.h), so `#ifndef` is false and this branch was compiled OUT of every
+ * build since it was written - the accessor returned the FT8 table for both
+ * arguments.
+ *
+ * Every other guard on this symbol - two in ft8_test.c and three in this file -
+ * spells it `#if FT4_MODE_DISABLED` / `#if !FT4_MODE_DISABLED` and is correct.
+ * This was the single odd one out, which is why the fault was invisible on the
+ * Tab5 (its own picker uses the tables through the guards at 2431/2613 and
+ * shows the right FT4 frequencies) and showed up only in the browser, whose
+ * dropdown is built from THIS accessor: /api/status?presets=1 served the FT8
+ * frequencies under "ft4_presets", identical to the FT8 list.
+ *
+ * It also broke mode switching from the browser, and did so silently: the page
+ * decides FT8 vs FT4 by asking which list the chosen frequency is in, and with
+ * two identical lists the answer was always FT4 (Randy N4OPI: "only frequency
+ * change - window stay on mode FT4 both places"). */
+#if !FT4_MODE_DISABLED
     if (ft4) { if (out_count) *out_count = (int)N_FT4_BAND_FREQS;
                return (const ft8_preset_t *)FT4_BAND_FREQS; }
 #else
@@ -2415,9 +2538,9 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     ui_update_frequency(freq_hz);               // top-bar "Freq:" label
     if (s_btn_freq) {
         char b[40];
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)(freq_hz / 1000000),
-                 (unsigned long)((freq_hz / 1000) % 1000));
+        char fs[20];
+        format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);   /* #302 - see above */
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -2564,10 +2687,9 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
                             (void *)(uintptr_t)dial_hz);
 
         char bstr[24];
-        snprintf(bstr, sizeof(bstr), "%sm  %lu.%03lu",
-                 bands[i].name,
-                 (unsigned long)(dial_hz / 1000000),
-                 (unsigned long)((dial_hz / 1000) % 1000));
+        char fstr[16];
+        format_freq_mhz_khz((uint32_t)dial_hz, g_freq_style, fstr, sizeof(fstr));
+        snprintf(bstr, sizeof(bstr), "%sm  %s", bands[i].name, fstr);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, bstr);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
@@ -2708,7 +2830,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_btn_freq, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *freq_lbl = lv_label_create(s_btn_freq);
-    lv_label_set_text(freq_lbl, "Preset: --.--- MHz");
+    lv_label_set_text(freq_lbl, "Preset: ---.---.---");
     lv_obj_set_style_text_color(freq_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(freq_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(freq_lbl);

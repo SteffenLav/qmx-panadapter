@@ -47,19 +47,39 @@ Everything that causes trouble on this bench is one of these three being used by
 two people at once. Two of them are invisible in software, which is why they get
 a lock file and a doc rather than good intentions.
 
-### 2.1 CPU — one build at a time, all four trees
+### 2.1 The build lock — no longer about the CPU
 
-The machine is an **i7-7600U: 2 physical cores, 4 threads**. One `idf.py build`
-already saturates it. Two concurrent builds put ~8 compile jobs on 2 cores, so
-both slow by more than 2× and any bystander process starves — which is what
-stalled `make_flasher_zip.ps1` for 3+ minutes during the v1.9.2 release. That was
-originally written up as the pinned IDF Python environment not being safe for
-concurrent invocation from different worktrees. **That explanation was wrong.**
-Nothing was locking; it was queueing.
+⭐ **RE-MEASURED 2026-09-09: this machine is an AMD Ryzen 7 5800H, 8 physical /
+16 logical cores, 61 GB RAM @ 3200 MT/s** (AZW SER). Everything below used to
+say "an **i7-7600U: 2 physical cores, 4 threads**" and reasoned from it — that
+was the old laptop, and the hardware moved without this section moving with it.
 
-So serialising builds is not a workaround for an IDF limitation, it is correct
-scheduling on a dual-core machine. `bench build` and `bench flash` take
-`C:/dev/bench.lock` so the wait is explicit instead of a mystery.
+The retired reasoning, kept because the correction history matters: two
+concurrent builds were said to put ~8 compile jobs on 2 cores, so both slowed by
+more than 2× and bystanders starved — which stalled `make_flasher_zip.ps1` for
+3+ minutes during the v1.9.2 release. Before *that*, it had been written up as
+the pinned IDF Python environment not being safe for concurrent invocation from
+different worktrees, which was also wrong. So this one paragraph has now been
+wrong twice, in two different ways, and is a good reminder to re-measure a
+machine fact rather than inherit it.
+
+**On 8 cores the CPU argument does not hold.** ⚠ Two concurrent builds have NOT
+been timed here, so this is not a claim that they are free: two `idf.py build`s
+put ~32 ninja jobs on 16 threads, so expect each to slow. It is a claim that
+neither starves, and that a bystander process will not stall for minutes.
+
+**What the lock is still for, and these are real:**
+
+- **The same build dir.** Two `idf.py build`s in one build directory have ninja
+  and CMake writing the same outputs. That is corruption, not slowness, and no
+  amount of CPU fixes it.
+- **Flashing.** `bench flash` stops the capture, flashes, and restarts it. Two of
+  those interleaving is exactly how COM9 came to be held by a capture *during* a
+  flash on 2026-09-09 — the flash failed with an unhelpful esptool error. One
+  port, one flasher.
+
+`bench build` and `bench flash` take `C:/dev/bench.lock`, so the wait is explicit
+instead of a mystery — the same lock, for better reasons.
 
 Already in place and not worth re-litigating: **ccache is enabled and healthy** —
 292k calls at an **87.9% hit rate**. Raise its ceiling from 5 GiB to ~15 GiB now

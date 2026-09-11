@@ -73,12 +73,26 @@ static void refresh(void)
             char ref[16];
             settings_get_activation_ref(ref, sizeof(ref));
             int n = adif_log_count_activation(ref);
-            char b[96];
+            char b[160];   // room for the completeness line below
             // POTA's threshold is 10; SOTA's is 4. Showing the target turns a
             // bare number into an answer to "can I go home yet".
             int target = (settings_get_activation_type() == 2) ? 4 : 10;
-            snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
-                     running, n, n == 1 ? "" : "s", target);
+            /* #263 (Don WB0LQW): this panel already answers "can I go home
+               yet", and "3 of these may not count" is the same question, so
+               it belongs on the same line rather than behind another button.
+               Shown ONLY when something is wrong - a clean log says nothing
+               extra, because a tick here would read as "POTA will accept
+               this" and the Tab5 cannot know that. Same single walk the web
+               Check log button uses (adif_log_check), so the two screens
+               cannot give different answers. */
+            adif_log_check_t chk;
+            adif_log_check(true, &chk, NULL, 0);
+            int off = snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
+                               running, n, n == 1 ? "" : "s", target);
+            if (chk.with_problems > 0 && off > 0 && off < (int)sizeof(b))
+                snprintf(b + off, sizeof(b) - (size_t)off,
+                         "\n%d may be incomplete - check the log in the web UI",
+                         chk.with_problems);
             lv_label_set_text(s_lbl_count, b);
             lv_obj_set_style_text_color(s_lbl_count,
                                         lv_color_hex(n >= target ? 0x60D060 : 0xFFC864), 0);

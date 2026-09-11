@@ -118,8 +118,27 @@ static int build_query(char *out, size_t n, const wspr_spot_t *sp,
     gmtime_r(&when, &t);
 
     /* Dial in MHz, and the TRANSMITTER's frequency as wsprd would report it:
-     * dial + audio offset, where the audio offset is the CENTRE, not tone 0. */
-    const double dial_mhz = (double)cfg->wspr_dial_hz / 1e6;
+     * dial + audio offset, where the audio offset is the CENTRE, not tone 0.
+     *
+     * ⛔ THE SPOT'S OWN DIAL, NEVER THE CURRENT SETTING. This read
+     * cfg->wspr_dial_hz - what the radio is tuned to at UPLOAD time - and
+     * uploads are batched, so with band hopping on, a spot heard on 20 m could
+     * be published as having been heard on 30 m. Both rqrg (what we were
+     * listening on) and tqrg (the transmitter's frequency, derived from it)
+     * were wrong, which puts a station on a band it was never on.
+     *
+     * Found from Kevin KQ4DTX's report that the DISPLAY labelled the band
+     * wrongly (2026-09-03). The display bug was a few seconds of race at the
+     * end of a cycle; this one is unconditional whenever the band has changed
+     * since the spot was heard - and unlike the display it reaches a public
+     * scientific database, where nobody looking at it can tell.
+     *
+     * sp->dial_hz is carried with the decode job for exactly this reason. It is
+     * 0 only for spots recorded before that field existed; those are not
+     * published rather than published wrongly, which is the same rule the
+     * unmeasured SNR and drift above follow. */
+    if (sp->dial_hz == 0) return 0;
+    const double dial_mhz = (double)sp->dial_hz / 1e6;
     const double tqrg_mhz = dial_mhz +
         ((double)sp->freq_hz + WSPR_CENTRE_OFFSET_HZ) / 1e6;
 

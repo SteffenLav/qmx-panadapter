@@ -3073,3 +3073,542 @@ reachable from the browser for the first time, and the web and Tab5 lists agree.
 
 - A warning in the diagnostic log about the FT8 decoder "respawning" was describing entirely normal behaviour and made ordinary mode switches look like faults. It no longer does.
 - The diagnostic log now says so if the device ever runs out of network connections — a state in which the web page stops answering while everything else keeps working.
+
+### Shipped in v1.10.7 — 2026-09-02
+
+**A release of things users found, plus one crash that had been in the firmware for months.**
+
+**Reliability**
+
+- **A crash that rebooted the Tab5 during FT8 is fixed, and it was our own leftover debugging code.** A diagnostic routine from earlier weak-signal development was still in the decoder, trying to open a log file **once per decoded candidate — up to 140 times a slot, every slot**. The file could never be created, so it tried again forever, and each attempt asked for a small piece of memory the device was short of. Eventually one attempt failed and the firmware stopped. It showed up as a cyan screen and a restart, usually a minute or two into an FT8 session. Two occurrences were captured on the bench and traced exactly before the fix.
+- **Static IP addressing works.** It did not in v1.10.6 — the address you entered was always rejected and the Tab5 fell back to DHCP. Anyone who tried it saw it silently not take effect.
+- **A timed-out contact no longer blocks the station.** When a call went unanswered the message stayed on screen until you tapped it, and while it was there the automatic answering would not start anything new. It now clears itself after 20 seconds, counting down so you can see it go, and tapping still clears it at once. On the web page it is a button you can click.
+
+**WSPR**
+
+- **Transmit is off every time you open the WSPR page.** It used to come back on if that is how you left it last time, which meant a session could start transmitting without you deciding to.
+- **The first burst of a session can no longer go out at full power** *(Roy KI0ER)*. With "Protect finals" on, the reduction is confirmed by the radio before anything is armed, rather than the first transmission going out while the request was still in flight.
+- **The countdown on the TX button counts down to a real transmission.** It used to count down to the next opportunity and start again whenever the duty cycle decided not to transmit, which made it useless. The decision is now taken in advance, so the time shown is the time until a burst actually happens.
+- **The radio gets its power back after an interrupted session** *(Roy KI0ER)*. Leaving the WSPR page has always restored the maximum PA voltage, but a power cut is not leaving the page — so a session interrupted overnight could leave the radio at about a quarter power in every mode, with nothing on screen saying so. It is now restored when the radio reconnects, and only if the radio is still sitting at the reduced voltage, so it can never push one radio's setting onto another *(Michael KZ4LY)*.
+- **The spot list no longer says "Listening..." while transmitting** *(Roy KI0ER)*, and the waterfall stands completely still for the transmitting cycle instead of scrolling blank.
+- **The transmit controls are in one place.** "Allow transmitting" has gone from the settings drawer and from the web settings window: it set the same thing as the TX button on the WSPR page and did not track it, so the two could disagree.
+- **The TX button moved to the bottom of the panel** *(Randy N4OPI)*, clear of the edge used for swiping between screens.
+
+**FT8 and FT4**
+
+- **The band dropdown no longer switches you to FT4 by mistake** *(Steve KX7R)*. In v1.10.6 the browser's FT4 frequency list was accidentally filled with the FT8 frequencies, so whichever preset you picked switched the radio to FT4 — and there was no way back from the browser. The dropdown now has separate FT8 and FT4 groups, and the mode shown comes from the radio rather than being guessed.
+
+**Web page**
+
+- **A large heading says which screen you are on** — MODE: FT8, MODE: FT4 or MODE: WSPR — matching the Tab5.
+- **The FT8 page shows the slot occupancy strip and the slot countdown**, the same two the Tab5 has always had: which 50 Hz slots are busy in each transmit window, and how long the current slot has left.
+- **The WSPR page has the whole left-hand panel from the Tab5**: band selection, the TX button and its state, the finals-guard voltage, best DX, stations heard per cycle, and the wsprnet publishing status. Previously it showed only the list of decodes.
+- **The layout stops moving.** Both panels reserved no space, so everything shifted as decodes arrived; the receive status, decode count and controls now keep one position.
+
+**Smaller things**
+
+- Distances and bearings, the decode count and the receive status are all readable rather than fine print.
+- The mid-QSO buttons always take their own line rather than moving depending on window width.
+
+### Shipped in v1.10.8 — 2026-09-03
+
+**A crash introduced and fixed in the same release cycle, plus more groups.io reports.**
+
+**Reliability**
+
+- **A settings-drawer scroll could crash the device.** v1.10.7's "while the drawer is scrolling, nothing else in it acts" fix called into the touch driver to force a scroll gesture to be treated as already released the moment it began, so a slider or the close-swipe could not steal it. That collided with LVGL's own built-in momentum-scroll animation running on the same drawer object: every reproduction crashed the display task at the identical point, inside LVGL's own animation-completion code, with the animation's callback pointer corrupted to a small, obviously-wrong value. A diagnostic build that guarded the crash site and logged instead of jumping into it confirmed this was one specific interaction happening every time, not a rare race, before anything was changed. The offending call is removed; the drawer's scroll-vs-tap protection is unchanged and still works, because sliders and checkboxes were never actually at risk from it — they cannot chain a touch into the drawer's own scroll in the first place.
+- **The web spectrum could go on drawing against a stale frequency axis** *(Samuel W7STF)*. Spectrum data and the frequency axis it is drawn against arrive on two different channels — the spectrum over a fast stream, the axis on a once-a-second status poll — so a single missed poll after a band change or mode switch used to leave the picture looking completely normal while every signal sat at the wrong frequency. It now blanks itself and says why after a few missed polls, instead of showing a plausible lie. Not yet confirmed on the air.
+- **A WSPR spot heard just before a band hop could be published to wsprnet.org under the wrong band** *(Kevin KQ4DTX)*. The upload read the dial at send time, several minutes after the fact, rather than the dial the spot was actually heard on — so with band hopping and wsprnet publishing both on, a station heard on one band could be reported on another in a public database, with no way for anyone reading it to know. It now uses the frequency recorded at the moment of the decode. Not yet confirmed on the air.
+
+**QSO logging**
+
+- **Restore worked-station history from a downloaded ADIF file** *(Randy N4OPI)*. An erase-and-reinstall used to leave no way back to it — restoring your settings has never touched the QSO log, on purpose, so a config restore could not help either. "ADIF restore" in the web UI's QSO Logs menu merges a previously downloaded (or any other logger's) ADIF file in, skipping any contact already logged, and marks the restored contacts as already uploaded to QRZ/eQSL/LoTW so they are not sent again.
+
+**Web page**
+
+- **The decode list no longer jumps up and down during an exchange** *(Randy N4OPI)*. The status box above the list grew and shrank with the message text, pushing the list below it around while you were trying to click a row. It now holds a fixed height.
+
+**Smaller things**
+
+- The "QMX cannot display this" caption is gone from the hatched dead-band on both the Tab5 and the browser — the hatching alone says what it needs to.
+
+### Shipped in v1.10.9 — 2026-09-05
+
+**The web decode-list jump, root-caused for real this time; WSPR's PA-voltage guard made reliable; a remote QMX power-cycle relay.**
+
+**Web page**
+
+- **The decode list no longer jumps, for real this time** *(Randy N4OPI)*. v1.10.8's fix sized the status box against one "worst case" message and still moved on an armed transmit or a busy exchange — the real cause was the box disappearing from the page entirely while idle and reappearing at full size the moment there was something to show, not its size while visible. Every place that used to hide it now leaves its space reserved and only hides what is drawn inside it, so idle and busy are the same height throughout. The countdown shown while a transmission is armed is now its own small figure that cannot be cut off by a long message, Cancel clears the box immediately with no leftover "Cancelling" text, and the box no longer runs wider than the slot occupancy strip below it.
+- **The "Calling you" pileup list now ages out and clears on a band change** *(Randy N4OPI)*. It previously had no expiry at all — a caller from 17 hours earlier, on a different band, was still shown. Entries now drop after an hour, and changing bands clears the list outright, the same moment that already ends an in-progress QSO for the same reason.
+
+**WSPR**
+
+- **The finals-protection PA-voltage guard is now confirmed and retried, not fire-and-forget** *(Dirk DK7CVD)*. Restoring the radio's power when leaving WSPR mode was a single CAT write with nothing checking it actually landed — if that one write was lost, the radio stayed at the reduced WSPR voltage indefinitely, in every mode, with nothing on screen saying so. A background check now confirms the restore took and resends it if not. Verified end to end on real hardware: reduced 11.5 V to 6.0 V on WSPR TX, held there correctly for the whole session, and restored 6.0 V back to 11.5 V on leaving WSPR, each step confirmed against the radio's own CAT read-back.
+- **The WSPR countdown no longer appears to hit zero and restart on the first transmit cycle.** The radio's PA-voltage was only asked for once the first cycle began, so a burst due right at the start of a session could be held back a cycle while waiting for that answer — the right call, but the countdown had already been shown counting down to it. The question is now asked the moment WSPR transmit is turned on, giving it the whole two minutes to be answered instead of a few hundred milliseconds.
+
+**New**
+
+- **A remote relay pulse for power-cycling the QMX** *(Randy N4OPI)*. "Power-cycle relay" under the web UI's Miscellaneous menu drives one of two Tab5 GPIO pins for a chosen level and duration — wire a home-automation relay to it and the QMX's PWR_ON/GND **signals**, and a remote firmware upgrade (which always needs the QMX power-cycled afterward) no longer needs someone physically at the radio. (The QMX has no PWR_ON/GND jack - those signals must be brought out to a connector of your own, so this is an experimenter feature; wording corrected in v1.11.1 after Randy N4OPI pointed out someone would hunt for a socket that does not exist.)
+
+### Shipped in v1.11.0 — 2026-09-05
+
+**Your QSO log, recoverable from the card it was already backed up to — and searchable on both screens.**
+
+All of it from one report. Gyula HA3HZ chose the erase option when updating his
+firmware, having first saved his log, and then found no way to get 432 contacts
+back onto the device. Two of my own explanations for that were wrong and were
+tested against his actual files on real hardware before the third was found: the
+importer was never at fault, because his log never reached it. The microSD
+archive had only ever been able to write *to* the card.
+
+**Restoring the log**
+
+- **Restore straight from the microSD card.** The card has always held a copy of the QSO log, and the Tab5 could only ever write to it — so recovery needed a computer, a browser, and knowing the file was on the card at all. It reads it back now: **Restore from SD** in the Tab5's own log window (no computer, which is the POTA case), or **↳ Restore from SD card** in the browser's QSO Logs menu. Both merge, so contacts already logged are skipped, nothing is duplicated, and pressing it twice does nothing.
+- **The previous log is kept as `qso.prev.adi`.** The card mirrors the *present*, so a contact deleted before a restart was gone from the card too at the next start-up — which is exactly what happened on the bench while testing this, and the records only survived because a copy happened to be sitting on the build machine. Whenever the log about to be written is **smaller** than the one on the card, the older copy is kept first. Growth is ordinary logging and never disturbs it, so it holds the last larger version for as long as it takes to notice. Recover it with the file browser and **ADIF restore ↑**.
+- **An import now says what actually happened.** Reporting only how many contacts were added cannot distinguish "all of these were already logged" from "not one of them could be read", and the page asserted the first in both cases. It now reports found, added, already present and unreadable. A file over the size limit gives a plain sentence rather than a raw browser error; the limit itself went from 256 KB to 1 MB (about 1200 QSOs to roughly five thousand); and an upload interrupted by a slow link is retried instead of abandoned.
+
+**Searching and exporting**
+
+- **Search the log, on the Tab5 and in the browser.** Any part of a callsign, country, band, mode, date, grid or park reference; several words must all match, so `ha3 20m` narrows to HA3-prefix contacts on 20 m. A search that finds nothing says so in as many words — *"so this one has not been worked"* — because that is the question the box exists to answer. The decode list already greys out a worked station, but only while that station is on the air; this asks the same question whenever you like. Country is searchable although no ADIF field stores it: it comes from the same prefix lookup the Country column shows, so the two cannot disagree.
+- **The Tab5's log gains a Ref column** — the park or summit the other station was activating. Added because the search offered to find it while the list never showed it, and a column you can search but cannot see is a promise the screen does not keep. The window is wider to fit it.
+- **Export just the contacts you pick** (browser). Tick rows and press **Export selected** to save them as their own ADIF file. The tick box in the header takes everything **currently shown**, so a search plus one tick gives a single day, band or park as a file. Each record is exported exactly as the Tab5 wrote it, rather than rebuilt from the columns on screen, so fields the table does not display survive the trip.
+
+**Messages that wait to be read**
+
+- **A finished QSO stays on screen in the browser** *(Randy N4OPI)*. `<callsign> QSO complete` in green, held until you do something else, where every other message in that line clears itself after twenty seconds. Stepping away and coming back now tells you the contact finished. Two other designs were rejected first: holding the radio in the completed state blocks the next QSO, and freezing the display misreports what the radio is doing. This is neither — it is a record that the contact happened, and the radio carries on regardless. The Tab5's own label is unchanged; it is the browser that has to cope with nobody watching.
+- **Results on the Tab5 are a window with an OK button**, not a message that fades. A restore, a delete of test contacts, or clearing the whole log all report in a panel you dismiss — the outcome of something you asked for is worth reading, and dismissing it is how you say you read it. Clearing the log spells out "This cannot be undone".
+
+### Shipped in v1.11.1 — 2026-09-05
+
+**Decoded CW along the bottom of the panadapter, from the radio's own decoder.**
+
+Suggested by Uwe DL8UG, who had already built it for himself and wrote in to say
+how easy it was. He was right, and the reason it is affordable is that **the Tab5
+does not do the decoding**: the QMX decodes CW in its own microcontroller and
+hands the text to a CAT host with `TB;`, so this is one more slot in a poll that
+was already running. That matters on this board specifically — the display task
+is what limits it, and every previous attempt at doing CW audio work ourselves
+ran into exactly that.
+
+`TB` is in the **1.03** CAT manual as well as 1.04, so it needs no firmware
+version check and works on what people are already running. Uwe's pointer was to
+the 1.04 manual; the older one has it on page 9.
+
+**The line**
+
+- One line along the bottom of the waterfall in CW/CW-R, on the Tab5 and in the browser. A fixed green header carries the estimated speed; the decoded text follows in cyan.
+- It **wraps and overwrites itself** rather than scrolling, the way the QMX's own scroll line does. Nothing slides sideways, so a callsign you are half-way through reading stays where it is — only the oldest end is replaced. Two blank columns travel ahead of the writing position; after the first wrap that gap is the only thing separating new text from old.
+- The speed is **zero-padded to two digits**, so the header width never changes and the text does not shift every time the estimate crosses ten.
+- Both screens draw from **one** line model in the firmware, and the device sends the line already rendered — grid, wrap position and gap included. Rendering it twice would have drifted the moment either side changed.
+
+**The noise, which turned out to be the interesting part**
+
+- Measured rather than guessed: 864 characters over 20 minutes of live 20 m CW. `*` was **23.6%** — the single most common thing arriving — and it is not a character at all. It appears nowhere in the CAT manual's list of what the QMX decodes, so it is the decoder's marker for a symbol it could not resolve. It is dropped outright; it can never be real text.
+- Long runs of **E** and **T** are dropped too. They are the two shortest Morse symbols, so noise lands on them more often than on anything longer, and it is worst just after switching to CW while the decoder's amplitude tracking settles. Only long runs go: short ones are released, because those are real letters and TEST, BETTER and OZ1LAV have to survive.
+- A dropped run leaves **one space** behind. Without it, "CQ TTTTTTTT DE" came out as "CQDE" — two words welded together. The host tests caught that one.
+- E and T together are only 8% of what arrives, so the first version of this filter was targeting the wrong thing entirely.
+
+**The speed estimate, and what it is not**
+
+Characters per unit time on the PARIS convention of five characters to a word,
+over a 30 s window. It is a **throughput** figure: it counts the gaps between
+words and between overs, so it reads low during a real exchange and only
+approaches the sender's keying speed during continuous sending. A true keying
+speed needs element timing, and the radio hands over finished characters — the
+timing is gone before we see them. Hence the `~`, and hence `??` rather than a
+number when there is not enough to go on.
+
+**Everything else**
+
+- **Restore from SD reads both logs on the card** *(Gyula HA3HZ)*. It only ever read `qso.adi`, so putting a backup on the card as `qso.prev.adi` — the name the firmware itself writes for its safety copy — was answered with "nothing to restore", which was narrowly true and completely unhelpful. Verified by reproducing his exact steps: an 8-record file uploaded as `qso.prev.adi` now reports 33 found, 8 added, 25 already present, where it previously added nothing.
+- **The Tab5's QSO log gains a Grid column**, beside the callsign, where it sits with the contact's own details rather than out with the reports.
+- **The power-cycle relay's help text no longer names a connector that does not exist** *(Randy N4OPI)*: "I would really hate for someone to waste time looking for a non-existent connector or worse, connect these signals to the wrong connector." The QMX has no PWR_ON/GND jack — those signals have to be brought out of the radio to a connector of your own — so the control leads with "!Experimenter feature!" and says so. The same wrong wording was in four other places in the documentation and is corrected there too. His other question has a firmware answer rather than a hardware one: GPIO53/54 cannot float because they are held as driven outputs from boot, deliberately, so a relay cannot be closed by the Tab5 booting or being reflashed.
+- **Decoded CW can be switched off** in the settings drawer under Radio, beside CW centre and the transmit offset, and from the browser's settings form.
+
+
+### Shipped in v1.11.2 — 2026-09-06
+
+- **The QSO log's search now covers the whole log** *(Gyula HA3HZ)*. The Today/All filter was applied before the search matched, and Today is the view the window opens on — so typing a callsign only found it if you happened to have worked that station today. Searching a log asks "have I ever worked this", not "did I work it today". The toggle still governs browsing when the box is empty.
+- **The on-device QSO log opens in 0.13 seconds instead of 2.2** *(Gyula HA3HZ: "it takes so long for it to appear that it is not worth searching for it")*. Measuring first changed the fix: reading the file was 70 ms of that time and building the rows was the rest, so the window now builds about a screenful and adds the rest as you scroll. Nothing is capped — every record is still reachable.
+- **A station could be logged with another station's grid square** *(Gyula HA3HZ)*. When an entry in the decode table was recycled for a new callsign one field was not cleared: the grid. So a new station could inherit a stranger's locator and keep it if its own messages never carried one — which is exactly a QRP contact that completes on reports and RR73 rather than grids. The callsign and grid are now captured together at the start of each QSO.
+- **A grid square can be corrected by hand in the web QSO log** *(Gyula HA3HZ, who was editing them in ADIFMaster instead)*. It joins the two signal reports and the park reference as the fields that may be changed; the rest of the record is what QRZ, eQSL and LoTW match a contact on, so the log window now says which four are editable and why the others are not.
+- **A download that failed partway was served as a file that looked complete** *(Gyula HA3HZ: "the website shows 220 lines of LOG data")*, with 462 QSOs in his log. It was not a display limit — the terminating marker was sent whether or not the transfer had succeeded, so the browser reported success and saved half a log. The same fault was in the diagnostic-log download and the microSD file browser; all three now abort visibly instead.
+- **The QSO log list no longer shrinks as it is scrolled**, which made the last couple of contacts impossible to settle on. The list was sized by its own contents while also scrolling, which is self-referential: scrolling moves the rows, that changes the measured height, and the height changes what can be scrolled.
+- **Deleting many QSOs at once no longer freezes the screen for minutes.** It rewrote the whole file once per record; it now rewrites once for the batch, on a background task, so 500 records take about a second instead of half an hour.
+- **The power-cycle relay's pin, level and pulse length survive a reboot** *(Randy N4OPI)*. They were being stored all along — nothing ever sent them back to the page, so the form fell to its defaults on every load and looked like a setting that had not persisted.
+- **A "Check log" button in the web QSO log** *(Don Adams WB0LQW: "I wish POTA and SOTA had a feature allowing you to test your file for syntax and completeness without submitting it for credit")*. It asks whether to treat the log as an activation, then lists what each record is missing — a callsign, a malformed date, no station callsign, a reference that does not look like one, or no reference of your own. The Tab5's Activation panel carries the same count under the contact total, so it can be read at the park. It can only tell you a record is not obviously incomplete: it cannot see POTA's rules or their database, and it never says a file will be accepted.
+- **Decoded CW is mirrored to the microSD card with timestamps** *(Michael K Johnson KZ4LY)*, so a busted callsign can be resolved after the fact.
+- **A choice of frequency punctuation** *(Don N2VGU)*, in the settings drawer under Advanced and in the web settings. The default is unchanged and matches the QMX's own LCD: Icom, Yaesu, Kenwood and QRP Labs all group a frequency with periods as visual anchors between MHz, kHz and Hz, regardless of local writing conventions. The alternative is US written grammar — `14,074,000`. It applies to the frequency readout, the preset buttons and lists, the WSPR band picker, the keypad and the spectrum's frequency scale.
+- **"Lost contact with the Tab5" appeared over a spectrum that was drawing perfectly** *(Dave KX3DX: "I'm getting a lot of these")*. The page blanks the spectrum when the frequency scale might be out of date, so signals never appear at the wrong frequency — but it only counted the once-a-second status poll as proof the scale was current. Every spectrum frame already carries its own scale, ten times a second, so a poll that merely ran late produced the warning.
+- **Spot labels on the web page carry the mode**, CW / SB / FT, exactly as the Tab5's have — and, exactly as on the Tab5, the tag is dropped when the spot mode filter is on, because then every label is your own mode.
+- **Three crashes fixed.** The QSO log window could reboot the device when opened or searched; an HTTP request arriving in the second or so after the web server started could abort the firmware outright (a fault present, unrecognised, for many versions); and a stalled transfer to the WiFi co-processor deliberately restarted the device, which read as an unexplained reboot with a clean log.
+- **Three tasks were within a few hundred bytes of overrunning their stacks** and have been given room. A new diagnostic reports how much every task has left, and the firmware now traps an overrun as it happens rather than discovering it later as unexplained corruption.
+
+
+### Shipped in v1.11.3 — 2026-09-06
+
+A same-evening patch on v1.11.2. Both items are someone telling me that a thing
+I had just said was fixed is still not fixed, and both of them were right.
+
+- **The power-cycle relay was held closed from boot, for anyone using an active level of Low** *(Randy N4OPI)*. He asked only that his stored settings be applied at startup; what was underneath is worse than that. The two pins were driven Low at every boot, under a comment reasoning that closing a contact should require a deliberate pulse — which is the right principle and the opposite of what the code did for an active-Low station, because Low is their asserted level. The relay therefore sat closed from the moment the Tab5 powered on until the first pulse happened to release it, on a line wired to a radio's power input. The pins now come up on the inactive side of your stored polarity, and follow it the moment you change it rather than waiting for the next reboot. The boot log states which way round it is and reads the pins back to prove it.
+- **A corrected log file can now be imported** *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Restoring a log merges on callsign, date and time — which are exactly the three fields a correction does not change. So a record fixed in another logger looked identical to the wrong one already on the device, was counted as a duplicate, and was skipped; the report said "duplicate", which reads as "already fine". An import could add contacts and never replace one, making it useless for repairing a log. Choosing "update existing records" now lets an incoming record replace the one already logged, and the result says how many were replaced. Corrected contacts are sent to QRZ, eQSL and LoTW again afterwards, since the copy held there is the one carrying the error. Callsign, date and time still cannot be changed this way — a contact with a wrong date is a different contact, and those three are what every logbook matches on.
+- **The web page now tells you when it is older than the Tab5.** A browser tab left open across a firmware update keeps working perfectly — it polls, it draws, it responds — while missing every control added since it was loaded, which is indistinguishable from a feature that was never shipped. It cost a round trip with a user reporting a missing editor that was present and being served correctly. The page remembers which firmware served it and offers a Reload when the Tab5 reports a different one.
+- **A diagnostic for the web server going quiet.** The socket table filling up stops the web server and the rigctld port answering while everything else — ping, the radio, decoding — carries on, so nothing on screen suggests a fault. The firmware can now name which connection is holding each of the sixteen slots, and says so on its own when the number in use reaches a new high. This is groundwork for a fault seen on a long unattended run; it changes nothing in normal use.
+
+
+### Shipped in v1.12.0 — 2026-09-08
+
+Almost all of this came from users, and several items are a user telling me that
+something I had shipped was wrong.
+
+**CW profiles** *(Uwe DL8UG: "it would be great if you could pick a profile...
+it would save all the tedious fiddling on the QMX")*
+
+The QMX holds one CW centre and one set of filter widths, and changing them
+means walking two separate menus on the radio. Four profiles now live on the
+Tab5 — a name, a centre frequency, and which of the eight filter widths to offer
+with it — edited on the web settings page and applied from there or from a
+picker in the Tab5's settings drawer. His own examples: 700 Hz with 100/200/300/400,
+675 Hz with 50/150/250, 650 Hz with 100/200/300/500.
+
+Applying one writes the radio's configuration, so it verifies rather than hopes:
+each write is read back and retried, and the filter list is re-read from the
+radio afterwards rather than assumed. That mattered on the first real test — the
+centre write was refused and the retry is what got it there.
+
+**The bandwidth list offers only the filters your radio has** *(Uwe DL8UG)*. The
+QMX lets you enable any subset of its eight CW filters, and the Tab5 was offering
+all eight regardless, so choosing one the radio did not have did nothing. It now
+asks at connect. A radio that does not answer, or an older firmware that does not
+know the question, still gets the full list — never an empty one.
+
+**WSPR** *(Samuel W7STF)*
+
+- **A DT column**, on both screens: how far into the two-minute cycle each
+  transmission actually started. Nominal is +1.0 s, so a value far from that is
+  the other station's clock. The decoder had been measuring it all along and
+  simply never handed it over.
+- **Distances follow the km/miles setting.** They were always printed in
+  kilometres, on both the decode list and the Best DX panel, while the setting
+  had existed since v0.18.6 and the FT8 list had always honoured it. The setting
+  is also now reachable from the WSPR page, which it was not.
+- **A Clear button** for the decode list, beside the publishable count. It asks
+  first: the list is also the upload queue, so clearing it discards spots not yet
+  sent to wsprnet.
+- **One capture countdown instead of two.** The seconds one is gone; the cycle
+  clock beside it was saying the same thing.
+- **"xx/yy confirmed" now reads "N of M publishable"**, because the old wording
+  meant nothing without explanation. It is the publication gate — a station
+  reaches wsprnet only after it has been heard more than once — and it also
+  answers why a site like wspr.rocks shows fewer unique calls than the Tab5
+  reports hearing.
+- **Point at a trace on the waterfall and it names the station**, with the tone
+  and the signal report. Mouse only, since a touchscreen has no hover, so it adds
+  to the list rather than replacing it.
+- **The band picker is a list you drag through**, not a dropdown: touch it, the
+  line lights up, drag until you are on the one you want, release to choose.
+  Releasing outside chooses nothing. A dropdown commits on whatever line your
+  finger happens to lift over, and getting it wrong retunes the radio.
+
+**A CAT link that died and said it was healthy** *(Samuel W7STF, reporting that
+the "Now turn on or reboot your QMX/+" prompt was back)*
+
+A single transient USB error could stop the Tab5 receiving anything from the
+radio, permanently, while the poll went on reporting itself healthy — so the
+screen asked you to restart a radio that was working perfectly. Found in a
+soak of v1.11.3: it fired at four hours fifty-six minutes and the link stayed
+dead for the following four hours. A watchdog now forces a reconnect after five
+seconds of silence.
+
+**Tune snap is a setting again, including Off** *(Samuel W7STF, who asked
+twice)*. Tapping the spectrum lands on a grid — 500 Hz in SSB and the digital
+modes — and there was no way to turn it off. It is now Off / 250 Hz / 500 Hz /
+1 kHz in the settings drawer under Advanced and in the web settings, defaulting
+to the present behaviour. CW keeps its 10 Hz grid and tap-to-RIT still overrides
+it, since neither was what anyone objected to.
+
+**The web page**
+
+- **Every field in a QSO can be corrected** *(Gyula HA3HZ)*, not the four the
+  previous release allowed. Which record a logbook matches is a decision for the
+  logbook, not something the Tab5 should decide on its behalf.
+- **The spectrum above ×1 zoom had no frequency scale at all**, so clicking a
+  signal tuned to the wrong place, the passband overlay sat somewhere else than
+  on the Tab5, and the band-plan slider came apart as it was dragged. All three
+  were the same missing answer, and the device now sends the viewport it is
+  actually drawing.
+- **The dB scale labels were fixed values** that were only correct for the
+  default range: at −120 to −40 two of the printed labels named levels that were
+  not on the scale at all. The device works them out and the page prints what it
+  is told.
+- **The zoom list offers ×24**, and the passband in digital modes matches the
+  Tab5's.
+- **A frequency typed in twice quickly no longer loses the second one**, and a
+  mode or band change from the browser or from rigctld is no longer silently
+  dropped.
+- **The two screens showed different spots.** The mode filter was applied on the
+  Tab5 and not in the browser, and the browser was sent a truncated list on a
+  busy band — 20 of 116 spots were being lost.
+- **A tab left in the background stops polling**, so everything on it can be
+  minutes out of date the moment you look at it. It now refreshes the instant it
+  is brought back to the front.
+
+**Everything else**
+
+- **Flat spectrum is one setting shared with the browser**, rather than each
+  screen keeping its own idea of it, and the dB range controls grey out while it
+  is on — flat mode ignores them entirely, so they could not do anything.
+- **The settings drawer remembers where you scrolled to**, until the Tab5 is
+  restarted. Flat Spectrum has moved up beside the controls it governs, and IF
+  calibration has moved to the Radio group above CW centre, where it belongs.
+- **Every checkbox in the drawer now reflects a change made from the browser.**
+  They were read once when the drawer was built, so any setting changed from the
+  web showed the opposite of the truth until a restart. There were twenty.
+- **The web interface stalls for less time.** An incomplete request — a phone
+  that slept mid-request, a tab closed while loading — held the single-threaded
+  web server for five seconds; that is now two.
+- **The diagnostic log on internal flash had stopped being written**, silently,
+  and would retry a broken file for the rest of the session. It now recovers, and
+  says what actually went wrong rather than a stale error from something else.
+- **The decoded-CW pane is two lines** rather than one, wrapping down and then
+  overwriting the first, with the overwritten text in a second colour so the
+  newest character can be found.
+
+### Shipped in v1.12.1 — 2026-09-09
+
+**A feedback release: seven things testers reported in a day, and the remote
+power-switch modification documented properly.**
+
+**WSPR**
+
+- **Letters on the waterfall, and an `S` column to read them by.** Every trace
+  the decoder looks at gets a letter — **A, B, C… left to right by tone** — drawn
+  on the carpet in the decode list's own font, with the cycle's UTC time at the
+  left end of the row. The same letter appears in a new first column of the list,
+  so a line of text and a mark on the waterfall are the same station. A trace the
+  decoder tried and could not read is marked `?`, which is how a signal that is
+  present but too weak becomes visible instead of simply absent *(from Samuel
+  W7STF's request to be able to name a trace)*.
+- **A `?` now has to earn its place.** The candidate finder returns up to twenty
+  entries per cycle and it always fills that quota, so most of them were its own
+  noise floor rather than signals — measured, in one cycle, as eight entries
+  within 7 % of each other. A mark needs a score of at least twice the cycle's
+  median, which leaves five or six real ones instead of twenty pieces of
+  punctuation.
+- **A crowded mark is left out rather than moved.** They used to be nudged
+  sideways until they fitted, which is worse than saying nothing: a marker whose
+  position is wrong points at the wrong signal. Decoded stations are placed
+  first and never dropped.
+- **⛔ The WSPR page's Band button opened the *panadapter's* band list and
+  retuned the radio.** The top bar's own Band area sits above the WSPR panel and
+  was winning the touch, so picking a band from it wrote an FT8 frequency
+  straight to the QMX — leaving the radio on one band while WSPR carried on
+  capturing and labelling spots with another. **If you have used the WSPR page on
+  v1.12.0, check the band your radio is actually on.** The top bar is now inert
+  and greyed on the WSPR page, except the frequency, which stays live so a beacon
+  found off the standard dial can still be chased.
+- **A Tab5 that woke up on the WSPR page had a live top bar anyway.** The fix
+  above was applied when you swiped to the page, and not when the Tab5 restarted
+  onto it — which, since the page is remembered across a power cycle, is how most
+  units would meet it.
+- **The dial-mismatch warning no longer fires on the page's own retune.**
+- **The screenshot endpoint says when it is out of memory** instead of reporting
+  an unexpected error. WSPR uses most of the PSRAM, and a screenshot needs 1.8 MB
+  of it in one piece.
+
+**FT8**
+
+- **A reply can now make its own slot** *(Gyula HA3HZ)*. After a slot ends the
+  decoder works through every candidate it found, often well over a hundred, and
+  only then did the QSO logic look at what had been decoded. A message addressed
+  to you could therefore sit decoded and unread while the band was ground
+  through, and a reply that misses its window by any amount at all costs a full
+  fifteen seconds. It now acts the moment a message for you decodes. *(This is
+  not a regression from v1.11.1 — between that release and v1.12.0 there are
+  exactly three changes anywhere in the FT8 code and none of them touches reply
+  timing. What differs between releases is how long a decode takes.)*
+- **A band change during a transmission is no longer lost** *(Randy N4OPI)*. A
+  burst owns the link to the radio for its whole 12.7 seconds; a frequency sent
+  into that was rejected as a garble and silently discarded, while the dropdown
+  had already moved. It is now held and sent as soon as the link is free. If you
+  spin through several, the last one wins.
+- **The web TX tone button names the tone** *(Gyula HA3HZ)* rather than saying
+  only that a tone is set.
+
+**Elsewhere**
+
+- **WSPR band hopping stopped whenever you looked at another screen** *(Dirk
+  DK7CVD)*. A beacon's band schedule is not a property of what is on the display.
+- **The decoded-CW line is cleared when you leave CW** *(Gyula HA3HZ)*, rather
+  than sitting there showing text from a mode you are no longer in.
+- **The CW transcript on the SD card says when it is not being written** *(Uwe
+  DL8UG)*. With WiFi on, the card takes one snapshot at boot and then stops — the
+  arrangement that keeps SD writes from wedging the WiFi link — and the transcript
+  is written by the pass that stops. Switch WiFi off and reboot to record one.
+
+**Documentation**
+
+- **The remote power-switch modification is in the manual, with a schematic**
+  *(designed, built and documented by Randy N4OPI, published with his
+  permission)*. The relay control has been in the web UI since v1.10.9, but the
+  hardware it drives was described only as "wire it to PWR_ON and GND" — and the
+  QMX has no such connector to wire to. The manual now carries the whole job:
+  the 2.5 mm jack you fit to the radio, the two-component optoisolator interface,
+  the parts, the settings that work, and why only GPIO53 and GPIO54 are offered.
+
+
+### Shipped in v1.12.2 — 2026-09-10
+
+**A fixes release, and two of them are things earlier releases said were working
+when they were not.**
+
+**CW**
+
+- **⛔ The decoded CW transcript was never written to the microSD card while WiFi
+  was on** *(Uwe DL8UG, and Gyula HA3HZ)*. Switch it on, work a session, pull the
+  card, and `cw-decode.txt` held only whatever the first few seconds after boot
+  had caught. The function that writes it had exactly one caller, inside the
+  background burst that stops the moment WiFi comes up — so the text kept
+  accumulating in memory and nothing ever emptied it onto the card. **v1.12.1
+  "fixed" this by adding a warning that said it was not happening.** It now
+  writes on the same 30-second cycle as the diagnostic log. *The fix is Uwe's,
+  sent as a patch and applied nearly as written.*
+- **A failed write no longer throws the text away.** The card write took the
+  characters out of memory before it knew whether the write had succeeded, so a
+  single momentary card error discarded them for good. They now stay in memory
+  until the write has actually landed, and a run of failures is reported in the
+  file rather than passing silently.
+- **A restart no longer welds two sessions onto one line.** A line's ending is
+  written when the *next* line starts, so a restart left the file with an
+  unfinished line and the next session's timestamp landed on the end of it —
+  three sessions deep, in one line, on the bench. Found by reading the file back
+  after the fix above made it fill up properly.
+- **The decoded CW line really does go away when you leave CW** *(Gyula HA3HZ)*.
+  v1.12.1 addressed this and did not finish the job: the line is five separate
+  things on screen and only two of them were being taken down.
+
+**The microSD card**
+
+- **The card no longer gives up for the rest of the session.** Three failed
+  background writes in a row used to stop the diagnostic mirror permanently —
+  sometimes within four minutes of switching on — after which nothing in memory
+  reached the card again until a restart. It now waits longer between attempts,
+  up to five minutes, and keeps trying. The interference this is working around
+  comes and goes, so stopping forever threw away every later chance. *(Uwe
+  DL8UG.)*
+
+**WSPR**
+
+- **The decoder was quietly costing the receiver its own audio.** Under load it
+  ran on the same processor core as the USB audio service, and audio the radio
+  had already sent was being lost with nothing to show for it — up to 1.4 % of
+  it, which over a two-minute WSPR transmission is more than a whole symbol of
+  drift and enough to stop the cycle decoding at all. Moved to the other core,
+  where there is room. The decoder itself was never at fault.
+- **A three-minute waterfall, and marks that stay with their own cycle.** The
+  carpet now shows three minutes instead of two, every visible cycle is labelled
+  with its own time, and each letter is drawn against the cycle it belongs to
+  rather than drifting into open carpet. Letters appear as each line decodes
+  instead of all at once at the end, the alphabet rolls on across cycles so two
+  neighbouring cycles cannot both have an "A", and crowded marks step down a row
+  instead of being nudged sideways onto the wrong signal.
+- **Clear now clears.** The button rebuilt the display from a stale check and
+  then redrew the previous text.
+
+**Elsewhere**
+
+- **The Tab5 wakes up on the page it was left on.** It always came back to the
+  panadapter, whichever page was in use when it was switched off.
+- **The manual reads properly again in the printable guide and on the device.**
+  Notes and warnings were coming out as literal `!!! note` markup in the PDF and
+  as unlabelled boxes on the Tab5; a bullet split across two lines in the source
+  became a bullet plus a stray sentence; a sub-heading could read as part of the
+  paragraph above it. The Reader also drew the page underneath itself when opened
+  from the WSPR page.
+
+**Documentation**
+
+- **The remote power-switch schematic is corrected** *(Randy N4OPI, who spotted
+  his own error and sent a new drawing)*. The jack on the interface module is a
+  plain **3.5 mm stereo audio jack**; it was written up with a 2.5 mm part
+  number. The jack that goes **inside the radio** is still 2.5 mm, and the
+  3.5 mm-to-2.5 mm lead between them is unchanged.
+
+
+### Shipped in v1.12.3 — 2026-09-10
+
+**Everything reported in the first day of v1.12.2, and one of them was making the
+web page look broken.**
+
+**The web page freezing**
+
+- **The spectrum stopped for up to half a minute at a time** *(Gyula HA3HZ)*.
+  Writing the microSD card holds the spectrum stream while it happens, and on
+  this hardware that write can take a very long time — measured on the bench at
+  3, 10, 15 and once **29 seconds**, for four kilobytes. The spot list kept
+  updating throughout, because it arrives a different way, which is what made it
+  look like a fault rather than a pause.
+  Background card writes now **wait while a browser is actually watching**, and
+  go through anyway after three minutes so a crash still reaches the card. That
+  makes it about six times rarer rather than gone; the underlying slowness is
+  the card-and-WiFi contention this hardware has always had.
+  *It was not the CW transcript added in v1.12.2, which is where I first looked
+  — the diagnostic log has been doing it every 30 seconds since long before.*
+
+**WSPR**
+
+- **Coming back to the WSPR page no longer looks like a dead page**
+  *(Gyula HA3HZ)*. A capture can only start on an even minute, so arriving
+  part-way through a cycle means up to about 110 seconds in which nothing moves,
+  with the previous cycle's picture still on screen. The waterfall now dims and
+  says **"waiting for the next cycle — N s"** until the new one begins.
+- **⛔ Band hopping no longer retunes the radio while you are in FT8**
+  *(Dirk DK7CVD)*. If you had a hop list set, it kept hopping after you left the
+  WSPR page and wrote WSPR frequencies to the radio mid-session. It now runs only
+  while WSPR is actually receiving — which still includes having the settings
+  drawer or a window open over the page.
+- **The PA voltage is properly restored when you leave WSPR** *(Dirk DK7CVD)*.
+  The guard reduces transmit voltage for WSPR's long key-down and puts it back
+  afterwards; the "put it back" was sent once and never checked, so if that one
+  command did not reach the radio it stayed reduced for the rest of the session
+  and everything else transmitted at about a watt. The radio now has to confirm
+  the voltage is back, and it is retried until it is.
+
+**Elsewhere**
+
+- **The settings drawer sits above the decoded-CW line** *(Michael K Johnson
+  KZ4LY)*, instead of the CW line drawing over the top of the drawer.
+- **The QSO log opens showing contacts** *(Gyula HA3HZ)*, rather than two counts
+  over an empty list. The button is a straight Today / All toggle.
+
+
+### Shipped in v1.12.4 — 2026-09-10
+
+**One bug, twelve releases old: tapping a spot moved the spectrum away from it.**
+
+- **Tap a spot after tuning away with the dial, and the spectrum and waterfall
+  jumped several kHz** while the spot line itself stayed put *(found and fixed
+  from the Waveshare port branch)*. The overlays were the half that worked — the
+  frequency axis, the spots lane, the VFO cursor, the passband tint and the RIT
+  marker all moved to the new window, while the FFT carried on extracting the old
+  one. The trace was displaced by exactly the distance you had dialled away
+  before the tap, which reads as the radio having tuned somewhere else — the
+  worst possible shape for it.
+
+  `still_view_follow_dial()` has five exits and four of them publish the new pan
+  to the FFT. The fifth — a jump whose passband still fits the current view, so
+  the display holds — set the state and returned without publishing. That is the
+  exit a spot tap normally takes.
+
+  ⚠ **Only reachable above ×1 zoom**, because at ×1 the view is the whole capture
+  window and there is no pan to leave unpublished. The still display is a
+  ×2-and-up feature and the fault also needs a jump whose passband still fits, so
+  it survived from v1.10.6 through v1.12.3 without anyone seeing it.
+
+  ⭐ **It was introduced by the fix for a different bug** — "a picked spot only
+  re-frames when it would not fit where it is" — which was correct and added a
+  new exit. The new exit was the one that did not pay. The rule now sits at the
+  code: every exit that moved the pan owes a `dsp_set_zoom()`.
+
+  Hardware-verified on the Tab5 and independently on a second board with
+  byte-identical code. Nothing else changed in this release.

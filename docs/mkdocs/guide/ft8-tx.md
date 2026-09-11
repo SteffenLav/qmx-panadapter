@@ -14,7 +14,7 @@ Both modes transmit via the same CAT interface; the difference is **slot length 
 | **Symbol duration** | 160 ms | 48 ms |
 | **QSO time** (full exchange) | ~90 sec (6 slots) | ~45 sec (6 slots) |
 | **Use case** | Weak signal, SOTA/POTA | Busy bands, contests |
-| **Preset picker** | Panadapter mode → Freq dropdown | FT8 mode → Preset picker |
+| **Preset picker** | Panadapter mode -> Freq dropdown | FT8 mode -> Preset picker |
 
 **Choose FT4 when:**
 - The band is crowded (faster exchanges, less QRM)
@@ -63,11 +63,11 @@ note: amber | Transmit sends this message once; Auto Pounce runs the whole excha
 ```
 
 - **Transmit** (green) — send this one message on the next correct slot
-- **Auto Pounce** (blue) — handle the entire exchange automatically (TX1 → wait for report → TX2 → wait for RR73 → TX3 73)
+- **Auto Pounce** (blue) — handle the entire exchange automatically (TX1 -> wait for report -> TX2 -> wait for RR73 -> TX3 73)
 - **▲ / ▼ Nudge** — move the target to the row above or below, without closing the modal and redoing the selection gesture
 - **Cancel** — abort
 
-**Transmit is intelligent (v1.3.0)** — it builds the correct *next* message from what that station last sent, exactly like a WSJT-X double-click: their CQ → your grid (or your report, with Skip TX1 on), their grid → your report, their report → `R`+your report, their `R`-report → `RR73`, their `RR73`/`73` → `73`. You can run a whole QSO one Transmit tap at a time — and sending the closing `RR73`/`73` **logs the QSO to ADIF** just like an automatic contact. Auto Pounce is offered on any first reply; once you're mid-exchange with a station, its rows offer Transmit only.
+**Transmit is intelligent (v1.3.0)** — it builds the correct *next* message from what that station last sent, exactly like a WSJT-X double-click: their CQ -> your grid (or your report, with Skip TX1 on), their grid -> your report, their report -> `R`+your report, their `R`-report -> `RR73`, their `RR73`/`73` -> `73`. You can run a whole QSO one Transmit tap at a time — and sending the closing `RR73`/`73` **logs the QSO to ADIF** just like an automatic contact. Auto Pounce is offered on any first reply; once you're mid-exchange with a station, its rows offer Transmit only.
 
 **A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
 
@@ -399,7 +399,7 @@ Every completed QSO is **automatically logged to ADIF** on the Tab5's internal s
 - **Duration** (QSO start to finish)
 - **Operator** (your callsign)
 
-Download the log via the web UI (**QSO Logs** menu → **ADIF download ↓**) or Settings → ADIF Log.
+Download the log via the web UI (**QSO Logs** menu -> **ADIF download ↓**) or Settings -> ADIF Log.
 
 ### 12. Upload to QRZ, eQSL, LoTW & Cloudlog
 
@@ -409,7 +409,7 @@ Via the web UI:
 2. Enter your API key (QRZ), username/password (eQSL), the guided certificate setup (LoTW), or your server address and API key (Cloudlog) when first prompted — credentials are saved for future sessions
 3. Click again to upload
 
-See [Web UI → LoTW Upload](web-ui.md#lotw-upload) for the LoTW certificate setup details.
+See [Web UI -> LoTW Upload](web-ui.md#lotw-upload) for the LoTW certificate setup details.
 
 #### Cloudlog and Wavelog
 

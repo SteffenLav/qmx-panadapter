@@ -123,10 +123,17 @@ static void heap_watchdog_task(void *arg)
             // here; largest_free_block walks the heap with interrupts off and
             // must NEVER go on this periodic path (that caused the FT4 cyan
             // flash), which is why only "free" is reported.
-            ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB)  dma free=%uB  psram free=%uKB  ring@%p[%s]",
+            /* #313: sock= is the LWIP socket headroom, CACHED so this 10 s
+               line costs no real probe of its own (sock_probe.h explains why
+               the uncached call must not go on a polled path). It is here so a
+               SOAK captures the trend - the wedge took 10 h to appear and the
+               only reading anyone had was after the fact. A steady figure that
+               walks down over hours is the leak; a steady one is not. */
+            ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB)  dma free=%uB  psram free=%uKB  sock=%d  ring@%p[%s]",
                      (unsigned)(i_free / 1024), (unsigned)(i_min / 1024),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-                     (unsigned)(p_free / 1024), (void *)s_ring_storage,
+                     (unsigned)(p_free / 1024), sock_probe_free_cached(6, 10000),
+                     (void *)s_ring_storage,
                      (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
         }
     }

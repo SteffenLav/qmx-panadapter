@@ -106,21 +106,81 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.10.6 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.12.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.10.6 — a release of things users found on the air.** WSPR no longer loses two
-receive cycles to every transmission, its TX button stops a burst at once, and leaving the
-mode gives the radio back the PA voltage it borrowed — which was quietly being left behind,
-so CW and FT8 ran at a quarter power with nothing on the Tab5 to say so. A picked spot is
-brought into view instead of landing at the screen edge, and the still display now holds
-completely still and then jumps, rather than being dragged along in between. A static IP
-that would lock you out of the web page is refused before it can, and a **Use DHCP** button
-on the Tab5 undoes one that already has. A microSD card inserted while the Tab5 is running
-is finally noticed.
+**New in v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
+other modes.** Writing the microSD card holds the spectrum stream, and on this
+hardware that write can take a very long time — measured at 3, 10, 15 and once
+29 seconds for four kilobytes, which is what made the web page look broken while
+the spot list carried on updating. Card writes now wait while a browser is
+actually watching, and go through anyway after three minutes so a crash still
+reaches the card. On **WSPR**, a band-hop list kept hopping after you left the
+page and wrote WSPR frequencies to the radio in the middle of an FT8 session, and
+the reduced transmit voltage WSPR sets for its long key-down was restored with a
+single unchecked command — so if that was lost, everything afterwards transmitted
+at about a watt. Both fixed. Returning to the WSPR page now says "waiting for the
+next cycle" instead of showing a frozen waterfall, the settings drawer sits above
+the decoded-CW line, and the QSO log opens showing contacts.
+
+**In v1.12.2 — the CW transcript reaches the microSD card at last, and WSPR stopped
+costing the receiver its own audio.** Switch the decoded-CW transcript on, work a session,
+pull the card, and `cw-decode.txt` held almost nothing: the code that writes it only ever
+ran in the few seconds after boot, before WiFi came up — and **v1.12.1 "fixed" that by
+adding a warning saying it was not happening.** It now writes every 30 seconds, a failed
+write no longer throws the characters away, and a restart no longer welds two sessions
+onto one line *(the fix is Uwe DL8UG's, sent as a patch)*. The card also stops giving up
+for the rest of the session after three failed writes. On **WSPR**, the decoder was
+running on the same processor core as the USB audio service and losing up to 1.4 % of the
+audio the radio had already sent — more than a whole symbol of drift across a
+transmission, and enough to stop a cycle decoding at all; it now runs on the other core.
+The waterfall shows three minutes, every cycle is labelled, and letters appear as each
+line decodes. The Tab5 wakes on the page it was left on, and the manual's notes and
+warnings render properly again in the printable guide and on the device.
+
+**In v1.12.1 — letters on the WSPR waterfall, and a Band button that no longer
+retunes your radio.** Every trace the decoder looks at is lettered A, B, C… left to right
+by tone, matched by a new first column in the decode list; a trace it could not read is
+marked `?`. On the WSPR page the top bar's Band control was sitting over the page's own
+band panel and winning the touch, so picking a band there wrote an FT8 frequency to the
+radio while WSPR carried on labelling spots with the old one. An FT8 reply can now make
+its own slot instead of waiting for the whole band to finish decoding, a band change
+during a transmission is held rather than lost, and the remote power-switch modification
+is documented in the manual with a schematic, by Randy N4OPI.
+
+**In v1.12.0 — CW profiles.** The QMX holds one CW centre and one set of filter
+widths, and changing them means walking two separate menus on the radio. Four profiles
+now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths
+to offer with it — edited on the web settings page and applied from there or from a
+picker in the settings drawer. Applying one writes the radio's own configuration, so
+every write is read back and retried rather than assumed. The bandwidth list also asks
+the radio which filters it actually has, instead of offering all eight regardless.
+
+**A CAT link could die and go on reporting itself healthy.** One transient USB error
+could stop the Tab5 hearing the radio for good while the poll kept saying the link was
+fine — so the screen asked you to restart a radio that was working perfectly. Caught in
+a soak at four hours fifty-six minutes, with the link then dead for the following four.
+A watchdog now forces a reconnect after five seconds of silence.
+
+**WSPR** gains a DT column on both screens, distances that follow the km/miles setting
+(they were always kilometres), a Clear button for the decode list, one capture countdown
+instead of two, hover-a-trace-to-name-the-station on the waterfall, and a band picker you
+drag through rather than a dropdown that commits wherever your finger lifts.
+
+**Tune snap can be switched off** — Off / 250 Hz / 500 Hz / 1 kHz, defaulting to the
+present behaviour. And on the web page, the spectrum above ×1 zoom had no frequency scale
+at all, which is why clicking a signal tuned to the wrong place, the passband sat
+elsewhere than on the Tab5, and the band-plan slider came apart as it was dragged. Every
+field in a QSO can now be corrected, not four.
+
+**In v1.11.1 — decoded CW along the bottom of the panadapter.** In CW or CW-R the
+Morse the radio is decoding runs along the bottom of the waterfall, with an estimate
+of the sending speed beside it, on the Tab5 and in the browser alike. The QMX decodes
+it itself and hands the text over the CAT link, so it costs the panadapter no
+processing and works on QMX firmware 1.03 and later.
 
 **In v1.10.5 — the spectrum holds still while you tune across it.** The panadapter now
 behaves the way a Flex does: the spectrum and waterfall stay where they are and the VFO
@@ -155,7 +215,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.10.6.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.4.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

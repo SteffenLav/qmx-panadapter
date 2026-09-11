@@ -12,7 +12,45 @@
 // #define LOG_LEVEL LOG_DEBUG
 // #include "debug.h"
 
-// Stage 1 diagnostic logging
+/* ⛔⛔ STAGE-1 DIAGNOSTIC LOGGING - OFF ON THE DEVICE, BECAUSE IT ABORTED IT.
+ *
+ * This is offline weak-signal R&D instrumentation. It was built to write a CSV
+ * while running the decoder over WAV files on a PC, and CLAUDE.md recorded that
+ * work as "offline test-harness R&D only - NOT wired into device firmware".
+ * ⚠ THAT WAS WRONG. decode.c IS the firmware's decoder, so this shipped, and
+ * diag_log_candidate() runs from THREE places inside ftx_decode_candidate() -
+ * once per candidate, up to 140 of them per FT8 slot, every slot, for ever.
+ *
+ * fopen("stage1_diag.csv") is a relative path on a device with no working
+ * directory, so it never succeeded - which is worse rather than better, because
+ * g_diag_log stayed NULL and every single candidate tried again.
+ *
+ * ⭐ AND IT KILLED THE BENCH. Serial-captured 2026-09-02, twice in half an hour:
+ *
+ *     abort() was called at PC ... on core 1
+ *     task : ft8_dec   core 1   after 93.480 s of uptime
+ *     lock_init_generic (newlib locks.c:65)
+ *       <- __sfp (findfp.c:203)  <- _fopen_r  <- diag_log_open  <- diag_log_candidate
+ *
+ * newlib allocates a FILE and CREATES A LOCK before it can even fail to open the
+ * path, and lock_init_generic aborts outright when the mutex cannot be made. The
+ * heap watchdog either side of the crash read `int free=10KB (min=0KB lblk=2KB
+ * LOW!)`, so on this board that allocation is a coin toss - and this code was
+ * tossing it hundreds of times a slot to write a file that could never exist.
+ *
+ * The first two attempts at these crashes blamed newly-added firmware, on the
+ * strength of "the task that crashed is the one I just touched". Wrong both
+ * times. What actually found it was a serial capture that was running BEFORE
+ * the crash, plus addr2line on the return addresses in the register dump.
+ *
+ * Compiled out by default. Define FT8_STAGE1_DIAG=1 in a host harness build to
+ * get it back; do not define it for the device. */
+#ifndef FT8_STAGE1_DIAG
+#define FT8_STAGE1_DIAG 0
+#endif
+
+#if FT8_STAGE1_DIAG
+
 static FILE* g_diag_log = NULL;
 static char g_current_filename[256] = "unknown";
 
@@ -60,6 +98,23 @@ void diag_log_close(void) {
         g_diag_log = NULL;
     }
 }
+
+
+#else  /* !FT8_STAGE1_DIAG - the device build */
+
+void diag_set_filename(const char* filename) { (void)filename; }
+void diag_log_close(void) { }
+
+static inline void diag_log_candidate(int cand_idx, float snr_db, float freq_offset,
+                                      int single_errors, int fallback_trigg,
+                                      int multi_errors, int final_result,
+                                      const char* message)
+{
+    (void)cand_idx; (void)snr_db; (void)freq_offset; (void)single_errors;
+    (void)fallback_trigg; (void)multi_errors; (void)final_result; (void)message;
+}
+
+#endif /* FT8_STAGE1_DIAG */
 
 // Lookup table for y = 10*log10(1 + 10^(x/10)), where
 //   y - increase in signal level dB when adding a weaker independent signal

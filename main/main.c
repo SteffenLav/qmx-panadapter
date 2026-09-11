@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
+#include "util/format_freq.h"   // #302
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "ft8_test.h"
@@ -14,7 +15,9 @@
 #include "status.h"
 #include "battery.h"
 #include "bsp_info.h"
+#include "gpio_relay.h"
 #include "cat.h"
+#include "cw_decode.h"
 #include "audio.h"
 #include "cw_audio.h"
 #include "dsp.h"
@@ -46,6 +49,10 @@
 #include "cw_qso.h"
 #include "net/pskreporter.h"
 #include "net/spots.h"
+#include "net/qrz_coords.h"
+#include "net/pskr_self.h"
+#include "net/wspr_self.h"
+#include "net/band_conditions.h"
 #include "net/psk_rx.h"
 #include "bt_hid_mouse.h"
 #include "net/rbn.h"
@@ -213,8 +220,34 @@ void app_main(void)
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());
 
+    /* ⛔ THE DATA LAYERS COME BEFORE THE UI, so the saved page can be restored
+     * before the screen is revealed. These are mutexes and PSRAM buffers -
+     * nothing here touches audio, dsp, cat or the network - and they used to
+     * sit ~180 lines further down purely by accident of when they were added.
+     * Leaving them there is what forced the mode restore to happen late. */
+    ft8_screen_init();
+    ft8_status_init();
+    ft8_tx_init();
+    wspr_tx_init();
+    wspr_spots_init();
+
     ui_init(disp);
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
+
+    /* ⭐ RESTORE THE PAGE BEFORE THE BACKLIGHT, so the Tab5 is ON the page it
+     * was left on from the first frame anybody sees, rather than switching to
+     * it once the rest of boot has crawled past. The engines follow later, in
+     * ui_apply_saved_mode_start(), where audio/dsp/cat exist.
+     *
+     * ⛔ Under display_lock: this moves LVGL widgets and shows whole views, and
+     * we are the main task, not taskLVGL. */
+    if (display_lock(2000)) {
+        ui_apply_saved_mode_view();
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - the saved page will not be restored");
+    }
+
     display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // === BENCH HOOK - MUST be 0 in shipping builds =======================
@@ -297,6 +330,17 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
+    // Before cat_init(): the poll task starts inside it and can deliver a TB
+    // response immediately, and cw_decode_feed() drops everything until the
+    // ring exists.
+    /* #302: the stored frequency punctuation, applied before any UI is built.
+       Every caller reads g_freq_style at format time, so this is the only
+       place it has to be set. */
+    {
+        qmx_settings_t fs; settings_load_all(&fs);
+        g_freq_style = (fs.freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+    }
+    cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
@@ -373,6 +417,7 @@ void app_main(void)
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
+    gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
@@ -381,11 +426,10 @@ void app_main(void)
     // Step 4b v0.10: boot directly into FT8 mode so the existing
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
-    ft8_screen_init();
-    ft8_status_init();
-    ft8_tx_init();
-    wspr_tx_init();
-    wspr_spots_init();
+    /* ⬆ ft8_screen_init / ft8_status_init / ft8_tx_init / wspr_tx_init /
+     * wspr_spots_init MOVED ABOVE ui_init() - see the block there. They are
+     * mutexes and buffers with no dependency on anything between here and
+     * there, and the mode restore needs them before it can show a page. */
     wsprnet_init();          /* OFF unless the operator enabled it */
     ft8_qso_init();
     ft8_pileup_init();
@@ -395,16 +439,50 @@ void app_main(void)
     psk_rx_selftest();     // attribute names still match the collector's output
     psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
     bt_hid_mouse_init();   // BLE mouse over the C6 (opt-in; Stage 1 = scan only)
+    qrz_coords_start();    // real-station lookup for RBN self-spot skimmers on the spot map (opt-in via credentials)
+    pskr_self_init();      // live PSK Reporter self-spotting (MQTT) for the spot map's Digi side
+    wspr_self_init();      // wsprnet.org self-spotting query for the spot map's WSPR side
+    band_conditions_start(); // HF band conditions for the spot map's CONDITIONS tab
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
+    /* ⛔ RESTORE THE MODE BEFORE THE SELF-TESTS, NOT AFTER THEM.
+     *
+     * It used to sit below the four calls that follow, and two of those
+     * synthesise GFSK audio and run it through the real decoder. That is a few
+     * seconds on an idle board and far longer once the radio is streaming and
+     * the FT8/WSPR tasks are competing for core 1 - measured across three
+     * boots on 2026-09-09 at 7.9 s, 46.3 s and 91.7 s.
+     *
+     * The operator is using the Tab5 long before that, so the restore was
+     * arriving into a UI somebody was already navigating: on one of those boots
+     * it read WSPR from NVS, set the mode, and 2 ms later the swipe handler on
+     * taskLVGL saw WSPR and cycled it to Panadapter - which wrote Panadapter to
+     * NVS. The screen showed WSPR, the stored value said Panadapter, and every
+     * boot after that came up on the panadapter. Reported as "why is the Tab5
+     * always waking up in Panadapter Mode".
+     *
+     * Nothing below is a dependency: these are verification, not
+     * initialisation. What the restore actually needs is the FT8/spots
+     * subsystems above, which have all run. */
+    // Restore last UI mode (Panadapter/FT8/WSPR), persisted across reboots.
+    // ⛔ Under display_lock: it moves LVGL widgets and shows whole views, and
+    // this is the main task, not taskLVGL.
+    /* The page itself went up before the backlight; this starts what needs
+     * audio, dsp and cat. Late is fine - the page is already correct and fills
+     * as data arrives. */
+    ui_apply_saved_mode_start();
+
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
     ft8_arrl_fd_e2e_selftest();
     cw_qso_hint_selftest();   // CW copilot classifier (no radio needed)
-    // Restore last UI mode (Panadapter/FT8), persisted across reboots.
-    ui_apply_saved_mode();
+    /* ⛔ NOT ui_apply_saved_mode() - feat/cw-page called that here, but main
+     * has since SPLIT it into ui_apply_saved_mode_view() (before the backlight
+     * fades in, above) and ui_apply_saved_mode_start() (already called above,
+     * where audio/dsp/cat exist). Restoring the single call would not even
+     * link. */
 
     // Background firmware-update poller for the docs Reader page. Self-throttles
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is

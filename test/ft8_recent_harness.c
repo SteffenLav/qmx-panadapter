@@ -1,6 +1,6 @@
 // Host harness for main/ft8_recent.c - links the REAL functions, not a copy.
 //
-//   gcc -std=c11 -Wall -Wextra -I../main -o ft8_recent.exe
+//   gcc -std=c11 -Wall -Wextra -I../main -o ft8_recent.exe \
 //       ft8_recent_harness.c ../main/ft8_recent.c
 //
 // Exists because the on-device route to this logic is unusable: exercising it

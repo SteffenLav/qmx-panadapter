@@ -17,6 +17,11 @@
 *.py       text eol=lf
 *.json     text eol=lf
 *.yml      text eol=lf
+# No extension, so no rule above catches these - and idf.py regenerates
+# sdkconfig with CRLF on Windows, which showed up once as a 3,489-line
+# whitespace-only diff in a merge.
+sdkconfig  text eol=lf
+sdkconfig.defaults text eol=lf
 
 # Windows batch/PowerShell scripts use CRLF.
 *.bat      text eol=crlf

@@ -16,7 +16,7 @@ GPS and SNTP are the two accurate sources and are used whenever present; if you'
 
 If you're operating **without WiFi** (POTA, portable, SOTA):
 
-1. **Set the Tab5 RTC before you leave home** (settings → Time)
+1. **Set the Tab5 RTC before you leave home** (settings -> Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
 4. **Turn the QMX on whenever you like — you do not have to do anything about its
@@ -39,7 +39,7 @@ No internet needed — FT8 timing works offline.
     If you have no accurate time at all — the RTC was never set, or it has been
     unpowered for more than a day or two — then a QMX reading *is* used, because
     something is better than nothing. Failing that, set the clock by hand
-    (**FT8 → Options → Sync Time**), which also accepts seconds.
+    (**FT8 -> Options -> Sync Time**), which also accepts seconds.
 
 ### 3. WiFi + SNTP
 
@@ -170,9 +170,9 @@ FT8 operates on **15-second slot boundaries** aligned to UTC. The panadapter:
 
 This alignment is **automatic** — you don't configure slots. But **time accuracy is critical**:
 
-- ±500 ms error → can miss decodes or transmit off-slot
-- ±1 s error → very few decodes, transmit often off-time
-- ±2 s error or worse → FT8 doesn't work
+- ±500 ms error -> can miss decodes or transmit off-slot
+- ±1 s error -> very few decodes, transmit often off-time
+- ±2 s error or worse -> FT8 doesn't work
 
 ### 9. Time Sources Summary
 

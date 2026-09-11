@@ -58,7 +58,18 @@ void ft8_greylist_note_timeout(const char *call)
     if (!call || !call[0]) return;
     ensure_lock();
     if (!s_lock) return;   // create failed - a missed grey-list note, not a reboot
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int i = find_locked(call);
     if (i < 0) {
         if (s_count < GREY_MAX) {
@@ -73,7 +84,7 @@ void ft8_greylist_note_timeout(const char *call)
     }
     if (s_tbl[i].fails < 255) s_tbl[i].fails++;
     uint8_t fails = s_tbl[i].fails;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "%s pounce timeout #%u%s", call, (unsigned)fails,
              fails >= GREY_FAIL_LIMIT ? " - grey-listed" : "");
 }
@@ -81,32 +92,32 @@ void ft8_greylist_note_timeout(const char *call)
 bool ft8_greylist_contains(const char *call)
 {
     if (!call || !call[0] || !s_lock) return false;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int i = find_locked(call);
     bool listed = (i >= 0 && s_tbl[i].fails >= GREY_FAIL_LIMIT);
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return listed;
 }
 
 void ft8_greylist_clear(const char *call)
 {
     if (!call || !call[0] || !s_lock) return;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int i = find_locked(call);
     if (i >= 0) {
         memmove(&s_tbl[i], &s_tbl[i + 1], sizeof(s_tbl[0]) * (s_count - i - 1));
         s_count--;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "%s cleared from grey-list", call);
 }
 
 void ft8_greylist_clear_all(void)
 {
     if (!s_lock) return;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "grey-list cleared");
 }
 
@@ -126,6 +137,6 @@ int ft8_greylist_get_all(char out[][12], int max)
             n++;
         }
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return n;
 }

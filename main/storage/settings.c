@@ -1,4 +1,7 @@
 #include "settings.h"
+#include "util/format_freq.h"   // #302: g_freq_style, applied on set
+#include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
+#include "ui.h"                 // CW_CENTER_* - the grid the radio accepts (#359)
 #include "sd_archive.h"
 
 #include <string.h>
@@ -50,6 +53,8 @@ static const char *TAG = "settings";
 #define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
+#define KEY_CW_PROF     "cw_prof"   /* CW profiles blob (#359) */
+#define KEY_TUNE_SNAP   "tune_snap"  /* tap-to-tune grid, Hz (#347) */
 #define KEY_KBD_BIND   "kbd_bind"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
@@ -63,6 +68,8 @@ static const char *TAG = "settings";
 #define KEY_QRZ_UPLOADED "qrz_upl_n"
 #define KEY_EQSL_USER    "eqsl_user"
 #define KEY_EQSL_PSWD    "eqsl_pswd"
+#define KEY_QRZ_LU_USER  "qrz_lu_user"
+#define KEY_QRZ_LU_PASS  "qrz_lu_pass"
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
 #define KEY_CL_URL       "cl_url"
 #define KEY_CL_KEY       "cl_key"
@@ -83,6 +90,8 @@ static const char *TAG = "settings";
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_FREQ_SEP       "freq_sep"
+#define KEY_CW_DECODE       "cw_dec_en"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
 #define KEY_STILL_NOTICE   "still_note"
@@ -96,6 +105,7 @@ static const char *TAG = "settings";
 #define KEY_SPOTS_MODE_FLT "spot_modeflt"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
+#define KEY_SPOTMAP_EN     "spotmap_en"
 #define KEY_SOTA_EN        "sota_en"
 #define KEY_OTA_AUTODL     "ota_autodl"
 #define KEY_DRAWER_EXPERT  "drw_expert"
@@ -121,6 +131,9 @@ static const char *TAG = "settings";
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
 #define KEY_CHARGE_LIM_EN  "chg_lim_en"
 #define KEY_CHARGE_LIM_PCT "chg_lim_pct"
+#define KEY_RELAY_PIN      "relay_pin"
+#define KEY_RELAY_LEVEL    "relay_lvl"
+#define KEY_RELAY_MS       "relay_ms"
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
@@ -159,6 +172,9 @@ static const char *TAG = "settings";
 #define DEF_WF_WINDOW     (0)
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
+#define DEF_RELAY_PIN      (53)
+#define DEF_RELAY_LEVEL    (true)   /* active HIGH */
+#define DEF_RELAY_MS       (1000)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -272,6 +288,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_DISP_FLIP     38
 #define DIRTY_BP_REGION     40
 #define DIRTY_DISTANCE_MILES 41
+#define DIRTY_FREQ_SEP       113   /* #302 */
 #define DIRTY_RIT_PILL_SHOW  88
 #define DIRTY_SPUR_SUP       89
 #define DIRTY_QMX_TPUSH      90
@@ -352,6 +369,13 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_STILL_VIEW    108   /* #298 spectrum holds still, VFO moves */
 #define DIRTY_STILL_NOTICE  109   /* the one-time notice has been shown */
 #define DIRTY_WIFI_STATIC   110   /* static IP/mask/gw/DNS - one set, one bit */
+#define DIRTY_CW_DECODE     111   /* decoded-CW line on the panadapter */
+#define DIRTY_TUNE_SNAP     115   /* tap-to-tune grid (#347) */
+#define DIRTY_CW_PROFILES   114   /* CW profiles blob (#359) - 113 is DIRTY_FREQ_SEP */
+#define DIRTY_GPIO_RELAY    112   /* relay pin + level + duration, always set together */
+#define DIRTY_QRZ_LU_USER   116   /* QRZ Callbook (XML) lookup username, spot map */
+#define DIRTY_QRZ_LU_PASS   117   /* QRZ Callbook (XML) lookup password, spot map */
+#define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -371,16 +395,16 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
-    DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
+    DIRTY_QRZ_KEY, DIRTY_QRZ_LU_USER, DIRTY_QRZ_LU_PASS, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
     DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
-    DIRTY_CHARGE_LIM_PCT,
+    DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_CW_MSG0, DIRTY_CW_MSG0 + 1, DIRTY_CW_MSG0 + 2, DIRTY_CW_MSG0 + 3,
     DIRTY_CW_MSG0 + 4, DIRTY_CW_MSG5, DIRTY_CW_PARK,
-    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_SPOTMAP_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
@@ -522,6 +546,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap->cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap->onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap->ft8_filters, sizeof(snap->ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_CW_PROFILES))  nvs_set_blob(s_nvs, KEY_CW_PROF, s_pending.cw_profile, sizeof(s_pending.cw_profile));
+        if (dirty_test(&dirty_local, DIRTY_TUNE_SNAP))    nvs_set_u16(s_nvs, KEY_TUNE_SNAP, s_pending.tune_snap_hz);
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap->kbd_bindings, sizeof(snap->kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap->wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap->qmx_gps      ? 1 : 0);
@@ -537,6 +563,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_QRZ_UPLOADED)) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap->qrz_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap->eqsl_user);
         if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap->eqsl_pswd);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_LU_USER))   nvs_set_str(s_nvs, KEY_QRZ_LU_USER, snap->qrz_lookup_user);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_LU_PASS))   nvs_set_str(s_nvs, KEY_QRZ_LU_PASS, snap->qrz_lookup_pass);
         if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap->eqsl_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap->cloudlog_url);
         if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap->cloudlog_key);
@@ -558,6 +586,8 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap->bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap->distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap->freq_sep_style);
+        if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap->cw_decode_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap->rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap->still_view ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap->still_notice_done ? 1 : 0);
@@ -571,6 +601,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap->spots_mode_filter ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap->spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap->rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTMAP_EN))    nvs_set_u8(s_nvs, KEY_SPOTMAP_EN,    snap->spotmap_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap->sota_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap->ota_autodl ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap->drawer_expert ? 1 : 0);
@@ -613,6 +644,11 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap->ft8_op_mode);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap->charge_limit_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap->charge_limit_pct);
+        if (dirty_test(&dirty_local, DIRTY_GPIO_RELAY)) {
+            nvs_set_u8 (s_nvs, KEY_RELAY_PIN,   snap->gpio_relay_pin);
+            nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap->gpio_relay_level ? 1 : 0);
+            nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap->gpio_relay_ms);
+        }
         if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap->resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap->resmon_dx);
@@ -691,7 +727,14 @@ void settings_init(void)
     load_from_nvs(&s_pending);
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
-    s_flush_task = psram_task_create(flush_task, "settings_flush", 3072, NULL, 3, tskNO_AFFINITY);
+    /* 3072 -> 4608: measured 2026-09-06 with only 232 BYTES of headroom left
+       (/api/cmd {"action":"stacks"}), which is one deep call from writing past
+       the end - and with CANARY-only checking that write would corrupt a
+       neighbour silently rather than fault here. This task already caused a
+       crash loop once by taking settings_load_all() on its stack, and CLAUDE.md
+       records its bound as 3064 B from that crash dump. The stack is in PSRAM
+       (psram_task_create), so the extra 1.5 KB costs no internal RAM. */
+    s_flush_task = psram_task_create(flush_task, "settings_flush", 4608, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "ready");
 }
 
@@ -713,6 +756,13 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
+    /* 500 Hz is today's SSB/digital grid, so an existing unit's behaviour does
+       not change when this setting appears. Must be set here, not left zeroed -
+       a zeroed default would silently turn snapping OFF for everyone (#347). */
+    out->tune_snap_hz = 500;
+    /* Decoded CW is ON by default - it is the point of the feature - so like
+       rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
+    out->cw_decode_en = true;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
      * can - see the notice in ui.c. still_notice_done stays false so an
@@ -756,6 +806,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->passband_width_hz = 0;
     out->qrz_api_key[0] = '\0';
     out->qrz_uploaded_n = 0;
+    out->qrz_lookup_user[0] = '\0';
+    out->qrz_lookup_pass[0] = '\0';
     out->eqsl_user[0] = '\0';
     out->eqsl_pswd[0] = '\0';
     out->eqsl_uploaded_n = 0;
@@ -787,6 +839,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // nothing until WiFi is up.
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
+    out->spotmap_en = false; // opt-in: a standing MQTT session plus three pollers, see settings.h
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
     // #239: ON, and the repeat runs are in. Under the exact failing recipe -
     // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
@@ -836,6 +889,13 @@ static void load_from_nvs(qmx_settings_t *out)
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    out->gpio_relay_pin   = DEF_RELAY_PIN;
+    out->gpio_relay_level = DEF_RELAY_LEVEL;
+    out->gpio_relay_ms    = DEF_RELAY_MS;
+    out->freq_sep_style   = 0;   /* #302: the punctuation the Tab5 has always
+                                    shown - a stored preference is the only
+                                    thing that changes it, so nobody sees a
+                                    different readout by upgrading. */
     out->resmon_en = false;
     out->resmon_dx = 0;
     out->resmon_dy = 0;
@@ -929,6 +989,12 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->qrz_api_key);
     nvs_get_str(s_nvs, KEY_QRZ_KEY, out->qrz_api_key, &sz);
     nvs_get_u32(s_nvs, KEY_QRZ_UPLOADED, &out->qrz_uploaded_n);
+    out->qrz_lookup_user[0] = '\0';
+    sz = sizeof(out->qrz_lookup_user);
+    nvs_get_str(s_nvs, KEY_QRZ_LU_USER, out->qrz_lookup_user, &sz);
+    out->qrz_lookup_pass[0] = '\0';
+    sz = sizeof(out->qrz_lookup_pass);
+    nvs_get_str(s_nvs, KEY_QRZ_LU_PASS, out->qrz_lookup_pass, &sz);
     out->eqsl_user[0] = '\0';
     sz = sizeof(out->eqsl_user);
     nvs_get_str(s_nvs, KEY_EQSL_USER, out->eqsl_user, &sz);
@@ -968,6 +1034,10 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    /* Anything other than the two known styles falls back to the historical
+       one rather than printing something nobody has seen. */
+    if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
+    if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
@@ -981,6 +1051,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTMAP_EN, &u8v) == ESP_OK) out->spotmap_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
@@ -990,6 +1061,9 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+    nvs_get_u16(s_nvs, KEY_TUNE_SNAP, &out->tune_snap_hz);
+    { size_t psz = sizeof(out->cw_profile);
+      nvs_get_blob(s_nvs, KEY_CW_PROF, out->cw_profile, &psz); }
     sz = sizeof(out->kbd_bindings);
     nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
     if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
@@ -1035,6 +1109,18 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
     if (out->charge_limit_pct < 50 || out->charge_limit_pct > 100) out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    {
+        uint8_t rp = out->gpio_relay_pin, rl = out->gpio_relay_level ? 1 : 0;
+        nvs_get_u8(s_nvs, KEY_RELAY_PIN, &rp);
+        nvs_get_u8(s_nvs, KEY_RELAY_LEVEL, &rl);
+        nvs_get_u16(s_nvs, KEY_RELAY_MS, &out->gpio_relay_ms);
+        // gpio_relay.c whitelists 53/54 and would refuse anything else at
+        // pulse time, so a stored value outside it could never fire - keep
+        // the form honest by falling back to the default instead.
+        out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
+        out->gpio_relay_level = (rl != 0);
+        if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+    }
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
     nvs_get_i16(s_nvs, KEY_RESMON_DY, &out->resmon_dy);
@@ -1060,6 +1146,31 @@ static void load_from_nvs(qmx_settings_t *out)
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
 }
 
+/* ⛔ A RUNTIME STACK GUARD WAS TRIED HERE AND REMOVED. Do not re-add it.
+ *
+ * The idea was sound - callers keep putting this multi-hundred-byte struct on
+ * a task that has no room for it, and the rule in CLAUDE.md only ever gets
+ * consulted AFTER the crash. So a check was added here to name the offending
+ * task in the log.
+ *
+ * It made things worse, twice, in one session (2026-09-06):
+ *   1. It called pxTaskGetStackStart()/pcTaskGetName() before the scheduler
+ *      was running - settings_load_all() runs during early boot - and put the
+ *      device into a BOOT LOOP.
+ *   2. Fixed that, and the check's own frame (plus the ESP_LOGE argument
+ *      marshalling when it fires) then overflowed `dxcluster`, a task that was
+ *      already close to its limit. It crashed precisely the tasks it existed
+ *      to protect.
+ *
+ * The lesson is about WHERE the check belongs, not whether to check: anything
+ * on this path costs stack in every caller, and the callers at risk are by
+ * definition the ones with none to spare. A check for this bug class must cost
+ * ZERO runtime stack - i.e. a build-time grep, or the count-don't-log pattern
+ * the USB patches use (util/usb_patch_counters.c) reported from a task known
+ * to be roomy. Not here.
+ *
+ * The narrow accessors are the real fix and they stay: settings_get_upload_cursors(),
+ * settings_get_spots_lane(), settings_get_wifi_static(), settings_wifi_known_count(). */
 void settings_load_all(qmx_settings_t *out)
 {
     if (!out) return;
@@ -1543,6 +1654,34 @@ void settings_set_qrz_uploaded_n(uint32_t n)
     mark_dirty(DIRTY_QRZ_UPLOADED);
 }
 
+void settings_set_qrz_lookup_user(const char *user)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (user) {
+        strncpy(s_pending.qrz_lookup_user, user, sizeof(s_pending.qrz_lookup_user) - 1);
+        s_pending.qrz_lookup_user[sizeof(s_pending.qrz_lookup_user) - 1] = '\0';
+    } else {
+        s_pending.qrz_lookup_user[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_LU_USER);
+}
+
+void settings_set_qrz_lookup_pass(const char *pass)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pass) {
+        strncpy(s_pending.qrz_lookup_pass, pass, sizeof(s_pending.qrz_lookup_pass) - 1);
+        s_pending.qrz_lookup_pass[sizeof(s_pending.qrz_lookup_pass) - 1] = '\0';
+    } else {
+        s_pending.qrz_lookup_pass[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_LU_PASS);
+}
+
 void settings_set_eqsl_user(const char *user)
 {
     if (!s_ready) return;
@@ -1851,6 +1990,52 @@ int16_t settings_get_cw_tx_offset_hz(void)
     return v;
 }
 
+/* ---- WSPR transmit, narrowly ----------------------------------------------
+ * Two bytes for the callers that need to re-roll the transmit schedule, so
+ * neither of them has to put a whole qmx_settings_t on its stack. Both run on
+ * tasks that cannot afford one - taskLVGL and httpd - and this board has
+ * boot-looped four times on exactly that mistake. Same reason
+ * settings_get_cw_tx_offset_hz() above exists. */
+bool settings_get_wspr_tx_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.wspr_tx_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+// Narrow on purpose: the drawer callback and the feed tasks that read this are
+// on stacks that cannot afford a whole qmx_settings_t local - see CLAUDE.md's
+// "Task stacks on this board are TINY", where that mistake has landed four
+// times, three of them from a settings_load_all() that did not look big.
+bool settings_get_spotmap_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.spotmap_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint8_t settings_get_wspr_duty_pct(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.wspr_duty_pct;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint16_t settings_get_wspr_pa_saved_x10(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.wspr_pa_saved_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 /* ⛔ THIS EXISTS BECAUSE ITS CALLERS RUN ON `sys_evt`, WHOSE STACK IS 2808 B.
  *
  * The static-IP code is driven from the WiFi and IP event handlers, and the
@@ -1888,6 +2073,40 @@ void settings_get_bandplan(uint8_t *region_out, char grid_out[8])
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (region_out) *region_out = s_pending.bandplan_region;
     if (grid_out)   memcpy(grid_out, s_pending.my_grid, sizeof(s_pending.my_grid));
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_get_qrz_lookup_creds(char user[40], char pass[40])
+{
+    if (user) user[0] = '\0';
+    if (pass) pass[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (user) memcpy(user, s_pending.qrz_lookup_user, sizeof(s_pending.qrz_lookup_user));
+    if (pass) memcpy(pass, s_pending.qrz_lookup_pass, sizeof(s_pending.qrz_lookup_pass));
+    xSemaphoreGive(s_mutex);
+}
+
+/* See the header: small-stack code takes the field, not the struct. */
+uint32_t settings_get_last_unix_time(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t v = s_pending.last_unix_time;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out)
+{
+    if (ssid) ssid[0] = 0;
+    if (pass) pass[0] = 0;
+    if (enabled_out) *enabled_out = false;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (ssid) { strncpy(ssid, s_pending.wifi_ssid, 32); ssid[32] = 0; }
+    if (pass) { strncpy(pass, s_pending.wifi_pass, 64); pass[64] = 0; }
+    if (enabled_out) *enabled_out = s_pending.wifi_enabled;
     xSemaphoreGive(s_mutex);
 }
 
@@ -1938,6 +2157,40 @@ void settings_set_spur_mode(uint8_t v)
     s_pending.spur_mode = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SPUR_SUP);
+}
+
+bool settings_get_cw_decode_en(void)
+{
+    if (!s_ready || !s_mutex) return true;   // default until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cw_decode_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_cw_decode_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_decode_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_decode_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_DECODE);
+}
+
+void settings_set_freq_sep_style(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v > 1) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.freq_sep_style == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.freq_sep_style = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FREQ_SEP);
+    /* Applied immediately: every caller reads g_freq_style at format time, so
+       the next repaint is already in the new style - no reboot, and nothing
+       to keep in step. */
+    g_freq_style = (v == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
 }
 
 void settings_set_distance_in_miles(bool v)
@@ -1998,6 +2251,16 @@ void settings_set_rbn_en(bool v)
     s_pending.rbn_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RBN_EN);
+}
+
+void settings_set_spotmap_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spotmap_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spotmap_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTMAP_EN);
 }
 
 void settings_set_sota_en(bool v)
@@ -2347,6 +2610,145 @@ void settings_set_charge_limit_pct(uint8_t pct)
     s_pending.charge_limit_pct = pct;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CHARGE_LIM_PCT);
+}
+
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw)
+{
+    if (qrz)  *qrz  = 0;
+    if (eqsl) *eqsl = 0;
+    if (lotw) *lotw = 0;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (qrz)  *qrz  = s_pending.qrz_uploaded_n;
+    if (eqsl) *eqsl = s_pending.eqsl_uploaded_n;
+    if (lotw) *lotw = s_pending.lotw_uploaded_n;
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
+                             char *grid_out, size_t grid_sz)
+{
+    if (region)      *region      = 0;
+    if (mode_filter) *mode_filter = false;
+    if (grid_out && grid_sz)      grid_out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (region)      *region      = s_pending.bandplan_region;
+    if (mode_filter) *mode_filter = s_pending.spots_mode_filter;
+    if (grid_out && grid_sz)
+        snprintf(grid_out, grid_sz, "%s", s_pending.my_grid);
+    xSemaphoreGive(s_mutex);
+}
+
+bool settings_get_distance_in_miles(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.distance_in_miles;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint16_t settings_get_tune_snap_hz(void)
+{
+    if (!s_ready) return 500;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.tune_snap_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_tune_snap_hz(uint16_t hz)
+{
+    if (!s_ready) return;
+    /* Only the offered values, so a bad import cannot leave a grid nothing in
+       the UI can express or undo. 0 is legal and means off. */
+    if (hz != 0 && hz != 250 && hz != 500 && hz != 1000) hz = 500;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.tune_snap_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TUNE_SNAP);
+}
+
+bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
+                             uint16_t *centre_hz, uint8_t *mask)
+{
+    if (!s_ready || idx < 0 || idx >= CW_PROFILE_COUNT) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t c = s_pending.cw_profile[idx].centre_hz;
+    if (c) {
+        if (name && name_sz) snprintf(name, name_sz, "%s", s_pending.cw_profile[idx].name);
+        if (centre_hz) *centre_hz = c;
+        if (mask)      *mask      = s_pending.cw_profile[idx].mask;
+    }
+    xSemaphoreGive(s_mutex);
+    return c != 0;
+}
+
+void settings_set_cw_profile(int idx, const char *name,
+                             uint16_t centre_hz, uint8_t mask)
+{
+    if (!s_ready || idx < 0 || idx >= CW_PROFILE_COUNT) return;
+    /* centre_hz 0 clears the slot. Anything else is clamped to the CW centre
+     * grid the radio actually accepts - see ui.h; a profile that cannot be
+     * applied is worse than no profile. */
+    if (centre_hz) {
+        if (centre_hz < CW_CENTER_MIN_HZ) centre_hz = CW_CENTER_MIN_HZ;
+        if (centre_hz > CW_CENTER_MAX_HZ) centre_hz = CW_CENTER_MAX_HZ;
+        centre_hz = (uint16_t)(((centre_hz + CW_CENTER_STEP_HZ / 2) / CW_CENTER_STEP_HZ)
+                               * CW_CENTER_STEP_HZ);
+    }
+    /* Truncated HERE, not in the form: the length that matters is what the Tab5
+     * button can show, and a config import must obey it as well. */
+    char nm[CW_PROFILE_NAME_MAX + 1];
+    snprintf(nm, sizeof(nm), "%s", name ? name : "");
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(s_pending.cw_profile[idx].name, sizeof(s_pending.cw_profile[idx].name),
+             "%s", nm);
+    s_pending.cw_profile[idx].centre_hz = centre_hz;
+    s_pending.cw_profile[idx].mask      = mask;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PROFILES);
+}
+
+void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
+{
+    if (!s_ready) return;
+    if (pin != 53 && pin != 54) pin = DEF_RELAY_PIN;
+    if (ms < 50)   ms = 50;
+    if (ms > 5000) ms = 5000;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gpio_relay_pin == pin && s_pending.gpio_relay_level == level &&
+        s_pending.gpio_relay_ms == ms) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gpio_relay_pin   = pin;
+    s_pending.gpio_relay_level = level;
+    s_pending.gpio_relay_ms    = ms;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GPIO_RELAY);
+
+    /* ⭐ APPLIED HERE, NOT AT THE CALL SITES. Storing the polarity without
+     * re-resting the pins leaves them on the wrong side until the next reboot -
+     * exactly the bug Randy N4OPI reported, just deferred instead of fixed. Two
+     * callers exist today (the web form and the config import) and putting it
+     * in either one leaves the other wrong, so it goes in the single place
+     * every caller must pass through. Same reasoning as g_freq_style above. */
+    gpio_relay_set_polarity(level);
+}
+
+void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
+{
+    // Defaults first, so a caller running before settings_init() still gets a
+    // usable answer rather than uninitialised stack.
+    if (pin)   *pin   = DEF_RELAY_PIN;
+    if (level) *level = DEF_RELAY_LEVEL;
+    if (ms)    *ms    = DEF_RELAY_MS;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pin)   *pin   = s_pending.gpio_relay_pin;
+    if (level) *level = s_pending.gpio_relay_level;
+    if (ms)    *ms    = s_pending.gpio_relay_ms;
+    xSemaphoreGive(s_mutex);
 }
 
 void settings_set_resmon_en(bool v)

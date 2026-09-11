@@ -207,12 +207,14 @@ static time_t get_date_anchor(void)
     time_t now = time(NULL);
     if (epoch_is_sane((int64_t)now)) return now;
 
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    if (epoch_is_sane((int64_t)cfg.last_unix_time)) return (time_t)cfg.last_unix_time;
+    /* ONE FIELD, not the whole ~1 KB struct: this runs on time_sync_task,
+     * whose stack is 3072 bytes, and an ESP_LOGW's vfprintf frame is most of
+     * a kilobyte on its own. See the rule in settings.h. */
+    uint32_t anchor = settings_get_last_unix_time();
+    if (epoch_is_sane((int64_t)anchor)) return (time_t)anchor;
 
     ESP_LOGW(TAG, "No valid date anchor (NVS=0x%08lx) — using fallback 2023-11-14; time-of-day will be correct",
-             (unsigned long)cfg.last_unix_time);
+             (unsigned long)anchor);
     return (time_t)EPOCH_SANE_MIN;
 }
 

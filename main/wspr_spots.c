@@ -196,5 +196,17 @@ void wspr_spots_clear(void)
     if (!s_ring) return;
     if (!lock()) return;
     s_count = s_head = 0;
+    /* ⛔ BUMP THE SEQUENCE, or the operator taps Clear and nothing happens for
+     * up to two minutes. The view repaints its list on a CHANGE of
+     * wspr_spots_seq() - deliberately, because the count saturates at the ring
+     * size and froze the display for five hours once - and only wspr_spots_add()
+     * moved it. So the ring emptied instantly and the screen kept showing the
+     * old rows until the next decode happened to arrive. Reported 2026-09-09:
+     * "the Clear button: what is it clearing? not the display".
+     *
+     * The same rule the view already states about its own repaint gate: a
+     * change-detected repaint must key on everything the render reads. This is
+     * the other side of it - anything that CHANGES what is read has to say so. */
+    s_seq++;
     unlock();
 }

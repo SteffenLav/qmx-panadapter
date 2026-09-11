@@ -699,6 +699,10 @@ typedef struct {
     int   n_attempted;
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
     int   n_timing;
+    /* Set when this range advanced the QSO early - see the early-advance note
+       in the decode loop. decode_slot() skips its own end-of-slot advance when
+       it is set, so advance() runs exactly ONCE per slot either way. */
+    bool  early_advanced;
 } decode_result_t;
 
 typedef struct {
@@ -1004,8 +1008,10 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    int n_cand, int start, int step,
                                    float noise_db, int64_t slot_sec,
                                    int64_t t_start_us, int start_off_ms,
+                                   bool may_early_advance,
                                    decode_result_t *out)
 {
+    out->early_advanced = false;
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
@@ -1111,6 +1117,48 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             if (!sim_suppresses_real) {
                 ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
                                          (int)lroundf(cand_dt_ms));
+
+                /* ⭐ ADVANCE THE QSO THE MOMENT OUR PARTNER'S MESSAGE ARRIVES,
+                 * not after all 140 candidates (Gyula HA3HZ, 2026-09-08: "the
+                 * acknowledgement response does not go immediately, but 15
+                 * seconds later").
+                 *
+                 * The arithmetic that makes this necessary: an FT8 burst is
+                 * 12 640 ms inside a 15 000 ms slot, so the whole reply window
+                 * is 2 260 ms and the hold-for-decode backstop sits at 1 960 ms
+                 * (ft8_slot_gate.c derives both). ft8_qso_advance() used to run
+                 * only after the ENTIRE candidate list, and on a saturated band
+                 * that is 4-6 s. His log shows it exactly: the report he needed
+                 * was decoded at +81 ms, first in the list; the backstop fired
+                 * at +1972 ms and sent the previous message; the advance landed
+                 * at +3087 ms. Every exchange step then cost an extra 30 s
+                 * cycle, and his partners re-sent their reports two and three
+                 * times.
+                 *
+                 * ⛔ NOT A REGRESSION, and it must not be described as one: the
+                 * ordering has always been this way. What changed is the band -
+                 * his median decode is 64 ms and his p90 is 4762 ms, so on a
+                 * quiet band the advance wins the race and on a busy one it
+                 * never can.
+                 *
+                 * EXACTLY ONCE per slot: the flag makes the end-of-slot call
+                 * skip. Running advance() twice would re-scan the same message
+                 * and could step the state machine twice.
+                 *
+                 * ⚠ The cost, stated: advance() also captures the pileup and
+                 * scans for CQ callers, and running early shows it a PARTIAL
+                 * decode table. That is why the gate is ft8_qso_msg_is_for_us()
+                 * - it is only taken when a QSO is already running, which is
+                 * exactly when the pileup matters least and a prompt reply
+                 * matters most. An idle receiver still advances at the end of
+                 * the slot with the full picture, as before. */
+                if (may_early_advance && !out->early_advanced &&
+                    ft8_qso_msg_is_for_us(text)) {
+                    out->early_advanced = true;
+                    ESP_LOGI(TAG, "early advance: '%s' is for us - advancing now "
+                                  "instead of after all %d candidates", text, n_cand);
+                    ft8_qso_advance(slot_sec);
+                }
             }
             // PSK Reporter spot (REAL decodes only - this path never runs on
             // simulator injections, which bypass the audio pipeline entirely;
@@ -1218,9 +1266,16 @@ static void ft8_decode_worker_task(void *arg)
         worker_job_t *job = NULL;
         if (xQueueReceive(ctx->jobs, &job, portMAX_DELAY) != pdTRUE) continue;
         if (!job) break;   // termination sentinel
+        /* false: the worker is a DIFFERENT TASK from the one that has always
+           called ft8_qso_advance(), and this is not the evening to add a second
+           caller into the QSO state machine. It costs almost nothing - the
+           decode task takes the EVEN candidates, which are the strongest, and a
+           partner replying to us is the loudest thing in the slot. If it lands
+           on an odd candidate we simply fall back to the end-of-slot advance,
+           i.e. today's behaviour. */
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
-                               job->start_off_ms, job->result);
+                               job->start_off_ms, false, job->result);
         xSemaphoreGive(ctx->done);
     }
     ESP_LOGI(TAG, "decode worker exiting");
@@ -1333,14 +1388,16 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     // Our half (even indices).
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
-                           t_start, start_off_ms, &r_main);
+                           t_start, start_off_ms, true, &r_main);
 
     if (dispatched) {
         xSemaphoreTake(wctx->done, portMAX_DELAY);
     } else {
         // No helper (or <=1 candidate): decode the odd half inline too.
+        /* Inline fallback: this is still the DECODE TASK, so it may early-advance
+           on the same terms as the even half above. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, &r_worker);
+                               t_start, start_off_ms, true, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
@@ -1488,7 +1545,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         }
     }
 
-    ft8_qso_advance(slot_sec);
+    /* EXACTLY ONCE per slot. If a message addressed to us turned up mid-list,
+       the early-advance above has already run this and running it again would
+       re-scan the same message and could step the state machine twice. */
+    if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-

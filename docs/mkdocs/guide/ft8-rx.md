@@ -5,7 +5,7 @@ The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectr
 
 ### 1. FT8 & FT4 View
 
-Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter → FT8/FT4 → WSPR). The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
+Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter -> FT8/FT4 -> WSPR). The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
 
 **FT4 notes:**
 - Decodes refresh roughly twice as fast as FT8 because slots are 7.5 seconds
@@ -119,7 +119,7 @@ The reply always follows FT8 protocol (correct parity, proper message sequence) 
 
 ⚠️ **Experimental** — enabled via a checkbox in the Options modal.
 
-When robot mode is on, the Tab5 **automatically replies to CQ** without waiting for you to tap. It scans each FT8 slot for CQ callers matching your filters, picks the highest-priority station, and sends a full QSO exchange (TX1 → wait for report → TX2 → wait for RR73 → TX3). Everything is logged to ADIF.
+When robot mode is on, the Tab5 **automatically replies to CQ** without waiting for you to tap. It scans each FT8 slot for CQ callers matching your filters, picks the highest-priority station, and sends a full QSO exchange (TX1 -> wait for report -> TX2 -> wait for RR73 -> TX3). Everything is logged to ADIF.
 
 **Important:** Robot mode **keys the QMX for real** — your signal goes on the air. Never leave it unattended unless you're confident in your filters and your station is in a safe state.
 

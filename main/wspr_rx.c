@@ -85,7 +85,228 @@ static const char *TAG = "wspr_rx";
  * station ended up below eight noisier peaks last time. If a real session ever
  * shows stations appearing only when the cap is lifted, this is the number to
  * raise; do not raise it on the strength of a reference file that says no. */
+/* ⭐ 24, and the number came off a curve rather than a guess. With the deep
+ * pass the reference score is 22 of 32 at caps 24, 30 and 40 alike, and 20 at
+ * cap 20 - so 24 is where the gain arrives and everything above it is time
+ * spent for nothing (host: 489 ms at 24 against 803 ms at 40).
+ *
+ * ⚠ THE DEVICE BUDGET IS TIGHT AND MUST BE MEASURED. The deep pass costs
+ * about 2.1x the old search on the host, which puts 24 candidates near
+ * WSPR_DECODE_BUDGET_MS. The budget check truncates gracefully - a slow cycle
+ * simply tries fewer - but if the log shows the budget being hit every cycle,
+ * lower this before touching the algorithm. */
+/* ⛔ BACK TO 20 FROM 24, ON DEVICE EVIDENCE. At 24 with the deep pass the
+ * log read `24 candidate(s), 5 decode(s), 13 skipped (budget, pass 1),
+ * 1 pass(es), 122520 ms` EVERY cycle - only 11 candidates tried and pass 2
+ * never reached, and pass 2 is what subtracts a decoded station to uncover
+ * its neighbours. The host said 2.1x; the device measured about 4.5x.
+ * Over-running the budget costs more than the extra candidates buy. */
 #define WSPR_MAX_CANDS    20
+/* How far above the cycle's MEDIAN candidate score an undecoded candidate has
+ * to sit before it earns a '?' on the waterfall (#360). See the long note where
+ * it is applied - the finder pads its list out of the noise, so without this
+ * every cycle drew twenty marks and most pointed at nothing. */
+#define WSPR_MARK_MIN_X_MEDIAN 2.0f
+_Static_assert(WSPR_MARKS_MAX == WSPR_MAX_CANDS,
+               "WSPR_MARKS_MAX (wspr_rx.h) must track WSPR_MAX_CANDS");
+
+/* ---- Waterfall letter markers (#360) ----------------------------------
+ * Published once per completed cycle; see the long note in wspr_rx.h for what
+ * they are for. Guarded by its own mutex rather than the waterfall's: the
+ * decode task writes this at the END of a cycle while the capture task is
+ * already publishing carpet rows, and making them share a lock would put the
+ * decoder behind the row pump for no reason. */
+/* ⭐ WSPR_MARKS_CYCLES SETS, NOT ONE. The carpet shows three minutes now, so
+ * more than one boundary line is on screen and each wants its own letters -
+ * and a decode lands ~40 s into the FOLLOWING cycle, so by the time a set
+ * exists its line is already the second one down. One set could only ever
+ * label the newest line, which is the one whose letters do not exist yet. */
+static wspr_mark_t s_marks[WSPR_MARKS_CYCLES][WSPR_MARKS_MAX];
+static int         s_marks_n[WSPR_MARKS_CYCLES];
+static int64_t     s_marks_cycle[WSPR_MARKS_CYCLES];
+static int         s_marks_newest;
+static uint32_t    s_marks_seq;
+static SemaphoreHandle_t s_marks_mtx;
+
+/* Sort by tone and publish. The LETTER is not assigned here - see
+ * next_mark_letter(); each decode claims one when it decodes and keeps it.
+ * Works on a COPY
+ * because the caller's array is still the live working set - indexed by
+ * candidate and mutated as later passes decode - and must not be reordered
+ * underneath that.
+ *
+ * ⭐ CALLED AFTER EVERY DECODE, not only at the end of the cycle (operator,
+ * 2026-09-09: "show every single letter as soon as the corresponding line is
+ * decoded - this way we would not have to wait until all (possibly 20) were
+ * decoded"). A cycle's decodes trickle in over ~40 s and used to appear all at
+ * once at the end; now the first letter is on the carpet within a second or
+ * two of its own line resolving.
+ *
+ * ⚠ THE '?' MARKS CANNOT COME EARLY and are deliberately excluded until the
+ * cycle is done. Whether a candidate is worth showing at all is decided
+ * against the MEDIAN of the whole candidate set - the finder saturates its
+ * 20-slot quota with its own noise floor - and a median is not known until
+ * every candidate has been scored. A decode needs no such test: it decoded.
+ *
+ * ⭐ NOTHING RE-LETTERS. An earlier version of this handed the letters out
+ * left to right on every publish, so a decode arriving at a lower tone took
+ * the letter of one already on screen and pushed it along - visible churn,
+ * and briefly a wrong join to the S column. Claiming the letter at decode
+ * time removes that by construction. */
+static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc);
+
+/* ⭐ THE ALPHABET RUNS ON ACROSS CYCLES AND DOES NOT RESTART (Samuel W7STF,
+ * 2026-09-09: *"when you decode the next cycle, if you echo the same A,B,C,D
+ * then it gets a little confusing as to what traces they belong to"*).
+ * Restarting at A every two minutes meant the letter said WHICH station within
+ * a cycle and nothing about WHICH cycle, so two adjacent 'A's on the carpet
+ * were unrelated stations and the S column had to be read against the clock to
+ * tell them apart.
+ *
+ * It advances only when a letter is actually taken, so a cycle that decodes
+ * nothing leaves the position alone - a gap in the alphabet would otherwise
+ * imply a station nobody saw. Wraps Z to A, which is 26 decodes of separation
+ * and far more than the carpet holds.
+ *
+ * ⚠ THE PRICE, AND IT IS A REAL ONE: within a cycle the letters are now in
+ * DECODE order, which is by candidate score, rather than left to right across
+ * the carpet. Those two cannot both hold while letters also appear as each
+ * trace decodes - candidates resolve strongest-first, not by tone. #360's
+ * left-to-right rule existed so that A was always the leftmost mark and the
+ * list needed no legend; once the alphabet rolls, A is not the leftmost
+ * anything, so that mnemonic has already gone and the letter itself is the
+ * join. */
+static char s_next_letter = 'A';
+
+static char next_mark_letter(void)
+{
+    const char c = s_next_letter;
+    s_next_letter = (s_next_letter >= 'Z') ? 'A' : (char)(s_next_letter + 1);
+    return c;
+}
+
+static void marks_letter_and_publish(const wspr_mark_t *src, const float *mscore,
+                                     int n, int64_t cycle_utc)
+{
+    /* ⭐ THE NOISE-TAIL FILTER LIVES HERE, so every publish applies it and the
+     * '?' marks can go up the moment the candidate list exists (operator,
+     * 2026-09-09: *"then also do those ? the same way as soon as they are
+     * discovered"*). It used to run once, at the end of the cycle, which is
+     * why they were the one thing still arriving late.
+     *
+     * ⭐ AND IT CAN RUN THAT EARLY, which is what makes this cheap: the score
+     * it tests against is `cands[i].comb_score`, copied into mscore[] when the
+     * candidate list is built, before a single decode is attempted. The median
+     * was never a product of decoding - it only looked that way because the
+     * filter happened to sit at the bottom of the function.
+     *
+     * A candidate below 2x the cycle MEDIAN is the finder's own noise floor:
+     * the search saturates its 20-slot quota on a quiet band, and #360 records
+     * what that looked like on screen - twenty '?' in one run of punctuation
+     * pointing at nothing. A DECODE is never filtered; it decoded. */
+    wspr_mark_t out[WSPR_MARKS_MAX];
+    int nout = 0;
+    float floor_score = 0.0f;
+    if (n > 1) {
+        float sorted[WSPR_MARKS_MAX];
+        memcpy(sorted, mscore, (size_t)n * sizeof(sorted[0]));
+        for (int i = 1; i < n; i++) {            /* insertion sort, ascending */
+            float t = sorted[i]; int j = i - 1;
+            while (j >= 0 && sorted[j] > t) { sorted[j + 1] = sorted[j]; j--; }
+            sorted[j + 1] = t;
+        }
+        const float median = (n & 1) ? sorted[n / 2]
+                                     : 0.5f * (sorted[n / 2 - 1] + sorted[n / 2]);
+        floor_score = median * WSPR_MARK_MIN_X_MEDIAN;
+    }
+    for (int i = 0; i < n && nout < WSPR_MARKS_MAX; i++) {
+        if (src[i].ch == '?' && mscore[i] < floor_score) continue;
+        out[nout++] = src[i];
+    }
+    for (int i = 1; i < nout; i++) {
+        wspr_mark_t t = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j].freq_hz > t.freq_hz) { out[j + 1] = out[j]; j--; }
+        out[j + 1] = t;
+    }
+    marks_publish(out, nout, cycle_utc);
+}
+
+static void marks_publish(const wspr_mark_t *m, int n, int64_t cycle_utc)
+{
+    if (!s_marks_mtx) return;
+    if (n > WSPR_MARKS_MAX) n = WSPR_MARKS_MAX;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    /* Same cycle republishing (the streaming publish of #372 fires once per
+     * decode) overwrites its own slot; a NEW cycle takes the next one. */
+    int slot = s_marks_newest;
+    if (s_marks_cycle[slot] != cycle_utc)
+        slot = (s_marks_newest + 1) % WSPR_MARKS_CYCLES;
+    memcpy(s_marks[slot], m, (size_t)n * sizeof(*m));
+    s_marks_n[slot]     = n;
+    s_marks_cycle[slot] = cycle_utc;
+    s_marks_newest      = slot;
+    s_marks_seq++;
+    xSemaphoreGive(s_marks_mtx);
+}
+
+int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max)
+{
+    if (!out || max <= 0 || !s_marks_mtx || cycle_utc <= 0) return 0;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    int n = 0;
+    for (int k = 0; k < WSPR_MARKS_CYCLES; k++) {
+        if (s_marks_cycle[k] != cycle_utc) continue;
+        n = s_marks_n[k] < max ? s_marks_n[k] : max;
+        memcpy(out, s_marks[k], (size_t)n * sizeof(*out));
+        break;
+    }
+    xSemaphoreGive(s_marks_mtx);
+    return n;
+}
+
+int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out)
+{
+    if (!out || max <= 0 || !s_marks_mtx) return 0;
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    const int slot = s_marks_newest;
+    int n = s_marks_n[slot] < max ? s_marks_n[slot] : max;
+    memcpy(out, s_marks[slot], (size_t)n * sizeof(*out));
+    if (cycle_utc_out) *cycle_utc_out = s_marks_cycle[slot];
+    xSemaphoreGive(s_marks_mtx);
+    return n;
+}
+
+uint32_t wspr_rx_marks_seq(void) { return s_marks_seq; }
+
+char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
+{
+    if (!s_marks_mtx) return 0;
+    char ch = 0;
+    float best = 3.0f;   /* Hz - wider than the decoder's own frequency spread
+                          * on one signal, far narrower than the ~6 Hz a WSPR
+                          * transmission occupies, so it cannot claim a
+                          * neighbour's letter. */
+    xSemaphoreTake(s_marks_mtx, portMAX_DELAY);
+    /* Only the cycle the carpet is showing - see the header. A tone is reused
+     * cycle after cycle, so without this an older row wears a current letter. */
+    /* Any remembered cycle, not just the newest - the S column shows rows from
+     * several cycles at once. */
+    int slot = -1;
+    for (int k = 0; k < WSPR_MARKS_CYCLES; k++)
+        if (s_marks_cycle[k] == cycle_utc) { slot = k; break; }
+    if (slot >= 0) {
+        for (int i = 0; i < s_marks_n[slot]; i++) {
+            float d = fabsf(s_marks[slot][i].freq_hz - freq_hz);
+            if (d < best) { best = d; ch = s_marks[slot][i].ch; }
+        }
+    }
+    xSemaphoreGive(s_marks_mtx);
+    /* A '?' is a mark, not an answer: it means nothing decoded there, so it can
+     * never belong to a spot in the list. */
+    return (ch == '?') ? 0 : ch;
+}
+
 
 /* Decode is ~7.9 s per candidate, and with the ping-pong it has a full 120 s
  * cycle. Stop at 105 s so the buffer is handed back before the next capture
@@ -106,6 +327,10 @@ static const char *TAG = "wspr_rx";
  * the search is widened a little either side: the operator's dial calibration,
  * the QMX's own, and a transmitter's offset all move real signals about, and a
  * candidate found slightly outside the nominal window still decodes. */
+/* Matches the displayed window. Narrowing this to 1380-1610 was tried and
+ * reverted with the display - see WSPR_WF_LO_HZ. It would have saved 23 % of
+ * the peak-finder's bins, which is real, but a station at the edge that is not
+ * SEARCHED can never be decoded, and the operator can see them out there. */
 #define SEARCH_LO_HZ      1350.0
 #define SEARCH_HI_HZ      1650.0
 
@@ -118,6 +343,104 @@ static const char *TAG = "wspr_rx";
  * 40 bytes is not worth a ring's index arithmetic. */
 static uint8_t s_hist[WSPR_CYCLE_HISTORY];
 static int     s_hist_n;
+
+/* ---- the transmit SCHEDULE ------------------------------------------------
+ *
+ * ⭐ THE DUTY-CYCLE ROLL IS TAKEN IN ADVANCE, and that is the whole point.
+ *
+ * It used to be taken AT the cycle boundary, for that same cycle. Nothing could
+ * then say when the next burst was, because nothing had decided yet - so the
+ * TX button counted down to the next SLOT, i.e. to the next opportunity, and
+ * every time the roll lost it reset and counted down again. The operator,
+ * 2026-09-02: "when it reached 00:00 then it started counting down again
+ * 01:20(!) I need to see a REAL count down to the next TX."
+ *
+ * So the roll is moved forward in time: one cycle index is chosen and held, the
+ * countdown reads it, and the boundary merely acts on a decision already made.
+ *
+ * ⚠ THE RANDOMNESS IS UNCHANGED, and that matters - it is load-bearing, not
+ * decoration (stations on a fixed schedule collide with the same neighbours for
+ * ever). Rolling each future cycle in turn until one wins gives exactly the
+ * geometric gap that independent per-cycle rolls give; the only difference is
+ * that the coin is tossed before the cycle rather than at it. Duty 100 still
+ * means every cycle, duty 0 still means never.
+ *
+ * ⚠ And a schedule can be OVERTAKEN. The PA guard can hold a burst, a build can
+ * fail, a callsign can be missing - in each case the cycle passes without
+ * transmitting and the next one is rolled from there, so the countdown jumps to
+ * a later time rather than sitting at zero claiming a burst that is not coming.
+ */
+static int64_t now_ms(void);           /* UTC ms - the cycle index is UTC-aligned */
+static int64_t s_next_tx_cycle = -1;   /* cycle index; -1 = nothing scheduled */
+static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
+
+/* First cycle AFTER `after` that wins the duty roll. */
+static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
+{
+    if (duty == 0) return -1;
+    if (duty >= 100) return after + 1;
+    /* Bounded so a corrupt duty can never spin here. At the lowest duty this
+     * offers (10%) the chance of 2000 straight losses is about 10^-92, so the
+     * bound is a safety net and not a behaviour. */
+    for (int i = 1; i <= 2000; i++)
+        if ((esp_random() % 100u) < duty) return after + i;
+    return -1;
+}
+
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
+{
+    /* ⚠ Takes the two values it needs as ARGUMENTS rather than reading the
+     * settings itself. Both callers are UI paths - the Tab5's TX button on
+     * taskLVGL and the /api/settings handler on httpd - and settings_load_all()
+     * is a multi-kilobyte struct on the caller's stack. That is the bug class
+     * this board has hit four times; see "Task stacks on this board are TINY". */
+    if (!tx_en || duty_pct == 0) {
+        s_next_tx_cycle = -1;
+        s_sched_duty    = 0;
+        return;
+    }
+    /* Rolled from the CURRENT cycle, so the earliest possible burst is the next
+     * boundary and a countdown appears the instant the operator presses TX ON -
+     * rather than after up to two minutes of the button saying nothing. */
+    s_next_tx_cycle = roll_next_tx_cycle(now_ms() / WSPR_CYCLE_MS, duty_pct);
+    s_sched_duty    = duty_pct;
+
+    /* ⭐ PRE-WARM THE PA-GUARD QUERY, not wait for the first cycle to ask.
+     *
+     * wspr_pa_guard_update() only runs once per 120 s cycle, from inside the
+     * slot loop, and its FIRST call for a session always finds cur < 0 ("not
+     * answered yet") because nothing has asked the radio anything yet - so it
+     * issues the query and returns having reduced nothing. If the very first
+     * scheduled TX cycle lands before that answer comes back (routine - a CAT
+     * round trip is a couple hundred ms, but the schedule can pick the very
+     * next boundary), the guard holds that burst and re-rolls to a LATER
+     * cycle. Reproduced live 2026-09-05: "cycle ...: holding TX - the finals
+     * guard has not confirmed the PA is turned down yet (radio says not
+     * answered yet...)", immediately followed by a re-roll - which is exactly
+     * Dirk DK7CVD's "counting down to 00 ... then straight to counting down
+     * again from 3:40 or so": the re-roll happens correctly and BEFORE the
+     * countdown would have hit zero for a real burst, but the browser's
+     * countdown is driven by polling, so it still visibly reaches 0:00 on the
+     * poll just before the boundary and only picks up the new, larger target
+     * on the poll just after - reading exactly like "counted to zero, then
+     * restarted".
+     * Asking here, the moment TX is turned on, gives the answer the entire
+     * ~120 s until the first cycle boundary to come back, instead of however
+     * many milliseconds are left in the CURRENT cycle - which should turn the
+     * "not answered yet" hold from routine into rare. Harmless to call even
+     * when PA-reduce is off in settings: the answer just sits in the cache
+     * unread, same as any other unread CAT poll value. */
+    cat_query_pa_voltage();
+}
+
+int wspr_rx_seconds_to_next_tx(void)
+{
+    int64_t sched = s_next_tx_cycle;          /* one read - the loop may write */
+    if (sched < 0) return -1;
+    int64_t ms = sched * WSPR_CYCLE_MS - now_ms();
+    if (ms < 0) return -1;                    /* overtaken; the loop re-rolls */
+    return (int)(ms / 1000);
+}
 
 int wspr_rx_cycle_history(uint8_t *out, int max)
 {
@@ -204,6 +527,11 @@ static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc,
     sp.power_dbm = (int16_t)r->power_dbm;
     sp.snr_db    = (int16_t)snr_db;
     sp.drift_hz  = (int16_t)drift_hz;        /* 0 Hz is a REAL value, not "unset" */
+    /* DT: the decoder's own alignment, in tenths of a second. Nominal +1.0 s
+       (a WSPR transmission starts one second into the minute), so a value far
+       from that is a clock the far end should look at. */
+    sp.dt_tenths = (int16_t)lround((double)r->best_dt_samples * 10.0
+                                   / (double)WSPR_SAMPLE_RATE_HZ);
     sp.km = -1; sp.bearing_deg = -1;
 
     const char *cty = dxcc_lookup_alpha3(r->callsign);
@@ -271,6 +599,25 @@ static float  s_wf_floor;        /* rolling per-row noise floor - see wf_row() *
  * back the per-cycle step this replaced. */
 #define WF_FLOOR_ALPHA 0.25f
 static int    s_wf_rows_done;
+
+/* Seconds until the next cycle boundary while the slot loop is WAITING, or -1
+ * when it is not. The page draws this over the carpet (Gyula HA3HZ, 2026-09-10:
+ * coming back to WSPR he saw "no movement on the waterfall" and read it as a
+ * dead page).
+ *
+ * ⭐ It is not dead and it is not slow: a WSPR cycle is 120 s and the loop can
+ * only start on an even UTC minute, so re-entering the page part-way through a
+ * cycle means waiting out the remainder - up to about 110 s. Measured on the
+ * bench: slot loop up at 34 s into a cycle, next capture 86 s later, exactly
+ * 120 - 34. The carpet is deliberately NOT blanked (see wf_begin), so what is
+ * on screen meanwhile is the PREVIOUS cycle's picture, which is genuinely
+ * still worth looking at and is also indistinguishable from a frozen one.
+ *
+ * A plain integer written by the slot loop and read by taskLVGL: a torn read
+ * costs one frame of a countdown. */
+static volatile int s_wait_secs = -1;
+
+int wspr_rx_waiting_secs(void) { return s_run ? s_wait_secs : -1; }
 static kiss_fftr_cfg     s_wf_cfg;
 static kiss_fft_scalar  *s_wf_in;
 static kiss_fft_cpx     *s_wf_sp;
@@ -318,12 +665,27 @@ static void wf_publish(int idx, const uint8_t *bytes)
 
 /* One dashed row marking a cycle boundary - and the ~68 s of deafness that
  * follows it while the decoder runs. See WSPR_WF_MARK. */
-static void wf_mark_boundary(void)
+/* The cycle the newest dashed line CLOSES, i.e. the one whose rows lie beneath
+ * it. Published here rather than derived in the view from the wall clock,
+ * because the line is drawn when the capture actually ends and only this side
+ * knows that instant. The view needs it for two things: to print the time on
+ * the line the moment it appears, and to refuse to draw a set of marks under a
+ * line belonging to a different cycle. */
+static volatile int64_t s_wf_boundary_cycle;
+
+int64_t wspr_rx_boundary_cycle(void) { return s_wf_boundary_cycle; }
+
+static void wf_mark_boundary(int64_t cycle_utc)
 {
     if (!s_wf) return;
+    s_wf_boundary_cycle = cycle_utc;
     uint8_t row[WSPR_WF_COLS];
-    for (int c = 0; c < WSPR_WF_COLS; c++)
-        row[c] = ((c / 4) & 1) ? 0 : WSPR_WF_MARK;
+    /* ⭐ CONTINUOUS, NOT DASHED (operator, 2026-09-09). The dashes were there to
+     * stop the line reading as signal, and that job is now done by the colour:
+     * it renders as a dim grey the signal ramp cannot produce at any level. An
+     * unbroken rule is quieter than a dotted one and reads as a divider at a
+     * glance, which is all it has to do. */
+    for (int c = 0; c < WSPR_WF_COLS; c++) row[c] = WSPR_WF_MARK;
     /* ⛔ TWO rows, not one. The view downsamples HIST_ROWS into a 200 px pane
      * nearest-neighbour - a step of 1.76 - so a single row is SKIPPED whenever
      * the map jumps by 2, i.e. the marker would silently vanish on roughly two
@@ -523,12 +885,12 @@ static void wf_finalise(void)
 /* Whole-window build, used by the simulator, which has the entire window at
  * once. Identical output to the incremental path - same row function, same
  * finalise - so the two cannot drift apart. */
-static void build_waterfall(const int16_t *pcm, long n)
+static void build_waterfall(const int16_t *pcm, long n, int64_t cycle_utc)
 {
     if (!wf_begin()) return;
     for (int r = 0; r < WSPR_WF_ROWS; r++) wf_row(NULL, pcm, n, r);
     wf_finalise();
-    wf_mark_boundary();
+    wf_mark_boundary(cycle_utc);
 }
 
 bool wspr_rx_get_waterfall(uint8_t *out)
@@ -590,9 +952,15 @@ typedef struct {
      * Reading the dial when the SPOT is filed would attribute it to the wrong
      * band: band hopping retunes HOP_LEAD_SEC before the next cycle, and a
      * decode routinely finishes after that, so spots from the cycle just ended
-     * would be filed under the band we have already moved to. Captured at the
-     * moment the window is queued instead - which is what the samples actually
-     * belong to. */
+     * would be filed under the band we have already moved to.
+     *
+     * ⚠ IT IS READ AT CAPTURE-BEGIN, NOT AT QUEUE TIME. This comment used to
+     * say "the moment the window is queued ... which is what the samples
+     * actually belong to", and that was wrong by up to the length of the
+     * waterfall build plus an SD dump: the queue happens at the END of the
+     * cycle, and the hop retunes in its last 3 seconds. Kevin KQ4DTX saw spots
+     * labelled with the band we had just moved to. The dial is now taken before
+     * the first sample, where nothing can overtake it. */
     uint32_t dial_hz;
 } wspr_dec_job_t;
 
@@ -754,10 +1122,36 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * subtraction is the same reception report, not a second one. */
     char seen[WSPR_MAX_CANDS][7];
     int nseen = 0;
+    /* #360: one mark per candidate the search found, whether it decoded or not.
+     * Seeded from the FIRST pass only - a later pass re-runs the finder over
+     * audio with signals removed and returns the same tones, so re-seeding
+     * would just duplicate them. Successes are stamped in by frequency below,
+     * on whichever pass they land. */
+    wspr_mark_t marks[WSPR_MARKS_MAX];
+    float       mscore[WSPR_MARKS_MAX];   /* the finder's comb score per mark */
+    int nmarks = 0;
+
+    /* Reset the per-cycle ration of deep searches before the first pass. */
+    wspr_decode_begin_cycle();
 
   next_pass:
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                   cands, WSPR_MAX_CANDS);
+    if (pass == 0) {
+        nmarks = ncand > WSPR_MARKS_MAX ? WSPR_MARKS_MAX : ncand;
+        for (int i = 0; i < nmarks; i++) {
+            marks[i].freq_hz = (float)cands[i].freq_hz;
+            marks[i].ch      = '?';   /* until something decodes here */
+            mscore[i]        = (float)cands[i].comb_score;
+        }
+        /* ⭐ THE '?' MARKS GO UP NOW, before a single decode is attempted
+         * (operator, 2026-09-09: "also do those ? the same way as soon as they
+         * are discovered"). The noise-tail filter runs inside the publish and
+         * needs only these comb scores, so there is nothing to wait for - the
+         * carpet shows where the search is about to look, and each mark turns
+         * into its letter as that line decodes. */
+        marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
+    }
     found_in_pass = 0;
     tried_this_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {
@@ -857,6 +1251,30 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
 
         decoded++;
         found_in_pass++;
+        /* Stamp the mark this decode belongs to. Matched by frequency rather
+         * than by index because a later pass has its own candidate ordering. */
+        {
+            float best = 3.0f; int bi = -1;
+            for (int k = 0; k < nmarks; k++) {
+                float d = fabsf(marks[k].freq_hz - (float)r.freq_hz);
+                if (d < best) { best = d; bi = k; }
+            }
+            /* A decode with no candidate near it can only come from a later
+             * pass finding something the first pass did not list at all. It is
+             * a real station, so it gets its own mark rather than being lost. */
+            if (bi < 0 && nmarks < WSPR_MARKS_MAX) { bi = nmarks++; mscore[bi] = 0.0f; }
+            if (bi >= 0) {
+                marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
+                                                         * is the accurate one */
+                /* Claimed here and kept - see next_mark_letter(). Only if
+                 * this mark has not already got one: a later pass can decode
+                 * the same station again, and it must not consume a second
+                 * letter or change the one the operator is already reading. */
+                if (marks[bi].ch == '?') marks[bi].ch = next_mark_letter();
+            }
+            /* Straight to the carpet. */
+            marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
+        }
         wspr_accepted_add(&accepted, r.freq_hz);
         /* `agree` is the re-encode score - how well the received audio actually
          * supports this message (wspr_decode.h). It is logged on EVERY decode
@@ -907,6 +1325,37 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                  (long long)cycle_utc, skipped, pass, (long long)dec_ms,
                  pass > 1 ? " - second-look only, the band was fully scanned"
                           : " - lower WSPR_MAX_CANDS or make the decode faster");
+    /* ⛔ THE CANDIDATE LIST IS PADDED WITH NOISE, AND MARKING ALL OF IT WAS
+     * WRONG. Operator, 2026-09-08: "I am still quite puzzled about where you
+     * mark the signals - it does not really make sense compared to what you
+     * see." He was right, and the fault was mine rather than the display's.
+     *
+     * wspr_find_candidates() returns its best WSPR_MAX_CANDS by correlation
+     * score, and that cap SATURATES every cycle - a fact already recorded at
+     * the top of this file. Once it runs out of real signals it fills the rest
+     * of the list from the noise, so a '?' was being drawn over blank carpet.
+     * Measured on this bench, one ordinary cycle:
+     *
+     *     cand 0   1.71e5  DECODED        cand 12  2.70e4
+     *     cand 1   1.54e5                 ...      (flat)
+     *     cand 5   7.49e4                 cand 19  2.52e4
+     *
+     * The tail is eight entries within 7 % of each other - the correlator's own
+     * floor, not signals.
+     *
+     * So an undecoded candidate earns a '?' only if it stands clearly above
+     * that floor. The test is against the cycle's own MEDIAN score, which needs
+     * no absolute calibration and rescales itself with band noise and with the
+     * band in use. A DECODE is always kept whatever its score: it is a fact,
+     * and it is the join to the S column.
+     *
+     * ⚠ The multiplier is a judgement about presentation, not a detection
+     * threshold - nothing here changes what the decoder attempts. On the two
+     * cycles measured it leaves 5 and 6 marks instead of 20. */
+    /* The final set. Identical treatment to every interim publish, so nothing
+     * jumps at the end of a cycle - a later pass may simply have added a mark
+     * or turned a '?' into a letter. */
+    marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
     hist_push(decoded);
     set_dec_status("%d decoded", decoded);
 }
@@ -983,8 +1432,16 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
     if (want_reduced && ws->wspr_pa_saved_x10 == 0) {
         int16_t cur = cat_get_pa_voltage_x10();
         if (cur < 0) {
-            /* Not known yet - ask, and act on the next cycle. Two minutes late
-             * is fine; guessing the current value is not. */
+            /* ⛔ "Two minutes late is fine" - what this comment used to say -
+             * IS EXACTLY ONE FULL-POWER TRANSMISSION, which is the thing the
+             * guard exists to prevent. Roy KI0ER, 2026-09-01, on a 12 V QMX fed
+             * from a 9 V supply: "first WSPR TX went out at full power for the
+             * first 2 minutes... I checked QMX Menu, and PA voltage was still
+             * at 11.5 volts. Subsequent WSPR TX cycles were then at 6.0 Volts."
+             *
+             * Asking and returning is still right - guessing the operator's
+             * value would be worse - but the ARM must now wait for the answer.
+             * See wspr_pa_guard_ready(), which the duty-cycle roll consults. */
             cat_query_pa_voltage();
             return;
         }
@@ -1012,6 +1469,33 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
         ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage restored to %u.%u V",
                  back / 10, back % 10);
     }
+}
+
+/* ⛔ MAY A BURST BE ARMED YET?
+ *
+ * The guard is asynchronous: it asks the radio for Max. PA voltage over CAT,
+ * and the answer arrives a poll or two later. Until then it cannot reduce
+ * anything - and the duty-cycle roll immediately below it used to fire anyway,
+ * so the FIRST burst of a WSPR session went out at whatever the radio was
+ * already set to. Every later cycle was correctly reduced, which is exactly why
+ * it reads as intermittent and why it survived a release.
+ *
+ * The test is a MEASUREMENT, not a flag: the radio's own reported Max. PA
+ * voltage must actually be at or below the target. That covers all three ways
+ * this can be satisfied - the guard reduced it, the operator was already
+ * running lower (the guard never raises anyone's power), or the read-back after
+ * the write has confirmed it landed. A flag saying "we sent the write" would
+ * not, and the write is the part that goes through MM + MU; + a Q9 re-assert.
+ *
+ * Skipping a transmit cycle costs nothing: the duty cycle is random anyway, so
+ * a skipped slot is indistinguishable from an unlucky roll. Transmitting at
+ * four times the intended power is not so cheap. */
+static bool wspr_pa_guard_ready(const qmx_settings_t *ws)
+{
+    if (!(ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0))
+        return true;                    /* protection not wanted - nothing to wait for */
+    int16_t cur = cat_get_pa_voltage_x10();
+    return cur >= 0 && (uint16_t)cur <= WSPR_PA_TARGET_X10;
 }
 
 static void wspr_rx_task(void *arg)
@@ -1152,14 +1636,17 @@ static void wspr_rx_task(void *arg)
         int64_t wait = (into <= WSPR_ARM_GRACE_MS && cyc != last_cycle_idx)
                      ? 0 : (WSPR_CYCLE_MS - into);
         set_status("waiting %llds", (long long)(wait / 1000));
+        s_wait_secs = (int)((wait + 999) / 1000);
         while (s_run && wait > 0) {
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
             vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
             t = now_ms();
             into = t % WSPR_CYCLE_MS;
             wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
+            s_wait_secs = (int)((wait + 999) / 1000);
             if (wait > WSPR_CYCLE_MS - 100) break;     /* boundary just passed */
         }
+        s_wait_secs = -1;
         if (!s_run) break;
 
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
@@ -1200,16 +1687,55 @@ static void wspr_rx_task(void *arg)
             set_status("transmitting");
             ESP_LOGW(TAG, "cycle %lld: TX still busy - receiver stood down",
                      (long long)cycle_utc);
-            /* ⭐ MARK THE STALL - see the note beside the other stand-down. */
-            wf_mark_boundary();
+            /* No carpet mark - see the note at the other stand-down. */
             while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
                 vTaskDelay(pdMS_TO_TICKS(500));
             }
             continue;
         }
 
-        if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&
-            (esp_random() % 100u) < ws.wspr_duty_pct) {
+        /* ---- is THIS the cycle the schedule picked? --------------------
+         * The roll itself happened earlier (see roll_next_tx_cycle) so that
+         * the TX button can count down to a real burst instead of to the next
+         * mere opportunity. All that is left here is to act on it, and to roll
+         * the following one - whether this cycle transmitted or not, so a held
+         * or refused burst moves the countdown on rather than leaving it at
+         * zero promising something that is not coming. */
+        const bool tx_possible = ws.wspr_tx_en && ws.wspr_duty_pct > 0;
+        if (!tx_possible) {
+            s_next_tx_cycle = -1;
+            s_sched_duty    = 0;
+        } else if (s_next_tx_cycle < last_cycle_idx ||
+                   s_sched_duty != ws.wspr_duty_pct) {
+            /* Nothing scheduled, the schedule was overtaken (a stalled cycle,
+             * a clock step), or the operator changed the duty. Rolled from
+             * last_cycle_idx - 1 so THIS cycle is the first candidate, which
+             * keeps the old behaviour that a burst can happen in the very
+             * first cycle after transmitting is switched on. */
+            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx - 1, ws.wspr_duty_pct);
+            s_sched_duty    = ws.wspr_duty_pct;
+        }
+        const bool tx_this_cycle = tx_possible && s_next_tx_cycle == last_cycle_idx;
+        if (tx_this_cycle) {
+            /* Roll the next one now, before anything below can fail. */
+            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx, ws.wspr_duty_pct);
+        }
+
+        if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {
+            /* Loud, and only while it is actually holding something up. */
+            /* -1 means "not answered yet", and printing that as tenths gave
+             * "0.-1 V" on the very first run of this line. Say which it is. */
+            int16_t pav = cat_get_pa_voltage_x10();
+            char pavs[24];
+            if (pav < 0) snprintf(pavs, sizeof(pavs), "not answered yet");
+            else         snprintf(pavs, sizeof(pavs), "%d.%d V", pav / 10, pav % 10);
+            ESP_LOGW(TAG, "cycle %lld: holding TX - the finals guard has not "
+                          "confirmed the PA is turned down yet (radio says %s, "
+                          "target %u.%u V)",
+                     (long long)cycle_utc, pavs,
+                     (unsigned)(WSPR_PA_TARGET_X10 / 10),
+                     (unsigned)(WSPR_PA_TARGET_X10 % 10));
+        } else if (tx_this_cycle) {
             wspr_tx_request_t req;
             char err[80] = "";
             if (!ws.my_callsign[0] || !ws.my_grid[0]) {
@@ -1256,29 +1782,31 @@ static void wspr_rx_task(void *arg)
             ESP_LOGW(TAG, "cycle %lld: TX cycle - receiver stood down",
                      (long long)cycle_utc);
 
-            /* ⭐ A TX CYCLE MUST MARK THE CARPET TOO (Dirk, 2026-08-31: "the
-             * nice waterfall is not updated during the cycle before transmit").
+            /* ⛔ THE CARPET DOES NOT MOVE DURING A TRANSMIT CYCLE (operator,
+             * 2026-09-02: "I need it to not move at all - its obvious that
+             * nothing can be rx'ed while tx'ing - this is not a duplex
+             * machine").
              *
-             * This branch returns to the top of the loop BEFORE wf_begin() and
-             * before the wf_mark_boundary() at the end of a receive cycle, so a
-             * transmit was the one stall that drew nothing at all: the pane
-             * holds exactly one cycle (WSPR_WF_CYCLES 1), so the previous
-             * cycle's finished picture simply sat there, unchanged, for two
-             * minutes. The status line said "transmitting" and the carpet said
-             * nothing - which is precisely what the note above wf_mark_boundary()
-             * already forbids: a stalled carpet is indistinguishable from a hung
-             * display.
+             * ⚠ THIS REVERSES A DELIBERATE DECISION, so here is why it is safe
+             * now. The mark was added on 2026-08-31 for Dirk DK7CVD, whose
+             * complaint was that the waterfall went dead around a transmission
+             * with nothing to say why: two dashed rows made a stalled carpet
+             * distinguishable from a hung display.
              *
-             * ⛔ ONCE, HERE - NOT INSIDE THE WAIT BELOW. That loop polls every
-             * 500 ms for the ~110 s of the burst; marking per iteration would
-             * publish ~440 rows into a 176-row buffer and wipe the picture the
-             * operator still wants to see.
+             * What has changed is that the state is now stated plainly twice
+             * elsewhere on the same screen - the TX button reads ON AIR, and the
+             * empty spot list says "Transmitting - not receiving this cycle"
+             * (Roy KI0ER, this release). And Dirk's real bug was never the
+             * missing mark: it was that a burst cost TWO receive cycles, which
+             * is fixed. One dark cycle out of two minutes, clearly labelled, is
+             * what a half-duplex radio actually does.
              *
-             * Deliberately the mark ALONE, keeping the last received cycle on
-             * screen (operator's call, 2026-08-31). The pane is the only place
-             * those signals exist, and a full TX band would have thrown them
-             * away to repeat what the status line already says. */
-            wf_mark_boundary();
+             * The mark also cost what it was meant to preserve: two rows of a
+             * 200 px pane published per transmit, so the carpet crept upward as
+             * if it were receiving something blank.
+             *
+             * Marks at the end of a RECEIVE cycle stay - those separate real
+             * cycles from each other and are not a stall. */
 
             while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
                 vTaskDelay(pdMS_TO_TICKS(500));
@@ -1306,7 +1834,7 @@ static void wspr_rx_task(void *arg)
                 continue;
             }
             wspr_sim_build_window(s_pcm[sslot], CAP_SAMPLES, cycle_utc);
-            build_waterfall(s_pcm[sslot], CAP_SAMPLES);
+            build_waterfall(s_pcm[sslot], CAP_SAMPLES, cycle_utc);
             /* Through the SAME queue as a real window - a sim that took a
              * shortcut past the handoff would stop exercising the thing most
              * likely to be wrong about it. */
@@ -1334,6 +1862,24 @@ static void wspr_rx_task(void *arg)
          * store could not be allocated - so driving the row loop after a failed
          * wf_begin() would spin forever and hang the capture, turning an
          * out-of-memory condition into a dead receiver. */
+        /* ⭐ THE DIAL IS READ HERE, WHERE THE SAMPLES START - NOT WHERE THE
+         * WINDOW IS QUEUED (Kevin KQ4DTX, 2026-09-03: "when the software
+         * decodes a station(s) it labels the band it heard that station on
+         * incorrectly, it uses the current listening band").
+         *
+         * The job already carried the dial rather than letting the decode task
+         * read it, precisely so a decode finishing after a hop could not file
+         * spots under the band we had moved to. But it was read at QUEUE time,
+         * which is after the capture, after the waterfall build and after an
+         * optional SD dump - and hop_maybe() retunes in the last HOP_LEAD_SEC
+         * (3 s) of the cycle. Anything that pushed the queue past that point
+         * recorded the band we were about to listen on instead of the one the
+         * samples came from.
+         *
+         * Reading it at capture-begin removes the window entirely: the value is
+         * taken before the first sample and cannot be overtaken by a retune. */
+        const uint32_t cap_dial_hz = wspr_rx_cycle_dial_hz();
+
         const bool wf_live = wf_begin();
         esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
         if (err != ESP_OK) {
@@ -1366,7 +1912,16 @@ static void wspr_rx_task(void *arg)
             if (elapsed > WSPR_CYCLE_MS - 500 && got > 0) break;  /* boundary */
             /* "captur." not "capturing": the line also carries "| dec n/20"
              * and the full word ran past the left panel's right edge. */
-            set_status("captur. %d/120 s", got / (int)WSPR_SAMPLE_RATE_HZ);
+            /* ⭐ NO SECOND COUNTDOWN. This used to read "captur. NN/120 s"
+             * while the header two inches away already showed
+             * "cycle m:ss / 2:00" - the same 120 seconds, twice, in two
+             * formats (Samuel W7STF: "why the redundant capture time
+             * count-downs, one in mm:ss and another in seconds?").
+             *
+             * The word is still worth having: it distinguishes capturing from
+             * transmitting, simulating and idle, and it is what the "cap | dec"
+             * pairing reads against while a decode runs. Only the number went. */
+            set_status("capturing");
             vTaskDelay(pdMS_TO_TICKS(500));
         }
         dsp_ft8_capture_finish(2000);
@@ -1478,14 +2033,14 @@ static void wspr_rx_task(void *arg)
         /* The carpet stops advancing from here until the next capture opens -
          * ~68 s in which the receiver is genuinely DEAF, not merely idle. Mark
          * it, or a stalled carpet is indistinguishable from a hung display. */
-        wf_mark_boundary();
+        wf_mark_boundary(cycle_utc);
 
         /* Hand the finished window to the decode task and go straight back to
          * the next boundary. THIS is what ends the every-other-cycle deafness:
          * the capture below starts on time while this window is still decoding. */
         {
             wspr_dec_job_t job = { .slot = slot, .cycle_utc = cycle_utc,
-                                   .dial_hz = wspr_rx_cycle_dial_hz() };
+                                   .dial_hz = cap_dial_hz };
             if (!s_dec_q || xQueueSend(s_dec_q, &job, 0) != pdTRUE) {
                 ESP_LOGE(TAG, "cycle %lld: decode queue full - dropping window",
                          (long long)cycle_utc);
@@ -1545,11 +2100,41 @@ bool wspr_rx_start(void)
         return false;
     }
 
+    /* ⛔ TRANSMIT ALWAYS STARTS OFF (Roy KI0ER, 2026-09-01; operator's call:
+     * "It is not okay to have it transmitting automatically if the user were
+     * not aware how it was left last time").
+     *
+     * wspr_tx_en persists, so entering WSPR - including the page being restored
+     * at boot - used to resume beaconing on its own. That is a transmitter
+     * keying up because of a decision made in a previous session, possibly days
+     * ago, and possibly with a different antenna or supply connected. Roy hit
+     * exactly that: he came back to WSPR and found TX already enabled from
+     * before, on a 12 V radio running from a 9 V supply.
+     *
+     * ⚠ This narrows v1.10.0's "the Tab5 wakes on the page it was left on", and
+     * only that far: the PAGE still comes back, so a station set up for WSPR
+     * finds itself on WSPR after a reboot. It just does not transmit until
+     * somebody says so. Those two were only ever bundled together by the fact
+     * that one setting carried both.
+     *
+     * Written through settings_set_wspr_tx_en() rather than poked, so the
+     * drawer, the web page and the config export all see it. */
+    {
+        qmx_settings_t st;
+        settings_load_all(&st);
+        if (st.wspr_tx_en) {
+            settings_set_wspr_tx_en(false);
+            ESP_LOGW(TAG, "entering WSPR: transmit was left ON from a previous "
+                          "session - defaulting it OFF; enable it deliberately");
+        }
+    }
+
     /* Claimed BEFORE the task exists, and cleared if creation fails - #199: a
      * flag set as the task's first statement means "has begun running" while
      * every reader needs "exists", and on this board the gap between the two is
      * long enough to matter. */
     if (!s_wf_mtx) s_wf_mtx = xSemaphoreCreateMutex();
+    if (!s_marks_mtx) s_marks_mtx = xSemaphoreCreateMutex();
     /* Only if untouched: a wspr_guards dev action set before the page is
      * entered must survive starting the loop, or an experiment silently
      * reverts to defaults the moment it is run. */
@@ -1583,8 +2168,35 @@ bool wspr_rx_start(void)
     int reaped = psram_task_reap();
     if (reaped) ESP_LOGI(TAG, "reaped %d parked task(s) from the last visit", reaped);
 
+    /* ⛔ CORE 1, NOT tskNO_AFFINITY - AND THAT ONE WORD WAS #376.
+     *
+     * These two were the only heavy tasks in the system left free to land on
+     * core 0, where `audio_task` (pri 6, pinned to core 0) has to service the
+     * QMX's isochronous IN endpoint and taskLVGL already owns ~74 % of the
+     * core. Priority alone does not protect the audio: an isochronous endpoint
+     * that is not serviced in its interval loses those samples AT THE WIRE,
+     * with no error and no retry - the exact silence #51 documents.
+     *
+     * ⭐ MEASURED, from the `FT8 arm: head=` line's own numbers (samples the
+     * pre-ring actually received, over the wall-clock gap between two arms):
+     *
+     *   healthy build      47,910 pairs/s   11.995 - 11.936 smp/ms   3, 2, 5 decodes
+     *   deep pass on       47,717           11.937 - 11.834          8,2,0,2,5,5,0
+     *   + 3-min carpet     47,628           11.931 - 11.806          0,4,0,0,0
+     *
+     * The pre-ring rate tracks the USB delivery rate exactly, so the samples
+     * are lost before fft_task ever sees them. ⭐ AND THE ERROR IS A RATE, NOT
+     * AN OFFSET: 0.6-0.8 % over a 110.6 s WSPR transmission accumulates
+     * 0.66-0.86 s of slip, about one whole symbol, so the 162-symbol matched
+     * filter walks off its own tones no matter where it starts. That is why
+     * the late arm recorded in #376 was a CO-SYMPTOM and why the proposed
+     * negative-DT search could not have recovered anything.
+     *
+     * Priority stays at 1, below fft_task's 4, which is what CLAUDE.md already
+     * prescribes for new work: core 1, under fft_task, nothing new on core 0.
+     * FT8 has done exactly this since v0.18.0 (`ft8`/`ft8_dec` on core 1). */
     s_dec_task = psram_task_create_reapable(wspr_dec_task, "wspr_dec", 32768, NULL,
-                                   tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+                                   tskIDLE_PRIORITY + 1, 1);
     if (!s_dec_task) {
         ESP_LOGE(TAG, "could not create the decode task");
         vQueueDelete(s_dec_q); s_dec_q = NULL;
@@ -1593,8 +2205,11 @@ bool wspr_rx_start(void)
         return false;
     }
 
+    /* Core 1 for the same reason, and for one of its own: this task is what
+     * arms the capture on the UTC boundary, and on core 0 it was queueing
+     * behind taskLVGL to do it. */
     s_task = psram_task_create_reapable(wspr_rx_task, "wspr_rx", 32768, NULL,
-                               tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+                               tskIDLE_PRIORITY + 1, 1);
     if (!s_task) {
         ESP_LOGE(TAG, "could not create the slot-loop task");
         s_run = false;   /* stands the decode task down too */
@@ -1617,13 +2232,200 @@ bool wspr_rx_start(void)
  * leaving the page is the case the loop cannot cover. */
 static void wspr_pa_guard_release(void)
 {
-    qmx_settings_t ws;
-    settings_load_all(&ws);
-    if (ws.wspr_pa_saved_x10 == 0) return;      /* nothing outstanding */
-    cat_request_pa_voltage_x10(ws.wspr_pa_saved_x10);
+    wspr_pa_guard_release_pending("leaving WSPR");
+}
+
+/* ⭐ THE RESTORE HAS TO BE REACHABLE FROM OUTSIDE WSPR, because the case that
+ * needs it is the one where WSPR never gets to run again.
+ *
+ * Roy KI0ER, 2026-09-02: WSPR ran overnight, his supply switched off on a timer
+ * mid-session, and in the morning he went straight to FT8 and found the radio
+ * still capped at 6.0 V. Leaving the WSPR page restores correctly and always
+ * has - but a power cut is not leaving the page. wspr_rx_stop() never ran, the
+ * value to restore sat in NVS, and nothing on the FT8 or panadapter path ever
+ * looks at it. Every subsequent transmission on any mode was at about 1 W.
+ *
+ * ⚠ He guessed the cause differently - that the radio had reported 6.0 V as its
+ * own full-power setting and the guard had adopted it. That would be the
+ * "a guard inherits whatever the last session left" hazard already recorded in
+ * CLAUDE.md, and it is real, but it is not this: the capture only runs when the
+ * stored value is 0, and his was 11.5. The stored value was right the whole
+ * time; nothing was asking for it.
+ *
+ * So this is called at CAT link-up too. Idempotent - it returns at once when
+ * there is nothing outstanding, which is the normal case on almost every boot.
+ *
+ * ⚠ Uses the narrow accessor, never settings_load_all(): one caller is the CAT
+ * link task on a 5 KB stack, and the settings struct is multi-kilobyte. That is
+ * the bug class that has boot-looped this board four times. */
+void wspr_pa_guard_release_pending(const char *why)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;                       /* nothing outstanding */
+    cat_request_pa_voltage_x10(back);
+    /* ⛔ THE OWED VALUE IS *NOT* CLEARED HERE, AND THAT LINE WAS THE BUG
+     * (Dirk DK7CVD, three times now, most recently 2026-09-10: "the PA
+     * limitation reset still does not work for me. The voltage limit stays at
+     * 6V after changing to FT8 operation").
+     *
+     * It used to send the write and clear the record in the same breath. That
+     * makes the restore fire-and-forget, and it defeats the very check added
+     * in v1.10.9 to catch a lost restore: wspr_pa_guard_periodic_check()
+     * begins `if (back == 0) return;`, so once this cleared it there was
+     * nothing left to retry and the radio stayed at 6.0 V for the rest of the
+     * session. wspr_pa_guard_reclaim_on_link() is shut out the same way.
+     *
+     * ⭐ AND A LOST WRITE HERE IS THE EXPECTED CASE, NOT AN EDGE ONE. This
+     * fires at the moment the operator leaves WSPR, i.e. exactly when the CAT
+     * link is also carrying the mode change, the frequency write and the IQ
+     * re-assert - and an MM write is REFUSED when it is crowded (CLAUDE.md's
+     * CW-profile note measures that: 40 ms spacing had the radio answer `?;`
+     * while the apply logged success, and even 200 ms needed three attempts).
+     *
+     * So the record stands until the RADIO says the value is back.
+     * wspr_pa_guard_periodic_check() already knows how to do that - it
+     * confirms and clears, or resends if the radio is still sitting at our
+     * reduced target - and it only runs when WSPR is not running, which is
+     * precisely this window. Same shape as the fix Uwe DL8UG sent for the CW
+     * transcript the day before: never discard the record of what is owed
+     * until the thing that owes it has confirmed. */
+    ESP_LOGW(TAG, "PA guard: %s - restore to %u.%u V sent; holding it as owed "
+                  "until the radio confirms",
+             why ? why : "restoring", back / 10, back % 10);
+}
+
+/* ⭐ RESTORE ONLY WHAT WE OURSELVES REDUCED - which is also the answer to the
+ * two-radio problem, and a better one than remembering a value per radio.
+ *
+ * Michael KZ4LY, 2026-09-02: "I have built both 9V QMX, 12V QMX+ so far... if
+ * the tab5 keeps track of it in configuration, it should be per unit ID, not
+ * generic across all devices."
+ *
+ * He is right, and the hazard is in THIS code, not hypothetical: the outstanding
+ * value is a single NVS number with no radio attached to it. Reduce a 12 V unit
+ * to 6.0, unplug it, plug in the 9 V unit, and the link-up restore would push
+ * the first radio's 11.5 V onto the second - raising a cap the operator never
+ * set, on a radio that never asked. That is exactly what the capture path
+ * already refuses to do ("a guard that turns someone's power UP is the opposite
+ * of a guard"), and the restore path was not holding to it.
+ *
+ * ⚠ A per-unit table is not available and that is measured, not assumed: the
+ * QMX answers no CAT command with a serial, and its USB descriptor reports
+ * iSerialNumber 0 - checked in the enumeration log rather than guessed. Both
+ * doors are shut.
+ *
+ * But identity was never the question worth asking. The question is "is this
+ * radio still sitting at the value we put there?" - and the radio can answer
+ * that itself. If it reports the WSPR target, this is our own reduction and
+ * restoring is right. If it reports anything else, it is either a different
+ * radio or one the operator has since set by hand, and in both cases the stored
+ * value is not ours to write. The value is kept rather than dropped, so the
+ * original radio still gets it back when it returns.
+ *
+ * Blocks briefly for the answer. Called once per link-up from the poll task,
+ * which is the first place a query can actually go out. */
+void wspr_pa_guard_reclaim_on_link(void)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;                       /* the normal case, every boot */
+
+    cat_query_pa_voltage();
+    int16_t cur = -1;
+    for (int i = 0; i < 25 && cur < 0; i++) {    /* up to ~500 ms */
+        vTaskDelay(pdMS_TO_TICKS(20));
+        cur = cat_get_pa_voltage_x10();
+    }
+    if (cur < 0) {
+        ESP_LOGW(TAG, "PA guard: %u.%u V still owed, but the radio has not "
+                      "reported its Max. PA voltage - leaving it for now",
+                 back / 10, back % 10);
+        return;
+    }
+    if ((uint16_t)cur != WSPR_PA_TARGET_X10) {
+        ESP_LOGW(TAG, "PA guard: %u.%u V is owed, but this radio is at %d.%d V, "
+                      "not the %u.%u V we reduce to - so it is not our doing "
+                      "(a different radio, or you set it yourself). Leaving it "
+                      "alone and keeping the value for the radio it belongs to",
+                 back / 10, back % 10, cur / 10, cur % 10,
+                 WSPR_PA_TARGET_X10 / 10, WSPR_PA_TARGET_X10 % 10);
+        return;
+    }
+    cat_request_pa_voltage_x10(back);
     settings_set_wspr_pa_saved_x10(0);
-    ESP_LOGW(TAG, "PA guard: leaving WSPR - Max. PA voltage restored to %u.%u V",
-             ws.wspr_pa_saved_x10 / 10, ws.wspr_pa_saved_x10 % 10);
+    ESP_LOGW(TAG, "PA guard: radio reconnected still reduced - Max. PA voltage "
+                  "restored to %u.%u V", back / 10, back % 10);
+}
+
+/* ⭐ THE NON-BLOCKING TWIN OF THE ABOVE - for the gap link-up never covers.
+ *
+ * wspr_pa_guard_release_pending() (called from wspr_rx_stop() on a plain
+ * "leave WSPR mode", not a power cut) queues cat_request_pa_voltage_x10(back)
+ * and clears the outstanding NVS value IN THE SAME BREATH, on the assumption
+ * the write will get there. Nothing ever confirms it did. Every other CAT
+ * write on this pipe that matters this much either re-reads to confirm (the
+ * engage direction below, and the link-up reclaim above) or is retried on its
+ * own schedule (the engage direction runs every WSPR cycle); this was the one
+ * path that was fire-and-forget with no way back if the single attempt was
+ * lost. That is the same shape of bug this pipe has produced before - the
+ * CDC-disconnect race and the IQ-mode-retry saga both being an unconfirmed
+ * single write silently failing under load. Dirk DK7CVD, 2026-09-04: "the
+ * return to full power from WSPR mode still doesn't work on my unit. It stays
+ * at 6 Volt after leaving WSPR mode."
+ *
+ * Called periodically (every ~15 s, see poll_task()) rather than once, so it
+ * must never block - it only checks the answer to a query already in flight
+ * and re-issues one if there is none, the same two-phase shape
+ * wspr_pa_guard_update()'s engage path already uses for exactly this reason.
+ *
+ * ⛔ MUST STAND DOWN WHILE THE WSPR SLOT LOOP IS RUNNING - caught live on
+ * hardware within a second of shipping the first version of this function:
+ * "PA guard: WSPR TX on - Max. PA voltage 11.5 -> 6.0 V" immediately followed
+ * by "PA guard: 11.5 V still owed - the earlier restore was never confirmed,
+ * resending", undoing the very reduction it exists to protect, mid-session,
+ * ~1 s after it took effect. `saved_x10 != 0 && cur == target` is EXACTLY the
+ * normal, correct, ongoing-WSPR-session state - not just the "restore was
+ * lost" state this function was written to catch - and nothing about those
+ * two numbers alone can tell the two apart.
+ *
+ * ⚠ A settings-based test (tx_en && pa_reduce && duty>0) was tried first and
+ * is WRONG: entering WSPR forces wspr_tx_en off, but LEAVING it does not
+ * reset that setting back - "entering WSPR: transmit was left ON from a
+ * previous session - defaulting it OFF" is exactly this. So the settings can
+ * still read "wants reduced" for a session that is no longer running at all,
+ * which would make this function stand down forever on the one case it
+ * exists for. wspr_rx_running() asks the thing that actually matters -
+ * whether wspr_pa_guard_update() (called every WSPR cycle, and the only
+ * other place cur==target is written on purpose) is still the one driving
+ * the radio. */
+void wspr_pa_guard_periodic_check(void)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;                       /* the normal case, almost always */
+    if (wspr_rx_running()) return;   /* the WSPR slot loop's own guard owns this state */
+
+    int16_t cur = cat_get_pa_voltage_x10();
+    if (cur < 0) { cat_query_pa_voltage(); return; }   /* ask; check again next tick */
+
+    if ((uint16_t)cur == back) {
+        settings_set_wspr_pa_saved_x10(0);
+        ESP_LOGW(TAG, "PA guard: periodic check confirms %u.%u V restored",
+                 back / 10, back % 10);
+        return;
+    }
+    if ((uint16_t)cur == WSPR_PA_TARGET_X10) {
+        /* Still sitting at our own reduced value - the restore queued when
+         * WSPR mode was left never reached the radio, or was never
+         * confirmed. Resend; harmless if it already landed, since this
+         * merely re-confirms on the next tick either way. */
+        cat_request_pa_voltage_x10(back);
+        cat_query_pa_voltage();
+        ESP_LOGW(TAG, "PA guard: %u.%u V still owed - the earlier restore was "
+                      "never confirmed, resending", back / 10, back % 10);
+        return;
+    }
+    /* Neither our target nor the value owed - a different radio, or the
+     * operator has set it by hand since. Not ours to touch; same reasoning
+     * as wspr_pa_guard_reclaim_on_link() above. */
 }
 
 void wspr_rx_stop(void)

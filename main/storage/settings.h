@@ -148,6 +148,13 @@ typedef struct {
     uint32_t qrz_uploaded_n;  // count of ADIF records already uploaded to QRZ
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
     char     eqsl_pswd[32];   // eQSL.cc password
+    // QRZ.com Callbook (XML) lookup credentials, for net/qrz_coords.c's
+    // real-station-position lookup (net/rbn.c's self-spot skimmers, on the
+    // spot map). Deliberately separate from qrz_api_key above: that one is
+    // the unrelated Logbook/QSO-sync API key, this is username+password for
+    // the XML Callsign Lookup service.
+    char     qrz_lookup_user[40];
+    char     qrz_lookup_pass[40];
     uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
     // Cloudlog / Wavelog (#171). Self-hosted, so the ADDRESS is the operator's -
     // the only upload target here whose host is not hardcoded. May be plain http
@@ -202,7 +209,12 @@ typedef struct {
     // a two-letter mode tag so the lane is not ambiguous.
     bool     spots_mode_filter;
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
+    // Decoded CW from the radio's own decoder, shown along the bottom of the
+    // panadapter in CW/CW-R. Default ON - it is the point of the feature - but
+    // it is an overlay on someone else's waterfall, so it has an off switch.
+    bool     cw_decode_en;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
+    uint8_t  freq_sep_style;    // #302: 0 = 14.074.000 (default), 1 = 14,074,000 (Don N2VGU)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
     /* #298 STILL DISPLAY. true (the default) = the spectrum and waterfall hold
      * still and the VFO marker moves across them; false = the old behaviour,
@@ -221,6 +233,22 @@ typedef struct {
     bool     rbn_en;          // add the RBN telnet feed as a second spot source (default FALSE:
                               // a continuous firehose on this board's most fragile subsystem,
                               // so it is opt-in - see net/rbn.h)
+    // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
+    // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
+    // plus the QRZ callbook lookups that place an RBN skimmer on the map.
+    // Opt-in (default FALSE) for two reasons, neither of them about the map
+    // itself being expensive to draw:
+    //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
+    //     on the operator's own callsign, for the life of the session. An
+    //     outward-facing connection is something to ask for, not to inherit.
+    //   - measured against v1.12.4 with all four running: internal free
+    //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
+    //     the headroom that pool has left. That pool is what fails SD mounts,
+    //     USB endpoint allocation and TLS when it runs dry (#65/#284), so the
+    //     cost belongs to operators who asked for the feature.
+    // Applies live, no reboot: each feed re-reads this every pass, the same
+    // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
+    bool     spotmap_en;
     // SOTA summit activations, fetched from spothole.app. Opt-in (default
     // FALSE) for a reason that is about somebody else's server rather than
     // ours: spothole is Ian Renton M0TRT's hobby box, shared with his blog, and
@@ -358,6 +386,50 @@ typedef struct {
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
                                  // instead of a generic default for the few seconds before the first real FW poll lands.
+    // Power-cycle relay (util/gpio_relay.c). Which pin the relay is wired to
+    // and its polarity are properties of the OPERATOR'S HARDWARE, not of the
+    // browser that happens to be open, so they live here rather than in web
+    // localStorage - Randy N4OPI, 2026-09-06: the web form reset to
+    // GP53/HIGH/1000 ms on every page load, and pulsing the wrong pin or the
+    // wrong polarity into a real relay is not a cosmetic mistake.
+    /* CW PROFILES (#359, Uwe DL8UG). A profile is the pair an operator actually
+     * thinks in: a sidetone/centre they like, and the filter widths worth
+     * offering with it. "Setting this on the QMX is always a bit of a chore,
+     * and half the time you do not have the right values in your head anyway."
+     *
+     * Stored here rather than on the radio because the radio holds exactly ONE
+     * of them - that is the whole complaint. Four is enough for the three he
+     * gave as examples plus one spare, and keeps this struct's growth honest:
+     * it is copied onto task stacks (see settings_load_all's warnings).
+     *
+     * centre_hz 0 means "an empty slot", so an unused profile costs nothing and
+     * cannot be applied by accident. */
+    struct {
+        char     name[12];      // what the operator calls it, "" for unnamed
+        uint16_t centre_hz;     // CW centre, 0 = slot unused
+        uint8_t  mask;          // enabled filter widths, bit i = CW_FILTER_WIDTHS[i]
+    } cw_profile[4];
+
+    /* TUNE SNAP (#347, Samuel W7STF - asked twice). The grid a tap-to-tune
+     * lands on, in Hz, for SSB and the digital modes. 0 = OFF, tune exactly
+     * where the finger went.
+     *
+     * ⚠ This is NOT the old "snap to signal" setting he remembers - that was
+     * snap-to-peak, removed in 2026-08, and it has had nothing to control
+     * since. What he is actually hitting is the mode grid, which was 250 Hz in
+     * SSB until v1.9.3 when it was DOUBLED to 500 for Dave KX3DX (who asked for
+     * 1 kHz). So this is two operators wanting opposite things, and the setting
+     * exists so neither has to lose.
+     *
+     * CW is deliberately NOT covered: it snaps to 10 Hz, which is fine enough
+     * that nobody has complained, and tap-to-RIT overrides the grid entirely
+     * because a few-hundred-Hz offset onto one caller needs resolution, not
+     * tidiness. */
+    uint16_t tune_snap_hz;      // 0=off, else 250/500/1000; default 500
+
+    uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
+    bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
+    uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -470,6 +542,12 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
  * reason settings_wifi_known_count() exists (see CLAUDE.md, "Task stacks on
  * this board are TINY"). */
 int16_t settings_get_cw_tx_offset_hz(void);
+
+/* Narrow reads for the WSPR transmit schedule - see the note in settings.c.
+ * Never load the whole struct on taskLVGL or httpd just to get these two. */
+bool    settings_get_wspr_tx_en(void);
+uint8_t settings_get_wspr_duty_pct(void);
+uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
  *
@@ -479,6 +557,20 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * boot-looped this device once. */
 void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[16]);
 
+/* ---- targeted getters, for code on a small stack ------------------------
+ *
+ * qmx_settings_t is ~1 KB and grows with every setting added, so
+ * settings_load_all() on a 3-4 KB task stack is a stack overflow waiting for
+ * the next field. It has already happened FOUR times in this codebase - twice
+ * with wifi_known_t on `sys_evt` (2026-08-05), once in the static-IP path on
+ * `sys_evt` (2026-08-31, a boot loop), and once in `settings_flush` and
+ * `render` on the CW branch (2026-09-01, a reboot on every page swipe).
+ *
+ * The rule, from the comment above settings_get_wifi_static(): code on a task
+ * stack of 4 KB or less asks for the fields it needs, never the whole struct.
+ */
+uint32_t settings_get_last_unix_time(void);
+void     settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out);
 /* Band-plan region + grid without copying the whole struct. Same reason as
  * settings_get_wifi_static() above: the callers are the band-plan strip and the
  * CW-segment helpers, which run on the render task (4096 B) and the LVGL touch
@@ -495,7 +587,24 @@ uint8_t settings_get_swr_limit_x10(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
+// ⛔ NARROW accessor on purpose. settings_load_all() copies a multi-kilobyte
+// struct, and this is read from a 4 Hz LVGL timer callback - taskLVGL has about
+// 8 KB of stack. See CLAUDE.md "Task stacks on this board are TINY": the same
+// mistake boot-looped the device via sys_evt in #307, and it has now been made
+// four times. Reads the staged copy, so it reflects a change immediately.
+bool settings_get_cw_decode_en(void);
+void settings_set_cw_decode_en(bool v);
 void settings_set_distance_in_miles(bool v);
+/* Narrow read - the WSPR decode list formats up to 18 rows per repaint on
+ * taskLVGL, where settings_load_all()'s multi-kilobyte copy has crashed this
+ * project four times. See the stack notes in CLAUDE.md. */
+bool settings_get_distance_in_miles(void);
+/* #302: how a frequency is punctuated. 0 = dots (what the Tab5 has always
+   shown), 1 = comma thousands with a decimal point, which is the USA/HP
+   calculator reading Don N2VGU asked for. Both keep a DECIMAL POINT between
+   kHz and Hz - 14,074,000 and 14.074.000 are the same number written two
+   ways, and 14,074,000 would be Hz. See util/format_freq.h. */
+void settings_set_freq_sep_style(uint8_t v);
 void settings_set_rit_pill_show(bool v);
 void settings_set_still_view(bool v);
 void settings_set_still_notice_done(bool v);
@@ -509,6 +618,8 @@ void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
+void settings_set_spotmap_en(bool v);   // spot map + its self-spot feeds (see spotmap_en above)
+bool settings_get_spotmap_en(void);     // narrow: callers are on small stacks
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
 void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot
@@ -648,6 +759,17 @@ void settings_set_qrz_uploaded_n(uint32_t n);
 void settings_set_eqsl_user(const char *user);
 void settings_set_eqsl_pswd(const char *pswd);
 
+// QRZ.com Callbook (XML) lookup credentials, set via the web UI (debounced
+// flush, one field per call like the eQSL setters above). Pass NULL or empty
+// to clear. See the struct field comment in this header for why this is
+// separate from qrz_api_key.
+void settings_set_qrz_lookup_user(const char *user);
+void settings_set_qrz_lookup_pass(const char *pass);
+
+// Narrow getter for net/qrz_coords.c's background task - see the "targeted
+// getters, for code on a small stack" note above settings_get_wifi_static().
+void settings_get_qrz_lookup_creds(char user[40], char pass[40]);
+
 // Count of ADIF records already uploaded to eQSL (offset into the log file
 // for the next upload batch). Debounced flush.
 void settings_set_eqsl_uploaded_n(uint32_t n);
@@ -682,6 +804,23 @@ void settings_set_wifi_static(const char *ip, const char *mask,
 // for the next upload batch). Debounced flush.
 void settings_set_lotw_uploaded_n(uint32_t n);
 
+// Read the three upload cursors WITHOUT loading the whole settings struct.
+//
+// ⛔ Exists because `settings_load_all()` puts a multi-kilobyte
+// `qmx_settings_t` on the caller's stack, and the callers that need these
+// three numbers are delete/rewrite paths running on small worker tasks. That
+// is not hypothetical: doing it the obvious way crashed `adif_delt` with a
+// Stack protection fault at 48 s on a 4 KB stack (2026-09-06) - the same bug
+// class as the three `wifi.c` instances in CLAUDE.md. Any argument is
+// optional (pass NULL).
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw);
+
+// The three fields the spot lane needs, without the whole struct. Same reason:
+// it runs on the `render` task, which the settings_load_all() stack guard
+// caught with under 2 KB to spare. grid_out must be at least 8 bytes.
+void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
+                             char *grid_out, size_t grid_sz);
+
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
@@ -709,6 +848,43 @@ void settings_set_charge_limit_pct(uint8_t pct);
 // Display sleep: minutes of touch inactivity before the backlight turns off
 // (0 = never). Any touch wakes it; a two-finger double-tap sleeps immediately.
 void settings_set_display_sleep_min(uint8_t minutes);
+
+// Power-cycle relay wiring (debounced flush). Set as a group - the three are
+// only ever written together from one form, so they share a dirty bit, the
+// same way the LoTW state/county fields share DIRTY_LOTW_DXCC.
+// Out-of-range values are clamped to the defaults rather than stored: a pin
+// outside gpio_relay.c's 53/54 whitelist would be refused at pulse time
+// anyway, and silently keeping it would leave the form showing a setting that
+// can never fire.
+void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
+
+// Read the stored relay wiring. Narrow accessor rather than
+// settings_load_all() - that is a multi-kilobyte struct and this is read from
+// the web handler; see the task-stack notes in CLAUDE.md.
+void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
+
+/* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a
+ * multi-hundred-byte struct and CLAUDE.md records four crash-loops from doing
+ * it on a small task stack. idx is 0..CW_PROFILE_COUNT-1.
+ * Returns false for an unused slot (centre_hz == 0). */
+#define CW_PROFILE_COUNT 4
+/* Longest profile name that can be READ on the Tab5. Not a storage limit - the
+ * field is 12 bytes - but the limit that matters, because the drawer picker is
+ * four buttons across a 520 px drawer, i.e. 116 px each, and at montserrat_20 a
+ * name longer than this cannot be shown whole. Enforced in
+ * settings_set_cw_profile() rather than in the two callers, so the web form and
+ * a config import obey the same rule. The button also ellipsizes, so a name
+ * from an older store can never spill into its neighbour. */
+#define CW_PROFILE_NAME_MAX 9
+bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
+                             uint16_t *centre_hz, uint8_t *mask);
+void settings_set_cw_profile(int idx, const char *name,
+                             uint16_t centre_hz, uint8_t mask);
+
+/* Tune snap (#347). Narrow accessor - the touch handler reads this on every
+ * tap and must not copy the whole settings struct onto taskLVGL's stack. */
+uint16_t settings_get_tune_snap_hz(void);
+void settings_set_tune_snap_hz(uint16_t hz);
 
 // Resource-monitor floating overlay: shown/hidden, and its dragged position
 // (offset in pixels from the screen's top-left, debounced flush). Position

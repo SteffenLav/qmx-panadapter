@@ -74,6 +74,8 @@ const char *ft8_screen_view_get_web_reply_result(void);
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
 // Called by the CQ preset modal after a save. LVGL-thread only.
 void ft8_screen_view_refresh_cq_label(void);
+/* #302: re-render the Preset button after the frequency format changes. */
+void ft8_screen_view_refresh_preset(void);
 
 // Re-activates the row adjacent (delta = +1 down / -1 up) to the one last
 // confirmed via row_activate(), re-resolving and re-opening the TX

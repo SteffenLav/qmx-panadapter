@@ -151,7 +151,24 @@ static ft8_call_t *find_or_evict(const char *call)
             free_idx = i;
         }
     }
-    if (free_idx >= 0) return &s_table[free_idx];
+    // An unoccupied slot is NOT a blank one. Aging (ft8_screen_get_all) drops a
+    // quiet station by clearing `occupied` alone, leaving every field behind -
+    // so this slot can still hold the PREVIOUS station's data. Clear it for the
+    // same reason the eviction path below does.
+    //
+    // ⛔ This was a real, logged-to-ADIF fault (Gyula HA3HZ, 2026-09-06: "the
+    // Grid data for some callsigns does not match the reality"). Every other
+    // field is overwritten unconditionally by record_decode(), so a recycled
+    // slot could only leak through `last_grid` - which is written ONLY when the
+    // message carries a grid, because clobbering it with empty was itself a bug
+    // (John W5JSS, v1.3.2). Consequence: a new station landing here whose own
+    // messages carry no grid - a report/RR73/73, i.e. exactly a drawn-out QRP
+    // exchange - inherited a stranger's grid and kept it, and ft8_qso.c then
+    // looked it up by callsign at completion and logged it as fact.
+    if (free_idx >= 0) {
+        memset(&s_table[free_idx], 0, sizeof(ft8_call_t));
+        return &s_table[free_idx];
+    }
     memset(&s_table[oldest_idx], 0, sizeof(ft8_call_t));
     return &s_table[oldest_idx];
 }

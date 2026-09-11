@@ -87,11 +87,9 @@ static const char *TAG = "spots_ui";
 // is the same KIND of spot, only better evidenced.
 #define COL_CONFIRMED 0xFFF0B0
 
-// The radio's mode string as the spot store classifies modes. Returns
-// SPOT_MODE_OTHER for anything unrecognised, which the filter reads as "do not
-// filter" - failing OPEN on purpose. A mode we do not know about should show
-// you every spot, not hide the band.
-static spot_mode_t spot_mode_from_cat(const char *m)
+// Declared in spots.h and shared with the web path - see there for why. The
+// Tab5 and the browser must classify a mode identically or their lanes differ.
+spot_mode_t spot_mode_from_cat(const char *m)
 {
     if (!m || !m[0]) return SPOT_MODE_OTHER;
     if (strstr(m, "CW"))  return SPOT_MODE_CW;
@@ -281,8 +279,13 @@ static void repaint(void)
 
     // Opting out simply draws nothing. Now that this is an overlay rather than a
     // strip it costs no layout height either way, so there is nothing to reflow.
-    qmx_settings_t st;
-    settings_load_all(&st);
+    // ⛔ NOT settings_load_all(): this runs on the `render` task, and the stack
+    // guard in settings.c caught it here with ~1.9 KB left against a 916 B
+    // struct plus whatever the rest of this function needs. Three fields is all
+    // it ever used.
+    struct { uint8_t bandplan_region; bool spots_mode_filter; char my_grid[8]; } st;
+    settings_get_spots_lane(&st.bandplan_region, &st.spots_mode_filter,
+                            st.my_grid, sizeof(st.my_grid));
     if (!spots_any_source_enabled()) { hide_all(); return; }
 
     // Scope to the band we are ON, the same range /api/status uses. Taking the
@@ -493,6 +496,23 @@ static void repaint(void)
         tick_n++;
     }
 
+    // ⛔ THESE COUNT OFF-SCREEN SPOTS ONLY, AND THAT IS NOT AN OVERSIGHT.
+    //
+    // On 2026-09-10 they were changed to include in-view spots that lost their
+    // label to a full row - which is a real gap, since MAX_LABELS (16) over
+    // LABEL_ROWS (3) drops plenty and they get no line either. It was reverted
+    // the same evening, by the operator: "the edge counters should always show
+    // what will be available when you click on it".
+    //
+    // He is right, and the reason is one line below: edge_l_click_cb() calls
+    // tune_to_spot(&s_off_l), i.e. tapping the counter TUNES to the nearest
+    // spot beyond that edge. The number is the label on a navigation control,
+    // so it has to mean what the control does. An in-view spot is not somewhere
+    // the tap can take you - you are already there.
+    //
+    // If the dropped-label gap is worth surfacing, it needs its own indicator
+    // with its own action, not a second meaning bolted onto this one.
+    //
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
     // Spelled out as "spots (N)" rather than a bare "<N": a lone number against the

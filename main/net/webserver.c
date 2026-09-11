@@ -4,6 +4,8 @@
 #include "net/ota_update.h"     // #218
 #include "filebrowser.h"      // filebrowser_register - microSD web file browser
 
+#include <sys/time.h>         // gettimeofday - the FT8 slot clock in /api/status
+
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -12,7 +14,8 @@
 #include "battery.h"          // battery_get_level, battery_is_charging
 #include "util/status.h"      // status_charge_limit_active
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
-#include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
+#include "cat.h"
+#include "cw_decode.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"
 #include "audio.h"          // audio_ring_backlog_pairs - spectrum staleness               // ui_get_*, ui_set_zoom
 #include "qmx_term.h"         // /api/term
@@ -21,9 +24,11 @@
 #include "ui_mode.h"          // ui_mode_get (CW page reports screen:"cw")
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
+#include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
+#include "wspr_decode.h"     // the deep-search ration (#367/#376 dev action)
 #include "net/wsprnet.h"    // spot publishing (OFF by default)
 #include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
@@ -34,7 +39,10 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
-#include "util/dma_owners.h"   // TEMP INSTRUMENT #283
+#include "adif/adif_check.h"  // #263 "check my log" - completeness pass
+#include "util/dma_owners.h"
+#include "util/task_stacks.h"   // on-demand stack headroom (#329)
+#include "util/format_freq.h"   // #302 self-test
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
@@ -42,6 +50,8 @@
 #include "util/net_guard.h"   // net_url_parse - save-time URL sanity only
 #include "util/ip_guard.h"    // #307: a static IP must not lock the operator out
 #include "util/sock_probe.h"  // #313: how many LWIP sockets are left
+#include "util/sock_owners.h"  // #313: and WHO is holding them
+#include "util/db_gridlines.h" // the dB scale the browser must draw too
 #include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
@@ -67,8 +77,13 @@
 #include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
+#include "gpio_relay.h"        // gpio_pulse - remote relay for a QMX power cycle
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
+/* Defined by the lv_event.c guard in managed_components/ (#329,
+   tools/patches/apply_lv_event_chain_guard.ps1). Declared here rather than in
+   a header because the definition lives in a patched vendor file. */
+extern uint32_t qmx_lv_event_chain_bad;
 #include "util/dxcc.h"        // dxcc_lookup - the decode list's COUNTRY column
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
@@ -212,6 +227,63 @@ static void add_ft8_tx_status(cJSON *root)
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
 
+    /* ⭐ FT8 or FT4, from the engine rather than inferred. The browser used to
+     * work this out by looking for "FT4" in the TX status TEXT, which is a
+     * guess dressed as a fact: it reads FT8 whenever nothing is transmitting.
+     * The mode heading and the preset list both need the real answer, and the
+     * device is the only thing that has it. Same rule the FT4 preset list had
+     * to learn the hard way this week - one accessor, both screens. */
+    cJSON_AddStringToObject(f, "proto",
+        ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+
+    /* ⭐ THE MINI OCCUPANCY STRIP AND THE SLOT CLOCK, so the browser can show
+     * what the Tab5's left pane shows. Operator, 2026-09-02: "I want to have
+     * the mini E & O strips shown just like on the Tab5 but bigger of course...
+     * next to the strips i want to se the 15sec or 7 sec countdown with the
+     * pulsing bar - again like the Tab5."
+     *
+     * Carried on THIS poll rather than by making the page fetch /api/tone as
+     * well. It is about 130 bytes, it is only sent while the FT8 screen is up
+     * (see the caller), and httpd here is single-worker - a second periodic
+     * request is the more expensive of the two by a wide margin.
+     *
+     * ⚠ The masks are STRINGS, one character per 50 Hz slot. JavaScript cannot
+     * hold 52 bits of integer without losing the low ones to the double it
+     * would become - the same reason /api/tone sends them this way. */
+    {
+        int n_slots = 0, n_stations = 0;
+        uint64_t mask_e = 0, mask_o = 0;
+        ft8_tx_get_tone_occupancy_split(&mask_e, &mask_o, &n_slots, &n_stations);
+        char bits[72];
+        int n = (n_slots > 0 && n_slots < (int)sizeof(bits)) ? n_slots : 0;
+        for (int i = 0; i < n; i++) bits[i] = (mask_e >> i) & 1ULL ? '1' : '0';
+        bits[n] = '\0';
+        cJSON_AddStringToObject(f, "busy_e", bits);
+        for (int i = 0; i < n; i++) bits[i] = (mask_o >> i) & 1ULL ? '1' : '0';
+        cJSON_AddStringToObject(f, "busy_o", bits);
+        /* Drives the all-grey "nothing heard yet" state - an empty band and a
+         * band nobody has listened to must not look alike. */
+        cJSON_AddNumberToObject(f, "stations", n_stations);
+        cJSON_AddNumberToObject(f, "tone_hz",  ft8_tx_get_tone_pref_hz());
+        int partner = 0;
+        if (ft8_qso_get_priority_freq(&partner) && partner > 0)
+            cJSON_AddNumberToObject(f, "partner_hz", partner);
+    }
+    {
+        /* Slot length and how far into the slot we are. The browser runs the
+         * bar off its own clock between polls and re-anchors on each of these,
+         * so it stays smooth without a request per frame. */
+        const int slot_ms = ft8_op_mode_slot_ms();
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        int64_t ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        cJSON_AddNumberToObject(f, "slot_ms",     slot_ms);
+        cJSON_AddNumberToObject(f, "slot_pos_ms", (double)(ms % slot_ms));
+        /* Which window this slot is, on the SAME grid the decode list's E/O
+         * column uses - so the strip's highlight and the rows agree. */
+        cJSON_AddBoolToObject(f, "slot_even", ((ms / slot_ms) % 2) == 0);
+    }
+
     char tx_text[32];
     int  secs_until = 0;
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
@@ -245,10 +317,21 @@ static void add_ft8_tx_status(cJSON *root)
                  (double)trip_swr);
     } else if (tx_st == FT8_TX_ACTIVE) {
         st = "active";
-        snprintf(b, sizeof(b), "Transmitting: %s%s", tx_text, cq_line);
+        // Shorter on purpose (operator, 2026-09-05) - one less word to fit
+        // before this line's own ellipsis truncation has to start eating
+        // the callsign.
+        snprintf(b, sizeof(b), "TX'ing: %s%s", tx_text, cq_line);
     } else if (tx_st == FT8_TX_ARMED) {
         st = "armed";
-        snprintf(b, sizeof(b), "TX armed: %s%s (~%ds)", tx_text, cq_line, secs_until);
+        // The countdown used to be baked into this string ("... (~Ns)") -
+        // the one piece of it an operator actually needs a fresh reading of
+        // every second - and a long callsign/cq_line combination could push
+        // it past the box's single-line width, ellipsis-truncating exactly
+        // the seconds figure (Randy N4OPI: "in the boxes is a figure (~1...
+        // that is cut off - what is it?"). It is now its own field
+        // (armed_secs, below) rendered as a small badge that can never be
+        // truncated away, so it is left out of the truncatable text here.
+        snprintf(b, sizeof(b), "TX armed: %s%s", tx_text, cq_line);
     } else if (qso_st == FT8_QSO_DONE) {
         st = "done";
         char target[FT8_CALL_MAX_LEN];
@@ -277,6 +360,7 @@ static void add_ft8_tx_status(cJSON *root)
     }
     cJSON_AddStringToObject(f, "st",   st);
     cJSON_AddStringToObject(f, "text", b);
+    if (tx_st == FT8_TX_ARMED) cJSON_AddNumberToObject(f, "armed_secs", secs_until);
 
     // Power and SWR from the last burst (Randy N4OPI, top of his list for
     // operating FT8 from another room: "Ability to see Power out and SWR. As it
@@ -407,6 +491,36 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "freq_hz",     (double)cat_get_frequency());
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
+    // Decoded CW, EXACTLY the line the Tab5 is drawing - same grid, same wrap
+    // position, same two-column gap - because the operator asked for the two
+    // screens to be identical and rendering it twice from the raw text would
+    // drift the moment either side changed. Only in CW/CW-R, and only when the
+    // operator has it switched on, so it costs nothing the rest of the time.
+    {
+        const char *m = cat_get_mode_str();
+        bool cw = m && (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0);
+        if (cw && settings_get_cw_decode_en()) {
+            /* CW_GRID_CELLS, not CW_LINE_COLS - the grid is CW_LINE_ROWS rows
+             * and cw_decode_line() fills whatever it is given, so a one-row
+             * buffer silently truncated the second line away and the browser
+             * drew an empty lower row while the Tab5 drew both. Caught on the
+             * bench the same evening the two-line pane shipped. */
+            char line[CW_GRID_CELLS + 1];
+            cw_decode_line(line, sizeof(line));
+            cJSON *c = cJSON_CreateObject();
+            if (c) {
+                cJSON_AddStringToObject(c, "line", line);
+                /* The write position, so the browser can colour the two passes
+                 * the way the Tab5 does. Sent rather than re-derived - the
+                 * whole reason cw_decode.c owns the one line model is that two
+                 * copies of "where does the next character go" drift. */
+                cJSON_AddNumberToObject(c, "col", cw_decode_line_col());
+                cJSON_AddNumberToObject(c, "wpm", cw_decode_wpm());
+                cJSON_AddItemToObject(root, "cw", c);
+            }
+        }
+    }
+
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     /* Three pages now. Asked of ui_mode rather than of the FT8 view, so a new
      * page cannot be reported as "panadapter" just because FT8 is not up. */
@@ -467,10 +581,17 @@ static esp_err_t status_handler(httpd_req_t *req)
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
         add_ft8_tx_status(root);
-    // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
     {
         uint32_t bw = ui_get_passband_width_hz();
         if (bw == 0) {
+            /* Mode defaults, for the width READOUT only, before CAT has
+             * answered FW;. This block used to carry the comment "matches Tab5
+             * compute_passband_edges_hz" - i.e. it admitted to being a copy of a
+             * rule that lives elsewhere, and there were then THREE
+             * implementations of the passband: this one, the real one in ui.c,
+             * and a fourth-hand version in the browser. The EDGES below are now
+             * asked for rather than re-derived, so this survives only to put a
+             * plausible number next to "BW" on a radio that has not spoken yet. */
             const char *m = ui_get_mode_str();
             if      (strstr(m, "CW"))   bw = 300;
             else if (strstr(m, "AM"))   bw = 6000;
@@ -478,6 +599,54 @@ static esp_err_t status_handler(httpd_req_t *req)
             else                        bw = 2700;  // USB/LSB/DiGi
         }
         cJSON_AddNumberToObject(root, "passband_hz", (double)bw);
+
+        /* ⭐ THE PASSBAND EDGES THEMSELVES, FROM THE ONE FUNCTION THAT KNOWS.
+         *
+         * The browser worked them out again and got DIGITAL WRONG AT BOTH ENDS:
+         * it treated DiGi as USB, drawing 200..200+FW, where the QMX uses one
+         * fixed 150..3200 filter for digital modes AND reports FW; as that
+         * filter's TOP EDGE rather than its width. So in FT8 the Tab5 drew
+         * 150..3200 and the page drew 200..3400 - which is the other half of
+         * Samuel W7STF's "the pass-band filter being centered on the Tab5, but
+         * totally in a different place on the Web-UI" (#342), the half the zoom
+         * viewport fix did not touch.
+         *
+         * Sent, not derived. Same rule as the CW line, the spot filter and the
+         * viewport: one implementation, and the page draws what it is told. */
+        int32_t pb_lo = 0, pb_hi = 0;
+        ui_get_passband_edges_hz(&pb_lo, &pb_hi);
+        cJSON_AddNumberToObject(root, "pb_lo_hz", (double)pb_lo);
+        cJSON_AddNumberToObject(root, "pb_hi_hz", (double)pb_hi);
+    }
+
+    /* The dB scale and its round gridline values, from util/db_gridlines.c -
+     * the same numbers the Tab5 prints up its right-hand edge. The page had
+     * -40/-60/-80/-100/-120 baked in, which stops being true the moment the
+     * dB-range sliders move; that is exactly the bug db_gridlines.c was written
+     * to fix on the Tab5 (Samuel W7STF, v1.8.3) and the browser never got it. */
+    {
+        float db_lo = 0, db_hi = 0;
+        ui_get_db_range(&db_lo, &db_hi);
+        cJSON_AddNumberToObject(root, "db_lo", (double)db_lo);
+        cJSON_AddNumberToObject(root, "db_hi", (double)db_hi);
+        float lines[DB_SCALE_MAX_LBLS];
+        int nl = db_gridlines_build(db_lo, db_hi, DB_SCALE_MAX_LBLS, lines);
+        cJSON *arr = cJSON_AddArrayToObject(root, "db_lines");
+        if (arr)
+            for (int i = 0; i < nl; i++)
+                cJSON_AddItemToArray(arr, cJSON_CreateNumber((double)lines[i]));
+    }
+
+    /* The zoom steps the Tab5 offers. The page's own list was already one short
+     * - {1,2,4,8,16} against {1,2,4,8,16,24} - so x24 could not be selected from
+     * the browser at all. */
+    {
+        const float *zp = NULL;
+        int nz = ui_zoom_presets(&zp);
+        cJSON *arr = cJSON_AddArrayToObject(root, "zoom_steps");
+        if (arr && zp)
+            for (int i = 0; i < nz; i++)
+                cJSON_AddItemToArray(arr, cJSON_CreateNumber((double)zp[i]));
     }
 
     float peak_dbm = -999.0f;
@@ -490,7 +659,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "zoom",        (double)ui_get_zoom_factor());
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
 
-    /* ⭐ THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
+    /* THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
      *
      * index.html computes `panHz = lastPanBins * HZ_PER_BIN` in six separate
      * places and masks a centre bin with `& (SPEC_W - 1)`. That is the pan
@@ -514,12 +683,35 @@ static esp_err_t status_handler(httpd_req_t *req)
     {
         pan_view_cfg_t pvc;
         pan_view_t     pv;
+        /* ⭐ THE VIEWPORT GOES OUT ON BOTH PATHS; ONLY THE BIN MAPPING IS
+         * CONDITIONAL. This whole block used to sit inside the
+         * ui_pan_view_current() test, which declines while the zoom FFT is
+         * driving - so above zoom x1 the browser was sent NO axis at all and
+         * fell back to a dial-centred guess. Samuel W7STF reported the four
+         * consequences separately (#342 #343 #344 #346); see ui.c's
+         * ui_screen_view_hz() for the full account.
+         *
+         * The distinction is real, not a workaround: which frequencies are on
+         * screen is knowable on either path (ui_view_lo_now() is explicitly
+         * "whichever FFT is driving the display"), while which BIN a frequency
+         * lands in is not, because dsp_set_zoom() has mixed the pan target to
+         * DC. So the page always gets lo/hi/span, and cap_lo/cap_hi, if_offset and n_bins -
+         * which exist only to map Hz to a bin - still appear only when they
+         * mean something. The page already guards on if_offset_hz being
+         * undefined before using them. */
+        {
+            int64_t vlo = 0;
+            int32_t vspan = 0;
+            ui_screen_view_hz(&vlo, &vspan);
+            if (vspan > 0) {
+                cJSON_AddNumberToObject(root, "view_lo_hz", (double)vlo);
+                cJSON_AddNumberToObject(root, "view_hi_hz", (double)(vlo + vspan));
+                cJSON_AddNumberToObject(root, "span_hz",    (double)vspan);
+            }
+        }
         if (ui_pan_view_current(&pvc, &pv, DSP_FFT_SIZE)) {
-            cJSON_AddNumberToObject(root, "view_lo_hz", (double)pv.lo_hz);
-            cJSON_AddNumberToObject(root, "view_hi_hz", (double)pv.hi_hz);
             cJSON_AddNumberToObject(root, "cap_lo_hz",  (double)pv.cap_lo_hz);
             cJSON_AddNumberToObject(root, "cap_hi_hz",  (double)pv.cap_hi_hz);
-            cJSON_AddNumberToObject(root, "span_hz",    (double)pv.span_hz);
             /* Sent, not re-derived. It is IF_OFFSET_HZ plus the CW centre plus
              * the per-unit trim minus RIT, and a browser rebuilding that from
              * four separate fields is one more place for the two screens to
@@ -563,6 +755,10 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     cJSON_AddNumberToObject(root, "audio_backlog_pairs",
                             (double)audio_ring_backlog_pairs());
+    /* Which CW filter widths the RADIO offers (#350, Uwe DL8UG). 0 = it did not
+     * say, or says none - and then BOTH screens must show all eight, never an
+     * empty list. See cat.c for why zero is a real state and not just a guard. */
+    cJSON_AddNumberToObject(root, "cw_filter_mask", (double)cat_cw_filter_mask());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
@@ -649,9 +845,31 @@ static esp_err_t status_handler(httpd_req_t *req)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
         cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
+        cJSON_AddBoolToObject(root, "qrz_lu_creds_set", cfg.qrz_lookup_user[0] != '\0' && cfg.qrz_lookup_pass[0] != '\0');
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
+        cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+        /* #333: the spot lane tags each label with its mode unless the mode
+           filter is on - with the filter on every label is your own mode and
+           a tag would be noise on all of them. The browser draws the same
+           lane and needs the same flag; cfg is already loaded here. */
+        cJSON_AddBoolToObject(root, "spots_mode_filter", cfg.spots_mode_filter);
+        /* #302: the page's fmtHz() mirrors this, so both screens punctuate a
+           frequency the same way without the browser having to fetch settings. */
+        cJSON_AddNumberToObject(root, "freq_sep_style", (double)cfg.freq_sep_style);
+        // The relay's wiring, so the web form comes back showing the pin and
+        // polarity this station is actually wired for instead of resetting to
+        // GP53/HIGH/1000 ms on every page load (Randy N4OPI, 2026-09-06).
+        {
+            uint8_t  rpin = 53; bool rlevel = true; uint16_t rms = 1000;
+            settings_get_gpio_relay(&rpin, &rlevel, &rms);
+            cJSON *relay = cJSON_CreateObject();
+            cJSON_AddNumberToObject(relay, "pin", rpin);
+            cJSON_AddNumberToObject(relay, "level", rlevel ? 1 : 0);
+            cJSON_AddNumberToObject(relay, "ms", rms);
+            cJSON_AddItemToObject(root, "relay", relay);
+        }
 
         // Band-plan for the current band — whole-band strip on the web UI,
         // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
@@ -713,6 +931,16 @@ static esp_err_t status_handler(httpd_req_t *req)
             // array only when it is stale. spots_v is ALWAYS sent, so "no spots
             // key" is never ambiguous: it means "you are up to date".
             uint32_t sv = spots_version();
+            /* ⛔ THE VERSION HAS TO COVER THE FILTER, NOT JUST THE STORE.
+             * The array now depends on the radio's MODE as well as on the spot
+             * store, and spots_version() only moves when a source refreshes. So
+             * a mode change would have left the browser holding the previous
+             * mode's spots until POTA next updated - minutes of a lane that
+             * quietly disagrees with the Tab5, which is the very fault being
+             * fixed here. Folding the filter state and the mode into the
+             * version makes a mode change invalidate the cache by itself. */
+            if (cfg.spots_mode_filter)
+                sv = sv * 8u + (uint32_t)spot_mode_from_cat(cat_get_mode_str()) + 4u;
             cJSON_AddNumberToObject(root, "spots_v", (double)sv);
             char qbuf[64] = {0}, svbuf[16] = {0};
             bool want = true;
@@ -730,11 +958,43 @@ static esp_err_t status_handler(httpd_req_t *req)
             // cap - i.e. it was already truncating, the same way SPOTS_MAX's
             // first cut did (see spots.h). The count that was found is sent as
             // spots_total regardless, so a truncation can never be silent.
-            const int MAXSP = 96;
+            /* ⛔ SPOTS_MAX, THE SAME CAP THE TAB5 USES - not a number of its
+             * own. This was 96 while spots_lane.c took 200 from the same store
+             * over the same band range, so on a busy band the browser was
+             * working from a TRUNCATED list: the operator photographed both
+             * screens seconds apart on 20 m CW and the Tab5 showed six spots
+             * and "106 >" where the page showed three and "82 >".
+             *
+             * The comment above spots_lane.c's own query records him reporting
+             * this same class on 2026-08-09 - "the off-screen arrows disagreed,
+             * and the two never showed the same overview". A second cap is a
+             * second rule, and two rules is what that fixed.
+             *
+             * The payload only grows on a band that actually has more than 96,
+             * and it is sent at most once per spot-store refresh thanks to ?sv,
+             * not once a second. */
+            const int MAXSP = SPOTS_MAX;
             spot_t *sp = heap_caps_malloc(sizeof(spot_t) * MAXSP,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (sp) {
                 int ns = spots_get_in_range(sp, MAXSP, sp_segs[0].lo_hz, sp_segs[sp_nseg - 1].hi_hz);
+                /* The SAME mode filter the Tab5's lane applies (spots_lane.c).
+                 * It used to be applied only there, so with "Mode filter the
+                 * spots" on the Tab5 dropped every spot that was not your mode
+                 * while this array still carried all of them - two visibly
+                 * different lanes from one setting. Filtering here rather than
+                 * in the page keeps ONE rule: a second copy in JavaScript is
+                 * exactly what produced the difference. */
+                if (cfg.spots_mode_filter) {
+                    spot_mode_t want = spot_mode_from_cat(cat_get_mode_str());
+                    if (want != SPOT_MODE_OTHER) {
+                        int keep = 0;
+                        for (int i = 0; i < ns; i++)
+                            if (sp[i].mode == want || sp[i].mode == SPOT_MODE_OTHER)
+                                sp[keep++] = sp[i];
+                        ns = keep;
+                    }
+                }
                 cJSON *sarr = cJSON_AddArrayToObject(root, "spots");
                 int64_t now = (int64_t)time(NULL);
                 for (int i = 0; i < ns; i++) {
@@ -837,11 +1097,29 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(usbp, "buffer_parse_no_urb", (double)g_qmx_usb_buffer_parse_no_urb);
     }
 
+    /* #329: how many times the LVGL event-chain guard refused to walk a
+     * corrupt link. Non-zero means the ADIF-viewer crash class fired and was
+     * survived rather than fixed - it is a DIAGNOSTIC, and it is reported here
+     * for the same reason the USB patch counters are: a silent tolerant patch
+     * reads exactly like a missing one (#189). Declared extern rather than in a
+     * header because it is DEFINED inside patched managed_components/, so a
+     * missing patch leaves this at 0 instead of failing the link... which it
+     * would, so the definition below is the firmware-side fallback. */
+    cJSON_AddNumberToObject(root, "lv_evt_bad", (double)qmx_lv_event_chain_bad);
+
     const esp_app_desc_t *app = esp_app_get_description();
     /* #313: two listeners died together with the stack alive underneath.
-     * A small capped probe, so the figure costs a few socket()/close()
-     * pairs and never holds enough of the table to cause what it measures. */
-    cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free(6));
+     *
+     * ⛔ CACHED, and that is the point. The comment here used to claim the
+     * probe "never holds enough of the table to cause what it measures" - it
+     * did exactly that. sock_probe_free(6) holds up to SIX sockets at once,
+     * this runs on EVERY /api/status, and a browser polls that at 1 Hz while
+     * the bench idles with only five free. So every poll took the whole
+     * remaining table for the length of the probe, and anything arriving in
+     * that window would be refused with ENFILE - which is #313's signature.
+     * At most one real probe per 10 s now; the number is a trend, not a
+     * reading that has to be current to the millisecond. */
+    cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free_cached(6, 10000));
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
     int band_count = 0;
@@ -887,7 +1165,34 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
             uint32_t hz = (uint32_t)item->valuedouble;
-            cat_set_frequency(hz);
+            /* FORCED, because every caller of this action is a COMMIT.
+             *
+             * It used to be the rate-limited cat_set_frequency(), whose return
+             * value was discarded - so an entry landing within 200 ms of any
+             * other write was dropped in silence. Samuel W7STF: "sometimes when
+             * attempting to direct enter from say 7.046MHz, to 3.5MHz, and
+             * selecting Save, the frequency entry popup is dismissed, but the
+             * VFO and band do not change" (#341). Same class as the mode fix in
+             * #340, on the other command.
+             *
+             * The reason it was left rate-limited was the fear that a drag
+             * would stream writes down the CDC pipe. It does not: all five
+             * senders in the page are one-shots - the spot tap, the release of
+             * a tune drag, the release of a band-plan drag, the DEBOUNCED wheel
+             * commit and the keypad Save - and the drag preview is drawn
+             * locally with drawBandplan(targetHz) without sending anything.
+             * Checked, not assumed.
+             *
+             * This is what the Tab5 already does for the same gestures:
+             * cat_set_frequency_forced() at ui.c's band button and at its own
+             * wheel-to-tune, and the header of that function prescribes exactly
+             * this use - "deliberate user actions (e.g. preset taps) where the
+             * write must go through".
+             *
+             * rigctld's own F command is deliberately NOT changed with it: a
+             * rigctld client is a program, not a finger, and nobody has
+             * reported losing a frequency there. */
+            cat_set_frequency_forced(hz);
             /* ⭐ TELL THE UI NOW, do not wait to be told (#298 phase 5).
              *
              * This called cat_set_frequency() and stopped, so the Tab5 learned
@@ -921,7 +1226,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // the new band. Doing it from the browser must not be the loophole.
             ft8_band_change_stand_down("band changed");
             uint32_t want = target ? target : center_hz;
-            cat_set_frequency(want);
+            /* Forced, exactly as the Tab5's own band button does (ui.c
+             * band_preset_cb). A band change is a deliberate one-shot, and the
+             * plain call is droppable: tune, then change band within 200 ms,
+             * and the band change is discarded while the display has already
+             * been moved to it optimistically below - which reads as "I
+             * selected 80 m and it put me back where I was" (Samuel W7STF). */
+            cat_set_frequency_forced(want);
             /* Same reason as set_freq above: the Tab5's own band buttons move
              * the display immediately (ui.c band_preset_cb) and this path did
              * not, so a band change from the browser left the Tab5 mapping a
@@ -931,7 +1242,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         }
     } else if (action && strcmp(action, "set_mode") == 0) {
         const char *mode = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
-        if (mode) cat_set_mode(mode);
+        /* ⛔ cat_request_mode(), NOT cat_set_mode(). This was the direct
+         * call, whose return value was discarded - and cat_set_mode() SHARES
+         * THE 200 ms RATE LIMIT with cat_set_frequency() and returns
+         * ESP_ERR_TIMEOUT when it loses. The page clicks a spot with
+         *
+         *     sendCmd({action:"set_freq", ...});
+         *     sendCmd({action:"set_mode", ...});
+         *
+         * back to back, so the frequency took the budget and the mode was
+         * dropped on the floor, silently, every time. Reported as "it is not
+         * changing mode after the spot type" (operator) and, decisively, by
+         * Samuel W7STF as an ASYMMETRY: "selecting the change via the Tab5, the
+         * change is honored properly" - because every Tab5 path already goes
+         * through the poll task (spots_lane.c, memory_modal.c, tune_modal.c,
+         * ui.c) and only the browser did not.
+         *
+         * This is the same bug the FT8-entry and memory-recall paths had in
+         * v0.18.6, fixed there the same way and recorded in ui.c:2058 as "the
+         * radio stayed in the previous mode. cat_request_mode is retried". */
+        if (mode) cat_request_mode(mode);
     } else if (action && strcmp(action, "set_bw") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
@@ -1158,6 +1488,38 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "off_ms");
         uint32_t off_ms = cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 2000;
         usb_replug(off_ms);
+    } else if (action && strcmp(action, "gpio_pulse") == 0) {
+        // Remote relay pulse - Randy N4OPI's request: a QMX power-cycled
+        // through a home-automation relay wired to its PWR_ON/GND jack, so a
+        // remote firmware upgrade (which wedges the QMX, per #74) can be
+        // followed up without anyone physically at the bench. gpio_relay.c
+        // does the actual whitelisting/bounds-checking; this handler only
+        // pulls the three parameters out of the body and reports what
+        // happened - it does not repeat those checks.
+        cJSON *pin_j   = cJSON_GetObjectItem(root, "pin");
+        cJSON *level_j = cJSON_GetObjectItem(root, "level");
+        cJSON *ms_j    = cJSON_GetObjectItem(root, "ms");
+        if (!cJSON_IsNumber(pin_j) || !cJSON_IsNumber(level_j) || !cJSON_IsNumber(ms_j)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "gpio_pulse needs numeric pin, level and ms");
+            return ESP_FAIL;
+        }
+        char err[64] = "";
+        bool ok = gpio_relay_pulse((uint8_t)pin_j->valuedouble, level_j->valuedouble != 0,
+                                    (uint16_t)ms_j->valuedouble, err, sizeof(err));
+        // Remember what actually fired, so the form restores this station's
+        // real wiring next time. Saved only on a pulse the device ACCEPTED -
+        // storing a refused combination would put a setting that can never
+        // work back in front of the operator.
+        if (ok) settings_set_gpio_relay((uint8_t)pin_j->valuedouble,
+                                        level_j->valuedouble != 0,
+                                        (uint16_t)ms_j->valuedouble);
+        if (!ok) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err[0] ? err : "refused");
+            return ESP_FAIL;
+        }
     } else if (action && strcmp(action, "drawer") == 0) {
         // Hidden dev action, like resmon below: open or close the Tab5's own
         // settings drawer. No web UI element references it - the browser has
@@ -1435,10 +1797,109 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *js = cJSON_GetObjectItem(root, "slow");
         cJSON *jnh = cJSON_GetObjectItem(root, "near_hz");
         cJSON *jsc = cJSON_GetObjectItem(root, "slow_cycles");
-        wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
-                           jnh ? jnh->valuedouble : 0.0,
-                           js ? (cJSON_IsTrue(js) || js->valueint) : 0,
-                           jsc ? (unsigned)jsc->valueint : 0u);
+        /* ⛔ ONLY IF A GUARD FIELD IS ACTUALLY PRESENT. Every argument here
+         * DEFAULTS rather than persists - absent "near" means 1, i.e.
+         * ENFORCED - so a call that meant to set nothing but the deep-search
+         * ration below silently turned the NEAR guard on and changed what the
+         * very experiment it was setting up would measure. Caught live on
+         * 2026-09-10, one cycle after it happened, from this action's own
+         * "guards now:" line. A field that is not mentioned must not move. */
+        if (jn || js || jnh || jsc) {
+            wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
+                               jnh ? jnh->valuedouble : 0.0,
+                               js ? (cJSON_IsTrue(js) || js->valueint) : 0,
+                               jsc ? (unsigned)jsc->valueint : 0u);
+        }
+        /* "deep": N sets #367's per-cycle deep-search ration live, so the
+         * expensive and cheap decoders can be compared on the same band in the
+         * same hour instead of across a reflash - which on this bench also
+         * costs a QMX power cycle. Absent means leave it alone. */
+        cJSON *jd = cJSON_GetObjectItem(root, "deep");
+        if (cJSON_IsNumber(jd)) {
+            wspr_decode_set_deep_max(jd->valueint);
+            ESP_LOGW(TAG, "WSPR deep-search ration set to %d per cycle",
+                     wspr_decode_get_deep_max());
+        }
+    } else if (action && strcmp(action, "freq_fmt_test") == 0) {
+        int bad = format_freq_selftest();
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":%s,\"failures\":%d}", bad ? "false" : "true", bad);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "adif_check_test") == 0) {
+        /* Runs the checker's own cases on the device. Here because the bench
+           machine has no host C compiler, so test/adif_check_harness.c could
+           not be run when the checker was written. */
+        int bad = adif_check_selftest();
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":%s,\"failures\":%d}",
+                 bad ? "false" : "true", bad);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "wspr_clear") == 0) {
+        /* Clear the WSPR decode list (Samuel W7STF asked for the button; this
+         * is what the browser's copy of it calls).
+         *
+         * ⛔ THE RING IS ALSO THE UPLOAD QUEUE. Anything not yet published to
+         * wsprnet goes with it, and the heard-more-than-once gate is computed
+         * from the same ring - so this resets which stations are publishable,
+         * not just what is on screen. Both screens confirm before calling it. */
+        wspr_spots_clear();
+        ESP_LOGI(TAG, "WSPR decode list cleared from the web");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        cJSON_Delete(root);
+        return ESP_OK;
+    } else if (action && strcmp(action, "cw_profile") == 0) {
+        /* Apply a stored CW profile to the radio (#359).
+         *
+         * The Tab5 drawer picker and this endpoint both come here, so the two
+         * screens cannot disagree about what applying a profile means.
+         *
+         * NOT a cheap action: eight filter rows, the centre, then MU; to make
+         * the radio act on any of it, then the IQ handshake because MU; drops
+         * IQ mode. It is queued for the poll task and takes about a second, so
+         * a 200 here means "asked for", never "done" - the log line
+         * "CW profile applied" is the one that means done. */
+        cJSON *ix = cJSON_GetObjectItem(root, "idx");
+        int idx = cJSON_IsNumber(ix) ? (int)ix->valuedouble : -1;
+        char nm[12] = "";
+        uint16_t centre = 0;
+        uint8_t  mask = 0;
+        if (!settings_get_cw_profile(idx, nm, sizeof(nm), &centre, &mask)) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"no such profile, or that slot is empty\"}");
+            return ESP_OK;
+        }
+        if (!cat_apply_cw_profile(centre, mask)) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"the radio is not connected\"}");
+            return ESP_OK;
+        }
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req,
+            "{\"ok\":true,\"note\":\"queued - the radio reloads its config, about a second\"}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "sockets") == 0) {
+        /* #313. Names every holder of the 16-entry LWIP socket table. Costs no
+           socket of its own, so it is safe to fire while the table is full -
+           which is the only moment it is really wanted. Dev action, log only. */
+        sock_owners_report("on demand");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the log\"}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "stacks") == 0) {
+        /* One-shot per-task stack headroom. Dev action, serial/diag log only -
+           see task_stacks.h for why it must never go on a periodic path. */
+        task_stacks_report();
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the log\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser
@@ -1662,7 +2123,23 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     size_t size;
     uint32_t w, h;
     if (screenshot_capture_rgb565(&buf, &size, &w, &h) != ESP_OK) {
-        return httpd_resp_send_500(req);
+        /* ⛔ NOT a bare 500. "Server has encountered an unexpected error" in a
+         * browser tab is the least useful sentence this firmware can produce -
+         * it names nothing, and the operator reported exactly that. A full
+         * frame is 1.8 MB of CONTIGUOUS PSRAM, and on the WSPR page, whose
+         * capture windows are megabytes each, that is simply not always
+         * available. Say so, and say what to do about it. */
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req,
+            "Screenshot unavailable: could not reserve 1.8 MB of contiguous "
+            "PSRAM for the frame.\n\n"
+            "This is most likely because WSPR is running - its capture windows "
+            "are megabytes each. Try again from the panadapter page, or between "
+            "WSPR cycles.\n\n"
+            "The diagnostic log records the free and largest-block figures at "
+            "the moment it failed.\n");
+        return ESP_OK;
     }
 
     /* Crop window, defaulting to the whole frame. Clamped to the image rather
@@ -1824,6 +2301,14 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
     total += stream_file_part(req, diag_log_persist_path(), &err);
     if (total == 0)
         return httpd_resp_sendstr(req, "(no saved diagnostic log yet)\n");
+    /* Same rule as /api/adif: never cap a failed body with a valid terminator.
+     * A diagnostic log silently missing its tail is worse than a download that
+     * visibly failed - the tail is the part with the fault in it. */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "/api/log/saved: send failed after %u bytes (err 0x%x) - aborting rather "
+                      "than serving a truncated log that looks complete", (unsigned)total, err);
+        return ESP_FAIL;
+    }
     httpd_resp_send_chunk(req, NULL, 0);
     return err;
 }
@@ -1930,6 +2415,25 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         }
     }
     fclose(f);
+    /* The terminating 0-length chunk MUST NOT be sent if the body failed
+     * partway. It closes the chunked stream cleanly, so a transfer that died at
+     * record 220 of 462 arrives as a WELL-FORMED ADIF FILE THAT IS SIMPLY
+     * SHORT: the browser reports success, the log viewer says "220 QSOs", and a
+     * download kept as a backup or uploaded to a logbook has silently lost half
+     * the contacts. That is what Gyula HA3HZ reported as "the website shows 220
+     * lines of LOG data" with 462 in his log.
+     *
+     * Returning ESP_FAIL without the terminator makes httpd close the socket,
+     * so the client sees an aborted download and can retry - the honest
+     * outcome. Same rule as the WebSocket partial write in #193: a transfer we
+     * are committed to must be finished or visibly broken, never quietly
+     * truncated into something that looks whole. */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "/api/adif: send failed mid-file (err 0x%x) - aborting the connection "
+                      "rather than serving a short log that looks complete", err);
+        webserver_ws_set_paused(false);
+        return ESP_FAIL;
+    }
     httpd_resp_send_chunk(req, NULL, 0);
     webserver_ws_set_paused(false);
     return err;
@@ -1941,6 +2445,126 @@ static esp_err_t adif_clear_handler(httpd_req_t *req)
     adif_log_clear();
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// 1 MB. The old 256 KB cap was arbitrary and reachable: the body is allocated
+// from PSRAM, and a log people are told to keep for years runs past 256 KB at
+// roughly 1200 QSOs.
+#define ADIF_IMPORT_MAX_BYTES (1024 * 1024)
+
+// The counts an import reply carries, in one place because two endpoints send
+// them (an uploaded file and the SD card's own mirror) and they must not drift.
+//
+// "added" alone is not enough to describe an import, and saying so is the whole
+// point: 0 added because everything was already logged and 0 added because
+// nothing could be read look identical to a caller and mean opposite things.
+// The page next door already learned this - the config import carries a comment
+// about a user erasing his unit over an "applied: 0" that meant a bad file.
+static void adif_import_add_counts(cJSON *root, const adif_import_result_t *ir, int added)
+{
+    cJSON_AddBoolToObject(root, "ok", added >= 0);
+    cJSON_AddNumberToObject(root, "added", added < 0 ? 0 : added);
+    cJSON_AddNumberToObject(root, "found", ir->found);
+    cJSON_AddNumberToObject(root, "duplicate", ir->duplicate);
+    cJSON_AddNumberToObject(root, "unreadable", ir->unreadable);
+    cJSON_AddNumberToObject(root, "replaced", ir->replaced);
+    cJSON_AddNumberToObject(root, "total", adif_log_count());
+}
+
+// Advance the QRZ/eQSL/LoTW cursors past everything now in the log, so a
+// restored history is not re-sent to three logbooks as if it were new. Shared
+// by both restore endpoints for the same reason the counts are.
+static void adif_import_mark_uploaded(void)
+{
+    uint32_t n = (uint32_t)adif_log_count();
+    settings_set_qrz_uploaded_n(n);
+    settings_set_eqsl_uploaded_n(n);
+    settings_set_lotw_uploaded_n(n);
+}
+
+// POST /api/adif/import?mark_uploaded=1 — merge records from an uploaded
+// ADIF file (Randy N4OPI: a clean erase-and-reinstall left him with no way
+// to get his downloaded log's worked-station history back). Body is the raw
+// ADIF file text, same as what the browser's own "ADIF download" produced
+// or any other logger's export.
+//
+// mark_uploaded defaults ON: the overwhelmingly common reason to restore a
+// log is that these contacts were already sent to QRZ/eQSL/LoTW before the
+// wipe, and advancing the cursors past them is what stops the next upload
+// pass from re-sending the whole restored history as if it were new. A
+// caller importing contacts that were genuinely never uploaded can pass 0.
+static esp_err_t adif_import_handler(httpd_req_t *req)
+{
+    int total = req->content_len;
+    // 1 MB rather than the old 256 KB: the body is PSRAM-allocated (15 MB
+    // free) and 256 KB is only about 1200 \"SOs of a log meant to last years.
+    if (total <= 0 || total > ADIF_IMPORT_MAX_BYTES) {
+        // JSON, not httpd_resp_send_err(): the browser parses this reply as
+        // JSON either way, so the HTML error page reached the user as a raw
+        // "SyntaxError" instead of a sentence saying the file was too big.
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req,
+            "{\"ok\":false,\"error\":\"That file is too big to import (1 MB maximum).\"}");
+    }
+    char *body = heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!body) return httpd_resp_send_500(req);
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, body + got, total - got);
+        // A socket timeout mid-body means a slow link, not a failed upload.
+        // This board's WiFi produces exactly that, and treating it as fatal
+        // threw away a whole 90 KB restore on one late segment.
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) {
+            free(body);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "application/json");
+            return httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"The upload did not finish - try again.\"}");
+        }
+        got += r;
+    }
+    body[got] = '\0';
+
+    /* ⛔ QUERY PARSED BEFORE THE IMPORT, and the buffer sized for BOTH
+     * parameters. It used to be read afterwards into char q[16], which is one
+     * byte short of "mark_uploaded=1&update=1" - the second parameter would
+     * have been truncated away and silently ignored. */
+    char q[64] = "";
+    bool mark_uploaded = true;
+    bool update_existing = false;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[4];
+        if (httpd_query_key_value(q, "mark_uploaded", v, sizeof(v)) == ESP_OK)
+            mark_uploaded = (v[0] != '0');
+        if (httpd_query_key_value(q, "update", v, sizeof(v)) == ESP_OK)
+            update_existing = (v[0] != '0');
+    }
+
+    adif_import_result_t ir;
+    int added = update_existing ? adif_log_import_update(body, &ir)
+                                : adif_log_import_ex(body, &ir);
+    free(body);
+    /* ⛔ NOT IN UPDATE MODE, AND THE TWO GENUINELY CONFLICT. Removing the
+     * stale versions already stepped the cursors back past them, so a corrected
+     * record now sits beyond the cursor and will be re-sent - which is the
+     * point, since the copy at QRZ/eQSL/LoTW is the one carrying the error.
+     * Marking everything uploaded here would put the cursor past the
+     * corrections and they would never leave the device. The unchanged records
+     * keep their existing cursor position either way. */
+    if (added > 0 && mark_uploaded && !update_existing) adif_import_mark_uploaded();
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    adif_import_add_counts(root, &ir, added);
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
 }
 
 // POST /api/adif/delete?idx=<n>&call=<CALL> — delete ONE record (web ADIF
@@ -2002,7 +2626,12 @@ static esp_err_t adif_delete_handler(httpd_req_t *req)
 static esp_err_t adif_edit_handler(httpd_req_t *req)
 {
     char query[192] = "", idx_s[12] = "", call_raw[24] = "", call[24] = "";
-    char field[24] = "", value_raw[32] = "", value[32] = "";
+    /* Widened from 32 with the whitelist removal: a COMMENT or a long
+     * portable callsign no longer has to fit in a report-sized buffer. Over-long
+     * input is REFUSED below rather than truncated - a silently shortened
+     * callsign written into someone's log is the same class of fault as the
+     * silently dropped edit this whole thread is about. */
+    char field[24] = "", value_raw[160] = "", value[160] = "";
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
         httpd_query_key_value(query, "idx", idx_s, sizeof(idx_s)) != ESP_OK ||
         httpd_query_key_value(query, "call", call_raw, sizeof(call_raw)) != ESP_OK ||
@@ -2028,11 +2657,63 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     // and a LoTW record is signed over exactly those. SIG/SIG_INFO are read by
     // POTA and SOTA to credit an activation and by nothing that matches a QSO,
     // so they fall on the safe side of that same boundary.
-    bool is_rst = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
-    bool is_ref = (strcmp(field, "SIG_INFO") == 0);
-    if (!is_rst && !is_ref) {
+    //   GRIDSQUARE           their locator. Falls on the same safe side: no
+    //                        logbook matches a QSO on it, and it is the field
+    //                        most likely to be WRONG through no fault of the
+    //                        operator - a partner's grid arrives once, in their
+    //                        first message, and a marginal QRP contact can
+    //                        complete without it ever being heard cleanly
+    //                        (Gyula HA3HZ, 2026-09-06, who was correcting them
+    //                        in a Windows ADIF editor instead). #322 fixes the
+    //                        cause; this fixes the records already logged.
+    /* THE WHITELIST IS GONE - EVERY FIELD IS EDITABLE (operator, 2026-09-07).
+     *
+     * This used to refuse everything but the four "safe" fields, on the
+     * reasoning quoted above: call, band, mode, date and time are what QRZ,
+     * eQSL and LoTW match a contact on, so correcting them here could not
+     * correct the copy those logbooks hold. That reasoning is still true and it
+     * is no longer OURS to act on. The operator's decision, reversing #327:
+     *
+     *   "ALL fields should be editable... It is not up to us to rule what to be
+     *    edited. The later matching on the various log platforms is what
+     *    matters."
+     *
+     * Which is the right line. An operator repairing records that earlier
+     * firmware logged badly (Gyula HA3HZ's whole case) may well need the
+     * callsign or the date, and a logger that refuses is a logger they stop
+     * using - he had already gone to a Windows ADIF editor.
+     *
+     * ⛔ WHAT IS STILL REFUSED IS MALFORMED BYTES, NOT UNWISE EDITS. The
+     * difference matters: which field is worth changing is a judgement about
+     * radio, and this file has no business making it; whether the result still
+     * parses as ADIF is a property of the file, and a record that does not
+     * parse can break the log for every other reader of it. So the format
+     * checks below stay, and QSO_DATE/TIME_ON gain their own.
+     *
+     * The idx+CALL match guard is unaffected and still fires: the caller sends
+     * the call the record has NOW, so renaming a callsign still cannot land on
+     * the wrong record. */
+    bool is_rst  = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
+    bool is_ref  = (strcmp(field, "SIG_INFO") == 0);
+    bool is_grid = (strcmp(field, "GRIDSQUARE") == 0);
+    bool is_date = (strcmp(field, "QSO_DATE") == 0);
+    bool is_time = (strcmp(field, "TIME_ON") == 0);
+    /* An ADIF field name: letters, digits and underscore. Anything else would
+     * be written straight into the record's tag and corrupt it. */
+    for (const char *f = field; *f; f++) {
+        if (!isalnum((unsigned char)*f) && *f != '_') {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "field name may contain only letters, digits and underscore");
+            return ESP_FAIL;
+        }
+    }
+    if (!field[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "field required");
+        return ESP_FAIL;
+    }
+    if (strlen(value_raw) >= sizeof(value_raw) - 1) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "only RST_SENT, RST_RCVD and SIG_INFO are editable");
+                            "value is too long for one ADIF field");
         return ESP_FAIL;
     }
     // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).
@@ -2062,6 +2743,71 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
         if (!okfmt) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                 "report must be like -07 or +03, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    /* YYYYMMDD and HHMM[SS], because every other reader of this file - our own
+     * loader, the uploads, and whatever the operator opens it in - takes them
+     * by position. A date of "yesterday" would not be an unwise edit, it would
+     * be an unreadable record. Empty is allowed: clearing a field is how you
+     * say it was never exchanged, and that is true of these too. */
+    if (is_date && value[0]) {
+        bool okfmt = (strlen(value) == 8);
+        for (const char *v = value; okfmt && *v; v++)
+            if (!isdigit((unsigned char)*v)) okfmt = false;
+        if (okfmt) {
+            int mm = (value[4] - '0') * 10 + (value[5] - '0');
+            int dd = (value[6] - '0') * 10 + (value[7] - '0');
+            if (mm < 1 || mm > 12 || dd < 1 || dd > 31) okfmt = false;
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "date must be YYYYMMDD, like 20260907, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    if (is_time && value[0]) {
+        size_t n = strlen(value);
+        bool okfmt = (n == 4 || n == 6);
+        for (const char *v = value; okfmt && *v; v++)
+            if (!isdigit((unsigned char)*v)) okfmt = false;
+        if (okfmt) {
+            int hh = (value[0] - '0') * 10 + (value[1] - '0');
+            int mi = (value[2] - '0') * 10 + (value[3] - '0');
+            if (hh > 23 || mi > 59) okfmt = false;
+            if (n == 6 && ((value[4] - '0') * 10 + (value[5] - '0')) > 59) okfmt = false;
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "time must be HHMM or HHMMSS in UTC, like 0816, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    // A Maidenhead locator: two letters A-R, two digits, optionally two more
+    // letters. Validated for the same reason as the report above - it is
+    // uploaded to three logbooks and drives distance/bearing on both screens,
+    // so a typo would be a wrong measurement presented as a real one, and the
+    // point of allowing the edit is to REMOVE wrong grids. Uppercase field,
+    // lowercase subsquare, which is the conventional rendering.
+    if (is_grid && value[0]) {
+        size_t n = strlen(value);
+        bool okfmt = (n == 4 || n == 6);
+        if (okfmt) {
+            value[0] = (char)toupper((unsigned char)value[0]);
+            value[1] = (char)toupper((unsigned char)value[1]);
+            okfmt = value[0] >= 'A' && value[0] <= 'R' &&
+                    value[1] >= 'A' && value[1] <= 'R' &&
+                    isdigit((unsigned char)value[2]) && isdigit((unsigned char)value[3]);
+        }
+        if (okfmt && n == 6) {
+            value[4] = (char)tolower((unsigned char)value[4]);
+            value[5] = (char)tolower((unsigned char)value[5]);
+            okfmt = value[4] >= 'a' && value[4] <= 'x' &&
+                    value[5] >= 'a' && value[5] <= 'x';
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "grid must be like JN45 or JN45bc, or empty to clear");
             return ESP_FAIL;
         }
     }
@@ -2114,11 +2860,137 @@ static const httpd_uri_t uri_adif_edit = {
     .uri = "/api/adif/edit", .method = HTTP_POST, .handler = adif_edit_handler,
 };
 
+/* GET /api/adif/check[?activating=1] - #263, Don WB0LQW's "check my log".
+ *
+ * ⛔ This says what is MISSING, never that a file will be accepted. It cannot
+ * see POTA's rules or their database; a confident tick that turns into a
+ * rejected activation is worse than no check at all. Every string it emits is
+ * phrased as a shortfall, and the web UI repeats that in as many words.
+ *
+ * Streams the file once and decides per record with adif_check_record(), the
+ * portable function the self-test covers. Unique-callsign counting is NOT
+ * duplicated here - adif_log_count_activation() already dedupes by callsign
+ * (the fix for Eric's double-counted activation in v1.9.5), and having two
+ * answers to "how many count" is how they come to disagree.
+ */
+static esp_err_t adif_check_handler(httpd_req_t *req)
+{
+    bool activating = false;
+    {
+        size_t qlen = httpd_req_get_url_query_len(req) + 1;
+        if (qlen > 1 && qlen < 128) {
+            char q[128], v[8] = "";
+            if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+                httpd_query_key_value(q, "activating", v, sizeof(v)) == ESP_OK)
+                activating = (v[0] == '1' || v[0] == 't' || v[0] == 'y');
+        }
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { httpd_resp_send_500(req); return ESP_FAIL; }
+
+    /* ONE walk, shared with the Tab5's Activation modal - adif_log_check().
+       This handler used to extract the fields itself; two walks is how two
+       answers to "is my log ready" come to disagree. */
+    adif_log_check_t res;
+    adif_log_problem_t probs[20];
+    adif_log_check(activating, &res, probs, (int)(sizeof(probs) / sizeof(probs[0])));
+
+    cJSON *list = cJSON_AddArrayToObject(root, "problems");
+    if (list) {
+        for (int i = 0; i < res.listed; i++) {
+            cJSON *e = cJSON_CreateObject();
+            if (!e) break;
+            cJSON_AddNumberToObject(e, "idx", probs[i].idx);
+            cJSON_AddStringToObject(e, "call", probs[i].call);
+            const char *why = adif_check_first_problem(probs[i].flags);
+            cJSON_AddStringToObject(e, "problem", why ? why : "unknown");
+            cJSON_AddItemToArray(list, e);
+        }
+    }
+
+    int total = res.total, checked = res.checked, with_problems = res.with_problems;
+    uint32_t all_flags = res.all_flags;
+    cJSON_AddNumberToObject(root, "records", (double)total);
+    cJSON_AddNumberToObject(root, "checked", (double)checked);
+    cJSON_AddNumberToObject(root, "with_problems", (double)with_problems);
+    cJSON_AddNumberToObject(root, "flags", (double)all_flags);
+    cJSON_AddBoolToObject(root, "activating", activating);
+    if (with_problems > res.listed)
+        cJSON_AddNumberToObject(root, "not_listed", (double)(with_problems - res.listed));
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_500(req); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, out);
+    free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_adif_check = {
+    .uri = "/api/adif/check", .method = HTTP_GET, .handler = adif_check_handler,
+};
+
 static const httpd_uri_t uri_adif_get = {
     .uri = "/api/adif", .method = HTTP_GET, .handler = adif_get_handler,
 };
 static const httpd_uri_t uri_adif_clear = {
     .uri = "/api/adif/clear", .method = HTTP_POST, .handler = adif_clear_handler,
+};
+// POST /api/adif/import_sd - restore the QSO log from the card's own mirror.
+//
+// The auto-archive has always written qso.adi TO the card and never read it
+// back, so a log lost to a clean reinstall was recoverable only by moving the
+// file to a PC and uploading it through the browser - and only by someone who
+// knew the file was on the card at all. Gyula HA3HZ had 432 QSOs mirrored on
+// the card, inside the device, and no way to reach them; he assumed the
+// firmware would find them, which is a fair thing to assume of a backup.
+//
+// Merge semantics, so this is safe to press twice: contacts already logged are
+// skipped. mark_uploaded defaults ON for the same reason it does on the upload
+// path - a restored log is almost always one that was already sent onward.
+static esp_err_t adif_import_sd_handler(httpd_req_t *req)
+{
+    char q[16] = "";
+    bool mark_uploaded = true;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[4];
+        if (httpd_query_key_value(q, "mark_uploaded", v, sizeof(v)) == ESP_OK)
+            mark_uploaded = (v[0] != '0');
+    }
+
+    adif_import_result_t ir;
+    int added = adif_log_import_from_sd(&ir);
+    /* Add-only by construction - the card mirror is a backup of what the device
+     * itself wrote, never a corrected file, so there is nothing here to replace
+     * and the cursors mean what they normally mean. */
+    if (added > 0 && mark_uploaded) adif_import_mark_uploaded();
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    adif_import_add_counts(root, &ir, added);
+    // A card that could not be read is a different answer from a card whose log
+    // held nothing new, and the page has to be able to tell them apart.
+    if (added < 0 && ir.found == 0)
+        cJSON_AddStringToObject(root, "error",
+            "No QSO log found on the SD card. Check a card is inserted and that "
+            "it holds qmx-panadapter/qso.adi.");
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_adif_import_sd = {
+    .uri = "/api/adif/import_sd", .method = HTTP_POST, .handler = adif_import_sd_handler,
+};
+
+static const httpd_uri_t uri_adif_import = {
+    .uri = "/api/adif/import", .method = HTTP_POST, .handler = adif_import_handler,
 };
 static const httpd_uri_t uri_adif_delete = {
     .uri = "/api/adif/delete", .method = HTTP_POST, .handler = adif_delete_handler,
@@ -2148,9 +3020,9 @@ static esp_err_t qrz_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2160,13 +3032,13 @@ static esp_err_t qrz_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_QRZ };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2217,9 +3089,9 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2229,13 +3101,13 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_EQSL };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2246,6 +3118,41 @@ static esp_err_t eqsl_upload_handler(httpd_req_t *req)
 
 static const httpd_uri_t uri_eqsl_creds = {
     .uri = "/api/eqsl_creds", .method = HTTP_POST, .handler = eqsl_creds_handler,
+};
+
+// POST /api/qrz_lookup_creds — JSON body {"user":"...","pass":"..."}. QRZ's
+// Callsign Lookup (XML) service has no API-key scheme, unlike the Logbook
+// upload above (qrz_key_handler) — username+password only, exchanged for a
+// session key by net/qrz_coords.c. Used to place net/rbn.c's self-spot
+// skimmers (who is hearing us on CW) at a real station position on the spot
+// map instead of a country centroid.
+static esp_err_t qrz_lookup_creds_handler(httpd_req_t *req)
+{
+    char buf[160];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+        return ESP_FAIL;
+    }
+    const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(root, "user"));
+    const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(root, "pass"));
+    settings_set_qrz_lookup_user(user);
+    settings_set_qrz_lookup_pass(pass);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static const httpd_uri_t uri_qrz_lookup_creds = {
+    .uri = "/api/qrz_lookup_creds", .method = HTTP_POST, .handler = qrz_lookup_creds_handler,
 };
 static const httpd_uri_t uri_eqsl_upload = {
     .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
@@ -2307,9 +3214,9 @@ static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
     if (!s_upload_queue)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2319,13 +3226,13 @@ static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_CLOUDLOG };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2434,9 +3341,9 @@ static esp_err_t lotw_upload_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
     }
 
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     if (s_last_upload.busy) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         httpd_resp_set_status(req, "423 Locked");
         return httpd_resp_sendstr(req, "upload in progress");
     }
@@ -2446,13 +3353,13 @@ static esp_err_t lotw_upload_handler(httpd_req_t *req)
     s_last_upload.failed = 0;
     s_last_upload.error[0] = '\0';
     s_last_upload.note[0] = '\0';
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     upload_request_t up = { .kind = UPLOAD_LOTW };
     if (!xQueueSend(s_upload_queue, &up, 0)) {
-        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
         s_last_upload.busy = false;
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
     }
 
@@ -2584,10 +3491,10 @@ static const httpd_uri_t uri_log_saved = {
 // GET /api/upload_status — check result of last QRZ or eQSL upload
 static esp_err_t upload_status_handler(httpd_req_t *req)
 {
-    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
     cJSON *root = cJSON_CreateObject();
     if (!root) {
-        xSemaphoreGive(s_upload_mutex);
+        if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         return httpd_resp_send_500(req);
     }
 
@@ -2603,7 +3510,7 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
         if (s_last_upload.note[0])
             cJSON_AddStringToObject(root, "note", s_last_upload.note);
     }
-    xSemaphoreGive(s_upload_mutex);
+    if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -2872,6 +3779,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "spots_en",          c.spots_en);
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
+    cJSON_AddBoolToObject(root, "spotmap_en",        c.spotmap_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
@@ -2882,7 +3790,43 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // the IF trim are per-unit calibration you set once and forget, which is
     // exactly the kind of thing you do not want to need the glass for; the charge
     // limit matters most when the Tab5 is somewhere you are not.
+    cJSON_AddNumberToObject(root, "tune_snap_hz",   (double)settings_get_tune_snap_hz());
     cJSON_AddNumberToObject(root, "cw_pitch_hz",     (double)ui_get_cw_pitch_hz());
+    /* CW PROFILES (#359, Uwe DL8UG). Four slots of {name, centre, filter mask}.
+     * An empty slot is centre 0 and is sent as such, so the page renders it as
+     * empty rather than inventing a default the operator never chose.
+     *
+     * The eight widths go WITH them, from cat_cw_filter_width() - the device
+     * owns which widths exist and the page must not carry a second copy of that
+     * list. Same rule that fixed the spot filter and the viewport today. */
+    {
+        /* The LIMITS come from the device too, for the same reason the widths
+         * do. The page has to clamp a typed centre so the operator sees what
+         * will really be stored, and a copy of 500/950/25 typed into the page
+         * is a second source of truth that can drift from the radio's. */
+        cJSON_AddNumberToObject(root, "cw_centre_min_hz",  (double)CW_CENTER_MIN_HZ);
+        cJSON_AddNumberToObject(root, "cw_centre_max_hz",  (double)CW_CENTER_MAX_HZ);
+        cJSON_AddNumberToObject(root, "cw_centre_step_hz", (double)CW_CENTER_STEP_HZ);
+        cJSON_AddNumberToObject(root, "cw_profile_name_max", (double)CW_PROFILE_NAME_MAX);
+
+        cJSON *w = cJSON_AddArrayToObject(root, "cw_filter_widths");
+        for (int i = 0; w && i < CW_FILTER_COUNT; i++)
+            cJSON_AddItemToArray(w, cJSON_CreateNumber((double)cat_cw_filter_width(i)));
+
+        cJSON *arr = cJSON_AddArrayToObject(root, "cw_profiles");
+        for (int i = 0; arr && i < CW_PROFILE_COUNT; i++) {
+            char nm[12] = "";
+            uint16_t centre = 0;
+            uint8_t  mask = 0;
+            settings_get_cw_profile(i, nm, sizeof(nm), &centre, &mask);
+            cJSON *o = cJSON_CreateObject();
+            if (!o) continue;
+            cJSON_AddStringToObject(o, "name", nm);
+            cJSON_AddNumberToObject(o, "centre_hz", (double)centre);
+            cJSON_AddNumberToObject(o, "mask", (double)mask);
+            cJSON_AddItemToArray(arr, o);
+        }
+    }
     cJSON_AddNumberToObject(root, "if_cal_hz",       (double)ui_get_if_cal_hz());
     cJSON_AddBoolToObject  (root, "charge_limit_en",  c.charge_limit_en);
     cJSON_AddNumberToObject(root, "charge_limit_pct", (double)c.charge_limit_pct);
@@ -2930,7 +3874,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
     cJSON_AddStringToObject(root, "fd_class",     c.fd_class);
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
+    cJSON_AddBoolToObject(root, "cw_decode_en", c.cw_decode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
+    cJSON_AddNumberToObject(root, "freq_sep_style", (double)c.freq_sep_style);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddBoolToObject(root, "still_view",        c.still_view);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
@@ -3038,10 +3984,21 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // also retunes the radio and clears the decode list, so it has its own
     // action ("set_ft8_mode") that defers to the LVGL task rather than writing
     // a setting behind the UI's back.
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode")))
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode"))) {
+        /* Store AND apply. Storing alone left the live spectrum on whatever it
+           was until the next boot, so the setting agreed with nothing. */
         settings_set_flat_mode(cJSON_IsTrue(it));
+        ui_request_flat_mode(cJSON_IsTrue(it));
+    }
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "cw_decode_en")))
+        settings_set_cw_decode_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))
         settings_set_distance_in_miles(cJSON_IsTrue(it));
+    /* #302: 0 = 14.074.000, 1 = 14,074,000. Anything else is refused by the
+       setter rather than stored, so a bad value cannot produce a readout
+       nobody has seen. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "freq_sep_style")))
+        settings_set_freq_sep_style((uint8_t)it->valueint);
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "greylist_en")))
         settings_set_greylist_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ft8_early_decode")))
@@ -3056,6 +4013,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "spotmap_en")))
+        settings_set_spotmap_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
         settings_set_pskreporter_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))
@@ -3068,6 +4027,30 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
         settings_set_cw_cal_hz((int16_t)it->valuedouble);
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tune_snap_hz")))
+        settings_set_tune_snap_hz((uint16_t)it->valuedouble);   /* #347 - the setter clamps to the offered values */
+
+    /* CW profiles, same array shape they are served in. ABSENT means "not
+     * edited" - a page from an older firmware posts every field it knows, and
+     * must not silently clear four slots it never showed. Present-but-empty
+     * (centre 0) is a deliberate clear and is honoured. */
+    {
+        cJSON *arr = cJSON_GetObjectItem(root, "cw_profiles");
+        if (cJSON_IsArray(arr)) {
+            int n = cJSON_GetArraySize(arr);
+            if (n > CW_PROFILE_COUNT) n = CW_PROFILE_COUNT;
+            for (int i = 0; i < n; i++) {
+                cJSON *o = cJSON_GetArrayItem(arr, i);
+                if (!cJSON_IsObject(o)) continue;
+                const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(o, "name"));
+                cJSON *c = cJSON_GetObjectItem(o, "centre_hz");
+                cJSON *m = cJSON_GetObjectItem(o, "mask");
+                settings_set_cw_profile(i, nm ? nm : "",
+                                        cJSON_IsNumber(c) ? (uint16_t)c->valuedouble : 0,
+                                        cJSON_IsNumber(m) ? (uint8_t)m->valuedouble : 0);
+            }
+        }
+    }
 
     // ⛔ sim_mode_en is exposed on purpose and is the one to be careful with: it
     // is what lets a test drive full QSOs with NO radio attached, and ft8_tx.c
@@ -3089,12 +4072,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_wspr_net_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_pa_reduce")))
         settings_set_wspr_pa_reduce(cJSON_IsTrue(it));
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
+    bool wspr_sched_dirty = false;
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en"))) {
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
+        wspr_sched_dirty = true;
+    }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
         int v = it->valueint;
-        if (v >= 0 && v <= 50) settings_set_wspr_duty_pct((uint8_t)v);
+        if (v >= 0 && v <= 50) { settings_set_wspr_duty_pct((uint8_t)v); wspr_sched_dirty = true; }
     }
+    /* Re-roll which cycle transmits next, or the TX countdown goes on
+     * describing the previous setting until the next cycle boundary - up to two
+     * minutes of a page contradicting the switch that was just moved. Both
+     * values are passed in rather than re-read: this is the httpd task. */
+    if (wspr_sched_dirty)
+        wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
+                                  settings_get_wspr_duty_pct());
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not
@@ -3171,6 +4164,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         if (cJSON_IsBool(b)) setter(cJSON_IsTrue(b)); } while (0)
     BOOLTOP("spots_en",          settings_set_spots_en);
     BOOLTOP("rbn_en",            settings_set_rbn_en);
+    BOOLTOP("spotmap_en",        settings_set_spotmap_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
     BOOLTOP("ota_autodl",        settings_set_ota_autodl);
@@ -3190,6 +4184,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // generally: this is the one setting that makes TX SAFER (ft8_tx.c's interlock
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
+    BOOLTOP("cw_decode_en", settings_set_cw_decode_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
     BOOLTOP("field_day_en",      settings_set_field_day_en);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "fd_class"))))   settings_set_fd_class(s);
@@ -3559,6 +4554,16 @@ static esp_err_t wspr_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "spots_held",   total);
     cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
+    /* The distance unit is the DEVICE's setting, so it travels with the data.
+       km is always what the spots carry; this says how to label and convert
+       them, so the two screens cannot disagree the way they just did. */
+    cJSON_AddBoolToObject(root, "miles", settings_get_distance_in_miles());
+    /* The dial IN FORCE, so the browser's band control can follow a band hop.
+       It was set once when the list was built and never again, so it went on
+       naming the band the operator chose while the radio had moved on (Dirk
+       DK7CVD, 2026-09-08). */
+    { qmx_settings_t ws; settings_load_all(&ws);
+      cJSON_AddNumberToObject(root, "dial_hz", (double)ws.wspr_dial_hz); }
     cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
     cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
     /* The radio's OWN measurement of the last burst, and the PA voltage in
@@ -3572,6 +4577,106 @@ static esp_err_t wspr_handler(httpd_req_t *req)
           cJSON_AddNumberToObject(root, "advised_dbm", wspr_tx_advised_dbm());
       } }
     cJSON_AddNumberToObject(root, "pa_voltage_x10", cat_get_pa_voltage_x10());
+
+    /* ⭐ THE TRANSMIT STATE, so the browser can show what the Tab5's TX button
+     * shows rather than inferring it from rx_status text. Same three states and
+     * the same countdown the button uses. */
+    {
+        char txt[64];
+        int secs = 0;
+        wspr_tx_state_t tst = wspr_tx_get_status(txt, sizeof(txt), &secs);
+        cJSON_AddStringToObject(root, "tx_state",
+            tst == WSPR_TX_ACTIVE ? "active" : tst == WSPR_TX_ARMED ? "armed" : "idle");
+        cJSON_AddNumberToObject(root, "tx_secs", secs);
+    }
+    /* Time to the next cycle that will ACTUALLY transmit, which is a different
+     * question from tx_secs above (that one counts an armed burst down to its
+     * own slot). -1 when nothing is scheduled. See wspr_rx.h. */
+    cJSON_AddNumberToObject(root, "next_tx_secs", wspr_rx_seconds_to_next_tx());
+
+    /* ⭐ THE THREE THINGS THE TAB5'S LEFT PANE SHOWS AND THE BROWSER DID NOT.
+     * Operator, 2026-09-02: "I still see no: Stations per cycle graphics - Best
+     * DX - wsprnet data". Each is served from the SAME accessor the Tab5 reads,
+     * never re-derived here, so the two screens cannot drift apart - the rule
+     * the KM/BRG/COUNTRY columns already follow.
+     *
+     * All three are small and change every cycle, so unlike the band list they
+     * belong in the ordinary poll rather than behind a query flag. */
+    {
+        wspr_spot_t dx;
+        if (wspr_spots_best_dx(&dx) && dx.km >= 0) {
+            cJSON *o = cJSON_AddObjectToObject(root, "best_dx");
+            cJSON_AddStringToObject(o, "call", dx.call);
+            cJSON_AddStringToObject(o, "grid", dx.grid);
+            /* Spelled out, like the spot rows' country column and for the same
+             * reason: the browser has the width. Falls back the way the Tab5's
+             * own line does when the callsign is not in the DXCC table. */
+            {
+                const char *full = dxcc_lookup(dx.call);
+                cJSON_AddStringToObject(o, "country",
+                    (full && full[0]) ? full : (dx.cty[0] ? dx.cty : dx.grid));
+            }
+            cJSON_AddNumberToObject(o, "km",  dx.km);
+            cJSON_AddNumberToObject(o, "pwr", dx.power_dbm);
+        } else {
+            /* null, not an empty object - "nothing heard yet" is a state the
+             * browser should render as such, not as a row of blanks. */
+            cJSON_AddNullToObject(root, "best_dx");
+        }
+    }
+
+    {
+        uint8_t h[WSPR_CYCLE_HISTORY];
+        int nh = wspr_rx_cycle_history(h, WSPR_CYCLE_HISTORY);
+        /* Oldest first, as the accessor promises. The browser scales to the
+         * busiest cycle held rather than to a fixed ceiling - what matters is
+         * whether the band is rising or falling, and a fixed scale flattens a
+         * quiet band into nothing. Same choice the Tab5's bars make. */
+        cJSON *a = cJSON_AddArrayToObject(root, "history");
+        for (int i = 0; i < nh; i++) cJSON_AddItemToArray(a, cJSON_CreateNumber(h[i]));
+    }
+
+    {
+        cJSON *o = cJSON_AddObjectToObject(root, "net");
+        /* ⚠ ASK the uploader, never restate a belief about it. The Tab5's own
+         * line said "off" as a string literal while the operator watched his
+         * spots appear on wsprnet.org. */
+        cJSON_AddStringToObject(o, "status", wsprnet_status());
+        /* How many of the calls heard are eligible under the heard-more-than-
+         * once rule that gates publication - the part an operator cannot work
+         * out from anywhere else on the page. */
+        cJSON_AddNumberToObject(o, "confirmed", wspr_spots_repeat_calls());
+        cJSON_AddNumberToObject(o, "calls",     wspr_spots_unique_calls());
+    }
+
+    /* The WSPR dial frequencies, sent ONLY when asked for (?bands=1) - the list
+     * never changes, so putting it in a poll would spend bytes on this link for
+     * ever. Same contract as /api/status?presets=1, and built from the SAME
+     * accessor the Tab5's own picker uses (wspr_bands), so the two cannot
+     * disagree about what a band is.
+     *
+     * ⚠ That mattered this week: the FT8/FT4 equivalent went through a second
+     * path that had been compiled out, and served the FT8 table as FT4 without
+     * anything noticing. One accessor, both screens. */
+    {
+        char q[96];
+        if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
+            httpd_query_key_value(q, "bands", (char[4]){0}, 4) == ESP_OK) {
+            int nb = 0;
+            const wspr_band_t *bl = wspr_bands(&nb);
+            cJSON *arr = cJSON_AddArrayToObject(root, "bands");
+            for (int i = 0; i < nb; i++) {
+                cJSON *o = cJSON_CreateObject();
+                cJSON_AddStringToObject(o, "band",  bl[i].name);
+                /* No "label": it was a hardcoded second copy of the dial that
+                   no setting could reformat (#302). The browser has hz and
+                   fmtHz(), so it punctuates it the same way as everything
+                   else on the page. */
+                cJSON_AddNumberToObject(o, "hz",    (double)bl[i].dial_hz);
+                cJSON_AddItemToArray(arr, o);
+            }
+        }
+    }
 
     cJSON *arr = cJSON_AddArrayToObject(root, "spots");
     for (int i = 0; i < n; i++) {
@@ -3598,6 +4703,22 @@ static esp_err_t wspr_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "pwr",   snap[i].power_dbm);
         cJSON_AddNumberToObject(o, "km",    snap[i].km);
         cJSON_AddNumberToObject(o, "brg",   snap[i].bearing_deg);
+        /* DT - where in the cycle the transmission started, seconds. null when
+           it was never measured, same rule as snr and drift: a spot from before
+           this field existed must not print a fabricated 0.0. */
+        if (snap[i].dt_tenths == WSPR_DT_UNKNOWN) cJSON_AddNullToObject(o, "dt");
+        else cJSON_AddNumberToObject(o, "dt", snap[i].dt_tenths / 10.0);
+        /* The waterfall letter (#360), asked of the device rather than derived
+         * in the page: the marks are assigned once, here, so the Tab5 and the
+         * browser can never number the same cycle differently. Empty for a spot
+         * whose cycle has scrolled off the carpet - there is no trace left for
+         * it to point at, and a letter that pointed at the wrong one would be
+         * worse than none. */
+        {
+            char sc[2] = { wspr_rx_mark_for_freq(snap[i].freq_hz,
+                                                 snap[i].cycle_utc), 0 };
+            cJSON_AddStringToObject(o, "s", sc[0] ? sc : "");
+        }
         cJSON_AddItemToArray(arr, o);
     }
 
@@ -4354,37 +5475,37 @@ static void upload_task(void *arg)
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_EQSL) {
             eqsl_upload_result_t result;
             eqsl_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_CLOUDLOG) {
             cloudlog_upload_result_t result;
             cloudlog_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_LOTW) {
             lotw_upload_result_t result;
             lotw_upload_pending(&result);
-            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            if (s_upload_mutex) xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
             s_last_upload.uploaded = result.uploaded;
             s_last_upload.failed = result.failed;
             strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
@@ -4392,7 +5513,7 @@ static void upload_task(void *arg)
             strncpy(s_last_upload.note, result.note, sizeof(s_last_upload.note) - 1);
             s_last_upload.note[sizeof(s_last_upload.note) - 1] = '\0';
             s_last_upload.busy = false;
-            xSemaphoreGive(s_upload_mutex);
+            if (s_upload_mutex) xSemaphoreGive(s_upload_mutex);
         }
         // Stagger the resume - releasing the SD lock, the WS pause, and the
         // DSP quiet all at once (as this used to) means the SD archive
@@ -4467,21 +5588,72 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 51;   // 41 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 53;   // 45 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
     // session can be LRU-purged instead of bouncing new connects off ENFILE.
     //
-    // 10 -> 13, i.e. all of the safe budget (#232). Eviction is not theoretical
-    // here: the spectrum WebSocket was being purged repeatedly because its LRU
-    // position never refreshed, and every purge costs the browser a reconnect.
-    // That specific bug is fixed in webserver_ws.c, but the pressure that made
-    // it fire is real - the page polls /api/status and /api/decodes, the feeds
-    // open outbound connections, and each of ours competes for the same table.
-    // Three more slots is free headroom against a mechanism we have now watched
-    // misfire, so there is no reason to hold any of it back.
-    config.max_open_sockets = 13;
+    // 13 -> 8, and the three slots given back in #232 come with them.
+    //
+    // ⛔⛔ 13 IS IDF's CEILING FOR A DEVICE WHERE httpd IS THE ONLY USER OF THE
+    // TABLE, and this one is not. httpd_main.c refuses anything above
+    // CONFIG_LWIP_MAX_SOCKETS - 3, so 13 reserves the ENTIRE 16 for httpd and
+    // its three internals - while rigctld's listener, RBN, the DX cluster,
+    // pskreporter's UDP socket, mDNS and every outbound TLS feed draw on the
+    // same table.
+    //
+    // The consequence is not that httpd is merely greedy. It is that httpd can
+    // NEVER REACH ITS OWN LIMIT, so lru_purge_enable - the mechanism that exists
+    // to reclaim an idle session - can never fire. lwIP runs out first and every
+    // new connection is refused, for ever, while httpd sits there believing it
+    // has room.
+    //
+    // ⭐ WATCHED HAPPENING, 2026-09-07, which is what settles it. With ONE
+    // browser open and its other tabs closed, sock_owners reported 15 of 16 in
+    // use with NINE httpd sessions to that browser, unchanged 145 s later - and
+    // churning, three peer ports changed between two readings, so sessions were
+    // being replaced while the total never fell. The WebSocket had taken the
+    // last slot and every /api/status poll was refused: the page drew a live
+    // spectrum at 9.6 fps with band, mode, frequency, clock and battery all
+    // showing "--".
+    //
+    // At 8, httpd hits its own limit while lwIP still has ~5 free, so the purge
+    // engages and evicts httpd's OWN oldest idle session instead of everyone
+    // being refused. The WebSocket is not the victim: webserver_ws.c refreshes
+    // its LRU position on every send (the v1.9.x fix), which is precisely the
+    // bug that made 10 unsafe before and is fixed.
+    //
+    // ⚠ A ramp test that morning did NOT reproduce this and I wrongly used that
+    // to argue the arithmetic was not the whole story. Half-open connections are
+    // not what fills the table; a real browser is.
+    config.max_open_sockets = 8;
+
+    /* #345 - "stalls spanning a few seconds" (Samuel W7STF), and the mechanism
+     * was REPRODUCED FROM A DESK rather than inferred: plain TCP connections to
+     * port 80 sending a PARTIAL request (headers, no terminating blank line)
+     * and held open were closed STRICTLY ONE AT A TIME, 5.1 s apart, at the IDF
+     * default recv_wait_timeout.
+     *
+     * esp_http_server has ONE worker task and no multi-worker option, so an
+     * incomplete request holds it for the whole timeout and N of them stall the
+     * entire web UI for 5N seconds. Nothing exotic produces one: a phone that
+     * slept mid-request, a tab closed while loading, a client that walked out of
+     * WiFi range.
+     *
+     * ⛔ THIS IS NOT #313 AND MUST NOT BE FOLDED INTO IT. During that test the
+     * socket table peaked at 11 of 16 with zero SOCKET TABLE EXHAUSTED and zero
+     * accept errors. The two are indistinguishable from a browser and are
+     * different faults.
+     *
+     * ⚠ 2 s is a JUDGEMENT, not a measurement. It cuts each stall by 60%, and a
+     * few hundred bytes of request headers are well inside 2 s even on poor
+     * WiFi since TCP retransmits sooner - but a genuinely slow client now gets
+     * less grace, and that lands on exactly the people least likely to report
+     * it. If anyone reports requests failing on a weak link, this is the first
+     * thing to put back. It SHORTENS a stall; it does not remove one - the real
+     * cure would be a second worker, which this server cannot do. */
+    config.recv_wait_timeout = 2;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);
@@ -4498,7 +5670,10 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log);
     httpd_register_uri_handler(s_server, &uri_log_saved);
     httpd_register_uri_handler(s_server, &uri_adif_get);
+    httpd_register_uri_handler(s_server, &uri_adif_check);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
+    httpd_register_uri_handler(s_server, &uri_adif_import);
+    httpd_register_uri_handler(s_server, &uri_adif_import_sd);
     httpd_register_uri_handler(s_server, &uri_adif_delete);
     httpd_register_uri_handler(s_server, &uri_adif_edit);
     httpd_register_uri_handler(s_server, &uri_qrz_key);
@@ -4521,6 +5696,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_help);
     httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
+    httpd_register_uri_handler(s_server, &uri_qrz_lookup_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     httpd_register_uri_handler(s_server, &uri_cloudlog_creds);
     httpd_register_uri_handler(s_server, &uri_cloudlog_upload);

@@ -47,6 +47,22 @@ bool sock_probe_exhausted(void);
 // the very thing being measured. On demand only - never on a periodic path.
 int sock_probe_free(int cap);
 
+/* Same figure, but at most one real probe per `max_age_ms`; in between it
+ * returns the last one taken.
+ *
+ * ⛔ USE THIS FROM ANYTHING POLLED. sock_probe_free() holds up to `cap` sockets
+ * AT ONCE, and /api/status called it with cap=6 on every request - a browser
+ * polls that at 1 Hz, and this bench idles with FIVE sockets free, so every
+ * poll took the entire remaining table for the duration of the probe. Anything
+ * arriving in that window gets ENFILE, which is the exact #313 signature
+ * (`httpd_accept_conn: error in accept (23)`).
+ *
+ * Whether that is all of #313 is NOT established - the reproduction ran for
+ * 10 h before failing and then failed continuously, which a momentary window
+ * does not obviously explain. But a diagnostic must not consume the resource
+ * it is measuring, which is the same rule task_stacks.h states for the heap. */
+int sock_probe_free_cached(int cap, int max_age_ms);
+
 // Called from the 10 s heap watchdog. Runs the cheap one-socket canary and logs
 // ONLY on a change of state, so a healthy device stays silent and an exhausted
 // one says so once, loudly, in the diag log that a field report carries.

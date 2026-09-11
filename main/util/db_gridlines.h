@@ -20,6 +20,11 @@ extern "C" {
  * range (hi <= lo) - callers must treat 0 as "draw no scale", never as an error
  * to paper over with a default.
  */
+/* How many gridlines the scale may carry. Defined HERE rather than in ui.c,
+ * because the browser draws the same scale from the same builder and a second
+ * copy of the bound is how the two ended up disagreeing in the first place. */
+#define DB_SCALE_MAX_LBLS 5
+
 int db_gridlines_build(float lo, float hi, int max_n, float *out);
 
 #ifdef __cplusplus

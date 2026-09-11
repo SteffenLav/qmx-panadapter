@@ -49,8 +49,8 @@ You need **two USB connections**:
 
 | Connection | Tab5 Port | Cable | Carries |
 |---|---|---|---|
-| Tab5 ← QMX | USB-A (host) | USB-A to USB-C, **data cable** | I/Q audio + CAT control |
-| Tab5 ← Power | USB-C | Any USB-C power cable | 5V power |
+| Tab5 <- QMX | USB-A (host) | USB-A to USB-C, **data cable** | I/Q audio + CAT control |
+| Tab5 <- Power | USB-C | Any USB-C power cable | 5V power |
 
 ⚠️ **Cable gotcha:** Many USB-C cables are charge-only. If the spectrum stays flat and the top bar shows `Band: ---`, you have a charge-only cable. Swap it for one you know does data (USB stick, phone sync, etc.).
 
@@ -95,7 +95,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
+| Swipe → from **left edge** | Cycle Panadapter -> FT8/FT4 -> WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
@@ -171,7 +171,7 @@ The same window is available from the web page, in the same words.
 ### If you would rather it did not download by itself
 
 The background download is **on by default** and can be switched off in
-**Settings → Network → Download updates automatically**. Turn it off if you
+**Settings -> Network -> Download updates automatically**. Turn it off if you
 are on a metered connection — a phone hotspot in a field, for instance — since
 each update is about 3.3 MB. With it off, the bar offers the update and the
 window's button reads **Download now** instead.

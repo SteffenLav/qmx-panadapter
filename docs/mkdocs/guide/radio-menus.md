@@ -18,7 +18,7 @@ whole thing at once.
 The terminal runs on the QMX's **second** USB serial port, and that port is off by
 default. You only have to do this once — the setting survives a power cycle.
 
-On the radio: **System config → GPS & Ser. ports → USB serial ports → 2**
+On the radio: **System config -> GPS & Ser. ports -> USB serial ports -> 2**
 
 !!! note "Why a second port, and not the one already in use"
     The QMX manual is explicit that leaving a terminal session without choosing
@@ -41,7 +41,7 @@ the failure happens rather than in a message that disappears. *(Michael KZ4LY)*
 
 === "On the Tab5"
 
-    **Settings drawer → Radio → Radio menus**
+    **Settings drawer -> Radio -> Radio menus**
 
     The keys are along the top, all the same size: **▲ ▼ ◀ ▶**, **Enter**,
     **Back**, **BS**, the **keyboard** toggle, and **Close**.
@@ -82,7 +82,7 @@ Two things happen automatically so you cannot get stuck:
   You will see *"session timed out — closed"*. Open it again to carry on.
 
 **You come back to the frequency and mode you left.** A trip through the radio's own
-menus can move the dial on its own — go into Hardware Tests → Diagnostics to read
+menus can move the dial on its own — go into Hardware Tests -> Diagnostics to read
 the supply voltage, come out, and the radio is on 160 m whatever band you started on
 *(Randy N4OPI)*. On closing, the Tab5 puts the frequency and mode back if they moved,
 along with re-enabling I/Q mode and re-reading the noise floor.
@@ -134,7 +134,7 @@ browser both your Backspace and Delete keys do this.
     a table they move between columns, which is the radio's own intended behaviour.
 
     For those, use **BS** and type the value instead. `Max. PA voltage`, the band
-    config columns, `CAT Config → Timeout`, `System config → TCXO frequency` and the
+    config columns, `CAT Config -> Timeout`, `System config -> TCXO frequency` and the
     Virtual U3S values all edit this way. *(Randy N4OPI worked this out from PuTTY
     and told us — it is how the radio has always behaved, not a Tab5 limitation.)*
 

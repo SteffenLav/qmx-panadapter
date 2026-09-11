@@ -52,11 +52,36 @@ PATCHES = [
      "WiFi transport buffers stay in scarce internal DRAM; the device reboots "
      "under QMX+FT8 load when WiFi TX bursts"),
 
+    ("apply_lv_event_chain_guard.ps1", "repo",
+     "managed_components/lvgl__lvgl/src/misc/lv_event.c",
+     "qmx_lv_event_chain_bad",
+     "LVGL walks its in-flight event chain on EVERY object destruction; a "
+     "corrupt link takes a Load access fault and reboots the device, and the "
+     "marker is the COUNTER symbol because a silent tolerant patch is "
+     "indistinguishable from a missing one (#189/#329)"),
+
     ("apply_esp_hosted_sdio_recovery.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "SDIO RX oversize",
      "an oversized SDIO pending-byte delta livelocks the link: WiFi dies within "
      "minutes and every RPC times out forever (reboot is the only way out)"),
+
+    # NOTE sdio_drv.c carries TWO of our patches - this one and the oversize
+    # recovery above - with separate markers. Applying one does not apply the
+    # other, so each needs its own row.
+    ("apply_esp_hosted_sdio_rxbuf_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_PANADAPTER_SDIO_RXBUF_TOLERANT",
+     "sdio_read_task() abort()s the device when its RX buffer pool is "
+     "momentarily exhausted under load - observed at ~97 minutes of uptime "
+     "with WiFi + MQTT self-spotting running"),
+
+    ("apply_esp_hosted_sdio_write_avail_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_WRITE_AVAIL_TOLERANT",
+     "sdio_is_write_buffer_available() gave the slave two back-to-back chances "
+     "and then REBOOTED the device - a deliberate restart, so no crash record, "
+     "and a warm reset with the radio attached wedges the QMX (#74)"),
 
     ("apply_esp_hosted_assert_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
@@ -115,6 +140,15 @@ PATCHES = [
      "components/fatfs/src/ffconf.h",
      "#define FF_FS_EXFAT\t1",
      "microSD cards larger than 32 GB (exFAT) will not mount"),
+
+    ("apply_mqtt_client_psram_task.ps1", "idf",
+     "components/mqtt/esp-mqtt/mqtt_client.c",
+     "PATCHED (qmx-panadapter, 2026-09-10)",
+     "esp_mqtt_client_start() always allocated its task stack from internal "
+     "RAM with no PSRAM option; on this board that RAM is chronically tight "
+     "after WiFi bring-up and the allocation failed outright, silently "
+     "killing live PSK Reporter self-spotting (net/pskr_self.c) for the "
+     "whole session"),
 ]
 
 

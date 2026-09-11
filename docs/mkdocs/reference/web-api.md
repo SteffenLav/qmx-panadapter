@@ -304,6 +304,32 @@ with no records, not an error.
 `qso-YYYY-MM-DD.adi` so a daily file is self-identifying once it is saved. A day
 with no contacts returns a valid empty ADIF, not an error.
 
+### POST /api/adif/import
+
+Restore records from a raw ADIF file — the browser's own "ADIF download", or any
+other logger's export. Body is the ADIF text itself (`Content-Type: text/plain`).
+
+`?mark_uploaded=0` imports the contacts as **not yet uploaded**, so the next QRZ/
+eQSL/LoTW upload pass sends them. Default (`1`, or the parameter omitted) marks
+them as already uploaded instead — advancing all three upload cursors to the new
+record count — since the ordinary reason to restore a log is that these contacts
+were already sent before whatever wiped the device.
+
+A pretty-printed, multi-line record (as some loggers export) is normalised to
+this device's own one-line-per-record form before being written. A record whose
+`CALL`+`QSO_DATE`+`TIME_ON` already matches one in the log is skipped, so
+re-importing the same file twice — or a file that overlaps an earlier partial
+restore — adds nothing extra.
+
+**Response**:
+
+```json
+{ "ok": true, "added": 12, "total": 47 }
+```
+
+`added: 0` with `ok: true` means every record in the file was already logged.
+`ok: false` means the log could not be written at all (storage full).
+
 ### POST /api/adif/edit
 
 Correct **one field of one record**: `?idx=<n>&call=<CALL>&field=<F>&value=<V>`.

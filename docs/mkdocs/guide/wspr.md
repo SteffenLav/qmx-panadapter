@@ -4,7 +4,7 @@
 
 It is not a contact mode. Nobody replies, there is no exchange, and nothing goes in your log. That is the point: it measures propagation instead of working people.
 
-Swipe → from the left edge to cycle **Panadapter → FT8/FT4 → WSPR** and back.
+Swipe → from the left edge to cycle **Panadapter -> FT8/FT4 -> WSPR** and back.
 
 ---
 
@@ -24,8 +24,9 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 
 | Column | Meaning |
 |---|---|
+| **S** | The letter this station is marked with on the waterfall for that cycle — see [Which trace is which](#which-trace-is-which) below. Blank once the cycle it belongs to has scrolled out of the picture |
 | **UTC** | The cycle this spot came from |
-| **M** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
+| **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
 | **GRID** | Their Maidenhead locator, as transmitted |
 | **COUNTRY** | Country from the callsign prefix |
@@ -33,13 +34,23 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 | **DRF** | Drift, in Hz per minute. A stable transmitter reads 0 |
 | **TONE** | Where in the 200 Hz sub-band they were heard |
 | **PWR** | The power **they declared**, not a measurement |
-| **KM / BRG** | Great-circle distance and bearing from your grid |
+| **KM / BRG** | Great-circle distance and bearing from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md) |
+| **DT** | How far into the two-minute cycle that transmission actually started, in seconds. **Nominal is +1.0**, because a WSPR transmission begins one second into its even minute — so a value far from that is the other station's clock rather than anything at your end |
 
 Below the list:
 
 - **DX** — the furthest station of the session, which is usually the number you actually want.
 - **HISTORY** — stations per cycle, oldest on the left. A single snapshot cannot tell an opening band from a closing one; a row of bars can.
-- **WSPRNET** — whether spots are being published, and whether they can be.
+- **WSPRNET** — whether spots are being published, and how many can be. **"N of M publishable"** is the publication gate: a station is only sent to wsprnet once it has been heard **more than once**, so N is how many of the M calls heard so far are eligible. This is also why a site like wspr.rocks can show fewer unique calls than this page reports hearing — it only ever received the publishable ones.
+- **Clear** — empties the decode list. It asks first, because the list is also the upload queue: anything not yet sent to wsprnet goes with it, and the publishable count resets.
+
+!!! tip "With a mouse, point at a trace to see whose it is"
+
+    Hovering a trace on the waterfall names the station, its tone and its signal
+    report, beside the pointer. It matches within about half a WSPR signal's
+    width, so you have to be on the trace rather than near it. There is no hover
+    on a touchscreen, so this adds to the list rather than replacing it —
+    everything it shows is in the table underneath.
 
 The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR's whole sub-band is narrower than a single FT8 signal, so this is a very close-up view: individual beacons appear as near-horizontal lines, and a sloping line is a drifting transmitter.
 
@@ -47,17 +58,71 @@ The right pane shows the captured 200 Hz window for the cycle just decoded. WSPR
 
 **The panadapter spectrum is not available while WSPR runs.** The receiver takes the IQ stream for the whole cycle, so there is nothing left to draw a live spectrum from. This is expected, not a fault.
 
+#### Which trace is which
+
+Each time a cycle finishes, the traces the decoder examined are lettered on the
+waterfall — **A, B, C… from left to right by tone** — and the cycle's UTC time is
+printed at the left end of the row. The same letter appears in the list's **S**
+column, so a line of text and a mark on the carpet are the same station, and you
+can tell at a glance which of five traces produced the report you are reading.
+
+The letters describe the cycle **below** the boundary line they sit under, since
+that is the cycle that just finished. They scroll down the carpet with it and are
+gone once it leaves the picture, which is why an older row's **S** column is
+blank.
+
+- **A `?` is a trace the decoder tried and could not read.** That is worth
+  seeing: it is the difference between "nothing was there" and "something was
+  there and was too weak", which is the whole question when you are judging an
+  antenna or a band. It usually means a signal a few dB below the decode
+  threshold, but a birdie or a carrier sitting in the sub-band will also collect
+  one.
+- **Not everything gets a mark.** The candidate finder always returns a full
+  quota of possibilities, most of which are its own noise floor rather than
+  signals, so a `?` is only drawn for a candidate well above the middle of that
+  cycle's crop. Expect a handful, not a row of punctuation.
+- **A mark that cannot be placed honestly is left out.** Where several traces are
+  too close together to letter separately, decoded stations are placed first and
+  the rest are dropped rather than nudged aside — a marker pointing at the wrong
+  trace is worse than no marker.
+- The letter is drawn a couple of Hz above the tone in the table. A WSPR
+  transmission is four tones about 4.4 Hz wide and the reported frequency is the
+  lowest of them, so the mark sits on the middle of the trace rather than its
+  left-hand edge.
+
+---
+
+**Changing band** — tap the button at the top of the left pane and a list drops
+below it. Touch a line and it lights up; if it is the wrong one, keep your finger
+down and drag until you are on the one you want, then lift to choose it.
+Releasing outside the list chooses nothing. The band you are on is named in
+amber.
+
+!!! warning "Use *this* button, not the top bar"
+    On the WSPR page the top bar's **Band**, **Mode**, **BW** and **Zoom** are
+    greyed out and do nothing: they belong to the panadapter's idea of the radio,
+    while this page owns the dial. Only **Freq** stays live, so a beacon found off
+    the standard dial frequency can still be chased by typing it in.
+
+    On **v1.12.0 only**, the top bar's Band control overlapped this panel and took
+    the touch — picking a band from it wrote an FT8 frequency to the radio while
+    WSPR carried on capturing and labelling its spots with the band it thought it
+    was on. If you used the WSPR page on that release, check which band your radio
+    is actually on.
+
 ---
 
 ### 3. Settings
 
 All of WSPR's settings live in the **settings drawer** (swipe ← from the right edge) under **WSPR**, and appear only while the WSPR page is up. The page itself keeps just one control — the **TX** button — because that is the only one you reach while a session is running.
 
-#### Allow transmitting
+#### Transmitting is the TX button, and nothing else
 
-Off by default. Turning it on lets the station beacon; turning it off makes the Tab5 a pure receiver, which is a perfectly good way to use WSPR.
+There is no separate "allow transmitting" setting. The **TX** button on the page is the only control, so there is nothing that can disagree with it.
 
-**Your callsign and grid must be set**, in **Station → Callsign & Grid square**. Without them there is no transmission at all — the same rule FT8 follows. WSPR sends your callsign to every station that hears you and publishes it to a public database, so it uses the identity you entered and nothing else.
+**It is off every time you open the WSPR page**, whatever you did last session. A beacon that resumes on its own because of how you left it a week ago is not a decision you made, so the page always starts as a pure receiver — which is a perfectly good way to use WSPR — and transmitting is something you switch on deliberately each time.
+
+**Your callsign and grid must be set**, in **Station -> Callsign & Grid square**. Without them there is no transmission at all — the same rule FT8 follows. WSPR sends your callsign to every station that hears you and publishes it to a public database, so it uses the identity you entered and nothing else.
 
 #### Declared power
 
@@ -126,20 +191,22 @@ It needs WiFi and your callsign and grid.
 
 ### 4. Transmitting
 
-With **Allow transmitting** on, a callsign and grid set, and a duty cycle above 0%, the **TX** button on the page arms the station. Each cycle is then decided by the duty cycle, and the button shows what is happening.
+With a callsign and grid set and a duty cycle above 0%, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the duty cycle, and the button shows what is happening.
+
+**The countdown on the button is the time until a real transmission.** The duty-cycle decision is taken in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.
 
 A few things worth knowing before you leave it running:
 
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
-- **SWR protection still applies.** If the SWR limit in **Radio → SWR protection** is exceeded, transmitting stops.
-- **The Tab5 wakes up on the page you left it on.** If you leave it on WSPR with transmitting enabled, it resumes beaconing after a power cycle — including after an unexpected one, with nobody present. That is what a beacon is for, but it is worth knowing before you leave the shack.
+- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops.
+- **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
 - **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **FT8 Simulation Mode** in the drawer; it interlocks WSPR TX as well.
 
 ---
 
 ### 5. From the browser
 
-The web UI mirrors whatever page the Tab5 is on. Switch it to WSPR with the **Switch to WSPR** link in the bottom bar, and the spot table appears in the browser as well.
+The web UI mirrors whatever page the Tab5 is on. Switch it to WSPR with the **Switch to WSPR** link in the bottom bar, and the browser shows the same page the Tab5 does: a **MODE: WSPR** heading, the band selection, the **TX** button with its countdown, the finals-guard voltage, best DX, stations heard per cycle, the wsprnet publishing status — and the table of spots.
 
 The table is shown only while the Tab5 is on the WSPR page, because that is the only time the receiver is running — on any other page it would be a frozen list that looked live.
 

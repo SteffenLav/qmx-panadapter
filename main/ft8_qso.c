@@ -25,6 +25,7 @@
 // the idle fallback) does the actual ft8_tx_arm(). This avoids the
 // "arm refused, burst already in progress" race that previously left CQ stuck.
 
+#include "esp_timer.h"   // the sticky-timeout expiry clock
 #include "ft8_qso.h"
 #include "ft8_robot.h"   // ft8_band_change_stand_down also stands the robot down
 #include "ft8_pileup.h"
@@ -58,6 +59,29 @@ static const char *TAG = "ft8_qso";
 // (2026-06-26): an OH5KNL RR73 landed just 29s after a 4-slot timeout fired -
 // they needed one more cycle to successfully copy our report and reply.
 #define QSO_TIMEOUT_SLOTS  6
+
+/* ⭐ AND THEN THE TIMEOUT STATE CLEARS ITSELF.
+ *
+ * FT8_QSO_TIMEOUT is sticky: it was designed to be, so the operator finds out
+ * that a call went unanswered rather than the fact scrolling past. But sticky
+ * also means BLOCKING - the state machine is not IDLE, so the automatic pickers
+ * will not start anything new until somebody taps the label. Operator,
+ * 2026-09-02: "it blocks new processes".
+ *
+ * A message that stops the station working is worse than a message nobody read,
+ * so it now expires. Twenty seconds is the operator's figure: long enough to
+ * see it across the shack, short enough that a session left alone carries on by
+ * itself. Tapping still clears it immediately.
+ *
+ * ⚠ Only the STICKY case expires. The pileup-initiated timeout in
+ * ft8_qso_advance() already clears itself so one caller who wandered off cannot
+ * stall the drain, and that path is untouched. */
+#define QSO_TIMEOUT_AUTO_CLEAR_MS  20000
+
+/* When the sticky timeout began. Written under the lock beside s_state, at all
+   three places that enter it, so it can never describe a different timeout than
+   the one being shown. */
+static int64_t s_timeout_us;
 
 // Clamp the SNR we report to a sane FT8 range.
 #define RPT_MIN_DB  (-24)
@@ -276,6 +300,27 @@ bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
 //   uploaded to QRZ/eQSL/LoTW as if real (Roy KI0ER, 2026-07-29).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
+/* Their grid, remembered for the LIFETIME OF THIS QSO (Gyula HA3HZ, 2026-09-06:
+ * "the associated call sign and grid data should be recorded in memory, then
+ * incorrect entries would not occur").
+ *
+ * The ADIF record is built at completion by looking the partner up in the live
+ * decode table - but that table ages quiet stations out, and a QRP exchange
+ * that drags on while the partner is not being decoded can outlive their row.
+ * Their grid arrived once, in their first message; nothing after it carries one
+ * (a report/RR73/73 has no room), so once the row is gone the grid is gone and
+ * the QSO logs without one. Captured here the moment it is seen, and used only
+ * as a FALLBACK when the live lookup comes up empty - the table stays the
+ * source of truth while it has an answer. Never a guess: empty stays empty, the
+ * same rule the RST fields follow.
+ *
+ * Stored WITH the callsign it belongs to, and used only when that matches the
+ * station being logged - so it cannot be left over from an earlier contact and
+ * attributed to this one. That is the same failure this fix exists to stop, one
+ * layer up, and pairing the two values makes it unrepresentable instead of
+ * relying on every reset path remembering to clear it. */
+static char               s_their_grid[FT8_GRID_MAX_LEN];
+static char               s_their_grid_call[FT8_CALL_MAX_LEN];
 /* Their numeric report of us, lifted from the message a manual/pileup reply
  * was built from, so the R-report entry can record it as RST_RCVD (#292). */
 static char               s_heard_their_rpt[8];
@@ -324,8 +369,32 @@ static int64_t next_slot_sec(bool match_parity, bool want_even, ftx_protocol_t p
     return next_ms / 1000;
 }
 
-static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
-static inline void unlock(void) { xSemaphoreGive(s_lock); }
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+static inline void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
+static inline void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
+
+/* Remember the partner's grid the first time it is seen in this exchange, with
+ * the callsign it belongs to - see s_their_grid. */
+static void note_their_grid(const char *call, const char *grid)
+{
+    if (!call || !call[0] || !grid || !grid[0]) return;
+    lock();
+    strncpy(s_their_grid_call, call, sizeof(s_their_grid_call) - 1);
+    s_their_grid_call[sizeof(s_their_grid_call) - 1] = '\0';
+    strncpy(s_their_grid, grid, sizeof(s_their_grid) - 1);
+    s_their_grid[sizeof(s_their_grid) - 1] = '\0';
+    unlock();
+}
 
 // Cache + uppercase the operator callsign for message scanning. Returns false
 // (with err) if no callsign is configured.
@@ -1299,7 +1368,7 @@ static void register_miss(const char *waiting_for)
         ft8_status_set("QSO %s lost - back to CQ", tgt);
         ESP_LOGI(TAG, "QSO %s timed out - resuming CQ", tgt);
     } else {
-        lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+        lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
         ft8_tx_disarm();
         ft8_status_set("QSO %s: no response - timeout", tgt);
         ESP_LOGW(TAG, "QSO %s timed out", tgt);
@@ -2134,9 +2203,70 @@ static bool final_resend_if_still_asked(int64_t slot_sec)
     return true;
 }
 
+bool ft8_qso_msg_is_for_us(const char *text)
+{
+    if (!text || !text[0]) return false;
+    lock();
+    const bool busy = (s_state != FT8_QSO_IDLE && s_state != FT8_QSO_DONE &&
+                       s_state != FT8_QSO_TIMEOUT);
+    char me[FT8_CALL_MAX_LEN];
+    strncpy(me, s_my_call, sizeof(me) - 1);
+    me[sizeof(me) - 1] = 0;
+    unlock();
+    if (!busy || !me[0]) return false;
+
+    /* The FIRST field of an FT8 message is who it is FOR. Compare only that:
+     * our callsign as the SENDER of somebody else's decode, or sitting inside a
+     * longer call, is not a message to us. */
+    const char *p = text;
+    while (*p == ' ') p++;
+    size_t n = 0;
+    while (p[n] && p[n] != ' ') n++;
+    if (n != strlen(me)) return false;
+    return strncasecmp(p, me, n) == 0;
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
+    /* ⛔ THE EXPIRY CHECK IS NOT CALLED HERE ANY MORE.
+     *
+     * It was, "to cover a session watched only from a browser" - which was
+     * reasoning, not a requirement: /api/status only carries the FT8 block
+     * while ft8_screen_view_is_active(), so the Tab5's own 1 Hz timer is
+     * running whenever any of this is visible anywhere. The browser case it
+     * was covering cannot occur.
+     *
+     * What it did do was clear the state to IDLE at the TOP of advance(), so
+     * the state machine ran the rest of the slot against a state that had
+     * changed underneath it - and the robot, which self-gates on IDLE and runs
+     * immediately after advance(), could start a fresh contact inside the same
+     * slot. That is new behaviour on the decode task, and the decode task is
+     * where the bench then took an abort() at 137 s.
+     *
+     * ⚠ THAT IS NOT PROOF: the serial capture missed the pre-crash window, so
+     * the abort has NOT been root-caused and this is a reduction in exposure,
+     * not a diagnosis. Said plainly so nobody later reads it as one. If the
+     * abort returns with the check gone from this task, look elsewhere. */
+
     capture_pileup_callers(slot_sec);
+
+    // Take a copy of the partner's grid while their row is still in the decode
+    // table. It ages out of that table on its own schedule, and on a slow QRP
+    // exchange the QSO can outlive it - see s_their_grid. Their grid only ever
+    // arrives in their FIRST message, so once it is gone there is no second
+    // chance to read it.
+    {
+        lock();
+        char tgt[FT8_CALL_MAX_LEN];
+        strncpy(tgt, s_target, sizeof(tgt) - 1);
+        tgt[sizeof(tgt) - 1] = '\0';
+        unlock();
+        if (tgt[0]) {
+            ft8_call_t row;
+            if (ft8_screen_find_call(tgt, &row) && row.last_grid[0])
+                note_their_grid(tgt, row.last_grid);
+        }
+    }
 
     // Before anything else can start a NEW contact this slot: finish the last
     // one properly if the partner is still waiting on our final. Runs only when
@@ -2375,6 +2505,19 @@ void ft8_qso_advance(int64_t slot_sec)
                     strncpy(their_grid, snap[i].last_grid, sizeof(their_grid) - 1);
                     break;
                 }
+            }
+            // Their row may have aged out during a long exchange, taking the
+            // only copy of their grid with it. Fall back to what was captured
+            // earlier in THIS QSO - and only if it was captured for THIS
+            // station (Gyula HA3HZ, 2026-09-06).
+            if (!their_grid[0]) {
+                lock();
+                bool same = (strcmp(s_their_grid_call, target) == 0) && s_their_grid[0];
+                if (same) snprintf(their_grid, sizeof(their_grid), "%s", s_their_grid);
+                unlock();
+                if (their_grid[0])
+                    ESP_LOGI(TAG, "grid for %s recovered from this QSO's own record (%s) "
+                                  "- their decode row had aged out", target, their_grid);
             }
 
             // ARRL Field Day exchange (if any): their_exch is "<class> <section>";
@@ -2705,7 +2848,7 @@ void ft8_qso_advance(int64_t slot_sec)
             }
         }
         if (!ok) {
-            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+            lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
         arm_current_replacing_armed();
@@ -2817,7 +2960,7 @@ void ft8_qso_advance(int64_t slot_sec)
         if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
             ft8_status_set("QSO %s: sending 73", target);
         else {
-            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+            lock(); s_state = FT8_QSO_TIMEOUT; s_timeout_us = esp_timer_get_time(); unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
         arm_current_replacing_armed();
@@ -3087,7 +3230,12 @@ void ft8_qso_notify_manual_final(const char *target_call)
  *
  * ⛔ Deliberately NOT gated on "was the robot running". A hand-started pounce
  * transmits on the wrong band just as readily as an automatic one, and the
- * on-air consequence is identical. */
+ * on-air consequence is identical.
+ *
+ * ⭐ Also clears the pileup list (added after a second Randy N4OPI report,
+ * 2026-09-04): a station heard calling on the OLD band cannot be worked by
+ * replying on the new one, so leaving them listed just invites exactly the
+ * mistake this function exists to prevent. */
 void ft8_band_change_stand_down(const char *why)
 {
     char who[16];
@@ -3097,6 +3245,44 @@ void ft8_band_change_stand_down(const char *why)
         ft8_qso_abort();
     }
     ft8_robot_stand_down(why);
+    ft8_pileup_clear();
+}
+
+bool ft8_qso_timeout_expire_check(void)
+{
+    /* ⛔ s_lock IS CREATED LAZILY, on the engine's first run (see the
+     * xSemaphoreCreateMutex below). Both of these are public and are called
+     * from a 1 Hz UI timer, so they can be reached on a screen where FT8 has
+     * never started - and xSemaphoreTake(NULL) is an assert, not a no-op.
+     * Cost me a boot loop on 2026-09-02: taskLVGL, 3.5 s of uptime, named
+     * exactly by the #117 crash record. Nothing can have timed out before the
+     * engine has ever run, so "no lock yet" simply means "nothing to do". */
+    if (!s_lock) return false;
+    lock();
+    bool due = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us &&
+               (esp_timer_get_time() - s_timeout_us) >= (int64_t)QSO_TIMEOUT_AUTO_CLEAR_MS * 1000;
+    unlock();
+    /* ⚠ Aborting OUTSIDE the lock: ft8_qso_abort() takes it itself, and this is
+     * called from a 1 Hz UI timer and from the decode task's advance(). Holding
+     * it across the call would be a straightforward deadlock. */
+    if (due) {
+        ESP_LOGI(TAG, "QSO timeout expired after %d s - clearing by itself",
+                 QSO_TIMEOUT_AUTO_CLEAR_MS / 1000);
+        ft8_qso_abort();
+    }
+    return due;
+}
+
+int ft8_qso_timeout_secs_left(void)
+{
+    if (!s_lock) return -1;          /* see the note above */
+    lock();
+    bool on = (s_state == FT8_QSO_TIMEOUT) && s_timeout_us;
+    int64_t age_us = on ? (esp_timer_get_time() - s_timeout_us) : 0;
+    unlock();
+    if (!on) return -1;
+    int left = (int)((QSO_TIMEOUT_AUTO_CLEAR_MS - age_us / 1000 + 999) / 1000);
+    return left < 0 ? 0 : left;
 }
 
 void ft8_qso_abort(void)
