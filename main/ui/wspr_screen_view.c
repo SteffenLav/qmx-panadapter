@@ -116,7 +116,57 @@ static lv_obj_t *s_lbl_heard;
 
 static lv_obj_t *s_btn_dial;       /* opens the band picker; carries s_lbl_dial */
 static lv_obj_t *s_btn_tx;
+
 static lv_obj_t *s_lbl_tx;
+
+/* ⛔ THE TX BUTTON'S LABEL OUTGREW ITS BUTTON, AND THE PART THAT FELL OFF WAS
+ * THE SAFETY WARNING.
+ *
+ * The button is EX_W_LOW - 24 = 226 px and the font was fixed at montserrat_28,
+ * sized when the text was "TX  OFF" (~110 px, and the comment at the label's
+ * creation still says so). Every string added since is longer:
+ *
+ *   "TX  OFF"                ~110 px   fits
+ *   "TX  ON  next 2:59"      ~260 px   clipped at BOTH ends - operator, 2026-09-12
+ *   "TX  ON AIR  FULL PWR"   ~300 px   "FULL PWR" invisible
+ *   "TX  in 0:14  FULL PWR"  ~320 px   "FULL PWR" invisible
+ *
+ * The reported fault was the cosmetic one. The serious one is underneath it:
+ * FULL PWR says the PA guard is off while WSPR keys the finals for 110 s in
+ * every 120, and it was being clipped away in every single state where it
+ * applies - i.e. exactly when it matters. "A protection whose absence is
+ * invisible is a protection you cannot trust", as the comment that added it
+ * says; a warning clipped off the end of a button is invisible.
+ *
+ * So the label MEASURES itself and steps the font down until it fits, rather
+ * than anybody counting characters again. The short, common strings keep 28 pt
+ * and look exactly as before; only the long ones shrink. A new string can never
+ * silently lose its tail. */
+static void tx_label_fit(const char *txt)
+{
+    if (!s_lbl_tx || !s_btn_tx || !txt) return;
+
+    static const lv_font_t *const kFonts[] = {
+        &lv_font_montserrat_28, &lv_font_montserrat_24,
+        &lv_font_montserrat_20, &lv_font_montserrat_18,
+    };
+    /* Button width less its own horizontal padding, and then a little more:
+     * a glyph that ends flush against the border reads as clipped even when
+     * it is not. */
+    const int32_t avail = lv_obj_get_width(s_btn_tx)
+                        - lv_obj_get_style_pad_left(s_btn_tx, LV_PART_MAIN)
+                        - lv_obj_get_style_pad_right(s_btn_tx, LV_PART_MAIN) - 8;
+
+    const lv_font_t *chosen = kFonts[sizeof(kFonts) / sizeof(kFonts[0]) - 1];
+    for (size_t i = 0; i < sizeof(kFonts) / sizeof(kFonts[0]); i++) {
+        if (lv_text_get_width(txt, (uint32_t)strlen(txt), kFonts[i], 0) <= avail) {
+            chosen = kFonts[i];
+            break;
+        }
+    }
+    lv_obj_set_style_text_font(s_lbl_tx, chosen, 0);
+    lv_obj_center(s_lbl_tx);
+}
 
 /* THE standard WSPR dial for each band - the whole list, not a range.
  *
@@ -2475,8 +2525,10 @@ void wspr_screen_view_tick(void)
          * bursts, because the next one is coming in under two minutes. */
         lv_obj_set_style_text_color(s_lbl_tx,
             lv_color_hex(unprotected ? 0xFF4010 : 0xFFFFFF), 0);
-        if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0)
+        if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0) {
             lv_label_set_text(s_lbl_tx, txt);
+            tx_label_fit(txt);
+        }
 
         /* The Duty readout that used to live here went to the drawer with its
          * button (2026-08-28). Nothing is left to update: TX above still shows
