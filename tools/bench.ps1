@@ -403,6 +403,54 @@ function Cmd-Build {
     } finally { if ($took) { Release-Lock $reg } }
 }
 
+# ⚠ WSPR's transmit state is on /api/wspr and FT8's is on /api/status. The first
+# version of this asked /api/status for tx_state, which is not there - so it
+# would have returned "not transmitting" every single time and looked like a
+# working guard. Checked against the live device before trusting it.
+function Get-Json {
+    param([string] $url)
+    try {
+        return (Invoke-WebRequest -Uri $url -TimeoutSec 5 -UseBasicParsing).Content | ConvertFrom-Json
+    } catch { return $null }
+}
+
+function Assert-NotTransmitting {
+    param($b)
+    if ($Force) {
+        Write-Host "-Force: not checking whether '$($b.name)' is transmitting." -ForegroundColor DarkYellow
+        return
+    }
+    if (-not $b.ip -or $b.ip -eq "UNKNOWN") { return }
+
+    $reached = $false
+
+    $w = Get-Json "http://$($b.ip)/api/wspr"
+    if ($w) {
+        $reached = $true
+        if ($w.tx_state -eq "active") {
+            throw ("Bench '$($b.name)' is TRANSMITTING right now (WSPR burst active).`n" +
+                   "A flash resets the Tab5 mid-burst, so RX; is never sent and the QMX stays KEYED`n" +
+                   "into the antenna until someone power-cycles it. WSPR keys for ~110 s of every 120,`n" +
+                   "so most moments during a beacon session are inside a burst.`n" +
+                   "Wait for it to end, or turn TX off first. -Force overrides.")
+        }
+    }
+
+    $s = Get-Json "http://$($b.ip)/api/status"
+    if ($s) {
+        $reached = $true
+        if ($s.ft8 -and $s.ft8.st -eq "active") {
+            throw ("Bench '$($b.name)' is TRANSMITTING right now (FT8 burst active).`n" +
+                   "Same reason: the flash resets the Tab5 before RX; is sent. -Force overrides.")
+        }
+    }
+
+    if (-not $reached) {
+        Write-Host "Could not ask '$($b.name)' whether it is transmitting." -ForegroundColor DarkYellow
+        Write-Host "  Proceeding - an unreachable board is often exactly why it is being reflashed." -ForegroundColor DarkGray
+    }
+}
+
 function Cmd-Flash {
     param($reg, $b)
     if ($b.usb_flash -ne "yes") {
@@ -411,6 +459,25 @@ function Cmd-Flash {
     if (-not $b.com -or $b.com -eq "UNASSIGNED") { throw "Bench '$($b.name)' has no COM port assigned yet." }
     if (-not ((Get-PresentPorts) -contains $b.com)) { throw "$($b.com) is not present - is bench '$($b.name)' plugged in?" }
     if ($b.warning) { Write-Host "NOTE: $($b.warning)" -ForegroundColor Yellow }
+
+    # ⛔ NEVER FLASH A RADIO THAT IS TRANSMITTING.
+    #
+    # A flash is a reset, so the firmware never reaches the end of its burst and
+    # never sends RX;. Nothing else will: the QMX stays KEYED, transmitting an
+    # unmodulated carrier into the antenna until somebody power-cycles it.
+    # Done on the dev bench 2026-09-12, mid-WSPR-burst, and the operator had to
+    # catch it - "its still txing..." - and pull the power himself.
+    #
+    # WSPR makes this likely rather than unlucky: it keys for ~110 s out of every
+    # 120, so a flash issued at random during a beacon session lands inside a
+    # burst most of the time.
+    #
+    # Asks the RUNNING firmware rather than reasoning from settings: wspr_tx_en
+    # says transmitting is allowed, tx_state says whether it is happening now.
+    # A device that cannot be reached is not a reason to refuse - it may be
+    # wedged, which is often exactly why it is being reflashed - so an
+    # unreachable board falls through with a warning.
+    Assert-NotTransmitting $b
 
     # Before anything else: is the built image even for THIS board?
     Assert-BoardMatches $b
