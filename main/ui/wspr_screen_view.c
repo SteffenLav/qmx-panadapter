@@ -907,7 +907,7 @@ static void build_left_extras(void)
     lv_label_set_text(s_lbl_txi, "");
     lv_obj_set_style_text_font(s_lbl_txi, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_txi, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_width(s_lbl_txi, EX_W_LOW - 24);
+    lv_obj_set_width(s_lbl_txi, EX_W_LOW);
     lv_obj_set_pos(s_lbl_txi, EX_X, EX_TXI_Y);
 
     /* ---- Clear, beside the confirmed line ----
@@ -2574,7 +2574,14 @@ void wspr_screen_view_tick(void)
             if (pa >= 0)
                 n += snprintf(ti + n, sizeof(ti) - n, "PA %d.%d V", pa / 10, pa % 10);
             if (wspr_tx_get_last_power_swr(&pw, &sw))
-                n += snprintf(ti + n, sizeof(ti) - n, "%slast TX %.1f W  SWR %.2f",
+                /* ⛔ "last TX 1.2 W  SWR 1.20" is ~276 px of montserrat_22 in a
+                 * 250 px column, so it wrapped to a THIRD line and ran into
+                 * the TX button below (operator, 2026-09-12, with a
+                 * screenshot). The two-line height this label is anchored for
+                 * is the budget and the words have to fit it - "TX" says the
+                 * same thing as "last TX" beside a PA voltage, five characters
+                 * shorter. */
+                n += snprintf(ti + n, sizeof(ti) - n, "%sTX %.1f W  SWR %.2f",
                               n ? "\n" : "", pw, sw);
             if (n == 0) ti[0] = '\0';
 
