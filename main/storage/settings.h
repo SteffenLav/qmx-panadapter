@@ -676,6 +676,7 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+bool settings_get_wspr_pa_reduce(void);         // narrow getter - small-stack callers
 void settings_set_wspr_pa_reduce(bool v);       // #290 halve PA voltage while WSPR TX is on
 void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a volt, 0 = none
 void settings_set_wspr_hop_mask(uint16_t v);

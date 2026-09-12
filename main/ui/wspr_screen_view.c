@@ -2600,13 +2600,38 @@ void wspr_screen_view_tick(void)
             int   pa = cat_get_pa_voltage_x10();
             float pw, sw;
 
-            if (pa >= 0) snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
-            else         pa_s[0] = '\0';
-
+            /* ⛔ SAY WHAT IT WILL BE, NOT ONLY WHAT IT IS.
+             *
+             * A bare orange "PA 11.5 V" the instant TX is switched on reads as
+             * a fault - the guard has not applied yet, it is about to, and the
+             * number changes underneath a second later. The operator said so
+             * directly. So while transmitting is enabled and the radio is
+             * still above target the line states the INTENT, and it turns
+             * green with the real voltage once the radio confirms. Disarmed,
+             * it shows the real figure again, which is the honest thing when
+             * nothing is pending. */
             uint32_t pa_col;
-            if (unprotected)                              pa_col = 0xFF4010;
-            else if (pa >= 0 && pa <= WSPR_PA_TARGET_X10_UI) pa_col = 0x40D060;
-            else                                          pa_col = 0xFFA040;
+            if (unprotected) {
+                /* Guard switched off: the real number, in the red the TX
+                 * button uses. Nothing is going to come and change it. */
+                if (pa >= 0) snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
+                else         pa_s[0] = '\0';
+                pa_col = 0xFF4010;
+            } else if (pa >= 0 && pa <= WSPR_PA_TARGET_X10_UI) {
+                snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
+                pa_col = 0x40D060;                      /* confirmed down */
+            } else if (st.wspr_tx_en && pa >= 0) {
+                snprintf(pa_s, sizeof(pa_s), "PA %u.%u V on TX",
+                         (unsigned)(WSPR_PA_TARGET_X10_UI / 10),
+                         (unsigned)(WSPR_PA_TARGET_X10_UI % 10));
+                pa_col = 0xFFA040;                      /* pending, not wrong */
+            } else if (pa >= 0) {
+                snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
+                pa_col = 0xFFA040;                      /* disarmed, restored */
+            } else {
+                pa_s[0] = '\0';
+                pa_col = 0xFFA040;
+            }
 
             if (wspr_tx_get_last_power_swr(&pw, &sw))
                 snprintf(ps_s, sizeof(ps_s), "TX %.1f W  SWR %.2f", pw, sw);

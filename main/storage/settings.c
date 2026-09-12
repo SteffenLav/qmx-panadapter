@@ -2458,6 +2458,19 @@ void settings_set_wspr_tx_dbm(int8_t v)
     mark_dirty(DIRTY_WSPR_DBM);
 }
 
+/* Narrow getter, because the callers that need it run on small stacks.
+ * wspr_rx_tx_schedule_reset() is one of them - httpd and taskLVGL - and
+ * settings_load_all() there is the multi-kilobyte-local bug class this board
+ * has hit four times. Same reasoning as settings_get_wspr_pa_saved_x10(). */
+bool settings_get_wspr_pa_reduce(void)
+{
+    if (!s_ready) return true;          /* the default: guard the finals */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.wspr_pa_reduce;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_wspr_pa_reduce(bool v)
 {
     if (!s_ready) return;

@@ -378,6 +378,9 @@ static int64_t s_next_tx_cycle = -1;   /* cycle index; -1 = nothing scheduled */
  * then - so without this a held first burst would quietly become the coin toss
  * the operator asked us not to make him wait for. */
 static bool s_first_tx_forced = false;
+
+#define WSPR_PA_TARGET_X10 60   /* 6.0 V - about 1 W, per the QMX manual */
+
 static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
 
 /* First cycle AFTER `after` that wins the duty roll. */
@@ -429,6 +432,37 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
         s_next_tx_cycle   = cycle_now + 1;
         s_first_tx_forced = true;
         ESP_LOGI(TAG, "TX enabled - first burst is the next cycle, duty applies from the one after");
+        /* ⛔ TURN THE PA DOWN NOW, NOT AT THE BOUNDARY - or the first burst is
+         * held and the operator waits another full cycle.
+         *
+         * wspr_pa_guard_update() runs from the slot loop AT the cycle
+         * boundary, and wspr_pa_guard_ready() is consulted microseconds later
+         * in the same pass - so the reduction it has just issued cannot
+         * possibly have completed. Measured 2026-09-12: the guard engaged at
+         * 151202 ms, the burst was held at 151210 ms, and the radio confirmed
+         * 6.0 V at 152037 ms - 835 ms later, long after the decision. The
+         * operator saw "it waited for the present rx cycle to finish then
+         * further 2min".
+         *
+         * Engaging here gives the CAT round trip the whole ~2 minutes before
+         * the boundary. Uses narrow accessors rather than settings_load_all():
+         * this runs on httpd and taskLVGL, whose stacks are small. */
+        if (settings_get_wspr_pa_reduce() && settings_get_wspr_pa_saved_x10() == 0) {
+            int16_t cur = cat_get_pa_voltage_x10();
+            if (cur > (int16_t)WSPR_PA_TARGET_X10) {
+                settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
+                cat_request_pa_voltage_x10(WSPR_PA_TARGET_X10);
+                ESP_LOGW(TAG, "PA guard: engaging at TX-enable, %d.%d -> %u.%u V "
+                              "(not at the boundary, so the first burst is not held)",
+                         cur / 10, cur % 10,
+                         (unsigned)(WSPR_PA_TARGET_X10 / 10),
+                         (unsigned)(WSPR_PA_TARGET_X10 % 10));
+            } else if (cur < 0) {
+                /* Not answered yet - the query above was only just issued. The
+                 * boundary path still covers this, one cycle later. */
+                ESP_LOGI(TAG, "PA guard: radio has not reported its PA voltage yet");
+            }
+        }
     } else {
         s_next_tx_cycle = roll_next_tx_cycle(cycle_now, duty_pct);
     }
@@ -1449,7 +1483,6 @@ static void wspr_dec_task(void *arg)
  * 6.0 V is QRP Labs' own figure: the operating manual says setting Max. PA
  * voltage to 6.0 gives roughly 1 W, and names WSPR as a use for it. An absolute
  * target is meaningful regardless of what the operator's limit happens to be. */
-#define WSPR_PA_TARGET_X10 60   /* 6.0 V - about 1 W, per the QMX manual */
 
 /* Defined near wspr_rx_stop(); used by the task's own out-of-memory exit too. */
 static void wspr_pa_guard_release(void);
