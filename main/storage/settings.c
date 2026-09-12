@@ -826,7 +826,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->sim_mode_en = false;
     out->wspr_dial_hz  = 14095600u;   /* 20 m, the busiest WSPR band */
     out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
-    out->wspr_duty_pct = 20;          /* the conventional WSPR fraction */
+    out->wspr_duty_pct = 5;           /* 1 in 5 - closest match to the old "20%" default */
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
     out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
     out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
@@ -1040,7 +1040,28 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
     { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
-    if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) out->wspr_duty_pct = u8v;
+    if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) {
+        /* ⛔ MIGRATE THE OLD PERCENTAGE SCALE, DO NOT LET IT LEAK THROUGH AS A
+         * PERIOD. This field's meaning changed 2026-09-12 from "chance per
+         * cycle, 0-50" to "literal 1-in-N period" (operator: "No % but only 1
+         * in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10 ... this way ... operator knows
+         * the TX plan"). roll_next_tx_cycle() now does a bare `after + duty`,
+         * so a stored 50 (used to mean "roughly half the cycles") would
+         * silently become "one cycle in fifty" - 100 minutes idle instead of
+         * frequent bursts, with no error and no visible cause. The five values
+         * below are the ONLY ones the old UI could ever have written (kDuty[]
+         * had exactly these five options), so the mapping is exhaustive, not a
+         * guess: higher percentage (more frequent) maps to smaller N (more
+         * frequent), preserving what the operator actually chose. Anything
+         * else (should not occur) falls back to 5 rather than an unbounded N. */
+        static const uint8_t legacy_from[] = { 0, 10, 20, 33, 50 };
+        static const uint8_t legacy_to[]   = { 0, 10,  5,  3,  2 };
+        bool known = false;
+        for (size_t i = 0; i < sizeof(legacy_from); i++) {
+            if (u8v == legacy_from[i]) { out->wspr_duty_pct = legacy_to[i]; known = true; break; }
+        }
+        if (!known) out->wspr_duty_pct = (u8v == 0) ? 0 : 5;
+    }
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_PARED, &u8v) == ESP_OK) out->wspr_pa_reduce = (u8v != 0); }
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_PASAVE, &u16v) == ESP_OK) out->wspr_pa_saved_x10 = u16v; }

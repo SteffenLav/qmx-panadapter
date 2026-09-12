@@ -78,4 +78,4 @@ void wspr_screen_view_open_hop_picker(void);
  * places that offer them cannot drift apart. WSPR asks "what fraction of cycles
  * may I transmit", and these are the answers - see docs/wspr-ui-design.md. */
 extern const uint8_t kDuty[];
-#define WSPR_N_DUTY 5
+#define WSPR_N_DUTY 6

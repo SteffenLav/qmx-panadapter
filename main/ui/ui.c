@@ -12820,14 +12820,18 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_t *dd = lv_dropdown_create(sec);
+        /* "1 in N", not a percentage, and not "about" - it is now an exact
+         * period. See kDuty[]/roll_next_tx_cycle() in wspr_rx.c. */
         lv_dropdown_set_options(dd,
-            "0% - receive only\n10% - about 1 cycle in 10\n20% - about 1 in 5\n"
-            "33% - about 1 in 3\n50% - about half");
+            "Receive only\n1 in 2\n1 in 3\n1 in 4\n1 in 5\n1 in 10");
         lv_obj_set_size(dd, DRAWER_W - 32, 50);
         lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
         {
-            uint16_t idx = 2;
+            /* Fallback index 4 = kDuty[4] = 5 ("1 in 5"), matching settings.c's
+             * own default - was index 2 against the old 5-entry array, which
+             * would now silently mean "1 in 3" if nothing matched. */
+            uint16_t idx = 4;
             for (int k = 0; k < WSPR_N_DUTY; k++)
                 if (kDuty[k] == ws.wspr_duty_pct) { idx = (uint16_t)k; break; }
             lv_dropdown_set_selected(dd, idx);

@@ -4180,8 +4180,17 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         wspr_sched_dirty = true;
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
+        /* An exact allow-list, not a range: this is a literal 1-in-N period
+         * now (see roll_next_tx_cycle() in wspr_rx.c), and any value outside
+         * the option list the web/Tab5 UIs actually offer would silently
+         * become a period nobody chose. 0..50 used to be a valid RANGE when
+         * this meant a percentage; it is not one any more. */
         int v = it->valueint;
-        if (v >= 0 && v <= 50) { settings_set_wspr_duty_pct((uint8_t)v); wspr_sched_dirty = true; }
+        static const int allowed[] = { 0, 2, 3, 4, 5, 10 };
+        bool ok = false;
+        for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
+            if (v == allowed[i]) { ok = true; break; }
+        if (ok) { settings_set_wspr_duty_pct((uint8_t)v); wspr_sched_dirty = true; }
     }
     /* Re-roll which cycle transmits next, or the TX countdown goes on
      * describing the previous setting until the next cycle boundary - up to two

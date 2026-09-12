@@ -36,7 +36,6 @@
  * front of it. Anything further away is a whole cycle we can still listen in. */
 #define WSPR_RX_TX_IMMINENT_S  10
 #include "cat/cat.h"   /* #290 PA-voltage guard */
-#include "esp_random.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
 #include "wspr_wav.h"
@@ -383,17 +382,32 @@ static bool s_first_tx_forced = false;
 
 static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
 
-/* First cycle AFTER `after` that wins the duty roll. */
+/* ⛔ "1 IN N", NOT A PERCENTAGE - A SCHEDULE THE OPERATOR CAN PREDICT, NOT A
+ * DICE ROLL THAT HAPPENS TO AVERAGE OUT TO ONE.
+ *
+ * This used to be an independent per-cycle probability (duty=50 meant "a 50%
+ * chance, every cycle"), and that is exactly what produced two transmissions
+ * in a row - correct as a coin toss, wrong for a beacon whose finals key for
+ * ~110 s of every 120 s cycle. A 2-cycle minimum gap was added to stop the
+ * back-to-back case, but the schedule underneath was still a random walk: the
+ * operator could not look at "duty 33%" and say which cycle would transmit
+ * next, only that IT MIGHT be any of them.
+ *
+ * Operator, 2026-09-12: "No % but only 1 in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10
+ * - this way we keep consistency and operator knows the TX plan." So `duty` is
+ * now the literal period N: cycle `after + N` transmits, every time, no roll.
+ * N >= 2 always (see kDuty[] in wspr_screen_view.c - the option list has no
+ * "1 in 1"), so the old back-to-back problem cannot recur by construction and
+ * the separate min_gap mechanism it needed is gone with it.
+ *
+ * The parameter is still named `duty` rather than `period_n` - the STORED
+ * value (NVS key, /api/settings field, config export) is unchanged, only its
+ * meaning is, and renaming it would be a bigger and less honest diff than the
+ * behaviour change itself. */
 static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
 {
     if (duty == 0) return -1;
-    if (duty >= 100) return after + 1;
-    /* Bounded so a corrupt duty can never spin here. At the lowest duty this
-     * offers (10%) the chance of 2000 straight losses is about 10^-92, so the
-     * bound is a safety net and not a behaviour. */
-    for (int i = 1; i <= 2000; i++)
-        if ((esp_random() % 100u) < duty) return after + i;
-    return -1;
+    return after + (int64_t)duty;
 }
 
 void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
@@ -464,6 +478,9 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
             }
         }
     } else {
+        /* Nothing has just transmitted here - this is transmitting being
+         * switched on, or the duty being changed mid-session - so the very
+         * next cycle is allowed. */
         s_next_tx_cycle = roll_next_tx_cycle(cycle_now, duty_pct);
     }
     s_sched_duty    = duty_pct;
@@ -1780,6 +1797,9 @@ static void wspr_rx_task(void *arg)
         const bool tx_this_cycle = tx_possible && s_next_tx_cycle == last_cycle_idx;
         if (tx_this_cycle) {
             /* Roll the next one now, before anything below can fail. */
+            /* THIS cycle is about to transmit, so the next one is exactly N
+             * cycles from here - guaranteed by roll_next_tx_cycle's own return
+             * (after + N), never a roll that could land back on THIS cycle. */
             s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx, ws.wspr_duty_pct);
         }
 

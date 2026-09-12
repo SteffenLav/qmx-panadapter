@@ -241,7 +241,12 @@ static const char *TAG = "wspr_view";
  * but silent - while setting up. */
 /* The ONLY legal duty values, and now shared with the settings drawer so the
  * two cannot offer different sets. Exported through wspr_screen_view.h. */
-const uint8_t kDuty[] = { 0, 10, 20, 33, 50 };
+/* ⛔ THIS IS A PERIOD NOW, NOT A PERCENTAGE. Operator, 2026-09-12: "No % but
+ * only 1 in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10 - this way we keep consistency
+ * and operator knows the TX plan." See roll_next_tx_cycle() in wspr_rx.c -
+ * cycle `after + N` transmits, every time, no roll. WSPR_N_DUTY grew 5 -> 6 to
+ * carry the new "1 in 4" option that was not part of the old percentage set. */
+const uint8_t kDuty[] = { 0, 2, 3, 4, 5, 10 };
 #define N_DUTY ((int)(sizeof(kDuty) / sizeof(kDuty[0])))
 
 /* Which kBands entries this radio can reach, in table order. Built when the
@@ -2633,7 +2638,23 @@ void wspr_screen_view_tick(void)
                 pa_col = 0xFFA040;
             }
 
-            if (wspr_tx_get_last_power_swr(&pw, &sw))
+            /* ⛔ ONLY WHILE THE RADIO IS ACTUALLY KEYED. These two numbers are
+             * a measurement of ONE burst, taken about 11 s into it - and the
+             * next burst is a different measurement. The operator, 2026-09-12:
+             * "TX W and SWR needs to go away when we are not TXing...... it
+             * could change from cycle to cycle".
+             *
+             * Quite right, and it is the same rule the paragraph above already
+             * applies to the FIRST burst: "0.0 W SWR 0.00" would be a
+             * measurement that was never made, and 1.1 W left standing between
+             * bursts is a measurement that is no longer being made. Both read
+             * as current, and neither is. Nothing here is lost - the figure is
+             * re-measured every burst and the browser keeps the last one.
+             *
+             * The PA line above deliberately does NOT do this: it describes the
+             * SETTING, which is just as true between bursts as during one, and
+             * the risk it guards against does not pause either. */
+            if (tst == WSPR_TX_ACTIVE && wspr_tx_get_last_power_swr(&pw, &sw))
                 snprintf(ps_s, sizeof(ps_s), "TX %.1f W  SWR %.2f", pw, sw);
             else
                 ps_s[0] = '\0';
@@ -2657,6 +2678,32 @@ void wspr_screen_view_tick(void)
     time_t now = time(NULL);
     int into = (int)(now % 120);
     lv_bar_set_value(s_bar_cycle, into, LV_ANIM_OFF);
+
+    /* ⭐ THE BAR AND ITS COUNTER GO TX-ORANGE WHILE THE RADIO IS KEYED, the
+     * same UI_COLOR_TX_ACTIVE the TX button uses (operator, 2026-09-12: "i
+     * would like the cycle progress bar and counter above to change colour to
+     * the same as the TX ON AIR").
+     *
+     * They describe the same 120 s window the burst occupies, so during a
+     * transmission they ARE the progress of that transmission - and one colour
+     * saying "on air" in every place that means it is easier to read at a
+     * glance than a single orange button elsewhere on the page.
+     *
+     * Change-detected: an identical style set still costs LVGL an invalidate,
+     * and this runs every tick. */
+    {
+        char tj[48];
+        bool on_air = wspr_tx_get_status(tj, sizeof(tj), NULL) == WSPR_TX_ACTIVE;
+        static int s_bar_on_air = -1;               /* -1 = never painted */
+        if ((int)on_air != s_bar_on_air) {
+            s_bar_on_air = (int)on_air;
+            lv_obj_set_style_bg_color(s_bar_cycle,
+                lv_color_hex(on_air ? UI_COLOR_TX_ACTIVE : UI_COLOR_PRIMARY),
+                LV_PART_INDICATOR);
+            lv_obj_set_style_text_color(s_lbl_cycle,
+                lv_color_hex(on_air ? UI_COLOR_TX_ACTIVE : UI_COLOR_PRIMARY_BORDER), 0);
+        }
+    }
 
     char c[48];
     /* ⭐ THE BAND, beside the cycle clock. Roy KI0ER, 2026-08-31: "Band could be
@@ -2685,9 +2732,39 @@ void wspr_screen_view_tick(void)
      * canvas. */
     if (s_wf_wait_lbl && s_wf_canvas) {
         int wsec = wspr_rx_waiting_secs();
-        if (wsec != s_wf_wait_shown) {
-            s_wf_wait_shown = wsec;
-            if (wsec >= 0) {
+
+        /* ⛔ A TRANSMIT CYCLE IS A STALE CARPET TOO, AND IT WAS THE ONE CASE
+         * THIS DID NOT COVER. The operator, 2026-09-12: "the wf should stop
+         * when we TX - why show it - any reason?" There is none.
+         *
+         * The receiver genuinely IS stood down for the whole burst - wspr_rx.c
+         * publishes no rows at all during a TX cycle, on this operator's own
+         * instruction of 2026-09-02 ("I need it to not move at all"). But
+         * wspr_rx_waiting_secs() only describes the waiting-for-boundary
+         * window; the TX cycle takes a different path out of the slot loop and
+         * never touches s_wait_secs, so it reported -1 and the carpet stayed at
+         * full brightness for ~110 s showing the PREVIOUS cycle's picture.
+         * Frozen and bright is exactly the "indistinguishable from a page that
+         * has died" state the waiting dim was added to fix - same fault, one
+         * state along.
+         *
+         * Dimmed rather than blanked, for the reason the waiting case already
+         * gives: what is on screen is real data from the last cycle and is
+         * still worth reading. -3 as the change-detect key because -2 already
+         * means "never painted". */
+        char tj[48];
+        bool tx_now = wspr_tx_get_status(tj, sizeof(tj), NULL) == WSPR_TX_ACTIVE;
+        int key = tx_now ? -3 : wsec;
+
+        if (key != s_wf_wait_shown) {
+            s_wf_wait_shown = key;
+            if (tx_now) {
+                lv_label_set_text(s_wf_wait_lbl,
+                                  "transmitting - not receiving this cycle");
+                lv_obj_clear_flag(s_wf_wait_lbl, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_move_foreground(s_wf_wait_lbl);
+                lv_obj_set_style_opa(s_wf_canvas, LV_OPA_40, 0);
+            } else if (wsec >= 0) {
                 char w[64];
                 snprintf(w, sizeof(w), "waiting for the next cycle - %d s", wsec);
                 lv_label_set_text(s_wf_wait_lbl, w);
