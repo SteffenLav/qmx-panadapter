@@ -118,7 +118,14 @@ static lv_obj_t *s_btn_dial;       /* opens the band picker; carries s_lbl_dial 
 static lv_obj_t *s_btn_tx;
 
 static lv_obj_t *s_lbl_tx;
-static lv_obj_t *s_lbl_txi;        /* PA volts / measured watts / SWR of the last burst */
+static lv_obj_t *s_lbl_txi;        /* PA volts of the last burst - coloured by protection */
+static lv_obj_t *s_lbl_txi2;       /* measured watts / SWR - cyan, as FT8 shows the same pair */
+
+/* ⛔ TWO LABELS, NOT ONE WITH TWO COLOURS. LVGL 9.2.2 dropped in-label recolor
+ * markup, so a line that needs a colour of its own needs an object of its own -
+ * the same conclusion ft8_screen_view.c reached for its live PWR/SWR line, and
+ * qmx_term_view.c for its rows. */
+#define WSPR_PA_TARGET_X10_UI 60   /* 6.0 V, mirroring wspr_rx.c's own target */
 
 /* ⛔ THE TX BUTTON'S LABEL OUTGREW ITS BUTTON, AND THE PART THAT FELL OFF WAS
  * THE SAFETY WARNING.
@@ -909,6 +916,16 @@ static void build_left_extras(void)
     lv_obj_set_style_text_color(s_lbl_txi, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_width(s_lbl_txi, EX_W_LOW);
     lv_obj_set_pos(s_lbl_txi, EX_X, EX_TXI_Y);
+
+    s_lbl_txi2 = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_txi2, "");
+    lv_obj_set_style_text_font(s_lbl_txi2, &lv_font_montserrat_22, 0);
+    /* Cyan, because ft8_screen_view.c's live PWR/SWR line is cyan and this is
+     * the same measurement of the same radio - one colour for one meaning,
+     * whichever screen the operator happens to be on. */
+    lv_obj_set_style_text_color(s_lbl_txi2, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_set_width(s_lbl_txi2, EX_W_LOW);
+    lv_obj_set_pos(s_lbl_txi2, EX_X, EX_TXI_Y + 26);
 
     /* ---- Clear, beside the confirmed line ----
      *
@@ -2566,30 +2583,42 @@ void wspr_screen_view_tick(void)
          * about to be applied is worth seeing before the first transmission,
          * not after it. */
         {
-            char ti[80];
-            int  n = 0;
-            int  pa = cat_get_pa_voltage_x10();
+            /* Two lines, two meanings, two colours.
+             *
+             * PA voltage is the SAFETY line, so it is coloured by whether the
+             * finals are actually protected right now rather than by whether
+             * the setting is on: green once the radio confirms it is at or
+             * below the guard's target, amber while the guard is on but the
+             * radio has not got there (or has not answered), red when the
+             * guard is switched off altogether - the same red the TX button
+             * uses, and the same rule.
+             *
+             * Watts and SWR are the MEASUREMENT line, in the cyan
+             * ft8_screen_view.c already uses for exactly this pair. Same
+             * radio, same numbers, same colour on both screens. */
+            char pa_s[40], ps_s[48];
+            int   pa = cat_get_pa_voltage_x10();
             float pw, sw;
 
-            if (pa >= 0)
-                n += snprintf(ti + n, sizeof(ti) - n, "PA %d.%d V", pa / 10, pa % 10);
-            if (wspr_tx_get_last_power_swr(&pw, &sw))
-                /* ⛔ "last TX 1.2 W  SWR 1.20" is ~276 px of montserrat_22 in a
-                 * 250 px column, so it wrapped to a THIRD line and ran into
-                 * the TX button below (operator, 2026-09-12, with a
-                 * screenshot). The two-line height this label is anchored for
-                 * is the budget and the words have to fit it - "TX" says the
-                 * same thing as "last TX" beside a PA voltage, five characters
-                 * shorter. */
-                n += snprintf(ti + n, sizeof(ti) - n, "%sTX %.1f W  SWR %.2f",
-                              n ? "\n" : "", pw, sw);
-            if (n == 0) ti[0] = '\0';
+            if (pa >= 0) snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
+            else         pa_s[0] = '\0';
 
-            if (strcmp(lv_label_get_text(s_lbl_txi), ti) != 0)
-                lv_label_set_text(s_lbl_txi, ti);
-            /* Red while the finals are unprotected, same rule as the button. */
-            lv_obj_set_style_text_color(s_lbl_txi,
-                lv_color_hex(unprotected ? 0xFF4010 : UI_COLOR_TEXT_MUTED), 0);
+            uint32_t pa_col;
+            if (unprotected)                              pa_col = 0xFF4010;
+            else if (pa >= 0 && pa <= WSPR_PA_TARGET_X10_UI) pa_col = 0x40D060;
+            else                                          pa_col = 0xFFA040;
+
+            if (wspr_tx_get_last_power_swr(&pw, &sw))
+                snprintf(ps_s, sizeof(ps_s), "TX %.1f W  SWR %.2f", pw, sw);
+            else
+                ps_s[0] = '\0';
+
+            if (strcmp(lv_label_get_text(s_lbl_txi), pa_s) != 0)
+                lv_label_set_text(s_lbl_txi, pa_s);
+            lv_obj_set_style_text_color(s_lbl_txi, lv_color_hex(pa_col), 0);
+
+            if (strcmp(lv_label_get_text(s_lbl_txi2), ps_s) != 0)
+                lv_label_set_text(s_lbl_txi2, ps_s);
         }
 
         /* The Duty readout that used to live here went to the drawer with its
