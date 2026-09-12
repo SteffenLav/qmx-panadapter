@@ -118,6 +118,7 @@ static lv_obj_t *s_btn_dial;       /* opens the band picker; carries s_lbl_dial 
 static lv_obj_t *s_btn_tx;
 
 static lv_obj_t *s_lbl_tx;
+static lv_obj_t *s_lbl_txi;        /* PA volts / measured watts / SWR of the last burst */
 
 /* ⛔ THE TX BUTTON'S LABEL OUTGREW ITS BUTTON, AND THE PART THAT FELL OFF WAS
  * THE SAFETY WARNING.
@@ -324,6 +325,18 @@ void wspr_screen_view_freq_style_changed(void)
  * bottom instead of stacked below its neighbour, so a line that grows can
  * never reach it. */
 #define EX_HOP_Y  (MID_H - 90)
+/* What the radio actually did on the last burst - PA voltage, measured watts,
+ * SWR. The browser has shown these since the WSPR page existed and the Tab5
+ * showed nothing (operator, 2026-09-12, watching the two side by side). Same
+ * two accessors the web handler calls - wspr_tx_get_last_power_swr() and
+ * cat_get_pa_voltage_x10() - so the screens cannot disagree about what the
+ * radio did.
+ *
+ * ⚠ ANCHORED TO THE BUTTON, not stacked under the wsprnet line, for the reason
+ * EX_HOP_Y gives right above: the wsprnet line grows to two lines on two-digit
+ * counts, and anything stacked below it gets walked into. Two lines of
+ * montserrat_22 is ~52 px, so this clears EX_TX_Y with room. */
+#define EX_TXI_Y  (EX_TX_Y - 58)
 
 #define HIST_BAR_W 6
 #define HIST_GAP   1
@@ -888,6 +901,14 @@ static void build_left_extras(void)
     lv_obj_set_style_text_color(s_lbl_net, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_width(s_lbl_net, EX_W_LOW - 100);
     lv_obj_set_pos(s_lbl_net, EX_X, EX_NET_Y);
+
+    /* ---- what the last burst measured ---- */
+    s_lbl_txi = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_txi, "");
+    lv_obj_set_style_text_font(s_lbl_txi, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(s_lbl_txi, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_width(s_lbl_txi, EX_W_LOW - 24);
+    lv_obj_set_pos(s_lbl_txi, EX_X, EX_TXI_Y);
 
     /* ---- Clear, beside the confirmed line ----
      *
@@ -2528,6 +2549,40 @@ void wspr_screen_view_tick(void)
         if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0) {
             lv_label_set_text(s_lbl_tx, txt);
             tx_label_fit(txt);
+        }
+
+        /* ⭐ WHAT THE RADIO ACTUALLY DID, which until now only the browser was
+         * told. The button says what is scheduled; this says what happened.
+         *
+         * Both figures come from the same accessors the /api/status handler
+         * uses, so the two screens cannot drift - and neither is inferred from
+         * a log line after the fact, which is how a measurement was once
+         * attributed to the wrong burst (2026-08-29).
+         *
+         * Says nothing at all before the first burst rather than printing
+         * zeroes: "0.0 W SWR 0.00" would be a measurement that was never made.
+         * The PA line is shown as soon as the radio has answered, because it
+         * describes the setting rather than a burst - and a guard that is
+         * about to be applied is worth seeing before the first transmission,
+         * not after it. */
+        {
+            char ti[80];
+            int  n = 0;
+            int  pa = cat_get_pa_voltage_x10();
+            float pw, sw;
+
+            if (pa >= 0)
+                n += snprintf(ti + n, sizeof(ti) - n, "PA %d.%d V", pa / 10, pa % 10);
+            if (wspr_tx_get_last_power_swr(&pw, &sw))
+                n += snprintf(ti + n, sizeof(ti) - n, "%slast TX %.1f W  SWR %.2f",
+                              n ? "\n" : "", pw, sw);
+            if (n == 0) ti[0] = '\0';
+
+            if (strcmp(lv_label_get_text(s_lbl_txi), ti) != 0)
+                lv_label_set_text(s_lbl_txi, ti);
+            /* Red while the finals are unprotected, same rule as the button. */
+            lv_obj_set_style_text_color(s_lbl_txi,
+                lv_color_hex(unprotected ? 0xFF4010 : UI_COLOR_TEXT_MUTED), 0);
         }
 
         /* The Duty readout that used to live here went to the drawer with its
