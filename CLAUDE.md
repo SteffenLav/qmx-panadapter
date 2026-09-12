@@ -198,6 +198,17 @@ capture, not after a result looks strange.**
    writing to stderr **aborts the script** — so `schtasks /end` on a task that
    does not exist yet, the normal first-run case, killed the function. Every
    schtasks call goes through `Invoke-Task-Quiet`, i.e. `cmd /c ... >nul 2>&1`.
+   ⚠ **And it must run through `tools/run_hidden.vbs`, or it leaves a console
+   window on the operator's desktop** — a task running as the logged-on user runs
+   INTERACTIVELY, and an interactive console program always gets a window.
+   `-WindowStyle Hidden` only **minimises** it. ⭐ **The lesson is the
+   instrument, not the flag:** I checked `powershell.exe`'s `MainWindowHandle`,
+   got 0, and reported it hidden — but the window belongs to **conhost.exe**, so
+   that test could never have seen it, and the operator had to tell me twice.
+   Enumerate **every** process with a non-zero `MainWindowHandle` instead; a
+   minimised window still has one. `WScript.Shell.Run(cmd, 0, False)` creates no
+   window at all and needs no elevation, which `schtasks /ru <user> /np` (session
+   0, no desktop) would have.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when
