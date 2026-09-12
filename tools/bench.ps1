@@ -218,6 +218,17 @@ function Cmd-Status {
     }
 }
 
+# Run one schtasks command and hand back its exit code, with stdout and stderr
+# both discarded INSIDE cmd. See the note in Cmd-Capture: under
+# $ErrorActionPreference = "Stop", a native exe writing to stderr aborts this
+# script, and schtasks writes to stderr for perfectly ordinary outcomes such as
+# "that task does not exist".
+function Invoke-Task-Quiet {
+    param([string] $argLine)
+    cmd /c "schtasks $argLine >nul 2>&1"
+    return $LASTEXITCODE
+}
+
 function Cmd-Capture {
     param($reg, $b)
     if (-not $b.com -or $b.com -eq "UNASSIGNED") { throw "Bench '$($b.name)' has no COM port assigned yet." }
@@ -230,22 +241,79 @@ function Cmd-Capture {
     }
     # No -Reset. Opening the port already reboots the board once; -Reset would
     # do it deliberately and that is how the phantom "double boot" was born.
-    Start-Process powershell -ArgumentList @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $reg.capture_script,
-        "-Port", $b.com, "-Out", $b.capture, "-Seconds", "$($reg.capture_seconds)"
-    ) -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+    #
+    # ⛔ LAUNCHED AS A SCHEDULED TASK, NOT Start-Process - and that is the whole
+    # point of this function. A capture started with Start-Process from inside a
+    # Claude Code tool call gets KILLED minutes later: three times on the night of
+    # 2026-09-11, across two ports and two trees, each time with NO
+    # "=== [capture] done ===" marker and no PORT LOST, i.e. terminated rather
+    # than exited. One of them (COM9, 22:47:13) died five seconds before Windows
+    # logged "Application Hang: powershell.exe ... was closed", in the same minute
+    # the Claude desktop app stopped its own service, redeployed itself and
+    # restarted - so the capture died with the app that transitively owned it.
+    # Launching via WMI (Win32_Process.Create) was tried and did NOT survive
+    # either. A scheduled task is owned by the task scheduler, so it outlives the
+    # tool call, the session, and an app update.
+    #
+    # The cost of getting this wrong is not a missing log: a dead capture looks
+    # EXACTLY like a quiet, healthy device (CLAUDE.md serial rule 10), so the
+    # night reads as "no crashes" for a window that closed minutes after it opened.
+    $taskName = "qmx-capture-$($b.name)"
+    $cmd = "powershell.exe"
+    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$($reg.capture_script)`" " +
+            "-Port $($b.com) -Out `"$($b.capture)`" -Seconds $($reg.capture_seconds)"
+
+    # Delete any previous definition first: /f on create replaces it, but an
+    # already-RUNNING instance of the old task would keep the port and the new
+    # one would log PORT LOST and record nothing (serial rule 3).
+    #
+    # ⛔ Every schtasks call goes through cmd /c with its output swallowed there.
+    # This script runs under $ErrorActionPreference = "Stop", and in Windows
+    # PowerShell 5.1 a native exe writing to stderr becomes a NativeCommandError
+    # that ABORTS the script - so "/end" on a task that does not exist yet, which
+    # is the normal first-run case, killed the whole function.
+    Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
+    Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
+
+    # ⛔ No /rl highest and no /ru: BOTH need elevation to register, and this
+    # script is run from an ordinary shell, so schtasks answered "Access is
+    # denied". The capture only opens a COM port - it has never needed admin.
+    # /st is in the future purely to stop schtasks warning that a once-task with
+    # a past start time may not run; the task is started by /run immediately
+    # afterwards and the trigger time is never reached.
+    $rc = Invoke-Task-Quiet "/create /tn $taskName /sc once /st 23:59 /f /tr `"$cmd $args`""
+    if ($rc -ne 0) {
+        Write-Host "schtasks /create failed (exit $rc) for '$taskName'." -ForegroundColor Red
+        Write-Host "  Run it by hand to see why: schtasks /create /tn $taskName ..." -ForegroundColor DarkGray
+        throw "Could not create the capture task."
+    }
+    $rc = Invoke-Task-Quiet "/run /tn $taskName"
+    if ($rc -ne 0) { throw "schtasks /run failed (exit $rc) for '$taskName'." }
+
+    Start-Sleep -Seconds 4
     if (Test-CaptureFresh $b.capture) {
         Write-Host "Capture running for '$($b.name)' on $($b.com) -> $($b.capture)" -ForegroundColor Green
+        Write-Host "  (scheduled task '$taskName' - survives this session and app updates)" -ForegroundColor DarkGray
     } else {
-        Write-Host "Capture started but the file is not growing yet. Check again in a few seconds." -ForegroundColor DarkYellow
+        Write-Host "Task started but the file is not growing yet. Check again in a few seconds." -ForegroundColor DarkYellow
+        Write-Host "  If it never grows: schtasks /query /tn $taskName /v /fo list" -ForegroundColor DarkGray
     }
 }
 
 function Cmd-StopCapture {
     param($reg, $b)
+    # End the scheduled task as well as the process. Killing only the process
+    # leaves the task defined and "ready", which reads as a live capture in
+    # schtasks /query and invites someone to think one is running when it is not.
+    $taskName = "qmx-capture-$($b.name)"
+    Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
+    Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
+
     $procs = Get-CaptureProcess $b.capture
-    if ($procs.Count -eq 0) { Write-Host "No capture running for '$($b.name)'."; return }
+    if ($procs.Count -eq 0) {
+        Write-Host "No capture process running for '$($b.name)' (task '$taskName' removed if it existed)."
+        return
+    }
     foreach ($p in $procs) {
         try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { }
     }

@@ -175,6 +175,29 @@ capture, not after a result looks strange.**
    fine. The PORT dies, not the process, so the file's timestamp is the only
    honest liveness test. Running several sessions at once is the operator's
    normal daily practice, so treat this as expected, not exotic.
+11. ⛔ **A CAPTURE I START FROM A TOOL CALL GETS KILLED — use `bench capture`,
+   which registers a SCHEDULED TASK.** Three deaths on the night of 2026-09-11,
+   across two ports and two trees, after 20 s, 9 min and 1 min: every one with
+   **no `=== [capture] done ===` and no `PORT LOST`**, i.e. terminated rather
+   than exited. `Start-Process` did not survive, and neither did
+   `Invoke-CimMethod Win32_Process Create`, which was tried precisely to escape
+   the job object. One of them (COM9, 22:47:13) died five seconds before Windows
+   logged `Application Hang: powershell.exe ... was closed`, in the same minute
+   the Claude desktop app disabled its own service, redeployed itself via AppX
+   and restarted — so a capture dies with the app that transitively owns it, and
+   an app update in the night is enough to end it.
+   ⚠ **The overnight soak of 2026-09-11 was lost this way** and had to be
+   reconstructed from the SD diag log plus `/api/log/saved`. Rule 10 is what
+   makes it expensive: a dead capture reads as a quiet, healthy device, so the
+   night reports "no crashes" for a window that shut minutes after it opened.
+   `Cmd-Capture` in `tools/bench.ps1` now does `schtasks /create` + `/run`, which
+   the task scheduler owns. Two things it got wrong first, both worth keeping:
+   **`/rl highest` and `/ru` need elevation** and answered `Access is denied` from
+   an ordinary shell (the capture only opens a COM port and has never needed
+   admin), and under that script's `$ErrorActionPreference = "Stop"` a native exe
+   writing to stderr **aborts the script** — so `schtasks /end` on a task that
+   does not exist yet, the normal first-run case, killed the function. Every
+   schtasks call goes through `Invoke-Task-Quiet`, i.e. `cmd /c ... >nul 2>&1`.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when
