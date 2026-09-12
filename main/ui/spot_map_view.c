@@ -252,6 +252,80 @@ static int gather_self_spots(self_spot_t *out, int max)
 
 // ---- Karte tab --------------------------------------------------------
 
+/* Fit the map to what there is to see.
+ *
+ * The world outline is drawn edge to edge, so a station whose spots are all
+ * within a thousand kilometres gets a pinhead of activity in the middle of an
+ * empty planet - which is what the operator saw: every trace crammed into
+ * Europe with the Pacific taking up half the screen (2026-09-12).
+ *
+ * Works in the same normalised world coordinates project() uses, so the zoom
+ * and pan computed here are exactly what project() will apply: it scales every
+ * point away from our own QTH and then shifts by the pan. Two steps:
+ *   - zoom so the bounding box of every drawn point spans MAP_FIT_FRACTION of
+ *     the view rather than all of it, leaving a margin so dots near the edge
+ *     are not clipped;
+ *   - pan so that box ends up CENTRED, because the anchor is our QTH and not
+ *     the middle of the screen - without this, zooming on a European station
+ *     pushes everything off the top.
+ *
+ * Only ever called when the map is opened. It must not run on the refresh
+ * timer: the operator pinches and drags this map, and a view that re-fitted
+ * itself underneath them every time a spot arrived would be unusable. */
+#define MAP_FIT_FRACTION 0.72f     /* of the view the spots may occupy */
+#define MAP_FIT_MAX_ZOOM 12.0f     /* a single nearby spot must not fill the world */
+
+static void map_fit_to_spots(void)
+{
+    static self_spot_t spots[SELF_SPOT_MAX];
+    int count = gather_self_spots(spots, SELF_SPOT_MAX);
+
+    s_map_zoom   = 1.0f;
+    s_map_pan_dx = s_map_pan_dy = 0.0f;
+    if (!s_have_me) return;                 /* no anchor - project() no-ops anyway */
+
+    /* Our own QTH is always in the box: the great circles start there, so a
+     * fit that excluded it would cut every line off at the screen edge. */
+    float x0, x1, y0, y1;
+    x0 = x1 = ((float)s_my_lon + 180.0f) / 360.0f;
+    y0 = y1 = (90.0f - (float)s_my_lat) / 180.0f;
+
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        const self_spot_t *sp = &spots[i];
+        if (!sp->has_pos || !passes_filter(sp)) continue;
+        float wx = (sp->lon + 180.0f) / 360.0f;
+        float wy = (90.0f - sp->lat) / 180.0f;
+        if (wx < x0) x0 = wx;
+        if (wx > x1) x1 = wx;
+        if (wy < y0) y0 = wy;
+        if (wy > y1) y1 = wy;
+        n++;
+    }
+    if (n == 0) return;                     /* nothing heard - leave the whole world */
+
+    const float spanx = x1 - x0, spany = y1 - y0;
+    float zx = (spanx > 0.0001f) ? (MAP_FIT_FRACTION / spanx) : MAP_FIT_MAX_ZOOM;
+    float zy = (spany > 0.0001f) ? (MAP_FIT_FRACTION / spany) : MAP_FIT_MAX_ZOOM;
+    float z  = (zx < zy) ? zx : zy;
+    if (z > MAP_FIT_MAX_ZOOM) z = MAP_FIT_MAX_ZOOM;
+    if (z < 1.0f) z = 1.0f;                 /* project() only zooms in */
+
+    s_map_zoom = z;
+
+    /* Centre the box. project() puts a point at ax + (wx - ax) * z + pan, so
+     * the box centre lands at ax + (cx - ax) * z and the pan is whatever moves
+     * that to the middle of the view. */
+    const float ax = ((float)s_my_lon + 180.0f) / 360.0f;
+    const float ay = (90.0f - (float)s_my_lat) / 180.0f;
+    const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
+    s_map_pan_dx = 0.5f - (ax + (cx - ax) * z);
+    s_map_pan_dy = 0.5f - (ay + (cy - ay) * z);
+
+    ESP_LOGI(TAG, "map fit: %d spot(s), zoom %.2f, pan %.3f/%.3f",
+             n, z, s_map_pan_dx, s_map_pan_dy);
+}
+
 static lv_point_precise_t project(const lv_area_t *area, int32_t w, int32_t h, float lon, float lat)
 {
     float wx = (lon + 180.0f) / 360.0f;
@@ -536,7 +610,12 @@ static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, b
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(lbl, 0);
     lv_obj_set_flex_grow(lbl, grow);
-    lv_obj_set_style_text_font(lbl, bold ? &lv_font_montserrat_20 : &lv_font_montserrat_18, 0);
+    /* 22/24, not 18/20. This project settled long ago that 18 is below what is
+     * readable on this screen at arm's length - wspr_screen_view.c carries the
+     * same note beside its own wsprnet line, where 18 had crept in too. The
+     * widest cell here is a callsign like "F/SWL/PRIVAS" at grow 2, which is
+     * ~144 px of montserrat_24 in a ~230 px column, so the columns still fit. */
+    lv_obj_set_style_text_font(lbl, bold ? &lv_font_montserrat_24 : &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
 }
 
@@ -1176,9 +1255,10 @@ void spot_map_view_show(void)
     s_sig_rbn_t = s_sig_psk_t = s_sig_wspr_t = -1;
     refresh_own_position();
     refresh_now();
-    // Never reopen pre-zoomed/pre-panned from a forgotten previous session.
-    s_map_zoom = 1.0f;
-    s_map_pan_dx = s_map_pan_dy = 0.0f;
+    // Never reopen pre-zoomed/pre-panned from a forgotten previous session -
+    // map_fit_to_spots() resets both before deciding, then frames whatever is
+    // actually there rather than handing over an empty planet.
+    map_fit_to_spots();
     s_map_pinch_active = false;
     s_map_drag_active = false;
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
