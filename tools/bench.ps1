@@ -259,13 +259,30 @@ function Cmd-Capture {
     # EXACTLY like a quiet, healthy device (CLAUDE.md serial rule 10), so the
     # night reads as "no crashes" for a window that closed minutes after it opened.
     $taskName = "qmx-capture-$($b.name)"
-    $cmd = "powershell.exe"
-    # -WindowStyle Hidden, because a scheduled task shows its console by default
-    # and Start-Process used to hide it for us. Without this the operator gets a
-    # black empty PowerShell window sitting on his desktop for the whole run -
-    # empty because the script writes to a file, never to the console.
-    $args = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($reg.capture_script)`" " +
-            "-Port $($b.com) -Out `"$($b.capture)`" -Seconds $($reg.capture_seconds)"
+
+    # Launched through tools/run_hidden.vbs so there is NO console window. A
+    # scheduled task running as the logged-on user runs interactively, and an
+    # interactive console program always gets a window; `-WindowStyle Hidden`
+    # only MINIMISES it (the window is conhost's, not powershell's - which is
+    # why powershell's MainWindowHandle read 0 and looked hidden while it sat on
+    # the taskbar). Running the task in session 0 instead would need
+    # `/ru <user> /np`, and registering that needs elevation. See run_hidden.vbs.
+    $vbs = Join-Path (Split-Path -Parent $PSCommandPath) "run_hidden.vbs"
+    if (-not (Test-Path $vbs)) { throw "run_hidden.vbs not found next to bench.ps1 at $vbs" }
+
+    # schtasks' /tr takes ONE quoted string, and quotes cannot be nested inside
+    # it, so every path here has to be space-free. They are, and have always
+    # been - but say so plainly rather than emitting a task that silently runs
+    # the wrong thing.
+    foreach ($p in @($vbs, $reg.capture_script, $b.capture)) {
+        if ($p -match '\s') {
+            throw "Path '$p' contains a space; schtasks /tr cannot quote it. Move it somewhere without spaces."
+        }
+    }
+
+    $action = "wscript.exe $vbs powershell.exe -NoProfile -ExecutionPolicy Bypass " +
+              "-File $($reg.capture_script) -Port $($b.com) -Out $($b.capture) " +
+              "-Seconds $($reg.capture_seconds)"
 
     # Delete any previous definition first: /f on create replaces it, but an
     # already-RUNNING instance of the old task would keep the port and the new
@@ -285,7 +302,7 @@ function Cmd-Capture {
     # /st is in the future purely to stop schtasks warning that a once-task with
     # a past start time may not run; the task is started by /run immediately
     # afterwards and the trigger time is never reached.
-    $rc = Invoke-Task-Quiet "/create /tn $taskName /sc once /st 23:59 /f /tr `"$cmd $args`""
+    $rc = Invoke-Task-Quiet "/create /tn $taskName /sc once /st 23:59 /f /tr `"$action`""
     if ($rc -ne 0) {
         Write-Host "schtasks /create failed (exit $rc) for '$taskName'." -ForegroundColor Red
         Write-Host "  Run it by hand to see why: schtasks /create /tn $taskName ..." -ForegroundColor DarkGray
