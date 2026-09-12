@@ -14,9 +14,20 @@
 // &nbsp;value&nbsp; regardless of column.
 //
 // Verified live query, 2026-09-11:
-//   https://www.wsprnet.org/olddb?mode=html&band=all&limit=30&findcall=DL8UG&findReporter=&sort=date
+//   http://www.wsprnet.org/olddb?mode=html&band=all&limit=30&findcall=DL8UG&findReporter=&sort=date
 // (querying the www host directly - the bare wsprnet.org host 302-redirects
 // to it, and there is no reason to pay that extra round trip every poll).
+//
+// Plain HTTP, not HTTPS: verified live (three consecutive fetches, identical
+// byte count each time) that this specific endpoint answers 200 directly
+// over HTTP with no redirect - unlike every other read-only feed this
+// project queries (hamqsl.com, PSK Reporter's own retrieve.*, spothole.app,
+// tab5.lav.dk all 301 straight to HTTPS; POTA's API 403s plain HTTP
+// outright). net/wsprnet.c's own POST to this same host has used plain HTTP
+// for its entire history for the same reason. Skipping the TLS handshake
+// avoids an mbedtls session on every one of this module's periodic polls -
+// this data (who heard our own already-public WSPR beacon) carries no
+// credential and needs no confidentiality.
 
 #include "wspr_self.h"
 #include "wifi.h"
@@ -229,7 +240,7 @@ static void fetch_once(const char *mycall)
 
     char url[192];
     snprintf(url, sizeof(url),
-             "https://www.wsprnet.org/olddb?mode=html&band=all&limit=%d&findcall=%s&findReporter=&sort=date",
+             "http://www.wsprnet.org/olddb?mode=html&band=all&limit=%d&findcall=%s&findReporter=&sort=date",
              QUERY_LIMIT, call_upper);
 
     esp_http_client_config_t cfg = {
