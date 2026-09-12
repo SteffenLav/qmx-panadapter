@@ -33,6 +33,29 @@
 #   * The restart is KEPT as a last resort behind a consecutive-failure streak,
 #     so a genuinely dead link still recovers, while transients cannot
 #     accumulate toward a reboot. Any success clears the streak.
+#
+# 2026-09-12: A STREAK OF 32 IS HALF A SECOND, NOT A DEAD LINK.
+# ------------------------------------------------------------
+# Each call is 8 tries x 2 ms = ~16 ms, so 32 of them span ~0.5 s - the device
+# was rebooting after half a second of trouble. Measured on the dev bench: two
+# restarts in an afternoon, at 31 min and 61 min of uptime, the SECOND with the
+# bench idle and no screenshot traffic. Both reached exactly 32 with no
+# successful write in between, so nothing ever cleared the streak.
+#
+# A reboot is far more expensive than the reboot: it is a warm reset with the
+# radio attached, i.e. the documented #74 wedge, so each one costs the QMX until
+# somebody power-cycles it by hand.
+#
+# The restart now needs BOTH the streak AND QMX_SDIO_DEATH_MS (10 s) of
+# continuous failure. A C6 that comes back inside the window clears the streak
+# and nothing reboots.
+#
+# ⚠ It also LOGS the elapsed time, and logs recovery explicitly ("slave answered
+# again after N failure(s) over Nms - NOT restarting"), because whether these
+# ever recover on their own is the thing nobody can currently answer: we always
+# rebooted at 0.5 s before finding out. Read those lines before tuning the 10 s
+# either way - if recovery never appears, the window is only delaying an
+# inevitable restart and the real fix is elsewhere.
 #   * Logs the state at each give-up, which is what makes the next occurrence
 #     diagnosable at all - stock, it printed one line and rebooted.
 #
