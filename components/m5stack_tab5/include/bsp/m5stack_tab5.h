@@ -365,6 +365,19 @@ lv_indev_t *bsp_display_get_input_dev(void);
 bool bsp_display_lock(uint32_t timeout_ms);
 
 /**
+ * @brief The DSI panel handle, or NULL before the display is brought up.
+ *
+ * Exposed so a caller can reach the panel's own frame buffer via
+ * esp_lcd_dpi_panel_get_frame_buffer(). screenshot.c streams /ss.bmp straight
+ * out of it, because a full-screen snapshot is 1280x720x2 = 1.8 MB and
+ * lv_snapshot_take_to_buf() needs that CONTIGUOUS - which on the WSPR page is
+ * not available (measured 2026-09-12: 2.26 MB free, 1.31 MB largest block).
+ * The frame buffer already exists, is configured num_fbs = 1 so there is no
+ * back buffer to pick the wrong one of, and holds exactly what is on the glass.
+ */
+esp_lcd_panel_handle_t bsp_display_get_panel_handle(void);
+
+/**
  * @brief Give LVGL mutex
  *
  */

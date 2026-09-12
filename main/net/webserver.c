@@ -2160,10 +2160,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
 
 static esp_err_t ss_bmp_handler(httpd_req_t *req)
 {
-    uint8_t *buf;
+    uint8_t *buf = NULL;          /* NULL => streaming from the panel frame buffer */
     size_t size;
     uint32_t w, h;
-    if (screenshot_capture_rgb565(&buf, &size, &w, &h) != ESP_OK) {
+
+    /* ⭐ FRAME BUFFER FIRST, and the allocating snapshot only as a fallback.
+     *
+     * lv_snapshot_take_to_buf() re-renders the tree into 1.8 MB of CONTIGUOUS
+     * PSRAM. On the WSPR page that is not available - 2026-09-12, operator
+     * trying to photograph the spot map: 2.26 MB free, 1.31 MB largest block,
+     * short by 467 KB. Fragmented, not exhausted, and waiting does not help
+     * (PSRAM moves only ~350 KB across a WSPR cycle, so those capture windows
+     * are held rather than freed).
+     *
+     * The panel's own frame buffer needs no allocation at all, and it is the
+     * better source anyway: it is literally what is on the glass, so it
+     * already includes the top layer that the snapshot path had to composite
+     * by hand, and it needs none of that path's defensive scroll-zeroing or
+     * lv_anim_delete_all() - which used to stop every breathing animation on
+     * screen just to take a picture. */
+    const bool streaming = (screenshot_fb_begin(&w, &h) == ESP_OK);
+    if (streaming) {
+        size = (size_t)w * h * 2;
+    } else if (screenshot_capture_rgb565(&buf, &size, &w, &h) != ESP_OK) {
         /* ⛔ NOT a bare 500. "Server has encountered an unexpected error" in a
          * browser tab is the least useful sentence this firmware can produce -
          * it names nothing, and the operator reported exactly that. A full
@@ -2238,7 +2257,17 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
 
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
 
-    if (cropped) {
+    if (streaming) {
+        /* One logical row at a time, straight out of the panel frame buffer.
+         * 2.5 KB of stack instead of 1.8 MB of PSRAM. The crop costs nothing
+         * here - it is just where the row starts and how long it is. */
+        static uint16_t row[DISPLAY_H_RES];
+        for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
+            screenshot_fb_row(cy + r, cx, cw, row);
+            err = httpd_resp_send_chunk(req, (const char *)row, cw * 2);
+        }
+        screenshot_fb_end();
+    } else if (cropped) {
         /* Row by row: the crop is not contiguous in the source buffer. */
         const uint32_t row_bytes = cw * 2;
         for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
@@ -2257,7 +2286,7 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
         err = httpd_resp_send_chunk(req, NULL, 0);
     }
 
-    heap_caps_free(buf);
+    if (buf) heap_caps_free(buf);
     return err;
 }
 

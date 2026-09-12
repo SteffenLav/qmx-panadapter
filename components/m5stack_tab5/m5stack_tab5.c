@@ -1675,6 +1675,19 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t* config, esp_lcd_touch_handle_t
 }
 
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
+/* The DSI panel handle, kept so a caller can reach the panel's own frame
+ * buffer. screenshot.c streams /ss.bmp straight out of it: a full-screen
+ * snapshot is 1280x720x2 = 1.8 MB and lv_snapshot_take_to_buf() needs that
+ * CONTIGUOUS, which on the WSPR page simply is not available - measured
+ * 2026-09-12, 2.26 MB free but a 1.31 MB largest block. The frame buffer
+ * already exists and already holds exactly what is on the glass. */
+static esp_lcd_panel_handle_t s_bsp_panel = NULL;
+
+esp_lcd_panel_handle_t bsp_display_get_panel_handle(void)
+{
+    return s_bsp_panel;
+}
+
 static lv_display_t* bsp_display_lcd_init(const bsp_display_cfg_t* cfg)
 {
     assert(cfg != NULL);
@@ -1690,6 +1703,8 @@ static lv_display_t* bsp_display_lcd_init(const bsp_display_cfg_t* cfg)
     } else {
         BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles(NULL, &lcd_panels));
     }
+
+    s_bsp_panel = lcd_panels.panel;
 
     /* Add LCD screen */
     ESP_LOGD(TAG, "Add LCD screen");
