@@ -324,6 +324,15 @@ static void map_fit_to_spots(void)
 
     ESP_LOGI(TAG, "map fit: %d spot(s), zoom %.2f, pan %.3f/%.3f",
              n, z, s_map_pan_dx, s_map_pan_dy);
+
+    /* ⛔ INVALIDATE, or a re-open of an ALREADY-VISIBLE overlay keeps the old
+     * framing. spot_map_view_show() runs on every top-edge swipe and on the
+     * spotmap dev action, and when the map is already on screen nothing else
+     * marks it dirty - so the zoom changed underneath a picture that was never
+     * redrawn. Caught 2026-09-12 only because the screenshots kept coming back
+     * unzoomed while the log said "zoom 2.28": the computation was right and
+     * the pixels were stale. */
+    if (s_map_obj) lv_obj_invalidate(s_map_obj);
 }
 
 static lv_point_precise_t project(const lv_area_t *area, int32_t w, int32_t h, float lon, float lat)

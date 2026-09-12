@@ -2258,14 +2258,46 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
 
     if (streaming) {
-        /* One logical row at a time, straight out of the panel frame buffer.
-         * 2.5 KB of stack instead of 1.8 MB of PSRAM. The crop costs nothing
-         * here - it is just where the row starts and how long it is. */
-        static uint16_t row[DISPLAY_H_RES];
-        for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
-            screenshot_fb_row(cy + r, cx, cw, row);
-            err = httpd_resp_send_chunk(req, (const char *)row, cw * 2);
+        /* ⛔ BATCH THE ROWS. SENDING ONE CHUNK PER ROW KILLED THE WIFI LINK.
+         *
+         * The first version of this sent each 2,560-byte row as its own
+         * httpd chunk - 720 small TCP writes across ~15 s, where the old
+         * whole-frame path sent 56 x 32 KB. The operator hit it immediately:
+         * "it is super annoying that we need a restart whenever i take a
+         * screenshot". The serial log has the mechanism, and it is not a
+         * crash - esp_hosted's SDIO write path filled with
+         * "slave unresponsive after 8 tries - dropping frame", and at
+         * 32 consecutive failures it took the last-resort
+         * "link is dead, restarting".
+         *
+         * So the chunk size was never incidental: it is what keeps this
+         * transfer inside what the C6 link will take. Rows are accumulated
+         * into one SS_CHUNK_BYTES buffer and sent when the next row will not
+         * fit, which restores the old traffic shape while keeping the whole
+         * point of this path - no 1.8 MB contiguous allocation.
+         *
+         * The buffer is PSRAM and 32 KB, which is available even when the
+         * heap is far too fragmented for a frame. */
+        const uint32_t row_bytes = cw * 2;
+        uint8_t *acc = heap_caps_malloc(SS_CHUNK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!acc) {
+            screenshot_fb_end();
+            httpd_resp_send_chunk(req, NULL, 0);
+            return ESP_FAIL;
         }
+        size_t used = 0;
+        for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
+            if (used + row_bytes > SS_CHUNK_BYTES) {
+                err = httpd_resp_send_chunk(req, (const char *)acc, used);
+                used = 0;
+                if (err != ESP_OK) break;
+            }
+            screenshot_fb_row(cy + r, cx, cw, (uint16_t *)(acc + used));
+            used += row_bytes;
+        }
+        if (err == ESP_OK && used > 0)
+            err = httpd_resp_send_chunk(req, (const char *)acc, used);
+        heap_caps_free(acc);
         screenshot_fb_end();
     } else if (cropped) {
         /* Row by row: the crop is not contiguous in the source buffer. */
