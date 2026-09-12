@@ -88,15 +88,20 @@ static const char *TAG = "sd_arch";
  * transcript's doing: the diag mirror has run every 30 s since #153, and it is
  * the worse of the two.
  *
- * So while someone is actually watching the stream, the writes wait. Nobody
- * watching, nothing to freeze - and that is the common case, since the web UI
- * is opened to look at something rather than left running.
+ * ⛔ THE ANSWER IS NOT TO WRITE LESS OFTEN WHILE SOMEONE WATCHES. v1.12.3 did
+ * exactly that and the deferral was REMOVED on 2026-09-12, because a web page
+ * is a MONITOR and must not change what the device records. Leaving one open
+ * overnight took the mirror from 4 KB/30 s to 4 KB/180 s - 23 B/s - which is
+ * below what WSPR alone produces, so the card fell four hours behind and the SD
+ * record of a ten-hour soak ended at 6.5 h. A monitor that silently truncates
+ * the log is worse than a stuttering spectrum.
  *
- * ⚠ BUT NOT FOR EVER, and this is the load-bearing half. #153 exists so that a
- * crash reaches the card, and an operator who leaves a browser open all session
- * is exactly the one whose crash would otherwise be lost. After this long the
- * write happens regardless and the browser takes the stutter. */
-#define WS_DEFER_MAX_MS   180000   /* 3 min: write anyway, watcher or not */
+ * ⭐ The numbers above are also the way out, and they were in the log all along:
+ * 3107 ms for 4096 B, and elsewhere "8,942 ms to write ONE byte". The cost is
+ * per WRITE, not per byte - the open, the fsync, the close, the contention. So
+ * mirror_diag_slow() drains up to 64 KB inside ONE open at the same 30 s
+ * cadence. The stream is interrupted once per 30 s whether or not anybody is
+ * looking, which is precisely what makes the browser irrelevant. */
 
 /* ⛔ TEMPORARY EXPERIMENT (#378), DEFAULT 0 - REMOVE WHEN IT HAS ANSWERED.
  *
@@ -668,6 +673,27 @@ static int64_t s_mount_retry_last_us = 0;
 // The contention being avoided is SPI2-SD DMA against WiFi-SDIO DMA, and the
 // ~10 fps spectrum stream is the SDIO traffic that matters. Pausing it is the
 // whole point; quieting the FFT is not.
+//
+// ⭐ ONE OPEN, MANY CHUNKS - AND THE COST IS PER WRITE, NOT PER BYTE.
+// This used to write exactly DIAG_CHUNK (4 KB) per call, with its own fopen /
+// fwrite / fsync / fclose around it. At the #153 cadence of 30 s that is
+// 136 B/s, and in WSPR mode the ring produces more than that - so the card's
+// copy fell steadily behind the device. Measured overnight 2026-09-11: the
+// mirror ended up FOUR HOURS behind, and the SD record of a ten-hour soak
+// stopped at 6.5 h.
+//
+// Writing more per call is very nearly free, and the log said so long before
+// anyone asked: "8,942 ms to write ONE byte". A write that takes nine seconds
+// for a single byte is not bandwidth-limited, it is paying a fixed cost -
+// the open, the fsync, the close, and the SPI2-vs-WiFi contention the pause
+// exists to dodge. So drain the backlog inside ONE open instead of taking that
+// fixed cost 16 times for 64 KB.
+//
+// The cap matters in the other direction: the stream is paused for the whole
+// burst, so an unbounded drain after a long stall would freeze the browser for
+// as long as it took. SLOW_DRAIN_MAX keeps the worst case bounded while still
+// being 16x what a single chunk moved.
+#define SLOW_DRAIN_MAX_CHUNKS 16            // <= 64 KB inside one open
 static bool mirror_diag_slow(void)
 {
     static char buf[DIAG_CHUNK];
@@ -693,16 +719,37 @@ static bool mirror_diag_slow(void)
 
     FILE *f = fopen(SD_LOG_PATH, "ab");
     bool ok;
+    size_t wrote = 0;
     if (!f) {
         sd_fail_diag("slowopen", errno);
         ok = false;
     } else {
-        ok = (fwrite(buf, 1, got, f) == got);
-        if (ok) { fflush(f); fsync(fileno(f)); }
-        else    { sd_fail_diag("slowwrite", errno); }
+        ok = true;
+        for (int chunk = 0; chunk < SLOW_DRAIN_MAX_CHUNKS && got > 0; chunk++) {
+            if (fwrite(buf, 1, got, f) != got) {
+                sd_fail_diag("slowwrite", errno);
+                // Same reason as the burst path: clear the stream error or every
+                // later fwrite on this FILE* returns short WITHOUT touching the
+                // card, and a transient fault reads as a permanent one. The
+                // cursor is advanced only for chunks that actually landed, so
+                // the next call resumes exactly here.
+                clearerr(f);
+                ok = false;
+                break;
+            }
+            // Advance per chunk, not once at the end: a failure half way through
+            // must not re-write the chunks that already reached the card.
+            s_diag_cursor = next;
+            s_log_bytes  += got;
+            wrote        += got;
+            got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
+        }
+        // One fsync for the whole burst - it is the expensive part, and the
+        // bytes are equally durable whether it runs once or sixteen times.
+        if (wrote > 0) { fflush(f); fsync(fileno(f)); }
         fclose(f);
-        if (ok) { s_diag_cursor = next; s_log_bytes += got; }
     }
+    got = wrote;                            // report what actually went to the card
 
     if (exp_pause && !was_paused) webserver_ws_set_paused(false);
 
@@ -1026,33 +1073,26 @@ static void sd_archive_task(void *arg)
             // no-card park below must stay silent.
             if (s_mounted) {
                 int64_t now_us = esp_timer_get_time();
-                /* Defer while a browser is watching - see WS_DEFER_MAX_MS.
-                 * s_slow_last_us is NOT advanced when we defer, so the moment
-                 * the browser goes away the write happens on the next tick
-                 * rather than waiting out another full interval. */
-                static int64_t s_defer_since_us = 0;
-                bool defer = false;
-#if SD_PAUSE_EXPERIMENT
-                (void)0;   /* no deferral during the experiment - see the flag */
-#else
-                if (webserver_ws_client_streaming()) {
-                    if (s_defer_since_us == 0) s_defer_since_us = now_us;
-                    defer = (now_us - s_defer_since_us < (int64_t)WS_DEFER_MAX_MS * 1000);
-                    if (!defer) {
-                        ESP_LOGW(TAG, "card writes deferred %d s for a watching "
-                                      "browser - writing anyway, so a crash still "
-                                      "reaches the card",
-                                 (int)((now_us - s_defer_since_us) / 1000000));
-                        /* Restart the window, or every tick from here would
-                           force a write and the deferral would be gone. */
-                        s_defer_since_us = now_us;
-                    }
-                } else {
-                    s_defer_since_us = 0;   /* nobody watching - back to normal */
-                }
-#endif
-                if (!defer &&
-                    now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
+                /* ⛔ NO BROWSER DEFERRAL. A web page is a MONITOR: having one
+                 * open must not change what the device records.
+                 *
+                 * v1.12.3 deferred card writes while webserver_ws_client_streaming(),
+                 * up to WS_DEFER_MAX_MS, to stop the spectrum freezing. The
+                 * arithmetic was the bug: one 4 KB chunk per forced write meant
+                 * 4 KB / 180 s = 23 B/s with a browser open against 4 KB / 30 s
+                 * = 136 B/s without one, and WSPR produces more than either. So
+                 * a browser left open did not slow the record down, it stopped
+                 * it keeping up at all - measured overnight 2026-09-11, the card
+                 * ended FOUR HOURS behind and the SD record of a ten-hour soak
+                 * stopped at 6.5 h.
+                 *
+                 * The freeze that deferral was protecting is addressed where it
+                 * belongs instead: the cost is per WRITE, not per byte (the log
+                 * has "8,942 ms to write ONE byte"), so mirror_diag_slow() now
+                 * drains up to 64 KB inside ONE open. The number of times the
+                 * stream is interrupted is unchanged at one per 30 s, watcher or
+                 * not - which is exactly what makes the browser irrelevant. */
+                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
