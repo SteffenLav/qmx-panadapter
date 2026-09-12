@@ -209,6 +209,69 @@ capture, not after a result looks strange.**
    minimised window still has one. `WScript.Shell.Run(cmd, 0, False)` creates no
    window at all and needs no elevation, which `schtasks /ru <user> /np` (session
    0, no desktop) would have.
+12. ⛔ **`bench flash` SILENTLY SKIPPED STOPPING THE CAPTURE, AND THE CAUSE IS A
+   POWERSHELL TYPE TRAP WORTH KNOWING BY NAME.** Three flashes failed in a row on
+   2026-09-12 with `Could not open COM5, the port is busy ... Access is denied`.
+   Nothing was written any of those times — the good outcome — but this is the
+   same shape as COM9 being held through a flash on 2026-09-09.
+
+   `Get-CaptureProcess` built `$procs = @()` and returned it. **PowerShell
+   unrolls a one-element array on return**, so with exactly ONE capture running
+   the caller got a bare `CimInstance`. Then:
+   ```powershell
+   $hadCapture = ((Get-CaptureProcess $b.capture).Count -gt 0)   # $null -gt 0 = FALSE
+   ```
+   so `Cmd-StopCapture` was never called at all. `bench stopcapture` worked
+   throughout, because its own guard is `-eq 0` and `$null -eq 0` is *also*
+   false, so it fell through to the kill loop. One helper, two callers, opposite
+   outcomes from the same null.
+
+   ⭐ **The trap is that this is TYPE-DEPENDENT.** PS 3.0+ adds an ETS `Count` to
+   most scalars, so `(Get-Process ...).Count` really is 1 — but a `CimInstance`
+   does **not** get it and yields `$null`. Measured:
+   | scalar | `.Count` | `-gt 0` |
+   |---|---|---|
+   | `Process` | 1 | True |
+   | `CimInstance` | *(empty)* | **False** |
+
+   ⚠ **I tested it with the wrong type and retracted a CORRECT diagnosis**,
+   telling the operator the root cause was wrong when it was right. Testing an
+   *analogue* of the object instead of the object is how that happened. Fixed
+   with `return ,$procs` (the comma survives unrolling) plus `@()` at every call
+   site, and `Wait-PortFree` now *tests* the port instead of sleeping 1 s.
+
+   **Generalise: never call `.Count` on an unwrapped function return in
+   PowerShell — write `@(f ...).Count`.** A blank where a number should be in a
+   log line (`Stopped  capture process(es)`) is the tell.
+13. ⛔ **A CAPTURE PROCESS CAN STAY ALIVE AND STOP WRITING FOREVER, AND
+   `bench capture`'S OWN "ALREADY RUNNING" GUARD THEN PROTECTS THE CORPSE.**
+   `bench_watchdog.ps1` (rule 11) restarted nothing for 6.5 straight hours on
+   2026-09-12 — every one-minute cycle logged `restart produced NO output`
+   within 8–9 seconds, far too fast for the 20–40 s retry loop `Cmd-Capture`
+   runs when it genuinely tries to start something. That timing is the tell:
+   `Cmd-Capture` was hitting its own **"already running — leave it alone"**
+   early return every single time, because a process genuinely WAS still
+   alive — just stuck, holding the port, writing nothing.
+
+   Likely mechanism (matches the timeline: failures continued for hours after
+   the device itself had recovered from a flash+reboot): `SerialPort.Open()`/
+   `Read()` against a COM port backed by a USB-CDC device that has since reset
+   can **block indefinitely** on the OS side rather than throwing — so the
+   capture script's own try/catch/reconnect logic never gets a turn, because
+   the thread never returns from the blocking call. `schtasks /end` cannot
+   reach it either: the task only ever launched `wscript.exe`, which already
+   exited the instant it detached the real capture process (that is the whole
+   point of `run_hidden.vbs`) — the capture is an orphan from Task Scheduler's
+   point of view from the moment it starts.
+
+   So "is a process already running" is the right question for a HUMAN typing
+   `bench capture` (never clobber a healthy one), and the wrong question for a
+   WATCHDOG, whose entire job is to find a process that is alive but not doing
+   its job. Fixed: the watchdog now treats **file staleness** as ground truth,
+   independent of what `Get-CaptureProcess` says — on a stale file it kills
+   whatever holds the port first, then calls `bench capture -Force`, every
+   time. `bench.ps1` itself is unchanged; only the watchdog's judgement of when
+   a restart is warranted changed.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when
@@ -564,13 +627,38 @@ and no complaint. The 1 Hz RSSI/SSID poll had been reading one-behind.
 runs **before** the request is queued for transmit, so there is no window in
 which a legitimate response can arrive ahead of its own waiter.
 
-⚠ **NOT YET CONFIRMED ON HARDWARE.** It is correct by construction and the
-capture matches exactly, but the wedge needs a memory-pressure spike to seed it,
-so it cannot be provoked on demand. Both new paths log (`no waiter for resp[..]
-uid .. - dropping`, `no sem for req[..] - not sending`), deliberately — this runs
-on a task, not in an ISR, so the #189 counter dance is unnecessary and a
-timestamped line is better. **A soak that shows `no waiter ... dropping` lines
-with no following timeout storm is the confirmation.**
+Both new paths log (`no waiter for resp[..] uid .. - dropping`, `no sem for
+req[..] - not sending`), deliberately — this runs on a task, not in an ISR, so
+the #189 counter dance is unnecessary and a timestamped line is better.
+
+⭐⭐ **HARDWARE-CONFIRMED 2026-09-12, dev bench, in ONE 30-minute run:**
+
+```
+sem create failed : 17
+no sem for req    : 17   <- every one refused before the request was sent
+no waiter dropping: 0
+0x126 timeouts    : 0
+```
+
+**Seventeen seedings, no wedge.** `sem create failed` is the exact
+memory-pressure condition that creates an orphan, and on the unpatched build of
+2026-09-11 the **third** one filled the 3-deep `rpc_rx_q` and the link was dead
+five seconds later (161 consecutive `0x126` timeouts, one per 5 s, until
+reboot). Here there were seventeen and RPC never missed a beat — `/api/status`'s
+RSSI kept changing, which IS the `0x126` `WifiStaGetApInfo` call answering.
+
+⭐ **The 1:1 ratio proves the MECHANISM, not just the outcome.** Every
+`sem create failed` is followed by `no sem for req`, i.e. the first half of the
+patch refusing to register a NULL semaphore, so the request is never
+transmitted and no orphan response can exist. That is why `no waiter for resp
+... dropping` reads **0**: the second half is the backstop for a race that the
+first half prevents outright. A soak showing the drop line instead would be
+equally valid confirmation — this is the stronger of the two shapes.
+
+⚠ **Do not read the 0 as "the drop path is dead code."** It covers the window
+where a waiter times out at 5 s while its response is already in flight, which
+needs a slow round trip rather than a failed allocation. Unobserved, not
+unreachable.
 
 **RE-ENABLED 2026-07-19 (`SD_ARCHIVE_DISABLED 0`) — the FT8-collapse blocker was #51 all along.** The archive was shelved 2026-07-10 not for the WiFi wedge (exonerated above — SD-independent, self-heals) but because a live test showed FT8 decode collapsing to `cand=140/dec=0` zero-clusters with a card mounted, blamed on internal-heap starvation. That is the *exact* #51 signature (USB ISO audio lost at the wire), root-caused + fixed 2026-07-19. Re-verified on hardware: with a card mounted the internal heap still craters (min ~12 KB, lblk ~15 KB — the SD tax is real, ~14–49 KB depending on card) **yet FT8 decodes 35–54/slot with no collapse, no WiFi wedge, no SDIO-recovery events.** So the low heap was never the cause. The archive is now a full **grab-and-go station backup** (`storage/sd_archive.c`): mirrors `qso.adi`, `qmx-config.txt` (settings + secrets), `lotw_cert.b64`+`lotw_key.b64` (via `sd_archive_mark_lotw_dirty()`, hooked in the `/api/lotw_cert` handler), the diag log, and a self-describing version-stamped `README.txt` (written each mount) that warns the card holds credentials in clear (WiFi pw, QRZ/eQSL, LoTW private key) — inherent to a restorable backup. Deliberately NOT mirrored: the LoTW TQ8 (derived/regenerable, signing-on-write is heavy) and screenshots. A 30 s `sd_arch: heartbeat` + per-burst SPI timing were added as soak instrumentation. FAT32 (≤32 GB) works with no patch — the exFAT patch below is only for >32 GB exFAT cards. If FT8 ever zero-clusters *only* with a card in, the fallback is gating the mount off in FT8/FT4 mode (the tightest-heap case); not needed as of this writing.
 

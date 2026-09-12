@@ -18,6 +18,7 @@
 #   bench status <name>        ask the running firmware over the network
 #   bench capture <name>       start the standing serial capture (leave it up)
 #   bench stopcapture <name>   the only legitimate reason is a flash
+#   bench watchdog [off|status]  keep captures alive (every minute); see bench_watchdog.ps1
 #   bench build [<name>]       build that bench's tree, under the lock
 #   bench flash <name>         lock, stop capture, flash, restart capture, verify
 #   bench verify <name>        re-check the MAC in the latest boot header
@@ -105,7 +106,49 @@ function Get-CaptureProcess {
                 }
             }
     } catch { }
-    return $procs
+    # ⛔ THE COMMA IS LOAD-BEARING. PowerShell UNROLLS a one-element array on
+    # return, so with exactly one capture running the caller got a bare
+    # CimInstance - and in Windows PowerShell 5.1 a scalar has no .Count, so
+    # `(Get-CaptureProcess ...).Count` was $null.
+    #
+    # That is not a cosmetic bug. Cmd-Flash asked `.Count -gt 0` to decide
+    # whether to stop the capture, `$null -gt 0` is false, and so a flash with
+    # ONE capture running never stopped it and died on "Could not open COM5,
+    # the port is busy" - twice on 2026-09-12 before anyone looked at why.
+    # Cmd-StopCapture only escaped it by accident: its guard is `-eq 0`, and
+    # `$null -eq 0` is false too, so it fell through to the kill loop.
+    #
+    # `,$procs` wraps the array in an outer one, which unrolling then strips -
+    # leaving the array intact. Call sites also use @() as a belt.
+    return ,$procs
+}
+
+function Wait-PortFree {
+    param([string] $com, [int] $timeoutSec = 20)
+    # ⛔ KILLING THE CAPTURE DOES NOT FREE THE PORT SYNCHRONOUSLY.
+    #
+    # Cmd-Flash used to Stop-Process the capture and then Start-Sleep 1 before
+    # handing COM to esptool. Windows closes a dead process's handles on its own
+    # schedule, so that one second was a guess - and on 2026-09-12 it lost twice
+    # in a row on the dev bench: "A fatal error occurred: Could not open COM5,
+    # the port is busy or doesn't exist. (Access is denied)". Nothing was
+    # written either time, which is the good outcome; the bad one is a flash
+    # that starts while something else still holds the line, which is how COM9
+    # ended up held through a flash on 2026-09-09.
+    #
+    # So TEST it instead of waiting a magic number: try to open the port, which
+    # is exactly what esptool is about to do. Returns $true the moment it opens.
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $p = New-Object System.IO.Ports.SerialPort($com, 115200)
+            $p.Open(); $p.Close(); $p.Dispose()
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    return $false
 }
 
 function Test-CaptureFresh {
@@ -232,7 +275,7 @@ function Invoke-Task-Quiet {
 function Cmd-Capture {
     param($reg, $b)
     if (-not $b.com -or $b.com -eq "UNASSIGNED") { throw "Bench '$($b.name)' has no COM port assigned yet." }
-    if ((Get-CaptureProcess $b.capture).Count -gt 0 -and -not $Force) {
+    if (@(Get-CaptureProcess $b.capture).Count -gt 0 -and -not $Force) {
         Write-Host "A capture for '$($b.name)' is already running. Leave it alone (-Force to start another anyway)." -ForegroundColor Yellow
         return
     }
@@ -311,13 +354,86 @@ function Cmd-Capture {
     $rc = Invoke-Task-Quiet "/run /tn $taskName"
     if ($rc -ne 0) { throw "schtasks /run failed (exit $rc) for '$taskName'." }
 
-    Start-Sleep -Seconds 4
-    if (Test-CaptureFresh $b.capture) {
+    # ⛔ DO NOT RETURN UNTIL THE FILE IS ACTUALLY GROWING, AND RETRY IF IT IS NOT.
+    #
+    # This used to wait 4 s and, on a miss, print a mild "check again in a few
+    # seconds" - which is a capture that MIGHT be running, reported as a
+    # non-problem. On 2026-09-12 a capture stopped at a flash and stayed dead
+    # for 22 minutes; the operator hit a full UI freeze inside that window and
+    # there was no log of it. A capture that did not start is not a cosmetic
+    # failure, it is the difference between diagnosing the next crash and
+    # guessing at it.
+    #
+    # 4 s is also simply too short when the board is mid-boot after a flash, so
+    # this waits up to 20 s, then re-runs the task ONCE before giving up loudly.
+    $fresh = $false
+    foreach ($attempt in 1..2) {
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 2
+            if (Test-CaptureFresh $b.capture) { $fresh = $true; break }
+        }
+        if ($fresh) { break }
+        if ($attempt -eq 1) {
+            Write-Host "Capture produced nothing in 20 s - re-running the task once." -ForegroundColor DarkYellow
+            Invoke-Task-Quiet "/run /tn $taskName" | Out-Null
+        }
+    }
+
+    if ($fresh) {
         Write-Host "Capture running for '$($b.name)' on $($b.com) -> $($b.capture)" -ForegroundColor Green
         Write-Host "  (scheduled task '$taskName' - survives this session and app updates)" -ForegroundColor DarkGray
     } else {
-        Write-Host "Task started but the file is not growing yet. Check again in a few seconds." -ForegroundColor DarkYellow
-        Write-Host "  If it never grows: schtasks /query /tn $taskName /v /fo list" -ForegroundColor DarkGray
+        Write-Host "CAPTURE IS NOT RUNNING for '$($b.name)' - the next crash will NOT be recorded." -ForegroundColor Red
+        Write-Host "  Diagnose: schtasks /query /tn $taskName /v /fo list" -ForegroundColor DarkGray
+        Write-Host "  Port in use by something else? $($b.com)" -ForegroundColor DarkGray
+    }
+}
+
+function Cmd-Watchdog {
+    param($reg, [string] $mode)
+    # Keeps every configured capture alive. See tools/bench_watchdog.ps1 for
+    # why this exists and what it refuses to do during a flash.
+    $taskName = "qmx-capture-watchdog"
+    $vbs = Join-Path (Split-Path -Parent $PSCommandPath) "run_hidden.vbs"
+    $wd  = Join-Path (Split-Path -Parent $PSCommandPath) "bench_watchdog.ps1"
+
+    switch ($mode) {
+        "off" {
+            Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
+            Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
+            Write-Host "Capture watchdog removed. Nothing will restart a dead capture now." -ForegroundColor Yellow
+        }
+        "status" {
+            $out = cmd /c "schtasks /query /tn $taskName /fo list 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Capture watchdog: NOT INSTALLED" -ForegroundColor Yellow
+            } else {
+                Write-Host "Capture watchdog: installed" -ForegroundColor Green
+                ($out | Select-String "Status|Next Run Time") | ForEach-Object { "  $_" }
+            }
+            $log = "C:/dev/qmx-panadapter/scratchpad/bench-watchdog.log"
+            if (Test-Path $log) {
+                Write-Host "  recent activity:" -ForegroundColor DarkGray
+                Get-Content $log -Tail 5 | ForEach-Object { "    $_" }
+            }
+        }
+        default {
+            foreach ($p in @($vbs, $wd)) {
+                if ($p -match '\s') { throw "Path '$p' contains a space; schtasks /tr cannot quote it." }
+            }
+            $action = "wscript.exe $vbs powershell.exe -NoProfile -ExecutionPolicy Bypass -File $wd"
+            Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
+            Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
+            # Every minute, for ever. /du 9999:59 because schtasks defaults a
+            # minute-schedule to a single day and would stop overnight - which
+            # is exactly the run you most want covered.
+            $rc = Invoke-Task-Quiet "/create /tn $taskName /sc minute /mo 1 /du 9999:59 /f /tr `"$action`""
+            if ($rc -ne 0) { throw "schtasks /create failed (exit $rc) for '$taskName'." }
+            Invoke-Task-Quiet "/run /tn $taskName" | Out-Null
+            Write-Host "Capture watchdog installed - checks every minute, restarts any capture that stopped." -ForegroundColor Green
+            Write-Host "  Skips entirely while the bench lock is held, so it cannot interfere with a flash." -ForegroundColor DarkGray
+            Write-Host "  Log: C:/dev/qmx-panadapter/scratchpad/bench-watchdog.log" -ForegroundColor DarkGray
+        }
     }
 }
 
@@ -330,7 +446,7 @@ function Cmd-StopCapture {
     Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
     Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
 
-    $procs = Get-CaptureProcess $b.capture
+    $procs = @(Get-CaptureProcess $b.capture)
     if ($procs.Count -eq 0) {
         Write-Host "No capture process running for '$($b.name)' (task '$taskName' removed if it existed)."
         return
@@ -487,11 +603,19 @@ function Cmd-Flash {
     Cmd-Status $reg $b
 
     $took = Take-Lock $reg "flash" $b.name
-    $hadCapture = ((Get-CaptureProcess $b.capture).Count -gt 0)
+    $hadCapture = (@(Get-CaptureProcess $b.capture).Count -gt 0)
     $preLen = 0
     if (Test-Path $b.capture) { $preLen = (Get-Item $b.capture).Length }
     try {
-        if ($hadCapture) { Cmd-StopCapture $reg $b; Start-Sleep -Seconds 1 }
+        if ($hadCapture) { Cmd-StopCapture $reg $b }
+        # Wait for the port to actually open, however the capture was stopped -
+        # and even when there was no capture, since something else on this
+        # machine may hold it. See Wait-PortFree for why a fixed sleep is not
+        # good enough. Not fatal on timeout: esptool's own error is clearer
+        # than anything invented here, and it has not written a byte yet.
+        if (-not (Wait-PortFree $b.com 20)) {
+            Write-Host "$($b.com) still busy after 20 s - flashing anyway, esptool will say who holds it." -ForegroundColor Yellow
+        }
         $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("-p", $b.com, "flash"))
         if ($rc -ne 0) { Write-Host "Flash FAILED (exit $rc)" -ForegroundColor Red }
     } finally {
@@ -560,6 +684,7 @@ switch ($Command.ToLower()) {
     "status"       { Cmd-Status       $reg (Get-Bench $reg $Name) }
     "capture"      { Cmd-Capture      $reg (Get-Bench $reg $Name) }
     "stopcapture"  { Cmd-StopCapture  $reg (Get-Bench $reg $Name) }
+    "watchdog"     { Cmd-Watchdog     $reg $Name }
     "build"        { if (-not $Name) { $Name = "dev" }; Cmd-Build $reg (Get-Bench $reg $Name) }
     "flash"        { Cmd-Flash        $reg (Get-Bench $reg $Name) }
     "verify"       { Cmd-Verify       $reg (Get-Bench $reg $Name) }
