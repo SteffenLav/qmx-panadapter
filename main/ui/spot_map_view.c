@@ -62,7 +62,10 @@ extern esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
 #define SCR_W      1280
 #define SCR_H      720
 #define HEADER_H   64
-#define SIDEBAR_W  220
+/* Widened 220 -> 270 with the sidebar's fonts (see add_filter_checkbox):
+ * "Digi (PSKR)" at montserrat_26 plus a 31 px indicator does not fit 220,
+ * and the map pane keeps 1010 px of the 1280. */
+#define SIDEBAR_W  270
 
 static lv_obj_t *s_overlay    = NULL;
 static lv_obj_t *s_map_obj    = NULL;   // Karte tab: custom-drawn world map + self-spot lines
@@ -81,7 +84,38 @@ static bool s_active = false;
 // overlay never starts pre-zoomed/pre-panned from a forgotten previous
 // session. s_map_pan_dx/dy are in the same 0..1 screen-fraction units
 // project() already works in - see its own comment for how they combine.
+/* ⭐ NEW vs OLDER on the map, 30 minutes, per the operator's own wording:
+ * "the age like New: <30min Older: >30min" (2026-09-12). One number, used by
+ * the map's opacity AND by the sidebar legend, so the picture and the words
+ * describing it cannot drift apart. */
+#define SELF_SPOT_NEW_SEC (30 * 60)
+
+/* Older spots are shown by default - the ask was to see "all that is shown in
+ * the list", and the list has never hidden them. The checkbox exists so a busy
+ * map can be cut back to what is live right now, which is the earlier request
+ * for "a checkbox for history data". */
+static bool s_show_older = true;
+
+/* ⭐ HAS THE OPERATOR TAKEN OVER THE VIEW?
+ *
+ * The auto-fit deliberately runs only when the map is OPENED - re-framing
+ * underneath a finger mid-pinch would be unusable, and that is why the fit's
+ * own comment forbids running it on the refresh timer.
+ *
+ * But that left a real gap: spots arrive live, and one further away than
+ * anything present at open lands outside the frame and is never seen. The
+ * operator, 2026-09-12: "some of them is then further away than the starting
+ * zoom level - can you zoom out as they come in? Still same bounderies?"
+ *
+ * So the rule is ownership, not timing: the map keeps re-fitting itself while
+ * the view is still the one IT chose, and stops the instant a pinch or a drag
+ * makes the view the operator's. Nothing moves under anyone's hand, and a map
+ * nobody has touched stays honest about what it is receiving. Re-opening the
+ * overlay hands control back. */
+static bool s_view_is_users = false;
+
 static float s_map_zoom = 1.0f;
+static void map_sync_scroll_chain(void);   // defined with the drag-pan, far below
 static float s_map_pan_dx = 0.0f, s_map_pan_dy = 0.0f;
 #define MAP_ZOOM_MIN 1.0f
 #define MAP_ZOOM_MAX 8.0f
@@ -262,9 +296,8 @@ static int gather_self_spots(self_spot_t *out, int max)
  * Works in the same normalised world coordinates project() uses, so the zoom
  * and pan computed here are exactly what project() will apply: it scales every
  * point away from our own QTH and then shifts by the pan. Two steps:
- *   - zoom so the bounding box of every drawn point spans MAP_FIT_FRACTION of
- *     the view rather than all of it, leaving a margin so dots near the edge
- *     are not clipped;
+ *   - zoom so the bounding box of every drawn point fills the view apart from a
+ *     MAP_FIT_MARGIN_PX border, so dots near the edge are not clipped;
  *   - pan so that box ends up CENTRED, because the anchor is our QTH and not
  *     the middle of the screen - without this, zooming on a European station
  *     pushes everything off the top.
@@ -272,7 +305,24 @@ static int gather_self_spots(self_spot_t *out, int max)
  * Only ever called when the map is opened. It must not run on the refresh
  * timer: the operator pinches and drags this map, and a view that re-fitted
  * itself underneath them every time a spot arrived would be unusable. */
-#define MAP_FIT_FRACTION 0.72f     /* of the view the spots may occupy */
+/* ⛔ THE CLEARANCE IS A DISTANCE ON THE GLASS, NOT A FRACTION OF THE VIEW.
+ *
+ * This was one constant, 0.72, applied to both axes - so the spots occupied 72%
+ * of the pane and the operator got a wide empty border: "you do not zoom to fit
+ * enough - i like a couple of mm clearance from the signal path endings - not
+ * more" (2026-09-12).
+ *
+ * A single fraction cannot express "a couple of mm", because the pane is not
+ * square: it is 1060 x ~600 px on a 110.7 mm-wide panel, i.e. 11.6 px/mm, so
+ * 24 px is 4.5% of the width but 8% of the height. Asking for a pixel margin
+ * and deriving the fraction per axis gives the same physical gap top, bottom
+ * and sides - which is what "a couple of mm" means.
+ *
+ * Falls back to the old behaviour if the pane has not been laid out yet, since
+ * a zero-sized read would otherwise divide the world by nothing. */
+#define MAP_RING_MIN_PX  3     /* a ring smaller than this on BOTH axes is a dot */
+#define MAP_FIT_MARGIN_PX 24.0f    /* ~2 mm at 11.6 px/mm, each edge */
+#define MAP_FIT_FALLBACK 0.90f     /* used only before the pane has a size */
 #define MAP_FIT_MAX_ZOOM 12.0f     /* a single nearby spot must not fill the world */
 
 static void map_fit_to_spots(void)
@@ -282,6 +332,7 @@ static void map_fit_to_spots(void)
 
     s_map_zoom   = 1.0f;
     s_map_pan_dx = s_map_pan_dy = 0.0f;
+    map_sync_scroll_chain();
     if (!s_have_me) return;                 /* no anchor - project() no-ops anyway */
 
     /* Our own QTH is always in the box: the great circles start there, so a
@@ -304,14 +355,27 @@ static void map_fit_to_spots(void)
     }
     if (n == 0) return;                     /* nothing heard - leave the whole world */
 
+    /* Per-axis fraction from a fixed pixel margin - see MAP_FIT_MARGIN_PX. */
+    float fx = MAP_FIT_FALLBACK, fy = MAP_FIT_FALLBACK;
+    if (s_map_obj) {
+        lv_area_t a;
+        lv_obj_get_coords(s_map_obj, &a);
+        float w = (float)lv_area_get_width(&a);
+        float h = (float)lv_area_get_height(&a);
+        if (w > 4.0f * MAP_FIT_MARGIN_PX) fx = (w - 2.0f * MAP_FIT_MARGIN_PX) / w;
+        if (h > 4.0f * MAP_FIT_MARGIN_PX) fy = (h - 2.0f * MAP_FIT_MARGIN_PX) / h;
+    }
+
     const float spanx = x1 - x0, spany = y1 - y0;
-    float zx = (spanx > 0.0001f) ? (MAP_FIT_FRACTION / spanx) : MAP_FIT_MAX_ZOOM;
-    float zy = (spany > 0.0001f) ? (MAP_FIT_FRACTION / spany) : MAP_FIT_MAX_ZOOM;
+    float zx = (spanx > 0.0001f) ? (fx / spanx) : MAP_FIT_MAX_ZOOM;
+    float zy = (spany > 0.0001f) ? (fy / spany) : MAP_FIT_MAX_ZOOM;
     float z  = (zx < zy) ? zx : zy;
     if (z > MAP_FIT_MAX_ZOOM) z = MAP_FIT_MAX_ZOOM;
     if (z < 1.0f) z = 1.0f;                 /* project() only zooms in */
 
     s_map_zoom = z;
+    map_sync_scroll_chain();   /* the fit usually lands zoomed, so this is the
+                                * state the operator actually meets */
 
     /* Centre the box. project() puts a point at ax + (wx - ax) * z + pan, so
      * the box centre lands at ax + (cx - ax) * z and the pan is whatever moves
@@ -429,21 +493,107 @@ static void map_draw_cb(lv_event_t *e)
     // its own draw call rather than one call per ring.
     lv_draw_line_dsc_t land_dsc;
     lv_draw_line_dsc_init(&land_dsc);
-    land_dsc.color = lv_palette_darken(LV_PALETTE_GREY, 2);
+    /* Land reads LIGHTER than the sea (operator, 2026-09-12: "Can you paint
+     * land a bit lighter than the sea?"). The background is 0x0a0d10, so a
+     * darkened grey put the coastline barely above it - the outline was there
+     * and had to be hunted for. This is an OUTLINE, not a fill: LVGL 9.2.2 has
+     * no polygon fill here, so "lighter land" is a brighter coast line against
+     * the dark ground, which is the same convention the bandplan strip uses. */
+    land_dsc.color = lv_color_hex(0x8FA0AD);
     land_dsc.width = 1;
 
+    /* ⛔ REJECT A RING BY ITS BOUNDING BOX BEFORE WALKING ITS POINTS.
+     *
+     * One lv_draw_line per EDGE (see above), and the table is now ~16x denser
+     * than the 1:110m silhouette it replaced - 19,543 points against 1,280. On
+     * a board whose core 0 is already the wall that is not affordable brute
+     * force, and this very map redrawing is implicated in audio-ring overflows
+     * (`DROPPED=... (ring full)`), so the cull is a precondition of the finer
+     * data rather than an optimisation bolted on after it.
+     *
+     * Two tests, both from the precomputed box, both costing two projections
+     * instead of N:
+     *   - entirely off-screen: nothing to draw. This is what makes ZOOMING IN
+     *     cheap - at 12x over Scandinavia almost every ring on Earth fails
+     *     here, so the zoomed view now costs LESS than the coarse table did.
+     *   - smaller than MAP_RING_MIN_PX on both axes: a shape that would land
+     *     inside a pixel or two, i.e. the several hundred small islands. They
+     *     cost nothing to skip and contribute nothing but a dot. This is what
+     *     keeps the ZOOMED-OUT view affordable.
+     *
+     * project() is monotonic in lon and inverted-monotonic in lat, so the two
+     * opposite corners of the geographic box project to the two opposite
+     * corners of the screen box - min/max rather than assuming which is which. */
     for (int i = 0; i < WORLD_MAP_RING_COUNT; i++) {
         const world_map_ring_t *ring = &WORLD_MAP_RINGS[i];
         int n = ring->point_count;
         if (n < 2) continue;
-        lv_point_precise_t prev = project(&area, w, h, ring->points[0] / 10.0f, ring->points[1] / 10.0f);
-        for (int j = 1; j <= n; j++) {
-            int k = (j % n) * 2;   // wraps to 0 on the last iteration - closes the ring
-            lv_point_precise_t cur = project(&area, w, h, ring->points[k] / 10.0f, ring->points[k + 1] / 10.0f);
+
+        lv_point_precise_t c0 = project(&area, w, h,
+                                        ring->lon_min / WORLD_MAP_UNITS_PER_DEG,
+                                        ring->lat_min / WORLD_MAP_UNITS_PER_DEG);
+        lv_point_precise_t c1 = project(&area, w, h,
+                                        ring->lon_max / WORLD_MAP_UNITS_PER_DEG,
+                                        ring->lat_max / WORLD_MAP_UNITS_PER_DEG);
+        int32_t bx0 = (int32_t)(c0.x < c1.x ? c0.x : c1.x);
+        int32_t bx1 = (int32_t)(c0.x < c1.x ? c1.x : c0.x);
+        int32_t by0 = (int32_t)(c0.y < c1.y ? c0.y : c1.y);
+        int32_t by1 = (int32_t)(c0.y < c1.y ? c1.y : c0.y);
+
+        if (bx1 < area.x1 || bx0 > area.x2 || by1 < area.y1 || by0 > area.y2)
+            continue;                                   /* off-screen */
+        if ((bx1 - bx0) < MAP_RING_MIN_PX && (by1 - by0) < MAP_RING_MIN_PX)
+            continue;                                   /* sub-pixel speck */
+
+        /* ⛔ AND NOW THE HALF THE BOUNDING BOX CANNOT DO: DROP POINTS WHEN THE
+         * RING IS DRAWN SMALL. This is what froze the device.
+         *
+         * The box test rejects the several hundred tiny islands, which is the
+         * cheap half of the bill. It can do nothing about the EXPENSIVE half -
+         * at zoom 1, 248 rings still pass it and the two largest are 3,801 and
+         * 3,067 points, so a single redraw of the default view issued over ten
+         * thousand lv_draw_line calls. taskLVGL stopped keeping up, the
+         * SELFSPOTTER screen froze solid, drag and pinch stopped responding and
+         * even httpd stopped answering (operator, 2026-09-12: "Selfspotter
+         * screen seems to have frozen up completely"). I shipped the cull
+         * claiming it made the finer data affordable; it made the ZOOMED-IN
+         * case affordable and left the default view worse than before.
+         *
+         * So the vertex count is budgeted against the size the ring actually
+         * occupies ON SCREEN: roughly one segment per two pixels of half-
+         * perimeter, which is below what anyone can see. Antarctica at zoom 1
+         * goes from 3,801 segments to ~475.
+         *
+         * ⚠ The extent is CLAMPED TO THE VISIBLE AREA first. Zoomed in, a
+         * continent's box is mostly off-screen and enormous, which would buy a
+         * budget for pixels nobody is looking at - and full detail is exactly
+         * what zooming is for, so the clamp is what keeps Scandinavia sharp
+         * while stopping the off-screen remainder from paying for it. */
+        int32_t vx0 = bx0 > area.x1 ? bx0 : area.x1;
+        int32_t vx1 = bx1 < area.x2 ? bx1 : area.x2;
+        int32_t vy0 = by0 > area.y1 ? by0 : area.y1;
+        int32_t vy1 = by1 < area.y2 ? by1 : area.y2;
+        int32_t budget = ((vx1 - vx0) + (vy1 - vy0)) / 2;
+        if (budget < 8) budget = 8;
+        int stride = (n + (int)budget - 1) / (int)budget;
+        if (stride < 1) stride = 1;
+
+        lv_point_precise_t prev = project(&area, w, h,
+                                          ring->points[0] / WORLD_MAP_UNITS_PER_DEG,
+                                          ring->points[1] / WORLD_MAP_UNITS_PER_DEG);
+        /* j walks by `stride` and the final iteration is forced back to point 0,
+         * so the ring still closes however the stride divides into n. */
+        for (int j = stride; ; j += stride) {
+            bool last = (j >= n);
+            int k = (last ? 0 : j) * 2;
+            lv_point_precise_t cur = project(&area, w, h,
+                                             ring->points[k]     / WORLD_MAP_UNITS_PER_DEG,
+                                             ring->points[k + 1] / WORLD_MAP_UNITS_PER_DEG);
             land_dsc.p1 = prev;
             land_dsc.p2 = cur;
             lv_draw_line(layer, &land_dsc);
             prev = cur;
+            if (last) break;
         }
     }
 
@@ -469,18 +619,46 @@ static void map_draw_cb(lv_event_t *e)
     dot_dsc.radius = LV_RADIUS_CIRCLE;
     dot_dsc.bg_opa = LV_OPA_COVER;
 
+    /* ⭐ TWO DIMENSIONS, TWO CHANNELS: WHERE IT CAME FROM, AND HOW OLD IT IS.
+     *
+     * The operator, 2026-09-12: "in the MAP i want to be able to see all that
+     * is shown in the list - coloured after where it comes from (those
+     * checkboxes are already there) and the age like New: <30min Older:
+     * >30min".
+     *
+     * So HUE stays the source - the three sidebar checkboxes are already its
+     * legend - and AGE rides on OPACITY instead of on a second set of colours.
+     * That ordering is deliberate: greying an old spot (the first suggestion)
+     * would have cost the source, which is the thing the checkboxes name, and
+     * this overlay has already been confusing once for using one palette to
+     * mean two things. Dimming keeps both readable at once.
+     *
+     * The dot is dimmed with the line so a faded arc does not end in a
+     * full-brightness point - the endpoint is the loudest mark on the map. */
+    const int64_t now_u = (int64_t)time(NULL);
+
     for (int i = 0; i < count; i++) {
         const self_spot_t *sp = &spots[i];
         if (!sp->has_pos || !passes_filter(sp)) continue;
+
+        bool old = sp->heard_unix > 0 && (now_u - sp->heard_unix) > SELF_SPOT_NEW_SEC;
+        if (old && !s_show_older) continue;
+
+        line_dsc.opa   = old ? LV_OPA_30 : LV_OPA_80;
+        dot_dsc.bg_opa = old ? LV_OPA_40 : LV_OPA_COVER;
 
         line_dsc.color = lv_color_hex(source_color(sp->src));
         draw_great_circle(layer, &line_dsc, &area, w, h, (float)s_my_lon, (float)s_my_lat, sp->lon, sp->lat);
 
         lv_point_precise_t p = project(&area, w, h, sp->lon, sp->lat);
         dot_dsc.bg_color = lv_color_hex(source_color(sp->src));
-        lv_area_t dot_area = { p.x - 3, p.y - 3, p.x + 3, p.y + 3 };
+        int r = old ? 2 : 3;
+        lv_area_t dot_area = { p.x - r, p.y - r, p.x + r, p.y + r };
         lv_draw_rect(layer, &dot_dsc, &dot_area);
     }
+
+    /* Restore, or the home dot below inherits whatever the last spot set. */
+    dot_dsc.bg_opa = LV_OPA_COVER;
 
     // Own position, drawn last so it always sits on top of every line.
     lv_point_precise_t home = project(&area, w, h, (float)s_my_lon, (float)s_my_lat);
@@ -539,6 +717,8 @@ static void map_pinch_poll_cb(lv_timer_t *t)
     if (zoom > MAP_ZOOM_MAX) zoom = MAP_ZOOM_MAX;
     if (fabsf(zoom - s_map_zoom) > 0.01f) {
         s_map_zoom = zoom;
+        s_view_is_users = true;    /* stop auto-re-fitting under their fingers */
+        map_sync_scroll_chain();   /* pan, or swipe-to-tab - see its comment */
         if (s_map_obj) lv_obj_invalidate(s_map_obj);
     }
 }
@@ -553,6 +733,32 @@ static void map_pinch_poll_cb(lv_timer_t *t)
 static bool  s_map_drag_active = false;
 static lv_point_t s_map_drag_start_pt;
 static float s_map_drag_start_pan_dx = 0.0f, s_map_drag_start_pan_dy = 0.0f;
+
+/* ⛔ WHILE ZOOMED, A SIDEWAYS DRAG MUST PAN - NOT CHANGE TAB.
+ *
+ * The map sits in a page of an lv_tabview, and a tabview changes tab by
+ * scrolling its content horizontally. s_map_obj is not itself scrollable, so a
+ * press on it CHAINS up to that content and the swipe went to MAP/LIST/
+ * CONDITIONS instead of to the pan this file already implements. The operator:
+ * "if you have zoomed map then how to you move it around on the screen when
+ * dragging left or right changes between map list conditions?" (2026-09-12) -
+ * i.e. the pan was unreachable in the one state where it does anything.
+ *
+ * Clearing LV_OBJ_FLAG_SCROLL_CHAIN_HOR is the same remedy the drawer's
+ * sliders and the FT8 filter checkboxes already use vertically: stop the
+ * gesture propagating to a scrolling ancestor that would swallow it.
+ *
+ * ⚠ Toggled WITH THE ZOOM rather than cleared once, so the swipe-between-tabs
+ * gesture is only given up while it is actually competing with something. At
+ * zoom 1 there is no pan to make - project() ignores it - so the swipe keeps
+ * working exactly as before. While zoomed, the tab bar at the top is the way
+ * to change tab, which is a button rather than a gesture and cannot conflict. */
+static void map_sync_scroll_chain(void)
+{
+    if (!s_map_obj) return;
+    if (s_map_zoom > MAP_ZOOM_MIN) lv_obj_clear_flag(s_map_obj, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    else                           lv_obj_add_flag  (s_map_obj, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+}
 
 static void map_drag_cb(lv_event_t *e)
 {
@@ -586,6 +792,7 @@ static void map_drag_cb(lv_event_t *e)
     int32_t h = lv_area_get_height(&area);
     if (w <= 0 || h <= 0) return;
 
+    s_view_is_users = true;    /* same as the pinch: this view is theirs now */
     s_map_pan_dx = s_map_drag_start_pan_dx + (float)(p.x - s_map_drag_start_pt.x) / (float)w;
     s_map_pan_dy = s_map_drag_start_pan_dy + (float)(p.y - s_map_drag_start_pt.y) / (float)h;
     lv_obj_invalidate(s_map_obj);
@@ -720,7 +927,10 @@ static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_
     lv_obj_t *lbl = lv_label_create(cell);
     lv_label_set_text(lbl, buf);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    /* Matches the rows it labels (22 normal / 24 bold) rather than sitting a
+     * size below them - the operator, 2026-09-12: "please bump up headers as
+     * well it all needs to match". 24 so a header still reads as a header. */
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED), 0);
 
     lv_obj_add_event_cb(cell, header_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)col_id);
@@ -761,9 +971,37 @@ static void rebuild_table(void)
         const char *band = adif_log_band_for_freq(sp->freq_hz);
 
         lv_obj_t *row = make_row(s_table_list);
+        /* ⛔ THE MODE COLUMN IS COLOURED BY THE MODE, NOT BY THE SOURCE.
+         *
+         * Both used source_color(), which returns UI_COLOR_MODE_CW/_DIGI/_WSPR
+         * - the palette the bandplan and the FT8 screen use to mean MODE. So
+         * the mode text was painted in a mode colour that did not describe it,
+         * and the operator read the two as one scheme: "the Source coloures
+         * (CW Digi WSPR) on the map is mixed up with the coloures in the list:
+         * same coloures bit different meaning" (2026-09-12).
+         *
+         * They genuinely disagree: PSK Reporter carries CW spots, so such a
+         * station is SPOT_SRC_DIGI (amber) while its mode says CW, which is
+         * blue everywhere else in this firmware.
+         *
+         * So the mode now goes through ui_theme_mode_color(), the one rule the
+         * rest of the app uses. The CALLSIGN keeps the source colour, which is
+         * what the sidebar's three checkboxes are the legend for - one column
+         * per meaning, and no colour describing something it is not. */
         uint32_t col = source_color(sp->src);
         add_col(row, sp->call[0] ? sp->call : "-", 2, col, true);
-        add_col(row, sp->mode[0] ? sp->mode : "-", 1, col, false);
+        /* ⛔ ui_theme_mode_color() WAS THE WRONG FIX. Operator, 2026-09-12:
+         * "The Mode text in the LIST tap is almost invisible - make text same
+         * colour as Band". Cause found rather than guessed: that helper has no
+         * case for "WSPR" (only DiGi/FT8/FT4/RTTY/USB/LSB/CW substrings), so
+         * every WSPR spot's mode cell fell to its UNRECOGNISED-mode fallback,
+         * UI_COLOR_KEY_BG (0x2a2a2a) - nearly the same as this panel's own
+         * background. WSPR is the only source with any data this session, so
+         * every mode cell on screen was that colour. There is no house "WSPR
+         * mode colour" to add instead - it is a protocol on top of DiGi, not a
+         * QMX CAT mode - so the plain, correct answer is the one asked for:
+         * the same neutral UI_COLOR_TEXT the Band column already uses. */
+        add_col(row, sp->mode[0] ? sp->mode : "-", 1, UI_COLOR_TEXT, false);
         add_col(row, band[0] ? band : "-", 1, UI_COLOR_TEXT, false);
         add_col(row, freq_buf, 2, UI_COLOR_TEXT, false);
         add_col(row, snr_buf, 1, UI_COLOR_TEXT, false);
@@ -970,16 +1208,139 @@ static void wspr_cb(lv_event_t *e)
     refresh_now();
 }
 
+static void older_cb(lv_event_t *e)
+{
+    s_show_older = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    refresh_now();
+}
+
+#define FILTER_ROW_BOX_SZ 31
+#define FILTER_ROW_H      44
+
+/* ⛔ HOUSE COLOURS AND AN ACTUAL CHECKMARK, NOT A COLOURED SWATCH.
+ *
+ * Operator, 2026-09-12: "The Source checkboxes need checkmarks not colours -
+ * the box frame is also white - do like all over in the app please". A real
+ * lv_checkbox gets its tick and its border/fill from the ACTIVE LVGL THEME
+ * automatically applied to LV_PART_INDICATOR - this codebase never draws that
+ * glyph itself (grepped for LV_SYMBOL_OK against every checkbox in the app:
+ * none of them add one). Building the box as a plain lv_obj, as the "move it
+ * to the right" fix did, opted out of that theme application and lost the
+ * checkmark along with it - exactly what got reported.
+ *
+ * So this now matches ft8_filter_modal.c's make_checkbox() colour-for-colour
+ * (UI_COLOR_SURFACE_RAISED/UI_COLOR_BORDER unchecked, UI_COLOR_PRIMARY/
+ * UI_COLOR_PRIMARY_BORDER checked - the same pair the drawer and the FT8
+ * filter modal use) and draws the tick itself via a child label. The per-
+ * source ACCENT still lives on the row's own text label, which is the part
+ * that pairs with a map dot's colour - the box was never what carried that
+ * meaning, it just happened to be coloured the same way. */
+static void filter_box_paint(lv_obj_t *box, bool checked)
+{
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    if (checked) {
+        lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    } else {
+        lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
+    }
+    lv_obj_t *tick = lv_obj_get_child(box, 0);   /* the checkmark label, see below */
+    if (tick) {
+        if (checked) lv_obj_clear_flag(tick, LV_OBJ_FLAG_HIDDEN);
+        else         lv_obj_add_flag(tick, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/* One row IS the checkbox - a plain lv_obj carrying LV_STATE_CHECKED like any
+ * other stateful widget, rather than lv_checkbox. LVGL 9.2.2's checkbox draws
+ * its indicator at a hard-coded position INSIDE lv_checkbox_draw() (verified
+ * against managed_components/lvgl__lvgl/src/widgets/checkbox/lv_checkbox.c -
+ * the marker is computed relative to the object's own bounds, always before
+ * the text, not as a repositionable child), so "indicator on the right" has
+ * no style-only answer for that widget. Patching that draw function would add
+ * a NINETEENTH standing patch purely for one panel's layout; building the row
+ * by hand keeps the change local to this file instead. */
+static void filter_row_clicked_cb(lv_event_t *e)
+{
+    lv_obj_t *row = lv_event_get_target(e);
+    lv_obj_t *box = lv_obj_get_child(row, -1);   /* box is added last, below */
+    bool now_checked = !lv_obj_has_state(row, LV_STATE_CHECKED);
+    if (now_checked) lv_obj_add_state(row, LV_STATE_CHECKED);
+    else             lv_obj_clear_state(row, LV_STATE_CHECKED);
+    filter_box_paint(box, now_checked);
+    /* The caller's cb (cw_cb/digi_cb/...) reads LV_STATE_CHECKED off the event
+     * TARGET - sending VALUE_CHANGED on `row` itself keeps every one of them
+     * unchanged; they never knew they were reading a real lv_checkbox. */
+    lv_obj_send_event(row, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
 static lv_obj_t *add_filter_checkbox(lv_obj_t *parent, const char *label, uint32_t accent, lv_event_cb_t cb)
 {
-    lv_obj_t *box = lv_checkbox_create(parent);
-    lv_checkbox_set_text(box, label);
-    lv_obj_add_state(box, LV_STATE_CHECKED);
-    lv_obj_set_style_text_font(box, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(box, lv_color_hex(accent), 0);
-    lv_obj_set_style_text_color(box, lv_color_hex(accent), LV_PART_INDICATOR);
-    lv_obj_add_event_cb(box, cb, LV_EVENT_VALUE_CHANGED, NULL);
-    return box;
+    /* ⛔ HOUSE SIZE, NOT LVGL'S DEFAULT, AND THE BOX ON THE RIGHT.
+     *
+     * Three rounds of operator feedback, 2026-09-12, on this one row:
+     *  1. "the panel text and checkboxes are far too small" - montserrat_20
+     *     where the settings drawer uses 28, and a stock-size indicator with
+     *     no enlarged hit area (the same fix Don WB0LQW got applied twice
+     *     elsewhere - see ft8_filter_modal.c's own comment).
+     *  2. "checkboxes do not react to touches - too close to the edge - also
+     *     need more space between them" - the sidebar's own pad_all put the
+     *     indicator ~14 px from the physical screen edge where
+     *     ext_click_area cannot help (LVGL clips a child's hit area to its
+     *     parent), and adjacent 28 px halos on a 10 px row gap OVERLAPPED, so
+     *     a tap between two boxes went to whichever hit-tested first.
+     *  3. "move checkboxes to right (with more space in between)" - settled
+     *     the question the second comment above had left open.
+     *
+     * The row IS the click target (full sidebar width), so the edge and
+     * overlap problems from round 2 are gone by construction: there is
+     * nothing between rows for a tap to land on ambiguously, and the row's
+     * own width already reaches the panel's inner edge with the sidebar's
+     * pad_all as the only margin - no ext_click_area needed on the label side
+     * at all. The box keeps a small halo for the case where a tap lands just
+     * past its edge. */
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), FILTER_ROW_H);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLL_CHAIN_VER);   /* see round 2, same reasoning */
+    lv_obj_add_state(row, LV_STATE_CHECKED);                /* all three default ON */
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(accent), 0);
+    /* Width capped rather than left auto: an absolute-positioned box on the
+     * right does not push the label, so a long label ("Older >30 min") with no
+     * cap could grow under it instead of stopping short. LONG_DOT truncates
+     * rather than overlaps if it ever does run long. */
+    lv_obj_set_width(lbl, SIDEBAR_W - 28 - FILTER_ROW_BOX_SZ - 16);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *box = lv_obj_create(row);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, FILTER_ROW_BOX_SZ, FILTER_ROW_BOX_SZ);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);   /* the ROW takes the tap, not the box */
+    lv_obj_align(box, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    /* The tick itself - child 0, which is what filter_box_paint() looks up by
+     * index rather than a stored handle. White on the filled PRIMARY
+     * background, same as a real lv_checkbox's theme-drawn indicator. */
+    lv_obj_t *tick = lv_label_create(box);
+    lv_label_set_text(tick, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(tick, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(tick);
+
+    filter_box_paint(box, true);   /* matches the row's initial CHECKED state */
+
+    lv_obj_set_ext_click_area(row, 8);
+    lv_obj_add_event_cb(row, filter_row_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(row, cb, LV_EVENT_VALUE_CHANGED, NULL);
+    return row;
 }
 
 // Empties all three ring buffers immediately - net/rbn.c, net/pskr_self.c and
@@ -1007,11 +1368,11 @@ static void build_sidebar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(sb, 14, 0);
     lv_obj_set_flex_flow(sb, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(sb, 10, 0);
+    lv_obj_set_style_pad_row(sb, 30, 0);   /* checkbox rows must not share hit area */
     lv_obj_clear_flag(sb, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl = lv_label_create(sb);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(lbl, "Source");
 
@@ -1019,8 +1380,28 @@ static void build_sidebar(lv_obj_t *parent)
     add_filter_checkbox(sb, "Digi (PSKR)", UI_COLOR_MODE_DIGI, digi_cb);
     add_filter_checkbox(sb, "WSPR",        UI_COLOR_MODE_WSPR, wspr_cb);
 
+    /* Age, below the three SOURCE boxes and visually separated from them,
+     * because it filters a different axis: those three say WHERE a spot came
+     * from, this one says WHEN. Drawn in muted text rather than a source
+     * colour for the same reason - it is not a fourth source. */
+    lv_obj_t *age_lbl = lv_label_create(sb);
+    lv_label_set_text(age_lbl, "Age");
+    lv_obj_set_style_text_font(age_lbl, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(age_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_pad_top(age_lbl, 10, 0);
+
+    add_filter_checkbox(sb, "Older >30 min", UI_COLOR_TEXT_SECONDARY, older_cb);
+
+    /* Says what the dimming MEANS. The map draws older spots at a third of the
+     * opacity in the same source colour, which is only readable as "older" if
+     * something on screen says so. */
+    lv_obj_t *age_key = lv_label_create(sb);
+    lv_label_set_text(age_key, "bright = new <30 min\nfaded = older");
+    lv_obj_set_style_text_font(age_key, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(age_key, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+
     s_grid_warn = lv_label_create(sb);
-    lv_obj_set_style_text_font(s_grid_warn, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_grid_warn, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_grid_warn, lv_color_hex(UI_COLOR_DANGER_BORDER), 0);
     lv_label_set_long_mode(s_grid_warn, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_grid_warn, SIDEBAR_W - 28);
@@ -1043,10 +1424,10 @@ static void build_sidebar(lv_obj_t *parent)
     lv_obj_t *flush_btn = lv_button_create(flush_wrap);
     lv_obj_set_style_bg_color(flush_btn, lv_color_hex(UI_COLOR_DANGER), 0);
     lv_obj_set_style_pad_hor(flush_btn, 16, 0);
-    lv_obj_set_height(flush_btn, 42);
+    lv_obj_set_height(flush_btn, 52);
     lv_obj_add_event_cb(flush_btn, flush_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *flush_lbl = lv_label_create(flush_btn);
-    lv_obj_set_style_text_font(flush_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(flush_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(flush_lbl, "Flush");
 }
 
@@ -1092,6 +1473,11 @@ static void refresh_timer_cb(lv_timer_t *t)
         s_sig_rbn_n = rn; s_sig_rbn_t = rbn_newest;
         s_sig_psk_n = pn; s_sig_psk_t = psk_newest;
         s_sig_wspr_n = wn; s_sig_wspr_t = wspr_newest;
+        /* Re-frame for anything that has arrived since - but ONLY while the
+         * view still belongs to the map. See s_view_is_users. A spot further
+         * away than everything present at open would otherwise be drawn
+         * outside the frame and never seen. */
+        if (!s_view_is_users) map_fit_to_spots();
         refresh_now();
     }
 
@@ -1219,6 +1605,14 @@ void spot_map_view_init(lv_obj_t *parent)
     // "this is the selected thing" blue every other segmented control in
     // this app uses (the drawer, WSPR's band buttons, ...).
     lv_obj_t *tab_bar = lv_tabview_get_tab_bar(tv);
+    /* Operator, 2026-09-12: "Please increase the text font of the taps (MAP
+     * LIST CONDITIONS)" - montserrat_20 was the same undersized default this
+     * whole panel shipped with. 28 matches the sidebar's own section headers
+     * (build_sidebar()'s "SELFSPOTTER"/checkbox-row labels), and the bar is
+     * grown to fit it rather than clipping - LVGL's tabview sizes its bar once
+     * at creation and does not re-measure it when a bigger font is applied
+     * afterwards. */
+    lv_tabview_set_tab_bar_size(tv, 64);
     lv_obj_set_style_bg_color(tab_bar, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_set_style_border_side(tab_bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(tab_bar, 1, 0);
@@ -1229,7 +1623,7 @@ void spot_map_view_init(lv_obj_t *parent)
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), LV_STATE_CHECKED);
         lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT), LV_STATE_CHECKED);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_28, 0);
     }
 
     lv_obj_move_foreground(hdr);
@@ -1267,6 +1661,7 @@ void spot_map_view_show(void)
     // Never reopen pre-zoomed/pre-panned from a forgotten previous session -
     // map_fit_to_spots() resets both before deciding, then frames whatever is
     // actually there rather than handing over an empty planet.
+    s_view_is_users = false;   /* a fresh open is the map's view again */
     map_fit_to_spots();
     s_map_pinch_active = false;
     s_map_drag_active = false;
