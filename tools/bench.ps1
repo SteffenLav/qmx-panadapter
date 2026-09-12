@@ -260,7 +260,11 @@ function Cmd-Capture {
     # night reads as "no crashes" for a window that closed minutes after it opened.
     $taskName = "qmx-capture-$($b.name)"
     $cmd = "powershell.exe"
-    $args = "-NoProfile -ExecutionPolicy Bypass -File `"$($reg.capture_script)`" " +
+    # -WindowStyle Hidden, because a scheduled task shows its console by default
+    # and Start-Process used to hide it for us. Without this the operator gets a
+    # black empty PowerShell window sitting on his desktop for the whole run -
+    # empty because the script writes to a file, never to the console.
+    $args = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($reg.capture_script)`" " +
             "-Port $($b.com) -Out `"$($b.capture)`" -Seconds $($reg.capture_seconds)"
 
     # Delete any previous definition first: /f on create replaces it, but an
