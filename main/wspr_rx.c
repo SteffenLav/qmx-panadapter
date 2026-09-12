@@ -372,6 +372,12 @@ static int     s_hist_n;
  */
 static int64_t now_ms(void);           /* UTC ms - the cycle index is UTC-aligned */
 static int64_t s_next_tx_cycle = -1;   /* cycle index; -1 = nothing scheduled */
+/* The scheduled burst is the GUARANTEED first one after transmitting was
+ * switched on, rather than one the duty cycle chose. Tracked because the
+ * finals guard can hold a burst, and the next cycle has already been rolled by
+ * then - so without this a held first burst would quietly become the coin toss
+ * the operator asked us not to make him wait for. */
+static bool s_first_tx_forced = false;
 static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
 
 /* First cycle AFTER `after` that wins the duty roll. */
@@ -395,14 +401,37 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
      * is a multi-kilobyte struct on the caller's stack. That is the bug class
      * this board has hit four times; see "Task stacks on this board are TINY". */
     if (!tx_en || duty_pct == 0) {
-        s_next_tx_cycle = -1;
-        s_sched_duty    = 0;
+        s_next_tx_cycle   = -1;
+        s_sched_duty      = 0;
+        s_first_tx_forced = false;
         return;
     }
-    /* Rolled from the CURRENT cycle, so the earliest possible burst is the next
-     * boundary and a countdown appears the instant the operator presses TX ON -
-     * rather than after up to two minutes of the button saying nothing. */
-    s_next_tx_cycle = roll_next_tx_cycle(now_ms() / WSPR_CYCLE_MS, duty_pct);
+    /* ⭐ THE FIRST BURST AFTER SWITCHING TRANSMITTING ON IS GUARANTEED, AND AT
+     * THE VERY NEXT BOUNDARY - whatever the duty cycle says.
+     *
+     * This used to roll the duty dice straight away, so at 50% half the time
+     * the first burst was two cycles out and a quarter of the time four
+     * minutes. The operator, 2026-09-12: "the tx button took some time to get
+     * to TX ON - then further 3:xx to get to actually TX ... no matter what
+     * duty cycle i have please do tx asap first time". Quite right: the duty
+     * cycle is there to be polite about how much of the band time a beacon
+     * takes over a session, and it has nothing useful to say about the very
+     * first burst. Making someone wait out a coin toss to find out whether
+     * transmitting works at all is the wrong first experience, and it reads as
+     * a fault rather than as a setting.
+     *
+     * Only when transmitting was previously OFF (nothing scheduled). Changing
+     * the duty mid-session still re-rolls normally - that is an adjustment,
+     * not a fresh start, and forcing a burst there would let a duty change be
+     * used to key the radio on demand. */
+    const int64_t cycle_now = now_ms() / WSPR_CYCLE_MS;
+    if (s_next_tx_cycle < 0) {
+        s_next_tx_cycle   = cycle_now + 1;
+        s_first_tx_forced = true;
+        ESP_LOGI(TAG, "TX enabled - first burst is the next cycle, duty applies from the one after");
+    } else {
+        s_next_tx_cycle = roll_next_tx_cycle(cycle_now, duty_pct);
+    }
     s_sched_duty    = duty_pct;
 
     /* ⭐ PRE-WARM THE PA-GUARD QUERY, not wait for the first cycle to ask.
@@ -1735,6 +1764,13 @@ static void wspr_rx_task(void *arg)
                      (long long)cycle_utc, pavs,
                      (unsigned)(WSPR_PA_TARGET_X10 / 10),
                      (unsigned)(WSPR_PA_TARGET_X10 % 10));
+            /* The next cycle was rolled above, before this hold was known.
+             * Keep FORCING it while the burst being held is the guaranteed
+             * first one, or a hold silently demotes it to a duty-cycle coin
+             * toss - which is the wait the operator explicitly asked not to
+             * have. Only a guard hold gets this treatment: it clears itself
+             * within a cycle or two. */
+            if (s_first_tx_forced) s_next_tx_cycle = last_cycle_idx + 1;
         } else if (tx_this_cycle) {
             wspr_tx_request_t req;
             char err[80] = "";
@@ -1751,6 +1787,11 @@ static void wspr_rx_task(void *arg)
                          ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
                          (unsigned)ws.wspr_duty_pct);
             }
+            /* Cleared however this turned out. A build failure or a missing
+             * callsign is a configuration problem that will not fix itself,
+             * so re-forcing every cycle would just key the radio at 100% duty
+             * on a station that cannot legally identify. */
+            s_first_tx_forced = false;
         }
 
         /* Re-read AFTER the arm - see the ordering note above.
