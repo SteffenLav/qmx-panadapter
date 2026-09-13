@@ -3612,3 +3612,10 @@ web page look broken.**
 
   Hardware-verified on the Tab5 and independently on a second board with
   byte-identical code. Nothing else changed in this release.
+
+### Shipped in v1.13.0 — 2026-09-14
+
+- **SelfSpotter land is FILLED, not just outlined**, with the coastline stroked back on top in its own colour, tuned through three rounds of live feedback ("too bright" → "eating the historic traces" → right). Trace-line colours and widths increased for the same reason (contrast against the new fill). Own scanline fill/even-odd polygon rasteriser, since LVGL 9.2.2 has none, reusing the same per-ring point budget already tuned to keep this screen from freezing.
+- **Deterministic "Power-cycle QMX" sequence** (Randy N4OPI): a single relay pulse on PWR_ON only toggles the radio with no way to tell which state it left it in. The new sequence pulses off, waits, pulses on, waits, then confirms over CAT and reports the result.
+- **Log audit**: steady-state diagnostic log volume cut from ~300 to ~46 lines/min on a quiet bench — several sources were logging every second or every ~75s window with nothing new to say.
+- **Help-system audit**: seven real, fully-documented features (Radio Menus, Still Spectrum, FT8 Simulation Mode, SWR protection, Antenna Tune, RIT, "Release radio") had no path in from "Need guidance?" at all — wired in. Two structural bugs in the triage list fixed: the WSPR page was silently showing the panadapter's own trouble rows, and the SelfSpotter overlay (which doesn't change the underlying screen mode) was leaking whichever page it was opened from in both directions. The spot map's own access story — a removed swipe gesture, a removed opt-in setting, both replaced by an always-on drawer button — was corrected across README, the settings guide, the spot-map guide and the gestures reference, none of which had caught up.
