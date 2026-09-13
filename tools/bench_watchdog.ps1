@@ -102,7 +102,7 @@ function Get-StaleCaptureProcess {
                 }
             }
     } catch { }
-    return ,$procs   # same unrolling trap as bench.ps1's own Get-CaptureProcess
+    return $procs   # unrolled on purpose, caller wraps in @() - see bench.ps1's Get-CaptureProcess for why `,$procs` was wrong
 }
 
 function Invoke-Pass {
@@ -112,6 +112,10 @@ function Invoke-Pass {
     foreach ($b in $reg.benches) {
         if (-not $b.capture) { continue }
         if (-not $b.com -or $b.com -eq "UNASSIGNED") { continue }
+
+        # `bench standdown <name>` - the operator asked for the port back. Never
+        # respawn over that; `bench capture <name>` clears the flag.
+        if (Test-Path "C:/dev/bench.standdown.$($b.name)") { continue }
 
         # Not plugged in is not a fault - say nothing, do nothing.
         if (-not ([System.IO.Ports.SerialPort]::GetPortNames() -contains $b.com)) { continue }

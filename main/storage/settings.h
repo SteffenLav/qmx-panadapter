@@ -233,16 +233,22 @@ typedef struct {
     // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
     // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
     // plus the QRZ callbook lookups that place an RBN skimmer on the map.
-    // Opt-in (default FALSE) for two reasons, neither of them about the map
-    // itself being expensive to draw:
+    // ⛔ NOT A USER SETTING ANY MORE (2026-09-13) - there is no drawer checkbox
+    // for this, on the Tab5 or the web, and it is never written to NVS. It is
+    // driven ENTIRELY by ui/spot_map_view.c's own show()/hide(): true for as
+    // long as the SELFSPOTTER overlay is open, false the instant it closes,
+    // exactly mirroring what a permanent "on" checkbox used to mean while it
+    // was checked. Reasons this exists at all, unchanged from when it was a
+    // checkbox:
     //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
     //     on the operator's own callsign, for the life of the session. An
     //     outward-facing connection is something to ask for, not to inherit.
     //   - measured against v1.12.4 with all four running: internal free
     //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
     //     the headroom that pool has left. That pool is what fails SD mounts,
-    //     USB endpoint allocation and TLS when it runs dry (#65/#284), so the
-    //     cost belongs to operators who asked for the feature.
+    //     USB endpoint allocation and TLS when it runs dry (#65/#284) - which
+    //     is exactly why it is now tied to the SCREEN being open rather than
+    //     to a switch someone could forget they left on.
     // Applies live, no reboot: each feed re-reads this every pass, the same
     // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
     bool     spotmap_en;

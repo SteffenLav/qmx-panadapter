@@ -241,7 +241,14 @@ capture, not after a result looks strange.**
    site, and `Wait-PortFree` now *tests* the port instead of sleeping 1 s.
 
    **Generalise: never call `.Count` on an unwrapped function return in
-   PowerShell — write `@(f ...).Count`.** A blank where a number should be in a
+   PowerShell — write `@(f ...).Count`.**
+   ⛔ **And the `return ,$procs` half of that fix was WRONG (measured
+   2026-09-13):** together with `@()` at the call site it nests the result, so
+   `@(f).Count` is **1 for an EMPTY list** and every element is an inner array.
+   It hid because `$nested.ProcessId` enumerates the real PID when the list is
+   non-empty. Zero captures read as one with a null PID and broke the first
+   flash after `bench standdown`. Use a plain `return $procs` plus `@()` at the
+   call site — never both the comma and the `@()`. A blank where a number should be in a
    log line (`Stopped  capture process(es)`) is the tell.
 13. ⛔ **A CAPTURE PROCESS CAN STAY ALIVE AND STOP WRITING FOREVER, AND
    `bench capture`'S OWN "ALREADY RUNNING" GUARD THEN PROTECTS THE CORPSE.**
@@ -272,6 +279,17 @@ capture, not after a result looks strange.**
    whatever holds the port first, then calls `bench capture -Force`, every
    time. `bench.ps1` itself is unchanged; only the watchdog's judgement of when
    a restart is warranted changed.
+
+14. ⛔ **"RELEASE COM5 AND STAND DOWN" MEANS `bench standdown dev`.** Killing a
+   capture by hand is not enough: the watchdog respawns it within a minute, so
+   a new session could never get the port back. `standdown` sets
+   `C:/dev/bench.standdown.<name>` (the watchdog skips that bench), kills every
+   capture for that file OR port and confirms they died, removes leftover
+   `tail -f` viewers, and only says done once the port actually opens.
+   `bench capture <name>` clears the flag. Also since 2026-09-13: `bench
+   capture` replaces a capture that exists but has a STALE file instead of
+   answering "already running" - that answer left the post-flash boot
+   uncaptured the same day.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when

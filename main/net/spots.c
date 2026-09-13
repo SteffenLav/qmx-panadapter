@@ -15,6 +15,7 @@
 
 #include "spots.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
 #include "webserver_ws.h"     // webserver_ws_set_paused
 #include "wifi.h"             // wifi_is_connected
@@ -666,7 +667,7 @@ static void spots_task(void *arg)
         // net_quiet: an OTA verify needs internal heap, and a POTA fetch is a
         // whole TLS session built and torn down. Skipping it costs one polling
         // interval; colliding with the verify has cost a watchdog reset.
-        if (s.spots_en && now >= next_pota_us && !net_quiet_active()) {
+        if (s.spots_en && now >= next_pota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             fetch_pota();
             bool ok = (spots_age_s() == 0);
             next_pota_us = esp_timer_get_time() +
@@ -678,7 +679,7 @@ static void spots_task(void *arg)
         // an update - measured mid-download as "spots: SOTA: 18 spots (23600
         // bytes)" while internal free was 5 KB. Closing three of four doors is
         // not closing the door.
-        if (s.sota_en && now >= next_sota_us && !net_quiet_active()) {
+        if (s.sota_en && now >= next_sota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             bool ok = fetch_sota();
             if (ok) {
                 sota_backoff_s = 0;

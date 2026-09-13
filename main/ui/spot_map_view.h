@@ -24,3 +24,8 @@ void spot_map_view_hide(void);
 // For ui.c's sync_nav_affordances()/top_bar_apply_mode() - true whenever this
 // overlay is the thing on screen, same role as reader_view_is_active().
 bool spot_map_view_is_active(void);
+
+// Dev-only: inject a fixed set of synthetic self-spots (all three sources,
+// spread across every continent, mixed ages) so MAP/LIST can be tested
+// without waiting on real RBN/PSK-self/wsprnet traffic. /api/cmd "selfspot_test".
+void spot_map_view_set_test_spots(bool on);

@@ -92,7 +92,20 @@ static void render_task(void *arg)
         // The panadapter still freezes for the 120 s of each CAPTURE, because
         // dsp.c skips the FFT while one is armed. That is inherent to capturing
         // and not this gate's business.
-        bool pan_visible = (ui_mode_get() != UI_MODE_FT8);
+        //
+        // ⭐ WIDENED 2026-09-13 to any full-screen overlay, not just FT8 mode.
+        // Operator: "I think we really need to close any other process down
+        // when entering these resource eating features". The Reader, "Need
+        // guidance?", the radio terminal and now SelfSpotter are all opaque
+        // and cover the ENTIRE screen - the spectrum/waterfall canvases behind
+        // any of them are exactly as invisible as they are in FT8 mode, and
+        // this gate's own reasoning (a canvas write costs the flush + 90 deg
+        // rotation pipeline regardless of whether anyone can see the result)
+        // applies identically. ui_any_overlay_active() is the SAME four-way OR
+        // sync_nav_affordances() already uses to hide the edge-swipe strips
+        // for these same overlays - one predicate, not a second copy that
+        // could drift from it.
+        bool pan_visible = (ui_mode_get() != UI_MODE_FT8) && !ui_any_overlay_active();
         bool have_spectrum = false;
 
         if (pan_visible) {
@@ -138,7 +151,14 @@ static void render_task(void *arg)
         // Runs in BOTH modes (dsp keeps publishing a spectrum every ~10 FFT
         // iterations while FT8 captures, and dsp_get_peak_dbm_around_vfo()
         // reads the DSP's own copy — it doesn't need s_scratch).
-        {
+        //
+        // ⭐ Also skipped under any full-screen overlay (2026-09-13), same
+        // reasoning as pan_visible above: the S-meter is only ever visible in
+        // the main app's own top bar (FT8's included), and every overlay this
+        // file gates on covers that bar completely. Cheaper than the canvas
+        // pipeline either way, but there is no reason to pay it for a widget
+        // nobody can see.
+        if (!ui_any_overlay_active()) {
             static int s_smeter_tick = 0;
             s_smeter_tick++;
             if (s_smeter_tick >= 6) {  // 10 Hz / 6 ≈ 1.7 Hz

@@ -18,6 +18,8 @@
 #   bench status <name>        ask the running firmware over the network
 #   bench capture <name>       start the standing serial capture (leave it up)
 #   bench stopcapture <name>   the only legitimate reason is a flash
+#   bench standdown <name>     "release COMx and stand down": kill + keep the watchdog off it
+#                              until `bench capture <name>` (alias: bench release)
 #   bench watchdog [off|status]  keep captures alive (every minute); see bench_watchdog.ps1
 #   bench build [<name>]       build that bench's tree, under the lock
 #   bench flash <name>         lock, stop capture, flash, restart capture, verify
@@ -94,15 +96,17 @@ function Get-EspPorts {
 }
 
 function Get-CaptureProcess {
-    param([string] $outFile)
+    param([string] $outFile, [string] $com = "")
     $procs = @()
     try {
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
             ForEach-Object {
                 if ($_.CommandLine -and $_.CommandLine -match 'cap_serial_reboot\.ps1') {
-                    if (-not $outFile -or $_.CommandLine -replace '/', '\' -match [regex]::Escape(($outFile -replace '/', '\'))) {
-                        $procs += $_
-                    }
+                    $byFile = (-not $outFile) -or ($_.CommandLine -replace '/', '\' -match [regex]::Escape(($outFile -replace '/', '\')))
+                    # By PORT as well: a capture started by hand with a different
+                    # -Out still holds the same COM, and that is what blocks a flash.
+                    $byPort = $com -and ($_.CommandLine -match ("-Port\s+" + [regex]::Escape($com) + "\b"))
+                    if ($byFile -or $byPort) { $procs += $_ }
                 }
             }
     } catch { }
@@ -118,9 +122,19 @@ function Get-CaptureProcess {
     # Cmd-StopCapture only escaped it by accident: its guard is `-eq 0`, and
     # `$null -eq 0` is false too, so it fell through to the kill loop.
     #
-    # `,$procs` wraps the array in an outer one, which unrolling then strips -
-    # leaving the array intact. Call sites also use @() as a belt.
-    return ,$procs
+    # ⛔⛔ AND `,$procs` WAS THE WRONG CURE, measured 2026-09-13 in PS 5.1:
+    #   function F { $p=@(); return ,$p };  @(F).Count  ->  1   (an EMPTY capture list counts as ONE)
+    #   @(F)[0] -is [array]                 ->  True  (every result is nested one level)
+    # Combined with @() at the call sites, "no capture" read as one capture
+    # whose ProcessId is $null - the watchdog logged "could not kill pid  -
+    # Cannot bind argument to parameter 'Id' because it is null", and the first
+    # `bench flash` after `bench standdown` died on it. It only LOOKED fixed
+    # because member enumeration makes `$nested.ProcessId` return the real PID
+    # when there is at least one element.
+    #
+    # The correct idiom is the plain one: let PowerShell unroll, and wrap in @()
+    # at EVERY call site (they all do). @() of zero, one or many is always right.
+    return $procs
 }
 
 function Wait-PortFree {
@@ -149,6 +163,41 @@ function Wait-PortFree {
         }
     }
     return $false
+}
+
+# ⛔ STAND-DOWN FLAG. The operator: "release com5 and stand down". Without a
+# flag the watchdog (every minute) respawned the capture as soon as it was
+# killed, so a new session could never get the port back - "every time it say
+# respawning and took ages to kill all". The watchdog skips a bench while this
+# file exists; `bench capture <name>` removes it again.
+function Get-StandDownPath { param($b) return "C:/dev/bench.standdown.$($b.name)" }
+
+# Kill every capture for this bench AND CONFIRM THEY ARE GONE. Stop-Process
+# inside try/catch{} used to report "Stopped 1" whether or not the kill worked,
+# and a process blocked inside a USB-serial read can outlive a plain kill.
+# Returns the number still alive (0 = all gone).
+function Stop-CaptureHard {
+    param($b, [int] $timeoutSec = 15)
+    $taskName = "qmx-capture-$($b.name)"
+    Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
+    Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
+
+    $procs = @(Get-CaptureProcess $b.capture $b.com)
+    foreach ($p in $procs) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { }
+    }
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    $escalated = $false
+    while ((Get-Date) -lt $deadline) {
+        $left = @($procs | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+        if ($left.Count -eq 0) { return 0 }
+        if (-not $escalated -and ((Get-Date) -gt $deadline.AddSeconds(-($timeoutSec - 3)))) {
+            foreach ($p in $left) { cmd /c "taskkill /F /T /PID $($p.ProcessId) >nul 2>&1" | Out-Null }
+            $escalated = $true
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    return @($procs | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count
 }
 
 function Test-CaptureFresh {
@@ -275,9 +324,27 @@ function Invoke-Task-Quiet {
 function Cmd-Capture {
     param($reg, $b)
     if (-not $b.com -or $b.com -eq "UNASSIGNED") { throw "Bench '$($b.name)' has no COM port assigned yet." }
-    if (@(Get-CaptureProcess $b.capture).Count -gt 0 -and -not $Force) {
-        Write-Host "A capture for '$($b.name)' is already running. Leave it alone (-Force to start another anyway)." -ForegroundColor Yellow
-        return
+    # An explicit capture is the end of a stand-down.
+    $sd = Get-StandDownPath $b
+    if (Test-Path $sd) { Remove-Item $sd -Force; Write-Host "Stand-down for '$($b.name)' cleared." -ForegroundColor DarkGray }
+
+    $existing = @(Get-CaptureProcess $b.capture $b.com)
+    if ($existing.Count -gt 0 -and -not $Force) {
+        # ⛔ "ALREADY RUNNING" MUST MEAN WRITING. After the flash of 2026-09-13
+        # this returned early against a process that had written nothing, so the
+        # capture stayed dead until the watchdog's 90 s staleness caught it - the
+        # exact post-flash boot window the capture exists for. A process with a
+        # stale file is a corpse: kill it and start a fresh one.
+        if (Test-CaptureFresh $b.capture) {
+            Write-Host "A capture for '$($b.name)' is already running and writing. Leaving it alone." -ForegroundColor Yellow
+            return
+        }
+        Write-Host "A capture process exists for '$($b.name)' but the file is stale - replacing it." -ForegroundColor DarkYellow
+    }
+    if ($existing.Count -gt 0) {
+        $left = Stop-CaptureHard $b
+        if ($left -gt 0) { Write-Host "$left old capture process(es) would not die - the new one may log PORT LOST." -ForegroundColor Red }
+        [void](Wait-PortFree $b.com 15)
     }
     if (-not ((Get-PresentPorts) -contains $b.com)) {
         throw "$($b.com) is not present - is bench '$($b.name)' plugged in?"
@@ -442,19 +509,50 @@ function Cmd-StopCapture {
     # End the scheduled task as well as the process. Killing only the process
     # leaves the task defined and "ready", which reads as a live capture in
     # schtasks /query and invites someone to think one is running when it is not.
-    $taskName = "qmx-capture-$($b.name)"
-    Invoke-Task-Quiet "/end /tn $taskName" | Out-Null
-    Invoke-Task-Quiet "/delete /tn $taskName /f" | Out-Null
-
-    $procs = @(Get-CaptureProcess $b.capture)
-    if ($procs.Count -eq 0) {
-        Write-Host "No capture process running for '$($b.name)' (task '$taskName' removed if it existed)."
+    $n = @(Get-CaptureProcess $b.capture $b.com).Count
+    if ($n -eq 0) {
+        Invoke-Task-Quiet "/end /tn qmx-capture-$($b.name)" | Out-Null
+        Invoke-Task-Quiet "/delete /tn qmx-capture-$($b.name) /f" | Out-Null
+        Write-Host "No capture process running for '$($b.name)'."
         return
     }
-    foreach ($p in $procs) {
-        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { }
+    $left = Stop-CaptureHard $b
+    if ($left -gt 0) {
+        Write-Host "$left of $n capture process(es) for '$($b.name)' are STILL ALIVE after kill + taskkill." -ForegroundColor Red
+    } else {
+        Write-Host "Stopped $n capture process(es) for '$($b.name)'. RESTART IT when you are done." -ForegroundColor Yellow
     }
-    Write-Host "Stopped $($procs.Count) capture process(es) for '$($b.name)'. RESTART IT when you are done." -ForegroundColor Yellow
+}
+
+# `bench standdown <name>` - the operator's "release com5 and stand down".
+# Stops the watchdog from respawning it, kills every capture for that port and
+# confirms they died, removes any read-only `tail -f` viewers other sessions
+# left on the capture file, and does not return "done" until the COM port
+# actually OPENS. Undo with `bench capture <name>`.
+function Cmd-StandDown {
+    param($reg, $b)
+    Set-Content -Path (Get-StandDownPath $b) -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding utf8
+    Write-Host "Stand-down set for '$($b.name)' - the watchdog will not restart its capture." -ForegroundColor Cyan
+
+    $n = @(Get-CaptureProcess $b.capture $b.com).Count
+    $left = Stop-CaptureHard $b
+    Write-Host ("Capture processes: {0} found, {1} still alive." -f $n, $left) -ForegroundColor $(if ($left -gt 0) { "Red" } else { "Green" })
+
+    $leaf = [regex]::Escape((Split-Path $b.capture -Leaf))
+    $viewers = @(Get-CimInstance Win32_Process -Filter "Name='tail.exe'" -ErrorAction SilentlyContinue |
+                 Where-Object { $_.CommandLine -match $leaf })
+    foreach ($v in $viewers) { try { Stop-Process -Id $v.ProcessId -Force -ErrorAction Stop } catch { } }
+    if ($viewers.Count -gt 0) { Write-Host "Removed $($viewers.Count) leftover tail viewer(s) of $(Split-Path $b.capture -Leaf)." -ForegroundColor DarkGray }
+
+    if ($b.com -and $b.com -ne "UNASSIGNED" -and ((Get-PresentPorts) -contains $b.com)) {
+        if (Wait-PortFree $b.com 20) {
+            Write-Host "$($b.com) is FREE - opened and closed it just now." -ForegroundColor Green
+        } else {
+            Write-Host "$($b.com) is STILL HELD after 20 s by something that is not a bench capture." -ForegroundColor Red
+        }
+    } else {
+        Write-Host "$($b.com) is not present - nothing holds it." -ForegroundColor DarkGray
+    }
 }
 
 function Invoke-Idf {
@@ -603,7 +701,7 @@ function Cmd-Flash {
     Cmd-Status $reg $b
 
     $took = Take-Lock $reg "flash" $b.name
-    $hadCapture = (@(Get-CaptureProcess $b.capture).Count -gt 0)
+    $hadCapture = (@(Get-CaptureProcess $b.capture $b.com).Count -gt 0)
     $preLen = 0
     if (Test-Path $b.capture) { $preLen = (Get-Item $b.capture).Length }
     try {
@@ -684,6 +782,8 @@ switch ($Command.ToLower()) {
     "status"       { Cmd-Status       $reg (Get-Bench $reg $Name) }
     "capture"      { Cmd-Capture      $reg (Get-Bench $reg $Name) }
     "stopcapture"  { Cmd-StopCapture  $reg (Get-Bench $reg $Name) }
+    "standdown"    { Cmd-StandDown    $reg (Get-Bench $reg $Name) }
+    "release"      { Cmd-StandDown    $reg (Get-Bench $reg $Name) }
     "watchdog"     { Cmd-Watchdog     $reg $Name }
     "build"        { if (-not $Name) { $Name = "dev" }; Cmd-Build $reg (Get-Bench $reg $Name) }
     "flash"        { Cmd-Flash        $reg (Get-Bench $reg $Name) }

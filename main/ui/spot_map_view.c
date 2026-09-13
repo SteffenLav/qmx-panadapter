@@ -30,7 +30,8 @@
 
 #include "spot_map_view.h"
 #include "ui_theme.h"
-#include "ui.h"                 // ui_help_overlay_changed()
+#include "ui.h"                 // ui_help_overlay_changed(), ui_open_user_manual()
+#include "help_triage.h"        // help_triage_open() - the settings drawer's "Need guidance?"
 #include "net/rbn.h"
 #include "net/pskr_self.h"
 #include "net/wspr_self.h"
@@ -43,6 +44,7 @@
 
 #include "esp_log.h"
 #include "esp_attr.h"           // EXT_RAM_BSS_ATTR
+#include "esp_heap_caps.h"      // the map cache's PSRAM buffer
 #include "esp_timer.h"          // the Exit button's press duration (logged)
 #include "esp_lcd_touch.h"      // raw multi-touch read for the MAP tab's pinch-zoom
 #include <string.h>
@@ -63,15 +65,33 @@ extern esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
 #define SCR_H      720
 #define HEADER_H   64
 /* Widened 220 -> 270 with the sidebar's fonts (see add_filter_checkbox):
- * "Digi (PSKR)" at montserrat_26 plus a 31 px indicator does not fit 220,
- * and the map pane keeps 1010 px of the 1280. */
+ * "Digi (PSKR)" at montserrat_26 plus a 31 px indicator does not fit 220. Kept
+ * as the width of the SETTINGS DRAWER now (2026-09-13 restructure below) -
+ * same content, same font sizing, just reached by a right-edge swipe instead
+ * of sitting permanently on screen. */
 #define SIDEBAR_W  270
+/* MAP/LIST/CONDITIONS, now lv_tabview's OWN left-side tab bar rather than a
+ * horizontal strip along the top. Operator, 2026-09-13: "move the buttons MAP
+ * LIST and CONDITIONS to the now empty left panel as buttons - freeing up
+ * that space they occupied for map estate." Narrower than SIDEBAR_W - three
+ * short words need far less than a checkbox column did, and every pixel here
+ * is map/list/conditions estate given back. */
+#define TAB_BAR_W  140
+/* Same numbers the main app's own right-edge swipe uses (ui.c), reused rather
+ * than re-derived - there is no reason this gesture should feel different
+ * from the one it replaces. */
+#define SS_EDGE_ZONE_PX   30
+#define SS_EDGE_MIN_DX    60
 
 static lv_obj_t *s_overlay    = NULL;
-static lv_obj_t *s_map_obj    = NULL;   // Karte tab: custom-drawn world map + self-spot lines
+static lv_obj_t *s_map_obj    = NULL;   // MAP tab: TOUCH ONLY (drag/pinch) - draws nothing, see map_cache_rebuild()
+static lv_obj_t *s_map_bg_obj = NULL;   // MAP tab: lv_canvas holding the WHOLE rendered map (coastline + spots)
+static void map_mark_dirty(void);       // zoom/pan/position changed: re-render the cached coastline - see map_cache_rebuild()
+static void map_spots_changed(void);    // spot data/filters/age changed: re-snapshot + redraw only the spot layer
 static lv_obj_t *s_table_list = NULL;   // Tabelle tab: scrollable row list
 static lv_obj_t *s_grid_warn  = NULL;   // "set my_grid" notice, shown when it's empty
 static lv_obj_t *s_tabview    = NULL;   // so map_pinch_poll_cb() can tell MAP is the visible tab
+static lv_obj_t *s_zoom_dd    = NULL;   // greyed out on LIST/PROP - see tabview_changed_cb
 static lv_timer_t *s_refresh_timer = NULL;
 static lv_timer_t *s_pinch_timer   = NULL;
 static bool s_active = false;
@@ -118,7 +138,13 @@ static float s_map_zoom = 1.0f;
 static void map_sync_scroll_chain(void);   // defined with the drag-pan, far below
 static float s_map_pan_dx = 0.0f, s_map_pan_dy = 0.0f;
 #define MAP_ZOOM_MIN 1.0f
-#define MAP_ZOOM_MAX 8.0f
+/* ⛔ THE CHALLENGE THE OPERATOR ASKED FOR. This was 8.0 - the new Zoom
+ * dropdown's top preset is x10, and a preset the pinch ceiling cannot then
+ * reach would be a control that lies about what it just did (pick x10, pinch
+ * out one notch, and the picture would already be past the dropdown's own
+ * stated maximum). Raised to 10 so pinch and the dropdown share one ceiling -
+ * whichever one you used last, the other is never surprised by it. */
+#define MAP_ZOOM_MAX 10.0f
 
 // Filter: CW (RBN), Digi (PSK Reporter) and WSPR (net/wspr_self.c) are the
 // only three sources there are, so this is three checkboxes, not the eight
@@ -190,7 +216,11 @@ static void refresh_own_position(void)
 {
     qmx_settings_t s;
     settings_load_all(&s);
+    bool   was_have = s_have_me;
+    double was_lat = s_my_lat, was_lon = s_my_lon;
     s_have_me = s.my_grid[0] && maidenhead_to_latlon(s.my_grid, &s_my_lat, &s_my_lon);
+    // The zoom anchor and every line start here, so the cached map is stale.
+    if (s_have_me != was_have || s_my_lat != was_lat || s_my_lon != was_lon) { map_mark_dirty(); map_spots_changed(); }
 }
 
 // Pulls the three self-spot sources into one array. Returns the count.
@@ -219,6 +249,68 @@ static void refresh_own_position(void)
 // net/pskr_self.c's own s_store) puts them in PSRAM instead, matching every
 // other buffer this feature already got right.
 // Bumping either buffer size again must keep this in mind.
+
+// Dev-only synthetic spots, so MAP/LIST/filters/sort/age-fade can be tested
+// without waiting on real RBN/PSK-self/wsprnet traffic to accumulate after
+// every reboot (operator, 2026-09-13: "now i have to wait wspr tx'ing every
+// time you reboot to get access to any kind of list to test the map with").
+// Spread across every continent, all three sources, a mix of fresh and
+// >30 min "old" ages, so the age fade, per-source filter checkboxes,
+// distance/bearing and every LIST column sort all have something real to
+// show against. Injected in gather_self_spots() itself so the whole draw/
+// layout path under test is the SAME one real spots take - no parallel
+// "test mode" rendering to drift out of step with it.
+static volatile bool s_test_spots_en = false;
+static void refresh_now(void);   // fwd - defined below, needed by the toggle right here
+
+void spot_map_view_set_test_spots(bool on)
+{
+    s_test_spots_en = on;
+    // refresh_timer_cb's change-detection only watches the three REAL feeds'
+    // own counts, so toggling the fake set on/off would otherwise sit unseen
+    // until real traffic happened to change - exactly what this exists to
+    // avoid needing. Force the one redraw directly instead.
+    refresh_now();
+}
+
+static int gather_test_spots(self_spot_t *out, int max)
+{
+    if (!s_test_spots_en || max <= 0) return 0;
+    typedef struct { const char *call, *mode; spot_kind_t src; float lat, lon; int snr; int age_s; } fake_t;
+    static const fake_t FAKE[] = {
+        { "W1AW",    "CW",   SPOT_SRC_CW,   41.7f,   -72.7f,   12,    45 },
+        { "VK3XYZ",  "CW",   SPOT_SRC_CW,  -37.8f,   145.0f,   -8,  1200 },
+        { "JA1ABC",  "CW",   SPOT_SRC_CW,   35.7f,   139.7f,    3,   300 },
+        { "ZS6DEF",  "CW",   SPOT_SRC_CW,  -26.2f,    28.0f,  -14,  4000 },
+        { "PY2GHI",  "FT8",  SPOT_SRC_DIGI, -23.5f,   -46.6f,   -2,   90 },
+        { "G4JKL",   "FT8",  SPOT_SRC_DIGI, 51.5f,     -0.1f,   15,  600 },
+        { "9V1MNO",  "FT4",  SPOT_SRC_DIGI,  1.3f,   103.8f,   -6, 2500 },
+        { "VE3PQR",  "FT8",  SPOT_SRC_DIGI, 43.7f,   -79.4f,    9,  120 },
+        { "OA4STU",  "WSPR", SPOT_SRC_WSPR, -12.0f,   -77.0f,  -18,  200 },
+        { "4X1VWX",  "WSPR", SPOT_SRC_WSPR, 32.1f,    34.8f,  -22, 3300 },
+        { "EA8YZA",  "WSPR", SPOT_SRC_WSPR, 28.3f,   -16.5f,  -10,   30 },
+        { "9M2BCD",  "WSPR", SPOT_SRC_WSPR,  3.1f,   101.7f,  -25, 5400 },
+    };
+    int n = 0;
+    int64_t now = (int64_t)time(NULL);
+    for (size_t i = 0; i < sizeof(FAKE) / sizeof(FAKE[0]) && n < max; i++) {
+        self_spot_t *o = &out[n++];
+        snprintf(o->call, sizeof(o->call), "%s", FAKE[i].call);
+        snprintf(o->mode, sizeof(o->mode), "%s", FAKE[i].mode);
+        o->freq_hz    = 14074000;
+        o->snr_db     = FAKE[i].snr;
+        o->heard_unix = now - FAKE[i].age_s;
+        o->lat        = FAKE[i].lat;
+        o->lon        = FAKE[i].lon;
+        o->has_pos    = true;
+        o->src        = FAKE[i].src;
+        o->distance_km = (s_have_me)
+                       ? (int32_t)(haversine_km(s_my_lat, s_my_lon, o->lat, o->lon) + 0.5)
+                       : -1;
+    }
+    return n;
+}
+
 static int gather_self_spots(self_spot_t *out, int max)
 {
     int n = 0;
@@ -281,6 +373,7 @@ static int gather_self_spots(self_spot_t *out, int max)
                        ? (int32_t)(haversine_km(s_my_lat, s_my_lon, o->lat, o->lon) + 0.5)
                        : -1;
     }
+    n += gather_test_spots(&out[n], max - n);
     return n;
 }
 
@@ -327,7 +420,11 @@ static int gather_self_spots(self_spot_t *out, int max)
 
 static void map_fit_to_spots(void)
 {
-    static self_spot_t spots[SELF_SPOT_MAX];
+    // EXT_RAM_BSS_ATTR - missed the first time round, same ~18 KB internal-.bss
+    // class this file's other two copies (map_draw_cb's own and gather_self_spots'
+    // rbn[]/psk[]/wspr[]) already carry the warning for. This one is a THIRD
+    // call site of the identical array, so it is a THIRD ~18 KB if left plain.
+    static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];
     int count = gather_self_spots(spots, SELF_SPOT_MAX);
 
     s_map_zoom   = 1.0f;
@@ -396,7 +493,7 @@ static void map_fit_to_spots(void)
      * redrawn. Caught 2026-09-12 only because the screenshots kept coming back
      * unzoomed while the log said "zoom 2.28": the computation was right and
      * the pixels were stale. */
-    if (s_map_obj) lv_obj_invalidate(s_map_obj);
+    map_mark_dirty();
 }
 
 static lv_point_precise_t project(const lv_area_t *area, int32_t w, int32_t h, float lon, float lat)
@@ -476,13 +573,62 @@ static void draw_great_circle(lv_layer_t *layer, lv_draw_line_dsc_t *dsc,
     }
 }
 
-static void map_draw_cb(lv_event_t *e)
-{
-    lv_obj_t *obj = lv_event_get_target(e);
-    lv_layer_t *layer = lv_event_get_layer(e);
+/* ⭐⭐ SPLIT FROM THE SPOTS DRAWER, 2026-09-13 - THE WORLD OUTLINE WAS BEING
+ * RE-RASTERISED ON EVERY SELF-SPOT ARRIVAL, AND THAT IS WHAT WAS COSTING
+ * NEAR-100% OF taskLVGL WITH THE MAP OPEN.
+ *
+ * Both halves used to live in one map_draw_cb() on one object (s_map_obj),
+ * so refresh_now()'s lv_obj_invalidate(s_map_obj) - fired once a second by
+ * refresh_timer_cb whenever ANY self-spot count/timestamp changed - repainted
+ * the ENTIRE coastline every time, not just the spot lines that actually
+ * changed. Reproduced with ZERO spots present and nobody touching the
+ * glass: taskLVGL pinned at 97-98% of core 0 within ~2 s of opening the MAP
+ * tab, CAT/audio starved (`cdc_acm TX transfer timeout`, RX pairs/s down to
+ * a few hundred), and it cleared the instant the map was hidden. The earlier
+ * bounding-box + per-ring vertex budget (still below, in THIS function) cut
+ * the cost of one redraw a long way - Antarctica 3,801 -> ~475 segments -
+ * but a "long way" still leaves several thousand lv_draw_line calls for the
+ * full 1:10m world at zoom 1, and that was being paid again every ~1 s.
+ *
+ * The outline never needs the spot data and only changes on an actual
+ * zoom/pan change (map_fit_to_spots, pinch, drag, the Zoom dropdown) - all of
+ * which already route through map_sync_scroll_chain() or map_drag_cb()'s own
+ * PRESSING branch, both of which now invalidate s_map_bg_obj directly.
+ * refresh_now() invalidates ONLY s_map_obj (below), so a routine spot update
+ * repaints a handful of great-circle lines and dots, never the coastline. */
+/* Coastline pixels go STRAIGHT into the cache buffer with a 1-px Bresenham,
+ * not through lv_draw_line. LVGL's software line is anti-aliased and builds a
+ * mask per segment - measured 2026-09-13 as core 0 at ~10 % idle and 2.6 fps
+ * for as long as zoom/pan kept asking for rebuilds, the operator's "very long
+ * latency on clicking zoom". The outline is 1 px and one colour, so a plain
+ * integer line gives the same picture for a small fraction of the work. */
+static uint8_t *s_map_cache_buf = NULL;   // the cached coastline image, see map_cache_rebuild()
+static int32_t  s_map_cache_w = 0, s_map_cache_h = 0, s_map_cache_stride = 0;
 
-    lv_area_t area;
-    lv_obj_get_coords(obj, &area);
+static void cache_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint16_t c)
+{
+    const int32_t w = s_map_cache_w, h = s_map_cache_h;
+    // Both ends beyond the same edge: nothing of it can land on screen.
+    if ((x0 < 0 && x1 < 0) || (y0 < 0 && y1 < 0) || (x0 >= w && x1 >= w) || (y0 >= h && y1 >= h)) return;
+    int32_t dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+    int32_t dy = y1 > y0 ? y0 - y1 : y1 - y0, sy = y0 < y1 ? 1 : -1;
+    int32_t err = dx + dy;
+    for (int guard = 0; guard < 8192; guard++) {
+        if ((uint32_t)x0 < (uint32_t)w && (uint32_t)y0 < (uint32_t)h) {
+            uint8_t *p = s_map_cache_buf + (size_t)y0 * (size_t)s_map_cache_stride + (size_t)x0 * 2;
+            p[0] = (uint8_t)(c & 0xFF);
+            p[1] = (uint8_t)(c >> 8);
+        }
+        if (x0 == x1 && y0 == y1) break;
+        int32_t e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void map_render_coast(const lv_area_t *area_in)
+{
+    lv_area_t area = *area_in;
     int32_t w = lv_area_get_width(&area);
     int32_t h = lv_area_get_height(&area);
     if (w <= 0 || h <= 0) return;
@@ -491,16 +637,13 @@ static void map_draw_cb(lv_event_t *e)
     // (p1/p2), unlike the multi-point polyline descriptor newer LVGL versions
     // have, so each ring edge (including the closing edge back to point 0) is
     // its own draw call rather than one call per ring.
-    lv_draw_line_dsc_t land_dsc;
-    lv_draw_line_dsc_init(&land_dsc);
+    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x8FA0AD));
     /* Land reads LIGHTER than the sea (operator, 2026-09-12: "Can you paint
      * land a bit lighter than the sea?"). The background is 0x0a0d10, so a
      * darkened grey put the coastline barely above it - the outline was there
      * and had to be hunted for. This is an OUTLINE, not a fill: LVGL 9.2.2 has
      * no polygon fill here, so "lighter land" is a brighter coast line against
      * the dark ground, which is the same convention the bandplan strip uses. */
-    land_dsc.color = lv_color_hex(0x8FA0AD);
-    land_dsc.width = 1;
 
     /* ⛔ REJECT A RING BY ITS BOUNDING BOX BEFORE WALKING ITS POINTS.
      *
@@ -589,25 +732,40 @@ static void map_draw_cb(lv_event_t *e)
             lv_point_precise_t cur = project(&area, w, h,
                                              ring->points[k]     / WORLD_MAP_UNITS_PER_DEG,
                                              ring->points[k + 1] / WORLD_MAP_UNITS_PER_DEG);
-            land_dsc.p1 = prev;
-            land_dsc.p2 = cur;
-            lv_draw_line(layer, &land_dsc);
+            cache_line((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y, land_c);
             prev = cur;
             if (last) break;
         }
     }
+}
+
+// Spots + own-QTH marker - drawn LIVE on s_map_obj (LV_EVENT_DRAW_MAIN) over
+// the cached coastline, from a snapshot taken by map_spots_changed(). Keeping
+// them out of the cache means a spot arrival, a filter tick or the minute's
+// ageing costs a few lines, never a coastline rebuild. The snapshot means a
+// frame of the drawer sliding over the map does not take three mutexes and
+// copy 300 entries just to redraw a strip.
+// EXT_RAM_BSS_ATTR - see the note above gather_self_spots(): ~18 KB.
+static EXT_RAM_BSS_ATTR self_spot_t s_spot_snap[SELF_SPOT_MAX];
+static int s_spot_snap_n = 0;
+
+static void map_spots_changed(void)
+{
+    s_spot_snap_n = gather_self_spots(s_spot_snap, SELF_SPOT_MAX);
+    if (s_map_obj) lv_obj_invalidate(s_map_obj);
+}
+
+static void map_render_spots(lv_layer_t *layer, const lv_area_t *area_in)
+{
+    lv_area_t area = *area_in;
+    int32_t w = lv_area_get_width(&area);
+    int32_t h = lv_area_get_height(&area);
+    if (w <= 0 || h <= 0) return;
 
     if (!s_have_me) return;   // nothing to draw a line FROM - the sidebar/table already say so
 
-    // EXT_RAM_BSS_ATTR, not a plain static - same lesson as the rbn[]/psk[]
-    // scratch buffers in gather_self_spots() above, just missed the first
-    // time round because this array lives in this function instead. At
-    // SELF_SPOT_MAX now 300 (three 100-entry sources) a plain static here
-    // would be ~18 KB of internal .bss, PER call site, TWO call sites - the
-    // exact class of self-inflicted internal-RAM exhaustion that broke MQTT
-    // reconnects for 2026-09-11's whole session.
-    static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];
-    int count = gather_self_spots(spots, SELF_SPOT_MAX);
+    const self_spot_t *spots = s_spot_snap;
+    int count = s_spot_snap_n;
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
@@ -667,6 +825,86 @@ static void map_draw_cb(lv_event_t *e)
     lv_draw_rect(layer, &dot_dsc, &home_area);
 }
 
+/* ⭐⭐ THE WHOLE MAP IS ONE CACHED IMAGE NOW, 2026-09-13.
+ *
+ * Both layers used to be LV_EVENT_DRAW_MAIN callbacks, and LVGL redraws every
+ * object under ANY dirty area - so each frame of the settings drawer sliding
+ * over the map, and each frame of its breathing grip, re-walked the whole
+ * coastline (thousands of lv_draw_line calls) and re-gathered all 300 spots
+ * under three mutexes. That is what made the drawer lag, and why the breathing
+ * grip got the blame for slowing the page.
+ *
+ * Now the map is rendered ONCE into a PSRAM RGB565 canvas, and only when
+ * something the picture depends on changed (zoom, pan, spots, filters, own
+ * grid). Everything that moves over it costs a copy of the pixels underneath.
+ * Requests are coalesced by a 33 ms timer, so a drag or pinch that fires many
+ * events per frame still renders at most once per frame - the same cost the
+ * old per-frame redraw had during a drag, and nothing at all otherwise.
+ *
+ * Sized from s_map_obj's own coords (1140x656 at this layout, ~1.5 MB), so
+ * project() gives identical results against the canvas-local area. */
+static bool        s_map_dirty = true;
+static lv_timer_t *s_map_cache_timer = NULL;
+
+static void map_mark_dirty(void) { s_map_dirty = true; }
+
+static void map_spots_draw_cb(lv_event_t *e)
+{
+    lv_obj_t *obj = lv_event_get_target(e);
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+    int64_t t0 = esp_timer_get_time();
+    map_render_spots(lv_event_get_layer(e), &area);
+    int ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (ms >= 20) ESP_LOGI(TAG, "spot layer draw %d ms (%d spots)", ms, s_spot_snap_n);
+}
+
+static void map_cache_rebuild(void)
+{
+    if (!s_map_bg_obj || !s_map_obj) return;
+    lv_area_t a;
+    lv_obj_get_coords(s_map_obj, &a);
+    int32_t w = lv_area_get_width(&a);
+    int32_t h = lv_area_get_height(&a);
+    if (w <= 0 || h <= 0) return;
+
+    if (w != s_map_cache_w || h != s_map_cache_h || !s_map_cache_buf) {
+        if (s_map_cache_buf) { heap_caps_free(s_map_cache_buf); s_map_cache_buf = NULL; }
+        size_t sz = (size_t)lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565) * (size_t)h;
+        s_map_cache_buf = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_map_cache_buf) {
+            ESP_LOGE(TAG, "no PSRAM for the %dx%d map cache", (int)w, (int)h);
+            s_map_cache_w = s_map_cache_h = 0;
+            return;
+        }
+        s_map_cache_w = w;
+        s_map_cache_h = h;
+        s_map_cache_stride = (int32_t)lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(s_map_bg_obj, s_map_cache_buf, w, h, LV_COLOR_FORMAT_RGB565);
+    }
+
+    int64_t t0 = esp_timer_get_time();
+    lv_canvas_fill_bg(s_map_bg_obj, lv_color_hex(0x0a0d10), LV_OPA_COVER);
+    lv_area_t local = { 0, 0, w - 1, h - 1 };
+    map_render_coast(&local);
+    lv_obj_invalidate(s_map_bg_obj);   // the buffer was written behind LVGL's back
+    s_map_dirty = false;
+    // Temporary-but-harmless: rare (zoom/pan only) and the number that
+    // decides whether this approach is fast enough. Drag logs at most ~1/s.
+    static int64_t s_last_log_us;
+    int64_t now = esp_timer_get_time();
+    if (now - s_last_log_us > 1000000) {
+        s_last_log_us = now;
+        ESP_LOGI(TAG, "coastline rebuilt in %d ms", (int)((now - t0) / 1000));
+    }
+}
+
+static void map_cache_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_active && s_map_dirty) map_cache_rebuild();
+}
+
 // Raw multi-touch poll for two-finger pinch-zoom, same technique ui.c's own
 // pinch_poll_cb() uses for the panadapter spectrum (esp_lcd_touch_read_data()
 // bypasses LVGL's single-point indev to see both fingers). Only the SPREAD
@@ -719,7 +957,6 @@ static void map_pinch_poll_cb(lv_timer_t *t)
         s_map_zoom = zoom;
         s_view_is_users = true;    /* stop auto-re-fitting under their fingers */
         map_sync_scroll_chain();   /* pan, or swipe-to-tab - see its comment */
-        if (s_map_obj) lv_obj_invalidate(s_map_obj);
     }
 }
 
@@ -758,6 +995,9 @@ static void map_sync_scroll_chain(void)
     if (!s_map_obj) return;
     if (s_map_zoom > MAP_ZOOM_MIN) lv_obj_clear_flag(s_map_obj, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
     else                           lv_obj_add_flag  (s_map_obj, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    // Every caller of this function just changed zoom and/or pan (fit, pinch,
+    // the Zoom dropdown). See map_cache_rebuild().
+    map_mark_dirty();
 }
 
 static void map_drag_cb(lv_event_t *e)
@@ -795,13 +1035,35 @@ static void map_drag_cb(lv_event_t *e)
     s_view_is_users = true;    /* same as the pinch: this view is theirs now */
     s_map_pan_dx = s_map_drag_start_pan_dx + (float)(p.x - s_map_drag_start_pt.x) / (float)w;
     s_map_pan_dy = s_map_drag_start_pan_dy + (float)(p.y - s_map_drag_start_pt.y) / (float)h;
-    lv_obj_invalidate(s_map_obj);
+    map_mark_dirty();   // coalesced to one render per frame - see map_cache_rebuild()
 }
 
 // ---- Tabelle tab --------------------------------------------------------
 
 #define COL_GAP 10
-#define TABLE_MAX_ROWS SELF_SPOT_MAX   // the buffer is the limit, nothing clips it further
+/* ⛔ THE SAME UNBOUNDED-COST BUG THE MAP HAD, NOW FOUND IN THE LIST.
+ *
+ * This used to be SELF_SPOT_MAX (300) - "the buffer is the limit, nothing
+ * clips it further" - on the premise that lv_obj_clean()+rebuild is cheap.
+ * It is not, at this count: a real self-spot table with ~50-100 live entries
+ * (one WSPR poll session on this bench, nowhere near the 300 cap) produced
+ * `idle0 0.1%` `idle1 0.0%` `fps 0.6` in the capture the moment the LIST tab
+ * was opened - both cores saturated, not a slow frame. Operator, 2026-09-13:
+ * "pressed list and it almost froze". Same root cause as the map's freeze a
+ * day earlier (LVGL draw/layout cost scaling with an unbounded row count on
+ * a board where core 0 is already the wall) and the same class of fix: bound
+ * the WORK, do not just relocate when it is paid - my first attempt at this
+ * (forcing an early lv_obj_update_layout() call) targeted LAYOUT, and this
+ * measurement shows the real cost is in DRAW/scroll compositing when the tab
+ * becomes visible, which that call does nothing for. Retracted.
+ *
+ * 40 is a real cap now, not "the buffer size happens to allow it" - it bounds
+ * object count to 40 rows x 7 columns = 280, a small fraction of the ~700
+ * that produced the freeze, while still being a genuinely useful scrollable
+ * list. rebuild_table() appends a "N more, not shown" row rather than
+ * silently dropping them - a truncation nobody can see is worse than a
+ * shorter list that says so. */
+#define TABLE_MAX_ROWS 40
 
 static lv_obj_t *make_row(lv_obj_t *parent)
 {
@@ -939,6 +1201,28 @@ static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_
 static void rebuild_table(void)
 {
     if (!s_table_list) return;
+    /* ⚠ RETRACTED THEORY, KEPT AS A RECORD OF WHAT WAS WRONG.
+     *
+     * This comment used to say the LIST tap was slow because lv_tabview keeps
+     * a never-shown tab HIDDEN and defers its layout - and that forcing
+     * lv_obj_update_layout() here (still below) would fix it. Both halves
+     * were wrong: lv_tabview_set_active() (lv_tabview.c) switches tabs by
+     * SCROLLING its content container, not by a hidden-flag toggle - every
+     * tab page exists, laid out, at all times, so there was never a deferred
+     * layout to force.
+     *
+     * The real cost, confirmed from the capture after the "fix" shipped and
+     * the freeze recurred (`idle0 0.1% idle1 0.0% fps 0.6`, both cores
+     * saturated, not a slow frame): building up to SELF_SPOT_MAX (300) rows
+     * of 7 flex children each is expensive to LAY OUT AND DRAW regardless of
+     * when that happens, and a real self-spot table on this bench (~50-100
+     * entries, nowhere near 300) was already enough to do it. TABLE_MAX_ROWS
+     * is now a real cap (40, see its own comment) - the fix that actually
+     * bounds the work, rather than moving an unbounded cost from one moment
+     * to another. lv_obj_update_layout() below is kept as ordinary hygiene
+     * (this function already changed the content, so paying for layout here
+     * rather than on whatever runs next is still reasonable) - it is no
+     * longer claimed to be what fixed anything. */
     lv_obj_clean(s_table_list);
 
     lv_obj_t *hdr = make_row(s_table_list);
@@ -955,10 +1239,12 @@ static void rebuild_table(void)
     if (s_sort_col != SORT_COL_NONE) qsort(spots, (size_t)count, sizeof(spots[0]), cmp_spots);
     int64_t now = (int64_t)time(NULL);
 
-    int shown = 0;
-    for (int i = 0; i < count && shown < TABLE_MAX_ROWS; i++) {
+    int shown = 0, passed = 0;
+    for (int i = 0; i < count; i++) {
         const self_spot_t *sp = &spots[i];
         if (!passes_filter(sp)) continue;
+        passed++;
+        if (shown >= TABLE_MAX_ROWS) continue;   /* keep counting `passed` for the notice below */
 
         char freq_buf[16], age_buf[24], snr_buf[8], dist_buf[16];
         format_freq_hz(sp->freq_hz, g_freq_style, freq_buf, sizeof(freq_buf));
@@ -1013,7 +1299,19 @@ static void rebuild_table(void)
     if (shown == 0) {
         lv_obj_t *row = make_row(s_table_list);
         add_col(row, "Nobody has heard me yet (CW/Digi/WSPR).", 1, UI_COLOR_TEXT_MUTED, false);
+    } else if (passed > shown) {
+        /* A truncation nobody can see is worse than a shorter list that says
+         * so - see TABLE_MAX_ROWS's own comment for why there is a cap at
+         * all now. */
+        char more[48];
+        snprintf(more, sizeof(more), "... %d more not shown", passed - shown);
+        lv_obj_t *row = make_row(s_table_list);
+        add_col(row, more, 1, UI_COLOR_TEXT_MUTED, false);
     }
+
+    /* Pay the layout cost NOW, not on the tap that first reveals this tab -
+     * see the comment at the top of this function. */
+    lv_obj_update_layout(s_table_list);
 }
 
 // ---- Conditions tab -------------------------------------------------------
@@ -1103,7 +1401,14 @@ static void update_conditions_tables(const band_conditions_t *c)
 static void build_conditions_tab(lv_obj_t *tab)
 {
     lv_obj_set_flex_flow(tab, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    // Cross-axis (vertical, since flow is ROW) was CENTER - each column
+    // centred independently within its own height, so the shorter table
+    // (Solar/Geomagnetic, 6 plain rows) and the taller one (HF Band
+    // Conditions, a header row + BAND_COND_GROUP_COUNT rows) had their TOPS
+    // at different y - operator, 2026-09-13: "the two tables need to be
+    // aligned so top of table is the same". START top-aligns both; only the
+    // horizontal centering of the pair as a whole is meant to stay CENTER.
+    lv_obj_set_flex_align(tab, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(tab, 16, 0);
     lv_obj_set_style_pad_gap(tab, 32, 0);
     lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
@@ -1184,10 +1489,67 @@ static void build_conditions_tab(lv_obj_t *tab)
 
 // ---- filter sidebar -----------------------------------------------------
 
+// ⛔ rebuild_table() ALONE WAS NOT THE FIX - TABLE_MAX_ROWS BOUNDED THE
+// ONE-TIME COST OF OPENING THE LIST, NOT THE RECURRING COST OF STAYING
+// SOMEWHERE ELSE. refresh_now() used to call rebuild_table()
+// unconditionally, every time refresh_timer_cb (1 Hz) saw a self-spot
+// count or timestamp change - which is to say, every time RBN, the PSK
+// self-spot MQTT feed or the wsprnet scrape heard something, REGARDLESS
+// of which tab was on screen. That is lv_obj_clean() plus up to 41 row
+// objects of several flex children each, paid in full while parked on
+// MAP - live 2026-09-13: taskLVGL 96.9% of core 0 sustained, audio
+// collapsed to ~3-4k pairs/s, repeated `cdc_acm TX transfer timeout`,
+// buttons and the Zoom dropdown reading as "dead" - not a fresh freeze,
+// the SAME cost this file already measured, just paid on a 1 Hz loop
+// instead of once on open.
+//
+// Fix: rebuild only while LIST is the tab actually being looked at;
+// otherwise remember that it is stale and pay for it once, lazily, the
+// moment the operator switches TO it (tabview_event_cb below) - same
+// "bound the WORK, don't just relocate when it is paid" rule the
+// TABLE_MAX_ROWS comment above already states.
+static bool s_table_dirty = true;
+
 static void refresh_now(void)
 {
-    if (s_map_obj) lv_obj_invalidate(s_map_obj);
-    rebuild_table();
+    map_spots_changed();
+    if (s_tabview && lv_tabview_get_tab_active(s_tabview) == 1) {
+        rebuild_table();
+        s_table_dirty = false;
+    } else {
+        s_table_dirty = true;
+    }
+}
+
+// Pays the deferred rebuild exactly once, at the moment LIST actually
+// becomes the visible tab - not before, and not repeated while it stays
+// visible (nothing here marks it dirty again; the next real change does
+// that through refresh_now() above).
+static void tabview_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_tabview) return;
+    uint32_t active = lv_tabview_get_tab_active(s_tabview);
+
+    // Zoom only means anything on MAP - operator, 2026-09-13: "the zoom
+    // dropdown shall be greyed out when not useful in LIST and CONDITIONS".
+    // DISABLED blocks the tap; the opacity is what actually reads as
+    // "inactive" at a glance, same convention top_bar_apply_mode() uses
+    // elsewhere in this app for a control that means nothing right now.
+    if (s_zoom_dd) {
+        if (active == 0) {
+            lv_obj_clear_state(s_zoom_dd, LV_STATE_DISABLED);
+            lv_obj_set_style_opa(s_zoom_dd, LV_OPA_COVER, 0);
+        } else {
+            lv_obj_add_state(s_zoom_dd, LV_STATE_DISABLED);
+            lv_obj_set_style_opa(s_zoom_dd, LV_OPA_40, 0);
+        }
+    }
+
+    if (active == 1 && s_table_dirty) {
+        rebuild_table();
+        s_table_dirty = false;
+    }
 }
 
 static void cw_cb(lv_event_t *e)
@@ -1355,25 +1717,108 @@ static void flush_btn_cb(lv_event_t *e)
     refresh_now();
 }
 
-static void build_sidebar(lv_obj_t *parent)
+// ⛔ WAS THE LEFT SIDEBAR, NOW A RIGHT-EDGE SETTINGS DRAWER (2026-09-13).
+//
+// Four operator asks, all about this one panel:
+//   3. "all breathing swipe handles are gone but one: a settings drawer to
+//      the right as usual" - sync_nav_affordances() already hides every MAIN
+//      APP edge strip while this overlay is active; this file gets its OWN
+//      right-edge swipe, local to the overlay, for a settings panel local to
+//      the overlay.
+//   4. "The drawer will contain: User Manual, Need Guidance - then have those
+//      settings (checkboxes) moved from the left panel as it is now (CW Digi
+//      WSPR + Age)" - so the content below is exactly the OLD sidebar's
+//      content, unchanged, with two new buttons above it.
+//   5. Moving the checkboxes out is what frees the left panel for
+//      MAP/LIST/CONDITIONS (see spot_map_view_init() - lv_tabview's own tab
+//      bar, moved to LV_DIR_LEFT, replaces this whole object visually).
+//
+// Flush has no explicit home in the operator's list (User Manual, Need
+// Guidance, checkboxes) - it stays here, at the bottom, because "clear the
+// self-spot data" is a settings-panel action the same way the checkboxes
+// are, not a MAP/LIST/CONDITIONS destination. Easy to move if that reading is
+// wrong.
+static lv_obj_t *s_settings_drawer = NULL;
+static void settings_close(void);   // fwd - defined with the scrim, below
+static void settings_add_swipe(lv_obj_t *obj);   // fwd - same place
+
+static void settings_user_manual_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_close();
+    ui_open_user_manual();
+}
+
+static void settings_need_guidance_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_close();
+    help_triage_open();
+}
+
+static void settings_grip_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_close();
+}
+
+
+static void build_settings_drawer(lv_obj_t *parent)
 {
     lv_obj_t *sb = lv_obj_create(parent);
+    s_settings_drawer = sb;
     lv_obj_set_size(sb, SIDEBAR_W, SCR_H - HEADER_H);
-    lv_obj_set_pos(sb, 0, HEADER_H);
+    /* Starts OFF-SCREEN (x = SCR_W, flush with the right edge and extending
+     * further right, entirely outside the display) rather than HIDDEN - same
+     * as ui.c's own drawer_open()/drawer_close(), which never touch a hidden
+     * flag on s_drawer at all. This is what makes a SLIDING animation
+     * possible: settings_open()/settings_close() animate x between here and
+     * SCR_W - SIDEBAR_W, and an object entirely outside the screen area is
+     * naturally neither drawn nor hit-tested, so nothing extra is needed to
+     * keep it out of the way while "closed". */
+    lv_obj_set_pos(sb, SCR_W, HEADER_H);
     lv_obj_set_style_bg_color(sb, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(sb, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_side(sb, LV_BORDER_SIDE_RIGHT, 0);
+    lv_obj_set_style_border_side(sb, LV_BORDER_SIDE_LEFT, 0);   /* was RIGHT, sat on the left edge before */
     lv_obj_set_style_border_width(sb, 1, 0);
     lv_obj_set_style_border_color(sb, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_pad_all(sb, 14, 0);
     lv_obj_set_flex_flow(sb, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(sb, 30, 0);   /* checkbox rows must not share hit area */
+    lv_obj_set_style_pad_row(sb, 20, 0);
     lv_obj_clear_flag(sb, LV_OBJ_FLAG_SCROLLABLE);
+
+    // User Manual + Need Guidance - same two doors the main drawer offers,
+    // same order, so this panel reads as a drawer rather than a stranger.
+    {
+        lv_obj_t *btn = lv_button_create(sb);
+        lv_obj_set_size(btn, SIDEBAR_W - 28, 56);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, settings_user_manual_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_26, 0);
+        lv_label_set_text(l, LV_SYMBOL_FILE "  User Manual");
+        lv_obj_center(l);
+    }
+    {
+        lv_obj_t *btn = lv_button_create(sb);
+        lv_obj_set_size(btn, SIDEBAR_W - 28, 56);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, settings_need_guidance_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_26, 0);
+        lv_label_set_text(l, LV_SYMBOL_LIST "  Need guidance?");
+        lv_obj_center(l);
+    }
 
     lv_obj_t *lbl = lv_label_create(sb);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_pad_top(lbl, 6, 0);
     lv_label_set_text(lbl, "Source");
 
     add_filter_checkbox(sb, "CW (RBN)",    UI_COLOR_MODE_CW,   cw_cb);
@@ -1408,11 +1853,11 @@ static void build_sidebar(lv_obj_t *parent)
     lv_obj_set_style_pad_top(s_grid_warn, 10, 0);
     lv_label_set_text(s_grid_warn, "");   // filled in by refresh, see refresh_timer_cb
 
-    // A one-child row of its own, centered - the sidebar's own flex cross-
+    // A one-child row of its own, centered - the drawer's own flex cross-
     // align is START (so the checkboxes/labels above hug the left edge),
     // and that applies to every direct child alike. Centering just this one
     // button needs its own centered flex row rather than fighting the
-    // sidebar's container-wide alignment.
+    // drawer's container-wide alignment.
     lv_obj_t *flush_wrap = lv_obj_create(sb);
     lv_obj_remove_style_all(flush_wrap);
     lv_obj_set_size(flush_wrap, SIDEBAR_W - 28, LV_SIZE_CONTENT);
@@ -1429,6 +1874,226 @@ static void build_sidebar(lv_obj_t *parent)
     lv_obj_t *flush_lbl = lv_label_create(flush_btn);
     lv_obj_set_style_text_font(flush_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(flush_lbl, "Flush");
+
+    /* The handle, a CHILD of the drawer on its LEFT edge - the edge that
+     * travels - copied from ui.c's s_drawer_grip. ⛔ Not on the screen edge:
+     * that was tried here (parented to the overlay, breathing) and the
+     * operator rejected it - this is a drawer handle, so it comes out WITH
+     * the drawer and you push it back the way it came. No breathing: that
+     * means "hidden gesture here", and a visible handle is not hidden.
+     * -14 cancels the drawer's own pad_all(14); FLOATING keeps it out of the
+     * column flex layout. */
+    lv_obj_t *grip = lv_obj_create(sb);
+    lv_obj_set_size(grip, 10, 120);
+    lv_obj_add_flag(grip, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(grip, LV_ALIGN_LEFT_MID, -14, 0);
+    lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(grip, 0, 0);
+    lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_set_style_pad_all(grip, 0, 0);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(grip, 12);
+    lv_obj_add_event_cb(grip, settings_grip_cb, LV_EVENT_PRESSED, NULL);   // on touch, not on lift
+
+    // A rightward drag on the drawer's own background closes it too.
+    settings_add_swipe(sb);
+}
+
+// Right-edge swipe (drag left) toggles the settings drawer above - same
+// gesture shape as the main app's own right-edge swipe (ui.c), local to this
+// overlay because sync_nav_affordances() already hides the main app's strip
+// while this overlay is on screen (spot_map_view_is_active()).
+//
+// No mouse-click affordance (grip_mouse_click() in ui.c is private to that
+// file, and a BLE mouse on this screen is a secondary path) - a known,
+// deliberate simplification, not a silent omission.
+static lv_obj_t *s_settings_strip = NULL;
+static lv_obj_t *s_settings_scrim = NULL;
+static int       s_settings_swipe_start_x = -1;
+
+/* ⛔ THREE REAL BUGS FOUND FROM ONE REPORT, 2026-09-13, and the first pass at
+ * fixing them was itself wrong twice over. Operator: "make the drawer go
+ * away by either taping outside it or swiping back... Now the drawer do not
+ * close the right way - going in like a drawer... or even open like a
+ * drawer... The drawers in any other page has a strict process."
+ *
+ * 1. No tap-outside-to-close existed - fixed below, settings_scrim_cb,
+ *    same close-on-PRESS pattern as ui.c's own drawer_scrim_cb.
+ * 2. ⛔ THE GRIP IS TWO OBJECTS, NOT ONE - exactly as on the main drawer, and
+ *    getting that wrong cost four rounds. CLOSED: a breathing 4x120 bar on the
+ *    SCREEN edge (ui.c's s_burger_btn), parented to the overlay and drawn
+ *    under the drawer so the drawer covers it when open - build_settings_grip().
+ *    OPEN: a still 10x120 handle that is a CHILD of the drawer on its
+ *    travelling left edge (ui.c's s_drawer_grip) - end of
+ *    build_settings_drawer(). Removing either one is the regression; the
+ *    operator has rejected each half on its own.
+ * 3. This one was never actually diagnosed before now: s_settings_drawer
+ *    toggled LV_OBJ_FLAG_HIDDEN, an instant snap with no motion at all,
+ *    where ui.c's drawer_open()/drawer_close() SLIDE it (250 ms, ease
+ *    out/in) and never touch a hidden flag on the drawer itself - "closed"
+ *    is just x = SCR_W (off-screen). settings_open()/settings_close() now
+ *    do the same slide, via s_settings_open tracking state since HIDDEN no
+ *    longer can. */
+static bool s_settings_open = false;
+
+/* ⛔ 180 ms, and the gesture fires MID-SWIPE. Operator, 2026-09-13: "please
+ * make sure it opens as soon as i swipe - and closes same speed". Two costs
+ * were stacked: the swipe was only judged on RELEASE (so nothing moved until
+ * the finger lifted), then a 250 ms slide whose every frame re-drew the whole
+ * map underneath. The map is a cached image now (map_cache_rebuild), the swipe
+ * fires the moment it has travelled SS_EDGE_MIN_DX while still down, and open
+ * and close share one duration so they feel the same. */
+#define SETTINGS_SLIDE_MS 180
+
+static void settings_drawer_anim_x_cb(void *obj, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)obj, v);
+}
+
+static void settings_slide(int32_t to_x)
+{
+    lv_anim_delete(s_settings_drawer, settings_drawer_anim_x_cb);   // reversing mid-slide starts from where it IS
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_settings_drawer);
+    lv_anim_set_exec_cb(&a, settings_drawer_anim_x_cb);
+    lv_anim_set_values(&a, lv_obj_get_x(s_settings_drawer), to_x);
+    lv_anim_set_time(&a, SETTINGS_SLIDE_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+static void settings_open(void)
+{
+    if (s_settings_open) return;
+    if (s_settings_scrim) {
+        lv_obj_clear_flag(s_settings_scrim, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_settings_scrim);
+    }
+    lv_obj_move_foreground(s_settings_drawer);
+    settings_slide(SCR_W - SIDEBAR_W);
+    s_settings_open = true;
+}
+
+static void settings_close(void)
+{
+    if (!s_settings_open) return;
+    if (s_settings_scrim) lv_obj_add_flag(s_settings_scrim, LV_OBJ_FLAG_HIDDEN);
+    settings_slide(SCR_W);
+    s_settings_open = false;
+}
+
+static void settings_scrim_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_PRESSED) return;
+    settings_close();
+}
+
+/* One handler for both directions: a leftward drag from the screen edge opens,
+ * a rightward drag on the drawer or its handle closes. Fires once per press,
+ * as soon as the distance is reached - never waits for the finger to lift. */
+static bool s_settings_swipe_fired = false;
+
+static void settings_swipe_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_settings_swipe_start_x = (int)p.x;
+        s_settings_swipe_fired = false;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        s_settings_swipe_start_x = -1;
+        return;
+    }
+    if (code != LV_EVENT_PRESSING || s_settings_swipe_fired || s_settings_swipe_start_x < 0) return;
+    int dx = (int)p.x - s_settings_swipe_start_x;
+    if (!s_settings_open && dx <= -SS_EDGE_MIN_DX) { s_settings_swipe_fired = true; settings_open(); }
+    else if (s_settings_open && dx >= SS_EDGE_MIN_DX) { s_settings_swipe_fired = true; settings_close(); }
+}
+
+static void settings_add_swipe(lv_obj_t *obj)
+{
+    lv_obj_add_event_cb(obj, settings_swipe_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(obj, settings_swipe_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(obj, settings_swipe_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(obj, settings_swipe_cb, LV_EVENT_PRESS_LOST, NULL);
+}
+
+static void grip_breathe_anim_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+// The CLOSED-state grip: byte-for-byte ui.c's s_burger_btn and its
+// grip_start_breathing() (both static there, hence the copy). Non-clickable -
+// the press lands on the edge strip beneath it, exactly as on the main screen.
+static void build_settings_grip(lv_obj_t *parent)
+{
+    lv_obj_t *grip = lv_obj_create(parent);
+    lv_obj_set_size(grip, 4, 120);
+    lv_obj_align(grip, LV_ALIGN_RIGHT_MID, 0, HEADER_H / 2);   // centred on the area below the header
+    lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(grip, 0, 0);
+    lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_set_style_shadow_width(grip, 0, 0);
+    lv_obj_set_style_pad_all(grip, 0, 0);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, grip);
+    lv_anim_set_exec_cb(&a, grip_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_10, LV_OPA_60);
+    lv_anim_set_time(&a, 1400);
+    lv_anim_set_playback_time(&a, 1400);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+// Covers the tabview (MAP/LIST/PROP) area to the LEFT of the drawer -
+// everything the drawer does NOT occupy - same footprint rule as ui.c's own
+// s_drawer_scrim. Hidden until settings_open() shows it; a press anywhere on
+// it closes the drawer (settings_scrim_cb).
+static void build_settings_scrim(lv_obj_t *parent)
+{
+    lv_obj_t *scrim = lv_obj_create(parent);
+    lv_obj_set_size(scrim, SCR_W - SIDEBAR_W, SCR_H - HEADER_H);
+    lv_obj_set_pos(scrim, 0, HEADER_H);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(scrim, 0, 0);
+    lv_obj_set_style_pad_all(scrim, 0, 0);
+    lv_obj_clear_flag(scrim, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_HIDDEN);   /* only while the drawer is open */
+    lv_obj_add_event_cb(scrim, settings_scrim_cb, LV_EVENT_PRESSED, NULL);
+    s_settings_scrim = scrim;
+}
+
+static void build_settings_edge_strip(lv_obj_t *parent)
+{
+    lv_obj_t *strip = lv_obj_create(parent);
+    lv_obj_set_size(strip, SS_EDGE_ZONE_PX, SCR_H - HEADER_H);
+    lv_obj_set_pos(strip, SCR_W - SS_EDGE_ZONE_PX, HEADER_H);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(strip, 0, 0);
+    lv_obj_set_style_pad_all(strip, 0, 0);
+    lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+    settings_add_swipe(strip);
+    s_settings_strip = strip;
+    /* No grip child - build_settings_grip() is the separate closed-state bar,
+     * see the ⛔ note above s_settings_open. */
 }
 
 // ---- refresh timer + overlay lifecycle -----------------------------------
@@ -1450,6 +2115,14 @@ static void refresh_timer_cb(lv_timer_t *t)
     if (!s_active) return;
 
     refresh_own_position();
+
+    // A spot fades when it passes 30 min even if nothing new arrives - redraw
+    // the spot layer (not the coastline) once a minute for the ageing.
+    {
+        static int64_t s_last_age_min = -1;
+        int64_t m = (int64_t)time(NULL) / 60;
+        if (m != s_last_age_min) { s_last_age_min = m; if (s_map_obj) lv_obj_invalidate(s_map_obj); }
+    }
 
     static EXT_RAM_BSS_ATTR rbn_self_spot_t rbn[100];   // NOT internal .bss - see the note above gather_self_spots()
     int rn = rbn_self_spots_get(rbn, 100);
@@ -1520,6 +2193,65 @@ static void exit_btn_cb(lv_event_t *e)
     spot_map_view_hide();
 }
 
+/* Zoom dropdown - centered in the header. Operator, 2026-09-13: "a labelled
+ * Zoom dropdown centered between SELFSPOTTER and Exit: Fit (like when we
+ * enter the MAP first time), x1, x2, x3, x4, x5, x10 (challenge me on those
+ * zoom levels please)". Two real findings from taking up that challenge:
+ *
+ *  - x10 needed MAP_ZOOM_MAX raised from 8 to 10 (see that define's own
+ *    comment) so pinch and this dropdown agree on a ceiling.
+ *  - "Fit" is not a fixed number - it is exactly what map_fit_to_spots()
+ *    already computes on every fresh open, so selecting it just re-runs that
+ *    same function rather than jumping to some particular zoom value.
+ *
+ * Picking x1..x10 marks the view as the operator's (s_view_is_users = true),
+ * same as a pinch would - a deliberate zoom choice should not be silently
+ * overridden the next time a new spot arrives (see s_view_is_users's own
+ * comment). It does NOT track live pinch zoom back onto itself - the
+ * dropdown is a quick-jump, not a synchronized readout, and trying to keep a
+ * discrete control in step with a continuous one is not what was asked for. */
+static void zoom_dropdown_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t idx = lv_dropdown_get_selected(dd);
+    static const float kZoom[] = { 0.0f /* Fit */, 1, 2, 3, 4, 5, 10 };
+    if (idx >= sizeof(kZoom) / sizeof(kZoom[0])) return;
+    if (idx == 0) {
+        s_view_is_users = false;   /* map_fit_to_spots() sets it back anyway - explicit for clarity */
+        map_fit_to_spots();
+    } else {
+        s_map_zoom = kZoom[idx];
+        s_view_is_users = true;
+        map_sync_scroll_chain();
+    }
+    map_mark_dirty();
+}
+
+static void zoom_dropdown_open_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    if (!list) return;
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+    /* ⛔ ONLY x1-x5 WERE VISIBLE. Operator, 2026-09-13: "zoom dropdown and saw
+     * only x1 - x5? then scrolling dropdown and dropdown list became all
+     * white and froze". LVGL's dropdown list has a default max-height that
+     * clips a 7-option list at montserrat_28 and shows a scrollbar for the
+     * rest - exactly ui.c's own sleep-dropdown comment already describes
+     * ("LVGL caps the option-list height by default, which forces a
+     * scrollbar; remove the cap and size to content"). That fix was written
+     * once, for that dropdown, and never applied here. Same recipe.
+     *
+     * This may also be the whole story behind "became all white and froze":
+     * with no cap there is nothing left to scroll, so that interaction can
+     * no longer happen at all. Recorded as a plausible explanation, not a
+     * confirmed one - the freeze could equally have been fallout from the
+     * LIST tab's own CPU-saturation event landing moments earlier (see
+     * TABLE_MAX_ROWS's comment); nothing pins down which. */
+    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
+    lv_obj_set_height(list, LV_SIZE_CONTENT);
+}
+
 void spot_map_view_init(lv_obj_t *parent)
 {
     if (s_overlay) return;
@@ -1568,22 +2300,82 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(exit_lbl, LV_SYMBOL_CLOSE "  Exit");
 
-    build_sidebar(s_overlay);
+    // Zoom - centered in the header, same lv_dropdown + montserrat_28 +
+    // "fix the popup list's own font" recipe every other dropdown in this
+    // app uses (e.g. ui.c's waterfall-colour-map dropdown). A child of the
+    // header bar, not the overlay - it needs no extended hit area below the
+    // bar the way Exit does.
+    //
+    // "Zoom:" label to its left, both centred as ONE pair - operator,
+    // 2026-09-13: "no label next to it to tell what it does like: 'Zoom:'".
+    // A bare dropdown reading "Fit" names its CURRENT value, not what the
+    // control IS, which is exactly the ambiguity every other labelled control
+    // in this app avoids.
+    #define ZOOM_DD_W    160
+    #define ZOOM_LBL_W    86
+    #define ZOOM_GAP       8
+    lv_obj_t *zoom_lbl = lv_label_create(hdr);
+    lv_label_set_text(zoom_lbl, "Zoom:");
+    lv_obj_set_style_text_font(zoom_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(zoom_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(zoom_lbl, LV_ALIGN_TOP_MID,
+                 -(ZOOM_DD_W / 2 + ZOOM_GAP + ZOOM_LBL_W / 2), HEADER_H / 2 - 14);
+
+    lv_obj_t *zoom_dd = lv_dropdown_create(hdr);
+    lv_dropdown_set_options(zoom_dd, "Fit\nx1\nx2\nx3\nx4\nx5\nx10");
+    lv_obj_set_size(zoom_dd, ZOOM_DD_W, 46);
+    lv_obj_align(zoom_dd, LV_ALIGN_TOP_MID, (ZOOM_LBL_W + ZOOM_GAP) / 2, (HEADER_H - 46) / 2);
+    lv_obj_set_style_text_font(zoom_dd, &lv_font_montserrat_24, 0);
+    lv_dropdown_set_selected(zoom_dd, 0);   /* "Fit" - what a fresh open already does */
+    lv_obj_add_event_cb(zoom_dd, zoom_dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(zoom_dd, zoom_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+    s_zoom_dd = zoom_dd;   // tabview_changed_cb greys this out off the MAP tab
+
+    build_settings_drawer(s_overlay);
+    build_settings_scrim(s_overlay);
+    build_settings_edge_strip(s_overlay);
 
     lv_obj_t *tv = lv_tabview_create(s_overlay);
     s_tabview = tv;   // map_pinch_poll_cb() needs to know when MAP is the visible tab
-    lv_obj_set_pos(tv, SIDEBAR_W, HEADER_H);
-    lv_obj_set_size(tv, SCR_W - SIDEBAR_W, SCR_H - HEADER_H);
+    lv_obj_add_event_cb(tv, tabview_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    /* ⛔ FULL WIDTH NOW - the checkbox sidebar is gone (build_settings_drawer()
+     * above is a separate, hidden-by-default panel reached by the edge swipe),
+     * so lv_tabview's OWN tab bar, moved to the left, is the only thing
+     * occupying that space. See LV_DIR_LEFT below. */
+    lv_obj_set_pos(tv, 0, HEADER_H);
+    lv_obj_set_size(tv, SCR_W, SCR_H - HEADER_H);
     lv_obj_set_style_bg_color(tv, lv_color_hex(0x0a0d10), 0);
+    /* Operator, 2026-09-13: "move the buttons MAP LIST and CONDITIONS to the
+     * now empty left panel as buttons - freeing up that space they occupied
+     * for map estate." lv_tabview supports this natively - LV_DIR_LEFT makes
+     * its own tab bar a left-side column (lv_tabview.c stacks the buttons
+     * COLUMN-flow automatically for LEFT/RIGHT), so this reuses the existing
+     * tab-switching machinery instead of hand-rolling three buttons plus a
+     * manual page-swap. Must be set BEFORE lv_tabview_set_tab_bar_size(),
+     * which sizes WIDTH for a horizontal position and HEIGHT for a vertical
+     * one and reads tab_pos to know which. */
+    lv_tabview_set_tab_bar_position(tv, LV_DIR_LEFT);
+    lv_tabview_set_tab_bar_size(tv, TAB_BAR_W);
 
     lv_obj_t *tab_map = lv_tabview_add_tab(tv, "MAP");
     lv_obj_set_style_pad_all(tab_map, 0, 0);
     lv_obj_clear_flag(tab_map, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Created FIRST so it draws BEHIND s_map_obj - the world outline, redrawn
+    // only on an actual zoom/pan change, never on a routine spot update. See
+    // the split comment above map_bg_draw_cb. Not clickable: s_map_obj sits
+    // in the exact same area and is checked first by LVGL's hit-test (reverse
+    // creation order), so this never needs to see a touch.
+    s_map_bg_obj = lv_canvas_create(tab_map);   // buffer attached on first render - see map_cache_rebuild()
+    lv_obj_set_pos(s_map_bg_obj, 0, 0);
+    lv_obj_clear_flag(s_map_bg_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_map_bg_obj, LV_OBJ_FLAG_CLICKABLE);
+
     s_map_obj = lv_obj_create(tab_map);
     lv_obj_remove_style_all(s_map_obj);
     lv_obj_set_size(s_map_obj, LV_PCT(100), LV_PCT(100));
     lv_obj_clear_flag(s_map_obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(s_map_obj, map_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
+    lv_obj_add_event_cb(s_map_obj, map_spots_draw_cb, LV_EVENT_DRAW_MAIN, NULL);
     lv_obj_add_event_cb(s_map_obj, map_drag_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_map_obj, map_drag_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(s_map_obj, map_drag_cb, LV_EVENT_PRESS_LOST, NULL);
@@ -1594,7 +2386,11 @@ void spot_map_view_init(lv_obj_t *parent)
 
     // Rightmost, per explicit request - lv_tabview_add_tab() appends, so
     // creation order is left-to-right order.
-    lv_obj_t *tab_cond = lv_tabview_add_tab(tv, "CONDITIONS");
+    // "CONDITIONS" wrapped ugly in the TAB_BAR_W column (2 lines, hyphenated
+    // mid-word - "CONDITIO"/"NS"). PROP is the standard ham shorthand for
+    // propagation - exactly what this tab shows (band conditions + solar/
+    // geomagnetic) - and short enough to sit on one line like MAP/LIST.
+    lv_obj_t *tab_cond = lv_tabview_add_tab(tv, "PROP");
     build_conditions_tab(tab_cond);
 
     // Tab bar colouring, to match the rest of the app's palette rather than
@@ -1607,32 +2403,68 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_t *tab_bar = lv_tabview_get_tab_bar(tv);
     /* Operator, 2026-09-12: "Please increase the text font of the taps (MAP
      * LIST CONDITIONS)" - montserrat_20 was the same undersized default this
-     * whole panel shipped with. 28 matches the sidebar's own section headers
-     * (build_sidebar()'s "SELFSPOTTER"/checkbox-row labels), and the bar is
-     * grown to fit it rather than clipping - LVGL's tabview sizes its bar once
-     * at creation and does not re-measure it when a bigger font is applied
-     * afterwards. */
-    lv_tabview_set_tab_bar_size(tv, 64);
+     * whole panel shipped with.
+     *
+     * ⛔ 2026-09-13: the bar MOVED from a thin strip along the TOP to a
+     * TAB_BAR_W (140 px) column down the LEFT - the operator's own next
+     * request ("move the buttons MAP LIST and CONDITIONS to the now empty
+     * left panel"). "CONDITIONS" at montserrat_28 is ~180 px wide, wider than
+     * the whole column, so it is wrapped to two lines at montserrat_22
+     * instead of clipping - this needs each button's own LABEL child, not
+     * just the button, since long_mode/width are label properties.
+     *
+     * No explicit set_tab_bar_size(HEIGHT) call here any more - it was
+     * already done in WIDTH terms right after LV_DIR_LEFT was set, above;
+     * calling it again with a height would silently overwrite that width. */
     lv_obj_set_style_bg_color(tab_bar, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-    lv_obj_set_style_border_side(tab_bar, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_side(tab_bar, LV_BORDER_SIDE_RIGHT, 0);   /* was BOTTOM, for a top strip */
     lv_obj_set_style_border_width(tab_bar, 1, 0);
     lv_obj_set_style_border_color(tab_bar, lv_color_hex(UI_COLOR_BORDER), 0);
     for (uint32_t i = 0; i < lv_obj_get_child_count(tab_bar); i++) {
         lv_obj_t *btn = lv_obj_get_child(tab_bar, i);
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_SURFACE), 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), LV_STATE_CHECKED);
+        /* ⚠ TEXT COLOUR STAYS ON THE BUTTON, NOT THE LABEL. A state selector
+         * (LV_STATE_CHECKED) only ever matches the object it is set ON - the
+         * label itself never becomes "checked", only the button does. Setting
+         * it here works because text_color is an INHERITABLE property: LVGL
+         * resolves it against the BUTTON's real state and the label inherits
+         * that resolved value. Putting it on the label instead would silently
+         * never apply the checked colour - caught before it shipped, not
+         * after; almost repeated the exact bug this file's own "one colour
+         * describing something it is not" fixes elsewhere warn against. */
         lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT), LV_STATE_CHECKED);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_28, 0);
+        lv_obj_t *btn_lbl = lv_obj_get_child(btn, 0);
+        if (btn_lbl) {
+            lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_align(btn_lbl, LV_TEXT_ALIGN_CENTER, 0);
+            lv_label_set_long_mode(btn_lbl, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(btn_lbl, TAB_BAR_W - 20);
+        }
     }
 
     lv_obj_move_foreground(hdr);
     lv_obj_move_foreground(exit_btn);
+    /* The settings drawer + its edge strip must sit above the tabview content
+     * for the same reason hdr/exit_btn do - built after it, so without this
+     * they would be UNDER it in the child list and lose every hit test. The
+     * strip has to win the touch; the drawer has to win the DRAW, since it
+     * covers part of the map when open. */
+    lv_obj_move_foreground(s_settings_strip);
+    // Closed-state breathing grip: above the tabview, BELOW the drawer, so the
+    // drawer covers it when open - same order ui_init() uses for s_burger_btn.
+    build_settings_grip(s_overlay);
+    lv_obj_move_foreground(s_settings_drawer);
 
     // 1s poll, but see refresh_timer_cb: it only pays for a redraw when the
     // underlying data actually changed.
     s_refresh_timer = lv_timer_create(refresh_timer_cb, 1000, NULL);
     lv_timer_pause(s_refresh_timer);
+
+    // Renders the cached map at most once per frame, only when marked dirty.
+    s_map_cache_timer = lv_timer_create(map_cache_timer_cb, 33, NULL);
+    lv_timer_pause(s_map_cache_timer);
 
     // 40 ms poll for the MAP tab's two-finger pinch-zoom - same cadence as
     // ui.c's own pinch_poll_cb() (50 ms), close enough that a pinch feels
@@ -1641,19 +2473,37 @@ void spot_map_view_init(lv_obj_t *parent)
     s_pinch_timer = lv_timer_create(map_pinch_poll_cb, 40, NULL);
     lv_timer_pause(s_pinch_timer);
 
+    /* ⛔ THE FEEDS RUN FROM BOOT NOW - operator, 2026-09-13: "The list starts
+     * populating like 3min after opening the map.... how about opening and
+     * sync the list as soon as the whole app boots?" This REVERSES the same
+     * day's "free the RAM while not on SelfSpotter" rule, on his instruction,
+     * and it has to: PSK Reporter and RBN are live pushes with NO history, so
+     * a session opened when the map opens can only ever show what arrives
+     * afterwards. Collecting from boot is the only way the list is already
+     * full when he looks. Cost: the MQTT client task (internal RAM, see
+     * pskr_self.c) for every unit, all the time. show()/hide() no longer
+     * touch this. */
+    settings_set_spotmap_en(true);
+
     ESP_LOGI(TAG, "init");
 }
 
 void spot_map_view_show(void)
 {
     if (!s_overlay) return;
-    // Opt-in (settings.h, spotmap_en), so with it off there is nothing behind
-    // this gesture - every feed is idle and the map would be a blank world with
-    // no explanation. Say where the switch is instead of opening an empty one.
-    if (!settings_get_spotmap_en()) {
-        ui_toast("Spot map is off - Settings, Network, \"Spot map\"");
-        return;
-    }
+    /* ⛔ THIS IS THE SWITCH NOW - THERE IS NO CHECKBOX LEFT TO GATE ON.
+     *
+     * Operator, 2026-09-13: "The Spot Map checkbox in all other Drawers
+     * should be deleted and instead implement the following: Whenever the
+     * user is not on the SelfSpotter it will free up ram usage as if the
+     * former Spot map was UNCHECKED. Then when entering SelfSpotter it of
+     * course act like it WAS checked."
+     *
+     * So this call turns the three feeds (MQTT to PSK Reporter, RBN telnet,
+     * the wsprnet poller) on itself, rather than refusing to open because
+     * something else had not been turned on first - see settings.h's
+     * spotmap_en for what reads this. spot_map_view_hide() is the exact
+     * mirror image, below. */
     s_sig_rbn_n = s_sig_psk_n = s_sig_wspr_n = -1;   // force a redraw on this open
     s_sig_rbn_t = s_sig_psk_t = s_sig_wspr_t = -1;
     refresh_own_position();
@@ -1665,6 +2515,11 @@ void spot_map_view_show(void)
     map_fit_to_spots();
     s_map_pinch_active = false;
     s_map_drag_active = false;
+    // The settings drawer (right-edge swipe) always starts CLOSED on a fresh
+    // open too - same reasoning as the zoom/pan reset just above: nothing
+    // about a previous session should linger into this one. settings_close()
+    // rather than a bare flag set, so the scrim resets with it.
+    if (s_settings_drawer) settings_close();
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     // Raise it. Built once at init, so anything created/foregrounded after
     // that (every screen mode's own containers) sits above it in the
@@ -1675,6 +2530,8 @@ void spot_map_view_show(void)
     s_active = true;
     if (s_refresh_timer) lv_timer_resume(s_refresh_timer);
     if (s_pinch_timer) lv_timer_resume(s_pinch_timer);
+    map_mark_dirty();
+    if (s_map_cache_timer) lv_timer_resume(s_map_cache_timer);
     ui_help_overlay_changed();   // stand the top bar and edge swipes down
     ESP_LOGI(TAG, "show");
 }
@@ -1685,6 +2542,17 @@ void spot_map_view_hide(void)
     s_active = false;
     if (s_refresh_timer) lv_timer_pause(s_refresh_timer);
     if (s_pinch_timer) lv_timer_pause(s_pinch_timer);
+    if (s_map_cache_timer) lv_timer_pause(s_map_cache_timer);
+    /* Give the ~1.5 MB cache back while nobody is looking - PSRAM free was
+     * measured at 1.9 MB with it held. Rebuilt on the next show(). Detach the
+     * image source BEFORE freeing, so nothing can draw from freed memory. */
+    if (s_map_cache_buf) {
+        lv_image_set_src(s_map_bg_obj, NULL);
+        heap_caps_free(s_map_cache_buf);
+        s_map_cache_buf = NULL;
+        s_map_cache_w = s_map_cache_h = s_map_cache_stride = 0;
+        s_map_dirty = true;
+    }
     ui_help_overlay_changed();   // hand the top bar and edge swipes back
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "hide");

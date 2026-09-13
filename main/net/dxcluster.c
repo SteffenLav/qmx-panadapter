@@ -19,6 +19,7 @@
 
 #include "dxcluster.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "spots.h"
 #include "storage/settings.h"
 #include "wifi/wifi.h"
@@ -464,7 +465,7 @@ static void dxc_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
         qmx_settings_t cfg;
         settings_load_all(&cfg);
-        if (net_quiet_active()) continue;   // see net_quiet.h - no new sessions during an OTA
+        if (net_quiet_active() || bg_feed_gate_active()) continue;   // no new sessions during an OTA or a full-screen overlay
         if (!cfg.cluster_en || !cfg.my_callsign[0] || !wifi_is_connected()) {
             if (s->n) { s->n = 0; spots_publish(SPOT_SRC_CLUSTER, NULL, 0); s_pub_count = 0; }
             continue;

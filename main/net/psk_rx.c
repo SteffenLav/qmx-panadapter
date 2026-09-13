@@ -15,6 +15,7 @@
 
 #include "psk_rx.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "wifi/wifi.h"
@@ -334,7 +335,7 @@ static void psk_rx_task(void *arg)
         // net_quiet: this query's response cap is 64 KB and it comes over TLS -
         // by far the largest periodic allocation on the device. Not during an
         // update, where internal free has been measured at 5 KB. See net_quiet.h.
-        if (net_quiet_active()) continue;
+        if (net_quiet_active() || bg_feed_gate_active()) continue;
 
         // One floor for both paths. An operator hammering a refresh button must
         // not be able to breach the collector's stated rate limit.

@@ -251,6 +251,17 @@ void ui_power_off_safely(void);
 // what made the Reader's own Back/Exit buttons untappable.
 void ui_help_overlay_changed(void);
 
+// True while any full-screen overlay (Reader, "Need guidance?", the radio
+// terminal, SelfSpotter) is covering the whole display. Exported so render.c
+// can skip drawing the spectrum/waterfall canvases underneath one, the same
+// way it already skips them in FT8 mode - see render.c's pan_visible.
+bool ui_any_overlay_active(void);
+
+// Opens the on-device docs Reader at its top level. Exported 2026-09-13 so
+// ui/spot_map_view.c's own settings drawer can offer the same "User Manual"
+// button the main drawer has, rather than duplicating reader_view.c's API.
+void ui_open_user_manual(void);
+
 // Called from cat.c's VN; response handler once the QMX firmware version is
 // known, so the drawer can reveal 1_04+-gated sections (AM mode, Tune button)
 // even if it was already built (lazy, first-open) before VN; answered. No-op

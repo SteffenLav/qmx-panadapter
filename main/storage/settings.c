@@ -564,7 +564,6 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
-    if (dirty_test(&dirty_local, DIRTY_SPOTMAP_EN))    nvs_set_u8(s_nvs, KEY_SPOTMAP_EN,    snap.spotmap_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
@@ -791,7 +790,10 @@ static void load_from_nvs(qmx_settings_t *out)
     // nothing until WiFi is up.
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
-    out->spotmap_en = false; // opt-in: a standing MQTT session plus three pollers, see settings.h
+    /* ⛔ NEVER PERSISTED ANY MORE - see settings_set_spotmap_en()'s own comment.
+     * Always false at boot: the feeds start only when the SELFSPOTTER overlay
+     * is actually opened. */
+    out->spotmap_en = false;
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
     // #239: ON, and the repeat runs are in. Under the exact failing recipe -
     // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
@@ -995,7 +997,6 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
-    if (nvs_get_u8(s_nvs, KEY_SPOTMAP_EN, &u8v) == ESP_OK) out->spotmap_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
@@ -2172,14 +2173,28 @@ void settings_set_rbn_en(bool v)
     mark_dirty(DIRTY_RBN_EN);
 }
 
+/* ⛔ RAM-ONLY, NEVER WRITTEN TO NVS ANY MORE. Operator, 2026-09-13: "The Spot
+ * Map checkbox in all other Drawers should be deleted and instead implement
+ * the following: Whenever the user is not on the SelfSpotter it will free up
+ * ram usage as if the former Spot map was UNCHECKED. Then when entering
+ * SelfSpotter it of course act like it WAS checked."
+ *
+ * ⛔ SUPERSEDED THE SAME DAY: spot_map_view_init() now sets it true at boot and
+ * nothing turns it off, so the list is already full when the map is opened -
+ * see the comment there. It stays RAM-only so that decision lives in code, not
+ * in a stored value. Persisting it
+ * would let a stale "true" survive a reboot with the overlay never opened,
+ * starting three feeds (an MQTT session, an RBN telnet client, a wsprnet
+ * poller) for a screen nobody is looking at - the opposite of the point.
+ * mark_dirty(DIRTY_SPOTMAP_EN) is deliberately gone; DIRTY_SPOTMAP_EN itself
+ * is left defined (settings.c's dirty-bit indices are never reused) but is
+ * now permanently untested. */
 void settings_set_spotmap_en(bool v)
 {
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.spotmap_en == v) { xSemaphoreGive(s_mutex); return; }
     s_pending.spotmap_en = v;
     xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_SPOTMAP_EN);
 }
 
 void settings_set_sota_en(bool v)

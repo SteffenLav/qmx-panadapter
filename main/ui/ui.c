@@ -1917,7 +1917,8 @@ static void left_edge_swipe_cb(lv_event_t *e);
 static void bottom_edge_swipe_cb(lv_event_t *e);
 static void osk_bt_retire_cb(lv_timer_t *t);   /* #273 - retire a stale on-screen keyboard */
 static void right_edge_swipe_cb(lv_event_t *e);
-static void top_edge_swipe_cb(lv_event_t *e);
+// top_edge_swipe_cb forward decl REMOVED 2026-09-13 - see the function's own
+// removal note further down.
 static void resmon_drag_cb(lv_event_t *e);
 static void pinch_poll_cb(lv_timer_t *t);
 static void sync_nav_affordances(void);   // defined below; called from the 1 Hz poll
@@ -2307,7 +2308,7 @@ static int  s_screen_swipe_start_x  = -1;
 static int  s_left_edge_swipe_start_x   = -1;
 static int  s_bottom_edge_swipe_start_y = -1;
 static int  s_right_edge_swipe_start_x  = -1;
-static int  s_top_edge_swipe_start_y    = -1;
+// s_top_edge_swipe_start_y REMOVED 2026-09-13 with the gesture itself.
 // Deliberately thin (10px, not the usual 30). The top bar's Band/Mode/BW/
 // S-meter/burger hit zones claim nearly the whole top of the screen - unlike
 // the other three edges, which have wide free margins - so a strip this size
@@ -2427,7 +2428,7 @@ static volatile int8_t s_sd_want = -1;
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
-static lv_obj_t *s_top_edge_grip = NULL;
+// s_top_edge_grip REMOVED 2026-09-13 with the gesture itself.
 // The gesture strips themselves (not just their visual grips) - built first
 // in ui_init so touch handlers are live from the earliest possible frame,
 // then re-foregrounded one final time at the end of ui_init once every
@@ -2436,7 +2437,7 @@ static lv_obj_t *s_top_edge_grip = NULL;
 static lv_obj_t *s_left_edge_strip   = NULL;
 static lv_obj_t *s_bottom_edge_strip = NULL;
 static lv_obj_t *s_right_edge_strip  = NULL;
-static lv_obj_t *s_top_edge_strip    = NULL;
+// s_top_edge_strip REMOVED 2026-09-13 with the gesture itself.
 
 // Resource-monitor floating overlay: a small, draggable, semi-transparent
 // panel showing live memory/SD-space figures, toggled from the drawer.
@@ -2587,13 +2588,9 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
 // object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
 // "Settings drawer built". Raise this when adding a section, and keep headroom.
-/* The spot map overlay (ui/spot_map_view.c) and the three self-spot feeds
- * behind it. Its own section rather than a fifth row inside DRAWER_SEC_SPOTS,
- * for two reasons: that section is panadapter-only and the map opens from ANY
- * page on a top-edge swipe, so its switch would vanish exactly where the
- * gesture still worked; and the lane is about stations to WORK while the map
- * is about who is hearing US - different questions. */
-#define DRAWER_SEC_SPOTMAP    42
+// DRAWER_SEC_SPOTMAP (was 42) REMOVED 2026-09-13 - no drawer checkbox any
+// more, see settings.h's spotmap_en. The id is retired, not reused - see the
+// bound-and-index warning above.
 /* The km/miles switch on its own, for the WSPR page (operator, 2026-09-11:
  * "remove FT8 section - then insert: Distance in miles checkbox"). WSPR used
  * to borrow DRAWER_SEC_DISTANCE, which dragged an "FT8" group heading and two
@@ -2674,7 +2671,6 @@ static const drawer_item_t GRP_NETWORK[] = {
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     // Basic, not Advanced: it is off by default, so an operator who never finds
     // it never gets the feature at all.
-    { DRAWER_SEC_SPOTMAP, "Spot map (live reports of my signal)", true },
     { DRAWER_SEC_BT, "Bluetooth mouse", false },
 };
 // Flip 180 last: it is the least-touched control in the group (operator).
@@ -3093,7 +3089,6 @@ void ui_raise_edge_strips(void)
     if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
     if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
     if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
-    if (s_top_edge_strip)    lv_obj_move_foreground(s_top_edge_strip);
 }
 static void ui_advance_page(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
@@ -3551,6 +3546,11 @@ static void iq_warn_help_cb(lv_event_t *e)   { (void)e; help_open(HELP_TROUBLE_I
 // the other rows are right there instead of a dead end.
 static void qmx_wait_help_cb(lv_event_t *e)  { (void)e; help_triage_open(); }
 static void whats_wrong_cb(lv_event_t *e)    { (void)e; drawer_close(); help_triage_open(); }
+// The door into SelfSpotter, replacing the top-edge swipe it used to be
+// (removed the same day - see that gesture's own tombstone comment). A
+// drawer button rather than a gesture: swipes are hard to discover and this
+// one collided with the top bar's own Band/Mode/BW/Zoom hit zones.
+static void drawer_selfspotter_cb(lv_event_t *e) { (void)e; drawer_close(); spot_map_view_show(); }
 
 bool ui_iq_mode_warning_active(void) { return s_iq_warn_active; }
 
@@ -5532,38 +5532,12 @@ static void build_edge_swipe_strips(lv_obj_t *scr)
         lv_obj_move_foreground(strip);
         s_right_edge_strip = strip;
     }
-    // Top edge: swipe down to open the spot map (ui/spot_map_view.c). See
-    // TOP_EDGE_ZONE_PX's comment for why this strip is far thinner than the
-    // other three - the top bar's own controls claim nearly the whole width
-    // just below it.
-    {
-        lv_obj_t *strip = lv_obj_create(scr);
-        lv_obj_set_size(strip, DISPLAY_H_RES, TOP_EDGE_ZONE_PX);
-        lv_obj_set_pos(strip, 0, 0);
-        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(strip, 0, 0);
-        lv_obj_set_style_pad_all(strip, 0, 0);
-        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(strip, top_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(strip, top_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_move_foreground(strip);
-        s_top_edge_strip = strip;
-
-        // Tiny grip handle, horizontally centered, flush with the very top edge.
-        lv_obj_t *grip = lv_obj_create(strip);
-        lv_obj_set_size(grip, 120, 4);
-        lv_obj_align(grip, LV_ALIGN_TOP_MID, 0, 0);
-        lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
-        lv_obj_set_style_border_width(grip, 0, 0);
-        lv_obj_set_style_radius(grip, 5, 0);
-        lv_obj_set_style_shadow_width(grip, 0, 0);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
-        grip_start_breathing(grip);
-        s_top_edge_grip = grip;
-    }
+    // Top edge strip/grip REMOVED 2026-09-13. Operator: "The top down swipe
+    // needs to be dropped - there are too many top bar features that is
+    // colliding with it." The drawer's "SelfSpotter" button is the door in
+    // now (see its own comment). TOP_EDGE_ZONE_PX stays defined - it is not
+    // otherwise referenced, but it is a record of the old strip's size, not
+    // load-bearing for anything.
 }
 
 // Small, semi-transparent, draggable panel showing live memory/SD-space
@@ -7612,12 +7586,30 @@ static void top_bar_apply_mode(void)
 // the manual as if live; and the right edge has a SEPARATE s_burger_btn that opens
 // the drawer, which was never disabled at all. A hidden object is not hit-tested
 // and not drawn, which settles both in one move.
+/* ⭐ THE ONE PLACE THAT KNOWS "IS SOMETHING FULL-SCREEN COVERING EVERYTHING",
+ * exported below as ui_any_overlay_active() so render.c can reuse it rather
+ * than re-deriving the same four-way OR. Operator, 2026-09-13: "I think we
+ * really need to close any other process down when entering these resource
+ * eating features". render.c's own Tier-1 gate (v0.19.3) already skips the
+ * spectrum/waterfall canvas pipeline in FT8 mode, on the reasoning that
+ * drawing a canvas nobody can see still costs the full flush + 90 deg
+ * software-rotation pipeline - the single biggest thing on core 0. That
+ * reasoning applies just as much to EVERY overlay here, not only FT8: the
+ * Reader, "Need guidance?", the radio terminal, and now SelfSpotter are all
+ * full-screen and opaque, and none of them ever stood that pipeline down -
+ * a pre-existing gap this request happened to surface, not something new to
+ * SelfSpotter. See render.c's own widened pan_visible. */
+bool ui_any_overlay_active(void)
+{
+    return reader_view_is_active() || help_triage_is_open()
+           || qmx_term_view_is_open() || spot_map_view_is_active();
+}
+
 static void sync_nav_affordances(void)
 {
-    const bool owned = reader_view_is_active() || help_triage_is_open()
-                       || qmx_term_view_is_open() || spot_map_view_is_active();
+    const bool owned = ui_any_overlay_active();
 
-    lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn, s_top_edge_strip };
+    lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
     for (size_t i = 0; i < sizeof(nav) / sizeof(nav[0]); i++) {
         if (!nav[i]) continue;
         // ⛔ The OTA banner must NEVER hide these. It used to, back when the
@@ -9695,54 +9687,10 @@ static void left_edge_swipe_cb(lv_event_t *e)
     }
 }
 
-// Top-edge swipe (drag down) opens the spot map overlay (ui/spot_map_view.c).
-// Same always-on-top overlay approach as left_edge_swipe_cb, deliberately as
-// simple: unlike the bottom strip this has no second gesture to disambiguate
-// against, since the top bar's own controls take every tap that isn't a
-// vertical drag starting within TOP_EDGE_ZONE_PX of the very top edge.
-static void top_edge_swipe_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_indev_t *indev = lv_event_get_indev(e);
-    if (!indev) return;
-
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-
-    /* ⚠ LOGGED, BECAUSE THIS GESTURE HAS FIRED WITH NOBODY TOUCHING THE SCREEN.
-     * 2026-09-11, dev bench, WSPR page: the spot map opened at 17:08:21 UTC and
-     * was closed by its Exit button at 17:10:08 while the operator was nowhere
-     * near the Tab5 - and the map's load cost that WSPR cycle every decode. No
-     * mouse or keyboard was connected and the web UI has no way to open it, so
-     * the touch panel produced both. The log did not say what the touch looked
-     * like, so a ghost could not be told from a swipe. Now it does: where it
-     * started and ended, how long it took, and which indev delivered it. Guard
-     * on evidence, not on a guess at the ghost's shape. */
-    static int64_t s_top_press_us;
-    static int     s_top_press_x;
-    if (code == LV_EVENT_PRESSED) {
-        s_top_edge_swipe_start_y = (int)p.y;
-        s_top_press_x  = (int)p.x;
-        s_top_press_us = esp_timer_get_time();
-        return;
-    }
-    if (code == LV_EVENT_RELEASED) {
-        const int dur_ms = (int)((esp_timer_get_time() - s_top_press_us) / 1000);
-        bool open = false;
-        if (s_top_edge_swipe_start_y >= 0 &&
-            (int)p.y - s_top_edge_swipe_start_y >= EDGE_SWIPE_MIN_DY) {
-            open = true;
-        } else if (grip_mouse_click(e, s_top_edge_grip)) {
-            open = true;                // a pointer cannot swipe: see grip_mouse_click()
-        }
-        ESP_LOGI(TAG, "top-edge gesture: (%d,%d) -> (%d,%d) in %d ms via %s -> %s",
-                 s_top_press_x, s_top_edge_swipe_start_y, (int)p.x, (int)p.y, dur_ms,
-                 indev == s_mouse_indev ? "mouse" : "touch",
-                 open ? "OPEN spot map" : "ignored");
-        if (open) spot_map_view_show();
-        s_top_edge_swipe_start_y = -1;
-    }
-}
+// top_edge_swipe_cb REMOVED 2026-09-13. Operator: "The top down swipe needs
+// to be dropped - there are too many top bar features that is colliding with
+// it." The door in is now a "SelfSpotter" button in the drawer, right below
+// "Need guidance?" - see its own comment near that button's creation.
 
 // Bottom-edge swipe (drag up) opens the memory-channel modal. Same
 // always-on-top overlay approach as left_edge_swipe_cb.
@@ -10455,7 +10403,8 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
 static lv_obj_t *s_check_spots = NULL;
 static lv_obj_t *s_check_rbn   = NULL;
 static lv_obj_t *s_check_sota  = NULL;
-static lv_obj_t *s_check_spotmap = NULL;
+// s_check_spotmap REMOVED 2026-09-13 - the Spot map checkbox is gone from
+// every drawer; see settings.h's spotmap_en for what replaced it.
 
 static void drawer_spots_cb(lv_event_t *e)
 {
@@ -10474,17 +10423,6 @@ static void drawer_rbn_cb(lv_event_t *e)
     settings_set_rbn_en(on);
     // The RBN task polls the setting, so there is nothing to start or stop here.
     ESP_LOGI(TAG, "RBN spot source: %s", on ? "on" : "off");
-}
-
-static void drawer_spotmap_cb(lv_event_t *e)
-{
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_set_spotmap_en(on);
-    // Nothing to start or stop from here: all four feeds re-read the setting on
-    // their own pass, and net/pskr_self.c starts or STOPS its MQTT session on
-    // it - stopping matters, because esp-mqtt's client task is the one
-    // allocation in this feature that cannot live in PSRAM.
-    ESP_LOGI(TAG, "spot map + self-spot feeds: %s", on ? "on" : "off");
 }
 
 static void drawer_sota_cb(lv_event_t *e)
@@ -11084,7 +11022,6 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_wspr_test,      c.sim_mode_en);
     sync_cb(s_check_spots,          c.spots_en);
     sync_cb(s_check_rbn,            c.rbn_en);
-    sync_cb(s_check_spotmap,        c.spotmap_en);
     sync_cb(s_check_cluster,        c.cluster_en);
     sync_cb(s_check_sota,           c.sota_en);
     sync_cb(s_check_spotmode,       c.spots_mode_filter);
@@ -11313,6 +11250,27 @@ static void drawer_build(void)
         // curiosity rather than trouble. LV_SYMBOL_LIST matches what it opens - a
         // list of topics - where LV_SYMBOL_WARNING implied something was broken.
         lv_label_set_text(l, LV_SYMBOL_LIST "  Need guidance?");
+        lv_obj_center(l);
+        y += 60 + 20;
+    }
+
+    // SelfSpotter - the door in, replacing the top-edge swipe. Operator,
+    // 2026-09-13: "create a button in all the drawers just below the 'Need
+    // Guidance?' called SelfSpotter". Directly below the other two doors for
+    // the same reason they are grouped: all three are "go somewhere else in
+    // the app", not a setting to tune.
+    {
+        lv_obj_t *btn = lv_button_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 60);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, drawer_selfspotter_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_label_set_text(l, LV_SYMBOL_GPS "  SelfSpotter");
         lv_obj_center(l);
         y += 60 + 20;
     }
@@ -11953,38 +11911,10 @@ static void drawer_build(void)
         y += 278;
     }
 
-    // Spot map: deliberately its OWN section and not a sixth row above, because
-    // the section above is panadapter-only and the map's top-edge swipe is not.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTMAP, y, 104);
-        lv_obj_t *hdr = lv_label_create(sec);
-        // Two words, because the checkbox sits at TOP_RIGHT of this same
-        // section and a montserrat_28 header longer than that runs underneath
-        // it - "Spot map (live reports of my signal)" did, and the overlap is
-        // invisible from the code. The full name lives in the group list,
-        // where there is room for it.
-        lv_label_set_text(hdr, "Spot map");
-        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 6);
-        s_check_spotmap = make_drawer_checkbox(sec, settings_get_spotmap_en(),
-                                               drawer_spotmap_cb, NULL);
-        lv_obj_align(s_check_spotmap, LV_ALIGN_TOP_RIGHT, 0, 6);
-
-        // Says what gets switched on, because "Spot map" does not convey that
-        // it opens a live connection to somebody else's broker. Width and WRAP
-        // are set explicitly: an LVGL label defaults to one unclipped line that
-        // simply runs off the edge of the drawer, which is what the first
-        // version did with a hand-placed newline in the string.
-        lv_obj_t *sub = lv_label_create(sec);
-        lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(sub, DRAWER_W - 2 * 16 - 70);   /* drawer pad, then clear of the checkbox */
-        lv_label_set_text(sub, "live reports of my signal - swipe down from the top edge");
-        lv_obj_set_style_text_color(sub, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        lv_obj_set_style_text_font(sub, &lv_font_montserrat_20, 0);
-        lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 0, 44);
-        y += 104;
-    }
+    // Spot map section REMOVED 2026-09-13 - no checkbox, no NVS switch; the
+    // SELFSPOTTER button near the top of this drawer is the only door in now,
+    // and settings.h's spotmap_en is driven by that screen's own show()/
+    // hide(). See settings.h's field comment and spot_map_view.c.
 
     // Presets section: header + three buttons side-by-side
     {

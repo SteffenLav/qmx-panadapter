@@ -2371,7 +2371,17 @@ void wspr_screen_view_tick(void)
      * immediately when the page has not been built. */
     hop_maybe();
 
-    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+    // ⛔ "hidden" alone is the WRONG question - this container is never
+    // actually hidden by a full-screen overlay opening on top of it (Reader,
+    // SelfSpotter, ...); it is merely drawn OVER. So this guard passed
+    // (falsely) the whole time SelfSpotter was open, and everything below -
+    // the marker/waterfall-push work included - kept running its full cost
+    // underneath a screen nobody could see, competing with SelfSpotter's own
+    // drawing for taskLVGL. Same fix as render.c's Tier-1 gate and
+    // bg_feed_gate.c: ask ui_any_overlay_active() too, not just this page's
+    // own flag.
+    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)
+                      || ui_any_overlay_active()) return;
 
     /* After the visibility guard: these read the spot store under its mutex and
      * walk a 256-entry ring, which is pure cost on a page nobody is looking at. */

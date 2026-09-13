@@ -60,7 +60,7 @@ static const char *TAG = "wspr_self";
 #define QUERY_LIMIT     30      // rows requested - plenty for "who's hearing me right now"
 #define POLL_INTERVAL_S 180     // WSPR cycles are 2 min; this trails by half a cycle so a
                                  // just-uploaded report has landed in wsprnet's DB by the time we ask
-#define WSPR_SELF_TTL_S 1800    // same half-hour map lifetime as net/rbn.c's and net/pskr_self.c's self-spots
+#define WSPR_SELF_TTL_S (24 * 3600)   // same as net/rbn.c's RBN_SELF_TTL_S - see the reason there
 
 static EXT_RAM_BSS_ATTR wspr_self_spot_t s_store[WSPR_SELF_MAX];
 static int               s_count;
@@ -277,8 +277,13 @@ static void wspr_self_task(void *arg)
     while (!wifi_is_connected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_S * 1000));
+    /* ⛔ QUERY FIRST, THEN WAIT. The delay used to come first, so nothing
+     * appeared for a full POLL_INTERVAL_S (3 min) after boot - the operator's
+     * "the list starts populating like 3min after opening the map". A short
+     * settle lets the post-Got-IP burst (SNTP, POTA, web server) pass. */
+    vTaskDelay(pdMS_TO_TICKS(15000));
+    for (bool first = true; ; first = false) {
+        if (!first) vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_S * 1000));
 
         if (net_quiet_active()) continue;
         // The spot map is opt-in (settings.h, spotmap_en) and this is one of

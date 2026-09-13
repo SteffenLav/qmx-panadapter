@@ -1805,6 +1805,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                                            : "{\"ok\":true,\"spotmap\":\"hidden\"}")
                                    : "{\"ok\":false,\"error\":\"display busy\"}");
         return ESP_OK;
+    } else if (action && strcmp(action, "selfspot_test") == 0) {
+        /* Dev action: inject a fixed synthetic self-spot set (all three
+         * sources, every continent, mixed ages) so SelfSpotter's MAP/LIST can
+         * be exercised without waiting for real RBN/PSK-self/wsprnet traffic.
+         * {"action":"selfspot_test","on":true|false} */
+        cJSON *js = cJSON_GetObjectItem(root, "on");
+        bool on = cJSON_IsBool(js) ? cJSON_IsTrue(js) : true;
+        cJSON_Delete(root);
+        bool ok = false;
+        if (display_lock(500)) {
+            spot_map_view_set_test_spots(on);
+            ok = true;
+            display_unlock();
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, ok ? (on ? "{\"ok\":true,\"selfspot_test\":\"on\"}"
+                                         : "{\"ok\":true,\"selfspot_test\":\"off\"}")
+                                   : "{\"ok\":false,\"error\":\"display busy\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "gapfill") == 0) {
         /* Dev action for the capture time-base repair (dsp.c time_base_check):
          * {"action":"gapfill","on":false}            - A/B the repair
@@ -4115,8 +4134,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
-    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "spotmap_en")))
-        settings_set_spotmap_en(cJSON_IsTrue(it));
+    // spotmap_en POST handling REMOVED 2026-09-13 - there is no SelfSpotter
+    // view on the web, so this was a switch a web-only user could turn on for
+    // a screen they could never see the result of. spot_map_view.c's own
+    // show()/hide() is the sole authority now (settings.h).
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
         settings_set_pskreporter_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))

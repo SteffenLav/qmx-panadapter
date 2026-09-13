@@ -55,7 +55,10 @@ static const char *TAG = "rbn";
 // oldest is evicted first, same eviction rule as below) plus a manual Flush
 // (rbn_self_spots_clear()) so the map can be started fresh on demand.
 #define RBN_SELF_MAX  100
-#define RBN_SELF_TTL_S 1800       // stays on the map half an hour after being heard
+/* 24 h, was 1800. ⛔ At 1800 the map's "Older >30 min" checkbox could never
+ * show a real spot: the store deleted it at exactly the age the map would
+ * have started drawing it faded. The 100-entry evict-oldest cap bounds it. */
+#define RBN_SELF_TTL_S (24 * 3600)
 
 // Bench override for bringing the feature up when there is no way to reach the
 // settings toggle (the web UI behind a hotel subnet, nobody at the screen).
@@ -411,9 +414,13 @@ static void session(int fd, const char *mycall)
         qmx_settings_t st;
         settings_load_all(&st);
         // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
-        // exactly the internal-heap churn the verify cannot afford. A live
-        // connection is left running; this only gates starting a new one.
+        // exactly the internal-heap churn the verify cannot afford. (Left as it
+        // was - the OTA fix was verified with this read loop pausing.)
         if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        /* ⛔ NO bg_feed_gate HERE - this is the READ loop of a live session.
+         * Gating it stopped recv() whenever any overlay was up, so while the
+         * SelfSpotter was open RBN delivered NOTHING, including the CW
+         * self-spots that screen exists to show. */
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) { ESP_LOGI(TAG, "session ending (disabled or offline)"); return; }
 
@@ -486,6 +493,8 @@ static void rbn_task(void *arg)
         // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
         // exactly the internal-heap churn the verify cannot afford. A live
         // connection is left running; this only gates starting a new one.
+        // NOT bg_feed_gate: RBN carries the SelfSpotter's CW self-spots, so
+        // holding its reconnect while an overlay is up starves that very screen.
         if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) {

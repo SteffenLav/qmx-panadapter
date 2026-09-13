@@ -9,6 +9,7 @@
 #include "util/psram_task.h"
 #include "net/ota_update.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "storage/settings.h"
 
 #include "esp_http_client.h"
@@ -293,7 +294,7 @@ static void check_task(void *arg)
         // pulls 48 KB over TLS, and the thing it would be checking for is
         // already in flight. See net_quiet.h.
         s_checking = true;
-        bool ok = wifi_is_connected() && !net_quiet_active() && do_check();
+        bool ok = wifi_is_connected() && !net_quiet_active() && !bg_feed_gate_active() && do_check();
         s_checking = false;
 
         // #239: fetch it quietly, so the operator is only ever asked the one

@@ -8,6 +8,52 @@
 
 ---
 
+## ⛔ 2026-09-13 — the section below is CURRENT, everything under "Master Table" is NOT
+
+The master table's own header still says "Last updated 2026-09-02" and describes
+repo state as **v1.5.0** — the project is nine releases past that (currently
+**v1.12.4**, released) with dozens of commits since. It was never reconciled row
+by row against that gap, and doing so properly is a real, separate pass, not
+something to fold into a release-day check. **Do not read a row below this
+line as still true without checking it against the code first** — several are
+almost certainly already shipped and verified in a release the table predates.
+
+This section is the honest, current answer to "what is hanging, right now,
+2026-09-13" — built from `git log v1.12.4..HEAD`, not from the stale table.
+
+### Ready for today's release (v1.12.4 → next), built and flashed, awaiting your look
+| # | What | State |
+|---|---|---|
+| 1 | SELFSPOTTER map + LIST + CONDITIONS (Uwe DL8UG's feature) | Freeze root-caused and fixed (LOD stride), zoom-fit, drag-pan, live re-fit, age dimming, 1:10m coastline, house-style checkboxes, mode-colour fix, bigger tab fonts — full round of your own feedback, all flashed. **Not yet looked at by you on the actual screen.** |
+| 2 | WSPR duty cycle: "1 in N" instead of a percentage | Deterministic period, no more back-to-back bursts, legacy NVS values migrated. **Flashed; not yet watched over a real multi-cycle run.** |
+| 3 | WSPR TX-state UI: bar/counter go TX-orange, W/SWR hidden between bursts, carpet dims during TX | Flashed, not yet seen live. |
+| 4 | WSPR PA guard engages at TX-enable, not at the boundary | **Verified on air tonight** — burst fired at the very next boundary, no held cycle, 1.1 W measured at PA=6.0 V. Only gap: a cold-cache retry when CAT link-up races the guard (see below) — offered, no decision taken. |
+| 5 | RPC orphan-deadlock patch (#18) | **Hardware-confirmed tonight** — 17 seedings caught and refused in one run, zero wedges. Ready to call closed. |
+| 6 | microSD-write web freeze (screenshot streaming) | `/ss.bmp` now streams from the panel framebuffer instead of a 1-chunk-per-row send that was itself killing the WiFi link — fixed and flashed, not yet re-measured under a real CW+card session. |
+| 7 | SDIO 10 s death-window patch | Flashed. **The one thing it exists to prove — a `slave answered again ... NOT restarting` line — has not been seen yet.** Needs a longer soak. |
+
+### Decisions you haven't made yet (I asked, no answer came)
+| # | What | Question |
+|---|---|---|
+| 8 | PA-guard cold-cache retry | If CAT link-up resets the cached PA voltage right as TX is switched on, the guard's TX-enable engagement can miss and fall back to the (working but slower) boundary path. Small fix, offered, never answered. |
+| 9 | Map: silent "no position" drop | A spot with no resolvable lat/lon is in the LIST but invisible on the MAP, with nothing saying so. Hasn't bitten yet (WSPR-only data so far resolves 100%), but WILL the moment RBN/PSK Reporter data with an unmapped prefix arrives. Offered a sidebar count, no decision. |
+
+### Genuinely still open, not part of tonight's work, worth knowing about before you decide what ships
+| # | What | Status |
+|---|---|---|
+| #383 | Spot lane hides in-view spots with no indication | Real gap, first fix was wrong and reverted, still unsolved |
+| #376/#367 | WSPR decoder steals USB audio at the wire; the "deep" candidate pass is measurably better but starves capture | Deliberately shipped OFF, root cause understood, not a quick fix |
+| #378 | Web page freezes up to 30 s during a microSD write | Mitigated (deferred while a browser watches), not cured |
+| #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | Instrument built, not yet flashed |
+| #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | Understood, not blocking anything currently planned |
+
+### Deliberately parked (not today, by design)
+CW page work (#351/#352), QDX/QDX-M support (#303 — no hardware to test against),
+binaural CW (#245/#102), static IP still unverified on hardware (#307 — shipped,
+just never flash-tested live), README/docs-tree unification (#111).
+
+---
+
 ## ⚡ Status Legend
 
 - 🔴 **Identified bug** — Code defect confirmed, ready to fix
