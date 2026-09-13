@@ -25,6 +25,13 @@ void spot_map_view_hide(void);
 // overlay is the thing on screen, same role as reader_view_is_active().
 bool spot_map_view_is_active(void);
 
+// How many self-spots are currently on the map, for help_topics.c's "the spot
+// map is empty" triage row - a real live condition rather than a normal
+// question, but only meaningful while the overlay is actually open (see
+// spot_map_view_is_active()); the count is a stale snapshot from before the
+// last hide() otherwise, since the refresh timer is paused with it.
+int spot_map_view_spot_count(void);
+
 // Dev-only: inject a fixed set of synthetic self-spots (all three sources,
 // spread across every continent, mixed ages) so MAP/LIST can be tested
 // without waiting on real RBN/PSK-self/wsprnet traffic. /api/cmd "selfspot_test".

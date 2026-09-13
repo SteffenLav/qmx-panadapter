@@ -11,6 +11,7 @@
 #include "ft8_screen.h"
 #include "cat.h"
 #include "wifi/wifi.h"
+#include "spot_map_view.h"
 
 #include "esp_log.h"
 
@@ -30,6 +31,11 @@ static const help_entry_t s_topics[] = {
     { HELP_WEB_UI,              "guide/web-ui.md",              "Quick Start",               "Web interface"        },
     { HELP_TIME_SYNC,           "guide/time-sync.md",           "Time Sources",              "Time sync"            },
     { HELP_WSPR,                "guide/wspr.md",                "Reading the page",          "WSPR"                 },
+    // 2026-09-13: SelfSpotter (Uwe DL8UG's spot map) had a full guide page
+    // (guide/spot-map.md) and no entry anywhere in this table or the triage
+    // list below it feeds - reachable only by already knowing the manual's
+    // index existed and going to look. This is that entry.
+    { HELP_SPOTMAP,             "guide/spot-map.md",            "Opening it",                "Spot map"             },
 
     // Specific controls (Layer 2).
     { HELP_TAP_TO_TUNE,         "guide/panadapter.md",          "Tap to Tune",               "Tap to tune"          },
@@ -44,6 +50,25 @@ static const help_entry_t s_topics[] = {
     { HELP_UPLOADS,             "guide/ft8-tx.md",              "Upload to QRZ",             "Log uploads"          },
     { HELP_SPOTS_TAP,           "guide/spots.md",               "Tapping a spot",            "Tapping a spot"       },
     { HELP_ROBOT,              "guide/ft8-tx.md",               "Auto-Reply",                "Auto-reply robot"     },
+    // 2026-09-13 feature-coverage audit (the SelfSpotter pass turned up how
+    // much else had the same problem: real, documented features with zero
+    // path in from "Need guidance?"). All seven below have full guide
+    // content already - this is wiring, not new writing, except
+    // HELP_RELEASE_RADIO (see its own comment).
+    { HELP_RIT,                 "guide/panadapter.md",          "receiving off your transmit","RIT"                 },
+    { HELP_STILL_SPECTRUM,      "guide/panadapter.md",          "Still Spectrum",            "Still spectrum"       },
+    { HELP_SIM_MODE,            "guide/ft8-tx.md",              "FT8 Simulation Mode",       "Simulation mode"      },
+    { HELP_SWR_PROTECTION,      "guide/settings.md",            "SWR protection",            "SWR protection"       },
+    { HELP_ANTENNA_TUNE,        "guide/web-ui.md",              "Antenna Tune from the browser", "Antenna Tune"     },
+    // No dedicated heading exists for this one - "Let me use the QMX menus"
+    // is a bolded paragraph inside settings.md's one `## Radio` section, not
+    // a heading of its own, and pack_manual.py's anchor check only matches
+    // against real headings. Anchoring on the section heading lands a couple
+    // of paragraphs above the right one rather than exactly on it - close
+    // enough to find, and true today rather than a link that quietly rots
+    // the next time that section is reordered.
+    { HELP_RELEASE_RADIO,       "guide/settings.md",            "Radio",                     "Release radio"        },
+    { HELP_RADIO_MENUS,         "guide/radio-menus.md",         "Opening it",                "Radio menus"          },
 
     // What just went wrong (Layer 3). These point at headings that ALREADY exist
     // in troubleshooting.md - none were invented for this.
@@ -54,6 +79,8 @@ static const help_entry_t s_topics[] = {
     { HELP_TROUBLE_NO_TX,       "reference/troubleshooting.md", "doesn't key the QMX",       "TX not keying"        },
     { HELP_TROUBLE_FLAT,        "reference/troubleshooting.md", "Spectrum is flat",          "No signal on screen"  },
     { HELP_TROUBLE_IQ,          "reference/troubleshooting.md", "shifted/mirrored",          "Spectrum looks wrong" },
+    { HELP_SPOTMAP_EMPTY,       "guide/spot-map.md",            "stays empty",               "Empty spot map"       },
+    { HELP_WSPR_EMPTY,          "guide/wspr.md",                "If nothing is decoded",     "No WSPR decodes"      },
 };
 
 const help_entry_t *help_topic_get(help_topic_t t)
@@ -82,8 +109,20 @@ typedef struct {
     bool       (*happening_now)(void);
     bool         panadapter;   // offer on the panadapter screen
     bool         ft8;          // offer in FT8/FT4
+    bool         wspr;         // offer on the WSPR screen
+    bool         spotmap;      // offer while the SelfSpotter overlay is open
 } triage_cand_t;
 
+// ⛔ SelfSpotter is an OVERLAY, not a ui_mode_t - opening it does not change
+// ui_mode_get(), so without this a row set picked purely from the base mode
+// silently carries whatever screen you opened the map FROM into the map
+// itself. Caught live, 2026-09-13/14: opening SelfSpotter from the WSPR page
+// showed "Nothing is decoding" (a WSPR row) over the map, and the WSPR page
+// itself showed "The spot map is empty" (a map row) - the exact same
+// category of bug patch #wspr-triage-fix already found and fixed for
+// spectrum/tap-to-tune, just one layer further down. Checked FIRST in
+// help_triage_collect(), ahead of the panadapter/ft8/wspr split - being IN
+// the map overrides whatever screen you came from.
 static bool cond_no_radio(void)   { return !cat_is_ready(); }
 static bool cond_iq_bad(void)     { return ui_iq_mode_warning_active(); }
 // Only a fault if WiFi is supposed to be up. Someone operating POTA with WiFi
@@ -97,6 +136,13 @@ static bool cond_no_decodes(void)
     // two rows would be competing to describe one fault.
     if (ui_mode_get() != UI_MODE_FT8 || !cat_is_ready()) return false;
     return ft8_screen_active_count() == 0;
+}
+// Only meaningful while the map is actually open (see spot_map_view_spot_
+// count()'s own header comment on staleness when it is not) - operator,
+// live on the device: "The spot map is empty should be highlighted also".
+static bool cond_spotmap_empty(void)
+{
+    return spot_map_view_is_active() && spot_map_view_spot_count() == 0;
 }
 
 // Order here is the tie-break among rows that are equally (un)flagged, so it runs
@@ -112,50 +158,116 @@ static bool cond_no_decodes(void)
 // that are broken first, then "how do I" questions. The list scrolls, so being
 // generous costs nothing - and a question answered here saves scrolling the manual,
 // which is the whole point.
+// Columns: topic, symptom, condition, panadapter, ft8, wspr, spotmap.
 static const triage_cand_t s_cands[] = {
-    // --- Shared: these mean the same thing on either screen ---
-    { HELP_TROUBLE_USB,        "My radio is not showing up",              cond_no_radio,   true,  true  },
+    // --- Universal: mean the same thing on every screen, INCLUDING inside
+    //     the SelfSpotter overlay (the map still needs the radio and WiFi). ---
+    { HELP_TROUBLE_USB,        "My radio is not showing up",              cond_no_radio,   true,  true,  true,  true  },
+    { HELP_TROUBLE_WIFI,       "I cannot reach the web page",             cond_no_wifi,    true,  true,  true,  true  },
+
+    // --- SelfSpotter fault row. spotmap:true ONLY - "the spot map is empty"
+    //     is meaningless language unless you are actually looking at it, and
+    //     until 2026-09-14 this had panadapter/ft8/wspr all true instead,
+    //     which is a DIFFERENT mistake from the one below but the same
+    //     lesson: "reachable from every screen" (true for the discovery row
+    //     right after this one) is not the same claim as "relevant on every
+    //     screen" (false for a fault specific to being inside the overlay).
+    //     Now has a REAL condition - operator, live on the device: "The spot
+    //     map is empty should be highlighted also". ---
+    { HELP_SPOTMAP_EMPTY,      "The spot map is empty",                   cond_spotmap_empty, false, false, false, true },
+
+    // --- SelfSpotter discovery row. This one genuinely IS universal - it is
+    //     how you find the feature from any screen you might be on - so it
+    //     keeps panadapter/ft8/wspr true and ALSO offers on spotmap itself
+    //     ("what does this page do"), unlike the fault row above it. ---
+    { HELP_SPOTMAP,            "How do I see who is hearing me?",         NULL,            true,  true,  true,  true  },
 
     // --- FT8/FT4 problems. No spectrum is drawn here, so nothing about the
     //     spectrum belongs, however tempting the shared wording is. ---
-    { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",      cond_no_decodes, false, true  },
-    { HELP_TROUBLE_NO_TX,      "It never transmits",                      NULL,            false, true  },
-    { HELP_TROUBLE_TIME,       "Decodes look late, or the timer is off",  NULL,            false, true  },
-    { HELP_FT8_TX,             "Nobody answers my CQ",                    NULL,            false, true  },
+    { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",      cond_no_decodes, false, true,  false, false },
+    { HELP_TROUBLE_NO_TX,      "It never transmits",                      NULL,            false, true,  false, false },
+    { HELP_TROUBLE_TIME,       "Decodes look late, or the timer is off",  NULL,            false, true,  false, false },
+    { HELP_FT8_TX,             "Nobody answers my CQ",                    NULL,            false, true,  false, false },
 
     // --- Panadapter problems. The IQ and flat-spectrum symptoms are things you can
     //     only SEE on a spectrum, so they are offered here and not in FT8 (where the
     //     IQ topic is still one tap from the warning banner, which is tappable). ---
-    { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted",  cond_iq_bad,     true,  false },
-    { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",       NULL,            true,  false },
-    { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way",  NULL,            true,  false },
+    { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted",  cond_iq_bad,     true,  false, false, false },
+    { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",       NULL,            true,  false, false, false },
+    { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way",  NULL,            true,  false, false, false },
 
-    { HELP_TROUBLE_WIFI,       "I cannot reach the web page",             cond_no_wifi,    true,  true  },
+    // --- WSPR problems. Its own page, its own questions - it was silently
+    //     inheriting the panadapter rows above (spectrum/tap-to-tune) until
+    //     2026-09-13, because this file only ever distinguished ft8 from
+    //     "everything else". Operator, live on the device: "the base page
+    //     WSPR has wrong Need Guidance sentences about spectrum and tap to
+    //     tune". spotmap:false for the same reason HELP_SPOTMAP_EMPTY is
+    //     false everywhere else - "nothing is decoding" is a WSPR-page
+    //     statement, not a SelfSpotter one, and the overlay not changing
+    //     ui_mode_get() is exactly what let this leak into the map when it
+    //     was opened FROM the WSPR page (found the same evening as the fix
+    //     above, same root cause one layer down). ---
+    { HELP_WSPR_EMPTY,         "Nothing is decoding",                     NULL,            false, false, true,  false },
 
     // --- FT8/FT4 how-to ---
-    { HELP_FT8_RX,             "How do I answer a station I can see?",    NULL,            false, true  },
-    { HELP_TX_TONE,            "Which frequency am I transmitting on?",   NULL,            false, true  },
-    { HELP_CQ_PRESETS,         "How do I change what my CQ says?",        NULL,            false, true  },
-    { HELP_ROBOT,              "Can it work stations by itself?",         NULL,            false, true  },
-    { HELP_LOGGING,            "Where are my contacts logged?",           NULL,            false, true  },
-    { HELP_UPLOADS,            "How do I send my log to QRZ, eQSL or LoTW?", NULL,         false, true  },
+    { HELP_FT8_RX,             "How do I answer a station I can see?",    NULL,            false, true,  false, false },
+    { HELP_TX_TONE,            "Which frequency am I transmitting on?",   NULL,            false, true,  false, false },
+    { HELP_CQ_PRESETS,         "How do I change what my CQ says?",        NULL,            false, true,  false, false },
+    { HELP_ROBOT,              "Can it work stations by itself?",         NULL,            false, true,  false, false },
+    { HELP_SIM_MODE,           "Can I practice without a real station?",  NULL,            false, true,  false, false },
+    { HELP_LOGGING,            "Where are my contacts logged?",           NULL,            false, true,  false, false },
+    { HELP_UPLOADS,            "How do I send my log to QRZ, eQSL or LoTW?", NULL,         false, true,  false, false },
 
     // --- Panadapter how-to ---
-    { HELP_GESTURES,           "How do I zoom or pan the spectrum?",      NULL,            true,  false },
-    { HELP_SPOTS,              "What are the coloured call signs?",       NULL,            true,  false },
-    { HELP_SPOTS_TAP,          "How do I tune to a spotted station?",     NULL,            true,  false },
-    { HELP_PANADAPTER,         "How do I change band or filter width?",   NULL,            true,  false },
+    { HELP_GESTURES,           "How do I zoom or pan the spectrum?",      NULL,            true,  false, false, false },
+    { HELP_SPOTS,              "What are the coloured call signs?",       NULL,            true,  false, false, false },
+    { HELP_SPOTS_TAP,          "How do I tune to a spotted station?",     NULL,            true,  false, false, false },
+    { HELP_PANADAPTER,         "How do I change band or filter width?",   NULL,            true,  false, false, false },
+    { HELP_RIT,                "How do I receive off my transmit frequency?", NULL,        true,  false, false, false },
+    { HELP_STILL_SPECTRUM,     "Why does the display hold still while I tune?", NULL,       true,  false, false, false },
 
-    // --- Shared how-to ---
-    { HELP_TIME_SYNC,          "How does it know the time?",              NULL,            true,  true  },
-    { HELP_SETTINGS,           "Where do I find the settings?",           NULL,            true,  true  },
-    { HELP_WEB_UI,             "What can the web interface do?",          NULL,            true,  true  },
+    // --- WSPR how-to ---
+    { HELP_WSPR,               "What does this page show?",               NULL,            false, false, true,  false },
+
+    // --- Shared how-to: cross-cutting radio-level features, same question
+    //     regardless of which screen you asked it from - INCLUDING inside
+    //     the map, since these describe the radio, not any one screen. ---
+    { HELP_TIME_SYNC,          "How does it know the time?",              NULL,            true,  true,  true,  true  },
+    { HELP_SETTINGS,           "Where do I find the settings?",           NULL,            true,  true,  true,  true  },
+    { HELP_WEB_UI,             "What can the web interface do?",          NULL,            true,  true,  true,  true  },
+    { HELP_SWR_PROTECTION,     "Will it protect the radio if my SWR is bad?", NULL,         true,  true,  true,  true  },
+    { HELP_ANTENNA_TUNE,       "How do I tune my antenna?",               NULL,            true,  true,  true,  true  },
+    // 2026-09-13 audit: both below had complete guide content and were
+    // reachable from nowhere in "Need guidance?" at all - not low down, not
+    // present. The QMX's own front-panel menus fight with CAT for the same
+    // serial port (see settings.md's "Radio" section), which is exactly the
+    // kind of thing a symptom-first list exists to surface.
+    { HELP_RELEASE_RADIO,      "I need to use the QMX's own menus",       NULL,            true,  true,  true,  true  },
+    { HELP_RADIO_MENUS,        "Can I see the radio's menus on this screen?", NULL,         true,  true,  true,  true  },
 };
 
 int help_triage_collect(help_triage_row_t *out, int max)
 {
     if (!out || max <= 0) return 0;
-    const bool ft8 = (ui_mode_get() == UI_MODE_FT8);
+    // ⛔ Used to be a bare bool (ft8 or "everything else"), so the WSPR page
+    // silently got the PANADAPTER rows - spectrum/tap-to-tune nonsense on a
+    // page with neither. Found live, 2026-09-13: "the base page WSPR has
+    // wrong Need Guidance sentences about spectrum and tap to tune". Three
+    // screens now get three genuinely separate selections.
+    //
+    // ⛔ AND SelfSpotter IS A FOURTH SCREEN THAT THIS SAME BUG HID IN, ONE
+    // LAYER DOWN. The overlay does not change ui_mode_get(), so checking mode
+    // alone means the map silently shows whatever the underlying page's rows
+    // are - found live 2026-09-14, opening the map FROM the WSPR page showed
+    // "Nothing is decoding" over the map, and the WSPR page showed "The spot
+    // map is empty" back. spot_map_view_is_active() is checked FIRST and, if
+    // true, wins outright: being IN the map overrides whatever screen you
+    // opened it from, exactly the same fix as the ft8/wspr split above, one
+    // level further in.
+    const bool in_spotmap = spot_map_view_is_active();
+    const ui_mode_t mode = ui_mode_get();
+    const bool ft8  = !in_spotmap && (mode == UI_MODE_FT8);
+    const bool wspr = !in_spotmap && (mode == UI_MODE_WSPR);
     int n = 0;
 
     // Two passes rather than a sort: flagged rows first, each pass already in
@@ -164,7 +276,11 @@ int help_triage_collect(help_triage_row_t *out, int max)
         const bool want_flagged = (pass == 0);
         for (size_t i = 0; i < sizeof(s_cands) / sizeof(s_cands[0]) && n < max; i++) {
             const triage_cand_t *c = &s_cands[i];
-            if (!(ft8 ? c->ft8 : c->panadapter)) continue;
+            bool on_this_screen = in_spotmap ? c->spotmap
+                                 : wspr       ? c->wspr
+                                 : ft8        ? c->ft8
+                                              : c->panadapter;
+            if (!on_this_screen) continue;
             bool now = c->happening_now ? c->happening_now() : false;
             if (now != want_flagged) continue;
             out[n].topic   = c->topic;

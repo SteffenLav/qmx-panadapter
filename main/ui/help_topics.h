@@ -29,6 +29,7 @@ typedef enum {
     HELP_WEB_UI,
     HELP_TIME_SYNC,
     HELP_WSPR,
+    HELP_SPOTMAP,
 
     // --- What you are looking at (Layer 2: specific controls) ---
     HELP_TAP_TO_TUNE,
@@ -39,6 +40,13 @@ typedef enum {
     HELP_UPLOADS,
     HELP_SPOTS_TAP,
     HELP_ROBOT,
+    HELP_RIT,
+    HELP_STILL_SPECTRUM,
+    HELP_SIM_MODE,
+    HELP_SWR_PROTECTION,
+    HELP_ANTENNA_TUNE,
+    HELP_RELEASE_RADIO,
+    HELP_RADIO_MENUS,
 
     // --- What just went wrong (Layer 3: tappable warnings) ---
     HELP_TROUBLE_USB,
@@ -48,6 +56,8 @@ typedef enum {
     HELP_TROUBLE_NO_TX,
     HELP_TROUBLE_FLAT,
     HELP_TROUBLE_IQ,
+    HELP_SPOTMAP_EMPTY,
+    HELP_WSPR_EMPTY,
 
     HELP_TOPIC_COUNT
 } help_topic_t;
@@ -91,7 +101,15 @@ help_topic_t help_topic_for_current_context(void);
 // The list scrolls, so this is the size of the CANDIDATE POOL rather than what fits
 // on screen (about five rows are visible at a time). Raise it freely when adding
 // rows - the cost is one hidden widget each.
-#define HELP_TRIAGE_MAX 16
+//
+// 2026-09-13: the SelfSpotter audit added enough new rows (radio menus, still
+// spectrum, sim mode, SWR protection, Antenna Tune, RIT, release-radio, the
+// spot map's two, WSPR's own) that 16 was no longer a candidate-pool margin
+// on the panadapter screen, it was a hard cut - two rows added earlier that
+// evening never reached the visible list because everything ahead of them in
+// s_cands[] already filled it. 24 is comfortably past every screen's current
+// row count with room to keep adding.
+#define HELP_TRIAGE_MAX 24
 
 typedef struct {
     help_topic_t topic;

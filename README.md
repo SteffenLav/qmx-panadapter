@@ -499,13 +499,15 @@ signal — the CW skimmer that copied your CQ, the FT8 station whose decode of y
 reached PSK Reporter, the WSPR receiver that logged your beacon — each a line
 from your grid square to theirs. Contributed by **Uwe DL8UG**.
 
-**Swipe down from the top edge** to open it, from any page. Tabs for the map, a
-table of the same data, and HF band conditions. Drag to pan, pinch to zoom
-around your own QTH.
+**Tap SelfSpotter in the settings drawer** (right below "Need guidance?") to
+open it, from any page. Tabs for the map, a table of the same data, and HF band
+conditions. Drag to pan, pinch to zoom around your own QTH.
 
-**Off by default** — switch it on in **Network → Spot map**. While it is on the
-Tab5 holds a live session to PSK Reporter subscribed to your callsign, which is
-worth asking for rather than inheriting. Needs your callsign and grid square.
+**Always running, no setting to find.** The feeds (RBN, PSK Reporter, wsprnet)
+connect from the moment the Tab5 boots and stay connected the whole session —
+there used to be an opt-in switch for this, dropped once it became clear the
+map was worth having populated the moment you looked. Needs your callsign and
+grid square.
 
 📖 Full chapter: [tab5.lav.dk/guide/spot-map](https://tab5.lav.dk/guide/spot-map/)
 
@@ -519,7 +521,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
 
-**Remote QMX power-cycle relay (new in v1.10.9).** **Miscellaneous ▲ → Power-cycle relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header) for a chosen duration and level. Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. Same control is reachable as `POST /api/cmd {"action":"gpio_pulse","pin":53,"level":1,"ms":1000}` if you want to script it.
+**Remote QMX power-cycle relay (v1.10.9, sequenced in this release).** **Miscellaneous ▲ → Remote relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header). Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. **Pulse** fires a single pulse for the chosen duration and level — since PWR_ON is a toggle, this turns the QMX off *or* back on with no way to tell which from the LAN. **Power-cycle QMX** runs the whole sequence instead: off-pulse, wait, on-pulse, wait, then checks over CAT and tells you "QMX responded" or "no response from QMX". Scriptable as `POST /api/cmd {"action":"gpio_pulse", ...}` (single pulse) or `{"action":"gpio_power_cycle", "pin":53, "level":1, "ms":1000}` (the full sequence).
 
 **Building the interface — Randy N4OPI's design**, published here with his permission. Two components and a connector, plus one modification inside the radio.
 

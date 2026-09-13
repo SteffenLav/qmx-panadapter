@@ -10,23 +10,35 @@ your grid square to theirs.
 
 This is Uwe DL8UG's work, contributed to the project.
 
-!!! note "Off by default"
-    The spot map is **opt-in**. Switch it on in
-    **Settings -> Network -> Spot map (live reports of my signal)**. Until you do, nothing connects
-    and nothing runs — see [Why it is off until you ask](#5-why-it-is-off-until-you-ask).
+!!! note "Always on, no setting to find"
+    The three feeds below connect from the moment the Tab5 boots and stay
+    connected — there is nothing to switch on. Earlier versions asked you to
+    enable it first and only ran the feeds while the map was open; both of
+    those were tried and dropped, in that order, on the operator's own
+    instruction, once he found the list was still empty the first few
+    minutes after opening it either way. See
+    [What it costs, running all the time](#5-what-it-costs-running-all-the-time).
 
 ---
 
 ### 1. Opening it
 
-**Swipe down from the very top edge of the screen.** The map opens over whatever
+**Open the settings drawer and tap SelfSpotter** — the button right below
+**Need guidance?**, near the top of the drawer. The map opens over whatever
 page you were on, and **Exit** (top right) closes it. A Bluetooth keyboard's
 `Esc` closes it too.
 
-The gesture works from the panadapter, FT8 and WSPR pages alike.
+!!! note "Not a swipe any more"
+    Earlier versions opened this with a swipe down from the top edge of the
+    screen. That gesture collided with the top bar's own Band/Mode/BW/Zoom
+    taps and was easy to trigger by accident, so it was replaced with the
+    drawer button above.
 
-If the map is switched off, the swipe tells you so and points you at the setting
-rather than opening an empty world.
+The button works from the panadapter, FT8 and WSPR pages alike — the drawer
+itself opens the same way from any of them (swipe in from the right edge).
+
+There is nothing to switch on first — the feeds have been running since boot
+(see below), so the map is never starting from a cold, empty world.
 
 ---
 
@@ -55,9 +67,11 @@ any of the feeds, they simply begin filling it again.
 ### 3. The three tabs
 
 **MAP** draws a line from your position to each station that reported you, over a
-world outline. Line colour matches the source: **blue** for CW, **amber** for
-digital, **green** for WSPR — the same colours the band-plan strip uses for those
-modes. Your own position is a dot, drawn on top.
+world map — filled land, lighter than the sea, with a coastline outline on top.
+Line colour matches the source: **blue** for CW, **amber** for digital, **green**
+for WSPR. A line older than 30 minutes fades rather than disappearing, so a
+quiet stretch still shows what was heard recently. Your own position is a dot,
+drawn on top of everything.
 
 - **Drag** with one finger to pan.
 - **Pinch** with two fingers to zoom, up to 8×. Zoom is anchored on your own
@@ -94,23 +108,25 @@ from the QRZ Logbook API key used for uploading contacts.
 
 ---
 
-### 5. Why it is off until you ask
+### 5. What it costs, running all the time
 
-Two reasons, both worth knowing rather than just working around:
+Worth knowing, since there is no longer a setting to weigh this against:
 
-**It opens a connection on your behalf.** While the map is on, the Tab5 holds a
-live session to PSK Reporter's broker subscribed to your callsign, and polls
-wsprnet and hamqsl. That is a reasonable thing to do when you have asked for it,
-and not something to inherit from a firmware update.
+**It holds a connection on your behalf, permanently.** From boot, the Tab5
+holds a live session to PSK Reporter's broker subscribed to your callsign,
+and polls RBN and wsprnet. That used to be something you asked for first;
+now it starts with everything else.
 
-**It costs memory that other things need.** Measured on the bench, running the
-feeds costs about 6.6 KB of internal RAM and 2.6 KB of the DMA pool — and that
-DMA pool is the one that microSD mounts, USB and encrypted uploads draw on when
-they need it. Charging that to everyone, including operators who never open the
-map, is not a good trade.
+**It costs memory that other things need.** Measured on the bench, running
+the feeds costs about 6.6 KB of internal RAM and 2.6 KB of the DMA pool —
+and that DMA pool is the one that microSD mounts, USB and encrypted uploads
+draw on when they need it. Every unit pays this now, whether or not the map
+is ever opened.
 
-Switching it on and off takes effect immediately, no reboot. Switching it off
-gives the memory back.
+The feeds run whether the map is on screen or not — opening it doesn't start
+them and closing it doesn't stop them — so the picture is already populated
+with whatever has come in since boot the first time you look, rather than
+starting from nothing.
 
 ---
 

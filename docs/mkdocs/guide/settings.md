@@ -429,19 +429,11 @@ copied them just now rather than someone having typed it an hour ago.
 
 ## Spot Map
 
-**Spot map (live reports of my signal)** — **Off** by default. Switches on the
-full-screen map of stations that have reported *your* signal, opened by swiping
-down from the top edge. Full details in [Spot Map](spot-map.md).
-
-Off by default for two reasons. While it is on, the Tab5 holds a live session to
-PSK Reporter's broker subscribed to your callsign and polls wsprnet and
-hamqsl — a connection worth asking for rather than inheriting. And the feeds cost
-about 6.6 KB of internal memory and 2.6 KB of the DMA pool that microSD, USB and
-encrypted uploads draw on, which is not a fair charge on an operator who never
-opens the map.
-
-The switch applies immediately, both ways, with no reboot. Switching it off
-releases the memory again.
+There is no setting here any more — the full-screen map of stations that have
+reported *your* signal runs its feeds from boot, always, and opens from the
+**SelfSpotter** button in the drawer (below **Need guidance?**), not a
+setting or a switch. Full details in [Spot Map](spot-map.md), including what
+running the feeds all the time costs.
 
 Wants **your grid square** (the map draws lines from it) and **your callsign**
 (it is what the feeds are asked about). QRZ callbook credentials are optional and

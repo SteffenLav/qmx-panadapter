@@ -2724,3 +2724,4 @@ void spot_map_view_hide(void)
 }
 
 bool spot_map_view_is_active(void) { return s_active; }
+int  spot_map_view_spot_count(void) { return s_spot_snap_n; }
