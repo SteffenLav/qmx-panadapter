@@ -106,13 +106,31 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.12.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.13.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
+**New in v1.13.0 — SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as
+a patch)*, a full-screen map and list answering "who is hearing me right now" from PSK
+Reporter, wsprnet, and RBN's own self-spot feed, opened from the settings drawer. It
+ships off by default. Land is filled in, not just outlined — LVGL has no built-in
+polygon fill, so this is a small scanline rasteriser of its own — with the coastline
+stroked back on top in its own colour so it doesn't disappear into the fill. A
+deterministic **"Power-cycle QMX"** sequence *(Randy N4OPI)* for the web UI's remote
+relay: pulse off, wait, pulse on, wait, then confirm over CAT rather than assume it
+worked. Diagnostic log volume cut from roughly 300 lines a minute to under 50 on a
+quiet bench. And this manual's own "Need guidance?" panel caught up with seven real
+features that had no way in from it at all — Radio Menus, Still Spectrum, FT8
+Simulation Mode, SWR protection, Antenna Tune, RIT, and "Release radio" — plus two
+guidance bugs and a stale description of how to reach the spot map, both fixed.
+
+**In v1.12.4 — one bug, twelve releases old.** Tapping a spot after tuning away with
+the dial moved the spectrum and waterfall several kHz away from where the spot line
+itself stayed, reachable only above ×1 zoom. Fixed.
+
+**In v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
 other modes.** Writing the microSD card holds the spectrum stream, and on this
 hardware that write can take a very long time — measured at 3, 10, 15 and once
 29 seconds for four kilobytes, which is what made the web page look broken while
