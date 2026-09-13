@@ -605,6 +605,26 @@ static void draw_great_circle(lv_layer_t *layer, lv_draw_line_dsc_t *dsc,
 static uint8_t *s_map_cache_buf = NULL;   // the cached coastline image, see map_cache_rebuild()
 static int32_t  s_map_cache_w = 0, s_map_cache_h = 0, s_map_cache_stride = 0;
 
+// ---- Land FILL, not just an outline (operator, 2026-09-13, second ask -----
+// "land lighter than the sea" the first time round only bought a brighter
+// OUTLINE (the comment on land_c below records it), because most of any
+// landmass is still the plain water colour a few pixels in from its coast.
+// A scanline fill over the SAME edges already walked for the outline, at the
+// SAME per-ring point budget that was tuned to stop this exact function
+// freezing the device (see the ring loop's own comments) - so the added cost
+// is one more O(edges) pass, not O(rows x edges): each edge is walked from
+// its own y0 to y1 ONCE, depositing one x-crossing per row it spans, and the
+// fill itself is a single pass over the rows at the end.
+//
+// ne_10m_land carries no holes (it is land-vs-water only, no lakes cut out
+// of continents), and no two rings overlap, so a plain even-odd rule across
+// ALL rings' crossings together - not ring-by-ring - is exactly correct: two
+// separate landmasses crossing the same screen row still alternate in/out
+// correctly, same as one ring with a hole would if the data ever had one.
+#define MAP_SCAN_MAX_X   40   // crossings a single screen row can record - generous for a coastline; further ones on a pathological row are dropped, not a buffer overrun
+static int32_t *s_scan_x = NULL;   // [row * MAP_SCAN_MAX_X + slot], PSRAM, resized with the cache
+static int16_t *s_scan_n = NULL;   // crossings recorded so far, per row
+
 static void cache_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint16_t c)
 {
     const int32_t w = s_map_cache_w, h = s_map_cache_h;
@@ -626,6 +646,57 @@ static void cache_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint16_t 
     }
 }
 
+// Record one x-crossing of edge (x0,y0)-(x1,y1) into every integer row it
+// spans, half-open [yTop, yBottom) so a vertex shared by two edges of the
+// same ring is never counted twice (the standard scanline-fill rule - get
+// this wrong and every row touching a vertex flips parity an extra time,
+// which either leaves a 1px gap or bleeds fill past the coast there).
+static void scan_record_edge(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+{
+    if (y0 == y1) return;                    // horizontal edge: no row crossing
+    if (y0 > y1) { int32_t t; t = x0; x0 = x1; x1 = t; t = y0; y0 = y1; y1 = t; }
+    int32_t yy0 = y0 < 0 ? 0 : y0;
+    int32_t yy1 = y1 > s_map_cache_h ? s_map_cache_h : y1;   // half-open, so this may equal h
+    if (yy0 >= yy1) return;                  // fully above or below the buffer
+    // x at row y, linear in y along this edge - exact at the endpoints,
+    // which is what keeps adjoining edges (sharing a vertex) agreeing.
+    float dxdy = (float)(x1 - x0) / (float)(y1 - y0);
+    for (int32_t y = yy0; y < yy1; y++) {
+        int32_t x = x0 + (int32_t)((float)(y - y0) * dxdy);
+        int16_t n = s_scan_n[y];
+        if (n < MAP_SCAN_MAX_X) { s_scan_x[(size_t)y * MAP_SCAN_MAX_X + n] = x; s_scan_n[y] = n + 1; }
+    }
+}
+
+// One pass over every row, even-odd fill between sorted crossing pairs.
+// Called once per map_render_coast(), after every ring has deposited its
+// edges - the sort is insertion sort, which is the right choice for the
+// handful of crossings (2-8, typically) an actual coastline puts on a row;
+// MAP_SCAN_MAX_X bounds the pathological case, not the common one.
+static void scan_fill_rows(uint16_t land_c)
+{
+    for (int32_t y = 0; y < s_map_cache_h; y++) {
+        int16_t n = s_scan_n[y];
+        if (n < 2) continue;
+        int32_t *row = &s_scan_x[(size_t)y * MAP_SCAN_MAX_X];
+        for (int16_t i = 1; i < n; i++) {              // insertion sort, n is small
+            int32_t v = row[i]; int16_t j = i - 1;
+            while (j >= 0 && row[j] > v) { row[j + 1] = row[j]; j--; }
+            row[j + 1] = v;
+        }
+        uint8_t *dst_row = s_map_cache_buf + (size_t)y * (size_t)s_map_cache_stride;
+        for (int16_t i = 0; i + 1 < n; i += 2) {        // an odd leftover crossing is dropped, defensively
+            int32_t xa = row[i]     < 0 ? 0 : row[i];
+            int32_t xb = row[i + 1] > s_map_cache_w ? s_map_cache_w : row[i + 1];
+            for (int32_t x = xa; x < xb; x++) {
+                uint8_t *p = dst_row + (size_t)x * 2;
+                p[0] = (uint8_t)(land_c & 0xFF);
+                p[1] = (uint8_t)(land_c >> 8);
+            }
+        }
+    }
+}
+
 static void map_render_coast(const lv_area_t *area_in)
 {
     lv_area_t area = *area_in;
@@ -637,13 +708,20 @@ static void map_render_coast(const lv_area_t *area_in)
     // (p1/p2), unlike the multi-point polyline descriptor newer LVGL versions
     // have, so each ring edge (including the closing edge back to point 0) is
     // its own draw call rather than one call per ring.
-    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x8FA0AD));
-    /* Land reads LIGHTER than the sea (operator, 2026-09-12: "Can you paint
-     * land a bit lighter than the sea?"). The background is 0x0a0d10, so a
-     * darkened grey put the coastline barely above it - the outline was there
-     * and had to be hunted for. This is an OUTLINE, not a fill: LVGL 9.2.2 has
-     * no polygon fill here, so "lighter land" is a brighter coast line against
-     * the dark ground, which is the same convention the bandplan strip uses. */
+    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x333C44));
+    /* Land reads LIGHTER than the sea (operator, 2026-09-12, then again
+     * 2026-09-13 - the first pass only brightened the OUTLINE, and most of a
+     * landmass is still several pixels of plain sea-coloured background in
+     * from its coast, so "lighter land" wasn't actually visible as area).
+     * The background is 0x0a0d10; land_c above is filled all the way to the
+     * coast now via scan_record_edge()/scan_fill_rows() below, not just
+     * stroked along it.
+     * ⚠ 0x8FA0AD (a pale blue-grey, fine for a thin OUTLINE) read as glaring
+     * daylight once it was the fill colour for whole continents - operator,
+     * 2026-09-13: "I asked it to be a bit lighter, not like sunlight
+     * brighter". 0x333C44 is one step up from the 0x0a0d10 water, not several. */
+    const bool can_fill = (s_scan_x != NULL && s_scan_n != NULL);
+    if (can_fill) memset(s_scan_n, 0, (size_t)h * sizeof(*s_scan_n));
 
     /* ⛔ REJECT A RING BY ITS BOUNDING BOX BEFORE WALKING ITS POINTS.
      *
@@ -733,10 +811,12 @@ static void map_render_coast(const lv_area_t *area_in)
                                              ring->points[k]     / WORLD_MAP_UNITS_PER_DEG,
                                              ring->points[k + 1] / WORLD_MAP_UNITS_PER_DEG);
             cache_line((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y, land_c);
+            if (can_fill) scan_record_edge((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y);
             prev = cur;
             if (last) break;
         }
     }
+    if (can_fill) scan_fill_rows(land_c);
 }
 
 // Spots + own-QTH marker - drawn LIVE on s_map_obj (LV_EVENT_DRAW_MAIN) over
@@ -881,6 +961,21 @@ static void map_cache_rebuild(void)
         s_map_cache_h = h;
         s_map_cache_stride = (int32_t)lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565);
         lv_canvas_set_buffer(s_map_bg_obj, s_map_cache_buf, w, h, LV_COLOR_FORMAT_RGB565);
+
+        // Land-fill scanline scratch, sized to the same h (see the comment on
+        // s_scan_x above). Resized alongside the cache buffer; a failed alloc
+        // here is NOT fatal - map_render_coast() falls back to outline-only
+        // (can_fill == false), same defensive shape as the cache buffer above
+        // failing, just a worse-looking map rather than no map.
+        if (s_scan_x) { heap_caps_free(s_scan_x); s_scan_x = NULL; }
+        if (s_scan_n) { heap_caps_free(s_scan_n); s_scan_n = NULL; }
+        s_scan_x = heap_caps_malloc((size_t)h * MAP_SCAN_MAX_X * sizeof(*s_scan_x), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_scan_n = heap_caps_malloc((size_t)h * sizeof(*s_scan_n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_scan_x || !s_scan_n) {
+            ESP_LOGW(TAG, "no PSRAM for the map land-fill scratch (%d rows) - outline only", (int)h);
+            if (s_scan_x) { heap_caps_free(s_scan_x); s_scan_x = NULL; }
+            if (s_scan_n) { heap_caps_free(s_scan_n); s_scan_n = NULL; }
+        }
     }
 
     int64_t t0 = esp_timer_get_time();
@@ -2553,6 +2648,8 @@ void spot_map_view_hide(void)
         s_map_cache_w = s_map_cache_h = s_map_cache_stride = 0;
         s_map_dirty = true;
     }
+    if (s_scan_x) { heap_caps_free(s_scan_x); s_scan_x = NULL; }
+    if (s_scan_n) { heap_caps_free(s_scan_n); s_scan_n = NULL; }
     ui_help_overlay_changed();   // hand the top bar and edge swipes back
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "hide");
