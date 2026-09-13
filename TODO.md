@@ -46,6 +46,9 @@ This section is the honest, current answer to "what is hanging, right now,
 | #378 | Web page freezes up to 30 s during a microSD write | Mitigated (deferred while a browser watches), not cured |
 | #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | Instrument built, not yet flashed |
 | #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | Understood, not blocking anything currently planned |
+| new | Every WSPR decode (~33 s, core 1 at 0 % idle) causes CAT `TX transfer timeout`s about once a second; each recovers within ~100 ms | Seen 2026-09-13 at 191–220 s and 310–318 s of a boot. Same family as #376. No lost audio in those windows, no user-visible effect found yet |
+| new | Opening "Need guidance?" for the first time stalls LVGL long enough for one CAT timeout and a 1 s audio delay (caught up, nothing dropped) | Lazy first build of the panel. Seen once, 2026-09-13 125 s |
+| new | `cpu_owners` showed taskLVGL at priority **22** (base 4) | One sample, 2026-09-13 251 s. Raised priority on taskLVGL was the signature of the 2026-09-11 display_lock inversion — find who at 22 waits on the lock before assuming it is harmless |
 
 ### Deliberately parked (not today, by design)
 CW page work (#351/#352), QDX/QDX-M support (#303 — no hardware to test against),
