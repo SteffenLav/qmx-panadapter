@@ -850,6 +850,23 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
         cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+        // The power-cycle sequence runs on its own timers, well outside the
+        // 1 Hz cadence of this poll, so the web UI cannot watch a "busy" flag
+        // like the plain Pulse button does - it has to be told what the
+        // sequence is doing. OK/FAILED are latched on the device (see
+        // gpio_relay_power_cycle_status()'s header comment) until the next
+        // run starts; the browser diffs against the last value it saw so it
+        // shows a result exactly once regardless of which poll catches it.
+        {
+            const char *pc = "idle";
+            switch (gpio_relay_power_cycle_status()) {
+            case GPIO_PC_RUNNING: pc = "running"; break;
+            case GPIO_PC_OK:      pc = "ok";      break;
+            case GPIO_PC_FAILED:  pc = "failed";  break;
+            default: break;
+            }
+            cJSON_AddStringToObject(root, "gpio_pc", pc);
+        }
         /* #333: the spot lane tags each label with its mode unless the mode
            filter is on - with the filter on every label is your own mode and
            a tag would be noise on all of them. The browser draws the same
@@ -1511,6 +1528,35 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // real wiring next time. Saved only on a pulse the device ACCEPTED -
         // storing a refused combination would put a setting that can never
         // work back in front of the operator.
+        if (ok) settings_set_gpio_relay((uint8_t)pin_j->valuedouble,
+                                        level_j->valuedouble != 0,
+                                        (uint16_t)ms_j->valuedouble);
+        if (!ok) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err[0] ? err : "refused");
+            return ESP_FAIL;
+        }
+    } else if (action && strcmp(action, "gpio_power_cycle") == 0) {
+        // Randy N4OPI's follow-up: a plain gpio_pulse on PWR_ON only TOGGLES
+        // the QMX, so remotely it is a coin toss whether the click just
+        // turned it off or back on, with nothing saying which. This runs the
+        // deterministic sequence he asked for (off-pulse, wait, on-pulse,
+        // wait, confirm CAT) - gpio_relay.c does the actual state machine;
+        // this handler only starts it and reports whether it accepted.
+        cJSON *pin_j   = cJSON_GetObjectItem(root, "pin");
+        cJSON *level_j = cJSON_GetObjectItem(root, "level");
+        cJSON *ms_j    = cJSON_GetObjectItem(root, "ms");
+        if (!cJSON_IsNumber(pin_j) || !cJSON_IsNumber(level_j) || !cJSON_IsNumber(ms_j)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "gpio_power_cycle needs numeric pin, level and ms");
+            return ESP_FAIL;
+        }
+        char err[64] = "";
+        bool ok = gpio_relay_power_cycle_start((uint8_t)pin_j->valuedouble, level_j->valuedouble != 0,
+                                                (uint16_t)ms_j->valuedouble, err, sizeof(err));
+        // Same wiring-memory as gpio_pulse, and for the same reason - the
+        // pin/polarity are a fact about the station, not this one request.
         if (ok) settings_set_gpio_relay((uint8_t)pin_j->valuedouble,
                                         level_j->valuedouble != 0,
                                         (uint16_t)ms_j->valuedouble);

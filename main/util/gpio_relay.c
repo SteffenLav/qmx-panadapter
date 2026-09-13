@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "storage/settings.h"
+#include "cat.h"       // cat_is_ready() - the power-cycle sequence's own success test
 #include <stdio.h>
 
 static const char *TAG = "gpio_relay";
@@ -15,6 +16,8 @@ static const char *TAG = "gpio_relay";
 #define RELAY_PIN_B GPIO_NUM_54
 
 static esp_timer_handle_t s_release_timer;
+static esp_timer_handle_t s_pc_timer;         /* power-cycle sequence's own timer - see further down */
+static void pc_step_cb(void *arg);   /* forward decl - used by gpio_relay_init() below, defined near the power-cycle sequence further down */
 static volatile bool      s_busy = false;
 static bool               s_inited = false;   /* settings can be set before init() runs */
 static uint8_t            s_active_pin;
@@ -76,6 +79,12 @@ void gpio_relay_init(void)
     };
     esp_timer_create(&targs, &s_release_timer);
 
+    const esp_timer_create_args_t pc_targs = {
+        .callback = pc_step_cb,
+        .name     = "gpio_relay_pc",
+    };
+    esp_timer_create(&pc_targs, &s_pc_timer);
+
     s_inited = true;
     ESP_LOGI(TAG, "GPIO53/54: active %s so resting %s - pins READ BACK %d/%d (%s)",
              st_level ? "HIGH" : "LOW", s_rest_level ? "HIGH" : "LOW",
@@ -111,6 +120,87 @@ bool gpio_relay_pulse(uint8_t pin, bool level, uint16_t ms, char *err, size_t er
 }
 
 bool gpio_relay_busy(void) { return s_busy; }
+
+// ---- Deterministic power-cycle sequence (Randy N4OPI, 2026-09-13) ---------
+//
+// Chained one-shot timers rather than a single long delay, for the same
+// reason gpio_relay_pulse() itself is async: this runs from an HTTP handler
+// and must return immediately. Each stage schedules the next.
+typedef enum { PC_STAGE_ON_PULSE, PC_STAGE_CHECK } pc_stage_t;
+
+#define PC_WAIT_AFTER_OFF_MS      1000
+#define PC_ON_PULSE_MS             500
+#define PC_WAIT_BEFORE_CHECK_MS   2000
+#define PC_CHECK_INTERVAL_MS       500
+#define PC_CHECK_MAX_TRIES           16   /* +8 s of polling past the 2 s wait */
+
+static volatile gpio_pc_status_t  s_pc_status = GPIO_PC_IDLE;
+static pc_stage_t                 s_pc_stage;
+static uint8_t                    s_pc_pin;
+static bool                       s_pc_level;
+static int                        s_pc_check_tries;
+
+static void pc_step_cb(void *arg)
+{
+    (void)arg;
+    switch (s_pc_stage) {
+    case PC_STAGE_ON_PULSE: {
+        char err[64];
+        if (!gpio_relay_pulse(s_pc_pin, s_pc_level, PC_ON_PULSE_MS, err, sizeof(err))) {
+            // Only cause: something else grabbed the relay in the 1 s window
+            // between the off-pulse releasing and this firing - a stray
+            // concurrent gpio_pulse call, since power-cycle already checked
+            // "busy" before starting. Rare enough that failing outright,
+            // rather than retrying blind, is the honest answer.
+            ESP_LOGW(TAG, "power-cycle: on-pulse refused (%s) - reporting failed", err);
+            s_pc_status = GPIO_PC_FAILED;
+            return;
+        }
+        ESP_LOGW(TAG, "power-cycle: GPIO%u on-pulsed, watching for CAT", s_pc_pin);
+        s_pc_stage = PC_STAGE_CHECK;
+        s_pc_check_tries = 0;
+        esp_timer_start_once(s_pc_timer, (uint64_t)(PC_ON_PULSE_MS + PC_WAIT_BEFORE_CHECK_MS) * 1000ULL);
+        break;
+    }
+    case PC_STAGE_CHECK:
+        if (cat_is_ready()) {
+            ESP_LOGW(TAG, "power-cycle: QMX answered CAT - done, %d check(s)", s_pc_check_tries);
+            s_pc_status = GPIO_PC_OK;
+            return;
+        }
+        if (++s_pc_check_tries >= PC_CHECK_MAX_TRIES) {
+            ESP_LOGW(TAG, "power-cycle: no CAT response after %d ms - reporting failed",
+                     PC_WAIT_BEFORE_CHECK_MS + PC_CHECK_MAX_TRIES * PC_CHECK_INTERVAL_MS);
+            s_pc_status = GPIO_PC_FAILED;
+            return;
+        }
+        esp_timer_start_once(s_pc_timer, (uint64_t)PC_CHECK_INTERVAL_MS * 1000ULL);
+        break;
+    }
+}
+
+bool gpio_relay_power_cycle_start(uint8_t pin, bool level, uint16_t off_ms,
+                                   char *err, size_t errlen)
+{
+    if (s_pc_status == GPIO_PC_RUNNING) {
+        if (err) snprintf(err, errlen, "a power-cycle is already running");
+        return false;
+    }
+    // gpio_relay_pulse() does the pin/ms validation and the "already busy"
+    // check that matters here (a plain Pulse mid-flight) - not repeated.
+    if (!gpio_relay_pulse(pin, level, off_ms, err, errlen)) return false;
+
+    s_pc_pin   = pin;
+    s_pc_level = level;
+    s_pc_stage = PC_STAGE_ON_PULSE;
+    s_pc_status = GPIO_PC_RUNNING;
+    esp_timer_start_once(s_pc_timer, (uint64_t)((uint32_t)off_ms + PC_WAIT_AFTER_OFF_MS) * 1000ULL);
+    ESP_LOGW(TAG, "power-cycle: GPIO%u off-pulsed %u ms, on-pulse and CAT check to follow",
+             pin, off_ms);
+    return true;
+}
+
+gpio_pc_status_t gpio_relay_power_cycle_status(void) { return s_pc_status; }
 
 void gpio_relay_set_polarity(bool active_level)
 {

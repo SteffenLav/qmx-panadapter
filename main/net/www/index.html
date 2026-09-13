@@ -1248,11 +1248,12 @@
              contact closure must need a deliberate pulse) and it is the answer to
              "can GPIO53/54 float?": not as the firmware currently drives them. -->
         <div id="gpio-row" title="!Experimenter feature!&#10;Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND signals - for power-cycling it after a remote firmware upgrade with nobody at the bench.&#10;&#10;!Note! The QMX does not natively have a PWR_ON/GND jack. You would need to extend those signals from the main circuit board or front panel to an external connector.&#10;&#10;The pins rest as driven outputs, not floating.">
-          <span>Power-cycle relay:</span>
+          <span>Remote relay:</span>
           <select id="gpio-pin"><option value="53">GPIO53</option><option value="54">GPIO54</option></select>
           <select id="gpio-level"><option value="1">active HIGH</option><option value="0">active LOW</option></select>
           <input id="gpio-ms" type="number" min="50" max="5000" step="50" value="1000" title="How long to hold the pulse, in milliseconds - long enough for your relay/QMX to register it, no longer.">ms
           <button type="button" id="gpio-pulse-btn">Pulse</button>
+          <button type="button" id="gpio-pc-btn" title="A single Pulse on a PWR_ON line only TOGGLES the QMX - one click turns it off, the next back on, with nothing saying which. This does the deterministic sequence instead: off-pulse (the ms above), wait 1s, on-pulse 500ms, wait, then confirms over CAT and reports whether the QMX answered.">Power-cycle QMX</button>
           <span id="gpio-result"></span>
         </div>
       </div>
@@ -2703,11 +2704,13 @@ function adifImportMessage(j) {
       if (lvlEl && relay.level !== undefined) lvlEl.value = String(relay.level);
       if (msEl  && relay.ms    !== undefined) msEl.value  = String(relay.ms);
     };
+    const pcBtn = document.getElementById("gpio-pc-btn");
+    const out   = document.getElementById("gpio-result");   // shared by both buttons
+
     btn.addEventListener("click", async function () {
       const pin   = document.getElementById("gpio-pin").value;
       const level = document.getElementById("gpio-level").value;
       const ms    = document.getElementById("gpio-ms").value;
-      const out   = document.getElementById("gpio-result");
       btn.disabled = true;
       out.textContent = "pulsing…";
       try {
@@ -2725,6 +2728,53 @@ function adifImportMessage(j) {
         out.textContent = "no answer from the Tab5";
       } finally {
         btn.disabled = false;
+        setTimeout(() => { out.textContent = ""; }, 4000);
+      }
+    });
+
+    /* The sequence itself is reported through /api/status (gpio_pc: "idle"/
+       "running"/"ok"/"failed", latched on the device - see gpio_relay.c),
+       not through this fetch's response, because it runs for several
+       seconds on the device's own timers and this button click only STARTS
+       it. window.applyGpioPc is called from the 1 Hz status tick below;
+       lastGpioPc lets it tell "still running" from "a fresh result just
+       arrived" so a result is shown once rather than on every poll while it
+       sits latched. */
+    let lastGpioPc = "idle";
+    window.applyGpioPc = function (pc) {
+      if (pc === lastGpioPc) return;
+      lastGpioPc = pc;
+      if (pc === "running") {
+        btn.disabled = true; pcBtn.disabled = true;
+        out.textContent = "power-cycling…";
+      } else if (pc === "ok") {
+        btn.disabled = false; pcBtn.disabled = false;
+        out.textContent = "QMX responded";
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      } else if (pc === "failed") {
+        btn.disabled = false; pcBtn.disabled = false;
+        out.textContent = "no response from QMX";
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      }
+    };
+
+    if (pcBtn) pcBtn.addEventListener("click", async function () {
+      const pin   = document.getElementById("gpio-pin").value;
+      const level = document.getElementById("gpio-level").value;
+      const ms    = document.getElementById("gpio-ms").value;
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "gpio_power_cycle", pin: +pin, level: +level, ms: +ms })
+        });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => "");
+          out.textContent = "refused: " + (txt || ("HTTP " + r.status));
+          setTimeout(() => { out.textContent = ""; }, 4000);
+        }
+        // On success the /api/status poll takes it from here via applyGpioPc.
+      } catch (err) {
+        out.textContent = "no answer from the Tab5";
         setTimeout(() => { out.textContent = ""; }, 4000);
       }
     });
@@ -6443,6 +6493,7 @@ async function tick() {
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");
     if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
+    if (typeof s.gpio_pc === "string" && window.applyGpioPc) window.applyGpioPc(s.gpio_pc);
     /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
        reads freqSepStyle at call time, so live text follows by itself - but the
        WSPR band picker and the FT8 preset list are composed once behind a
