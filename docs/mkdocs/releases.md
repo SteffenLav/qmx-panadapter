@@ -6,7 +6,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.13.0** — 2026-09-14
 
-**The SelfSpotter map gets land you can actually see, and a release-night audit of its own documentation.**
+**SelfSpotter ships to users for the first time, and a release-night audit of its own documentation.**
 
 - **SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as a patch)*, a full-screen map and list answering "who is hearing me right now" from PSK Reporter, wsprnet, and RBN's self-spot feed, opened from the settings drawer. Ships off by default. **Land is filled in, not just outlined** — LVGL has no polygon fill, so this is a small even-odd scanline rasteriser of my own, reusing the same per-ring point budget already tuned to keep this screen from freezing. Land colour and the coastline's own contour both went through several rounds against the real screen — too bright, then eating the historic traces, then right — and the trace colours and line widths went up too, for contrast against the new fill.
 - **A deterministic "Power-cycle QMX" sequence** *(Randy N4OPI)*, for the web UI's remote relay: pulse off, wait, pulse on, wait, then confirm over CAT and report whether the radio actually came back. A single pulse toggles the radio with no way to know which state it left it in — this one does.
