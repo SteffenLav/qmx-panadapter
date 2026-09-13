@@ -1991,6 +1991,36 @@ LVGL thread or a priority-≤4 task apply it — the BLE keyboard path had the s
 trap (500 ms wait on the NimBLE task) and now goes through a queue. A zero-timeout
 try-lock is also safe (no wait, no inheritance) — `qmx_term.c`'s `on_rx` does that.
 
+### ⭐⭐ The LVGL PORT's OWN 2 ms tick lent taskLVGL priority 22 (patch #19, 2026-09-13)
+Opening the manual (or "Need guidance?", or the SelfSpotter map) reliably cost
+7–16 CAT `TX transfer timeout`s and 200–300 ms of lost USB audio. The display_lock
+fix above was already in, and the cause was one layer down, in esp_lvgl_port
+itself: `lvgl_port_tick_increment()` runs on the **esp_timer task (priority 22)**
+every 2 ms and took `timer_mux` with `portMAX_DELAY`. The LVGL task takes the
+same `timer_mux` around `lv_indev_read()` **while already holding `lvgl_mux`**. A
+tick during a touch read → esp_timer blocks → taskLVGL inherits 22 — and
+⛔ **FreeRTOS disinherits only when the holder has released EVERY mutex it
+holds**, so taskLVGL kept 22 for the whole `lv_timer_handler()` that followed,
+outranking USB-CDC (10), audio_task (6) and the UAC driver (5) on core 0.
+
+**Found by a task snapshot taken the instant a CAT send failed** (removed after):
+`taskLVGL:R 4>22 c0, esp_timer:R 22, USB-CDC:R 10, audio_task:R 6, USB UAC Host:R 5`
+— every USB task READY and not running. `esp_timer` is the ONLY base-22 task.
+**Ruled out by direct test first, all at priority 4 on both cores:** a CPU busy
+loop, 23 MB of PSRAM memcpy, internal-RAM memcpy, 500 ms of full-screen repaints
+(AXI QoS for USB at 0 and 8), a flash write, a blocking CDC RX callback.
+
+**Fix:** `tools/patches/apply_lvgl_port_tick_no_mutex.ps1` drops the mutex from the
+tick — `lv_tick_inc()` is interrupt-safe by design (`sys_irq_flag` retry loop in
+`lv_tick.c`). Edits `managed_components/`, so it is wiped by `fullclean`; in
+`check_patches.py`. **Verified:** three manual opens afterwards, 0 CAT failures,
+0 audio lost, audio 46.9–48.9 k pairs/s across each render.
+
+⚠ **Generalise:** a lock taken from `esp_timer` callbacks is a priority-22 lender
+to whoever holds it. And a sampler that walks every TCB every 10 ms reproduces the
+cyan flash and starves the device (tried the same day) — sample the priority of
+the few tasks you care about with `uxTaskPriorityGet()` instead.
+
 **Safety net:** `dsp.c` `time_base_check()` holds the FT8/WSPR capture to the wall
 clock — audio that never arrived is filled with silence where it went missing, so
 a lossy WSPR cycle still decodes (A/B at 2 % simulated loss: 0/0/0 decodes without,

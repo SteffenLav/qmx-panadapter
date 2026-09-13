@@ -68,6 +68,7 @@
 #include "ft8_pileup.h"        // pileup list - /api/decodes
 #include "ft8_greylist.h"      // grey-list viewer - /api/decodes + greylist_clear
 #include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
+#include "ui/date_confirm_modal.h"   // date_check dev action
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
 #include "ft8_robot.h"         // ft8_robot_stand_down - band change stops auto-answer
@@ -1658,6 +1659,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"1 s sample - see the serial log\"}");
         cpu_owners_report();
+        return ESP_OK;
+    } else if (action && strcmp(action, "date_check") == 0) {
+        // Dev only - {"action":"date_check"}: make the "Is today's date right?"
+        // question appear on a bench that has WiFi (and so a verified date).
+        cJSON_Delete(root);
+        time_sync_dev_force_date_unverified();
+        if (display_lock(500)) {
+            date_confirm_modal_show();
+            display_unlock();
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
     } else if (action && strcmp(action, "ota_reset") == 0) {
         // Dev only - clear a staged update in place so the next test run does

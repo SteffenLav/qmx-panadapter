@@ -41,3 +41,4 @@ unsigned display_fps_x10(void);
 // Thousands of invalidated pixels per second since the previous call. Read
 // together with the fps figure: frames say how OFTEN, this says how MUCH.
 unsigned display_inval_kpx_per_s(void);
+

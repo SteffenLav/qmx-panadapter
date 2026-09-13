@@ -41,6 +41,24 @@ No internet needed — FT8 timing works offline.
     something is better than nothing. Failing that, set the clock by hand
     (**FT8 -> Options -> Sync Time**), which also accepts seconds.
 
+!!! warning "The date is checked separately from the time"
+
+    The QMX, its GPS and the hours/minutes/seconds boxes all give only a
+    **time of day**. If the Tab5 has been off longer than its clock lasts and
+    there is no internet, the date it has is simply the last day it was used —
+    so a perfectly set time can still be logged under the wrong day.
+    Reported by Don WB0LQW, whose POTA log came out two days behind.
+
+    So when the date cannot be checked, the Tab5 asks about a minute after it
+    starts: **"Is today's date right?"** Step it with **- day / + day** if
+    needed and tap **This date is right**. If WiFi comes up while the question
+    is on screen, it closes by itself. QSOs are still logged if you do not
+    answer — nothing is ever held back.
+
+    The **Set and Sync the Clock** window also shows the date on its second
+    line, marked *(unverified)* when it has not been checked. Tap that line to
+    change it.
+
 ### 3. WiFi + SNTP
 
 When WiFi is active:

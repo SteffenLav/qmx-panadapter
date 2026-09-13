@@ -30,6 +30,7 @@
 //    correction is needed; time_sync_set_manual when HH or MM were edited.
 
 #include "ft8_time_modal.h"
+#include "date_confirm_modal.h"   // the date line opens it - HH:MM:SS alone never set the day
 #include "ui_theme.h"
 #include "ft8_test.h"
 #include "time_sync/time_sync.h"
@@ -425,6 +426,23 @@ static void apply_cb(lv_event_t *e)
 static void cancel_cb(lv_event_t *e) { (void)e; modal_close(); }
 static void swallow_click_cb(lv_event_t *e) { (void)e; }
 
+/* The second hint line carries the DATE and opens the date question when
+ * tapped. HH:MM:SS never set the day - time_sync_set_manual() keeps whatever
+ * date the clock already has - which is how Don WB0LQW could set his time
+ * perfectly with an atomic watch and still log a date two days behind. */
+static void set_top_hint(void)
+{
+    time_t now = time(NULL);
+    struct tm tm; gmtime_r(&now, &tm);
+    char tb[120];
+    snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\nDate %04d-%02d-%02d UTC%s - tap to change",
+             active_source_label(), tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             time_sync_date_verified() ? "" : " (unverified)");
+    lv_label_set_text(s_hint_top, tb);
+}
+
+static void date_line_cb(lv_event_t *e) { (void)e; date_confirm_modal_show(); }
+
 // ---------------------------------------------------------------------------
 // 1 Hz timer
 // ---------------------------------------------------------------------------
@@ -436,12 +454,7 @@ static void timer_cb(lv_timer_t *t)
 
     // Keep the top hint's active-source label live (SNTP can sync, or we can go
     // offline, while the modal is open).
-    if (s_hint_top) {
-        char tb[80];
-        snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\n ",
-                 active_source_label());
-        lv_label_set_text(s_hint_top, tb);
-    }
+    if (s_hint_top) set_top_hint();
 
     time_t now = time(NULL);
     struct tm tm; gmtime_r(&now, &tm);
@@ -660,6 +673,9 @@ static void modal_build(void)
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(hint, 600);
     lv_obj_set_pos(hint, 0, 42);
+    lv_obj_add_flag(hint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(hint, 6);
+    lv_obj_add_event_cb(hint, date_line_cb, LV_EVENT_CLICKED, NULL);
     s_hint_top = hint;
 
     // HH : MM : SS boxes — font_48 for digits, BY=85
@@ -820,13 +836,10 @@ void ft8_time_modal_show(void)
         snprintf(hb, sizeof(hb), "on %s (auto)", active_source_label());
     }
     lv_label_set_text(s_hint_ss, hb);
-    char tb[80];
     // Source-aware, honest in every mode: NTP/GPS auto-manage the clock (nothing
-    // to do); FT8 only when offline; HH/MM is the manual override. Trailing "\n "
-    // leaves an empty line below for spacing.
-    snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\n ",
-             active_source_label());
-    lv_label_set_text(s_hint_top, tb);
+    // to do); FT8 only when offline; HH/MM is the manual override. The second
+    // line is the date, tappable - see set_top_hint().
+    set_top_hint();
 
     lv_obj_add_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
     refresh_box_styles();

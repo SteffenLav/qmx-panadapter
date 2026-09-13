@@ -52,6 +52,14 @@ PATCHES = [
      "WiFi transport buffers stay in scarce internal DRAM; the device reboots "
      "under QMX+FT8 load when WiFi TX bursts"),
 
+    ("apply_lvgl_port_tick_no_mutex.ps1", "repo",
+     "managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port.c",
+     "PATCHED (qmx-panadapter, 2026-09-13) tick without mutex",
+     "the 2 ms LVGL tick takes a mutex on the esp_timer task (priority 22); "
+     "when it collides with a touch read taskLVGL inherits 22 for a whole "
+     "redraw and starves USB-CDC, audio and the UAC driver - CAT timeouts and "
+     "lost audio whenever the manual or an overlay opens"),
+
     ("apply_lv_event_chain_guard.ps1", "repo",
      "managed_components/lvgl__lvgl/src/misc/lv_event.c",
      "qmx_lv_event_chain_bad",

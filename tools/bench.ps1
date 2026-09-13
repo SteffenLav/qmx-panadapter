@@ -566,8 +566,19 @@ function Invoke-Idf {
         # which is exactly what happened the first time this ran: a successful
         # build reported "Build FAILED". A tool that cries wolf on its first
         # use is worse than no tool.
-        & idf.py @idfArgs | Out-Host
-        return $LASTEXITCODE
+        #
+        # ⛔ And ErrorActionPreference Continue for THIS call. The script runs
+        # under "Stop", and in Windows PowerShell 5.1 any stderr line from a
+        # native exe becomes a NativeCommandError that aborts it. A CMake
+        # reconfigure prints "info: Choice ESP_DEFAULT_CPU_FREQ_MHZ has multiple
+        # active selections" to stderr - harmless - and killed `bench build`
+        # outright on 2026-09-13. idf.py's own exit code is the verdict.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & idf.py @idfArgs 2>&1 | ForEach-Object { "$_" } | Out-Host
+            return $LASTEXITCODE
+        } finally { $ErrorActionPreference = $prevEap }
     } finally { Pop-Location }
 }
 

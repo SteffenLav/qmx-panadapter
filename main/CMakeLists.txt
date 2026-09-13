@@ -25,6 +25,7 @@ idf_component_register(
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
         "ui/ft8_time_modal.c"
+        "ui/date_confirm_modal.c"
         "ui/ft8_tone_modal.c"
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
