@@ -191,12 +191,30 @@ static bool passes_filter(const self_spot_t *sp)
     }
 }
 
+// Brighter than ui_theme.h's UI_COLOR_MODE_CW/_DIGI/_WSPR, ON PURPOSE and
+// MAP-ONLY - those match the bandplan strip elsewhere in the UI, and dimming
+// this map's traces to match them was never the point. Traces are drawn at
+// LV_OPA_80 (recent) or LV_OPA_30 (older than 30 min, see map_render_spots())
+// over a now much-discussed land/water fill, and the original hues read as
+// visibly dim once blended at those opacities - operator, 2026-09-13, after
+// the land-colour passes above: "all three colours ... seems to be dim...
+// this will also give a better contrast to the historic traces". Same hues,
+// pushed brighter/more saturated so the source is still identifiable at a
+// glance and the faded (old) traces still read as traces, not noise.
+#define MAP_SRC_COLOR_CW   0x42A5F5   /* was UI_COLOR_MODE_CW   0x2477B3 */
+#define MAP_SRC_COLOR_DIGI 0xFFB300   /* was UI_COLOR_MODE_DIGI 0xB37724 */
+#define MAP_SRC_COLOR_WSPR 0x66BB6A   /* was UI_COLOR_MODE_WSPR 0x3D8C40 */
+
+// The sidebar's three source checkboxes ARE this map's legend (add_filter_
+// checkbox() below), so their swatches use these same brighter values, not
+// ui_theme.h's - a legend that shows a different colour than what the map
+// actually draws would be worse than no legend.
 static uint32_t source_color(spot_kind_t src)
 {
     switch (src) {
-    case SPOT_SRC_DIGI: return UI_COLOR_MODE_DIGI;
-    case SPOT_SRC_WSPR: return UI_COLOR_MODE_WSPR;
-    default:            return UI_COLOR_MODE_CW;
+    case SPOT_SRC_DIGI: return MAP_SRC_COLOR_DIGI;
+    case SPOT_SRC_WSPR: return MAP_SRC_COLOR_WSPR;
+    default:            return MAP_SRC_COLOR_CW;
     }
 }
 
@@ -697,43 +715,15 @@ static void scan_fill_rows(uint16_t land_c)
     }
 }
 
-static void map_render_coast(const lv_area_t *area_in)
+// A ring's projected, decimated segments handed to a callback rather than
+// drawn directly - map_render_coast() below walks every ring TWICE (once to
+// fill, once to stroke the coast on top of that fill) and this is the one
+// copy of the culling/budget logic both passes share, so it cannot drift
+// between them the way two independent copies could.
+typedef void (*ring_segment_cb_t)(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
+
+static void walk_ring_segments(const lv_area_t *area, int32_t w, int32_t h, ring_segment_cb_t cb)
 {
-    lv_area_t area = *area_in;
-    int32_t w = lv_area_get_width(&area);
-    int32_t h = lv_area_get_height(&area);
-    if (w <= 0 || h <= 0) return;
-
-    // World outline. LVGL 9.2.2's lv_draw_line_dsc_t is a single segment
-    // (p1/p2), unlike the multi-point polyline descriptor newer LVGL versions
-    // have, so each ring edge (including the closing edge back to point 0) is
-    // its own draw call rather than one call per ring.
-    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x1E242A));
-    /* Land reads LIGHTER than the sea (operator, 2026-09-12, then again
-     * 2026-09-13 - the first pass only brightened the OUTLINE, and most of a
-     * landmass is still several pixels of plain sea-coloured background in
-     * from its coast, so "lighter land" wasn't actually visible as area).
-     * The background is 0x0a0d10; land_c above is filled all the way to the
-     * coast now via scan_record_edge()/scan_fill_rows() below, not just
-     * stroked along it.
-     * ⚠ TWO CORRECTIONS ON THE SAME EVENING, from the two things that already
-     * draw over this fill. 0x8FA0AD (fine for a 1px OUTLINE) read as glaring
-     * daylight once it filled whole continents - operator: "I asked it to be
-     * a bit lighter, not like sunlight brighter". 0x333C44 fixed that but
-     * then visibly reduced the contrast the "older than 30 min" spot traces
-     * depend on - they are drawn at LV_OPA_30 (map_render_spots(), the
-     * age-fade design) precisely so a faded arc reads as OLD against a near-
-     * black sea; a mid-brightness land background blends toward itself at
-     * 30% opacity and the trace all but disappears crossing land - operator:
-     * "its eating the historic traces". 0x1E242A keeps land visibly lighter
-     * than the 0x0a0d10 water while staying close enough to it that the
-     * traces (drawn on a layer OVER this cached image, not baked into it)
-     * keep the contrast that opacity-fade needs. Screenshot before touching
-     * this again - it is a three-way trade between land, sea and the traces
-     * drawn over both, not a single fill colour in isolation. */
-    const bool can_fill = (s_scan_x != NULL && s_scan_n != NULL);
-    if (can_fill) memset(s_scan_n, 0, (size_t)h * sizeof(*s_scan_n));
-
     /* ⛔ REJECT A RING BY ITS BOUNDING BOX BEFORE WALKING ITS POINTS.
      *
      * One lv_draw_line per EDGE (see above), and the table is now ~16x denser
@@ -761,10 +751,10 @@ static void map_render_coast(const lv_area_t *area_in)
         int n = ring->point_count;
         if (n < 2) continue;
 
-        lv_point_precise_t c0 = project(&area, w, h,
+        lv_point_precise_t c0 = project(area, w, h,
                                         ring->lon_min / WORLD_MAP_UNITS_PER_DEG,
                                         ring->lat_min / WORLD_MAP_UNITS_PER_DEG);
-        lv_point_precise_t c1 = project(&area, w, h,
+        lv_point_precise_t c1 = project(area, w, h,
                                         ring->lon_max / WORLD_MAP_UNITS_PER_DEG,
                                         ring->lat_max / WORLD_MAP_UNITS_PER_DEG);
         int32_t bx0 = (int32_t)(c0.x < c1.x ? c0.x : c1.x);
@@ -772,7 +762,7 @@ static void map_render_coast(const lv_area_t *area_in)
         int32_t by0 = (int32_t)(c0.y < c1.y ? c0.y : c1.y);
         int32_t by1 = (int32_t)(c0.y < c1.y ? c1.y : c0.y);
 
-        if (bx1 < area.x1 || bx0 > area.x2 || by1 < area.y1 || by0 > area.y2)
+        if (bx1 < area->x1 || bx0 > area->x2 || by1 < area->y1 || by0 > area->y2)
             continue;                                   /* off-screen */
         if ((bx1 - bx0) < MAP_RING_MIN_PX && (by1 - by0) < MAP_RING_MIN_PX)
             continue;                                   /* sub-pixel speck */
@@ -801,16 +791,16 @@ static void map_render_coast(const lv_area_t *area_in)
          * budget for pixels nobody is looking at - and full detail is exactly
          * what zooming is for, so the clamp is what keeps Scandinavia sharp
          * while stopping the off-screen remainder from paying for it. */
-        int32_t vx0 = bx0 > area.x1 ? bx0 : area.x1;
-        int32_t vx1 = bx1 < area.x2 ? bx1 : area.x2;
-        int32_t vy0 = by0 > area.y1 ? by0 : area.y1;
-        int32_t vy1 = by1 < area.y2 ? by1 : area.y2;
+        int32_t vx0 = bx0 > area->x1 ? bx0 : area->x1;
+        int32_t vx1 = bx1 < area->x2 ? bx1 : area->x2;
+        int32_t vy0 = by0 > area->y1 ? by0 : area->y1;
+        int32_t vy1 = by1 < area->y2 ? by1 : area->y2;
         int32_t budget = ((vx1 - vx0) + (vy1 - vy0)) / 2;
         if (budget < 8) budget = 8;
         int stride = (n + (int)budget - 1) / (int)budget;
         if (stride < 1) stride = 1;
 
-        lv_point_precise_t prev = project(&area, w, h,
+        lv_point_precise_t prev = project(area, w, h,
                                           ring->points[0] / WORLD_MAP_UNITS_PER_DEG,
                                           ring->points[1] / WORLD_MAP_UNITS_PER_DEG);
         /* j walks by `stride` and the final iteration is forced back to point 0,
@@ -818,16 +808,78 @@ static void map_render_coast(const lv_area_t *area_in)
         for (int j = stride; ; j += stride) {
             bool last = (j >= n);
             int k = (last ? 0 : j) * 2;
-            lv_point_precise_t cur = project(&area, w, h,
+            lv_point_precise_t cur = project(area, w, h,
                                              ring->points[k]     / WORLD_MAP_UNITS_PER_DEG,
                                              ring->points[k + 1] / WORLD_MAP_UNITS_PER_DEG);
-            cache_line((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y, land_c);
-            if (can_fill) scan_record_edge((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y);
+            cb((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y);
             prev = cur;
             if (last) break;
         }
     }
-    if (can_fill) scan_fill_rows(land_c);
+}
+
+// The two callbacks passed to walk_ring_segments() above. Both need a colour
+// (scan_record_edge() doesn't, land_c/coast_c do) that the ring_segment_cb_t
+// signature has no room for, so it rides in this one file-local instead of
+// widening every call site's signature for two users.
+static uint16_t s_stroke_color;
+static void cb_scan(int32_t x0, int32_t y0, int32_t x1, int32_t y1)   { scan_record_edge(x0, y0, x1, y1); }
+static void cb_stroke(int32_t x0, int32_t y0, int32_t x1, int32_t y1) { cache_line(x0, y0, x1, y1, s_stroke_color); }
+
+static void map_render_coast(const lv_area_t *area_in)
+{
+    lv_area_t area = *area_in;
+    int32_t w = lv_area_get_width(&area);
+    int32_t h = lv_area_get_height(&area);
+    if (w <= 0 || h <= 0) return;
+
+    // Fill colour and coastline colour are DELIBERATELY different now, and
+    // both have their own hard-won reasons documented at length. Keep them
+    // that way rather than collapsing back to one constant.
+    const uint16_t land_c  = lv_color_to_u16(lv_color_hex(0x1E242A));
+    /* Land reads LIGHTER than the sea (operator, 2026-09-12, then again
+     * 2026-09-13 - the first pass only brightened the OUTLINE, and most of a
+     * landmass is still several pixels of plain sea-coloured background in
+     * from its coast, so "lighter land" wasn't actually visible as area).
+     * The background is 0x0a0d10; land_c above is filled all the way to the
+     * coast via scan_record_edge()/scan_fill_rows() below, not just stroked
+     * along it.
+     * ⚠ TWO CORRECTIONS ON THE SAME EVENING, from the two things that already
+     * draw over this fill. 0x8FA0AD (fine for a 1px OUTLINE) read as glaring
+     * daylight once it filled whole continents - operator: "I asked it to be
+     * a bit lighter, not like sunlight brighter". 0x333C44 fixed that but
+     * then visibly reduced the contrast the "older than 30 min" spot traces
+     * depend on - they are drawn at LV_OPA_30 (map_render_spots(), the
+     * age-fade design) precisely so a faded arc reads as OLD against a near-
+     * black sea; a mid-brightness land background blends toward itself at
+     * 30% opacity and the trace all but disappears crossing land - operator:
+     * "its eating the historic traces". 0x1E242A keeps land visibly lighter
+     * than the 0x0a0d10 water while staying close enough to it that the
+     * traces (drawn on a layer OVER this cached image, not baked into it)
+     * keep the contrast that opacity-fade needs. Screenshot before touching
+     * this again - it is a three-way trade between land, sea and the traces
+     * drawn over both, not a single fill colour in isolation. */
+    const uint16_t coast_c = lv_color_to_u16(lv_color_hex(0x8FA0AD));
+    /* The bright contour the very first version drew (before there was any
+     * fill to distinguish it from) - operator, 2026-09-13, after the fill
+     * landed: "the last thing missing is the white (or lighter) contour line
+     * you had originally". It had not gone anywhere as a VALUE - land_c was
+     * simply reused for both jobs, so once land_c was dimmed for the fill
+     * (see above) the stroke dimmed right along with it and stopped reading
+     * as a distinct line. Restored as its own constant, drawn in its own
+     * pass (see below) so the fill can never paint over it. */
+    const bool can_fill = (s_scan_x != NULL && s_scan_n != NULL);
+
+    if (can_fill) {
+        memset(s_scan_n, 0, (size_t)h * sizeof(*s_scan_n));
+        walk_ring_segments(&area, w, h, cb_scan);
+        scan_fill_rows(land_c);
+    }
+    // Stroked SECOND, always - the coastline must sit on top of the fill (or
+    // be the only thing drawn, in the no-PSRAM fallback where can_fill is
+    // false), never the other way round.
+    s_stroke_color = coast_c;
+    walk_ring_segments(&area, w, h, cb_stroke);
 }
 
 // Spots + own-QTH marker - drawn LIVE on s_map_obj (LV_EVENT_DRAW_MAIN) over
@@ -860,7 +912,12 @@ static void map_render_spots(lv_layer_t *layer, const lv_area_t *area_in)
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
-    line_dsc.width = 2;
+    // 2 -> 4: the brighter MAP_SRC_COLOR_* hues (see source_color()) still
+    // did not read as brighter to the operator against the land/water fill -
+    // "if you cannot do them brighter then double the line thickness" - more
+    // lit pixels per unit length reads as brighter even at the same colour
+    // and opacity, which is the one lever left besides the hue itself.
+    line_dsc.width = 4;
     line_dsc.opa = LV_OPA_80;
 
     lv_draw_rect_dsc_t dot_dsc;
@@ -901,7 +958,7 @@ static void map_render_spots(lv_layer_t *layer, const lv_area_t *area_in)
 
         lv_point_precise_t p = project(&area, w, h, sp->lon, sp->lat);
         dot_dsc.bg_color = lv_color_hex(source_color(sp->src));
-        int r = old ? 2 : 3;
+        int r = old ? 3 : 5;   // landing dimple, bumped a tad to match the doubled line width above
         lv_area_t dot_area = { p.x - r, p.y - r, p.x + r, p.y + r };
         lv_draw_rect(layer, &dot_dsc, &dot_area);
     }
@@ -1927,9 +1984,9 @@ static void build_settings_drawer(lv_obj_t *parent)
     lv_obj_set_style_pad_top(lbl, 6, 0);
     lv_label_set_text(lbl, "Source");
 
-    add_filter_checkbox(sb, "CW (RBN)",    UI_COLOR_MODE_CW,   cw_cb);
-    add_filter_checkbox(sb, "Digi (PSKR)", UI_COLOR_MODE_DIGI, digi_cb);
-    add_filter_checkbox(sb, "WSPR",        UI_COLOR_MODE_WSPR, wspr_cb);
+    add_filter_checkbox(sb, "CW (RBN)",    MAP_SRC_COLOR_CW,   cw_cb);
+    add_filter_checkbox(sb, "Digi (PSKR)", MAP_SRC_COLOR_DIGI, digi_cb);
+    add_filter_checkbox(sb, "WSPR",        MAP_SRC_COLOR_WSPR, wspr_cb);
 
     /* Age, below the three SOURCE boxes and visually separated from them,
      * because it filters a different axis: those three say WHERE a spot came
