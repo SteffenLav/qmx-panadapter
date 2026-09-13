@@ -4,6 +4,17 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.13.0** — 2026-09-14
+
+**The SelfSpotter map gets land you can actually see, and a release-night audit of its own documentation.**
+
+- **SelfSpotter's land is filled in, not just outlined.** LVGL has no polygon fill, so this is a small even-odd scanline rasteriser of my own, reusing the same per-ring point budget already tuned to keep this screen from freezing. Land colour and the coastline's own contour both went through several rounds against the real screen — too bright, then eating the historic traces, then right — and the trace colours and line widths went up too, for contrast against the new fill.
+- **A deterministic "Power-cycle QMX" sequence** *(Randy N4OPI)*, for the web UI's remote relay: pulse off, wait, pulse on, wait, then confirm over CAT and report whether the radio actually came back. A single pulse toggles the radio with no way to know which state it left it in — this one does.
+- **Diagnostic log volume cut** from roughly 300 lines a minute to under 50 on a quiet bench. Several sources were logging every second, or every message-window, with nothing new to say each time.
+- **The "Need guidance?" panel and the manual caught up with what the firmware actually does.** Seven real features — Radio Menus, Still Spectrum, FT8 Simulation Mode, SWR protection, Antenna Tune, RIT, and "Release radio" — had no way in from the guidance panel at all; they do now. Two guidance bugs are fixed: the WSPR page was showing the panadapter's own trouble rows, and the SelfSpotter map (an overlay, not its own screen) was leaking whichever page it was opened from. And the manual's own description of how to reach the spot map — a swipe gesture and an opt-in setting, both removed a while back — is corrected throughout.
+
+## Previous Releases
+
 **v1.12.4** — 2026-09-10
 
 **One bug, twelve releases old: tapping a spot moved the spectrum away from it.**

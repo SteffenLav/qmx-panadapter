@@ -12,9 +12,15 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.12.4.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.13.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.12.4 — tapping a spot puts you on the signal, and leaves the picture where it was.** Zoomed in past x1, tuning away from a signal and then tapping its spot to come back moved the VFO to the right place but shifted the spectrum and waterfall, so the signal was no longer under the marker. The display now holds still and only the marker moves, which is what the still display is for. Nothing else changed in this release.
+> **New in v1.13.0 — the SelfSpotter map now shows land, not just an outline.** Land is filled in (LVGL has no built-in fill, so this is a small even-odd scanline rasteriser of my own), with the coastline stroked back on top in its own colour so it doesn't disappear into the fill. Trace colours and line widths went up too, for contrast against it — tuned live against the real screen over several rounds.
+>
+> **A deterministic "Power-cycle QMX" sequence** *(Randy N4OPI)*, for the web UI's remote relay: pulse off, wait, pulse on, wait, then confirm over CAT and report whether it actually came back — a single pulse toggles the radio with no way to know which state it left it in.
+>
+> **Diagnostic log volume cut** from roughly 300 lines a minute to under 50 on a quiet bench. Several sources were logging every second, or every message-window, with nothing new to say each time.
+>
+> **The "Need guidance?" panel and the manual caught up with what the firmware actually does.** Seven real features — Radio Menus, Still Spectrum, FT8 Simulation Mode, SWR protection, Antenna Tune, RIT, and "Release radio" — had no way in from the guidance panel at all; they do now. Two guidance bugs are fixed: the WSPR page was showing the panadapter's own trouble rows, and the SelfSpotter map (an overlay, not its own screen) was leaking whichever page it was opened from. And the manual's own description of how to reach the spot map — a swipe gesture and an opt-in setting, both removed a while back — is corrected.
 >
 > **CW profiles** *(Uwe DL8UG)*. The QMX holds one CW centre and one set of filter widths, and changing them means walking two separate menus on the radio. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's configuration, so every write is read back and retried rather than assumed. **The bandwidth list also asks the radio which filters it actually has**, instead of offering all eight regardless.
 >
@@ -28,7 +34,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.12.4.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.13.0.pdf).
 
 <!-- USERGUIDE:START -->
 
