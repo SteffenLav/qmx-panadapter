@@ -1130,8 +1130,11 @@ static void fft_task(void *arg)
             s_ft8_total_n_out += n_out;
             int64_t now = esp_timer_get_time();
             if (s_ft8_pre) time_base_check(now);
-            if (now - s_ft8_last_log_us > 1000000) {
-                ESP_LOGI(TAG, "FT8 cap: %u iters %u smp head=%u active=%d idx=%d/%d",
+            /* Every 10 s, was every second (2026-09-13 log audit). Counts are
+             * over the whole window, so ~480 iters / ~120000 smp is healthy.
+             * The time-base check above still reports any real gap at once. */
+            if (now - s_ft8_last_log_us > 10000000) {
+                ESP_LOGI(TAG, "capture (10 s): %u iters %u smp head=%u active=%d idx=%d/%d",
                     (unsigned)s_ft8_iter_count, (unsigned)s_ft8_total_n_out,
                     (unsigned)s_pre_head, (int)s_ft8_active, s_ft8_idx, s_ft8_target);
                 s_ft8_iter_count = 0;

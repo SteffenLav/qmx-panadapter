@@ -692,6 +692,12 @@ static void diag_log_rx(const char *msg, size_t len)
     // dropped, because it is the whole point of the feature.
     if (len >= 6 && msg[0] == 'T' && msg[1] == 'B' &&
         msg[3] == '0' && msg[4] == '0') return;   // TBt00; - nothing decoded
+    /* TM: the GPS second-tick sync polls TM; every few ms for up to 1.3 s and
+     * logged all ~200 replies every 5 minutes (log audit 2026-09-13). The one
+     * reading that matters is logged by cat_gps_tick_sync() and time_sync. */
+    if (len >= 2 && msg[0] == 'T' && msg[1] == 'M') return;
+    /* RG: the read-back is already logged as "RF gain read back: N dB". */
+    if (len >= 2 && msg[0] == 'R' && msg[1] == 'G') return;
     if      (len >= 2 && msg[0] == 'F' && msg[1] == 'A') { slot = last_fa; slot_sz = sizeof(last_fa); }
     else if (len >= 2 && msg[0] == 'M' && msg[1] == 'D') { slot = last_md; slot_sz = sizeof(last_md); }
     else if (len >= 2 && msg[0] == 'F' && msg[1] == 'W') { slot = last_fw; slot_sz = sizeof(last_fw); }
@@ -2044,7 +2050,7 @@ static void poll_task(void *arg)
             // changes, and one-off writes (Sent:/SSB filter->/raw cmd) log fully.
             if (diag_log_enabled()) {
                 uint64_t hb = esp_timer_get_time();
-                if (hb - s_diag_poll_hb_us > 10000000ULL) {
+                if (hb - s_diag_poll_hb_us > 60000000ULL) {   // 60 s, was 10 s (log audit 2026-09-13)
                     s_diag_poll_hb_us = hb;
                     ESP_LOGI(TAG, "poll heartbeat: FA/MD/FW cycling @ %dms (freq=%luHz mode=%s)",
                              CAT_POLL_INTERVAL_MS, (unsigned long)s_last_freq_hz, cat_get_mode_str());

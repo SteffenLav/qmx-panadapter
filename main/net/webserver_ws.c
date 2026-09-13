@@ -584,7 +584,9 @@ static void ws_push_task(void *arg)
 
         sent++;
         TickType_t now = xTaskGetTickCount();
-        if ((now - fps_at) >= pdMS_TO_TICKS(5000)) {
+        /* 60 s window, was 5 s (log audit 2026-09-13): 12 lines a minute for as
+         * long as a browser watched. A teardown is logged where it happens. */
+        if ((now - fps_at) >= pdMS_TO_TICKS(60000)) {
             float fps = (float)sent * 1000.0f / (float)pdTICKS_TO_MS(now - fps_at);
             // `partial` counts frames that needed more than one send() to go out.
             // Every one of those was, before this fix, a silently corrupted stream

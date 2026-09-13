@@ -475,9 +475,15 @@ static void session(int fd, const char *mycall)
         if (esp_timer_get_time() - last_pub_us >= PUBLISH_EVERY_MS * 1000LL) {
             last_pub_us = esp_timer_get_time();
             publish(now);
-            ESP_LOGI(TAG, "%lu lines -> %d stations held (%lu new)",
-                     (unsigned long)lines, s->n, (unsigned long)spots);
-            lines = 0; spots = 0;
+            /* Every 5 min, was every 10 s (log audit 2026-09-13). lines/new are
+             * accumulated over the whole window, so nothing is lost but noise. */
+            static int s_windows = 0;
+            if (++s_windows >= 30) {
+                s_windows = 0;
+                ESP_LOGI(TAG, "%lu lines -> %d stations held (%lu new) in 5 min",
+                         (unsigned long)lines, s->n, (unsigned long)spots);
+                lines = 0; spots = 0;
+            }
         }
     }
 }

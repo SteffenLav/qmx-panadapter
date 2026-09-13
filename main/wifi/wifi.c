@@ -710,11 +710,14 @@ static void wifi_task(void *arg)
         ESP_LOGW(TAG, "no WiFi credentials configured; WiFi idle until configured");
     }
 
-    // Periodic status log so user can see what's going on.
+    // Periodic status log so user can see what's going on. Every 10 min, was
+    // every 30 s (log audit 2026-09-13): connect/disconnect are logged where
+    // they happen, so this is only a "still here" marker with the clock.
+    int ticks = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(30000));
         EventBits_t b = xEventGroupGetBits(s_events);
-        if (b & BIT_CONNECTED) {
+        if ((b & BIT_CONNECTED) && (++ticks % 20) == 0) {
             time_t now = time(NULL);
             struct tm tm_utc;
             gmtime_r(&now, &tm_utc);

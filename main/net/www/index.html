@@ -5202,10 +5202,10 @@ async function pollWspr() {
     /* Keep the button honest: wspr_tx_en is changed by the Tab5 button and, on
        entry, forced off by the firmware - so the label must follow the device
        rather than remember what this page last clicked. */
-    try {
-      const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
-      document.getElementById("wspr-tx").textContent = cfg.wspr_tx_en ? "TX ON" : "TX OFF";
-    } catch (e) { /* leave the last label */ }
+    /* From /api/wspr itself - fetching the whole /api/settings every 5 s for one
+       flag also made the Tab5 query the radio each time. */
+    if (typeof j.wspr_tx_en === "boolean")
+      document.getElementById("wspr-tx").textContent = j.wspr_tx_en ? "TX ON" : "TX OFF";
 
     /* ⚠ BEFORE the table, deliberately. The table block below returns early
        when there are no spots, and these three panels are at their most useful

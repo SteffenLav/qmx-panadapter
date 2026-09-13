@@ -450,7 +450,12 @@ static void session(int fd, const char *mycall)
             refresh_band();
             publish(now);
             last_pub = now;
-            ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            /* Only when the count changes (log audit 2026-09-13: every 10 s). */
+            static int s_logged_count = -1;
+            if (s_pub_count != s_logged_count) {
+                s_logged_count = s_pub_count;
+                ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            }
         }
         qmx_settings_t cfg;
         settings_load_all(&cfg);

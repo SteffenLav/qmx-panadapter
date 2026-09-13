@@ -4020,7 +4020,18 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // "unknown" rather than as 0 dB, which is a real and very deaf setting.
     cJSON_AddNumberToObject(root, "cw_tx_offset_hz", c.cw_tx_offset_hz);
     cJSON_AddNumberToObject(root, "qmx_rf_gain_db",  cat_get_rf_gain());
-    cat_query_rf_gain();   // refresh for the next GET, as the drawer does on open
+    /* Refresh for the next GET, as the drawer does on open - but at most once
+     * every 30 s. RF gain is per band and changes only when someone changes it,
+     * and a page polling this endpoint was sending an RG; (3 log lines) every
+     * few seconds (log audit 2026-09-13). */
+    {
+        static int64_t s_last_rg_us;
+        int64_t now = esp_timer_get_time();
+        if (cat_get_rf_gain() < 0 || now - s_last_rg_us > 30000000) {
+            s_last_rg_us = now;
+            cat_query_rf_gain();
+        }
+    }
     cJSON_AddNumberToObject(root, "bandplan_region", c.bandplan_region);
 
     // Display & waterfall - the "tune it from the laptop while watching the
@@ -4722,6 +4733,10 @@ static esp_err_t wspr_handler(httpd_req_t *req)
           cJSON_AddNumberToObject(root, "advised_dbm", wspr_tx_advised_dbm());
       } }
     cJSON_AddNumberToObject(root, "pa_voltage_x10", cat_get_pa_voltage_x10());
+    /* The web WSPR poll used to fetch the WHOLE /api/settings every 5 s just to
+     * read this one flag - and every settings GET queued an RG; to the radio
+     * (log audit 2026-09-13). Carried here instead. */
+    cJSON_AddBoolToObject(root, "wspr_tx_en", settings_get_wspr_tx_en());
 
     /* ⭐ THE TRANSMIT STATE, so the browser can show what the Tab5's TX button
      * shows rather than inferring it from rx_status text. Same three states and

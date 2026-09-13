@@ -78,6 +78,14 @@ void app_main(void)
     // session header is written once below, after settings come up.
     diag_log_init();
 
+    // Library INFO chatter that says nothing about OUR state (2026-09-13 log
+    // audit): NimBLE prints 5-6 lines every time a scan window starts (every
+    // 60 s + 15 s, for ever, on a unit with no mouse), and the cert bundle
+    // prints one per TLS handshake. Warnings and errors still come through;
+    // btmouse logs the BLE events that matter under its own tag.
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
+
     // #117: if the last boot crashed, report it NOW - immediately after the log
     // hook is installed, so the record is captured, and before anything else can
     // panic and cost us the report. Panics never reach diag_log's vprintf hook,
