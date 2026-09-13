@@ -708,7 +708,7 @@ static void map_render_coast(const lv_area_t *area_in)
     // (p1/p2), unlike the multi-point polyline descriptor newer LVGL versions
     // have, so each ring edge (including the closing edge back to point 0) is
     // its own draw call rather than one call per ring.
-    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x333C44));
+    const uint16_t land_c = lv_color_to_u16(lv_color_hex(0x1E242A));
     /* Land reads LIGHTER than the sea (operator, 2026-09-12, then again
      * 2026-09-13 - the first pass only brightened the OUTLINE, and most of a
      * landmass is still several pixels of plain sea-coloured background in
@@ -716,10 +716,21 @@ static void map_render_coast(const lv_area_t *area_in)
      * The background is 0x0a0d10; land_c above is filled all the way to the
      * coast now via scan_record_edge()/scan_fill_rows() below, not just
      * stroked along it.
-     * ⚠ 0x8FA0AD (a pale blue-grey, fine for a thin OUTLINE) read as glaring
-     * daylight once it was the fill colour for whole continents - operator,
-     * 2026-09-13: "I asked it to be a bit lighter, not like sunlight
-     * brighter". 0x333C44 is one step up from the 0x0a0d10 water, not several. */
+     * ⚠ TWO CORRECTIONS ON THE SAME EVENING, from the two things that already
+     * draw over this fill. 0x8FA0AD (fine for a 1px OUTLINE) read as glaring
+     * daylight once it filled whole continents - operator: "I asked it to be
+     * a bit lighter, not like sunlight brighter". 0x333C44 fixed that but
+     * then visibly reduced the contrast the "older than 30 min" spot traces
+     * depend on - they are drawn at LV_OPA_30 (map_render_spots(), the
+     * age-fade design) precisely so a faded arc reads as OLD against a near-
+     * black sea; a mid-brightness land background blends toward itself at
+     * 30% opacity and the trace all but disappears crossing land - operator:
+     * "its eating the historic traces". 0x1E242A keeps land visibly lighter
+     * than the 0x0a0d10 water while staying close enough to it that the
+     * traces (drawn on a layer OVER this cached image, not baked into it)
+     * keep the contrast that opacity-fade needs. Screenshot before touching
+     * this again - it is a three-way trade between land, sea and the traces
+     * drawn over both, not a single fill colour in isolation. */
     const bool can_fill = (s_scan_x != NULL && s_scan_n != NULL);
     if (can_fill) memset(s_scan_n, 0, (size_t)h * sizeof(*s_scan_n));
 
