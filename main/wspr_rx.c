@@ -435,7 +435,68 @@ static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
  * first a no-op. */
 static void wspr_pa_guard_engage_if_pending(void)
 {
-    if (!settings_get_wspr_pa_reduce() || settings_get_wspr_pa_saved_x10() != 0) return;
+    if (!settings_get_wspr_pa_reduce()) return;
+
+    uint16_t owed = settings_get_wspr_pa_saved_x10();
+    if (owed != 0) {
+        /* ⛔ A NON-ZERO "OWED" RECORD DOES NOT MEAN A RESTORE IS STILL
+         * OUTSTANDING - it can equally mean one already landed, with nobody
+         * having noticed yet. The ONLY thing that clears this record is
+         * wspr_pa_guard_update()'s own cycle-boundary check, which runs
+         * once per 120 s WSPR cycle - so a restore that completes mid-cycle
+         * (this helper sends it the instant TX goes off) can sit CONFIRMED
+         * at the radio for up to two minutes with the bookkeeping still
+         * calling it owed.
+         *
+         * If the operator re-enables TX inside that window, this function
+         * used to see owed!=0 and refuse to start a new reduction - correct
+         * if something really were still in flight, wrong here, because
+         * nothing was. The radio then stayed at full power indefinitely:
+         * every cycle's wspr_pa_guard_ready() correctly saw it was not
+         * reduced and held the burst, and nothing was left to ever retry
+         * the reduction, because the guard believed one was already
+         * running.
+         *
+         * Hardware-confirmed 2026-09-14 (Steffen OZ1LAV): restore sent and
+         * confirmed by the radio within 800 ms; TX re-enabled ~90 s later,
+         * inside the stale window; two consecutive cycles then held with
+         * "radio says 12.0 V, target 6.0 V" and no engage line between
+         * them, because nothing had cleared owed=12.0 yet.
+         *
+         * So: check the radio directly before trusting the record's mere
+         * non-zero-ness. If it already reads what was owed, the earlier
+         * restore is done - self-confirm right here (this runs every
+         * ~500 ms from the wait loop, so it catches this within a tick
+         * instead of within two minutes) and fall through to consider a
+         * fresh reduction on its own merits. */
+        int16_t confirmed = cat_get_pa_voltage_x10();
+        if (confirmed != (int16_t)owed) return;   /* genuinely still outstanding, or unknown */
+        settings_set_wspr_pa_saved_x10(0);
+        ESP_LOGW(TAG, "PA guard: %u.%u V was still owed but the radio already "
+                      "confirms it - clearing the stale record", owed / 10, owed % 10);
+    }
+
+    /* ⛔ A NEW REDUCTION MUST NEVER START UNLESS TX IS ACTUALLY WANTED - this
+     * function itself had no opinion on that until now, because its only
+     * caller used to be schedule_reset()'s own TX-enable branch, where
+     * tx_en==true was already guaranteed by construction. Calling it
+     * unconditionally from the wait loop (added earlier tonight, so the
+     * self-heal above gets a chance every ~500 ms instead of once per
+     * cycle) broke that assumption: with the guard toggle on and TX
+     * genuinely off, this reduced the radio anyway the moment the boot
+     * settled, purely because nothing was "owed" yet and the voltage read
+     * above target.
+     *
+     * Hardware-confirmed 2026-09-14 (Steffen OZ1LAV), booting straight into
+     * WSPR with TX off: 12.0 V at 16379 ms, reduced to 6.0 V by this
+     * function at 16863 ms - unprompted - then wspr_pa_guard_update()'s own
+     * cycle-boundary check (which DOES gate on tx_en) correctly noticed a
+     * reduction that should not exist and restored it at 33441 ms. The
+     * whole 12 -> 6 -> 12 sequence the operator watched with the radio
+     * otherwise untouched was this bug creating the problem and unrelated,
+     * already-correct code fixing it 17 seconds later. */
+    if (!settings_get_wspr_tx_en()) return;
+
     int16_t cur = cat_get_pa_voltage_x10();
     if (cur < 0 || cur <= (int16_t)WSPR_PA_TARGET_X10) return;   /* not known yet, or already low */
     settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
@@ -445,6 +506,58 @@ static void wspr_pa_guard_engage_if_pending(void)
              cur / 10, cur % 10,
              (unsigned)(WSPR_PA_TARGET_X10 / 10),
              (unsigned)(WSPR_PA_TARGET_X10 % 10));
+}
+
+/* ⛔ THE MIRROR IMAGE OF THE ENGAGE HELPER ABOVE, AND UNTIL NOW MISSING -
+ * arming got an immediate, synchronous attempt (wspr_pa_guard_engage_if_
+ * pending(), called straight from wspr_rx_tx_schedule_reset()'s TX-on
+ * branch) plus a retry every wait-loop tick. Disarming got neither: the
+ * only place that ever restored the radio while still on the WSPR page was
+ * wspr_pa_guard_update()'s own "TX off" branch, which runs once per 120 s
+ * WSPR cycle - so pressing disarm could leave the radio genuinely still at
+ * 6.0 V for up to two minutes with nothing about to change that sooner.
+ *
+ * Operator, 2026-09-14: "if I regret after pushing TX OFF and push it one
+ * more time then PA stay at 6 V until the next cycle - almost 2min worst
+ * case... otherwise i cannot swipe to FT8 and start a full power TX." Worth
+ * noting swiping away is itself safe regardless - wspr_rx_stop() sends its
+ * own immediate restore on leaving the page - but staying on WSPR after
+ * disarming genuinely left the radio reduced for up to two minutes, and
+ * looking at a page that says so is enough reason to fix it on its own.
+ *
+ * Factored out of wspr_pa_guard_update()'s "TX off" branch so it can be
+ * called immediately from wspr_rx_tx_schedule_reset()'s TX-off path (below)
+ * as well as retried from the wait loop, exactly the same split the engage
+ * side already has. Narrow accessors throughout - this runs on taskLVGL/
+ * httpd (schedule_reset) as well as the WSPR task's own wait loop. */
+static void wspr_pa_guard_restore_if_pending(void)
+{
+    uint16_t back = settings_get_wspr_pa_saved_x10();
+    if (back == 0) return;   /* nothing owed */
+
+    bool want_reduced = settings_get_wspr_tx_en() && settings_get_wspr_pa_reduce()
+                       && settings_get_wspr_duty_pct() > 0;
+    if (want_reduced) return;   /* still genuinely wanted - not this function's job */
+
+    int16_t cur = cat_get_pa_voltage_x10();
+    if (cur < 0) {
+        cat_query_pa_voltage();      /* ask; check again next tick */
+        return;
+    }
+    if ((uint16_t)cur == back) {
+        settings_set_wspr_pa_saved_x10(0);
+        ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage confirmed "
+                      "restored to %u.%u V", back / 10, back % 10);
+        return;
+    }
+    /* Not confirmed yet (still at our reduced target, or unread) - resend
+     * and hold the record. Harmless if the earlier write already landed;
+     * this only re-confirms on the next tick either way. */
+    cat_request_pa_voltage_x10(back);
+    cat_query_pa_voltage();
+    ESP_LOGW(TAG, "PA guard: WSPR TX off - restore to %u.%u V sent; "
+                  "holding it as owed until the radio confirms",
+             back / 10, back % 10);
 }
 
 void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
@@ -458,6 +571,14 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
         s_next_tx_cycle   = -1;
         s_sched_duty      = 0;
         s_first_tx_forced = false;
+        /* Disarming (or duty going to 0) deserves the same immediate
+         * attempt arming gets below, not a wait for the next WSPR cycle's
+         * own check - see wspr_pa_guard_restore_if_pending()'s own
+         * comment. A no-op if nothing is owed or the guard has genuinely
+         * been switched off, so calling it unconditionally here costs
+         * nothing on the common paths (duty_pct==0 is rare; !tx_en is the
+         * disarm case this exists for). */
+        wspr_pa_guard_restore_if_pending();
         return;
     }
     /* ⭐ THE FIRST BURST AFTER SWITCHING TRANSMITTING ON IS GUARANTEED, AND AT
@@ -498,10 +619,29 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
          * Engaging here gives the CAT round trip the whole ~2 minutes before
          * the boundary. Uses narrow accessors rather than settings_load_all():
          * this runs on httpd and taskLVGL, whose stacks are small. */
-        if (settings_get_wspr_pa_reduce() && settings_get_wspr_pa_saved_x10() == 0) {
-            /* Kick off the query here (so an answer is already in flight the
+        if (settings_get_wspr_pa_reduce()) {
+            /* ⛔ USED TO ALSO REQUIRE settings_get_wspr_pa_saved_x10() == 0
+             * HERE - a leftover from before wspr_pa_guard_engage_if_pending()
+             * grew its own self-heal for a stale-but-already-confirmed owed
+             * record. That made this guard REDUNDANT, and worse than
+             * redundant: it silently skips the call entirely whenever
+             * something is (or merely LOOKS) owed, which is exactly the one
+             * case the self-heal exists to handle. Re-enabling TX with an
+             * unconfirmed restore still on the books - entirely possible,
+             * since nothing clears it faster than once per 120 s WSPR cycle -
+             * meant this whole block, self-heal included, never ran at all.
+             *
+             * Hardware-confirmed 2026-09-14 (Steffen OZ1LAV): TX re-enabled
+             * with owed=12.0 V still on the books from an already-landed
+             * restore; no "engaging" line, no self-heal line, nothing - this
+             * guard simply skipped the block. Every following cycle then
+             * held the burst at full power, because nothing was ever given
+             * the chance to notice the radio was never actually reduced.
+             *
+             * Kick off the query here (so an answer is already in flight the
              * moment the wait-loop retry below first runs), then let
-             * wspr_pa_guard_engage_if_pending() do the actual engage - here
+             * wspr_pa_guard_engage_if_pending() do the actual work - self-heal
+             * or engage, whichever the radio's own answer calls for - here
              * AND on every wait-loop tick until it lands. */
             if (cat_get_pa_voltage_x10() < 0) {
                 cat_query_pa_voltage();
@@ -1574,45 +1714,25 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
                       "a ~110 s key-down)",
                  cur / 10, cur % 10, target / 10, target % 10);
     } else if (!want_reduced && ws->wspr_pa_saved_x10 != 0) {
-        /* ⛔ THIS BRANCH USED TO CLEAR THE OWED RECORD IN THE SAME BREATH AS
-         * THE WRITE - exactly the fire-and-forget bug wspr_pa_guard_release_
-         * pending() was written to fix for the "leaving WSPR" case, just not
-         * for THIS one: toggling the guard off (or wspr_tx_en/duty_pct)
-         * while still ON the WSPR page. A dropped MM write here left the
-         * radio at the reduced voltage with the record already zeroed, so
-         * nothing - not even leaving WSPR afterwards - could ever restore
-         * it. Hardware-confirmed 2026-09-14 (Steffen OZ1LAV): disabled the
-         * guard from the drawer, the CAT read-back still showed 6.0 V, and
-         * three later WSPR->FT8 transitions logged nothing, because
-         * wspr_pa_saved_x10 was already 0.
+        /* ⛔ USED TO DO ITS OWN CONFIRM-OR-RESEND INLINE HERE - the exact
+         * fire-and-forget bug wspr_pa_guard_release_pending() was written to
+         * fix for the "leaving WSPR" case, just not for THIS one (toggling
+         * the guard off, or wspr_tx_en/duty_pct, while still on the WSPR
+         * page). Hardware-confirmed 2026-09-14 (Steffen OZ1LAV) in two
+         * separate ways: first as a dropped write leaving the record
+         * permanently zeroed with the radio still reduced, then - once that
+         * was fixed - as a genuinely correct restore that still had to wait
+         * for THIS once-per-120s-cycle check before it was even SENT, up to
+         * two minutes after disarming ("otherwise i cannot swipe to FT8 and
+         * start a full power TX").
          *
-         * ⚠ Cannot simply call wspr_pa_guard_release_pending() and let
-         * wspr_pa_guard_periodic_check() confirm it, the way leaving WSPR
-         * does - that function explicitly refuses to act while
-         * wspr_rx_running() ("the WSPR slot loop's own guard owns this
-         * state"), which is exactly this call site. So THIS function has to
-         * do its own confirm-or-resend, the same shape periodic_check() uses
-         * once WSPR has actually stopped. */
-        uint16_t back = ws->wspr_pa_saved_x10;
-        int16_t cur = cat_get_pa_voltage_x10();
-        if (cur < 0) {
-            cat_query_pa_voltage();      /* ask; check again next cycle */
-            return;
-        }
-        if ((uint16_t)cur == back) {
-            settings_set_wspr_pa_saved_x10(0);
-            ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage confirmed "
-                          "restored to %u.%u V", back / 10, back % 10);
-            return;
-        }
-        /* Not confirmed yet (still at our reduced target, or unread) - resend
-         * and hold the record. Harmless if the earlier write already landed;
-         * this only re-confirms on the next cycle either way. */
-        cat_request_pa_voltage_x10(back);
-        cat_query_pa_voltage();
-        ESP_LOGW(TAG, "PA guard: WSPR TX off - restore to %u.%u V sent; "
-                      "holding it as owed until the radio confirms",
-                 back / 10, back % 10);
+         * Now factored out to wspr_pa_guard_restore_if_pending(), which
+         * wspr_rx_tx_schedule_reset() also calls immediately on disarm and
+         * the wait loop retries every ~500 ms - this call here is what
+         * still catches it if disarming happened through some other path,
+         * or the immediate attempt's own CAT round trip hadn't landed yet.
+         * One mechanism, three ways to reach it, not three copies of it. */
+        wspr_pa_guard_restore_if_pending();
     }
 }
 
@@ -1788,8 +1908,10 @@ static void wspr_rx_task(void *arg)
             /* Catches the PA-voltage answer the enable-time check missed -
              * see wspr_pa_guard_engage_if_pending()'s own comment. A no-op
              * once engaged (or if nothing is owed), so this costs nothing on
-             * every ordinary tick. */
+             * every ordinary tick. Its restore-side twin gets the same
+             * every-tick retry, for the same reason. */
             wspr_pa_guard_engage_if_pending();
+            wspr_pa_guard_restore_if_pending();
             t = now_ms();
             into = t % WSPR_CYCLE_MS;
             wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
@@ -2553,10 +2675,27 @@ void wspr_pa_guard_reclaim_on_link(void)
                  WSPR_PA_TARGET_X10 / 10, WSPR_PA_TARGET_X10 % 10);
         return;
     }
+    /* ⛔ USED TO CLEAR saved_x10 RIGHT HERE, UNCONFIRMED - the exact
+     * fire-and-forget shape wspr_pa_guard_periodic_check()'s own header
+     * comment describes and was written to replace elsewhere. This call site
+     * was missed. Hardware-confirmed 2026-09-14 (Steffen OZ1LAV): the NVS
+     * write making it to flash (a separate, now-fixed bug) let saved_x10
+     * genuinely survive a reset - this function correctly found the radio
+     * still at the reduced target and sent the restore - and then cleared
+     * the record before anything confirmed the write landed. It didn't (busy
+     * CAT traffic right at link-up, same hazard documented throughout this
+     * file), and the radio was stuck at 6.0 V with nothing left to retry it,
+     * same end state as if the NVS write had never survived at all.
+     *
+     * Leave the record standing instead - wspr_pa_guard_periodic_check()
+     * already runs every ~15 s from poll_task and does exactly this
+     * confirm-or-resend job for the identical "leaving WSPR" case. No need
+     * for a second confirm loop here; just send the write once and let that
+     * one keep chasing confirmation the way it already does. */
     cat_request_pa_voltage_x10(back);
-    settings_set_wspr_pa_saved_x10(0);
-    ESP_LOGW(TAG, "PA guard: radio reconnected still reduced - Max. PA voltage "
-                  "restored to %u.%u V", back / 10, back % 10);
+    ESP_LOGW(TAG, "PA guard: radio reconnected still reduced - restore to "
+                  "%u.%u V sent; holding it as owed until the radio confirms",
+             back / 10, back % 10);
 }
 
 /* ⭐ THE NON-BLOCKING TWIN OF THE ABOVE - for the gap link-up never covers.
