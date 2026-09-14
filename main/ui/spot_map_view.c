@@ -38,6 +38,7 @@
 #include "net/band_conditions.h"
 #include "util/world_map_data.h"
 #include "util/maidenhead.h"
+#include "util/geo_coords.h"    // geo_coords_iso_for_call() - LIST tab's ISO column
 #include "util/format_freq.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"      // adif_log_band_for_freq() - the ONE band table, see its own comment
@@ -225,6 +226,26 @@ static void format_age(int64_t heard_unix, int64_t now, char *out, size_t out_sz
     if (age < 60)         snprintf(out, out_sz, "%llds", (long long)age);
     else if (age < 3600)  snprintf(out, out_sz, "%lldm", (long long)(age / 60));
     else                  snprintf(out, out_sz, "%lldh", (long long)(age / 3600));
+}
+
+// German-style thousands separator ('.', not ',') for the LIST tab's
+// Distance column - km values into the thousands (a spot on the far side of
+// the world is ~20,000 km) read faster with one. km is always >= 0 here;
+// distance_km's own -1 "unknown" sentinel is handled by the caller before
+// this is ever reached.
+static void format_km_dotted(long km, char *out, size_t out_sz)
+{
+    char digits[16];
+    int len = snprintf(digits, sizeof(digits), "%ld", km);
+    if (len < 0) len = 0;
+    if ((size_t)len >= sizeof(digits)) len = sizeof(digits) - 1;
+
+    size_t o = 0;
+    for (int i = 0; i < len && o + 1 < out_sz; i++) {
+        if (i > 0 && (len - i) % 3 == 0) out[o++] = '.';
+        if (o + 1 < out_sz) out[o++] = digits[i];
+    }
+    out[o] = '\0';
 }
 
 // Refreshes s_have_me/s_my_lat/s_my_lon from storage/settings.h's my_grid.
@@ -1244,7 +1265,7 @@ static lv_obj_t *make_row(lv_obj_t *parent)
     return row;
 }
 
-static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, bool bold)
+static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, bool bold, bool align_right)
 {
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, text);
@@ -1258,6 +1279,9 @@ static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, b
      * ~144 px of montserrat_24 in a ~230 px column, so the columns still fit. */
     lv_obj_set_style_text_font(lbl, bold ? &lv_font_montserrat_24 : &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
+    // SNR/Distance are numeric and right-aligned (2026-09-14) so their digits
+    // line up column-wise instead of ragging left like the text columns.
+    if (align_right) lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
 }
 
 // LIST tab column sort: tap a header to cycle unsorted -> ascending ->
@@ -1267,7 +1291,7 @@ static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, b
 // direction.
 typedef enum {
     SORT_COL_NONE = 0,
-    SORT_COL_CALL, SORT_COL_MODE, SORT_COL_BAND,
+    SORT_COL_CALL, SORT_COL_MODE, SORT_COL_BAND, SORT_COL_ISO,
     SORT_COL_FREQ, SORT_COL_SNR, SORT_COL_DIST, SORT_COL_AGE,
 } sort_col_t;
 typedef enum { SORT_ASC, SORT_DESC } sort_dir_t;
@@ -1303,6 +1327,16 @@ static int cmp_spots(const void *pa, const void *pb)
     // band-name-to-rank table to maintain.
     case SORT_COL_BAND:
     case SORT_COL_FREQ: cmp = (a->freq_hz    > b->freq_hz)    - (a->freq_hz    < b->freq_hz); break;
+    // ISO is derived from the callsign's prefix (geo_coords_iso_for_call()),
+    // same as the column's own render below - not stored on self_spot_t, so
+    // it is looked up here rather than compared as a field.
+    case SORT_COL_ISO: {
+        const char *ia = geo_coords_iso_for_call(a->call);
+        const char *ib = geo_coords_iso_for_call(b->call);
+        if (!ia || !ib) { cmp = (!ia == !ib) ? 0 : (ia ? -1 : 1); break; }
+        cmp = strcmp(ia, ib);
+        break;
+    }
     case SORT_COL_SNR:  cmp = (a->snr_db     > b->snr_db)     - (a->snr_db     < b->snr_db); break;
     case SORT_COL_DIST: cmp = (a->distance_km > b->distance_km) - (a->distance_km < b->distance_km); break;
     // "Ascending age" means smallest age (most recent) first, i.e. LARGEST
@@ -1331,7 +1365,7 @@ static void header_click_cb(lv_event_t *e)
 // below, but wraps the label in its own lv_obj so it can be tapped
 // independently of the (deliberately non-clickable) header row itself.
 // Appends an up/down glyph when this is the active sort column.
-static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_col_t col_id)
+static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_col_t col_id, bool align_right)
 {
     lv_obj_t *cell = lv_obj_create(row);
     lv_obj_remove_style_all(cell);
@@ -1357,6 +1391,13 @@ static void add_sort_header_col(lv_obj_t *row, const char *text, int grow, sort_
      * well it all needs to match". 24 so a header still reads as a header. */
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(active ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED), 0);
+    // Matches add_col()'s own SNR/Distance right-align - the label needs a
+    // real width (the cell's own, not its content size) before "align right
+    // within it" means anything.
+    if (align_right) {
+        lv_obj_set_width(lbl, LV_PCT(100));
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    }
 
     lv_obj_add_event_cb(cell, header_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)col_id);
 }
@@ -1389,13 +1430,18 @@ static void rebuild_table(void)
     lv_obj_clean(s_table_list);
 
     lv_obj_t *hdr = make_row(s_table_list);
-    add_sort_header_col(hdr, "RX",       2, SORT_COL_CALL);
-    add_sort_header_col(hdr, "Mode",     1, SORT_COL_MODE);
-    add_sort_header_col(hdr, "Band",     1, SORT_COL_BAND);
-    add_sort_header_col(hdr, "Freq",     2, SORT_COL_FREQ);
-    add_sort_header_col(hdr, "SNR",      1, SORT_COL_SNR);
-    add_sort_header_col(hdr, "Distance", 1, SORT_COL_DIST);
-    add_sort_header_col(hdr, "Age",      1, SORT_COL_AGE);
+    // Column weights doubled from the original 2/1/1/2/1/1/1/1 (2026-09-14) so
+    // RX/Freq could shrink and Distance grow by whole-number steps and still
+    // land on the same total (20 vs 10) - see add_col()'s own comment for why
+    // SNR/Distance also right-align.
+    add_sort_header_col(hdr, "RX",       4, SORT_COL_CALL,  false);
+    add_sort_header_col(hdr, "Mode",     2, SORT_COL_MODE,  true);
+    add_sort_header_col(hdr, "Band",     2, SORT_COL_BAND,  true);
+    add_sort_header_col(hdr, "Freq",     3, SORT_COL_FREQ,  true);
+    add_sort_header_col(hdr, "SNR",      2, SORT_COL_SNR,   true);
+    add_sort_header_col(hdr, "Distance", 3, SORT_COL_DIST,  true);
+    add_sort_header_col(hdr, "ISO",      2, SORT_COL_ISO,   true);
+    add_sort_header_col(hdr, "Age",      2, SORT_COL_AGE,   true);
 
     static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];   // NOT internal .bss - see the note above map_draw_cb()'s copy of this array
     int count = gather_self_spots(spots, SELF_SPOT_MAX);
@@ -1409,15 +1455,21 @@ static void rebuild_table(void)
         passed++;
         if (shown >= TABLE_MAX_ROWS) continue;   /* keep counting `passed` for the notice below */
 
-        char freq_buf[16], age_buf[24], snr_buf[8], dist_buf[16];
+        char freq_buf[16], age_buf[24], snr_buf[8], dist_buf[24];
         format_freq_hz(sp->freq_hz, g_freq_style, freq_buf, sizeof(freq_buf));
         format_age(sp->heard_unix, now, age_buf, sizeof(age_buf));
         snprintf(snr_buf, sizeof(snr_buf), "%d dB", sp->snr_db);
-        if (sp->distance_km >= 0) snprintf(dist_buf, sizeof(dist_buf), "%ld km", (long)sp->distance_km);
-        else                      snprintf(dist_buf, sizeof(dist_buf), "-");
+        if (sp->distance_km >= 0) {
+            char km_dotted[16];
+            format_km_dotted((long)sp->distance_km, km_dotted, sizeof(km_dotted));
+            snprintf(dist_buf, sizeof(dist_buf), "%s km", km_dotted);
+        } else {
+            snprintf(dist_buf, sizeof(dist_buf), "-");
+        }
         // The ONE band table (adif_log_band_for_freq(), adif_log.c) - do not
         // reimplement this locally, see that function's own comment.
         const char *band = adif_log_band_for_freq(sp->freq_hz);
+        const char *iso = geo_coords_iso_for_call(sp->call);
 
         lv_obj_t *row = make_row(s_table_list);
         /* ⛔ THE MODE COLUMN IS COLOURED BY THE MODE, NOT BY THE SOURCE.
@@ -1438,7 +1490,7 @@ static void rebuild_table(void)
          * what the sidebar's three checkboxes are the legend for - one column
          * per meaning, and no colour describing something it is not. */
         uint32_t col = source_color(sp->src);
-        add_col(row, sp->call[0] ? sp->call : "-", 2, col, true);
+        add_col(row, sp->call[0] ? sp->call : "-", 4, col, true, false);
         /* ⛔ ui_theme_mode_color() WAS THE WRONG FIX. Operator, 2026-09-12:
          * "The Mode text in the LIST tap is almost invisible - make text same
          * colour as Band". Cause found rather than guessed: that helper has no
@@ -1450,18 +1502,19 @@ static void rebuild_table(void)
          * mode colour" to add instead - it is a protocol on top of DiGi, not a
          * QMX CAT mode - so the plain, correct answer is the one asked for:
          * the same neutral UI_COLOR_TEXT the Band column already uses. */
-        add_col(row, sp->mode[0] ? sp->mode : "-", 1, UI_COLOR_TEXT, false);
-        add_col(row, band[0] ? band : "-", 1, UI_COLOR_TEXT, false);
-        add_col(row, freq_buf, 2, UI_COLOR_TEXT, false);
-        add_col(row, snr_buf, 1, UI_COLOR_TEXT, false);
-        add_col(row, dist_buf, 1, UI_COLOR_TEXT_SECONDARY, false);
-        add_col(row, age_buf, 1, UI_COLOR_TEXT_SECONDARY, false);
+        add_col(row, sp->mode[0] ? sp->mode : "-", 2, UI_COLOR_TEXT, false, true);
+        add_col(row, band[0] ? band : "-", 2, UI_COLOR_TEXT, false, true);
+        add_col(row, freq_buf, 3, UI_COLOR_TEXT, false, true);
+        add_col(row, snr_buf, 2, UI_COLOR_TEXT, false, true);
+        add_col(row, dist_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
+        add_col(row, iso ? iso : "-", 2, UI_COLOR_TEXT_SECONDARY, false, true);
+        add_col(row, age_buf, 2, UI_COLOR_TEXT_SECONDARY, false, true);
         shown++;
     }
 
     if (shown == 0) {
         lv_obj_t *row = make_row(s_table_list);
-        add_col(row, "Nobody has heard me yet (CW/Digi/WSPR).", 1, UI_COLOR_TEXT_MUTED, false);
+        add_col(row, "Nobody has heard me yet (CW/Digi/WSPR).", 1, UI_COLOR_TEXT_MUTED, false, false);
     } else if (passed > shown) {
         /* A truncation nobody can see is worse than a shorter list that says
          * so - see TABLE_MAX_ROWS's own comment for why there is a cap at
@@ -1469,7 +1522,7 @@ static void rebuild_table(void)
         char more[48];
         snprintf(more, sizeof(more), "... %d more not shown", passed - shown);
         lv_obj_t *row = make_row(s_table_list);
-        add_col(row, more, 1, UI_COLOR_TEXT_MUTED, false);
+        add_col(row, more, 1, UI_COLOR_TEXT_MUTED, false, false);
     }
 
     /* Pay the layout cost NOW, not on the tap that first reveals this tab -

@@ -17,3 +17,13 @@
 // Returns false (leaves *lat_out/*lon_out untouched) if no prefix matched.
 // On success, *lat_out/*lon_out are in degrees (-90..90 / -180..180).
 bool geo_coords_for_call(const char *call, float *lat_out, float *lon_out);
+
+// Same longest-prefix-match lookup as geo_coords_for_call(), but returns the
+// ISO 3166-1 alpha-3 country code for the matched DXCC entity instead of a
+// centroid - independent of how (or whether) the caller resolved a real
+// position, since the ISO code is a property of the callsign's nationality
+// prefix alone. Returns NULL if no prefix matched, OR if the matched entity
+// has no reasonable ISO mapping (a disputed territory, a diplomatic special
+// entity - see tools/dxcc_iso3.py). The returned pointer is a string literal
+// with static storage duration - never free it.
+const char *geo_coords_iso_for_call(const char *call);
