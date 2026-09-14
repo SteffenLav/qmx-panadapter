@@ -5430,6 +5430,18 @@ static void build_bottom_bar(lv_obj_t *parent)
 // Recolored from the A8 mask to the same faint blue, same opacity/position.
 extern const lv_image_dsc_t g_watermark_img;
 
+/* ⛔ WSPR's OWN NEAR-FULL-SCREEN OPAQUE PANE COVERED IT, same root cause as
+ * the burger button and edge grips right below - both already re-foreground
+ * themselves in apply_edge_grips_for_mode() for exactly this reason. The
+ * watermark was built once at boot (this function runs before the WSPR page
+ * exists), so it sat UNDER wspr_screen_view_show()'s pane in z-order from
+ * the moment WSPR was entered - present in Panadapter and FT8 (built before
+ * either page's own widgets, but neither is a full-screen opaque cover the
+ * way WSPR's is), invisible on WSPR. Operator, 2026-09-14: "we forgot to put
+ * my call image as watermark like all other pages." Stored here so
+ * apply_edge_grips_for_mode() can raise it alongside the burger button. */
+static lv_obj_t *s_signature_img;
+
 static void build_signature(lv_obj_t *scr)
 {
     lv_obj_t *img = lv_image_create(scr);
@@ -5445,6 +5457,7 @@ static void build_signature(lv_obj_t *scr)
     lv_coord_t margin = 4;
     lv_obj_set_pos(img, DISPLAY_H_RES - margin - g_watermark_img.header.w,
                    DISPLAY_V_RES - 75 - g_watermark_img.header.h);
+    s_signature_img = img;
 }
 
 // Edge-swipe gesture strips (left/bottom/right - transparent overlays kept
@@ -14300,6 +14313,11 @@ static void apply_edge_grips_for_mode(ui_mode_t m)
         if (wspr) lv_obj_add_flag(s_bottom_edge_grip, LV_OBJ_FLAG_HIDDEN);
         else      lv_obj_clear_flag(s_bottom_edge_grip, LV_OBJ_FLAG_HIDDEN);
     }
+    /* Same WSPR-pane-covers-it problem as the burger button above - the
+     * signature was built once at boot, before WSPR's own opaque pane
+     * existed, so it sat under that pane in z-order the whole time WSPR was
+     * on screen. Non-clickable, so raising it can never steal a touch. */
+    if (s_signature_img) lv_obj_move_foreground(s_signature_img);
 }
 
 static const char *mode_name(ui_mode_t m)
