@@ -740,5 +740,9 @@ void time_sync_init(i2c_master_bus_handle_t bus)
         set_qmx_time_pushed(true);
     }
 
-    psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
+    // 3072 -> 6144: a qmx_settings_t local (icfg) on the tightest stack in
+    // this file. qmx_settings_t grew ~1350 B total this session (#pwrcal) -
+    // generous this time, not incremental, after a +1024 bump undershot on
+    // the same bug class elsewhere (sd_archive).
+    psram_task_create(time_sync_task, "time_sync", 6144, NULL, 4, tskNO_AFFINITY);
 }

@@ -5765,7 +5765,10 @@ esp_err_t webserver_start(void)
         // Allocate the task stack from PSRAM (not the scarce internal DRAM that
         // SDIO/USB DMA depend on). The upload task only does network/TLS work,
         // never runs in ISR context, so a PSRAM stack is safe here.
-        if (xTaskCreateWithCaps(upload_task, "upload", 8192, NULL, 3, &s_upload_task,
+        // 8192 -> 12288: this task runs QRZ/eQSL/Cloudlog/LoTW upload code,
+        // each with its own qmx_settings_t local, generous not incremental -
+        // see sd_archive.c's comment for why.
+        if (xTaskCreateWithCaps(upload_task, "upload", 12288, NULL, 3, &s_upload_task,
                                 MALLOC_CAP_SPIRAM) != pdPASS) {
             ESP_LOGE(TAG, "Could not create upload task");
             vQueueDelete(s_upload_queue);

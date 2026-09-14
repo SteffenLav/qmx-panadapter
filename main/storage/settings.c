@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <time.h>   // time(NULL) - power-calibration row timestamp
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -119,6 +120,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_DBM       "wspr_dbm"
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
+#define KEY_PWR_CAL        "pwrcal"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
@@ -368,6 +370,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_QRZ_LU_USER   116   /* QRZ Callbook (XML) lookup username, spot map */
 #define DIRTY_QRZ_LU_PASS   117   /* QRZ Callbook (XML) lookup password, spot map */
 #define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
+#define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -512,6 +515,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CW_PROFILES))  nvs_set_blob(s_nvs, KEY_CW_PROF, s_pending.cw_profile, sizeof(s_pending.cw_profile));
         if (dirty_test(&dirty_local, DIRTY_TUNE_SNAP))    nvs_set_u16(s_nvs, KEY_TUNE_SNAP, s_pending.tune_snap_hz);
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
+        if (dirty_test(&dirty_local, DIRTY_PWR_CAL))      nvs_set_blob(s_nvs, KEY_PWR_CAL, &snap.pwr_cal, sizeof(snap.pwr_cal));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
@@ -696,7 +700,13 @@ void settings_init(void)
        crash loop once by taking settings_load_all() on its stack, and CLAUDE.md
        records its bound as 3064 B from that crash dump. The stack is in PSRAM
        (psram_task_create), so the extra 1.5 KB costs no internal RAM. */
-    s_flush_task = psram_task_create(flush_task, "settings_flush", 4608, NULL, 3, tskNO_AFFINITY);
+    // 4608 -> 7680: that 4608 was itself a bump from a prior crash, measured
+    // with only 232 B headroom left. qmx_settings_t grew ~1350 B total this
+    // session (#pwrcal) - generous this time, not incremental, after a
+    // +1024 bump undershot on the same bug class elsewhere (sd_archive).
+    // This task takes a full qmx_settings_t (`snap`) on its own stack every
+    // flush cycle.
+    s_flush_task = psram_task_create(flush_task, "settings_flush", 7680, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "ready");
 }
 
@@ -1012,6 +1022,8 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->kbd_bindings);
     nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
     if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
+    sz = sizeof(out->pwr_cal);
+    nvs_get_blob(s_nvs, KEY_PWR_CAL, &out->pwr_cal, &sz);
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
@@ -1473,6 +1485,48 @@ void settings_set_kbd_bindings(const kbd_bindings_t *b)
     mark_dirty(DIRTY_KBD_BIND);
 }
 
+void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCAL_STEPS],
+                                const uint16_t watts_x100[PWRCAL_STEPS])
+{
+    if (!s_ready || !band || !band[0] || !voltage_x10 || !watts_x100) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    pwr_cal_table_t *t = &s_pending.pwr_cal;
+    int slot = -1, oldest = -1;
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
+        if (t->bands[i].band[0] == '\0' && slot < 0) slot = i;  // first empty, keep looking for an exact match
+        if (oldest < 0 || t->bands[i].cal_unix_time < t->bands[oldest].cal_unix_time) oldest = i;
+    }
+    if (slot < 0) slot = oldest;  // table full and this band isn't in it - replace the stalest row
+    pwr_cal_band_t *row = &t->bands[slot];
+    memset(row, 0, sizeof(*row));
+    strncpy(row->band, band, sizeof(row->band) - 1);
+    memcpy(row->voltage_x10, voltage_x10, sizeof(row->voltage_x10));
+    memcpy(row->watts_x100, watts_x100, sizeof(row->watts_x100));
+    row->cal_unix_time = (uint32_t)time(NULL);
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PWR_CAL);
+}
+
+bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEPS],
+                                uint16_t watts_x100[PWRCAL_STEPS])
+{
+    if (!s_ready || !band || !band[0]) return false;
+    bool found = false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const pwr_cal_table_t *t = &s_pending.pwr_cal;
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
+            if (voltage_x10) memcpy(voltage_x10, t->bands[i].voltage_x10, sizeof(t->bands[i].voltage_x10));
+            if (watts_x100)  memcpy(watts_x100,  t->bands[i].watts_x100,  sizeof(t->bands[i].watts_x100));
+            found = true;
+            break;
+        }
+    }
+    xSemaphoreGive(s_mutex);
+    return found;
+}
+
 void settings_set_wifi_enabled(bool v)
 {
     if (!s_ready) return;
@@ -1869,6 +1923,16 @@ uint8_t settings_get_activation_type(void)
     bool has_ref = s_pending.act_ref[0] != '\0';
     xSemaphoreGive(s_mutex);
     return has_ref ? t : 0;
+}
+
+void settings_get_my_callsign(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, out_sz, "%s", s_pending.my_callsign);
+    xSemaphoreGive(s_mutex);
 }
 
 bool settings_get_activation_ref(char *out, size_t out_sz)

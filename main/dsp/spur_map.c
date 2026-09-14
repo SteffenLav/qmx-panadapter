@@ -542,5 +542,7 @@ void spur_map_init(void)
     // 8 KB, not 4: median_db() runs qsort over 1024 floats and that recursion is
     // most of the frame. The big per-detection arrays are statics (see
     // detect_at) precisely so this does not have to grow further.
-    psram_task_create(spur_task, "spur_map", 8192, NULL, 2, tskNO_AFFINITY);
+    // 8192 -> 11264: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(spur_task, "spur_map", 11264, NULL, 2, tskNO_AFFINITY);
 }

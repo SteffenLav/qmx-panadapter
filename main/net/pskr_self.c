@@ -209,10 +209,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_CONNECTED: {
         ESP_LOGI(TAG, "connected to broker");
         s_connected = true;
-        qmx_settings_t s;
-        settings_load_all(&s);
+        // Narrow read, not settings_load_all() - this callback runs on
+        // esp-mqtt's OWN internal task, whose stack is not ours to size.
+        // A full qmx_settings_t local here is exactly what crashed it
+        // (Stack protection fault, ~26 s uptime, hardware-confirmed).
+        char my_call[16];
+        settings_get_my_callsign(my_call, sizeof(my_call));
         char call[16];
-        call_upper(s.my_callsign, call, sizeof(call));
+        call_upper(my_call, call, sizeof(call));
         s_subscribed_call[0] = '\0';   // force a fresh SUBSCRIBE, not just the change-detect path
         do_subscribe(call);
         break;
@@ -323,10 +327,10 @@ static void watchdog_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
 
         if (!started || !s_connected) continue;
-        qmx_settings_t s;
-        settings_load_all(&s);
+        char my_call[16];
+        settings_get_my_callsign(my_call, sizeof(my_call));
         char call[16];
-        call_upper(s.my_callsign, call, sizeof(call));
+        call_upper(my_call, call, sizeof(call));
         if (call[0] && strcmp(call, s_subscribed_call) != 0) {
             do_subscribe(call);
         }
@@ -344,7 +348,9 @@ void pskr_self_init(void)
     // allocates the client context and its own copy of the config, so calling
     // it at boot charged that to every unit including the ones that never
     // open the map.
-    psram_task_create(watchdog_task, "pskr_self", 4096, NULL, 3, tskNO_AFFINITY);
+    // 4096 -> 7168: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(watchdog_task, "pskr_self", 7168, NULL, 3, tskNO_AFFINITY);
     // "ready", not "started" - nothing is allocated and nothing is connected
     // until spotmap_en says so, and the task above says when it is.
     ESP_LOGI(TAG, "live self-spotting ready (MQTT, %s; opt-in)", BROKER_URI);

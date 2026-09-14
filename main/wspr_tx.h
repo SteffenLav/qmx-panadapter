@@ -37,6 +37,15 @@ typedef enum {
     WSPR_TX_ACTIVE,     // CAT burst in progress - radio keyed up right now
 } wspr_tx_state_t;
 
+// The standard WSPR declared-power set, up to the QMX's 5 W ceiling. This is
+// PUBLISHED WORLDWIDE with every spot, so it is a claim about the station,
+// not a display preference - free entry would only let someone be precisely
+// wrong. ONE list: the WSPR drawer's "Declared power" dropdown (ui.c) and
+// Calibrate Power's results table (power_cal_modal.c) both read it, so they
+// can never quietly disagree about what "the standard steps" are.
+static const int8_t WSPR_STD_DBM[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
+#define WSPR_STD_DBM_N ((int)(sizeof(WSPR_STD_DBM) / sizeof(WSPR_STD_DBM[0])))
+
 // A fully-built, ready-to-arm WSPR transmission. Always produced by
 // wspr_tx_build_request(), which does the actual protocol encode up
 // front - a malformed callsign/grid is reported immediately, never

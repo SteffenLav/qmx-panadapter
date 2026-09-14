@@ -58,6 +58,35 @@ typedef struct {
     uint8_t max_age_sec;
 } ft8_filters_t;
 
+// Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/
+// power_cal_modal.c): a per-band table of measured RF output at a sweep of
+// Max. PA voltage settings, built against a dummy load by keying a real
+// DiGi TA<freq>; tone - the same primitives a WSPR/FT8 burst is built from.
+//
+// This is a property of the RADIO'S HARDWARE, not an operator preference -
+// deliberately NOT part of config export/import (a restored config on a
+// different physical QMX would carry the wrong radio's numbers).
+//
+// 1.0-12.0 V in 0.5 V steps: the QMX operation manual (op_104.txt, "Max. PA
+// voltage") states a setting below ~1 V has no further effect - leakage
+// from the 74ACT08 driver chip through to the LPF sets the real floor - so
+// there is nothing to gain by sweeping lower. WSPR is commonly run at
+// 10-27 dBm (10-500 mW), well below the ~1 W a plain 5-point sweep bottomed
+// out at, hence the resolution: this range is where it actually matters.
+#define PWRCAL_STEPS     23   // (12.0 - 1.0) / 0.5 + 1
+#define PWRCAL_MAX_BANDS 16   // one row per legal_band_edges() band is plenty
+
+typedef struct {
+    char     band[8];                   // adif_log_band_for_freq() string, e.g. "20m"; "" = unused slot
+    uint8_t  voltage_x10[PWRCAL_STEPS]; // test points actually reached, tenths of a volt; 0 = unset
+    uint16_t watts_x100[PWRCAL_STEPS];  // measured PC; output at that point, hundredths of a watt; 0 = not measured
+    uint32_t cal_unix_time;             // time(NULL) when this row was last (re)measured, 0 = never
+} pwr_cal_band_t;
+
+typedef struct {
+    pwr_cal_band_t bands[PWRCAL_MAX_BANDS];
+} pwr_cal_table_t;
+
 // User-defined physical-keyboard shortcuts (#233).
 //
 // A binding is a modifier plus a key plus an ACTION ID. The id is what is
@@ -313,6 +342,7 @@ typedef struct {
     bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
     uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
+    pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     /* Captured windows still to be written to the SD card as WAV.
      *
      * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
@@ -682,6 +712,21 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+// Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).
+// Never the whole blob: both copy exactly one pwr_cal_band_t (28 bytes), so a
+// caller has no reason to reach for settings_load_all() just for this.
+// _set replaces the row for `band` (adding it if the table has a free slot, else
+// overwriting whichever row is oldest by cal_unix_time). _get returns false and
+// leaves the buffers untouched if `band` has never been calibrated.
+void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCAL_STEPS],
+                                const uint16_t watts_x100[PWRCAL_STEPS]);
+bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEPS],
+                                uint16_t watts_x100[PWRCAL_STEPS]);
+// Narrow read of just the callsign - out is NUL'd first, always safe to print
+// even if settings aren't ready yet. See pskr_self.c's mqtt_event_handler(),
+// which runs on esp-mqtt's OWN internal task (not ours to resize) and used
+// to pull a full qmx_settings_t onto that stack for this one field.
+void settings_get_my_callsign(char *out, size_t out_sz);
 bool settings_get_wspr_pa_reduce(void);         // narrow getter - small-stack callers
 void settings_set_wspr_pa_reduce(bool v);       // #290 halve PA voltage while WSPR TX is on
 void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a volt, 0 = none

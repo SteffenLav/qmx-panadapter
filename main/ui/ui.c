@@ -46,6 +46,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "wifi_config.h"
 #include "tune_modal.h"
+#include "power_cal_modal.h"
 #include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
@@ -2459,6 +2460,7 @@ static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in setting
 static lv_obj_t *s_check_still     = NULL;  // #298 still-spectrum checkbox
 static lv_obj_t *s_lbl_still       = NULL;  // the sentence under it, which way is which
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
+static lv_obj_t *s_pwrcal_entry_btn = NULL; // "Calibrate Power" button, same section, same firmware gate
 static lv_obj_t *s_activation_btn  = NULL;  // POTA/SOTA activation entry
 static lv_obj_t *s_activation_lbl  = NULL;  // shows the live reference, not a static label
                                             // section, opens tune_modal.c (replaces the
@@ -2542,7 +2544,8 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
                                    // when hidden on <1_04 firmware and reopens it in
                                    // place when the firmware qualifies (see
                                    // drawer_set_ft8_mode's reflow)
-#define DRAWER_TUNE2_H        72  // its height = the shift applied when hidden. 72 (not 64)
+#define DRAWER_TUNE2_H       136  // Antenna Tune (56) + 8 gap + Calibrate Power (56), +16 slack -
+                                   // its height is the shift applied when the whole section hides
                                    // so the gap below the Antenna Tune button matches the
                                    // WiFi setup / Callsign sections (also 72), i.e. an equal
                                    // 16 px between Tune->WiFi and WiFi->Callsign buttons.
@@ -3190,6 +3193,7 @@ static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_check_still_cb(lv_event_t *e);
 static void drawer_still_refresh_label(void);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
+static void drawer_pwrcal_entry_btn_cb(lv_event_t *e);
 static void drawer_activation_btn_cb(lv_event_t *e);
 static void drawer_refresh_activation(void);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
@@ -6261,6 +6265,7 @@ void ui_init(lv_display_t *disp)
     // (~70 KB free post-services). Modals are show/hide singletons.
     wifi_config_modal_init();
     tune_modal_init();
+    power_cal_modal_init();
     memory_modal_init();
     identity_config_modal_init();
     onboarding_init();   // builds the first-boot WiFi prompt + schedules the one-time flow
@@ -10496,11 +10501,13 @@ static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
 
 /* Declared power. This is PUBLISHED WORLDWIDE with every spot and is what other
  * operators propagation analyses are built on, so it is a claim about this
- * station rather than a display preference. The list is the standard WSPR set
- * up to the QMX 5 W ceiling; free entry would only let someone be precisely
+ * station rather than a display preference. The list (WSPR_STD_DBM, wspr_tx.h)
+ * is the standard WSPR set up to the QMX 5 W ceiling, shared with Calibrate
+ * Power's results table so the two can never quietly disagree about what
+ * "the standard steps" are; free entry would only let someone be precisely
  * wrong. */
-static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
-#define N_WSPR_DBM ((int)(sizeof(kWsprDbm) / sizeof(kWsprDbm[0])))
+#define kWsprDbm WSPR_STD_DBM
+#define N_WSPR_DBM WSPR_STD_DBM_N
 
 /* ⛔ 37 dBm (5 W) IS BACK, and the reasoning that removed it was wrong.
  *
@@ -11569,6 +11576,24 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(tune_entry_lbl, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(tune_entry_lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(tune_entry_lbl);
+
+        // Calibrate Power: stacked in the SAME section, right below Antenna
+        // Tune - same 1_04+ firmware gate (both key SWR Tune mode), opposite
+        // requirement (dummy load here, antenna there). Sharing the section
+        // means the existing hide/reflow logic for DRAWER_SEC_TUNE2 covers
+        // this button too, for free.
+        s_pwrcal_entry_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_pwrcal_entry_btn, DRAWER_W - 32, 56);
+        lv_obj_align(s_pwrcal_entry_btn, LV_ALIGN_TOP_LEFT, 0, 64);
+        lv_obj_set_style_bg_color(s_pwrcal_entry_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(s_pwrcal_entry_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);  // shown once firmware confirms 1_04+
+        lv_obj_t *pwrcal_entry_lbl = lv_label_create(s_pwrcal_entry_btn);
+        lv_label_set_text(pwrcal_entry_lbl, "Calibrate Power");
+        lv_obj_set_style_text_font(pwrcal_entry_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(pwrcal_entry_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(pwrcal_entry_lbl);
+
         y += DRAWER_TUNE2_H;
     }
 
@@ -13156,6 +13181,10 @@ static void drawer_set_mode(ui_mode_t mode)
         if (tune_ok) lv_obj_clear_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_pwrcal_entry_btn) {
+        if (tune_ok) lv_obj_clear_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     (void)keep; (void)keep_h; (void)n_keep;   // superseded by the group table below
 
@@ -13324,6 +13353,15 @@ static void drawer_tune_entry_btn_cb(lv_event_t *e)
     (void)e;
     drawer_close();
     tune_modal_show();
+}
+
+// Calibrate Power: same "own window, not stacked on the still-open drawer"
+// treatment as Antenna Tune, for the same reason - it keys the radio.
+static void drawer_pwrcal_entry_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+    power_cal_modal_show();
 }
 
 // Refreshes the drawer button to name the running activation. Called when the

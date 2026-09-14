@@ -494,7 +494,9 @@ void dxcluster_init(void)
        deep path had not finished running when the first reading was taken (the
        tab5_kb lesson in CLAUDE.md: a high-water mark only describes the paths
        that actually ran). PSRAM stack, so no internal RAM cost. */
-    psram_task_create(dxc_task, "dxcluster", 7168, NULL, 2, tskNO_AFFINITY);
+    // 7168 -> 10240: three qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(dxc_task, "dxcluster", 10240, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));
 }

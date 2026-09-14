@@ -364,7 +364,9 @@ void psk_rx_init(void)
     // SHA-256 round constants sitting in the register dump. spots.c does the
     // same HTTPS work on 6144; this task also carries a qmx_settings_t, so it
     // gets more. Do not trim it back.
-    psram_task_create(psk_rx_task, "psk_rx", 8192, NULL, 2, tskNO_AFFINITY);
+    // 8192 -> 11264: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(psk_rx_task, "psk_rx", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "propagation feedback ready (query every %d s when enabled)",
              PSK_RX_MIN_INTERVAL_S);
 }

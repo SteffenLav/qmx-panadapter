@@ -10,6 +10,7 @@ idf_component_register(
         "ui/help_triage.c"
         "ui/wifi_config.c"
         "ui/tune_modal.c"
+        "ui/power_cal_modal.c"
         "ui/ota_modal.c"
         "net/net_quiet.c"
         "net/bg_feed_gate.c"

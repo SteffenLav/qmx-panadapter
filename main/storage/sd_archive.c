@@ -1343,7 +1343,13 @@ void sd_archive_init(void)
     return;
 #endif
     s_sd_mutex = xSemaphoreCreateMutex();
-    psram_task_create(sd_archive_task, "sd_archive", 6144, NULL,
+    // 6144 -> 12288: a qmx_settings_t local in this file (gs). CONFIRMED
+    // crashing this task on hardware 2026-09-14 (Stack protection fault,
+    // ~5 s uptime) TWICE - a first +1024 bump was not enough, because the
+    // struct grew ~1350 B total this session (pwr_cal field, then the
+    // 5->23-point expansion) and +1024 undershot that. Generous this time,
+    // not incremental - PSRAM-backed, costs nothing but PSRAM.
+    psram_task_create(sd_archive_task, "sd_archive", 12288, NULL,
                        2 /* low priority */, 0);
 }
 

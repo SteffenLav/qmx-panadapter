@@ -551,7 +551,9 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
      * for another (#279). Small - 4 KB - but it is once per transmission, and
      * WSPR transmits all day. */
     psram_task_reap();
-    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 4096, NULL,
+    // 4096 -> 7168: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 7168, NULL,
                                         5, tskNO_AFFINITY);
     if (!h) {
         lock();

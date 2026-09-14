@@ -704,6 +704,8 @@ void spots_init(void)
     s_scratch = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_lock    = xSemaphoreCreateMutex();
     if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
-    psram_task_create(spots_task, "spots", 6144, NULL, 2, tskNO_AFFINITY);
+    // 6144 -> 9216: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(spots_task, "spots", 9216, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }

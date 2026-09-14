@@ -624,6 +624,10 @@ void rbn_init(void)
     s = heap_caps_calloc(1, sizeof(rbn_state_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s) { ESP_LOGE(TAG, "no PSRAM for state (%u B)", (unsigned)sizeof(rbn_state_t)); return; }
     rbn_selftest();
-    psram_task_create(rbn_task, "rbn", 5120, NULL, 2, tskNO_AFFINITY);
+    // 5120 -> 8192: qmx_settings_t grew ~1350 B total this session
+    // (#pwrcal); the first +1024 bump on this class of task undershot that
+    // elsewhere (sd_archive), so this is sized generously, not
+    // incrementally. PSRAM-backed, costs nothing but PSRAM.
+    psram_task_create(rbn_task, "rbn", 8192, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "RBN client started (opt-in; state %u B)", (unsigned)sizeof(rbn_state_t));
 }

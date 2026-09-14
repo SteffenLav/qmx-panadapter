@@ -204,9 +204,23 @@ void app_main(void)
     // card (POTA: log in the field, analyse at home). Background task, 256 KB
     // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
+    /* Heap, not stack: this struct grew again (#pwrcal) and "main" is an 8 KB
+     * task that still has everything below to do - see CLAUDE.md, "Task
+     * stacks on this board are TINY". Used across a wide span of app_main()
+     * (down to dsp_set_window() below), so it lives until its last read,
+     * freed right after. 28 MB of PSRAM is free at this point in boot; a
+     * failed allocation here means something is badly wrong, so fall back to
+     * a zeroed on-stack instance rather than dereference NULL for the next
+     * couple hundred lines. */
+    static qmx_settings_t s_cfg_fallback;  // static, NOT stack - see the comment above
+    qmx_settings_t *cfg = heap_caps_malloc(sizeof(*cfg), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (cfg) {
+        settings_load_all(cfg);
+    } else {
+        ESP_LOGE(TAG, "boot config: PSRAM allocation failed - using defaults");
+        cfg = &s_cfg_fallback;
+    }
+    iq_balance_init(cfg->iq_enabled);  /* Restore IQ balance state from NVS */
     diag_log_write_session_header();  /* always-on capture; stamp the session */
 
     lv_display_t *disp = NULL;
@@ -255,7 +269,7 @@ void app_main(void)
         ESP_LOGW(TAG, "no display lock - the saved page will not be restored");
     }
 
-    display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
+    display_fade_in_backlight(cfg->brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // === BENCH HOOK - MUST be 0 in shipping builds =======================
     // Opens the Reader at boot so the built-in manual can be screenshotted via
@@ -285,10 +299,10 @@ void app_main(void)
     }
 
     // Apply persisted settings to UI / render pipeline.
-    ui_set_db_range(cfg.db_min, cfg.db_max);
-    ui_set_db_labels(cfg.db_min, cfg.db_max);
-    render_set_ema_alpha(cfg.ema_alpha);
-    display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
+    ui_set_db_range(cfg->db_min, cfg->db_max);
+    ui_set_db_labels(cfg->db_min, cfg->db_max);
+    render_set_ema_alpha(cfg->ema_alpha);
+    display_set_flipped(cfg->display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
     // BAND-AID (v0.18.5): e07f114 (CW audio) introduced cw_audio_preopen() which
@@ -315,25 +329,25 @@ void app_main(void)
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
-    iq_balance_set_enabled(cfg.iq_enabled);
-    ui_set_flat_mode(cfg.flat_mode);
+    iq_balance_set_enabled(cfg->iq_enabled);
+    ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
     // ~13 s from now), so the MMCW write this used to make went nowhere on every
     // single boot. The radio tells us its own centre at link-up instead, and that is
     // the value that wins; this is just what to show until it does.
-    ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
-    ui_set_cw_cal_hz(cfg.cw_cal_hz);
-    ui_set_rit_pill_show(cfg.rit_pill_show);   // before the drawer is ever opened
+    ui_seed_cw_pitch_hz(cfg->cw_pitch_hz);
+    ui_set_cw_cal_hz(cfg->cw_cal_hz);
+    ui_set_rit_pill_show(cfg->rit_pill_show);   // before the drawer is ever opened
     /* #298: before the first frame, so nobody sees the wrong one and then a jump.
      * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
-    ui_set_still_view(cfg.still_view);
-    ui_still_notice_arm(!cfg.still_notice_done);
-    render_waterfall_set_colormap(cfg.colormap_idx);
+    ui_set_still_view(cfg->still_view);
+    ui_still_notice_arm(!cfg->still_notice_done);
+    render_waterfall_set_colormap(cfg->colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
-    if (cfg.last_vfo_hz != 0) {
-        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg.last_vfo_hz);
-        ui_update_frequency(cfg.last_vfo_hz);
+    if (cfg->last_vfo_hz != 0) {
+        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg->last_vfo_hz);
+        ui_update_frequency(cfg->last_vfo_hz);
     } else {
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
@@ -344,8 +358,13 @@ void app_main(void)
        Every caller reads g_freq_style at format time, so this is the only
        place it has to be set. */
     {
-        qmx_settings_t fs; settings_load_all(&fs);
-        g_freq_style = (fs.freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+        /* Heap, not stack - same reasoning as the cfg block above. */
+        qmx_settings_t *fs = heap_caps_malloc(sizeof(*fs), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fs) {
+            settings_load_all(fs);
+            g_freq_style = (fs->freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+            heap_caps_free(fs);
+        }
     }
     cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
@@ -392,13 +411,15 @@ void app_main(void)
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
     // exist, and ui_set_drawer_expert() is a no-op when the value matches.
-    ui_set_drawer_expert(cfg.drawer_expert);
+    ui_set_drawer_expert(cfg->drawer_expert);
 
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
-    render_waterfall_set_black_level(cfg.wf_black_db);
-    render_waterfall_set_contrast_db(cfg.wf_contrast_db);
-    render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
-    dsp_set_window(cfg.wf_window);
+    render_waterfall_set_black_level(cfg->wf_black_db);
+    render_waterfall_set_contrast_db(cfg->wf_contrast_db);
+    render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
+    dsp_set_window(cfg->wf_window);
+    if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
+    cfg = NULL;
 
     // BAND-AID EXTENDED (v0.18.6): cw_audio_init() spawns cw_audio_task at
     // PRIORITY 6 on core 1 - higher than fft_task (4) and both FT8 tasks (1) -
