@@ -1917,6 +1917,11 @@ void wspr_screen_view_show(void)
     arm_dial_push("page entry");
     s_cat_was_ready = cat_is_ready();
     s_sim_was_on    = wspr_sim_enabled();
+    /* Pre-warm the PA-voltage read so the safety line has something to show
+     * from the first tick, not just once TX gets switched on - see the tick
+     * function's own comment on the pa<0 branch. Harmless if already known:
+     * cat_query_pa_voltage() only sets a flag. */
+    if (cat_get_pa_voltage_x10() < 0) cat_query_pa_voltage();
 }
 
 void wspr_screen_view_hide(void)
@@ -2629,9 +2634,17 @@ void wspr_screen_view_tick(void)
             if (unprotected) {
                 /* Guard switched off: the real number, in the red the TX
                  * button uses. Nothing is going to come and change it. */
-                if (pa >= 0) snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
-                else         pa_s[0] = '\0';
-                pa_col = 0xFF4010;
+                if (pa >= 0) {
+                    snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
+                    pa_col = 0xFF4010;
+                } else {
+                    /* Same fresh-entry gap as the unknown branch below, just
+                     * reached from the unprotected side - fix it the same
+                     * way rather than leaving one of the two paths dark. */
+                    snprintf(pa_s, sizeof(pa_s), "PA ...");
+                    pa_col = 0xB0B0B0;
+                    cat_query_pa_voltage();
+                }
             } else if (pa >= 0 && pa <= WSPR_PA_TARGET_X10_UI) {
                 snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
                 pa_col = 0x40D060;                      /* confirmed down */
@@ -2644,8 +2657,23 @@ void wspr_screen_view_tick(void)
                 snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
                 pa_col = 0xFFA040;                      /* disarmed, restored */
             } else {
-                pa_s[0] = '\0';
-                pa_col = 0xFFA040;
+                /* ⛔ USED TO LEAVE THIS LINE BLANK, and on a fresh WSPR entry
+                 * it stayed blank indefinitely: nothing queries PA voltage
+                 * until wspr_pa_guard_update() runs, which only happens once
+                 * TX is switched on. So the operator's very first look at the
+                 * page - RX-only, waiting for the first cycle - showed no PA
+                 * line at all, the one time this safety figure most needs to
+                 * be visible before anything transmits. Operator, 2026-09-14
+                 * (with screenshots): "make sure PA is always visible."
+                 * wspr_screen_view_show() now kicks a query on page entry,
+                 * so this is a brief startup gap, not a standing one - shown
+                 * as a neutral placeholder rather than nothing, and the query
+                 * is re-asked every tick until it lands (cat_query_pa_voltage()
+                 * only sets a flag, safe to call repeatedly). */
+                snprintf(pa_s, sizeof(pa_s), "PA ...");   /* plain ASCII - the U+2026 ellipsis this
+                                                            * used tofu'd, this font subset lacks it */
+                pa_col = 0xB0B0B0;                       /* neutral - not a verdict yet */
+                cat_query_pa_voltage();
             }
 
             /* ⛔ ONLY WHILE THE RADIO IS ACTUALLY KEYED. These two numbers are
