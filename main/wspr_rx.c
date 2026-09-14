@@ -410,6 +410,43 @@ static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
     return after + (int64_t)duty;
 }
 
+/* ⛔ THE TX-ENABLE ENGAGE BELOW IS ONE SYNCHRONOUS CHECK, AND THE CACHE IS
+ * OFTEN COLD AT THAT EXACT MILLISECOND - entering the WSPR page also pushes
+ * the dial frequency and other CAT traffic in the same breath, so
+ * cat_get_pa_voltage_x10() frequently answers -1 ("not reported yet") right
+ * when this runs. Nothing used to retry: the query issued in that branch
+ * gets its answer within ~200ms in practice, but the check that would act on
+ * it never runs again before the boundary - so the "engage ahead of time"
+ * optimisation silently missed, and the guaranteed-first-burst fell back to
+ * the boundary-time path, which holds the burst for a FULL EXTRA CYCLE (it
+ * writes the reduction and checks the radio confirmed it microseconds
+ * later, which it never has). Hardware-confirmed 2026-09-14 (Steffen
+ * OZ1LAV): TX enabled at 543030ms, PA answer landed at 543217ms - 187ms
+ * later, with 99+ seconds still before the boundary - and the burst still
+ * didn't fire until the SECOND cycle, 220s after enabling.
+ *
+ * So this is called again from the wait loop's own 500ms tick (see
+ * wspr_rx_task()), not just once at enable time. It never re-issues the CAT
+ * query itself - one is already outstanding from wspr_rx_tx_schedule_reset's
+ * cur<0 branch - it only re-checks the cache and acts the instant a valid
+ * answer shows up, which is what the "give the round trip the whole ~2
+ * minutes" comment always meant to happen. Cheap and safe to call every
+ * tick: settings_get_wspr_pa_saved_x10() != 0 makes every call after the
+ * first a no-op. */
+static void wspr_pa_guard_engage_if_pending(void)
+{
+    if (!settings_get_wspr_pa_reduce() || settings_get_wspr_pa_saved_x10() != 0) return;
+    int16_t cur = cat_get_pa_voltage_x10();
+    if (cur < 0 || cur <= (int16_t)WSPR_PA_TARGET_X10) return;   /* not known yet, or already low */
+    settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
+    cat_request_pa_voltage_x10(WSPR_PA_TARGET_X10);
+    ESP_LOGW(TAG, "PA guard: engaging ahead of the boundary, %d.%d -> %u.%u V "
+                  "(not at the boundary, so the first burst is not held)",
+             cur / 10, cur % 10,
+             (unsigned)(WSPR_PA_TARGET_X10 / 10),
+             (unsigned)(WSPR_PA_TARGET_X10 % 10));
+}
+
 void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
 {
     /* ⚠ Takes the two values it needs as ARGUMENTS rather than reading the
@@ -462,20 +499,15 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
          * the boundary. Uses narrow accessors rather than settings_load_all():
          * this runs on httpd and taskLVGL, whose stacks are small. */
         if (settings_get_wspr_pa_reduce() && settings_get_wspr_pa_saved_x10() == 0) {
-            int16_t cur = cat_get_pa_voltage_x10();
-            if (cur > (int16_t)WSPR_PA_TARGET_X10) {
-                settings_set_wspr_pa_saved_x10((uint16_t)cur);   /* remember BEFORE writing */
-                cat_request_pa_voltage_x10(WSPR_PA_TARGET_X10);
-                ESP_LOGW(TAG, "PA guard: engaging at TX-enable, %d.%d -> %u.%u V "
-                              "(not at the boundary, so the first burst is not held)",
-                         cur / 10, cur % 10,
-                         (unsigned)(WSPR_PA_TARGET_X10 / 10),
-                         (unsigned)(WSPR_PA_TARGET_X10 % 10));
-            } else if (cur < 0) {
-                /* Not answered yet - the query above was only just issued. The
-                 * boundary path still covers this, one cycle later. */
+            /* Kick off the query here (so an answer is already in flight the
+             * moment the wait-loop retry below first runs), then let
+             * wspr_pa_guard_engage_if_pending() do the actual engage - here
+             * AND on every wait-loop tick until it lands. */
+            if (cat_get_pa_voltage_x10() < 0) {
+                cat_query_pa_voltage();
                 ESP_LOGI(TAG, "PA guard: radio has not reported its PA voltage yet");
             }
+            wspr_pa_guard_engage_if_pending();
         }
     } else {
         /* Nothing has just transmitted here - this is transmitting being
@@ -1753,6 +1785,11 @@ static void wspr_rx_task(void *arg)
         while (s_run && wait > 0) {
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
             vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
+            /* Catches the PA-voltage answer the enable-time check missed -
+             * see wspr_pa_guard_engage_if_pending()'s own comment. A no-op
+             * once engaged (or if nothing is owed), so this costs nothing on
+             * every ordinary tick. */
+            wspr_pa_guard_engage_if_pending();
             t = now_ms();
             into = t % WSPR_CYCLE_MS;
             wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
