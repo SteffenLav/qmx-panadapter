@@ -1144,6 +1144,8 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 - **Binaural CW audio.** Asked for by Roy KI0ER, and shaped by Don N2VGU and Michael KZ4LY: a stereo sound stage so two stations a few tens of hertz apart land in different places in your head, with the **stage width a setting** rather than a fixed angle. The DSP is small — the Tab5 already receives I and Q separately — but it needs the Tab5's own audio output path, which is the same rework the CW page waits on.
+
+  Uwe DL8UG pointed at the KX2's "AFX MD Delay" — Elecraft's own quasi-stereo mode, a fixed delay on one channel applied to the whole receive audio, sold on *reducing operating fatigue* rather than separating signals. It's a genuinely different, much cheaper technique (no I/Q phase math, just a delay line) that solves comfort, not the "which station is where" separation the stage-width idea above targets. Worth keeping as a candidate first step or a companion to the real thing, not a replacement for it.
 - **Tab5 audio output rework.** The blocker under both of the above: the output task must not run at all in FT8/FT4 (Michael KZ4LY's suggestion), since merely existing at a higher priority than the FFT consumer cost decode yield.
 
 ### Longer term
