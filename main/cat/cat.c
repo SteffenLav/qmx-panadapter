@@ -2152,17 +2152,31 @@ static void link_task(void *arg)
             // false and ui_set_iq_mode_warning() raises a persistent on-screen
             // banner so the user isn't left guessing why the spectrum looks
             // wrong.
-            /* A radio that has just appeared has ALREADY restored its own
-             * Max. PA voltage: an MM Set does not survive a QMX power cycle
-             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0, and
-             * the radio's own Protection menu agrees with CAT throughout).
+            /* ⛔ USED TO DROP THE OWED PA-VOLTAGE RECORD HERE, UNCONFIRMED, on
+             * the theory that "an MM Set does not survive a QMX power cycle
+             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0)" - so
+             * the radio must have already restored itself and the record was
+             * stale. That measurement is now directly contradicted:
+             * hardware-confirmed 2026-09-14 (Steffen OZ1LAV), three separate
+             * times in one session, a value set over raw CAT (12.0 V) SURVIVED
+             * a genuine QMX power cycle every time, confirmed by CAT read-back
+             * afterwards. Whatever the 2026-08-29 test actually measured, this
+             * blanket assumption does not hold now, on this firmware.
              *
-             * So any value the WSPR PA guard was holding to restore is now
-             * STALE, and writing it back would push the operator's ceiling to
-             * a number they never chose. Drop it: the radio has already done
-             * the restore for us. */
+             * And even if it sometimes does hold, guessing here was never
+             * necessary - wspr_pa_guard_reclaim_on_link() (poll_task, moments
+             * after this runs) already does the verified version: it asks the
+             * radio what it currently reads and only acts on the answer,
+             * never assumes one. This line ran FIRST (link_task starts before
+             * poll_task exists) and cleared the record before that verified
+             * check ever got a chance to see it - silently defeating it every
+             * single time, which is why an earlier fix to
+             * wspr_pa_guard_reclaim_on_link() alone could never have been
+             * enough on its own. Dropped rather than fixed in place: there is
+             * nothing this line needs to decide that the reclaim function
+             * does not already decide correctly a few lines of execution
+             * later. */
             s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
-            settings_set_wspr_pa_saved_x10(0);
             iq_mode_handshake(4);
             /* The radio's own CW filter set, once, here (Uwe DL8UG - #350).
              * Link-up rather than polled: eight round trips is a lot to repeat,
