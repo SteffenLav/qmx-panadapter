@@ -2525,6 +2525,32 @@ void settings_set_wspr_pa_saved_x10(uint16_t v)
     s_pending.wspr_pa_saved_x10 = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_PA);
+
+    /* ⛔ ALSO WRITE IMMEDIATELY, not just via the debounced flush task -
+     * same reasoning and same fix shape as settings_set_last_ui_mode()'s own
+     * comment: this value can be followed within the DEBOUNCE_MS (500 ms)
+     * window by a reset, and losing it there is not a cosmetic annoyance the
+     * way a wrong boot page is - it strands the radio at the reduced PA
+     * voltage with nothing left to remember what to restore it to.
+     *
+     * Hardware-confirmed 2026-09-14: a WSPR reduction (12.0 -> 6.0 V) was
+     * captured in wspr_pa_saved_x10, and a firmware flash (a warm reset)
+     * landed inside that window before the debounced flush ever ran. NVS
+     * still held wspr_pa_saved_x10=0 on the next boot - the radio came back
+     * up still at 6.0 V with no record it had ever been anything else, and
+     * every later "already at target, leaving it alone" log line was
+     * correct-by-its-own-logic and permanently wrong for this radio.
+     *
+     * Left marked dirty above too, deliberately: DIRTY_WSPR_PA is shared
+     * with wspr_pa_reduce, and clearing it here (the way
+     * settings_set_last_ui_mode() clears its own dirty bit) could drop an
+     * unrelated pending write to THAT field. A redundant identical write
+     * from flush_task afterwards costs nothing. */
+    nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, v);
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_commit (wspr_pa_saved_x10) failed: 0x%x", err);
+    }
 }
 
 void settings_set_ft8_op_mode(uint8_t v)
