@@ -1542,10 +1542,44 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
                       "a ~110 s key-down)",
                  cur / 10, cur % 10, target / 10, target % 10);
     } else if (!want_reduced && ws->wspr_pa_saved_x10 != 0) {
+        /* ⛔ THIS BRANCH USED TO CLEAR THE OWED RECORD IN THE SAME BREATH AS
+         * THE WRITE - exactly the fire-and-forget bug wspr_pa_guard_release_
+         * pending() was written to fix for the "leaving WSPR" case, just not
+         * for THIS one: toggling the guard off (or wspr_tx_en/duty_pct)
+         * while still ON the WSPR page. A dropped MM write here left the
+         * radio at the reduced voltage with the record already zeroed, so
+         * nothing - not even leaving WSPR afterwards - could ever restore
+         * it. Hardware-confirmed 2026-09-14 (Steffen OZ1LAV): disabled the
+         * guard from the drawer, the CAT read-back still showed 6.0 V, and
+         * three later WSPR->FT8 transitions logged nothing, because
+         * wspr_pa_saved_x10 was already 0.
+         *
+         * ⚠ Cannot simply call wspr_pa_guard_release_pending() and let
+         * wspr_pa_guard_periodic_check() confirm it, the way leaving WSPR
+         * does - that function explicitly refuses to act while
+         * wspr_rx_running() ("the WSPR slot loop's own guard owns this
+         * state"), which is exactly this call site. So THIS function has to
+         * do its own confirm-or-resend, the same shape periodic_check() uses
+         * once WSPR has actually stopped. */
         uint16_t back = ws->wspr_pa_saved_x10;
+        int16_t cur = cat_get_pa_voltage_x10();
+        if (cur < 0) {
+            cat_query_pa_voltage();      /* ask; check again next cycle */
+            return;
+        }
+        if ((uint16_t)cur == back) {
+            settings_set_wspr_pa_saved_x10(0);
+            ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage confirmed "
+                          "restored to %u.%u V", back / 10, back % 10);
+            return;
+        }
+        /* Not confirmed yet (still at our reduced target, or unread) - resend
+         * and hold the record. Harmless if the earlier write already landed;
+         * this only re-confirms on the next cycle either way. */
         cat_request_pa_voltage_x10(back);
-        settings_set_wspr_pa_saved_x10(0);
-        ESP_LOGW(TAG, "PA guard: WSPR TX off - Max. PA voltage restored to %u.%u V",
+        cat_query_pa_voltage();
+        ESP_LOGW(TAG, "PA guard: WSPR TX off - restore to %u.%u V sent; "
+                      "holding it as owed until the radio confirms",
                  back / 10, back % 10);
     }
 }
