@@ -564,5 +564,5 @@ void status_bar_start(void)
     // the cheap side of the trade.
     // 8192 -> 11264: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(status_task, "status", 11264, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(status_task, "status", 13312, NULL, 2, tskNO_AFFINITY);
 }

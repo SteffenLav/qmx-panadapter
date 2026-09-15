@@ -67,13 +67,33 @@ typedef struct {
 // deliberately NOT part of config export/import (a restored config on a
 // different physical QMX would carry the wrong radio's numbers).
 //
-// 1.0-12.0 V in 0.5 V steps: the QMX operation manual (op_104.txt, "Max. PA
-// voltage") states a setting below ~1 V has no further effect - leakage
-// from the 74ACT08 driver chip through to the LPF sets the real floor - so
-// there is nothing to gain by sweeping lower. WSPR is commonly run at
-// 10-27 dBm (10-500 mW), well below the ~1 W a plain 5-point sweep bottomed
-// out at, hence the resolution: this range is where it actually matters.
-#define PWRCAL_STEPS     23   // (12.0 - 1.0) / 0.5 + 1
+// 1.0-12.0 V, average 0.25 V steps: the QMX operation manual (op_104.txt,
+// "Max. PA voltage") states a setting below ~1 V has no further effect -
+// leakage from the 74ACT08 driver chip through to the LPF sets the real
+// floor - so there is nothing to gain by sweeping lower. WSPR is commonly
+// run at 10-27 dBm (10-500 mW), well below the ~1 W a plain 5-point sweep
+// bottomed out at, hence the resolution: this range is where it actually
+// matters.
+//
+// ⚠ "0.25 V steps" is an AVERAGE, not a literal step size - the CAT `MM`
+// Set for this field is `%u.%u`, one decimal digit, so the radio itself
+// only accepts 0.1 V granularity (1.25 V cannot be asked for; 1.2 or 1.3
+// can). The table alternates +0.3/+0.2 V (see s_test_voltage_x10 in
+// power_cal_modal.c) so every individual point is something the radio can
+// actually be set to, while the sequence averages the finer resolution.
+// Widened 0.5 -> ~0.25 V, 2026-09-15, for the 23 dBm (200 mW) - 27 dBm
+// (500 mW) gap the operator found unexpectedly coarse (2.5 V vs 4.0 V, no
+// calibrated point between them) - operator: "there seems to be a huge PA
+// diff between 23 and 27 dBm ... maybe we need more steps in-between".
+//
+// ⛔ THIS DOES NOT HELP BELOW ~20 dBm (100 mW). The QMX's own `PC;` power
+// readback only resolves to about 100 mW - the radio cannot itself tell
+// 0 mW from 50 mW apart - so 0/3/7/10/13/17 dBm will always read `--`
+// regardless of sweep density. That is an instrument floor of the
+// measurement technique, not something more calibration points can fix;
+// verifying anything below it needs a different measurement path (an
+// external power meter or attenuator), which this feature does not have.
+#define PWRCAL_STEPS     45   // 1.0 V to 12.0 V, 44 steps averaging 0.25 V (see s_test_voltage_x10)
 #define PWRCAL_MAX_BANDS 16   // one row per legal_band_edges() band is plenty
 
 typedef struct {

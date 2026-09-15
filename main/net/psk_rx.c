@@ -366,7 +366,7 @@ void psk_rx_init(void)
     // gets more. Do not trim it back.
     // 8192 -> 11264: two qmx_settings_t locals in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(psk_rx_task, "psk_rx", 11264, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(psk_rx_task, "psk_rx", 13312, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "propagation feedback ready (query every %d s when enabled)",
              PSK_RX_MIN_INTERVAL_S);
 }

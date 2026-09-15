@@ -706,6 +706,6 @@ void spots_init(void)
     if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
     // 6144 -> 9216: two qmx_settings_t locals in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(spots_task, "spots", 9216, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(spots_task, "spots", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }

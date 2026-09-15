@@ -544,5 +544,5 @@ void spur_map_init(void)
     // detect_at) precisely so this does not have to grow further.
     // 8192 -> 11264: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(spur_task, "spur_map", 11264, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(spur_task, "spur_map", 13312, NULL, 2, tskNO_AFFINITY);
 }

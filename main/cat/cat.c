@@ -534,10 +534,17 @@ err = cdc_acm_host_install(NULL);
      * link task, so the first byte the radio sends has somewhere to go. */
     cat_rx_queue_init();
     if (!cat_rx_queue_ready()) return ESP_ERR_NO_MEM;
-    /* 4096: process_cat_message() ran on the CDC driver's 4096-byte stack until
-     * now, so that is the proven size. PSRAM is fine - this task touches no
-     * USB or DMA buffer, only the stream buffer and the UI. */
-    if (!psram_task_create(cat_rx_task, "cat_rx", 4096, NULL, 4, 1)) {
+    /* 4096 -> 9216, 2026-09-15: crashed on hardware within seconds of the QMX
+     * enumerating - "Stack protection fault", task cat_rx, core 1, ~6.5 s of
+     * uptime. The old 4096 figure was "proven" against the CDC driver's own
+     * stack before this session's two qmx_settings_t growths (Calibrate
+     * Power's table, then its 23 -> 45-step sweep - see
+     * [[feedback_generous_not_incremental_stack_fix]]); whatever
+     * process_cat_message() reaches on a band/frequency change apparently
+     * touches it too. Bumped generously rather than root-caused further,
+     * same as every other task in this sweep - PSRAM-backed, costs nothing
+     * but PSRAM. */
+    if (!psram_task_create(cat_rx_task, "cat_rx", 9216, NULL, 4, 1)) {
         ESP_LOGE(TAG, "could not start cat_rx");
         return ESP_FAIL;
     }

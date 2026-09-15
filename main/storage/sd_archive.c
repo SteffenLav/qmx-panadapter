@@ -1349,7 +1349,7 @@ void sd_archive_init(void)
     // struct grew ~1350 B total this session (pwr_cal field, then the
     // 5->23-point expansion) and +1024 undershot that. Generous this time,
     // not incremental - PSRAM-backed, costs nothing but PSRAM.
-    psram_task_create(sd_archive_task, "sd_archive", 12288, NULL,
+    psram_task_create(sd_archive_task, "sd_archive", 14336, NULL,
                        2 /* low priority */, 0);
 }
 

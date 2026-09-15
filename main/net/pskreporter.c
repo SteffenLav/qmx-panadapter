@@ -384,7 +384,7 @@ void pskreporter_init(void)
     s_rand_id = esp_random();
     // 6144 -> 9216: four qmx_settings_t locals in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    if (psram_task_create(psk_task, "pskrep", 9216, NULL, 2, tskNO_AFFINITY)) {
+    if (psram_task_create(psk_task, "pskrep", 11264, NULL, 2, tskNO_AFFINITY)) {
         s_running = true;
         // Report the effective state at boot: it is the quickest way to tell,
         // from a user's diagnostic log, whether spotting is actually enabled

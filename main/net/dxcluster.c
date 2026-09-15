@@ -496,7 +496,7 @@ void dxcluster_init(void)
        that actually ran). PSRAM stack, so no internal RAM cost. */
     // 7168 -> 10240: three qmx_settings_t locals in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(dxc_task, "dxcluster", 10240, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(dxc_task, "dxcluster", 12288, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));
 }

@@ -390,7 +390,7 @@ void update_check_start(void)
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
     // 6144 -> 9216: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(check_task, "update_chk", 9216, NULL, 3, tskNO_AFFINITY);
+    psram_task_create(check_task, "update_chk", 11264, NULL, 3, tskNO_AFFINITY);
 }
 
 void update_check_get_latest(char *out, int out_sz)

@@ -1298,7 +1298,7 @@ void bt_hid_mouse_init(void)
     // not compete with the audio/FFT pipeline.
     // 6144 -> 9216: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(bt_start_task, "bt_start", 9216, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(bt_start_task, "bt_start", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "BLE mouse enabled - waiting for the C6 link before starting NimBLE");
 }
 

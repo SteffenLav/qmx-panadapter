@@ -259,7 +259,14 @@ esp_err_t display_init(lv_display_t **out_disp)
             // never taskLVGL itself. +4096 is deliberately generous (not a
             // token increment - see the memory note) since several of those
             // call sites can nest in one callback chain.
-            .task_stack       = 12288,
+            //
+            // 12288 -> 16384, 2026-09-15: Calibrate Power's own sweep went
+            // 23 -> 45 steps for finer dBm resolution (settings.h
+            // PWRCAL_STEPS), growing qmx_settings_t by another ~1.5 KB on
+            // top of the growth above - same struct, same ~50 call sites,
+            // same task. Bumped proactively rather than waiting for this to
+            // crash too, per the same "generous, not incremental" lesson.
+            .task_stack       = 16384,
             // ⛔ CORE 0, and moving it is FALSIFIED ON HARDWARE (#284,
             // 2026-08-28). Everything LVGL does ends in the software 90-degree
             // rotation, which saturates this core (panadapter idle0 measured

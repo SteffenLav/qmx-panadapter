@@ -624,10 +624,12 @@ void rbn_init(void)
     s = heap_caps_calloc(1, sizeof(rbn_state_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s) { ESP_LOGE(TAG, "no PSRAM for state (%u B)", (unsigned)sizeof(rbn_state_t)); return; }
     rbn_selftest();
-    // 5120 -> 8192: qmx_settings_t grew ~1350 B total this session
-    // (#pwrcal); the first +1024 bump on this class of task undershot that
-    // elsewhere (sd_archive), so this is sized generously, not
-    // incrementally. PSRAM-backed, costs nothing but PSRAM.
-    psram_task_create(rbn_task, "rbn", 8192, NULL, 2, tskNO_AFFINITY);
+    // 5120 -> 8192 -> 10240: qmx_settings_t grew ~1350 B for the first
+    // Calibrate Power table, then another ~1550 B when its sweep went
+    // 23 -> 45 steps for finer resolution (settings.h PWRCAL_STEPS). Both
+    // bumps generous, not incremental - the first +1024 undershot on this
+    // class of task elsewhere (sd_archive). PSRAM-backed, costs nothing but
+    // PSRAM.
+    psram_task_create(rbn_task, "rbn", 10240, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "RBN client started (opt-in; state %u B)", (unsigned)sizeof(rbn_state_t));
 }

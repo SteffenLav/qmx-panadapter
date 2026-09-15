@@ -5768,7 +5768,7 @@ esp_err_t webserver_start(void)
         // 8192 -> 12288: this task runs QRZ/eQSL/Cloudlog/LoTW upload code,
         // each with its own qmx_settings_t local, generous not incremental -
         // see sd_archive.c's comment for why.
-        if (xTaskCreateWithCaps(upload_task, "upload", 12288, NULL, 3, &s_upload_task,
+        if (xTaskCreateWithCaps(upload_task, "upload", 14336, NULL, 3, &s_upload_task,
                                 MALLOC_CAP_SPIRAM) != pdPASS) {
             ESP_LOGE(TAG, "Could not create upload task");
             vQueueDelete(s_upload_queue);

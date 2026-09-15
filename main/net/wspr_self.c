@@ -310,6 +310,6 @@ void wspr_self_init(void)
     s_mutex = xSemaphoreCreateMutex();
     // 6144 -> 9216: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(wspr_self_task, "wspr_self", 9216, NULL, 3, tskNO_AFFINITY);
+    psram_task_create(wspr_self_task, "wspr_self", 11264, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "self-spotting ready (wsprnet.org query, %d s poll)", POLL_INTERVAL_S);
 }

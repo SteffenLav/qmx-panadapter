@@ -439,7 +439,7 @@ void diag_log_persist_start(void)
 {
     // 4096 -> 7168: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(diag_persist_task, "diag_persist", 7168, NULL, 2, tskNO_AFFINITY);
+    psram_task_create(diag_persist_task, "diag_persist", 9216, NULL, 2, tskNO_AFFINITY);
 }
 
 const char *diag_log_persist_path(void)

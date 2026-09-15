@@ -553,7 +553,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     psram_task_reap();
     // 4096 -> 7168: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 7168, NULL,
+    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 9216, NULL,
                                         5, tskNO_AFFINITY);
     if (!h) {
         lock();

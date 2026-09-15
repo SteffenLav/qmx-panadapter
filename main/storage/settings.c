@@ -1022,8 +1022,29 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->kbd_bindings);
     nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
     if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
+    /* PWRCAL_STEPS 23 -> 45 (2026-09-15, finer resolution above the QMX's
+     * own ~100 mW PC; readback floor) changed pwr_cal_band_t's own byte
+     * layout, not just the table's overall length - each row is now a
+     * DIFFERENT size, so an old 23-step blob's bytes land on the wrong
+     * field boundaries throughout, not just past some trailing cutoff.
+     * nvs_get_blob() with a capacity LARGER than what is actually stored
+     * still succeeds, silently copying the old bytes into the front of the
+     * new (zero-initialised, since s_pending is a static/.bss struct)
+     * destination - misread as the new layout, that is live garbage: a
+     * non-zero watts_x100[] entry born from noise passes
+     * power_cal_voltage_for_dbm()'s own "!= 0" check and could return a
+     * fabricated voltage_x10 for CAT to write to the radio. Same "never
+     * fabricate" rule as everywhere else calibration data is read - discard
+     * anything that is not exactly today's shape rather than trust a
+     * partial, misaligned copy. Same precedent as kbd_bindings.n above. */
     sz = sizeof(out->pwr_cal);
     nvs_get_blob(s_nvs, KEY_PWR_CAL, &out->pwr_cal, &sz);
+    if (sz != sizeof(out->pwr_cal)) {
+        memset(&out->pwr_cal, 0, sizeof(out->pwr_cal));
+        ESP_LOGW(TAG, "pwr_cal: stored blob is %u B, expected %u B - discarding "
+                      "(an older PWRCAL_STEPS shape); recalibrate to restore it",
+                 (unsigned)sz, (unsigned)sizeof(out->pwr_cal));
+    }
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
