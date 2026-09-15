@@ -181,11 +181,12 @@ bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *ou
     uint8_t  v_x10[PWRCAL_STEPS];
     uint16_t w_x100[PWRCAL_STEPS];
     bool got = band && band[0] && settings_get_pwr_cal_band(band, v_x10, w_x100);
-    /* 2026-09-15: a fresh 20M sweep (measured, logged, real wattages at every
-     * step) still read back "not calibrated" from here immediately after -
-     * root cause not yet found by static review. Logging every call, not
-     * just failures, until this is understood: a silent function that is
-     * itself the mystery must not hide its own inputs and outputs. */
+    /* Logging added 2026-09-15 chasing a bug that turned out to live in
+     * ui.c (the WSPR drawer's build-once-per-boot section never re-checked
+     * this after a fresh calibration - see wspr_dbm_area_refresh()'s own
+     * header), not here. Kept anyway: 0/3/7/10/13 dBm missing is EXPECTED
+     * (the QMX's own ~100 mW PC; floor), and a one-line reason beats a
+     * silent "no" for anything that looks like it should have matched. */
     if (!got) {
         ESP_LOGW(TAG, "voltage_for_dbm(band=%s, dbm=%d): settings_get_pwr_cal_band found NOTHING",
                  (band && band[0]) ? band : "(empty)", target_dbm);
@@ -211,6 +212,43 @@ bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *ou
     }
     if (out_v_x10) *out_v_x10 = v_x10[best];
     return true;
+}
+
+// For the general "Output power" slider (main/ui/ui.c) - unlike
+// power_cal_voltage_for_dbm() above, which matches against WSPR's fixed
+// dBm steps, this control has no standard step list to honour: it should
+// simply offer every wattage Calibrate Power actually measured on `band`,
+// so every position is real (same "never offer a fake level" rule).
+//
+// The sweep tests voltage ASCENDING, and the QMX's own PC; readback has
+// ~100 mW resolution, so several adjacent voltage steps routinely read the
+// SAME rounded wattage (see settings.h's PWRCAL_STEPS comment). Listing
+// every raw sample would put multiple slider positions a few pixels apart
+// all labelled "0.3 W" - keep only the FIRST (i.e. LOWEST-voltage) sample
+// at each distinct wattage, which is also the right one to keep: it is
+// never worth using more voltage than the lowest that produces a given
+// output.
+//
+// Returns the number of distinct levels found (0 = not calibrated).
+// out_w_x100/out_v_x10 must each hold at least PWRCAL_STEPS entries;
+// max_n bounds how many are actually written.
+int power_cal_list_watts(const char *band, uint16_t *out_w_x100, uint16_t *out_v_x10, int max_n)
+{
+    uint8_t  v_x10[PWRCAL_STEPS];
+    uint16_t w_x100[PWRCAL_STEPS];
+    if (!band || !band[0] || !settings_get_pwr_cal_band(band, v_x10, w_x100)) return 0;
+
+    int n = 0;
+    uint16_t last_w = 0xFFFF;
+    for (int i = 0; i < PWRCAL_STEPS && n < max_n; i++) {
+        if (w_x100[i] == 0) continue;          // below the QMX's own measurable floor
+        if (w_x100[i] == last_w) continue;     // same reading as a lower voltage already listed
+        out_w_x100[n] = w_x100[i];
+        out_v_x10[n]  = v_x10[i];
+        n++;
+        last_w = w_x100[i];
+    }
+    return n;
 }
 
 static void render_results(void)

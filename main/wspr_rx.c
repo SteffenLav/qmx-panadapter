@@ -441,6 +441,23 @@ static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
  * first a no-op. */
 static void wspr_pa_guard_engage_if_pending(void)
 {
+    /* ⛔ RETIRED, 2026-09-15 - operator: "the wspr finals-protection guard
+     * is now redundant" once Calibrate Power lets the operator set an
+     * EXACT, measured wattage directly (both the WSPR "Declared power"
+     * dropdown and the new general "Output power" slider) instead of a
+     * crude fixed-voltage halving. A hard return here, ahead of the
+     * settings_get_wspr_pa_reduce() check below, so this is inert
+     * regardless of what that setting holds (an old value, or a web UI
+     * toggle nobody has removed yet) - never engage a NEW reduction.
+     *
+     * The rest of this file's guard machinery is deliberately UNTOUCHED:
+     * wspr_pa_guard_release_pending()/_reclaim_on_link()/_periodic_check()
+     * still run, so a radio that was already reduced from BEFORE this
+     * change (wspr_pa_saved_x10 != 0, carried over in NVS) still gets its
+     * original voltage back correctly - retiring the guard must never
+     * leave a radio stuck turned down with no code path that undoes it. */
+    return;
+
     if (!settings_get_wspr_pa_reduce()) return;
 
     uint16_t owed = settings_get_wspr_pa_saved_x10();

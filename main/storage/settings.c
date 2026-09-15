@@ -121,6 +121,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
 #define KEY_PWR_CAL        "pwrcal"
+#define KEY_PWR_TARGET     "pwrtarget"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
@@ -371,6 +372,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_QRZ_LU_PASS   117   /* QRZ Callbook (XML) lookup password, spot map */
 #define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 #define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
+#define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -516,6 +518,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_TUNE_SNAP))    nvs_set_u16(s_nvs, KEY_TUNE_SNAP, s_pending.tune_snap_hz);
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_PWR_CAL))      nvs_set_blob(s_nvs, KEY_PWR_CAL, &snap.pwr_cal, sizeof(snap.pwr_cal));
+        if (dirty_test(&dirty_local, DIRTY_PWR_TARGET))   nvs_set_blob(s_nvs, KEY_PWR_TARGET, &snap.pwr_target, sizeof(snap.pwr_target));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
@@ -1045,6 +1048,8 @@ static void load_from_nvs(qmx_settings_t *out)
                       "(an older PWRCAL_STEPS shape); recalibrate to restore it",
                  (unsigned)sz, (unsigned)sizeof(out->pwr_cal));
     }
+    sz = sizeof(out->pwr_target);
+    nvs_get_blob(s_nvs, KEY_PWR_TARGET, &out->pwr_target, &sz);
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
@@ -1540,6 +1545,41 @@ bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEP
         if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
             if (voltage_x10) memcpy(voltage_x10, t->bands[i].voltage_x10, sizeof(t->bands[i].voltage_x10));
             if (watts_x100)  memcpy(watts_x100,  t->bands[i].watts_x100,  sizeof(t->bands[i].watts_x100));
+            found = true;
+            break;
+        }
+    }
+    xSemaphoreGive(s_mutex);
+    return found;
+}
+
+void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100)
+{
+    if (!s_ready || !band || !band[0]) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    pwr_target_table_t *t = &s_pending.pwr_target;
+    int slot = -1;
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
+        if (t->bands[i].band[0] == '\0' && slot < 0) slot = i;
+    }
+    if (slot < 0) slot = 0;   /* table somehow full of distinct bands - overwrite the first rather than drop the write */
+    strncpy(t->bands[slot].band, band, sizeof(t->bands[slot].band) - 1);
+    t->bands[slot].band[sizeof(t->bands[slot].band) - 1] = '\0';
+    t->bands[slot].target_w_x100 = watts_x100;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PWR_TARGET);
+}
+
+bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100)
+{
+    if (!s_ready || !band || !band[0]) return false;
+    bool found = false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const pwr_target_table_t *t = &s_pending.pwr_target;
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
+            if (watts_x100) *watts_x100 = t->bands[i].target_w_x100;
             found = true;
             break;
         }

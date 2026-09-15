@@ -107,6 +107,25 @@ typedef struct {
     pwr_cal_band_t bands[PWRCAL_MAX_BANDS];
 } pwr_cal_table_t;
 
+// The operator's own target output power per band - a PREFERENCE, unlike
+// pwr_cal_table_t above (a fact about the radio's hardware). Deliberately
+// separate: an operator's "I want 1 W on 20m" survives a recalibration or a
+// different radio in a way the measured voltage that satisfies it never
+// could. Independent of, and unrelated to, WSPR's own declared-power dBm
+// (wspr_tx_dbm) - operator, 2026-09-15: "1 W for WSPR, whatever I want for
+// FT8/CW/SSB" - two different numbers on the same band, on purpose.
+//
+// 0 = never set on this band (band[0] == '\0' for an unused slot, same
+// convention as pwr_cal_table_t).
+typedef struct {
+    char     band[8];
+    uint16_t target_w_x100;   // hundredths of a watt
+} pwr_target_band_t;
+
+typedef struct {
+    pwr_target_band_t bands[PWRCAL_MAX_BANDS];
+} pwr_target_table_t;
+
 // User-defined physical-keyboard shortcuts (#233).
 //
 // A binding is a modifier plus a key plus an ACTION ID. The id is what is
@@ -363,6 +382,7 @@ typedef struct {
     uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
+    pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
     /* Captured windows still to be written to the SD card as WAV.
      *
      * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
@@ -742,6 +762,12 @@ void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCA
                                 const uint16_t watts_x100[PWRCAL_STEPS]);
 bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEPS],
                                 uint16_t watts_x100[PWRCAL_STEPS]);
+// The operator's own general "Output power" target, one band at a time -
+// independent of WSPR's declared-power dBm (settings_set/get_wspr_tx_dbm),
+// which is its own separate number even on the same band. _get returns
+// false (watts_x100 untouched) if `band` has no target set yet.
+void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100);
+bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100);
 // Narrow read of just the callsign - out is NUL'd first, always safe to print
 // even if settings aren't ready yet. See pskr_self.c's mqtt_event_handler(),
 // which runs on esp-mqtt's OWN internal task (not ours to resize) and used

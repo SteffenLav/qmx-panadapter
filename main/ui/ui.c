@@ -2462,6 +2462,145 @@ static lv_obj_t *s_check_still     = NULL;  // #298 still-spectrum checkbox
 static lv_obj_t *s_lbl_still       = NULL;  // the sentence under it, which way is which
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
 static lv_obj_t *s_pwrcal_entry_btn = NULL; // "Calibrate Power" button, same section, same firmware gate
+
+/* General "Output power" (operator, 2026-09-15) - independent of WSPR's own
+ * declared-power dBm ("1 W for WSPR, whatever I want for FT8/CW/SSB"), so
+ * this is its OWN per-band target (settings_set/get_pwr_target_watts), its
+ * own section (DRAWER_SEC_OUTPWR), visible on every mode. Same build-once-
+ * per-boot / refresh-on-every-open split as the WSPR area, for the same
+ * reason - see output_power_area_refresh()'s own header. */
+static lv_obj_t *s_outpwr_nc_lbl   = NULL;
+static lv_obj_t *s_outpwr_cal_btn  = NULL;
+static lv_obj_t *s_outpwr_slider   = NULL;
+static lv_obj_t *s_outpwr_val_lbl  = NULL;
+static lv_obj_t *s_outpwr_warn_lbl = NULL;
+static uint16_t  s_outpwr_w[PWRCAL_STEPS];   // achievable watts, ascending, index-aligned with s_outpwr_v
+static uint16_t  s_outpwr_v[PWRCAL_STEPS];   // the voltage (tenths of a volt) that produces s_outpwr_w[i]
+static int       s_outpwr_n = 0;
+
+/* Above this, the (now-retired) WSPR PA-voltage guard used to act on its
+ * own; it now only warns, and the general power control and WSPR's
+ * declared-power dropdown both use the same number so the two controls
+ * agree about what counts as "a lot of heat for a long key-down". */
+#define OUTPWR_WARN_W_X100  100   // 1.00 W
+
+static void outpwr_set_value_text(uint16_t w_x100)
+{
+    if (!s_outpwr_val_lbl) return;
+    char buf[24];
+    if (w_x100 < 100) snprintf(buf, sizeof(buf), "%u mW", (unsigned)w_x100 * 10);
+    else              snprintf(buf, sizeof(buf), "%u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+    lv_label_set_text(s_outpwr_val_lbl, buf);
+}
+
+/* ⛔ NEVER WRITE Max. PA voltage while an automated burst is actually
+ * keyed. The retired WSPR PA guard's own header already recorded why:
+ * "the finals' supply went from 6.0 V back to 11.5 V IN THE MIDDLE OF A
+ * ~110 s KEY-DOWN, which is precisely the stress the guard exists to
+ * prevent" (Roy KI0ER, wspr_rx_stop()). This control can fire from a band
+ * change or a drawer open, neither of which implies the operator is
+ * mid-QSO - so it must check, not assume. Manual CW/SSB has no TX-status
+ * function to check (the firmware never arms those bursts itself), same
+ * gap every other drawer control already has - not unique to this one. */
+static bool outpwr_tx_busy(void)
+{
+    return ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE ||
+           wspr_tx_get_status(NULL, 0, NULL) != WSPR_TX_IDLE;
+}
+
+static void outpwr_update_warning(uint16_t w_x100)
+{
+    if (!s_outpwr_warn_lbl) return;
+    if (w_x100 > OUTPWR_WARN_W_X100) {
+        lv_label_set_text(s_outpwr_warn_lbl,
+            LV_SYMBOL_WARNING " Above 1 W - extended key-down risks the finals");
+        lv_obj_clear_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/* Decide whether the CURRENT band has anything real to offer, same
+ * dropdown-vs-prompt toggle as wspr_dbm_area_refresh() and for the SAME
+ * reason (this drawer's sections are built exactly once per boot - see
+ * that function's own header for the bug this pattern exists to avoid).
+ * Also restores and RE-APPLIES the persisted per-band target, so a band
+ * change (called from topbar_reconcile_cb below) puts the radio back
+ * where the operator last left it on that band without having to reopen
+ * the drawer. */
+static void output_power_area_refresh(void)
+{
+    if (!s_outpwr_nc_lbl || !lv_obj_is_valid(s_outpwr_nc_lbl)) return;   // section not built yet
+
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    s_outpwr_n = power_cal_list_watts(band, s_outpwr_w, s_outpwr_v, PWRCAL_STEPS);
+
+    if (s_outpwr_n == 0) {
+        char nc_txt[64];
+        snprintf(nc_txt, sizeof(nc_txt), "Not calibrated for %s",
+                 (band && band[0]) ? band : "this band");
+        lv_label_set_text(s_outpwr_nc_lbl, nc_txt);
+        lv_obj_clear_flag(s_outpwr_nc_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_outpwr_cal_btn) lv_obj_clear_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_outpwr_slider && lv_obj_is_valid(s_outpwr_slider)) lv_obj_add_flag(s_outpwr_slider, LV_OBJ_FLAG_HIDDEN);
+        if (s_outpwr_val_lbl) lv_obj_add_flag(s_outpwr_val_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_outpwr_warn_lbl) lv_obj_add_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_add_flag(s_outpwr_nc_lbl, LV_OBJ_FLAG_HIDDEN);
+    if (s_outpwr_cal_btn) lv_obj_add_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
+
+    int idx = 0;   // default: the lowest calibrated level - nothing persisted yet
+    uint16_t target_w;
+    if (band && band[0] && settings_get_pwr_target_watts(band, &target_w)) {
+        int best_gap = 0x7FFFFFFF;
+        for (int k = 0; k < s_outpwr_n; k++) {
+            int gap = abs((int)s_outpwr_w[k] - (int)target_w);
+            if (gap < best_gap) { best_gap = gap; idx = k; }
+        }
+    }
+
+    if (s_outpwr_slider && lv_obj_is_valid(s_outpwr_slider)) {
+        lv_slider_set_range(s_outpwr_slider, 0, s_outpwr_n - 1);
+        lv_slider_set_value(s_outpwr_slider, idx, LV_ANIM_OFF);
+        lv_obj_clear_flag(s_outpwr_slider, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_outpwr_val_lbl) lv_obj_clear_flag(s_outpwr_val_lbl, LV_OBJ_FLAG_HIDDEN);
+    outpwr_set_value_text(s_outpwr_w[idx]);
+    outpwr_update_warning(s_outpwr_w[idx]);
+
+    // Persist AND apply even when this is just restoring what was already
+    // stored - a band change is exactly the moment the radio needs
+    // re-telling, same reasoning as wspr_dbm_area_refresh(). Skip the
+    // actual CAT write (not the persistence) if a burst is keyed right
+    // now - see outpwr_tx_busy()'s own header.
+    settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
+    if (!outpwr_tx_busy()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+}
+
+// Live label/warning only while dragging - no CAT write until release, same
+// discipline as every other slider in this drawer that touches the radio.
+static void drawer_slider_outpwr_preview_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int idx = (int)lv_slider_get_value(sl);
+    if (idx < 0 || idx >= s_outpwr_n) return;
+    outpwr_set_value_text(s_outpwr_w[idx]);
+    outpwr_update_warning(s_outpwr_w[idx]);
+}
+
+static void drawer_slider_outpwr_commit_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int idx = (int)lv_slider_get_value(sl);
+    if (idx < 0 || idx >= s_outpwr_n) return;
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    if (!band || !band[0]) return;
+    settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
+    if (!outpwr_tx_busy()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+}
+
 static lv_obj_t *s_activation_btn  = NULL;  // POTA/SOTA activation entry
 static lv_obj_t *s_activation_lbl  = NULL;  // shows the live reference, not a static label
                                             // section, opens tune_modal.c (replaces the
@@ -2609,7 +2748,16 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * drives both the FT8 phantoms and the WSPR ones (wspr_sim.h) - so both boxes
  * are kept in step exactly like the two km/miles boxes. */
 #define DRAWER_SEC_WSPRTEST   44
-#define N_DRAWER_SECTIONS     45
+// General, mode-agnostic output-power control (operator, 2026-09-15):
+// separate from WSPR's own declared-power dBm, which stays its own number
+// even on the same band - "1 W for WSPR, whatever I want for FT8/CW/SSB".
+// Filed with Antenna Tune/Calibrate Power (same underlying calibration
+// table), NOT WSPR-gated - drawer_sec_visible()'s default `return true`
+// covers "every mode", so nothing needs to name it there.
+#define DRAWER_SEC_OUTPWR     45
+// ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
+// size array indexed by an enum will be overrun" section. IDs are 0..45.
+#define N_DRAWER_SECTIONS     46
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -2656,6 +2804,7 @@ static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_RITPILL, "Show RIT button", false },
     { DRAWER_SEC_SWRLIM, "SWR protection", true },
     { DRAWER_SEC_TUNE2, "Antenna Tune", true },
+    { DRAWER_SEC_OUTPWR, "Output power", true },
     { DRAWER_SEC_PAUSE, "Release radio", false },
     { DRAWER_SEC_TERM, "Radio menus", false },
 };
@@ -7502,6 +7651,12 @@ static void topbar_reconcile_cb(lv_timer_t *t)
     if (s_band_changed_pending) {
         s_band_changed_pending = false;
         ft8_band_change_stand_down("band changed");
+        // General Output power is per-band and mode-agnostic (unlike WSPR's
+        // own declared-power reapply, which only runs from that page's own
+        // dial-push) - a band change from ANY source (tap, memory recall,
+        // the radio's own knob) needs to restore whatever was last set for
+        // the new band, same as wspr_dbm_area_refresh() does for WSPR.
+        output_power_area_refresh();
     }
 
     if (!s_topbar_stale) return;
@@ -10570,10 +10725,13 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
 static lv_obj_t *s_wspr_dbm_dd = NULL;   /* declared-power dropdown, moved by the guard */
 static lv_obj_t *s_wspr_dbm_nc_lbl = NULL;   /* "Not calibrated for Xm" - built alongside the dropdown, same area */
 static lv_obj_t *s_wspr_dbm_cal_btn = NULL;  /* "Calibrate this band" - shown only when s_wspr_dbm_nc_lbl is */
-static lv_obj_t *s_wspr_pa_btn = NULL;
-static lv_obj_t *s_wspr_pa_lbl = NULL;
-static bool      s_wspr_pa_arm_off = false;   /* first tap of the two-tap disable */
-static lv_timer_t *s_wspr_pa_arm_timer = NULL;
+/* ">1 W" warning, replacing the retired #290 PA guard's own job of acting
+ * on this (2026-09-15) - see wspr_dbm_area_refresh(). The guard's own
+ * button/two-tap-disable UI (drawer_wspr_pa_btn_cb and friends) is deleted
+ * outright, not just unbuilt - wspr_pa_guard_engage_if_pending() (wspr_rx.c)
+ * is what actually stops a NEW reduction from ever starting; this label is
+ * purely informational. */
+static lv_obj_t *s_wspr_dbm_warn_lbl = NULL;
 /* Result of the LAST wspr_pa_apply_declared_dbm() attempt, under the
  * dropdown - "→ X.XV applied", "not calibrated for this band", or "PA guard
  * is protecting". Rebuilt with the section like s_wspr_dbm_dd above, so
@@ -10704,36 +10862,22 @@ static void wspr_dbm_area_refresh(void)
         }
     }
 
-    wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
-}
+    /* The fixed-voltage PA guard used to act on its own above ~1 W; retired
+     * 2026-09-15 in favour of setting an exact calibrated voltage directly
+     * (both here and via the general Output power slider), so all that is
+     * left to do at the high end is SAY SO. 30 dBm = 1.000 W exactly, so
+     * ">30" is ">1 W" with no rounding question. */
+    if (s_wspr_dbm_warn_lbl) {
+        if (ws.wspr_tx_dbm > 30) {
+            lv_label_set_text(s_wspr_dbm_warn_lbl,
+                LV_SYMBOL_WARNING " Above 1 W - extended key-down risks the finals");
+            lv_obj_clear_flag(s_wspr_dbm_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_wspr_dbm_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
-/* The guard knows roughly what the radio will now produce, and the operator
- * should not have to work it out: protected is about 1 W, unprotected is the
- * QMX's full output. So flipping the guard moves the declaration with it.
- *
- * ⚠ A DEFAULT, NOT A LOCK. The operator can pick anything afterwards, and once
- * a burst has been measured the hint under the dropdown shows what actually
- * went out - which beats both of these estimates.
- *
- * The numbers are the bench measurements at 12 V, snapped to the nearest legal
- * WSPR step, NOT round figures:
- *   protected   1.6 W = 32.04 dBm -> 33  (30 is 2.04 dB out, 33 is 0.96)
- *   unprotected 5.4 W = 37.32 dBm -> 37  (0.32 dB out)
- * 30 was tried first as the conservative choice and the operator's call was
- * accuracy over caution: this figure is published worldwide and other operators
- * reason from it, so a deliberately low guess is its own kind of wrong.
- *
- * ⚠ Both are 12 V figures. A 9 V QMX at the same 6.0 V limit produces something
- * different, which is exactly why the measured hint exists and why these are a
- * starting point rather than an answer. */
-static void wspr_set_declared_dbm(int8_t dbm)
-{
-    settings_set_wspr_tx_dbm(dbm);
-    /* Re-derive the whole area, not just the dropdown's selection - dbm
-     * might not even be achievable on this band, in which case the "not
-     * calibrated" prompt is the correct thing to show, not a forced
-     * selection. */
-    wspr_dbm_area_refresh();
+    wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
 }
 
 /* Re-read the declared power from settings on every drawer open (#291).
@@ -10760,63 +10904,6 @@ static void drawer_refresh_wspr(void)
     wspr_dbm_area_refresh();
 }
 
-static void wspr_pa_btn_refresh(void)
-{
-    if (!s_wspr_pa_btn || !s_wspr_pa_lbl) return;
-    qmx_settings_t st;
-    settings_load_all(&st);
-
-    if (s_wspr_pa_arm_off) {
-        lv_label_set_text(s_wspr_pa_lbl, "Tap again to REMOVE protection");
-        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0xFF4010), 0);
-        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
-    } else if (st.wspr_pa_reduce) {
-        lv_label_set_text(s_wspr_pa_lbl, "ON - about 1 W");
-        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0x2E7D32), 0);
-        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
-    } else {
-        lv_label_set_text(s_wspr_pa_lbl, "OFF - FULL POWER, finals at risk");
-        lv_obj_set_style_bg_color(s_wspr_pa_btn, lv_color_hex(0xFF4010), 0);
-        lv_obj_set_style_text_color(s_wspr_pa_lbl, lv_color_hex(0xFFFFFF), 0);
-    }
-}
-
-/* The armed state must not linger: a red "tap again" left on screen from a
- * stray touch minutes ago would be confirmed by an innocent second tap. */
-static void wspr_pa_arm_expire_cb(lv_timer_t *t)
-{
-    (void)t;
-    s_wspr_pa_arm_timer = NULL;
-    if (s_wspr_pa_arm_off) { s_wspr_pa_arm_off = false; wspr_pa_btn_refresh(); }
-}
-
-static void drawer_wspr_pa_btn_cb(lv_event_t *e)
-{
-    (void)e;
-    qmx_settings_t st;
-    settings_load_all(&st);
-
-    if (!st.wspr_pa_reduce) {
-        /* Restoring protection is the SAFE direction - immediate, no confirm. */
-        s_wspr_pa_arm_off = false;
-        settings_set_wspr_pa_reduce(true);
-        wspr_set_declared_dbm(33);      /* measured 1.6 W = 32.0 dBm -> nearest step 33 */
-        ESP_LOGW(TAG, "WSPR PA guard ENABLED from the drawer - declared power set to 33 dBm");
-    } else if (!s_wspr_pa_arm_off) {
-        s_wspr_pa_arm_off = true;          /* first tap: arm, change nothing */
-        if (s_wspr_pa_arm_timer) lv_timer_del(s_wspr_pa_arm_timer);
-        s_wspr_pa_arm_timer = lv_timer_create(wspr_pa_arm_expire_cb, 6000, NULL);
-        lv_timer_set_repeat_count(s_wspr_pa_arm_timer, 1);
-    } else {
-        s_wspr_pa_arm_off = false;
-        settings_set_wspr_pa_reduce(false);
-        wspr_set_declared_dbm(37);      /* the QMX's full output */
-        ESP_LOGW(TAG, "WSPR PA guard DISABLED from the drawer - declared power set to "
-                      "37 dBm; WSPR TX will run at FULL power, ~110 s key-down per cycle");
-    }
-    wspr_pa_btn_refresh();
-}
-
 static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -10829,6 +10916,18 @@ static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
         settings_set_wspr_tx_dbm(dbm);
         wspr_dbm_apply_tint(dd, dbm);
         wspr_pa_cal_apply_and_show(dbm);
+        /* Same >30 dBm test as wspr_dbm_area_refresh() - that function only
+         * runs on drawer open, so without this the warning stuck at whatever
+         * it was when the drawer was opened, regardless of what was picked. */
+        if (s_wspr_dbm_warn_lbl) {
+            if (dbm > 30) {
+                lv_label_set_text(s_wspr_dbm_warn_lbl,
+                    LV_SYMBOL_WARNING " Above 1 W - extended key-down risks the finals");
+                lv_obj_clear_flag(s_wspr_dbm_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_wspr_dbm_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 }
 
@@ -11727,6 +11826,58 @@ static void drawer_build(void)
         lv_obj_center(pwrcal_entry_lbl);
 
         y += DRAWER_TUNE2_H;
+    }
+
+    // General "Output power" - NOT 1_04+-gated (the DiGi TX;/TA;/RX; primitives
+    // Calibrate Power itself uses have existed since 1_03; only Antenna Tune's
+    // own SWR Tune mode needs 1_04+), and visible on every mode -
+    // drawer_sec_visible()'s default `return true` already covers it.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_OUTPWR, y, 156);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Output power");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *nc = lv_label_create(sec);
+        s_outpwr_nc_lbl = nc;
+        lv_obj_set_style_text_color(nc, lv_color_hex(0xFFA040), 0);
+        lv_obj_set_style_text_font(nc, &lv_font_montserrat_24, 0);
+        lv_obj_align(nc, LV_ALIGN_TOP_LEFT, 0, 44);
+
+        lv_obj_t *cal_btn = lv_button_create(sec);
+        s_outpwr_cal_btn = cal_btn;
+        lv_obj_set_size(cal_btn, DRAWER_W - 32, 40);
+        lv_obj_align(cal_btn, LV_ALIGN_TOP_LEFT, 0, 76);
+        lv_obj_add_event_cb(cal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *cal_lbl = lv_label_create(cal_btn);
+        lv_label_set_text(cal_lbl, "Calibrate this band");
+        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(cal_lbl);
+
+        lv_obj_t *sl = lv_slider_create(sec);
+        s_outpwr_slider = sl;
+        lv_obj_set_size(sl, DRAWER_W - 32, 30);
+        lv_obj_align(sl, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_add_event_cb(sl, drawer_slider_outpwr_preview_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(sl, drawer_slider_outpwr_commit_cb, LV_EVENT_RELEASED, NULL);
+
+        lv_obj_t *val = lv_label_create(sec);
+        s_outpwr_val_lbl = val;
+        lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(val, &lv_font_montserrat_24, 0);
+        lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 76);
+
+        lv_obj_t *warn = lv_label_create(sec);
+        s_outpwr_warn_lbl = warn;
+        lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
+        lv_obj_set_style_text_font(warn, &lv_font_montserrat_20, 0);
+        lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 120);
+        lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
+
+        output_power_area_refresh();   // sets initial visibility/range/value for everything above
+        y += 156;
     }
 
     // "Prepare for flashing" REMOVED 2026-08-08. The orderly-teardown
@@ -12790,12 +12941,13 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        /* 334, not 352 or 302: the "Allow transmitting" row above was removed
-         * (352 -> 302), then the calibration-applied hint below was added
-         * (302 -> 334). The height and the `y +=` at the bottom of this block
-         * must move together - this file has repeatedly had a section
-         * overlap the next one by changing only one of them. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 334);
+        /* 270, not 352/302/334: "Allow transmitting" removed (352 -> 302),
+         * the calibration-applied hint added (302 -> 334), the "Protect
+         * finals" button retired and replaced by one warning-label line
+         * (334 -> 270). The height and the `y +=` at the bottom of this
+         * block must move together - this file has repeatedly had a
+         * section overlap the next one by changing only one of them. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 270);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -12903,54 +13055,38 @@ static void drawer_build(void)
             lv_obj_set_style_text_font(hint2, &lv_font_montserrat_20, 0);
             lv_obj_align(hint2, LV_ALIGN_TOP_LEFT, 0, 172);
         }
-        // Now that the dropdown, the "not calibrated" prompt AND this hint
-        // all exist, one call sets every one of them to the right initial
-        // state - same call drawer_refresh_wspr() makes on every reopen.
+        {
+            // ">1 W" warning, replacing the retired PA guard - see
+            // wspr_dbm_area_refresh()'s own comment on the 30 dBm threshold.
+            lv_obj_t *warn = lv_label_create(sec);
+            s_wspr_dbm_warn_lbl = warn;
+            lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
+            lv_obj_set_style_text_font(warn, &lv_font_montserrat_20, 0);
+            lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 214);
+            lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Now that the dropdown, the "not calibrated" prompt, the hint AND
+        // the warning label all exist, one call sets every one of them to
+        // the right initial state - same call drawer_refresh_wspr() makes
+        // on every reopen.
         wspr_dbm_area_refresh();
 
-        /* #290 PA guard - a FULL-WIDTH BUTTON, not a checkbox, and the button
-         * IS the status display.
-         *
-         * Four things were wrong with the checkbox version, all reported from
-         * the bench and all fair:
-         *  - a TOAST is worthless as a guard: 1-2 s, white on black, gone. A
-         *    safety warning that disappears is not a safety warning.
-         *  - the status line never updated, because it was built once from
-         *    settings and nothing rewrote it when the box was ticked (the same
-         *    class as TODO #291).
-         *  - montserrat_20 is too small to be useful to this project's actual
-         *    users, who are mostly not 25.
-         *  - a small checkbox at the panel EDGE can be brushed on or off
-         *    without noticing - the worst possible mounting for the one control
-         *    that decides whether the finals cook.
-         *
-         * So: full width (no edge to brush), montserrat_28 (readable), the
-         * label states the CURRENT state permanently (nothing to miss), and
-         * turning protection OFF takes two deliberate taps while turning it
-         * back ON is immediate. Confirmation only in the dangerous direction -
-         * an accidental tap can never remove protection, and never delays
-         * restoring it. */
-        lv_obj_t *l3 = lv_label_create(sec);
-        lv_label_set_text(l3, "Protect finals");
-        lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
-        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 214);   /* was 182 - +32 for the new calibration hint above */
-
-        s_wspr_pa_btn = lv_btn_create(sec);
-        lv_obj_set_size(s_wspr_pa_btn, DRAWER_W - 32, 60);
-        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 254);   /* was 222 - see above */
-        lv_obj_add_event_cb(s_wspr_pa_btn, drawer_wspr_pa_btn_cb, LV_EVENT_CLICKED, NULL);
-        s_wspr_pa_lbl = lv_label_create(s_wspr_pa_btn);
-        lv_obj_set_style_text_font(s_wspr_pa_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_center(s_wspr_pa_lbl);
-        s_wspr_pa_arm_off = false;
-        wspr_pa_btn_refresh();
+        /* #290 PA guard RETIRED, 2026-09-15 (operator: "the wspr finals-
+         * protection guard is now redundant") - Calibrate Power lets the
+         * operator set an EXACT measured voltage directly now, rather than
+         * the guard's crude fixed halving. wspr_pa_guard_engage_if_pending()
+         * (wspr_rx.c) is hard-disabled at its own top; this button is
+         * simply no longer built. What replaces it is the >1 W warning
+         * label built into wspr_dbm_area_refresh() above (s_wspr_dbm_warn_lbl,
+         * created back near the calibration-status hint) - a warning, not a
+         * guard, matching the general Output power control's own. */
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped.
-         * 334, not 302: +32 for the calibration-status hint added above the
-         * "Protect finals" label, which pushed everything below it down. */
-        y += 334;
+         * 270, not 334: the "Protect finals" button (a label + a 60 px
+         * full-width button) is gone, replaced by one warning-label line
+         * already accounted for above. */
+        y += 270;
     }
     {
         qmx_settings_t ws;
@@ -13086,7 +13222,7 @@ static void drawer_build(void)
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast,
         s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
-        s_slider_cwtxoff,
+        s_slider_cwtxoff, s_outpwr_slider,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
@@ -13214,6 +13350,10 @@ static void drawer_open(void)
     // PUBLISHED to wsprnet - so the dropdown must state the stored value, not
     // whatever it was built with (#291).
     drawer_refresh_wspr();
+    // Same reasoning as drawer_refresh_wspr() immediately above, for the
+    // general Output power control - it's a different band's worth of
+    // achievable levels every time the drawer is opened on a new band.
+    output_power_area_refresh();
     /* Profiles are edited on the web page, so re-read them here (#359). */
     drawer_refresh_cw_profiles();
     /* ...and so is every other checkbox in here - see drawer_refresh_checkboxes. */
