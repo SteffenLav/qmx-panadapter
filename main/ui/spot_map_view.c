@@ -68,8 +68,15 @@ extern esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
  * "Digi (PSKR)" at montserrat_26 plus a 31 px indicator does not fit 220. Kept
  * as the width of the SETTINGS DRAWER now (2026-09-13 restructure below) -
  * same content, same font sizing, just reached by a right-edge swipe instead
- * of sitting permanently on screen. */
-#define SIDEBAR_W  270
+ * of sitting permanently on screen.
+ *
+ * Widened AGAIN 270 -> 340, 2026-09-15: the User Manual/Need Guidance? pair
+ * added later reused this same font at the FULL BUTTON WIDTH (SIDEBAR_W - 28,
+ * no wrapping), and "Need guidance?" plus its icon does not fit 270 either -
+ * the label ran off the right edge of the display, screenshot-confirmed. Same
+ * class of mistake as the checkbox row above, just found later because it is
+ * a different pair of widgets. */
+#define SIDEBAR_W  340
 /* MAP/LIST/CONDITIONS, now lv_tabview's OWN left-side tab bar rather than a
  * horizontal strip along the top. Operator, 2026-09-13: "move the buttons MAP
  * LIST and CONDITIONS to the now empty left panel as buttons - freeing up
@@ -1007,6 +1014,21 @@ static void map_spots_draw_cb(lv_event_t *e)
     if (ms >= 20) ESP_LOGI(TAG, "spot layer draw %d ms (%d spots)", ms, s_spot_snap_n);
 }
 
+// Container size the cache was last (re)built for - separate from
+// s_map_cache_w/h, which is the ACTUAL buffer resolution and can be smaller
+// (see below). Comparing against this, not the buffer size, is what stops a
+// reduced-resolution cache from being torn down and retried every single 33
+// ms tick just because its own dimensions differ from the container's.
+static int32_t s_map_cache_req_w = 0, s_map_cache_req_h = 0;
+// Set after a failed allocation attempt; map_cache_rebuild() skips retrying
+// until this passes. heap_caps_aligned_alloc() failing is cheap on its own,
+// but without a backoff a persistently-tight PSRAM budget (WSPR's capture/
+// decode buffers alone hold ~11 MB for as long as that page is open - see
+// wspr_rx.c) turns this into a 30 Hz allocation-and-log storm for as long as
+// the overlay stays open, for no benefit - the budget does not change tick
+// to tick.
+static int64_t s_map_cache_retry_after_us = 0;
+
 static void map_cache_rebuild(void)
 {
     if (!s_map_bg_obj || !s_map_obj) return;
@@ -1016,31 +1038,86 @@ static void map_cache_rebuild(void)
     int32_t h = lv_area_get_height(&a);
     if (w <= 0 || h <= 0) return;
 
-    if (w != s_map_cache_w || h != s_map_cache_h || !s_map_cache_buf) {
+    if (w != s_map_cache_req_w || h != s_map_cache_req_h || !s_map_cache_buf) {
+        if (!s_map_cache_buf && w == s_map_cache_req_w && h == s_map_cache_req_h
+            && esp_timer_get_time() < s_map_cache_retry_after_us) {
+            return;   // same size as the last failure, still backed off
+        }
+        s_map_cache_req_w = w;
+        s_map_cache_req_h = h;
         if (s_map_cache_buf) { heap_caps_free(s_map_cache_buf); s_map_cache_buf = NULL; }
-        size_t sz = (size_t)lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565) * (size_t)h;
-        s_map_cache_buf = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_map_cache_buf) {
-            ESP_LOGE(TAG, "no PSRAM for the %dx%d map cache", (int)w, (int)h);
+
+        /* PSRAM on this board is a genuinely tight shared resource - WSPR
+         * alone holds ~11 MB of capture/decode buffers (wspr_rx.c) for the
+         * whole time that page is open, and this cache is ~1.5 MB that needs
+         * ONE contiguous block. Total free can look ample (multiple MB) while
+         * nothing that large is actually free, so a plain alloc-and-fail
+         * leaves the map permanently blank even though there was "enough"
+         * PSRAM by the free-byte count. Measured 2026-09-15: 3.4 MB total
+         * free, every 1140x656 (~1.46 MB) allocation still failing.
+         *
+         * heap_caps_get_largest_free_block() is the on-demand path here -
+         * only on an actual container resize or a fresh open, never on the
+         * steady 33 ms redraw (that always takes the req_w/req_h match above
+         * and returns before reaching this). Same discipline CLAUDE.md
+         * documents for MALLOC_CAP_DMA: this walks the heap with interrupts
+         * off and must never run on a genuinely periodic path. */
+        size_t budget = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+        size_t margin = 64 * 1024;   // leave room for the land-fill scratch + alignment slop
+        budget = (budget > margin) ? budget - margin : 0;
+
+        int32_t rw = w, rh = h;
+        int f = 1;
+        for (; f <= 4; f++) {
+            rw = w / f; rh = h / f;
+            size_t need = (size_t)lv_draw_buf_width_to_stride(rw, LV_COLOR_FORMAT_RGB565) * (size_t)rh;
+            if (need <= budget) break;
+        }
+        if (f > 4) {
+            ESP_LOGE(TAG, "no PSRAM for even a quarter-size map cache (largest free block %d B)", (int)budget);
             s_map_cache_w = s_map_cache_h = 0;
+            s_map_cache_retry_after_us = esp_timer_get_time() + 3000000;   // 3 s
             return;
         }
-        s_map_cache_w = w;
-        s_map_cache_h = h;
-        s_map_cache_stride = (int32_t)lv_draw_buf_width_to_stride(w, LV_COLOR_FORMAT_RGB565);
-        lv_canvas_set_buffer(s_map_bg_obj, s_map_cache_buf, w, h, LV_COLOR_FORMAT_RGB565);
 
-        // Land-fill scanline scratch, sized to the same h (see the comment on
-        // s_scan_x above). Resized alongside the cache buffer; a failed alloc
-        // here is NOT fatal - map_render_coast() falls back to outline-only
-        // (can_fill == false), same defensive shape as the cache buffer above
-        // failing, just a worse-looking map rather than no map.
+        size_t sz = (size_t)lv_draw_buf_width_to_stride(rw, LV_COLOR_FORMAT_RGB565) * (size_t)rh;
+        s_map_cache_buf = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_map_cache_buf) {
+            ESP_LOGE(TAG, "no PSRAM for the %dx%d map cache (tried %dx%d, largest free block %d B)",
+                     (int)w, (int)h, (int)rw, (int)rh, (int)budget);
+            s_map_cache_w = s_map_cache_h = 0;
+            s_map_cache_retry_after_us = esp_timer_get_time() + 3000000;   // 3 s
+            return;
+        }
+        if (f > 1) {
+            ESP_LOGW(TAG, "map cache reduced to %dx%d (1/%d) - PSRAM is tight (largest free block %d B)",
+                     (int)rw, (int)rh, f, (int)budget);
+        }
+        s_map_cache_w = rw;
+        s_map_cache_h = rh;
+        s_map_cache_stride = (int32_t)lv_draw_buf_width_to_stride(rw, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(s_map_bg_obj, s_map_cache_buf, rw, rh, LV_COLOR_FORMAT_RGB565);
+        // Stretch the (possibly smaller) buffer to fill the same on-screen
+        // area it always has. The touch/projection layer (s_map_obj) is a
+        // SEPARATE object sized to the full container and never shrinks, so
+        // this is a purely visual scale-up - project()/touch math is
+        // untouched. Pivot at the origin so the scale expands from the same
+        // (0,0) corner the canvas is positioned at, not its center.
+        lv_image_set_pivot(s_map_bg_obj, 0, 0);
+        lv_image_set_scale(s_map_bg_obj, (f == 1) ? LV_SCALE_NONE : (uint32_t)(256 * f));
+
+        // Land-fill scanline scratch, sized to the ACTUAL buffer height (see
+        // the comment on s_scan_x above). Resized alongside the cache
+        // buffer; a failed alloc here is NOT fatal - map_render_coast()
+        // falls back to outline-only (can_fill == false), same defensive
+        // shape as the cache buffer above failing, just a worse-looking map
+        // rather than no map.
         if (s_scan_x) { heap_caps_free(s_scan_x); s_scan_x = NULL; }
         if (s_scan_n) { heap_caps_free(s_scan_n); s_scan_n = NULL; }
-        s_scan_x = heap_caps_malloc((size_t)h * MAP_SCAN_MAX_X * sizeof(*s_scan_x), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_scan_n = heap_caps_malloc((size_t)h * sizeof(*s_scan_n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_scan_x = heap_caps_malloc((size_t)rh * MAP_SCAN_MAX_X * sizeof(*s_scan_x), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_scan_n = heap_caps_malloc((size_t)rh * sizeof(*s_scan_n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_scan_x || !s_scan_n) {
-            ESP_LOGW(TAG, "no PSRAM for the map land-fill scratch (%d rows) - outline only", (int)h);
+            ESP_LOGW(TAG, "no PSRAM for the map land-fill scratch (%d rows) - outline only", (int)rh);
             if (s_scan_x) { heap_caps_free(s_scan_x); s_scan_x = NULL; }
             if (s_scan_n) { heap_caps_free(s_scan_n); s_scan_n = NULL; }
         }
@@ -1048,7 +1125,7 @@ static void map_cache_rebuild(void)
 
     int64_t t0 = esp_timer_get_time();
     lv_canvas_fill_bg(s_map_bg_obj, lv_color_hex(0x0a0d10), LV_OPA_COVER);
-    lv_area_t local = { 0, 0, w - 1, h - 1 };
+    lv_area_t local = { 0, 0, s_map_cache_w - 1, s_map_cache_h - 1 };
     map_render_coast(&local);
     lv_obj_invalidate(s_map_bg_obj);   // the buffer was written behind LVGL's back
     s_map_dirty = false;
