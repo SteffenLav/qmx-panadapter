@@ -44,9 +44,10 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "help_topics.h"
 #include "help_triage.h"
 #include "adif_view_modal.h"   // Ctrl+L shortcut
+#include "adif/adif_log.h"     // adif_log_band_for_freq() - which band the WSPR declared-power picker filters against
 #include "wifi_config.h"
 #include "tune_modal.h"
-#include "power_cal_modal.h"
+#include "power_cal_modal.h"   // power_cal_voltage_for_dbm() - filters "Declared power" to achievable levels
 #include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
@@ -10509,6 +10510,16 @@ static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
 #define kWsprDbm WSPR_STD_DBM
 #define N_WSPR_DBM WSPR_STD_DBM_N
 
+/* Index-aligned with WSPR_STD_DBM - the friendly mW/W text for each standard
+ * step, used to build the dropdown's option text. A plain lookup rather than
+ * computed from 10^(dbm/10), so the wording can never drift from the
+ * decades-established "round" figures (200 mW, not 199 mW). */
+static const char *const kWsprDbmLabel[] = {
+    "0 dBm (1 mW)", "3 dBm (2 mW)", "7 dBm (5 mW)", "10 dBm (10 mW)",
+    "13 dBm (20 mW)", "17 dBm (50 mW)", "20 dBm (100 mW)", "23 dBm (200 mW)",
+    "27 dBm (500 mW)", "30 dBm (1 W)", "33 dBm (2 W)", "37 dBm (5 W)",
+};
+
 /* ⛔ 37 dBm (5 W) IS BACK, and the reasoning that removed it was wrong.
  *
  * It was cut on 2026-08-28 to protect the finals over WSPR's ~110 s key-down.
@@ -10557,6 +10568,8 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
  * drawer the operator opened to change it. No toast: a warning that vanishes
  * after two seconds cannot guard anything. */
 static lv_obj_t *s_wspr_dbm_dd = NULL;   /* declared-power dropdown, moved by the guard */
+static lv_obj_t *s_wspr_dbm_nc_lbl = NULL;   /* "Not calibrated for Xm" - built alongside the dropdown, same area */
+static lv_obj_t *s_wspr_dbm_cal_btn = NULL;  /* "Calibrate this band" - shown only when s_wspr_dbm_nc_lbl is */
 static lv_obj_t *s_wspr_pa_btn = NULL;
 static lv_obj_t *s_wspr_pa_lbl = NULL;
 static bool      s_wspr_pa_arm_off = false;   /* first tap of the two-tap disable */
@@ -10566,6 +10579,41 @@ static lv_timer_t *s_wspr_pa_arm_timer = NULL;
  * is protecting". Rebuilt with the section like s_wspr_dbm_dd above, so
  * always re-validated before use. */
 static lv_obj_t *s_wspr_pa_cal_hint = NULL;
+
+/* The dropdown lists ONLY dBm values Calibrate Power actually verified for
+ * the CURRENT band (operator, 2026-09-15: "only have levels that are
+ * actually possible") - so its row index no longer maps 1:1 onto
+ * WSPR_STD_DBM/kWsprDbm. Populated at drawer-build time
+ * (build_wspr_dbm_options() below), consulted by the VALUE_CHANGED
+ * callback. File-scope for the same reason as s_wspr_dbm_dd: the section is
+ * rebuilt on every drawer open, and the callback needs whatever the most
+ * recent build actually put in the list. */
+static int8_t  s_wspr_dbm_achievable[WSPR_STD_DBM_N];
+static int     s_wspr_dbm_achievable_n = 0;
+
+/* Build the dropdown's option text from what Calibrate Power actually
+ * measured on `band`, filling s_wspr_dbm_achievable as a side effect.
+ * Returns the number of achievable steps (0 = band not calibrated, or
+ * nothing measured on it came within power_cal_voltage_for_dbm()'s own 3 dB
+ * tolerance of ANY standard step - same "not calibrated" case either way,
+ * from the operator's point of view). `opts` must hold the worst case (all
+ * WSPR_STD_DBM_N labels + separators). */
+static int build_wspr_dbm_options(const char *band, char *opts, size_t opts_sz)
+{
+    size_t off = 0;
+    s_wspr_dbm_achievable_n = 0;
+    if (!band || !band[0]) return 0;
+    for (int k = 0; k < N_WSPR_DBM; k++) {
+        uint16_t v_x10;
+        if (!power_cal_voltage_for_dbm(band, kWsprDbm[k], &v_x10)) continue;
+        int n = snprintf(opts + off, opts_sz - off, "%s%s",
+                          s_wspr_dbm_achievable_n ? "\n" : "", kWsprDbmLabel[k]);
+        if (n < 0 || (size_t)n >= opts_sz - off) break;   /* out of room - stop, don't corrupt */
+        off += (size_t)n;
+        s_wspr_dbm_achievable[s_wspr_dbm_achievable_n++] = kWsprDbm[k];
+    }
+    return s_wspr_dbm_achievable_n;
+}
 
 /* Ask wspr_rx.c to apply the calibrated voltage for `dbm` on the current
  * band, then reflect whatever it actually did under the dropdown. One
@@ -10581,9 +10629,85 @@ static void wspr_pa_cal_apply_and_show(int8_t dbm)
     }
 }
 
-/* Point the declared-power dropdown at a value, and store it.
+/* Decide whether the CURRENT band has anything real to declare, and show
+ * the right widget for it - the dropdown, or the "not calibrated" prompt.
  *
- * The guard knows roughly what the radio will now produce, and the operator
+ * ⛔ THIS FUNCTION EXISTS BECAUSE OF A REAL BUG, 2026-09-15: that decision
+ * used to be made ONCE, inline, at drawer-BUILD time. This drawer's own
+ * sections are built exactly once per boot ("lazy build on first open",
+ * drawer_open() below) and never rebuilt - drawer_refresh_wspr() already
+ * knew this for the dropdown's SELECTED VALUE (#291), but the dropdown-vs-
+ * prompt CHOICE was still a build-time decision. So the very first drawer
+ * open of a session - before anything had ever been calibrated - froze
+ * "Not calibrated for 20M" on screen, and no amount of calibrating
+ * afterward ever changed it for the rest of that boot: a fresh 45-step
+ * sweep measured and saved real data, and the drawer just never looked
+ * again. Both widget sets are now built once (drawer_build() below) and
+ * this toggles which is visible, called both at build time and on every
+ * drawer_refresh_wspr() (drawer reopen). */
+static void wspr_dbm_area_refresh(void)
+{
+    if (!s_wspr_dbm_nc_lbl || !lv_obj_is_valid(s_wspr_dbm_nc_lbl)) return;  // section not built yet
+
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    char dbm_opts[WSPR_STD_DBM_N * 24];
+    int n_ach = build_wspr_dbm_options(band, dbm_opts, sizeof(dbm_opts));
+
+    qmx_settings_t ws;
+    settings_load_all(&ws);
+
+    if (n_ach == 0) {
+        /* Not calibrated (or nothing on this band came within 3 dB of ANY
+         * standard step). The STORED declared power (whatever it was) is
+         * left alone - WSPR still transmits declaring it, this only gates
+         * offering a NEW pick until there is real data to pick from. */
+        char nc_txt[64];
+        snprintf(nc_txt, sizeof(nc_txt), "Not calibrated for %s",
+                 (band && band[0]) ? band : "this band");
+        lv_label_set_text(s_wspr_dbm_nc_lbl, nc_txt);
+        lv_obj_clear_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_cal_btn) lv_obj_clear_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) lv_obj_add_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_cal_btn) lv_obj_add_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) {
+            lv_obj_clear_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
+            lv_dropdown_set_options(s_wspr_dbm_dd, dbm_opts);
+
+            int idx = 0;
+            bool found = false;
+            for (int k = 0; k < s_wspr_dbm_achievable_n; k++)
+                if (s_wspr_dbm_achievable[k] == ws.wspr_tx_dbm) { idx = k; found = true; break; }
+            if (!found) {
+                /* Stored value has no row THIS time - a band change, or the
+                 * legacy >37 dBm cap. Fall back to the closest achievable
+                 * step rather than an arbitrary one, and REWRITE the
+                 * setting to match what is shown - leaving them disagreeing
+                 * would beacon a value the drawer denies, the silent-state
+                 * trap this code has already been bitten by once (the old
+                 * >37 dBm case). */
+                int best_gap = 999;
+                for (int k = 0; k < s_wspr_dbm_achievable_n; k++) {
+                    int gap = abs((int)s_wspr_dbm_achievable[k] - (int)ws.wspr_tx_dbm);
+                    if (gap < best_gap) { best_gap = gap; idx = k; }
+                }
+                ESP_LOGW(TAG, "WSPR declared power %d dBm has no calibrated match on "
+                              "%s - reset to %d dBm",
+                         ws.wspr_tx_dbm, (band && band[0]) ? band : "this band",
+                         s_wspr_dbm_achievable[idx]);
+                settings_set_wspr_tx_dbm(s_wspr_dbm_achievable[idx]);
+                ws.wspr_tx_dbm = s_wspr_dbm_achievable[idx];
+            }
+            lv_dropdown_set_selected(s_wspr_dbm_dd, (uint16_t)idx);
+            wspr_dbm_apply_tint(s_wspr_dbm_dd, s_wspr_dbm_achievable[idx]);
+        }
+    }
+
+    wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
+}
+
+/* The guard knows roughly what the radio will now produce, and the operator
  * should not have to work it out: protected is about 1 W, unprotected is the
  * QMX's full output. So flipping the guard moves the declaration with it.
  *
@@ -10602,30 +10726,14 @@ static void wspr_pa_cal_apply_and_show(int8_t dbm)
  * ⚠ Both are 12 V figures. A 9 V QMX at the same 6.0 V limit produces something
  * different, which is exactly why the measured hint exists and why these are a
  * starting point rather than an answer. */
-/* Move the declared-power dropdown onto a value. Read-only with respect to the
- * setting - see wspr_set_declared_dbm() below for the writing half.
- *
- * The dropdown lives in a drawer SECTION that is destroyed and rebuilt on every
- * drawer rebuild, and is only built at all in WSPR mode, so this pointer can
- * outlive its object and must always be validated. */
-static void wspr_dbm_dd_sync(int8_t dbm)
-{
-    if (!s_wspr_dbm_dd || !lv_obj_is_valid(s_wspr_dbm_dd)) return;
-    for (int k = 0; k < N_WSPR_DBM; k++) {
-        if (kWsprDbm[k] == dbm) {
-            lv_dropdown_set_selected(s_wspr_dbm_dd, (uint16_t)k);
-            wspr_dbm_apply_tint(s_wspr_dbm_dd, dbm);
-            break;
-        }
-    }
-}
-
 static void wspr_set_declared_dbm(int8_t dbm)
 {
     settings_set_wspr_tx_dbm(dbm);
-    /* The setting above is what actually matters; moving the widget is
-     * cosmetic, and must never be done through a stale pointer. */
-    wspr_dbm_dd_sync(dbm);
+    /* Re-derive the whole area, not just the dropdown's selection - dbm
+     * might not even be achievable on this band, in which case the "not
+     * calibrated" prompt is the correct thing to show, not a forced
+     * selection. */
+    wspr_dbm_area_refresh();
 }
 
 /* Re-read the declared power from settings on every drawer open (#291).
@@ -10646,14 +10754,10 @@ static void wspr_set_declared_dbm(int8_t dbm)
  * for them, and the fix for each is a line here. */
 static void drawer_refresh_wspr(void)
 {
-    if (!s_wspr_dbm_dd || !lv_obj_is_valid(s_wspr_dbm_dd)) return;
-    qmx_settings_t ws;
-    settings_load_all(&ws);
-    wspr_dbm_dd_sync(ws.wspr_tx_dbm);
-    /* The band (or the guard's state) may have moved since this was last
-     * applied - a drawer reopen is one of the points wspr_pa_apply_
-     * declared_dbm()'s own header promises to re-check at. */
-    wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
+    /* Re-derives band, achievable levels, selection AND the PA-guard-aware
+     * apply/hint in one call - see wspr_dbm_area_refresh()'s own header for
+     * why this must run on every open, not just the first. */
+    wspr_dbm_area_refresh();
 }
 
 static void wspr_pa_btn_refresh(void)
@@ -10717,10 +10821,14 @@ static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
     uint16_t i = lv_dropdown_get_selected(dd);
-    if (i < N_WSPR_DBM) {
-        settings_set_wspr_tx_dbm(kWsprDbm[i]);
-        wspr_dbm_apply_tint(dd, kWsprDbm[i]);
-        wspr_pa_cal_apply_and_show(kWsprDbm[i]);
+    /* Row index maps into s_wspr_dbm_achievable (this drawer-open's filtered
+     * list), NOT kWsprDbm/WSPR_STD_DBM directly - see build_wspr_dbm_options()
+     * and its own header. */
+    if (i < (uint16_t)s_wspr_dbm_achievable_n) {
+        int8_t dbm = s_wspr_dbm_achievable[i];
+        settings_set_wspr_tx_dbm(dbm);
+        wspr_dbm_apply_tint(dd, dbm);
+        wspr_pa_cal_apply_and_show(dbm);
     }
 }
 
@@ -12714,11 +12822,35 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(l2, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
         lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 46);
+
+        /* Only offer levels Calibrate Power actually verified for the
+         * CURRENT band (operator, 2026-09-15: "only have levels that are
+         * actually possible"). Both widget sets - the dropdown AND the
+         * "not calibrated" prompt - are built here UNCONDITIONALLY, and
+         * wspr_dbm_area_refresh() (called once at the end of this block,
+         * and again on every drawer reopen) decides which is visible. This
+         * section is built exactly ONCE per boot ("lazy build on first
+         * open" - drawer_open() below), so a decision baked in here and
+         * never revisited would freeze at whatever was true on the very
+         * first open - which is exactly the bug that was found and fixed,
+         * see wspr_dbm_area_refresh()'s own header. */
+        lv_obj_t *nc = lv_label_create(sec);
+        s_wspr_dbm_nc_lbl = nc;
+        lv_obj_set_style_text_color(nc, lv_color_hex(0xFFA040), 0);
+        lv_obj_set_style_text_font(nc, &lv_font_montserrat_24, 0);
+        lv_obj_align(nc, LV_ALIGN_TOP_LEFT, 0, 90);
+
+        lv_obj_t *cal_btn = lv_button_create(sec);
+        s_wspr_dbm_cal_btn = cal_btn;
+        lv_obj_set_size(cal_btn, DRAWER_W - 32, 44);
+        lv_obj_align(cal_btn, LV_ALIGN_TOP_LEFT, 0, 118);
+        lv_obj_add_event_cb(cal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *cal_lbl = lv_label_create(cal_btn);
+        lv_label_set_text(cal_lbl, "Calibrate this band");
+        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(cal_lbl);
+
         lv_obj_t *dd = lv_dropdown_create(sec);
-        lv_dropdown_set_options(dd,
-            "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
-            "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
-            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W)\n37 dBm (5 W)");
         /* FULL WIDTH ON ITS OWN LINE, matching the duty-cycle dropdown below -
          * which renders correctly and this one did not. At 300 px squeezed onto
          * the label's line it truncated the label to "Declared pow...", ran its
@@ -12728,29 +12860,15 @@ static void drawer_build(void)
         lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 86);
         s_wspr_dbm_dd = dd;   /* the guard moves this when it changes state */
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
-        {
-            uint16_t idx = 7;                         /* 23 dBm default */
-            for (int k = 0; k < N_WSPR_DBM; k++)
-                if (kWsprDbm[k] == ws.wspr_tx_dbm) { idx = (uint16_t)k; break; }
-            lv_dropdown_set_selected(dd, idx);
-            /* A 37 dBm stored before the cap has no row now, so idx fell back to
-             * the 23 dBm default. REWRITE the setting to match what is shown -
-             * leaving them disagreeing would beacon a value the drawer denies,
-             * which is the silent-state trap warned about elsewhere here. */
-            if (ws.wspr_tx_dbm > WSPR_DBM_LIMIT) {
-                ESP_LOGW(TAG, "WSPR declared power %d dBm exceeds the %d dBm cap "
-                              "(QMX finals, ~110 s key-down) - reset to %d dBm",
-                         ws.wspr_tx_dbm, WSPR_DBM_LIMIT, kWsprDbm[idx]);
-                settings_set_wspr_tx_dbm(kWsprDbm[idx]);
-            }
-            wspr_dbm_apply_tint(dd, kWsprDbm[idx]);
-        }
         lv_obj_add_event_cb(dd, drawer_dropdown_wspr_dbm_cb, LV_EVENT_VALUE_CHANGED, NULL);
         /* The OPTION LIST is a separate object with its own font - without
          * this it opens at LVGL's default, which is much smaller than
          * everything around it. Every other dropdown in this drawer
          * already does this; these two were added without it. */
         lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+
+        // wspr_dbm_area_refresh() runs once everything below (including the
+        // calibration-status hint) is built - see the call after it.
 
         /* What the radio MEASURED on the last burst, on its own line under the
          * control it is advising. Dim and smaller: it informs the choice, it is
@@ -12784,8 +12902,11 @@ static void drawer_build(void)
             lv_obj_set_style_text_color(hint2, lv_color_hex(0x9AA6B2), 0);
             lv_obj_set_style_text_font(hint2, &lv_font_montserrat_20, 0);
             lv_obj_align(hint2, LV_ALIGN_TOP_LEFT, 0, 172);
-            wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
         }
+        // Now that the dropdown, the "not calibrated" prompt AND this hint
+        // all exist, one call sets every one of them to the right initial
+        // state - same call drawer_refresh_wspr() makes on every reopen.
+        wspr_dbm_area_refresh();
 
         /* #290 PA guard - a FULL-WIDTH BUTTON, not a checkbox, and the button
          * IS the status display.

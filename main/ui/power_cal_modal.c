@@ -67,17 +67,22 @@ static const char *TAG = "power_cal";
 #define PWRCAL_TONE_RESEND_MS      150  // re-send TA<freq>; at roughly FT8's own 160 ms symbol cadence,
                                          // or the QMX drops the envelope between commands
 #define PWRCAL_EXIT_SETTLE_MS      300  // after restoring mode, before the next step's voltage write
-// 23 steps x up to ~9.3 s worst case (3 s voltage-confirm + 6 s measure +
-// 0.3 s exit) is ~214 s - give real margin over that, not just the old
-// 5-step figure. Mirrors tune_modal's TUNE_TIMEOUT_MS idea either way: a
-// backstop that should basically never fire in practice.
-#define PWRCAL_TOTAL_TIMEOUT_MS 300000
+// 45 steps (was 23 - see PWRCAL_STEPS in settings.h) x up to ~9.3 s worst
+// case (3 s voltage-confirm + 6 s measure + 0.3 s exit) is ~419 s - give
+// real margin over that, not just the per-step arithmetic. Mirrors
+// tune_modal's TUNE_TIMEOUT_MS idea either way: a backstop that should
+// basically never fire in practice.
+#define PWRCAL_TOTAL_TIMEOUT_MS 480000
 
-// 1.0-12.0 V in 0.5 V steps - see the PWRCAL_STEPS comment in settings.h for
-// why this range and this resolution.
+// 1.0-12.0 V, alternating +0.3/+0.2 V (average 0.25 V) - see the
+// PWRCAL_STEPS comment in settings.h for why this range, this resolution,
+// and why it is not a literal 0.25 V step (the radio only accepts 0.1 V
+// granularity).
 static const uint8_t s_test_voltage_x10[PWRCAL_STEPS] = {
-     10,  15,  20,  25,  30,  35,  40,  45,  50,  55,  60,  65,
-     70,  75,  80,  85,  90,  95, 100, 105, 110, 115, 120,
+     10,  13,  15,  18,  20,  23,  25,  28,  30,  33,  35,  38,
+     40,  43,  45,  48,  50,  53,  55,  58,  60,  63,  65,  68,
+     70,  73,  75,  78,  80,  83,  85,  88,  90,  93,  95,  98,
+    100, 103, 105, 108, 110, 113, 115, 118, 120,
 };
 
 typedef enum {
@@ -98,9 +103,18 @@ static lv_obj_t   *s_results_lbl2 = NULL;  // right column
 static lv_obj_t   *s_action_btn  = NULL;
 static lv_obj_t   *s_action_lbl  = NULL;
 static lv_obj_t   *s_cancel_btn  = NULL;
+static lv_obj_t   *s_cancel_lbl  = NULL;   // "Cancel" while running/idle, "Done" once results are in
 static lv_timer_t *s_timer       = NULL;
 
 static pwrcal_state_t s_state         = PC_IDLE;
+/* True while THIS modal stopped WSPR receive to have the radio to itself -
+ * set only in start_btn_cb() right before wspr_rx_stop(), cleared once
+ * wspr_rx_start() has been called to resume it. Operator, 2026-09-15: a
+ * "Stop WSPR first" refusal with no way to do that from here made
+ * calibrating awkward enough to report - swipe out to Panadapter, stop it,
+ * come back, calibrate, then swipe back to WSPR. This modal now does the
+ * stop/resume itself. */
+static bool             s_wspr_was_running = false;
 static uint32_t        s_state_enter_ms = 0;
 static uint32_t        s_sweep_start_ms = 0;
 static int              s_step           = 0;
@@ -166,18 +180,35 @@ bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *ou
 {
     uint8_t  v_x10[PWRCAL_STEPS];
     uint16_t w_x100[PWRCAL_STEPS];
-    if (!band || !band[0] || !settings_get_pwr_cal_band(band, v_x10, w_x100)) return false;
+    bool got = band && band[0] && settings_get_pwr_cal_band(band, v_x10, w_x100);
+    /* 2026-09-15: a fresh 20M sweep (measured, logged, real wattages at every
+     * step) still read back "not calibrated" from here immediately after -
+     * root cause not yet found by static review. Logging every call, not
+     * just failures, until this is understood: a silent function that is
+     * itself the mystery must not hide its own inputs and outputs. */
+    if (!got) {
+        ESP_LOGW(TAG, "voltage_for_dbm(band=%s, dbm=%d): settings_get_pwr_cal_band found NOTHING",
+                 (band && band[0]) ? band : "(empty)", target_dbm);
+        return false;
+    }
 
     float target_w = powf(10.0f, ((float)target_dbm - 30.0f) / 10.0f);
     int   best = -1;
     float best_gap_db = 1e9f;
+    int   nonzero = 0;
     for (int i = 0; i < PWRCAL_STEPS; i++) {
         if (w_x100[i] == 0) continue;
+        nonzero++;
         float w = (float)w_x100[i] / 100.0f;
         float gap_db = fabsf(10.0f * log10f(w / target_w));
         if (gap_db < best_gap_db) { best_gap_db = gap_db; best = i; }
     }
-    if (best < 0 || best_gap_db > PWRCAL_MATCH_MAX_DB) return false;
+    if (best < 0 || best_gap_db > PWRCAL_MATCH_MAX_DB) {
+        ESP_LOGW(TAG, "voltage_for_dbm(band=%s, dbm=%d): row found with %d nonzero point(s), "
+                      "best gap %.1f dB (limit %.1f) at index %d - no match",
+                 band, target_dbm, nonzero, (double)best_gap_db, (double)PWRCAL_MATCH_MAX_DB, best);
+        return false;
+    }
     if (out_v_x10) *out_v_x10 = v_x10[best];
     return true;
 }
@@ -263,6 +294,13 @@ static void finish_done(void)
     if (s_action_lbl) lv_label_set_text(s_action_lbl, "Start Calibration");
     if (s_action_btn) lv_obj_set_style_bg_color(s_action_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     if (s_cancel_btn) lv_obj_clear_state(s_cancel_btn, LV_STATE_DISABLED);
+    /* The bottom button no longer CANCELS anything at this point - results
+     * are already in and saved. "Done" says what tapping it now means: close
+     * the window. Reverted to "Cancel" in start_btn_cb() when a new sweep
+     * begins, since it goes back to being an abort button then. Operator,
+     * 2026-09-15: "Cancel should be Done now(!)". */
+    if (s_cancel_btn) lv_obj_set_style_bg_color(s_cancel_btn, lv_color_hex(0x2E7D32), 0);
+    if (s_cancel_lbl) lv_label_set_text(s_cancel_lbl, "Done");
 }
 
 // Stop transmitting RIGHT NOW if we currently are, then head for a
@@ -433,9 +471,20 @@ static void start_btn_cb(lv_event_t *e)
         ui_toast("FT8 is transmitting - try again once it's idle");
         return;
     }
-    if (wspr_rx_running()) {
-        ui_toast("Stop WSPR first - calibration needs the radio to itself");
-        return;
+    /* Calibration needs the radio to itself - WSPR's own capture/decode
+     * loop and its 2-minute CAT/audio cadence would otherwise collide with
+     * the sweep's own TX;/TA;/RX; and mode changes. Rather than refuse and
+     * send the operator out to the Panadapter to stop it by hand (their own
+     * report: awkward, and easy to forget to come back and re-enable it
+     * afterward), stop it here and remember to bring it back. wspr_rx_stop()
+     * is the SAME shutdown Panadapter/FT8 swipe uses - it aborts anything
+     * armed/keyed first, releases the PA-voltage guard, and only then
+     * returns, so this never keys the radio out from under WSPR mid-burst. */
+    s_wspr_was_running = wspr_rx_running();
+    if (s_wspr_was_running) {
+        wspr_rx_stop();
+        ESP_LOGI(TAG, "WSPR receive stopped for the calibration sweep - "
+                      "will resume when this window closes");
     }
 
     const char *cur_mode = cat_get_mode_str();
@@ -460,6 +509,10 @@ static void start_btn_cb(lv_event_t *e)
     if (s_action_btn) lv_obj_set_style_bg_color(s_action_btn, lv_color_hex(0xB03020), 0);
     if (s_results_lbl) lv_label_set_text(s_results_lbl, "");
     if (s_results_lbl2) lv_label_set_text(s_results_lbl2, "");
+    /* Back to a real abort button for the sweep that is about to run -
+     * finish_done() relabels this "Done" once results are in. */
+    if (s_cancel_btn) lv_obj_set_style_bg_color(s_cancel_btn, lv_color_hex(0x962020), 0);
+    if (s_cancel_lbl) lv_label_set_text(s_cancel_lbl, "Cancel");
 
     begin_step(0);
     if (!s_timer) s_timer = lv_timer_create(timer_cb, 150, NULL);
@@ -476,6 +529,25 @@ static void cancel_btn_cb(lv_event_t *e)
     (void)e;
     if (s_state == PC_IDLE || s_state == PC_DONE) {
         if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+        /* Bring WSPR back if this window is what stopped it - covers a
+         * normal finish AND a mid-sweep Cancel/timeout, both of which land
+         * in PC_DONE and wait for the operator to dismiss the window here
+         * (see the comment above this function). Resuming on CLOSE, not on
+         * PC_DONE itself, so the operator can still read the results with
+         * the radio quiet before deciding. */
+        if (s_wspr_was_running) {
+            s_wspr_was_running = false;
+            wspr_rx_start();
+            ESP_LOGI(TAG, "resuming WSPR receive after calibration");
+        }
+        /* ⛔ WAS STUCK AT PC_DONE UNTIL THE NEXT SWEEP - power_cal_modal_show()'s
+         * own pre-fill ("Previously calibrated - Start to re-measure") only
+         * runs `if (s_state == PC_IDLE)`, so reopening after a finished run
+         * skipped it and just left last time's rendered labels on screen
+         * unchanged - a snapshot, not a live re-check. Reset here so the
+         * NEXT open always re-queries settings fresh, same as a first-ever
+         * open would. */
+        s_state = PC_IDLE;
         return;
     }
     if (s_state == PC_RESTORE) return;  // already on the way out, disabled below anyway
@@ -532,8 +604,14 @@ static void modal_build(void)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     lv_obj_t *warn = lv_label_create(s_panel);
-    lv_label_set_text(warn, LV_SYMBOL_WARNING " Connect a DUMMY LOAD, not the antenna.\n"
-                             "Keys a brief full carrier at 5 voltage steps.");
+    {
+        static char warn_txt[128];
+        snprintf(warn_txt, sizeof(warn_txt),
+                 LV_SYMBOL_WARNING " Connect a DUMMY LOAD, not the antenna.\n"
+                 "Keys a brief full carrier at %d voltage steps, about 5-8 minutes.",
+                 PWRCAL_STEPS);
+        lv_label_set_text(warn, warn_txt);
+    }
     lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(warn, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, 0);
@@ -584,11 +662,11 @@ static void modal_build(void)
     lv_obj_set_style_border_width(s_cancel_btn, 2, 0);
     lv_obj_set_style_radius(s_cancel_btn, 8, 0);
     lv_obj_add_event_cb(s_cancel_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cancel_lbl = lv_label_create(s_cancel_btn);
-    lv_label_set_text(cancel_lbl, "Cancel");
-    lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(cancel_lbl);
+    s_cancel_lbl = lv_label_create(s_cancel_btn);
+    lv_label_set_text(s_cancel_lbl, "Cancel");
+    lv_obj_set_style_text_color(s_cancel_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_cancel_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_cancel_lbl);
 
     // Esc only, same reasoning as tune_modal.c: this keys a carrier, and the
     // only key worth having live is the one that stops it.
