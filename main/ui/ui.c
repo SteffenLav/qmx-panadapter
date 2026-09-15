@@ -10561,6 +10561,25 @@ static lv_obj_t *s_wspr_pa_btn = NULL;
 static lv_obj_t *s_wspr_pa_lbl = NULL;
 static bool      s_wspr_pa_arm_off = false;   /* first tap of the two-tap disable */
 static lv_timer_t *s_wspr_pa_arm_timer = NULL;
+/* Result of the LAST wspr_pa_apply_declared_dbm() attempt, under the
+ * dropdown - "→ X.XV applied", "not calibrated for this band", or "PA guard
+ * is protecting". Rebuilt with the section like s_wspr_dbm_dd above, so
+ * always re-validated before use. */
+static lv_obj_t *s_wspr_pa_cal_hint = NULL;
+
+/* Ask wspr_rx.c to apply the calibrated voltage for `dbm` on the current
+ * band, then reflect whatever it actually did under the dropdown. One
+ * function so the dropdown callback and the drawer-open refresh can never
+ * show a stale answer against what was really asked for. */
+static void wspr_pa_cal_apply_and_show(int8_t dbm)
+{
+    wspr_pa_apply_declared_dbm(dbm);
+    if (s_wspr_pa_cal_hint && lv_obj_is_valid(s_wspr_pa_cal_hint)) {
+        char msg[80];
+        wspr_pa_calibrated_status(msg, sizeof(msg));
+        lv_label_set_text(s_wspr_pa_cal_hint, msg);
+    }
+}
 
 /* Point the declared-power dropdown at a value, and store it.
  *
@@ -10631,6 +10650,10 @@ static void drawer_refresh_wspr(void)
     qmx_settings_t ws;
     settings_load_all(&ws);
     wspr_dbm_dd_sync(ws.wspr_tx_dbm);
+    /* The band (or the guard's state) may have moved since this was last
+     * applied - a drawer reopen is one of the points wspr_pa_apply_
+     * declared_dbm()'s own header promises to re-check at. */
+    wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
 }
 
 static void wspr_pa_btn_refresh(void)
@@ -10697,6 +10720,7 @@ static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
     if (i < N_WSPR_DBM) {
         settings_set_wspr_tx_dbm(kWsprDbm[i]);
         wspr_dbm_apply_tint(dd, kWsprDbm[i]);
+        wspr_pa_cal_apply_and_show(kWsprDbm[i]);
     }
 }
 
@@ -12658,10 +12682,12 @@ static void drawer_build(void)
         qmx_settings_t ws;
         settings_load_all(&ws);
 
-        /* 302, not 352: the "Allow transmitting" row above was removed and the
-         * height and the `y +=` below must move together - this file has twice
-         * had a section overlap the next one by changing only one of them. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 302);
+        /* 334, not 352 or 302: the "Allow transmitting" row above was removed
+         * (352 -> 302), then the calibration-applied hint below was added
+         * (302 -> 334). The height and the `y +=` at the bottom of this block
+         * must move together - this file has repeatedly had a section
+         * overlap the next one by changing only one of them. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 334);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -12745,6 +12771,22 @@ static void drawer_build(void)
             }
         }
 
+        /* Whether the voltage above was actually made to match - "X.XV
+         * applied for N dBm", "not calibrated for this band", or "PA guard
+         * is protecting" (wspr_pa_apply_declared_dbm()'s own header). Always
+         * built (unlike the measured-last-burst hint above, which has
+         * nothing to say until a burst happens) so the object exists for
+         * the dropdown callback to update live without a full drawer
+         * rebuild - same reasoning as s_wspr_dbm_dd itself. */
+        {
+            lv_obj_t *hint2 = lv_label_create(sec);
+            s_wspr_pa_cal_hint = hint2;
+            lv_obj_set_style_text_color(hint2, lv_color_hex(0x9AA6B2), 0);
+            lv_obj_set_style_text_font(hint2, &lv_font_montserrat_20, 0);
+            lv_obj_align(hint2, LV_ALIGN_TOP_LEFT, 0, 172);
+            wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
+        }
+
         /* #290 PA guard - a FULL-WIDTH BUTTON, not a checkbox, and the button
          * IS the status display.
          *
@@ -12771,11 +12813,11 @@ static void drawer_build(void)
         lv_label_set_text(l3, "Protect finals");
         lv_obj_set_style_text_color(l3, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(l3, &lv_font_montserrat_28, 0);
-        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 182);
+        lv_obj_align(l3, LV_ALIGN_TOP_LEFT, 0, 214);   /* was 182 - +32 for the new calibration hint above */
 
         s_wspr_pa_btn = lv_btn_create(sec);
         lv_obj_set_size(s_wspr_pa_btn, DRAWER_W - 32, 60);
-        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 222);
+        lv_obj_align(s_wspr_pa_btn, LV_ALIGN_TOP_LEFT, 0, 254);   /* was 222 - see above */
         lv_obj_add_event_cb(s_wspr_pa_btn, drawer_wspr_pa_btn_cb, LV_EVENT_CLICKED, NULL);
         s_wspr_pa_lbl = lv_label_create(s_wspr_pa_btn);
         lv_obj_set_style_text_font(s_wspr_pa_lbl, &lv_font_montserrat_28, 0);
@@ -12784,8 +12826,10 @@ static void drawer_build(void)
         wspr_pa_btn_refresh();
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
-         * records a release where they did not and the next section overlapped. */
-        y += 302;
+         * records a release where they did not and the next section overlapped.
+         * 334, not 302: +32 for the calibration-status hint added above the
+         * "Protect finals" label, which pushed everything below it down. */
+        y += 334;
     }
     {
         qmx_settings_t ws;

@@ -153,6 +153,35 @@ static void status_set_text(const char *s)
 // naming the nearest thing anyway.
 #define PWRCAL_MATCH_MAX_DB 3.0f
 
+// Runtime lookup, independent of the modal (which may never have been
+// opened this session): given a band already calibrated by a PAST sweep
+// (persisted, not the in-progress s_measured_w_x100 above), find the
+// voltage that produced the measured output closest to target_dbm. Exactly
+// the same "closest by dB gap, refuse past PWRCAL_MATCH_MAX_DB" rule as
+// render_results() above, kept as one rule rather than two so the WSPR
+// drawer's "Declared power" dropdown (main/ui/ui.c, power_cal_apply_declared
+// there) can never silently disagree with what this modal's own results
+// table shows for the same band and dBm.
+bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10)
+{
+    uint8_t  v_x10[PWRCAL_STEPS];
+    uint16_t w_x100[PWRCAL_STEPS];
+    if (!band || !band[0] || !settings_get_pwr_cal_band(band, v_x10, w_x100)) return false;
+
+    float target_w = powf(10.0f, ((float)target_dbm - 30.0f) / 10.0f);
+    int   best = -1;
+    float best_gap_db = 1e9f;
+    for (int i = 0; i < PWRCAL_STEPS; i++) {
+        if (w_x100[i] == 0) continue;
+        float w = (float)w_x100[i] / 100.0f;
+        float gap_db = fabsf(10.0f * log10f(w / target_w));
+        if (gap_db < best_gap_db) { best_gap_db = gap_db; best = i; }
+    }
+    if (best < 0 || best_gap_db > PWRCAL_MATCH_MAX_DB) return false;
+    if (out_v_x10) *out_v_x10 = v_x10[best];
+    return true;
+}
+
 static void render_results(void)
 {
     if (!s_results_lbl || !s_results_lbl2) return;

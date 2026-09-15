@@ -2426,6 +2426,12 @@ void wspr_screen_view_tick(void)
                     s_dial_settle_us = esp_timer_get_time() + 3000000;
                     ESP_LOGW(TAG, "dial: pushed %lu Hz to the radio (was %lu)",
                              (unsigned long)want, (unsigned long)have);
+                    /* The declared-power calibration is PER BAND - the same
+                     * dBm can map to a different voltage, or become
+                     * uncalibrated, on the new one. Re-resolve now rather
+                     * than leaving the radio at whatever the OLD band's
+                     * voltage happened to be. */
+                    wspr_pa_apply_declared_dbm(ds.wspr_tx_dbm);
                 } else if (want) {
                     ESP_LOGI(TAG, "dial: radio already on %lu Hz", (unsigned long)want);
                 }

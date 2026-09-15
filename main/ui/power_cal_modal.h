@@ -20,6 +20,17 @@ void power_cal_modal_init(void);
 // exactly the opposite reason that one does.
 void power_cal_modal_show(void);
 
+// Runtime lookup against a PAST sweep's persisted results (settings.h
+// pwr_cal), independent of whether this modal has ever been opened this
+// session. Returns false (out_v_x10 untouched) if `band` was never
+// calibrated, or nothing measured on it came within 3 dB of target_dbm -
+// same "never fabricate" rule the modal's own results table follows, so a
+// caller wiring this into the WSPR drawer's "Declared power" dropdown can
+// never show a different answer than Calibrate Power's own table would.
+#include <stdint.h>
+#include <stdbool.h>
+bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10);
+
 #ifdef __cplusplus
 }
 #endif

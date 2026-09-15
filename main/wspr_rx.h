@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 /* ⭐ IS THE WSPR PAGE REACHABLE AT ALL?
  *
@@ -346,6 +348,42 @@ void wspr_pa_guard_reclaim_on_link(void);
  * cannot: a plain "leave WSPR mode" restore whose single queued write was
  * never confirmed and silently failed to reach the radio. */
 void wspr_pa_guard_periodic_check(void);
+
+/* Apply the Max. PA voltage a PAST Calibrate Power sweep measured as
+ * producing `dbm` on the CURRENT band (adif_log_band_for_freq() of
+ * cat_get_frequency()), so "Declared power" is something the radio was
+ * actually asked to produce rather than a number typed into wsprnet.
+ *
+ * ⛔ REFUSES while the PA-voltage guard is CURRENTLY reducing
+ * (settings_get_wspr_pa_saved_x10() != 0) - that state IS the radio
+ * deliberately turned down to protect the finals over WSPR's ~110 s
+ * key-down, and writing a calibrated-for-full-power voltage over it would
+ * silently undo that protection. The guard's own restore-on-disengage
+ * already puts back whatever was here before it engaged, calibrated or
+ * not, so nothing is lost by waiting - the next call (drawer reopen, a
+ * dropdown change, a band change) tries again once the guard lets go.
+ *
+ * Call this: whenever the dropdown selection changes, whenever the WSPR
+ * drawer is opened/refreshed, and after the WSPR page pushes a new dial
+ * frequency to the radio (the same declared dBm can map to a different
+ * voltage - or become uncalibrated - on a different band).
+ *
+ * Fire-and-forget: like the guard's own writes, this is a CAT command, not
+ * a query, so success is not returned here - wspr_pa_calibrated_status()
+ * below is what a UI polls to know what happened. Safe to call from the
+ * LVGL/UI thread; the actual write goes to poll_task like every other CAT
+ * command (cat_request_pa_voltage_x10()). */
+void wspr_pa_apply_declared_dbm(int8_t dbm);
+
+/* What the last wspr_pa_apply_declared_dbm() call actually did, for a UI
+ * hint under the dropdown - same idea as wspr_tx_advised_dbm()'s "what the
+ * radio measured", but for what was ASKED rather than what came back.
+ * Writes a short human-readable line into `out` (band, applied voltage or
+ * why not) and returns true if a voltage was applied, false otherwise
+ * (uncalibrated band, no match within tolerance, or the guard is holding
+ * the line - `out` says which). Safe from the UI thread; touches no CAT
+ * state itself, only the small static this file already keeps. */
+bool wspr_pa_calibrated_status(char *out, size_t out_sz);
 
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes

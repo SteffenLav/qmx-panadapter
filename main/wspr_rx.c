@@ -37,6 +37,12 @@
 #define WSPR_RX_TX_IMMINENT_S  10
 #include "cat/cat.h"   /* #290 PA-voltage guard */
 #include "wspr_spots.h"
+#include "adif/adif_log.h"   /* adif_log_band_for_freq() - which band Calibrate Power's table is keyed on */
+
+/* main/ui/power_cal_modal.h also pulls in lvgl.h for its UI declarations,
+ * which this (non-UI) file has no other reason to need - re-declared here
+ * rather than included wholesale. Definition in power_cal_modal.c. */
+extern bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10);
 #include "wspr_rx.h"
 #include "wspr_wav.h"
 #include "storage/sd_archive.h"
@@ -2768,6 +2774,57 @@ void wspr_pa_guard_periodic_check(void)
     /* Neither our target nor the value owed - a different radio, or the
      * operator has set it by hand since. Not ours to touch; same reasoning
      * as wspr_pa_guard_reclaim_on_link() above. */
+}
+
+/* ---- declared-power calibration apply -------------------------------- */
+
+// Human-readable record of what the last wspr_pa_apply_declared_dbm() call
+// did, for wspr_pa_calibrated_status() to hand a UI. Small and static like
+// everything else in this file's PA-guard state - one caller (the LVGL/UI
+// thread) reads it, one caller (also the UI thread, via the dropdown/drawer
+// callbacks below) writes it, never concurrently with a CAT ISR or task.
+static char s_pa_cal_status[80] = "";
+static bool s_pa_cal_status_ok  = false;
+
+void wspr_pa_apply_declared_dbm(int8_t dbm)
+{
+    if (settings_get_wspr_pa_saved_x10() != 0) {
+        /* The guard is CURRENTLY holding the radio down for WSPR's long
+         * key-down - writing a calibrated-for-full-power voltage over that
+         * would silently undo the protection. Leave it; the guard's own
+         * restore already puts back whatever was here before it engaged,
+         * so the next call (once the guard lets go) tries again. */
+        snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
+                 "PA guard is protecting the radio - power not adjusted");
+        s_pa_cal_status_ok = false;
+        return;
+    }
+
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    uint16_t v_x10;
+    if (!band || !band[0] || !power_cal_voltage_for_dbm(band, dbm, &v_x10)) {
+        snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
+                 "not calibrated for %s - Max. PA voltage unchanged",
+                 (band && band[0]) ? band : "this band");
+        s_pa_cal_status_ok = false;
+        return;
+    }
+
+    cat_request_pa_voltage_x10(v_x10);
+    snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
+             "%s: Max. PA voltage set to %u.%uV for %d dBm",
+             band, v_x10 / 10, v_x10 % 10, dbm);
+    s_pa_cal_status_ok = true;
+    ESP_LOGI(TAG, "declared-power calibration: %s", s_pa_cal_status);
+}
+
+bool wspr_pa_calibrated_status(char *out, size_t out_sz)
+{
+    if (out && out_sz) {
+        strncpy(out, s_pa_cal_status, out_sz - 1);
+        out[out_sz - 1] = '\0';
+    }
+    return s_pa_cal_status_ok;
 }
 
 void wspr_rx_stop(void)
