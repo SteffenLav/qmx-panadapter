@@ -2575,8 +2575,19 @@ static void output_power_area_refresh(void)
     // re-telling, same reasoning as wspr_dbm_area_refresh(). Skip the
     // actual CAT write (not the persistence) if a burst is keyed right
     // now - see outpwr_tx_busy()'s own header.
+    //
+    // ⛔ AND skip it outright while WSPR is running - it owns Max. PA
+    // voltage then, via its own Declared-power calibration. This control
+    // used to write unconditionally on every band-change reconcile
+    // (topbar_reconcile_cb below), which raced wspr_rx's own write at boot:
+    // "declared-power calibration: 20M: Max. PA voltage set to 2.3V for
+    // 23 dBm" immediately followed 52 ms later by this control's own
+    // "PA voltage -> 12.0 V" clobbering it (Steffen OZ1LAV, 2026-09-16).
+    // wspr_rx_running(), not the current UI mode - the WSPR page can be
+    // left showing while another screen is up front, same reasoning as
+    // wspr_pa_guard_periodic_check()'s own "running, not visible" test.
     settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
-    if (!outpwr_tx_busy()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+    if (!outpwr_tx_busy() && !wspr_rx_running()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
 }
 
 // Live label/warning only while dragging - no CAT write until release, same
@@ -14695,6 +14706,13 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     if (cur == UI_MODE_WSPR) {
         wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
         wspr_screen_view_hide();
+        /* WSPR no longer owns Max. PA voltage the instant wspr_rx_stop()
+         * clears s_run - hand it back to the general Output power target
+         * right away, rather than leaving the radio at whatever dBm WSPR
+         * last declared until the next band change or drawer open. See
+         * output_power_area_refresh()'s own header for why it otherwise
+         * stays hands-off while wspr_rx_running(). */
+        output_power_area_refresh();
     } else if (cur == UI_MODE_FT8) {
         ui_save_snapshot(&s_ft8_snapshot);
         /* FT8 is always DiGi - never carry a drifted radio mode back in. */

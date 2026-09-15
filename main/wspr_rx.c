@@ -1703,7 +1703,24 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
 {
     bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0;
 
-    if (want_reduced && ws->wspr_pa_saved_x10 == 0) {
+    /* ⛔ RETIRED, 2026-09-16 - same operator decision as
+     * wspr_pa_guard_engage_if_pending() above ("the wspr finals-protection
+     * guard is now redundant" once Declared power and Output power both let
+     * the operator set an EXACT, measured voltage directly and both warn
+     * above 1 W). THAT retirement missed this one: this is the function
+     * actually wired into the WSPR cycle loop (wspr_rx_task, once per 120 s,
+     * see the call site below), so the guard kept forcing 6.0 V every cycle
+     * regardless of Declared power - Steffen OZ1LAV, 2026-09-16: Declared
+     * power set to 23 dBm (2.3 V), PA read 6.0 V, and wspr_pa_guard_ready()
+     * held the burst waiting for a reduction the operator never asked for.
+     *
+     * want_reduced is still computed and the `else if` below is left alone
+     * on purpose: a radio someone reduced BEFORE this fix (wspr_pa_saved_x10
+     * != 0, carried over in NVS) still needs its voltage back - never leave
+     * a radio stuck turned down with no path that undoes it, same rule the
+     * other retirement's own comment states. No NEW reduction can start:
+     * this branch is now a no-op instead of engaging one. */
+    if (false && want_reduced && ws->wspr_pa_saved_x10 == 0) {
         int16_t cur = cat_get_pa_voltage_x10();
         if (cur < 0) {
             /* ⛔ "Two minutes late is fine" - what this comment used to say -
@@ -1780,6 +1797,16 @@ static void wspr_pa_guard_update(const qmx_settings_t *ws)
  * four times the intended power is not so cheap. */
 static bool wspr_pa_guard_ready(const qmx_settings_t *ws)
 {
+    /* ⛔ RETIRED alongside wspr_pa_guard_update()'s engage branch, 2026-09-16
+     * - nothing ever asks for a NEW reduction any more, so there is nothing
+     * left to wait for. Without this, a radio sitting above the old 6.0 V
+     * target (e.g. Output power's own calibrated voltage for the band) would
+     * hold every burst forever, since nothing would ever bring it down to
+     * satisfy the old measurement below. (void)ws keeps the one caller
+     * unchanged. */
+    (void)ws;
+    return true;
+
     if (!(ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0))
         return true;                    /* protection not wanted - nothing to wait for */
     int16_t cur = cat_get_pa_voltage_x10();
