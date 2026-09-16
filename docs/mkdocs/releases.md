@@ -6,7 +6,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.14.0** — 2026-09-16
 
-**Calibrate Power: WSPR Declared power now fits what the QMX actually does, as precisely as the radio's own protocol allows.**
+**Calibrate Power: WSPR Declared power now fits what the QMX actually does, as closely as its own protocol allows.**
 
 - **Calibrate Power**, a new drawer feature: sweeps the QMX's *Max. PA voltage* through 45 points (1.0–12.0 V) on a **dummy load**, keying a real DiGi TX;/TA;/RX; carrier at each point — the same primitives a WSPR/FT8 burst is built from — and recording the real measured RF output from the radio's own `PC;` readback. Two earlier designs measured the wrong thing entirely before this one: QMX SWR Tune mode scales power independently of *Max. PA voltage*, and a bare CW `TX;` with no audio tone produces no RF at all. Reached from a "Calibrate this band" / "Recalibrate this band" button wherever it's needed.
 - **WSPR Declared power now only offers standard dBm steps the current band's calibration genuinely reaches, each labelled with the real measured wattage** — not the textbook figure a step's name implies. A step that measures 3.6 W now reads "(3.6 W)", never a stale "(5 W)". The matching is a real classification (the nearest *legal* WSPR dBm step for a given measurement, the only rounding the WSPR protocol itself can transmit) rather than a fuzzy tolerance window, so a step's label can no longer disagree with why it was offered.
