@@ -10,6 +10,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 - **Reproduced 100% on two benches** *(Randy N4OPI)* - it never happened while actually transmitting, only while armed and waiting. Same underlying bug as the v1.14.0 crash - a whole settings structure copied onto a task's stack just to read one value - reached this time from the web server's own task instead of the display or CAT tasks. Fixed the same way: read one setting at a time. Reproduced and confirmed fixed on the bench before release.
 - **The TX Hold checkbox not applying**, reported in the same message, was very likely the same crash: tone and hold travel in one web request, and the device rebooted while handling the tone half, before hold was ever reached. Confirmed applying and reading back correctly now.
+- **Output power stuck at WSPR's level after a reboot.** Max. PA voltage lives in the radio and a Tab5 restart does not reset it - so if WSPR had turned it down for its declared power (as low as 2.3 V, about 200 mW) and the Tab5 was then restarted straight into FT8, everything went out at that level while the Output power slider showed the figure it was *meant* to be at. Handing the power back only ever happened when you left the WSPR page live, and a reboot has no such moment. The radio is now told the correct level again whenever the CAT link comes up.
 
 ## Previous Releases
 

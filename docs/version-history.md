@@ -3692,3 +3692,12 @@ same crash: tone and hold travel in one request, and the crash happened while pr
 the tone half, before hold was ever reached. Worth confirming it now behaves once you've
 updated - reads back correctly on the bench, but reported symptoms sometimes have more
 than one cause.
+
+**Also fixed: output power stuck at WSPR's level after a reboot.** Max. PA voltage is a
+setting that lives in the radio, and a Tab5 reboot does not reset it - so if WSPR had
+turned it down for its declared power (as low as 2.3 V, about 200 mW), and the Tab5 was
+then restarted straight into FT8, everything transmitted at that level while the Output
+power slider cheerfully showed the figure it was supposed to be at. Handing the power
+back only ever happened when you *left* the WSPR page live; a reboot has no such moment.
+The radio is now told the right level again whenever the CAT link comes up, which also
+covers the radio itself being power-cycled mid-session.
