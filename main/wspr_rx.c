@@ -42,7 +42,8 @@
 /* main/ui/power_cal_modal.h also pulls in lvgl.h for its UI declarations,
  * which this (non-UI) file has no other reason to need - re-declared here
  * rather than included wholesale. Definition in power_cal_modal.c. */
-extern bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10);
+extern bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10,
+                                       uint16_t *out_w_x100);
 #include "wspr_rx.h"
 #include "wspr_wav.h"
 #include "storage/sd_archive.h"
@@ -2845,8 +2846,8 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
     }
 
     const char *band = adif_log_band_for_freq(cat_get_frequency());
-    uint16_t v_x10;
-    if (!band || !band[0] || !power_cal_voltage_for_dbm(band, dbm, &v_x10)) {
+    uint16_t v_x10, w_x100;
+    if (!band || !band[0] || !power_cal_voltage_for_dbm(band, dbm, &v_x10, &w_x100)) {
         snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
                  "not calibrated for %s - Max. PA voltage unchanged",
                  (band && band[0]) ? band : "this band");
@@ -2855,9 +2856,15 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
     }
 
     cat_request_pa_voltage_x10(v_x10);
+    /* Say what the radio will ACTUALLY put out at v_x10, not the nominal
+     * figure `dbm` implies - see power_cal_voltage_for_dbm()'s own header
+     * (operator, 2026-09-16: "PA 3.8 V = 500 mW", not just "PA 3.8 V"). */
+    char wbuf[16];
+    if (w_x100 < 100) snprintf(wbuf, sizeof(wbuf), "%u mW", (unsigned)w_x100 * 10);
+    else              snprintf(wbuf, sizeof(wbuf), "%u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
     snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
-             "%s: Max. PA voltage set to %u.%uV for %d dBm",
-             band, v_x10 / 10, v_x10 % 10, dbm);
+             "%s: Max. PA voltage set to %u.%uV = %s for %d dBm",
+             band, v_x10 / 10, v_x10 % 10, wbuf, dbm);
     s_pa_cal_status_ok = true;
     ESP_LOGI(TAG, "declared-power calibration: %s", s_pa_cal_status);
 }

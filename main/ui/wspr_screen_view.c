@@ -22,6 +22,15 @@
 #include <math.h>
 #include "esp_timer.h"
 #include "storage/settings.h"
+#include "adif/adif_log.h"   /* adif_log_band_for_freq() - for the PA line's watts figure */
+
+/* Same re-declaration approach as wspr_rx.c/wspr_tx.c: power_cal_modal.h
+ * also pulls in lvgl.h for its UI declarations, which this file already
+ * includes anyway, but the function belongs to a different screen's modal -
+ * re-declared rather than coupling this file to that one's header.
+ * Definition in power_cal_modal.c. */
+extern bool power_cal_watts_for_voltage(const char *band, uint16_t v_x10, uint16_t *out_w_x100);
+extern int8_t power_cal_dbm_for_watts(uint16_t w_x100);
 
 /* One narrow read per call, never settings_load_all() - this runs once per row
    on taskLVGL and that struct is kilobytes (CLAUDE.md lists four crashes from
@@ -2611,13 +2620,18 @@ void wspr_screen_view_tick(void)
         {
             /* Two lines, two meanings, two colours.
              *
-             * PA voltage is the SAFETY line, so it is coloured by whether the
-             * finals are actually protected right now rather than by whether
-             * the setting is on: green once the radio confirms it is at or
-             * below the guard's target, amber while the guard is on but the
-             * radio has not got there (or has not answered), red when the
-             * guard is switched off altogether - the same red the TX button
-             * uses, and the same rule.
+             * ⛔ PA voltage USED TO be coloured by whether the retired guard
+             * had the finals turned down (green "confirmed", amber
+             * "pending", red "guard off") - that stopped meaning anything
+             * once wspr_pa_guard_update() was neutered (2026-09-16, see its
+             * own header in wspr_rx.c) and it never matched the "Declared
+             * power" dropdown's own colours anyway. Now it is coloured
+             * EXACTLY like that dropdown - the same WSPR_DBM_LIMIT/CAUTION
+             * thresholds (wspr_tx.h), classified from the SAME real wattage
+             * the voltage produces (power_cal_dbm_for_watts(),
+             * power_cal_modal.c). Operator, 2026-09-16: "write PA 12.0 V =
+             * 3.6 W in red(!) just like it is red in the Declared power
+             * list ... now we have consistency!"
              *
              * Watts and SWR are the MEASUREMENT line, in the cyan
              * ft8_screen_view.c already uses for exactly this pair. Same
@@ -2626,47 +2640,35 @@ void wspr_screen_view_tick(void)
             int   pa = cat_get_pa_voltage_x10();
             float pw, sw;
 
-            /* ⛔ SAY WHAT IT WILL BE, NOT ONLY WHAT IT IS.
-             *
-             * A bare orange "PA 11.5 V" the instant TX is switched on reads as
-             * a fault - the guard has not applied yet, it is about to, and the
-             * number changes underneath a second later. The operator said so
-             * directly. So while transmitting is enabled and the radio is
-             * still above target the line states the INTENT, and it turns
-             * green with the real voltage once the radio confirms. Disarmed,
-             * it shows the real figure again, which is the honest thing when
-             * nothing is pending. */
-            uint32_t pa_col;
-            if (unprotected) {
-                /* Guard switched off: the real number, in the red the TX
-                 * button uses. Nothing is going to come and change it. */
-                if (pa >= 0) {
-                    snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
-                    pa_col = 0xFF4010;
-                } else {
-                    /* Same fresh-entry gap as the unknown branch below, just
-                     * reached from the unprotected side - fix it the same
-                     * way rather than leaving one of the two paths dark. */
-                    snprintf(pa_s, sizeof(pa_s), "PA ...");
-                    pa_col = 0xB0B0B0;
-                    cat_query_pa_voltage();
+            /* Same "say the real wattage, not just the voltage" fix as the
+             * drawer's Declared power hint and the TX burst-start log -
+             * operator, 2026-09-16: "PA 3.8 V = 500 mW". pa_dbm stays -1
+             * (unclassifiable) when the voltage is unknown or was never in
+             * Calibrate Power's sweep (a hand-set value, or a band never
+             * calibrated) - a colour or wattage that invented an answer
+             * would be worse than an honest "don't know". */
+            char    pa_wsuf[16] = "";
+            int8_t  pa_dbm      = -1;
+            if (pa >= 0) {
+                const char *pa_band = adif_log_band_for_freq(cat_get_frequency());
+                uint16_t pa_w_x100;
+                if (pa_band && pa_band[0] &&
+                    power_cal_watts_for_voltage(pa_band, (uint16_t)pa, &pa_w_x100)) {
+                    if (pa_w_x100 < 100)
+                        snprintf(pa_wsuf, sizeof(pa_wsuf), " = %u mW", (unsigned)pa_w_x100 * 10);
+                    else
+                        snprintf(pa_wsuf, sizeof(pa_wsuf), " = %u.%u W",
+                                 pa_w_x100 / 100, (pa_w_x100 / 10) % 10);
+                    pa_dbm = power_cal_dbm_for_watts(pa_w_x100);
                 }
-            } else if (pa >= 0 && pa <= WSPR_PA_TARGET_X10_UI) {
-                snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
-                pa_col = 0x40D060;                      /* confirmed down */
-            } else if (st.wspr_tx_en && pa >= 0) {
-                snprintf(pa_s, sizeof(pa_s), "PA %u.%u V on TX",
-                         (unsigned)(WSPR_PA_TARGET_X10_UI / 10),
-                         (unsigned)(WSPR_PA_TARGET_X10_UI % 10));
-                pa_col = 0xFFA040;                      /* pending, not wrong */
-            } else if (pa >= 0) {
-                snprintf(pa_s, sizeof(pa_s), "PA %d.%d V", pa / 10, pa % 10);
-                pa_col = 0xFFA040;                      /* disarmed, restored */
-            } else {
+            }
+
+            uint32_t pa_col;
+            if (pa < 0) {
                 /* ⛔ USED TO LEAVE THIS LINE BLANK, and on a fresh WSPR entry
-                 * it stayed blank indefinitely: nothing queries PA voltage
-                 * until wspr_pa_guard_update() runs, which only happens once
-                 * TX is switched on. So the operator's very first look at the
+                 * it stayed blank indefinitely: nothing queried PA voltage
+                 * until the (now-retired) guard ran, which only happened once
+                 * TX was switched on. So the operator's very first look at the
                  * page - RX-only, waiting for the first cycle - showed no PA
                  * line at all, the one time this safety figure most needs to
                  * be visible before anything transmits. Operator, 2026-09-14
@@ -2680,6 +2682,12 @@ void wspr_screen_view_tick(void)
                                                             * used tofu'd, this font subset lacks it */
                 pa_col = 0xB0B0B0;                       /* neutral - not a verdict yet */
                 cat_query_pa_voltage();
+            } else {
+                snprintf(pa_s, sizeof(pa_s), "PA %d.%d V%s", pa / 10, pa % 10, pa_wsuf);
+                if      (pa_dbm >= WSPR_DBM_LIMIT)   pa_col = 0xFF4010;   /* same red as the dropdown */
+                else if (pa_dbm >= WSPR_DBM_CAUTION) pa_col = 0xFFA040;   /* same amber */
+                else if (pa_dbm >= 0)                pa_col = 0x40D060;  /* same "fine" green */
+                else                                 pa_col = 0xB0B0B0; /* voltage not in the sweep - unclassifiable, not a verdict */
             }
 
             /* ⛔ ONLY WHILE THE RADIO IS ACTUALLY KEYED. These two numbers are

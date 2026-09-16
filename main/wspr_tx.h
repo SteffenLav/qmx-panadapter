@@ -46,6 +46,17 @@ typedef enum {
 static const int8_t WSPR_STD_DBM[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
 #define WSPR_STD_DBM_N ((int)(sizeof(WSPR_STD_DBM) / sizeof(WSPR_STD_DBM[0])))
 
+// Same two thresholds colour BOTH the "Declared power" dropdown (ui.c,
+// wspr_dbm_apply_tint) and the WSPR page's own "PA X.X V = Y W" line
+// (wspr_screen_view.c) - one control says what will be PUBLISHED, the other
+// what the radio is ACTUALLY doing right now, and after 2026-09-16's fix
+// those two numbers agree closely enough that colouring them by two
+// different rules would be its own inconsistency. Operator: "write PA 12.0 V
+// = 3.6 V in red(!) just like it is red in the Declared power list ...
+// now we have consistency!"
+#define WSPR_DBM_CAUTION  33      /* 2 W  - amber: a lot of heat for 110 s */
+#define WSPR_DBM_LIMIT    37      /* 5 W  - red: the QMX's full output */
+
 // A fully-built, ready-to-arm WSPR transmission. Always produced by
 // wspr_tx_build_request(), which does the actual protocol encode up
 // front - a malformed callsign/grid is reported immediately, never

@@ -158,25 +158,60 @@ static void status_set_text(const char *s)
 // about to declare", rather than leaving that as a guess the way the
 // dropdown always has been.
 //
-// For each standard dBm value, find the SWEPT point whose measured output
-// is closest to that target (10^((dbm-30)/10) W) and report its voltage.
-// A gap wider than 3 dB is shown as "--", not a wrong answer dressed up as
-// a right one - see the "never fabricate" rule elsewhere in this codebase
-// (RST placeholders, chase-reference fallback): a big enough gap means the
-// level is not really achievable here, and saying so is more honest than
-// naming the nearest thing anyway.
-#define PWRCAL_MATCH_MAX_DB 3.0f
+// ⛔ CLASSIFY FROM THE MEASUREMENT, NOT TOWARD A TARGET (2026-09-16).
+//
+// The original rule picked, for each standard dBm's NOMINAL wattage, the
+// swept point within PWRCAL_MATCH_MAX_DB (3 dB) of it - a tolerance window
+// around a target. That is backwards for a "declare what you actually do"
+// feature, and it produced exactly the inconsistency the operator caught:
+// a radio calibrated to 3.6 W max (35.6 dBm) fell within 3 dB of BOTH 33 dBm
+// (2 W nominal, 2.6 dB away) and 37 dBm (5 W nominal, 1.4 dB away) - so
+// "37 dBm" was offered and labelled with its own real 3.6 W, self-
+// consistent only by accident of which target happened to be nearest.
+// "the whole idea here is to be as precise as can be - this is research...
+// not a candy store."
+//
+// power_cal_dbm_for_watts() below is the other direction: given what the radio
+// REALLY measured, which standard step is it CLOSEST to - the same
+// nearest-neighbour classification wspr_tx_advised_dbm() (wspr_tx.c) already
+// uses to turn a burst's own PC; reading into a declaration. There is no
+// "gap too wide, refuse" case any more: every real wattage classifies to
+// exactly one step, by construction. What used to be "no match, too far"
+// (0/3/7/10/13 dBm below the QMX's ~100 mW PC; floor) is now simply "no
+// SWEPT point classifies as this exact step" - power_cal_voltage_for_dbm()
+// below still returns false for that, just from a cleaner test.
+int8_t power_cal_dbm_for_watts(uint16_t w_x100)
+{
+    float mw  = (float)w_x100 * 10.0f;         /* w_x100 is hundredths of a watt */
+    float dbm = 10.0f * log10f(mw);
+    int8_t best = WSPR_STD_DBM[0];
+    float  best_gap = 1e9f;
+    for (int i = 0; i < WSPR_STD_DBM_N; i++) {
+        float gap = fabsf(dbm - (float)WSPR_STD_DBM[i]);
+        if (gap < best_gap) { best_gap = gap; best = WSPR_STD_DBM[i]; }
+    }
+    return best;
+}
 
 // Runtime lookup, independent of the modal (which may never have been
 // opened this session): given a band already calibrated by a PAST sweep
-// (persisted, not the in-progress s_measured_w_x100 above), find the
-// voltage that produced the measured output closest to target_dbm. Exactly
-// the same "closest by dB gap, refuse past PWRCAL_MATCH_MAX_DB" rule as
-// render_results() above, kept as one rule rather than two so the WSPR
-// drawer's "Declared power" dropdown (main/ui/ui.c, power_cal_apply_declared
-// there) can never silently disagree with what this modal's own results
-// table shows for the same band and dBm.
-bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10)
+// (persisted, not the in-progress s_measured_w_x100 above), find a swept
+// point that CLASSIFIES as target_dbm - power_cal_dbm_for_watts(its real
+// wattage) == target_dbm - preferring the LOWEST voltage among any tied at
+// the same step (never use more voltage than the one that already gets
+// there, same rule power_cal_list_watts() uses for the Output power
+// slider). Exactly the same classification render_results() above uses, so
+// the WSPR drawer's "Declared power" dropdown (main/ui/ui.c,
+// power_cal_apply_declared there) can never silently disagree with what
+// this modal's own results table shows for the same band and dBm.
+//
+// out_w_x100 (optional) is that swept point's REAL measured wattage - by
+// construction the one whose nearest standard step IS target_dbm, so the
+// two can never again print as "37 dBm (5 W)" for a radio that only
+// reaches 3.6 W (Operator, 2026-09-16). Callers that build a label for the
+// operator should use this, not a fixed nominal-wattage string.
+bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10,
+                                uint16_t *out_w_x100)
 {
     uint8_t  v_x10[PWRCAL_STEPS];
     uint16_t w_x100[PWRCAL_STEPS];
@@ -193,24 +228,36 @@ bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *ou
         return false;
     }
 
-    float target_w = powf(10.0f, ((float)target_dbm - 30.0f) / 10.0f);
+    /* power_cal_dbm_for_watts() gates WHICH rows may even be considered - a row
+     * classifying as some OTHER step can never win here regardless of how
+     * close its wattage looks, which is what makes this bucket-correct. Once
+     * inside the bucket, break ties by closeness to THIS step's own nominal
+     * wattage (10^((dbm-30)/10)), not by lowest voltage: "37 dBm" should
+     * mean whichever real point best represents 5 W among the ones that
+     * classify there, not merely the cheapest one to reach. Operator,
+     * 2026-09-16, on a bucket containing both 3.3 W and 3.6 W: "you state
+     * 37 dBm (3.3 W) not 3.6 W, why?" - the lowest-voltage rule (right for
+     * the Output power slider below, wrong here) had picked 3.3 W. */
     int   best = -1;
     float best_gap_db = 1e9f;
     int   nonzero = 0;
+    float target_w = powf(10.0f, ((float)target_dbm - 30.0f) / 10.0f);
     for (int i = 0; i < PWRCAL_STEPS; i++) {
         if (w_x100[i] == 0) continue;
         nonzero++;
+        if (power_cal_dbm_for_watts(w_x100[i]) != target_dbm) continue;
         float w = (float)w_x100[i] / 100.0f;
         float gap_db = fabsf(10.0f * log10f(w / target_w));
         if (gap_db < best_gap_db) { best_gap_db = gap_db; best = i; }
     }
-    if (best < 0 || best_gap_db > PWRCAL_MATCH_MAX_DB) {
+    if (best < 0) {
         ESP_LOGW(TAG, "voltage_for_dbm(band=%s, dbm=%d): row found with %d nonzero point(s), "
-                      "best gap %.1f dB (limit %.1f) at index %d - no match",
-                 band, target_dbm, nonzero, (double)best_gap_db, (double)PWRCAL_MATCH_MAX_DB, best);
+                      "none classifies as this step - no match",
+                 band, target_dbm, nonzero);
         return false;
     }
-    if (out_v_x10) *out_v_x10 = v_x10[best];
+    if (out_v_x10)  *out_v_x10  = v_x10[best];
+    if (out_w_x100) *out_w_x100 = w_x100[best];   /* the REAL measured watts - see callers */
     return true;
 }
 
@@ -251,6 +298,29 @@ int power_cal_list_watts(const char *band, uint16_t *out_w_x100, uint16_t *out_v
     return n;
 }
 
+// Reverse of the two lookups above: given a voltage the RADIO is actually
+// reporting (cat_get_pa_voltage_x10(), not something this session chose),
+// find the wattage Calibrate Power measured at that exact voltage on `band`.
+// For log/status lines that only ever see the voltage - the WSPR TX burst
+// header logs "PA=%d.%d V" straight from a CAT readback, with no dBm or
+// slider index in scope to look the wattage up the other way. Exact match
+// only: the sweep is what it is, and a nearby-voltage guess here would be
+// the same "wrong answer dressed up as a right one" this file already
+// refuses to give for the dBm-keyed lookups.
+bool power_cal_watts_for_voltage(const char *band, uint16_t v_x10, uint16_t *out_w_x100)
+{
+    uint8_t  vtab[PWRCAL_STEPS];
+    uint16_t wtab[PWRCAL_STEPS];
+    if (!band || !band[0] || !settings_get_pwr_cal_band(band, vtab, wtab)) return false;
+    for (int i = 0; i < PWRCAL_STEPS; i++) {
+        if (wtab[i] != 0 && vtab[i] == v_x10) {
+            if (out_w_x100) *out_w_x100 = wtab[i];
+            return true;
+        }
+    }
+    return false;
+}
+
 static void render_results(void)
 {
     if (!s_results_lbl || !s_results_lbl2) return;
@@ -262,19 +332,22 @@ static void render_results(void)
     int half = (WSPR_STD_DBM_N + 1) / 2;
     for (int k = 0; k < WSPR_STD_DBM_N; k++) {
         int dbm = WSPR_STD_DBM[k];
-        float target_w = powf(10.0f, ((float)dbm - 30.0f) / 10.0f);
 
-        int best = -1;
+        /* Same classify-then-pick-closest-to-nominal rule as
+         * power_cal_voltage_for_dbm() - see that function's own header. */
+        int   best = -1;
         float best_gap_db = 1e9f;
+        float target_w = powf(10.0f, ((float)dbm - 30.0f) / 10.0f);
         for (int i = 0; i < PWRCAL_STEPS; i++) {
             if (s_measured_w_x100[i] == 0) continue;
+            if (power_cal_dbm_for_watts(s_measured_w_x100[i]) != dbm) continue;
             float w = (float)s_measured_w_x100[i] / 100.0f;
             float gap_db = fabsf(10.0f * log10f(w / target_w));
             if (gap_db < best_gap_db) { best_gap_db = gap_db; best = i; }
         }
 
         char line[48];
-        if (best >= 0 && best_gap_db <= PWRCAL_MATCH_MAX_DB) {
+        if (best >= 0) {
             unsigned vx = s_test_voltage_x10[best];
             snprintf(line, sizeof(line), "%3d dBm  %2u.%uV\n", dbm, vx / 10, vx % 10);
         } else {

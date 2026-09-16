@@ -26,14 +26,27 @@ void power_cal_modal_show(void);
 
 // Runtime lookup against a PAST sweep's persisted results (settings.h
 // pwr_cal), independent of whether this modal has ever been opened this
-// session. Returns false (out_v_x10 untouched) if `band` was never
-// calibrated, or nothing measured on it came within 3 dB of target_dbm -
-// same "never fabricate" rule the modal's own results table follows, so a
-// caller wiring this into the WSPR drawer's "Declared power" dropdown can
-// never show a different answer than Calibrate Power's own table would.
+// session. Returns false (out_v_x10/out_w_x100 untouched) if `band` was
+// never calibrated, or no swept point CLASSIFIES as target_dbm - see
+// power_cal_dbm_for_watts() below for what that means - same "never
+// fabricate" rule the modal's own results table follows, so a caller wiring
+// this into the WSPR drawer's "Declared power" dropdown can never show a
+// different answer than Calibrate Power's own table would.
+//
+// out_w_x100 (optional) is that point's REAL measured wattage - not the
+// nominal figure target_dbm implies. Use this for any label the operator
+// will read; do not print target_dbm's own 10^((dbm-30)/10) figure instead.
 #include <stdint.h>
 #include <stdbool.h>
-bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10);
+bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10,
+                                uint16_t *out_w_x100);
+
+// The nearest standard WSPR dBm step (WSPR_STD_DBM, wspr_tx.h) for a REAL
+// measured wattage - the classification power_cal_voltage_for_dbm() uses
+// internally, exported so any caller that already has a wattage (not a
+// band+dBm to look up) can colour or label it the same way. Every real
+// wattage classifies to exactly one step; there is no "no match" case.
+int8_t power_cal_dbm_for_watts(uint16_t w_x100);
 
 // For a general (non-WSPR) "Output power" control - every DISTINCT
 // wattage Calibrate Power actually measured on `band`, ascending, each
@@ -42,6 +55,13 @@ bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *ou
 // (0 = not calibrated); out_w_x100/out_v_x10 must each hold at least
 // PWRCAL_STEPS entries, bounded by max_n.
 int power_cal_list_watts(const char *band, uint16_t *out_w_x100, uint16_t *out_v_x10, int max_n);
+
+// Reverse lookup: the wattage Calibrate Power measured at an EXACT voltage
+// already in force (e.g. cat_get_pa_voltage_x10()'s own readback), for a
+// caller that only has the voltage in scope, not a dBm or slider index.
+// Returns false (out_w_x100 untouched) if `band` was never calibrated, or
+// nothing in the sweep landed on exactly this voltage.
+bool power_cal_watts_for_voltage(const char *band, uint16_t v_x10, uint16_t *out_w_x100);
 
 #ifdef __cplusplus
 }

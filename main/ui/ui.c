@@ -2461,7 +2461,6 @@ static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in setting
 static lv_obj_t *s_check_still     = NULL;  // #298 still-spectrum checkbox
 static lv_obj_t *s_lbl_still       = NULL;  // the sentence under it, which way is which
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
-static lv_obj_t *s_pwrcal_entry_btn = NULL; // "Calibrate Power" button, same section, same firmware gate
 
 /* General "Output power" (operator, 2026-09-15) - independent of WSPR's own
  * declared-power dBm ("1 W for WSPR, whatever I want for FT8/CW/SSB"), so
@@ -2471,6 +2470,10 @@ static lv_obj_t *s_pwrcal_entry_btn = NULL; // "Calibrate Power" button, same se
  * reason - see output_power_area_refresh()'s own header. */
 static lv_obj_t *s_outpwr_nc_lbl   = NULL;
 static lv_obj_t *s_outpwr_cal_btn  = NULL;
+static lv_obj_t *s_outpwr_recal_btn = NULL;  /* mirror of s_outpwr_cal_btn - see its own header
+                                               * on the WSPR side (s_wspr_dbm_recal_btn) for why
+                                               * this exists: the standalone "Calibrate Power"
+                                               * button next to Antenna Tune is gone. */
 static lv_obj_t *s_outpwr_slider   = NULL;
 static lv_obj_t *s_outpwr_val_lbl  = NULL;
 static lv_obj_t *s_outpwr_warn_lbl = NULL;
@@ -2484,12 +2487,21 @@ static int       s_outpwr_n = 0;
  * agree about what counts as "a lot of heat for a long key-down". */
 #define OUTPWR_WARN_W_X100  100   // 1.00 W
 
+/* Shared by the Output power value label and the WSPR Declared power
+ * dropdown's own option text (build_wspr_dbm_options() below) - one
+ * mW/W formatting rule so the two controls read the same watt figure the
+ * same way. */
+static void fmt_watts_x100(char *buf, size_t sz, uint16_t w_x100)
+{
+    if (w_x100 < 100) snprintf(buf, sz, "%u mW", (unsigned)w_x100 * 10);
+    else              snprintf(buf, sz, "%u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+}
+
 static void outpwr_set_value_text(uint16_t w_x100)
 {
     if (!s_outpwr_val_lbl) return;
     char buf[24];
-    if (w_x100 < 100) snprintf(buf, sizeof(buf), "%u mW", (unsigned)w_x100 * 10);
-    else              snprintf(buf, sizeof(buf), "%u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+    fmt_watts_x100(buf, sizeof(buf), w_x100);
     lv_label_set_text(s_outpwr_val_lbl, buf);
 }
 
@@ -2542,6 +2554,7 @@ static void output_power_area_refresh(void)
         lv_label_set_text(s_outpwr_nc_lbl, nc_txt);
         lv_obj_clear_flag(s_outpwr_nc_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_cal_btn) lv_obj_clear_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_outpwr_recal_btn) lv_obj_add_flag(s_outpwr_recal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_slider && lv_obj_is_valid(s_outpwr_slider)) lv_obj_add_flag(s_outpwr_slider, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_val_lbl) lv_obj_add_flag(s_outpwr_val_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_warn_lbl) lv_obj_add_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
@@ -2550,6 +2563,7 @@ static void output_power_area_refresh(void)
 
     lv_obj_add_flag(s_outpwr_nc_lbl, LV_OBJ_FLAG_HIDDEN);
     if (s_outpwr_cal_btn) lv_obj_add_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
+    if (s_outpwr_recal_btn) lv_obj_clear_flag(s_outpwr_recal_btn, LV_OBJ_FLAG_HIDDEN);
 
     int idx = 0;   // default: the lowest calibrated level - nothing persisted yet
     uint16_t target_w;
@@ -2695,11 +2709,16 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
                                    // when hidden on <1_04 firmware and reopens it in
                                    // place when the firmware qualifies (see
                                    // drawer_set_ft8_mode's reflow)
-#define DRAWER_TUNE2_H       136  // Antenna Tune (56) + 8 gap + Calibrate Power (56), +16 slack -
-                                   // its height is the shift applied when the whole section hides
-                                   // so the gap below the Antenna Tune button matches the
-                                   // WiFi setup / Callsign sections (also 72), i.e. an equal
-                                   // 16 px between Tune->WiFi and WiFi->Callsign buttons.
+#define DRAWER_TUNE2_H        72  // Antenna Tune (56) + 16 slack - its height is the shift applied
+                                   // when the whole section hides, so the gap below the button
+                                   // matches the WiFi setup / Callsign sections (also 72).
+                                   // ⛔ Calibrate Power's OWN button, once stacked here, is GONE
+                                   // (2026-09-16) - every mode now reaches it inline, under
+                                   // whichever control it calibrates (Declared power's own
+                                   // "Calibrate this band"/"Recalibrate", Output power's own),
+                                   // so a second entry point next to Antenna Tune was pure
+                                   // duplication. Operator: "drop the Calibrate power button
+                                   // from the Radio section."
 #define DRAWER_SEC_QMXVOL     22  // QMX AF gain (volume), directly under Flip 180.
                                    // Kept in both modes - the radio's audio is
                                    // just as relevant on the FT8 screen.
@@ -2759,12 +2778,23 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * drives both the FT8 phantoms and the WSPR ones (wspr_sim.h) - so both boxes
  * are kept in step exactly like the two km/miles boxes. */
 #define DRAWER_SEC_WSPRTEST   44
-// General, mode-agnostic output-power control (operator, 2026-09-15):
-// separate from WSPR's own declared-power dBm, which stays its own number
-// even on the same band - "1 W for WSPR, whatever I want for FT8/CW/SSB".
-// Filed with Antenna Tune/Calibrate Power (same underlying calibration
-// table), NOT WSPR-gated - drawer_sec_visible()'s default `return true`
-// covers "every mode", so nothing needs to name it there.
+// General output-power control (operator, 2026-09-15): separate from WSPR's
+// own declared-power dBm, which stays its own number even on the same band -
+// "1 W for WSPR, whatever I want for FT8/CW/SSB". Filed with Antenna
+// Tune/Calibrate Power (same underlying calibration table).
+//
+// ⛔ HIDDEN ON THE WSPR PAGE (2026-09-16) - it USED to be every-mode-visible
+// by drawer_sec_visible()'s default `return true`, and that was wrong: this
+// control's own CAT write is gated off while wspr_rx_running() (see
+// output_power_area_refresh()'s own header), so on WSPR it was a live-
+// looking slider that silently did nothing - the operator moved it, saw the
+// radio's PA answer for a moment, and then Declared power's own reapply put
+// it straight back. Operator: "the Declared power will ALWAYS win in WSPR
+// ... remove the Power slider completely in the WSPR drawer as it makes no
+// sense to have it here - we dont listen to it anyways." Same class of bug
+// as the FT8-only sections that used to leak onto this page (see
+// drawer_sec_visible()'s own header) - a bright control that does nothing
+// is the broken promise this whole function exists to prevent.
 #define DRAWER_SEC_OUTPWR     45
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
 // size array indexed by an enum will be overrun" section. IDs are 0..45.
@@ -3131,6 +3161,11 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * and is still panadapter-only. Group is where a control is FILED; this
      * function is where it is SHOWN. They are allowed to differ. */
     if (id == DRAWER_SEC_ACTIVATION) return !wspr;
+    // Output power's own CAT write is gated off while WSPR is running (it
+    // never gets to speak over Declared power's own PA-voltage management) -
+    // see DRAWER_SEC_OUTPWR's own header for why showing it there anyway was
+    // a bright control that did nothing.
+    if (id == DRAWER_SEC_OUTPWR) return !wspr;
     /* CW profiles too (operator, 2026-09-11): a profile sets the CW centre and
      * filters, which is CW/CW-R business for the same reason as the line's
      * other two - and it was never named here at all, so it fell through to
@@ -10676,15 +10711,10 @@ static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
 #define kWsprDbm WSPR_STD_DBM
 #define N_WSPR_DBM WSPR_STD_DBM_N
 
-/* Index-aligned with WSPR_STD_DBM - the friendly mW/W text for each standard
- * step, used to build the dropdown's option text. A plain lookup rather than
- * computed from 10^(dbm/10), so the wording can never drift from the
- * decades-established "round" figures (200 mW, not 199 mW). */
-static const char *const kWsprDbmLabel[] = {
-    "0 dBm (1 mW)", "3 dBm (2 mW)", "7 dBm (5 mW)", "10 dBm (10 mW)",
-    "13 dBm (20 mW)", "17 dBm (50 mW)", "20 dBm (100 mW)", "23 dBm (200 mW)",
-    "27 dBm (500 mW)", "30 dBm (1 W)", "33 dBm (2 W)", "37 dBm (5 W)",
-};
+/* ⛔ The fixed-text kWsprDbmLabel[] this comment used to describe is GONE
+ * (2026-09-16) - build_wspr_dbm_options() below now prints the REAL measured
+ * wattage instead of the nominal 10^(dbm/10) figure, because the two can
+ * differ enough to mislead (see that function's own header). */
 
 /* ⛔ 37 dBm (5 W) IS BACK, and the reasoning that removed it was wrong.
  *
@@ -10706,9 +10736,11 @@ static const char *const kWsprDbmLabel[] = {
  * confirmation rather than a guess.
  *
  * WSPR's protocol allows 40/43/47+ as well; the list stops at what a QMX can
- * actually produce. */
-#define WSPR_DBM_CAUTION  33      /* 2 W  - amber: a lot of heat for 110 s */
-#define WSPR_DBM_LIMIT    37      /* 5 W  - red: the QMX's full output */
+ * actually produce.
+ *
+ * WSPR_DBM_CAUTION/WSPR_DBM_LIMIT now live in wspr_tx.h, shared with the
+ * WSPR page's own "PA X.X V = Y W" line (wspr_screen_view.c) so the two
+ * controls colour the same way - see that header's own comment. */
 
 /* Tint the CONTROL by the selected value. LVGL 9.2 has no text recolor (only
  * image recolor - checked in the vendored source, not assumed) and a dropdown's
@@ -10736,6 +10768,15 @@ static void wspr_dbm_apply_tint(lv_obj_t *dd, int8_t dbm)
 static lv_obj_t *s_wspr_dbm_dd = NULL;   /* declared-power dropdown, moved by the guard */
 static lv_obj_t *s_wspr_dbm_nc_lbl = NULL;   /* "Not calibrated for Xm" - built alongside the dropdown, same area */
 static lv_obj_t *s_wspr_dbm_cal_btn = NULL;  /* "Calibrate this band" - shown only when s_wspr_dbm_nc_lbl is */
+/* "Recalibrate this band" - the mirror image, shown only once calibrated
+ * (the dropdown is up). Same drawer_pwrcal_entry_btn_cb() as s_wspr_dbm_cal_btn
+ * - this is the ONLY way left to re-run a sweep from the WSPR page, now that
+ * the standalone "Calibrate Power" button next to Antenna Tune is gone
+ * (2026-09-16, operator: "drop the Calibrate power button from the Radio
+ * section"). Without it, redoing an already-calibrated band from WSPR would
+ * have needed a swipe out to the Panadapter and back - exactly the awkward
+ * extra step this whole feature has been trying to remove. */
+static lv_obj_t *s_wspr_dbm_recal_btn = NULL;
 /* ">1 W" warning, replacing the retired #290 PA guard's own job of acting
  * on this (2026-09-15) - see wspr_dbm_area_refresh(). The guard's own
  * button/two-tap-disable UI (drawer_wspr_pa_btn_cb and friends) is deleted
@@ -10762,21 +10803,36 @@ static int     s_wspr_dbm_achievable_n = 0;
 
 /* Build the dropdown's option text from what Calibrate Power actually
  * measured on `band`, filling s_wspr_dbm_achievable as a side effect.
- * Returns the number of achievable steps (0 = band not calibrated, or
- * nothing measured on it came within power_cal_voltage_for_dbm()'s own 3 dB
- * tolerance of ANY standard step - same "not calibrated" case either way,
- * from the operator's point of view). `opts` must hold the worst case (all
- * WSPR_STD_DBM_N labels + separators). */
+ * Returns the number of achievable steps (0 = band not calibrated, or no
+ * swept point CLASSIFIES as any standard step - see
+ * power_cal_voltage_for_dbm()'s own header for what that means now).
+ * `opts` must hold the worst case (all WSPR_STD_DBM_N labels + separators).
+ *
+ * ⛔ THE LABEL IS THE REAL MEASURED WATTAGE, computed from whichever swept
+ * point actually classifies as this standard step - never kWsprDbmLabel's
+ * old fixed nominal text. Because the match is now "which step does this
+ * measurement round to" rather than "is this measurement within a tolerance
+ * of that step's nominal wattage", the dBm value and the parenthesised
+ * wattage can no longer disagree with each other the way "37 dBm (5 W)" did
+ * for a radio whose calibration tops out at 3.6 W. Operator, 2026-09-16:
+ * "I see 37 dBm (5 W) but I am not able to do that? ... the whole idea here
+ * is to be as precise as can be." The dBm VALUE is still the standard step
+ * (that is what gets published to wsprnet, and the only thing the WSPR wire
+ * format can carry - wspr_proto.c's own packer snaps to the nearest one
+ * regardless); only the parenthesised wattage was ever the informational
+ * part, and it is now provably consistent with why that step was offered. */
 static int build_wspr_dbm_options(const char *band, char *opts, size_t opts_sz)
 {
     size_t off = 0;
     s_wspr_dbm_achievable_n = 0;
     if (!band || !band[0]) return 0;
     for (int k = 0; k < N_WSPR_DBM; k++) {
-        uint16_t v_x10;
-        if (!power_cal_voltage_for_dbm(band, kWsprDbm[k], &v_x10)) continue;
-        int n = snprintf(opts + off, opts_sz - off, "%s%s",
-                          s_wspr_dbm_achievable_n ? "\n" : "", kWsprDbmLabel[k]);
+        uint16_t v_x10, w_x100;
+        if (!power_cal_voltage_for_dbm(band, kWsprDbm[k], &v_x10, &w_x100)) continue;
+        char wbuf[16];
+        fmt_watts_x100(wbuf, sizeof(wbuf), w_x100);
+        int n = snprintf(opts + off, opts_sz - off, "%s%d dBm (%s)",
+                          s_wspr_dbm_achievable_n ? "\n" : "", kWsprDbm[k], wbuf);
         if (n < 0 || (size_t)n >= opts_sz - off) break;   /* out of room - stop, don't corrupt */
         off += (size_t)n;
         s_wspr_dbm_achievable[s_wspr_dbm_achievable_n++] = kWsprDbm[k];
@@ -10826,20 +10882,23 @@ static void wspr_dbm_area_refresh(void)
     settings_load_all(&ws);
 
     if (n_ach == 0) {
-        /* Not calibrated (or nothing on this band came within 3 dB of ANY
-         * standard step). The STORED declared power (whatever it was) is
-         * left alone - WSPR still transmits declaring it, this only gates
-         * offering a NEW pick until there is real data to pick from. */
+        /* Not calibrated (or no swept point classifies as ANY standard
+         * step - power_cal_voltage_for_dbm()'s own header). The STORED
+         * declared power (whatever it was) is left alone - WSPR still
+         * transmits declaring it, this only gates offering a NEW pick
+         * until there is real data to pick from. */
         char nc_txt[64];
         snprintf(nc_txt, sizeof(nc_txt), "Not calibrated for %s",
                  (band && band[0]) ? band : "this band");
         lv_label_set_text(s_wspr_dbm_nc_lbl, nc_txt);
         lv_obj_clear_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_cal_btn) lv_obj_clear_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_recal_btn) lv_obj_add_flag(s_wspr_dbm_recal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) lv_obj_add_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_cal_btn) lv_obj_add_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_recal_btn) lv_obj_clear_flag(s_wspr_dbm_recal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) {
             lv_obj_clear_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
             lv_dropdown_set_options(s_wspr_dbm_dd, dbm_opts);
@@ -11819,32 +11878,21 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(tune_entry_lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(tune_entry_lbl);
 
-        // Calibrate Power: stacked in the SAME section, right below Antenna
-        // Tune - same 1_04+ firmware gate (both key SWR Tune mode), opposite
-        // requirement (dummy load here, antenna there). Sharing the section
-        // means the existing hide/reflow logic for DRAWER_SEC_TUNE2 covers
-        // this button too, for free.
-        s_pwrcal_entry_btn = lv_btn_create(sec);
-        lv_obj_set_size(s_pwrcal_entry_btn, DRAWER_W - 32, 56);
-        lv_obj_align(s_pwrcal_entry_btn, LV_ALIGN_TOP_LEFT, 0, 64);
-        lv_obj_set_style_bg_color(s_pwrcal_entry_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_add_event_cb(s_pwrcal_entry_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_add_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);  // shown once firmware confirms 1_04+
-        lv_obj_t *pwrcal_entry_lbl = lv_label_create(s_pwrcal_entry_btn);
-        lv_label_set_text(pwrcal_entry_lbl, "Calibrate Power");
-        lv_obj_set_style_text_font(pwrcal_entry_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(pwrcal_entry_lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(pwrcal_entry_lbl);
-
         y += DRAWER_TUNE2_H;
     }
 
     // General "Output power" - NOT 1_04+-gated (the DiGi TX;/TA;/RX; primitives
     // Calibrate Power itself uses have existed since 1_03; only Antenna Tune's
-    // own SWR Tune mode needs 1_04+), and visible on every mode -
-    // drawer_sec_visible()'s default `return true` already covers it.
+    // own SWR Tune mode needs 1_04+). Built unconditionally like every other
+    // section (build-once-per-boot), but hidden on WSPR - drawer_sec_visible()
+    // returns false for it there; see DRAWER_SEC_OUTPWR's own header.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_OUTPWR, y, 156);
+        /* 156 -> 192: room for the "Recalibrate this band" button added at
+         * the bottom (2026-09-16) now that the standalone "Calibrate Power"
+         * button next to Antenna Tune is gone. Height and the `y +=` at the
+         * end of this block must move together - see DRAWER_SEC_WSPRTX's
+         * own comment for what happens when they don't. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_OUTPWR, y, 192);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Output power");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
@@ -11887,8 +11935,21 @@ static void drawer_build(void)
         lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 120);
         lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
 
+        // "Recalibrate this band" - mirror of cal_btn, see
+        // s_outpwr_recal_btn's own header for why this exists.
+        lv_obj_t *recal_btn = lv_button_create(sec);
+        s_outpwr_recal_btn = recal_btn;
+        lv_obj_set_size(recal_btn, DRAWER_W - 32, 36);
+        lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 146);
+        lv_obj_add_event_cb(recal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(recal_btn, LV_OBJ_FLAG_HIDDEN);   // output_power_area_refresh() decides
+        lv_obj_t *recal_lbl = lv_label_create(recal_btn);
+        lv_label_set_text(recal_lbl, "Recalibrate this band");
+        lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(recal_lbl);
+
         output_power_area_refresh();   // sets initial visibility/range/value for everything above
-        y += 156;
+        y += 192;
     }
 
     // "Prepare for flashing" REMOVED 2026-08-08. The orderly-teardown
@@ -12955,10 +13016,12 @@ static void drawer_build(void)
         /* 270, not 352/302/334: "Allow transmitting" removed (352 -> 302),
          * the calibration-applied hint added (302 -> 334), the "Protect
          * finals" button retired and replaced by one warning-label line
-         * (334 -> 270). The height and the `y +=` at the bottom of this
-         * block must move together - this file has repeatedly had a
-         * section overlap the next one by changing only one of them. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 270);
+         * (334 -> 270), the "Recalibrate this band" button added at the
+         * bottom (270 -> 296, room for a 40 px button at y=242 plus slack).
+         * The height and the `y +=` at the bottom of this block must move
+         * together - this file has repeatedly had a section overlap the
+         * next one by changing only one of them. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 296);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -13076,10 +13139,27 @@ static void drawer_build(void)
             lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 214);
             lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
         }
-        // Now that the dropdown, the "not calibrated" prompt, the hint AND
-        // the warning label all exist, one call sets every one of them to
-        // the right initial state - same call drawer_refresh_wspr() makes
-        // on every reopen.
+        {
+            // "Recalibrate this band" - see s_wspr_dbm_recal_btn's own
+            // header. Mutually exclusive with s_wspr_dbm_cal_btn, but NOT
+            // sharing its slot: that one sits where the "not calibrated"
+            // prompt does, well above this - both fit in the section
+            // without a collision.
+            lv_obj_t *recal_btn = lv_button_create(sec);
+            s_wspr_dbm_recal_btn = recal_btn;
+            lv_obj_set_size(recal_btn, DRAWER_W - 32, 40);
+            lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 242);
+            lv_obj_add_event_cb(recal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_add_flag(recal_btn, LV_OBJ_FLAG_HIDDEN);   // wspr_dbm_area_refresh() decides
+            lv_obj_t *recal_lbl = lv_label_create(recal_btn);
+            lv_label_set_text(recal_lbl, "Recalibrate this band");
+            lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_24, 0);
+            lv_obj_center(recal_lbl);
+        }
+        // Now that the dropdown, the "not calibrated" prompt, the hint, the
+        // warning label AND the recalibrate button all exist, one call sets
+        // every one of them to the right initial state - same call
+        // drawer_refresh_wspr() makes on every reopen.
         wspr_dbm_area_refresh();
 
         /* #290 PA guard RETIRED, 2026-09-15 (operator: "the wspr finals-
@@ -13094,10 +13174,10 @@ static void drawer_build(void)
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped.
-         * 270, not 334: the "Protect finals" button (a label + a 60 px
-         * full-width button) is gone, replaced by one warning-label line
-         * already accounted for above. */
-        y += 270;
+         * 296, not 270: the "Recalibrate this band" button added at the
+         * bottom needs the extra room - see drawer_section()'s own 296
+         * above, which must match this exactly. */
+        y += 296;
     }
     {
         qmx_settings_t ws;
@@ -13496,10 +13576,6 @@ static void drawer_set_mode(ui_mode_t mode)
     if (s_tune_entry_btn) {
         if (tune_ok) lv_obj_clear_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (s_pwrcal_entry_btn) {
-        if (tune_ok) lv_obj_clear_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(s_pwrcal_entry_btn, LV_OBJ_FLAG_HIDDEN);
     }
 
     (void)keep; (void)keep_h; (void)n_keep;   // superseded by the group table below
@@ -14173,6 +14249,18 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
     lv_obj_t *list = lv_dropdown_get_list(dd);
     if (list) {
         lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+        /* Same "fully unfolded, no scrollbar" fix as
+         * drawer_dropdown_sleep_open_cb() below, applied here too since
+         * every dropdown sharing THIS callback had the same LVGL default
+         * height cap - including the WSPR "Declared power" one, which now
+         * offers up to WSPR_STD_DBM_N (12) rows once a band's calibration
+         * gets that granular. Operator, 2026-09-16: wanted every choice
+         * visible without scrolling. LVGL keeps the list on-screen by
+         * flipping it to open upward when there is not enough room below,
+         * so this is safe regardless of where in the drawer a dropdown
+         * sits. */
+        lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
+        lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
     }
 }
 

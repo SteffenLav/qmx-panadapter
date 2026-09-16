@@ -21,6 +21,12 @@
 #include "cat/cat.h"
 #include "storage/settings.h"
 #include "util/psram_task.h"
+#include "adif/adif_log.h"   /* adif_log_band_for_freq() - for the burst-start log's watts figure */
+
+/* Same re-declaration approach as wspr_rx.c: power_cal_modal.h also pulls in
+ * lvgl.h for its UI declarations, which this (non-UI) file has no other
+ * reason to need. Definition in power_cal_modal.c. */
+extern bool power_cal_watts_for_voltage(const char *band, uint16_t v_x10, uint16_t *out_w_x100);
 
 static const char *TAG = "wspr_tx";
 
@@ -289,10 +295,24 @@ static void run_burst(const wspr_tx_request_t *req)
      * one. A measurement that cannot be attributed with certainty is not a
      * measurement. -1 means the radio has not told us yet. */
     int16_t pa_x10 = cat_get_pa_voltage_x10();
+    /* "PA=3.8 V" alone does not say what that voltage actually produces -
+     * operator, 2026-09-16: "PA 3.8 V = 500 mW". Reverse-looked-up from
+     * Calibrate Power's own table by the EXACT voltage in force; empty when
+     * unknown (-1) or this voltage was never in the sweep (a value the
+     * operator set by hand, or a band never calibrated). */
+    char wbuf[20] = "";
+    if (pa_x10 > 0) {
+        const char *band = adif_log_band_for_freq(cat_get_frequency());
+        uint16_t w_x100;
+        if (band && band[0] && power_cal_watts_for_voltage(band, (uint16_t)pa_x10, &w_x100)) {
+            if (w_x100 < 100) snprintf(wbuf, sizeof(wbuf), " = %u mW", (unsigned)w_x100 * 10);
+            else              snprintf(wbuf, sizeof(wbuf), " = %u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+        }
+    }
     ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz, "
-                  "PA=%d.%d V%s",
+                  "PA=%d.%d V%s%s",
              req->callsign, req->grid, req->power_dbm, req->audio_freq_hz,
-             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
+             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0, wbuf,
              s_burst_sim      ? "  [SIMULATION - radio not keyed]"
              : WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
     if (pa_x10 <= 0) ESP_LOGW(TAG, "  ...PA voltage UNKNOWN - this burst cannot be attributed");
