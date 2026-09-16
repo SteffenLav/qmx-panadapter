@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.14.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.14.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.14.1 fixes a v1.14.0 crash on tuning or QMX power-on** *(Uwe DL8UG)* — a settings copy too large for a 4096-byte task stack, hit by nearly any frequency change. If you are on v1.14.0, update.
 >
 > **New in v1.14.0 — Calibrate Power.** Sweeps the QMX's *Max. PA voltage* through 45 points on a dummy load and measures the real RF output at each with the radio's own `PC;` readback, per band. **WSPR's Declared power** dropdown now only offers the standard dBm steps your calibration actually reaches — each one classified from the real measured wattage (the same rounding rule the WSPR wire format itself is limited to), not the textbook figure a step's name implies, so what you declare and what actually goes out can no longer disagree. The old fixed "turn the PA down to 6 V for the whole beacon" guard is gone — protecting the finals is now a matter of picking a low declared level, same as any other choice on that dropdown, and a plain warning appears above 1 W. A separate **Output power** slider does the equivalent job for every other mode (FT8, CW, SSB, ...) and stays off the WSPR page entirely, since Declared power always owns the radio there. Both grow a **Recalibrate this band** button once calibrated.
 >
@@ -20,7 +22,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.14.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.14.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -1143,7 +1145,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.14.0 is here.** Next on the bench:
+**v1.14.1 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

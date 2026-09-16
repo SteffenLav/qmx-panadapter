@@ -4,6 +4,14 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.14.1** — 2026-09-16
+
+**Emergency fix for a v1.14.0 crash on tuning or QMX power-on.**
+
+- **⛔ Fixed a crash reported within a day of v1.14.0 shipping** *(Martin Howard; Rick Trommer W5NR)*. `spots_any_source_enabled()` copied the whole settings struct onto a task stack as small as 4096 bytes — the render task, and independently the CAT poll task, either of which runs on nearly every frequency change — overflowing it on almost any tuning motion, or the frequency update an immediate QMX reconnect sends. Fixed by Uwe DL8UG: four narrow getters reading one bool each, instead of the whole struct. **If you are running v1.14.0, please update.**
+
+## Previous Releases
+
 **v1.14.0** — 2026-09-16
 
 **Calibrate Power: WSPR Declared power now fits what the QMX actually does, as closely as its own protocol allows.**
@@ -715,7 +723,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
