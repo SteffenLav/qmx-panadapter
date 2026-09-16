@@ -4,6 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.14.2** — 2026-09-17
+
+**General sluggishness since v1.13.0, root-caused — plus a web UI hang, an output-power surprise after calibration, and a SelfSpotter map bug.**
+
+- **Sluggishness some users saw starting with v1.13.0** *(Randy N4OPI)*, including with the SelfSpotter map screen closed, root-caused: SelfSpotter's PSK Reporter feed connects over its own background task from boot regardless of whether the map is ever opened, and that task was running at a higher scheduling priority than the display, with no core assigned to it — so it could hold the display up on every incoming report. It now runs at a lower priority, pinned to the second core. Not yet confirmed fixed on Randy's own hardware.
+- **The web UI's "find open slot" tool could hang on "Applying..." and lose contact with the QMX**, needing a power cycle, only mid-QSO or CQ run *(Randy N4OPI)*: a frequency-mode command could collide with an in-progress FT8/WSPR transmit burst on the radio's own control link. It now waits its turn. The page's warning text was also backwards (said it would be refused while transmitting; it actually applies automatically once the burst ends) and Apply now gives up cleanly after 8 seconds if this ever recurs.
+- **Output power reading near-zero right after Calibrate Power finishes** *(Gyula HA3HZ)* — a slider defaulted to its lowest setting and wrote that to the radio unconditionally. It now reads the radio's actual level when nothing has been chosen yet.
+- **SelfSpotter**: countries like Italy, Denmark and Greece drew as boxes on the map, from a coastline-simplification bug — fixed. Zoom raised 10x → 50x. The settings drawer's own content was taller than the panel and silently hid the Flush button — fixed. A screenshot of the map now carries your callsign, dial frequency and UTC time in its own header line *(Gyula HA3HZ)*, and every screenshot download gets a timestamped filename.
+- **Colour cleanup**: the map, the Live Spots lane and the network drawer's spot checkboxes now share one colour scheme instead of three that had drifted apart.
+- **Waterfall scroll speed** is now a real setting (1x–4x) instead of a fixed rate.
+
+## Previous Releases
+
 **v1.14.1** — 2026-09-16
 
 **A fix for a v1.14.0 crash on tuning or QMX power-on.**
@@ -723,7 +736,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

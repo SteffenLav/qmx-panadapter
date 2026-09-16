@@ -3632,3 +3632,47 @@ web page look broken.**
 ### Shipped in v1.14.1 — 2026-09-16
 
 - **Fixed a v1.14.0 crash on tuning or on QMX power-on**, reported by Martin Howard and Rick Trommer W5NR on the groups.io list - thanks to both for flagging it quickly. `spots_any_source_enabled()` copied the whole settings struct onto a stack as small as 4096 bytes (the render task, and independently the CAT poll task - either one could be hit by nearly every frequency change), overflowing it on almost any tuning motion or the frequency update an immediate QMX reconnect sends. Fixed by Uwe DL8UG: four narrow getters reading one bool each, instead of the whole struct. Hardware-verified: tuning across the band with the spots lane actively repainting, zero crashes.
+
+### Shipped in v1.14.2 — 2026-09-17
+
+**General sluggishness since v1.13.0, reported by Randy N4OPI, root-caused.** SelfSpotter's
+PSK Reporter feed connects over MQTT from the moment the Tab5 boots, whether or not the map
+screen is ever opened. That client's background task was running at a higher scheduling
+priority than the display task, with no core assigned to it - so on every incoming report it
+could land on the same core as the display and hold it up. It now runs at a lower priority,
+pinned to the second core, out of the display's way. Not yet confirmed fixed on Randy's own
+Tab5 - that's the real test.
+
+**A stuck "Applying..." on the web UI's find-open-slot tool, losing contact with the QMX and
+needing a power cycle** (Randy N4OPI) - happened about half the time, only mid-QSO or during
+a CQ run. A frequency-mode command could collide with an in-progress FT8/WSPR transmit burst
+on the radio's own control link; it now waits its turn instead. The web page's warning text
+was also backwards (it said the change would be refused while transmitting; it actually goes
+through automatically once the burst ends) and now says the right thing, plus the Apply
+button gives up cleanly after 8 seconds instead of hanging forever if this ever recurs.
+
+**Output power reading near-zero right after Calibrate Power finishes** (Gyula HA3HZ) - a
+slider defaulted to its lowest setting and wrote that to the radio the moment the drawer
+next refreshed, rather than leaving the radio at the voltage calibration had already put it
+back to. It now reads the radio's actual level when nothing has been chosen yet.
+
+**SelfSpotter**: countries like Italy, Denmark and Greece were drawing as boxes on the map -
+the coastline was being simplified by picking every Nth point along it regardless of shape,
+which throws away exactly the points that make a small peninsula look like one. It now keeps
+points by how far apart they are on screen instead, so shape survives regardless of where a
+point falls in the underlying data. Pinch/dropdown zoom raised 10x → 50x. The settings
+drawer's own content was taller than the panel and couldn't scroll, silently hiding the Flush
+button below the visible area - fixed, and tidied (an unused heading removed, an empty
+warning row hidden when there's nothing to warn about). A screenshot taken from the map now
+carries your callsign, dial frequency and UTC time in its own header line, so the image is
+self-describing on its own (Gyula HA3HZ) - and every screenshot download now gets a
+timestamped filename instead of one fixed name.
+
+**Colour cleanup**: CW/Digi/WSPR on the map, the Live Spots lane's mode tags and the network
+drawer's spot checkboxes all now draw from one shared colour scheme instead of three
+independently-drifted ones - the same "amber" no longer means three different shades in
+three different places. A dim orange used for USB/LSB text was brightened; it was close to
+invisible against the near-black backgrounds it appears on.
+
+**Waterfall scroll speed** is now a real setting (1x–4x, in the Waterfall Controls drawer
+section) instead of a fixed rate baked into the firmware.

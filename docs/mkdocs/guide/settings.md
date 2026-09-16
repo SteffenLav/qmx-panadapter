@@ -240,6 +240,10 @@ to restart.
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
 
+**Waterfall scroll speed** — 1× to 4× (default 1×). How many rows the waterfall
+advances per render, independent of the spectrum and S-meter update rate, which
+stay unchanged either way.
+
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.
 

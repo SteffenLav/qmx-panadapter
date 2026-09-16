@@ -109,16 +109,22 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.14.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.14.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**v1.14.1 — a fix for a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
+**v1.14.2 fixes general sluggishness some users saw starting with v1.13.0** — a background
+task connecting to PSK Reporter for SelfSpotter could hold up the display, whether or not
+the map was ever opened. Also fixes a web UI tool that could hang and lose contact with
+the radio mid-QSO, output power reading near-zero right after Calibrate Power, and a
+SelfSpotter map bug that drew some countries as boxes. See [releases](releases.md) for
+the full list.
+
+**v1.14.1 fixed a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
 large for a 4096-byte task stack, hit by nearly any frequency change. Thanks to Martin
-Howard and Rick Trommer W5NR for the reports, and Uwe DL8UG for the fix. If you are on
-v1.14.0, update.
+Howard and Rick Trommer W5NR for the reports, and Uwe DL8UG for the fix.
 
 **New in v1.14.0 — Calibrate Power.** Sweeps *Max. PA voltage* through 45 points on a
 dummy load and measures the real RF output at each, per band. **Declared power** (WSPR)
@@ -254,7 +260,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

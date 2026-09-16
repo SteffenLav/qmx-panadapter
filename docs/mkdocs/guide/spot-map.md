@@ -37,6 +37,10 @@ page you were on, and **Exit** (top right) closes it. A Bluetooth keyboard's
 The button works from the panadapter, FT8 and WSPR pages alike — the drawer
 itself opens the same way from any of them (swipe in from the right edge).
 
+The header shows your **callsign, dial frequency, and the current UTC date and
+time** — so a screenshot of the map stands on its own without needing anything
+else to say when or where it was taken.
+
 There is nothing to switch on first — the feeds have been running since boot
 (see below), so the map is never starting from a cold, empty world.
 
@@ -74,7 +78,7 @@ quiet stretch still shows what was heard recently. Your own position is a dot,
 drawn on top of everything.
 
 - **Drag** with one finger to pan.
-- **Pinch** with two fingers to zoom, up to 8×. Zoom is anchored on your own
+- **Pinch** with two fingers to zoom, up to 50×. Zoom is anchored on your own
   station, so your QTH stays put while the world grows around it.
 
 **LIST** is the same data as a table — receiver, mode, band, frequency, SNR,
