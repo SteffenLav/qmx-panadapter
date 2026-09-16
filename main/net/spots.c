@@ -321,9 +321,14 @@ void spots_request_refresh(void) { s_refresh_req = true; }
 // its own source.
 bool spots_any_source_enabled(void)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
-    return s.spots_en || s.rbn_en || s.cluster_en || s.sota_en;
+    // Was settings_load_all(&s) into a local qmx_settings_t - a multi-
+    // kilobyte stack allocation, and this is called from spots_lane.c's
+    // repaint() on the render TASK, whose stack is only 4096 B (render.c).
+    // Crashed on hardware as a "Stack protection fault" in render - see
+    // CLAUDE.md's "Task stacks on this board are TINY" and the comment on
+    // the narrow getters this now uses instead (storage/settings.c).
+    return settings_get_spots_en() || settings_get_rbn_en() ||
+           settings_get_cluster_en() || settings_get_sota_en();
 }
 
 // ---- fetch -----------------------------------------------------------------

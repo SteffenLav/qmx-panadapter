@@ -2075,6 +2075,51 @@ bool settings_get_spotmap_en(void)
     return v;
 }
 
+// Narrow, same reason as settings_get_spotmap_en() just above - these four are
+// for spots_any_source_enabled() (net/spots.c), which runs on the render task
+// (4096 B stack, render.c). It used to call settings_load_all() for a plain
+// four-bool OR, i.e. a multi-kilobyte qmx_settings_t local on that stack -
+// a FIFTH instance of the exact bug class this file's other narrow getters
+// already exist for, caught on hardware as a "Stack protection fault" in
+// render, task uptimes as short as 6.8 s and as long as 1514.9 s (so not a
+// boot-time race - see CLAUDE.md; reported by the operator as "crasht beim
+// schalten vom QMX", a spots-lane repaint triggered by a QMX state change).
+bool settings_get_spots_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.spots_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_rbn_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.rbn_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_cluster_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cluster_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_sota_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.sota_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 uint8_t settings_get_wspr_duty_pct(void)
 {
     if (!s_ready) return 0;

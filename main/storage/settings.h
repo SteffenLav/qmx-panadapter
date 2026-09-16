@@ -636,6 +636,7 @@ void     settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)
+bool    settings_get_cluster_en(void);           // narrow: spots_any_source_enabled() runs on render (4096 B stack)
 void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
@@ -672,10 +673,13 @@ void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
+bool settings_get_spots_en(void);       // narrow: spots_any_source_enabled() runs on render (4096 B stack)
 void settings_set_rbn_en(bool v);
+bool settings_get_rbn_en(void);         // narrow, same reason
 void settings_set_spotmap_en(bool v);   // spot map + its self-spot feeds (see spotmap_en above)
 bool settings_get_spotmap_en(void);     // narrow: callers are on small stacks
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
+bool settings_get_sota_en(void);        // narrow, same reason as settings_get_spots_en
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
 void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot
 
