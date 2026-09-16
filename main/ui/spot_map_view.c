@@ -460,6 +460,7 @@ static int gather_self_spots(self_spot_t *out, int max)
  * Falls back to the old behaviour if the pane has not been laid out yet, since
  * a zero-sized read would otherwise divide the world by nothing. */
 #define MAP_RING_MIN_PX  3     /* a ring smaller than this on BOTH axes is a dot */
+#define MAP_SEG_MIN_PX   2     /* drop a point closer than this to the last one DRAWN */
 #define MAP_FIT_MARGIN_PX 24.0f    /* ~2 mm at 11.6 px/mm, each edge */
 #define MAP_FIT_FALLBACK 0.90f     /* used only before the pane has a size */
 #define MAP_FIT_MAX_ZOOM 12.0f     /* a single nearby spot must not fill the world */
@@ -796,51 +797,68 @@ static void walk_ring_segments(const lv_area_t *area, int32_t w, int32_t h, ring
             continue;                                   /* sub-pixel speck */
 
         /* ⛔ AND NOW THE HALF THE BOUNDING BOX CANNOT DO: DROP POINTS WHEN THE
-         * RING IS DRAWN SMALL. This is what froze the device.
+         * RING IS DRAWN SMALL. This is what froze the device, and a second cut
+         * at it is what un-boxed Italy - both stories below, because the second
+         * bug only exists BECAUSE of how the first one was fixed.
          *
-         * The box test rejects the several hundred tiny islands, which is the
-         * cheap half of the bill. It can do nothing about the EXPENSIVE half -
-         * at zoom 1, 248 rings still pass it and the two largest are 3,801 and
-         * 3,067 points, so a single redraw of the default view issued over ten
-         * thousand lv_draw_line calls. taskLVGL stopped keeping up, the
-         * SELFSPOTTER screen froze solid, drag and pinch stopped responding and
-         * even httpd stopped answering (operator, 2026-09-12: "Selfspotter
-         * screen seems to have frozen up completely"). I shipped the cull
-         * claiming it made the finer data affordable; it made the ZOOMED-IN
-         * case affordable and left the default view worse than before.
+         * v1 (2026-09-12): the box test rejects the several hundred tiny
+         * islands, which is the cheap half of the bill. It can do nothing about
+         * the EXPENSIVE half - at zoom 1, 248 rings still pass it and the two
+         * largest are 3,801 and 3,067 points, so a single redraw of the default
+         * view issued over ten thousand lv_draw_line calls. taskLVGL stopped
+         * keeping up, the SELFSPOTTER screen froze solid, drag and pinch
+         * stopped responding and even httpd stopped answering (operator,
+         * 2026-09-12: "Selfspotter screen seems to have frozen up completely").
+         * I shipped the cull claiming it made the finer data affordable; it
+         * made the ZOOMED-IN case affordable and left the default view worse
+         * than before. Fixed then with a per-ring pixel BUDGET (roughly one
+         * segment per two px of the ring's on-screen half-perimeter) and a
+         * fixed INDEX stride across the ring's point array to hit it.
          *
-         * So the vertex count is budgeted against the size the ring actually
-         * occupies ON SCREEN: roughly one segment per two pixels of half-
-         * perimeter, which is below what anyone can see. Antarctica at zoom 1
-         * goes from 3,801 segments to ~475.
+         * v2 (2026-09-16, operator: Italy on the map is "almost a square box"):
+         * that index stride is not shape-aware, and Natural Earth is why it
+         * mattered. Italy is NOT its own ring - like Denmark and Greece it is a
+         * peninsula, so it ships fused into one landmass polygon with the rest
+         * of Africa+Eurasia (ring 0 here, 7,707 points, bbox running from West
+         * Africa to the Bering Strait). A fixed stride picks every Nth point BY
+         * INDEX across that WHOLE ring, so a tightly-curved few hundred points
+         * describing the boot got the identical sampling rate as thousands of
+         * points along nearly-straight Siberian coastline - and because the
+         * boot is a small slice of the ring's total point count, most of the
+         * vertices that actually DEFINE its shape were exactly the ones a
+         * fixed stride skipped over.
          *
-         * ⚠ The extent is CLAMPED TO THE VISIBLE AREA first. Zoomed in, a
-         * continent's box is mostly off-screen and enormous, which would buy a
-         * budget for pixels nobody is looking at - and full detail is exactly
-         * what zooming is for, so the clamp is what keeps Scandinavia sharp
-         * while stopping the off-screen remainder from paying for it. */
-        int32_t vx0 = bx0 > area->x1 ? bx0 : area->x1;
-        int32_t vx1 = bx1 < area->x2 ? bx1 : area->x2;
-        int32_t vy0 = by0 > area->y1 ? by0 : area->y1;
-        int32_t vy1 = by1 < area->y2 ? by1 : area->y2;
-        int32_t budget = ((vx1 - vx0) + (vy1 - vy0)) / 2;
-        if (budget < 8) budget = 8;
-        int stride = (n + (int)budget - 1) / (int)budget;
-        if (stride < 1) stride = 1;
-
-        lv_point_precise_t prev = project(area, w, h,
-                                          ring->points[0] / WORLD_MAP_UNITS_PER_DEG,
-                                          ring->points[1] / WORLD_MAP_UNITS_PER_DEG);
-        /* j walks by `stride` and the final iteration is forced back to point 0,
-         * so the ring still closes however the stride divides into n. */
-        for (int j = stride; ; j += stride) {
+         * Now decimated by ON-SCREEN DISTANCE instead of index: walk every
+         * point (this file's own header on project() below already calls the
+         * arithmetic cheap - a handful of float ops; it is the DRAW CALL that
+         * is expensive) and only emit a segment once the point has moved at
+         * least MAP_SEG_MIN_PX from the last point actually drawn. A stretch
+         * that Douglas-Peucker already left sparse (long straight coast)
+         * clears that distance in one step, same cost as before. A stretch it
+         * left dense because it curves (Italy, Denmark, Greece) needs several
+         * points to cover the same screen distance and now KEEPS them, because
+         * nothing here is tied to a point's position in a 7,707-point ring.
+         * Zoomed all the way out, where whole continents used to need the
+         * budget cap to avoid the freeze above, the SAME rule self-limits: most
+         * consecutive points fall within MAP_SEG_MIN_PX of each other when a
+         * landmass is squeezed into a small on-screen box, so the segment count
+         * still collapses on its own - not because the fixed budget said so,
+         * but because that many points genuinely add nothing visible there. */
+        lv_point_precise_t last_drawn = project(area, w, h,
+                                                ring->points[0] / WORLD_MAP_UNITS_PER_DEG,
+                                                ring->points[1] / WORLD_MAP_UNITS_PER_DEG);
+        for (int j = 1; ; j++) {
             bool last = (j >= n);
             int k = (last ? 0 : j) * 2;
             lv_point_precise_t cur = project(area, w, h,
                                              ring->points[k]     / WORLD_MAP_UNITS_PER_DEG,
                                              ring->points[k + 1] / WORLD_MAP_UNITS_PER_DEG);
-            cb((int32_t)prev.x, (int32_t)prev.y, (int32_t)cur.x, (int32_t)cur.y);
-            prev = cur;
+            int32_t dx = (int32_t)cur.x - (int32_t)last_drawn.x;
+            int32_t dy = (int32_t)cur.y - (int32_t)last_drawn.y;
+            if (!last && dx * dx + dy * dy < MAP_SEG_MIN_PX * MAP_SEG_MIN_PX)
+                continue;   /* too close to the last drawn point to be visible */
+            cb((int32_t)last_drawn.x, (int32_t)last_drawn.y, (int32_t)cur.x, (int32_t)cur.y);
+            last_drawn = cur;
             if (last) break;
         }
     }
