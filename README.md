@@ -1169,6 +1169,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ## Related projects
 
+- **[Video demo](https://youtu.be/UXWdl0Dd7ME)** by Bruce N9JCV — a hands-on walkthrough of the software, filmed on his phone
 - [DX-FT8](https://github.com/WB2CBA/DX-FT8-FT8-MULTIBAND-TABLET-TRANSCEIVER) by Barb (WB2CBA) — open-hardware FT8 tablet transceiver; an inspiring reference for a similar use-case
 - [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN) — Tab5 companion for QMX with audio + CAT; source of the polling audio task pattern and battery readout approach
 - [`ft8_lib`](https://github.com/kgoba/ft8_lib) by Karlis Goba — FT8 encoder/decoder vendored as `components/ft8_lib`
