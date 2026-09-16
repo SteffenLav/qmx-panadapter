@@ -2565,13 +2565,41 @@ static void output_power_area_refresh(void)
     if (s_outpwr_cal_btn) lv_obj_add_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
     if (s_outpwr_recal_btn) lv_obj_clear_flag(s_outpwr_recal_btn, LV_OBJ_FLAG_HIDDEN);
 
-    int idx = 0;   // default: the lowest calibrated level - nothing persisted yet
+    // ⛔ USED TO DEFAULT TO THE LOWEST CALIBRATED STEP WHEN NOTHING WAS
+    // PERSISTED YET - which is exactly the state right after Calibrate Power
+    // finishes, since calibration only measures the voltage->watts curve and
+    // never sets a target of its own. This function's own write below
+    // (cat_request_pa_voltage_x10) then fired unconditionally, so the radio's
+    // real Max. PA voltage was silently dropped to minimum the moment the
+    // drawer refreshed - not just a UI default, an actual unrequested
+    // transmit-power cut. Gyula HA3HZ, 2026-09-17: "I didn't notice the
+    // slider after calibration and couldn't figure out why my output power
+    // was so low."
+    //
+    // Fixed by reflecting the radio's OWN CURRENT voltage when nothing is
+    // persisted, instead of assuming a value - Calibrate Power already
+    // restores the pre-calibration voltage on its way out, so this now finds
+    // the calibrated step closest to what the radio is ALREADY at, making the
+    // write below a no-op rather than a silent cut. If that voltage is not
+    // known yet (cat_get_pa_voltage_x10() == -1, nothing has answered), fall
+    // back to the HIGHEST calibrated step - the wrong-direction mistake here
+    // is "louder than expected", never "silently far too quiet".
+    int idx = s_outpwr_n - 1;
     uint16_t target_w;
     if (band && band[0] && settings_get_pwr_target_watts(band, &target_w)) {
         int best_gap = 0x7FFFFFFF;
         for (int k = 0; k < s_outpwr_n; k++) {
             int gap = abs((int)s_outpwr_w[k] - (int)target_w);
             if (gap < best_gap) { best_gap = gap; idx = k; }
+        }
+    } else {
+        int16_t cur_x10 = cat_get_pa_voltage_x10();
+        if (cur_x10 >= 0) {
+            int best_gap = 0x7FFFFFFF;
+            for (int k = 0; k < s_outpwr_n; k++) {
+                int gap = abs((int)s_outpwr_v[k] - (int)cur_x10);
+                if (gap < best_gap) { best_gap = gap; idx = k; }
+            }
         }
     }
 
