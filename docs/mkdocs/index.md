@@ -44,9 +44,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   contact mode: a very slow, very weak signal carrying your callsign, grid and power,
   which stations worldwide report hearing. What was heard each two-minute cycle with band,
   distance and bearing, the furthest of the session, and a per-cycle history. Receiving is
-  the default; transmitting is opt-in, with a duty cycle, optional band hopping, and
-  **Protect finals** turning the radio's PA voltage down for the long key-down WSPR needs.
-  See [WSPR](guide/wspr.md).
+  the default; transmitting is opt-in, with a duty cycle and optional band hopping.
+  **Calibrate Power** measures real RF output per band on a dummy load, so **Declared
+  power** only offers standard dBm steps the radio actually reaches — labelled with the
+  real wattage, not a textbook figure — which is also how you protect the finals for a
+  long beacon run. A separate **Output power** slider covers every other mode. See
+  [WSPR](guide/wspr.md).
 - **Logging & upload** — every QSO written to an ADIF log on the device, readable and
   editable on the Tab5 or in the browser, and uploaded *(needs WiFi)* to **QRZ Logbook**,
   **eQSL**, **ARRL LoTW** and **your own Cloudlog or Wavelog** — LoTW QSOs signed on the
@@ -106,13 +109,26 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.13.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.14.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**New in v1.13.0 — SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as
+**New in v1.14.0 — Calibrate Power.** Sweeps *Max. PA voltage* through 45 points on a
+dummy load and measures the real RF output at each, per band. **Declared power** (WSPR)
+now only offers the standard dBm steps a band's calibration actually reaches, each one
+labelled with the real measured wattage rather than a textbook figure computed from the
+step's own name — so a declared level and what actually goes out can no longer disagree.
+The old fixed "hold the PA at 6 V for the whole beacon" guard is gone; protecting the
+finals is now just picking a low declared level, with a plain warning above 1 W. A
+separate **Output power** slider covers every other mode and stays off the WSPR page,
+since Declared power always owns the radio there. Both grow a **Recalibrate this band**
+button once calibrated. Also: **SelfSpotter's** callsign-to-country table rebuilt from an
+authoritative cty.dat-style source (~580 hand-curated prefixes → ~4,100 generated ones,
+Uwe DL8UG), plus a new **ISO** country-code column on the map's LIST tab.
+
+**In v1.13.0 — SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as
 a patch)*, a full-screen map and list answering "who is hearing me right now" from PSK
 Reporter, wsprnet, and RBN's own self-spot feed, opened from the settings drawer. It
 ships off by default. Land is filled in, not just outlined — LVGL has no built-in
@@ -233,7 +249,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.13.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

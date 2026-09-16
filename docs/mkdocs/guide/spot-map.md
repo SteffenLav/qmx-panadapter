@@ -78,7 +78,11 @@ drawn on top of everything.
   station, so your QTH stays put while the world grows around it.
 
 **LIST** is the same data as a table — receiver, mode, band, frequency, SNR,
-distance and age — when you want the numbers rather than the picture.
+distance, age and **ISO** (the receiving station's country) — when you want the
+numbers rather than the picture. Every column is sortable; tap a header to
+sort by it. The ISO column names the *country*, which can differ from the
+DXCC entity the map itself plots — a Hawaiian station's marker sits on Hawaii,
+but its ISO reads `USA`.
 
 **CONDITIONS** is HF propagation from hamqsl.com: day and night ratings per band
 group, plus solar flux, A and K index, sunspot number, geomagnetic field and

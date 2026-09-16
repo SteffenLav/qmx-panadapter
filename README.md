@@ -12,29 +12,15 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.13.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.14.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.13.0 — SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as a patch)*, a full-screen map and list answering "who is hearing me right now" from PSK Reporter, wsprnet, and RBN's self-spot feed, opened from the settings drawer. It ships off by default. **Land is filled in, not just outlined** — LVGL has no built-in fill, so this is a small even-odd scanline rasteriser of my own — with the coastline stroked back on top in its own colour so it doesn't disappear into the fill. Trace colours and line widths went up too, for contrast against it — tuned live against the real screen over several rounds.
+> **New in v1.14.0 — Calibrate Power.** Sweeps the QMX's *Max. PA voltage* through 45 points on a dummy load and measures the real RF output at each with the radio's own `PC;` readback, per band. **WSPR's Declared power** dropdown now only offers the standard dBm steps your calibration actually reaches — each one classified from the real measured wattage (the same rounding rule the WSPR wire format itself is limited to), not the textbook figure a step's name implies, so what you declare and what actually goes out can no longer disagree. The old fixed "turn the PA down to 6 V for the whole beacon" guard is gone — protecting the finals is now a matter of picking a low declared level, same as any other choice on that dropdown, and a plain warning appears above 1 W. A separate **Output power** slider does the equivalent job for every other mode (FT8, CW, SSB, ...) and stays off the WSPR page entirely, since Declared power always owns the radio there. Both grow a **Recalibrate this band** button once calibrated.
 >
-> **A deterministic "Power-cycle QMX" sequence** *(Randy N4OPI)*, for the web UI's remote relay: pulse off, wait, pulse on, wait, then confirm over CAT and report whether it actually came back — a single pulse toggles the radio with no way to know which state it left it in.
->
-> **Diagnostic log volume cut** from roughly 300 lines a minute to under 50 on a quiet bench. Several sources were logging every second, or every message-window, with nothing new to say each time.
->
-> **The "Need guidance?" panel and the manual caught up with what the firmware actually does.** Seven real features — Radio Menus, Still Spectrum, FT8 Simulation Mode, SWR protection, Antenna Tune, RIT, and "Release radio" — had no way in from the guidance panel at all; they do now. Two guidance bugs are fixed: the WSPR page was showing the panadapter's own trouble rows, and the SelfSpotter map (an overlay, not its own screen) was leaking whichever page it was opened from. And the manual's own description of how to reach the spot map — a swipe gesture and an opt-in setting, both removed a while back — is corrected.
->
-> **CW profiles** *(Uwe DL8UG)*. The QMX holds one CW centre and one set of filter widths, and changing them means walking two separate menus on the radio. Four profiles now live on the Tab5 — a name, a centre frequency, and which of the eight filter widths to offer with it — edited on the web settings page and applied from there or from a picker in the settings drawer. Applying one writes the radio's configuration, so every write is read back and retried rather than assumed. **The bandwidth list also asks the radio which filters it actually has**, instead of offering all eight regardless.
->
-> **A CAT link could die and go on reporting itself healthy** *(Samuel W7STF)*. One transient USB error could stop the Tab5 hearing the radio for good, while the poll kept saying the link was fine — so the screen asked you to restart a radio that was working perfectly. Caught in a soak at four hours fifty-six minutes, with the link then dead for four hours. A watchdog now forces a reconnect after five seconds of silence.
->
-> **WSPR** *(Samuel W7STF)*: a **DT column** on both screens, **distances that follow the km/miles setting** (they were always kilometres), a **Clear button** for the decode list, one capture countdown instead of two, **hover a trace on the waterfall to see whose it is**, and a band picker you **drag through** rather than a dropdown that commits wherever your finger lifts.
->
-> **Tune snap can be switched off** *(Samuel W7STF, who asked twice)* — Off / 250 Hz / 500 Hz / 1 kHz, defaulting to the present behaviour.
->
-> **The web page above ×1 zoom had no frequency scale at all**, which is why clicking a signal tuned to the wrong place, the passband sat elsewhere than on the Tab5, and the band-plan slider came apart. **Every field in a QSO can now be corrected**, not four. And **the two screens no longer disagree about spots**.
+> **SelfSpotter's callsign-to-country table rebuilt from an authoritative source** *(Uwe DL8UG)* — roughly 580 hand-curated prefixes replaced by ~4,100 generated from a cty.dat-style file, plus a new **ISO** column on the map's LIST tab naming each spotting station's country.
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.13.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.14.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -131,13 +117,16 @@ log. The page lists what was heard each two-minute cycle with the band, distance
 bearing, the furthest of the session, and a per-cycle history, so an opening band looks
 different from a closing one. Receiving is the default; transmitting is opt-in, refuses to
 key without your callsign and grid, and has a duty cycle and optional band hopping.
-**Protect finals** is on by default and turns the QMX's PA voltage down for as long as
-WSPR transmit is enabled — a WSPR transmission keys the radio for about 110 seconds in
-every 120, and measured on a QMX at 12 V that setting takes 5.4 W down to 1.6 W and 76% of
-the heat out of the finals. What you hear can be published to wsprnet.org *(needs WiFi)*.
-⚠ Declared power is a claim rather than a measurement and is published worldwide, so set
-it to what your transmitter really produces; the Tab5 asks the radio what it actually
-delivered and shows the answer under the setting.
+**Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output
+at each step, per band. **Declared power** then only offers the standard WSPR dBm steps
+your calibration actually reaches — each one labelled with its real measured wattage, not
+a textbook figure — so what you declare (published worldwide with every spot) matches
+what actually goes out. A WSPR transmission keys the radio for about 110 seconds in every
+120, so picking a low declared level for long beacon runs is how you protect the finals
+now, rather than a fixed voltage cut applied underneath you. **Output power**, a separate
+slider for every other mode (FT8, CW, SSB, ...), shares the same calibration but stays out
+of WSPR's way entirely — Declared power always owns the radio there. What you hear can be
+published to wsprnet.org *(needs WiFi)*.
 
 **Radio menus** — The QMX's own 80×24 menu system, on the Tab5 and in the browser, over
 the radio's *second* USB serial port so the panadapter keeps decoding while you are in
@@ -507,7 +496,12 @@ from your grid square to theirs. Contributed by **Uwe DL8UG**.
 
 **Tap SelfSpotter in the settings drawer** (right below "Need guidance?") to
 open it, from any page. Tabs for the map, a table of the same data, and HF band
-conditions. Drag to pan, pinch to zoom around your own QTH.
+conditions. Drag to pan, pinch to zoom around your own QTH. The LIST tab's
+table is sortable, including a new **ISO** column (Uwe's ~4,100-prefix rebuild
+from an authoritative cty.dat source, replacing the earlier hand-curated
+table) — it names the *country* a spotting station belongs to, which can
+differ from the DXCC entity its own marker uses on the map itself (Hawaii
+plots at its own coordinates but reads `USA` in this column, for example).
 
 **Always running, no setting to find.** The feeds (RBN, PSK Reporter, wsprnet)
 connect from the moment the Tab5 boots and stay connected the whole session —
@@ -919,19 +913,29 @@ carrying only your callsign, grid and declared power, reported by stations
 worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4 → WSPR**.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
-**Protect finals is on by default, and WSPR is why.** A WSPR transmission keys
-the radio for about **110 seconds out of every 120** — an FT8 burst is about 12.
-The Tab5 turns the radio down for as long as WSPR transmit is enabled (it sets
-the QMX's own *Max. PA voltage* to around 6 V and restores your setting
-afterwards), which is the same precaution the QMX takes with its own built-in
-WSPR beacon. Measured on a QMX at 12 V: **5.4 W → 1.6 W out, and 76% less heat
-in the PA transistors.**
+**Calibrate Power measures what your QMX actually does, on your antenna
+system, at every setting — instead of guessing from a rule of thumb.** From
+the drawer (**Radio → Antenna Tune → Calibrate Power**, or "Calibrate this
+band" the first time you open Declared power / Output power on an
+uncalibrated band), it sweeps *Max. PA voltage* through 45 points on a
+**dummy load** and records the real RF output at each with the QMX's own
+`PC;` readback. Takes a few minutes per band; results are saved per band and
+used from then on.
 
-⚠ **That reduces the heat in the finals; it does not remove it from the radio.**
-The excess is dropped inside the QMX instead, so total heat falls far less than
-the finals' share does. **If you plan to beacon for hours, feed the radio from a
-lower supply** — the QMX accepts 6.0–12.0 V, and around 9 V leaves much less to
-throw away as heat. That is the one thing no firmware setting can do for you.
+**Declared power** (the WSPR drawer) then only offers the standard dBm steps
+your calibration actually reaches on the current band — no more picking
+"37 dBm" and transmitting something else entirely. Each step's wattage is the
+*real measured* figure, not the textbook one, so what you see is what goes
+out and what gets published to wsprnet with every spot. A WSPR transmission
+keys the radio for about **110 seconds out of every 120**, so this is also
+where you protect the finals now: pick a low declared level for long beacon
+runs, rather than relying on a fixed halving the firmware used to apply
+underneath you. Anything above 1 W gets a plain warning instead.
+
+**Output power**, a separate slider filed with Calibrate Power, does the same
+job for every *other* mode (FT8, CW, SSB, ...) — it has nothing to do with
+WSPR's own declared level and doesn't appear on the WSPR page, since Declared
+power always owns the radio there.
 
 📖 The full chapter:
 [tab5.lav.dk/guide/wspr](https://tab5.lav.dk/guide/wspr/)
@@ -1139,7 +1143,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.13.0 is here.** Next on the bench:
+**v1.14.0 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

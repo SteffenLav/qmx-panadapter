@@ -4,6 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.14.0** — 2026-09-16
+
+**Calibrate Power: WSPR Declared power now fits what the QMX actually does, as precisely as the radio's own protocol allows.**
+
+- **Calibrate Power**, a new drawer feature: sweeps the QMX's *Max. PA voltage* through 45 points (1.0–12.0 V) on a **dummy load**, keying a real DiGi TX;/TA;/RX; carrier at each point — the same primitives a WSPR/FT8 burst is built from — and recording the real measured RF output from the radio's own `PC;` readback. Two earlier designs measured the wrong thing entirely before this one: QMX SWR Tune mode scales power independently of *Max. PA voltage*, and a bare CW `TX;` with no audio tone produces no RF at all. Reached from a "Calibrate this band" / "Recalibrate this band" button wherever it's needed.
+- **WSPR Declared power now only offers standard dBm steps the current band's calibration genuinely reaches, each labelled with the real measured wattage** — not the textbook figure a step's name implies. A step that measures 3.6 W now reads "(3.6 W)", never a stale "(5 W)". The matching is a real classification (the nearest *legal* WSPR dBm step for a given measurement, the only rounding the WSPR protocol itself can transmit) rather than a fuzzy tolerance window, so a step's label can no longer disagree with why it was offered.
+- **The old fixed "hold the finals at 6.0 V for the whole WSPR beacon" guard is retired.** Protecting the finals over WSPR's long key-down is now simply picking a low declared level — the same choice as any other row on that dropdown — with a plain warning above 1 W. The WSPR page's own live "PA X.X V" line now also states the real wattage and is coloured with the same thresholds as the Declared power dropdown.
+- **General "Output power"**, a new slider sharing Calibrate Power's own data, sets output for every mode *other* than WSPR (FT8, CW, SSB, ...) — genuinely independent of WSPR's declared level, and hidden entirely on the WSPR page since Declared power always owns the radio there. The standalone "Calibrate Power" button beside Antenna Tune is gone, replaced everywhere by the inline calibrate/recalibrate buttons.
+- **SelfSpotter's callsign-to-country table rebuilt from an authoritative source** *(Uwe DL8UG)*: ~580 hand-curated prefixes replaced by ~4,100 generated from a cty.dat-style reference, plus a new sortable **ISO** country-code column on the map's LIST tab.
+- Every drawer dropdown now unfolds its full option list with no scrollbar.
+
+## Previous Releases
+
 **v1.13.0** — 2026-09-14
 
 **SelfSpotter ships to users for the first time, and a release-night audit of its own documentation.**
@@ -702,7 +715,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.12.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
