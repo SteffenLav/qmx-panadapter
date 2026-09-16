@@ -3761,8 +3761,12 @@ static esp_err_t tone_get_handler(httpd_req_t *req)
     if (ft8_qso_get_priority_freq(&partner) && partner > 0)
         cJSON_AddNumberToObject(root, "partner_hz", partner);
 
-    // Whether a change would be accepted right now. A burst mid-flight refuses,
-    // and saying so up front beats offering a control that will fail.
+    // Whether a burst is currently mid-flight - NOT whether a change would be
+    // refused. It won't be: ft8_qso_set_tx_tone_hz() queues the tone and
+    // applies it the moment the burst ends (see its own comment - refusing
+    // outright used to mean "whichever tone the burst started on" for the
+    // rest of the QSO, since roughly 40% of attempts landed mid-burst). This
+    // flag exists so the UI can say so, not so it can pretend to refuse.
     cJSON_AddBoolToObject(root, "busy_tx", ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE);
 
     char *out = cJSON_PrintUnformatted(root);

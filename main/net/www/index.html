@@ -3505,7 +3505,7 @@ async function toneOpen() {
     toneSel  = toneState.hz;
     toneHold = !!toneState.hold;
     document.getElementById("tone-hold").checked = toneHold;
-    st.textContent = toneState.busy_tx ? "Transmitting - a change will be refused until the burst ends" : "";
+    st.textContent = toneState.busy_tx ? "Transmitting - Apply now queues the change for right after this burst" : "";
     toneSync();
   } catch (e) {
     st.textContent = "Could not read the tone (" + e.message + ")";
@@ -3526,7 +3526,7 @@ async function toneRefresh() {
     const fresh = await (await fetch("/api/tone", { cache: "no-store" })).json();
     toneState = fresh;
     const st = document.getElementById("tone-status");
-    if (st) st.textContent = toneState.busy_tx ? "Transmitting - a change will be refused until the burst ends" : "";
+    if (st) st.textContent = toneState.busy_tx ? "Transmitting - Apply now queues the change for right after this burst" : "";
     toneSync();
   } catch (e) {
     // Transient - keep showing the last-known picture rather than blanking it.
@@ -3560,10 +3560,23 @@ function toneFindClear() {
 async function toneApply() {
   const st = document.getElementById("tone-status");
   st.textContent = "Applying...";
+  // Bounded, not indefinite - Randy N4OPI, 2026-09-16: "gets stuck on
+  // Applying and loses contact with the QMX" about half the time. The
+  // device-side race this pointed at (a blocking CAT write racing an
+  // already-ACTIVE burst for the CDC pipe) is fixed at the source
+  // (cat_set_mode() now refuses instead of colliding), but a button with no
+  // ceiling on how long it will say "Applying..." is still the wrong shape
+  // for a web request - any OTHER stall (WiFi drops mid-request, the device
+  // reboots) would read identically to the hang this was chasing, with no
+  // way out except reloading the page. 8 s is generous against the pre-flight
+  // retry loop's own ~1 s bound.
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), 8000);
   try {
     const r = await fetch("/api/tone", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hz: toneSel, hold: document.getElementById("tone-hold").checked })
+      body: JSON.stringify({ hz: toneSel, hold: document.getElementById("tone-hold").checked }),
+      signal: ac.signal
     });
     if (r.ok) {
       st.textContent = "Applied";
@@ -3575,7 +3588,11 @@ async function toneApply() {
       try { msg = (await r.json()).error || msg; } catch (e) {}
       st.textContent = msg;
     }
-  } catch (e) { st.textContent = "Failed (" + e.message + ")"; }
+  } catch (e) {
+    st.textContent = (e.name === "AbortError") ? "No response - try again" : "Failed (" + e.message + ")";
+  } finally {
+    clearTimeout(to);
+  }
 }
 
 (function wireTone() {

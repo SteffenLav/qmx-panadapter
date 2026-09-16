@@ -2755,6 +2755,21 @@ esp_err_t cat_set_mode(const char *mode)
         return ESP_ERR_INVALID_ARG;
     }
     if (s_cdc_dev == NULL) return ESP_ERR_INVALID_STATE;
+    // ⛔ WAS THE ONE BLOCKING CDC WRITER IN THIS FILE WITH NO s_poll_paused
+    // GUARD (found 2026-09-16, chasing Randy N4OPI's "web Apply hangs and
+    // loses the QMX, only during an active QSO/CQ exchange, needs a power
+    // cycle" report). Every other blocking write here refuses cleanly while
+    // a burst owns the pipe (cat_gps_tick_sync() just above is the model this
+    // copies) - this one did not, and it is called from ft8_tx_arm()'s Digi
+    // pre-flight (ft8_tx.c) and wspr_tx.c's own pre-TX mode set, both of
+    // which run OUTSIDE ft8_tx's internal lock and can therefore race a
+    // DIFFERENT burst that is already ACTIVE and already owns the pipe -
+    // exactly the shape "only happens mid-exchange, ~50% of the time" points
+    // at. The caller already has a clean-refusal path for a failed pre-flight
+    // (see ft8_tx.c's own comment on aborting before TX; rather than sending
+    // a corrective cat_set_mode() mid-burst); this makes that path reachable
+    // instead of two tasks writing the CDC pipe at once.
+    if (s_poll_paused) return ESP_ERR_INVALID_STATE;  // FT8/WSPR TX owns the pipe
 
     uint64_t now = esp_timer_get_time();
     if (now - s_last_tx_us < 200000) return ESP_ERR_TIMEOUT;
