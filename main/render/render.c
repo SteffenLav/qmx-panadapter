@@ -48,12 +48,17 @@ void render_set_ema_alpha(float alpha)
     ESP_LOGI("render", "EMA alpha = %.2f", (double)alpha);
 }
 
-static volatile bool s_wf_2x = false;
+// Operator-facing waterfall speed setting (was the FT8-sync-lines diagnostic's
+// private s_wf_2x, which the removed drawer toggle used to drive - same
+// mechanism, generalised to 1..4x and given its own setting. See render.h.
+static volatile uint8_t s_wf_mult = 1;
 
-void render_set_waterfall_2x(bool on)
+void render_set_waterfall_speed_mult(uint8_t mult)
 {
-    s_wf_2x = on;
-    ESP_LOGI("render", "waterfall 3x speed: %s", on ? "on" : "off");
+    if (mult < 1) mult = 1;
+    if (mult > 4) mult = 4;
+    s_wf_mult = mult;
+    ESP_LOGI("render", "waterfall speed: %ux", mult);
 }
 
 
@@ -182,12 +187,12 @@ static void render_task(void *arg)
 
         if (have_spectrum) {
             render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
-            // Fast mode: push 2 more rows immediately (same spectrum content -
-            // we don't have a fresher sample within this period) for 3x total
-            // waterfall scroll speed, without touching the spectrum/S-meter
-            // cadence above, which stays at the normal 10 Hz.
-            if (s_wf_2x) {
-                render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
+            // Faster-than-1x: push (mult - 1) MORE rows immediately, same
+            // spectrum content - there is no fresher sample within this
+            // period, so this scrolls the picture faster without touching
+            // the spectrum/S-meter cadence above, which stays at 10 Hz.
+            uint8_t mult = s_wf_mult;
+            for (uint8_t i = 1; i < mult; i++) {
                 render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
             }
         }

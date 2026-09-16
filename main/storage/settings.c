@@ -78,6 +78,7 @@ static const char *TAG = "settings";
 #define KEY_WF_CONTRAST  "wf_contr"
 #define KEY_WF_BLEND     "wf_blend"
 #define KEY_WF_WINDOW    "wf_window"
+#define KEY_WF_SPEED     "wf_speed"
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_CW_TX_OFF    "cw_tx_off"
@@ -169,6 +170,7 @@ static const char *TAG = "settings";
 #define DEF_WF_CONTRAST   (45.0f)
 #define DEF_WF_BLEND      (100)
 #define DEF_WF_WINDOW     (0)
+#define DEF_WF_SPEED      (1)
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
 #define DEF_RELAY_PIN      (53)
@@ -373,6 +375,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 #define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
 #define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
+#define DIRTY_WF_SPEED       121
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -546,6 +549,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
         if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
+        if (dirty_test(&dirty_local, DIRTY_WF_SPEED))    nvs_set_u8(s_nvs, KEY_WF_SPEED,  snap.wf_speed_mult);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
@@ -785,6 +789,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_contrast_db = DEF_WF_CONTRAST;
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
+    out->wf_speed_mult  = DEF_WF_SPEED;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
@@ -979,8 +984,10 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_float(KEY_WF_CONTRAST, &fv)) out->wf_contrast_db = fv;
     nvs_get_u8(s_nvs, KEY_WF_BLEND,  &out->wf_floor_blend);
     nvs_get_u8(s_nvs, KEY_WF_WINDOW, &out->wf_window);
+    nvs_get_u8(s_nvs, KEY_WF_SPEED,  &out->wf_speed_mult);
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
+    if (out->wf_speed_mult < 1 || out->wf_speed_mult > 4) out->wf_speed_mult = DEF_WF_SPEED;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     {
@@ -1861,6 +1868,17 @@ void settings_set_wf_window(uint8_t idx)
     s_pending.wf_window = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WF_WINDOW);
+}
+
+void settings_set_wf_speed_mult(uint8_t mult)
+{
+    if (!s_ready) return;
+    if (mult < 1 || mult > 4) mult = DEF_WF_SPEED;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wf_speed_mult == mult) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wf_speed_mult = mult;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WF_SPEED);
 }
 
 void settings_set_display_flip(bool v)

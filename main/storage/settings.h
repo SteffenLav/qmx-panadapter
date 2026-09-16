@@ -234,6 +234,7 @@ typedef struct {
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
+    uint8_t  wf_speed_mult;   // waterfall scroll speed, 1..4x the normal 10 rows/s (default 1)
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -593,6 +594,7 @@ void settings_set_wf_black_db(float db);
 void settings_set_wf_contrast_db(float db);
 void settings_set_wf_floor_blend(uint8_t pct);
 void settings_set_wf_window(uint8_t idx);
+void settings_set_wf_speed_mult(uint8_t mult);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);

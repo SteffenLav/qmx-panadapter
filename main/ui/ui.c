@@ -3264,6 +3264,7 @@ static lv_obj_t *s_lbl_wf_black = NULL;
 static lv_obj_t *s_slider_wf_contrast = NULL;
 static lv_obj_t *s_lbl_wf_contrast = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
+static lv_obj_t *s_dropdown_wf_speed = NULL;
 static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
@@ -3397,6 +3398,7 @@ static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
+static void drawer_dropdown_wf_speed_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
 static int  spur_mode_to_menu_idx(uint8_t mode);
 bool ui_get_flat_mode(void);
@@ -12803,7 +12805,7 @@ static void drawer_build(void)
         // 404 -> 300 with the spur row parked. The section HEIGHT and the
         // "y +=" below must always move together, or the next section
         // overlaps this one - the reflow trap this file records.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 300);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 396);
         lv_obj_t *wf_hdr = lv_label_create(sec);
         lv_label_set_text(wf_hdr, "Waterfall");
         lv_obj_set_style_text_color(wf_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -12873,6 +12875,31 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
+        // Waterfall scroll speed (operator, 2026-09-16: "is wf speed always
+        // the same or where do i set it?" - it was, RENDER_PERIOD_MS is a
+        // compile-time #define). render_set_waterfall_speed_mult() already
+        // existed as the removed FT8-sync-lines diagnostic's private 1x/3x
+        // switch (render.c) - generalised into 1x..4x and given a real
+        // setting instead of building a second mechanism.
+        lv_obj_t *speed_lbl = lv_label_create(sec);
+        lv_label_set_text(speed_lbl, "Speed");
+        lv_obj_set_style_text_color(speed_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(speed_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(speed_lbl, LV_ALIGN_TOP_LEFT, 0, 280);
+        s_dropdown_wf_speed = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_wf_speed,
+                                "1x (10 rows/s)\n2x (20 rows/s)\n3x (30 rows/s)\n4x (40 rows/s)");
+        lv_obj_set_size(s_dropdown_wf_speed, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_wf_speed, LV_ALIGN_TOP_LEFT, 0, 316);
+        lv_obj_set_style_text_font(s_dropdown_wf_speed, &lv_font_montserrat_28, 0);
+        {
+            uint8_t mult = wcfg.wf_speed_mult;
+            if (mult < 1 || mult > 4) mult = 1;
+            lv_dropdown_set_selected(s_dropdown_wf_speed, mult - 1);
+        }
+        lv_obj_add_event_cb(s_dropdown_wf_speed, drawer_dropdown_wf_speed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_wf_speed, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+
         // ⛔ SPUR SUPPRESSION IS PARKED - the control is deliberately NOT built.
         //
         // It only ever reached the display at zoom x1. Above that both the
@@ -12903,7 +12930,7 @@ static void drawer_build(void)
         // references there. Then measure it WITH AN ANTENNA, not on an open
         // BNC. See TODO #222.
 
-        y += 300;
+        y += 396;
     }
 
     // FT8-only sections built LAST so they never leave a gap in Panadapter
@@ -13288,6 +13315,7 @@ static void drawer_build(void)
     //    dark drawer), applied to the closed box AND the option list
     lv_obj_t *drawer_dropdowns[] = {
         s_dropdown_sleep, s_dropdown_bpregion, s_dropdown_cmap, s_dropdown_wf_window,
+        s_dropdown_wf_speed,
     };
     for (size_t i = 0; i < sizeof(drawer_dropdowns) / sizeof(drawer_dropdowns[0]); i++) {
         lv_obj_t *dd = drawer_dropdowns[i];
@@ -14545,6 +14573,14 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
     uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
     dsp_set_window(idx);
     settings_set_wf_window(idx);
+}
+
+static void drawer_dropdown_wf_speed_cb(lv_event_t *e)
+{
+    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    uint8_t mult = idx + 1;   // dropdown is 0-based ("1x"=idx 0), the setting is the multiplier itself
+    render_set_waterfall_speed_mult(mult);
+    settings_set_wf_speed_mult(mult);
 }
 
 // Spur suppression. Live DSP path AND stored value, like the IQ balance switch -

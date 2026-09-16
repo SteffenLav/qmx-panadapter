@@ -72,6 +72,7 @@ char *config_io_export(size_t *out_len)
     APP("wf_contrast_db     = %.0f\n", (double)c.wf_contrast_db);
     APP("wf_floor_blend     = %u\n", (unsigned)c.wf_floor_blend);
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
+    APP("wf_speed_mult      = %u\n", (unsigned)c.wf_speed_mult);
     APP("display_flip       = %s\n", yn(c.display_flip));
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
@@ -264,6 +265,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_contrast_db"))    settings_set_wf_contrast_db((float)atof(val));
             else if (!strcasecmp(key, "wf_floor_blend"))    settings_set_wf_floor_blend((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "wf_speed_mult"))     settings_set_wf_speed_mult((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
