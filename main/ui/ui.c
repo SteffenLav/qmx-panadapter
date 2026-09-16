@@ -7735,6 +7735,43 @@ static void topbar_reconcile_cb(lv_timer_t *t)
         output_power_area_refresh();
     }
 
+    /* ⛔ RE-ASSERT OUTPUT POWER ON EVERY FRESH CAT LINK - THE BOOT PATH HAD NO
+     * TRANSITION TO HANG IT ON, which is the v1.12.1 top-bar bug again (see
+     * CLAUDE.md, "a per-mode UI state applied at the TRANSITION is not applied
+     * on the path that has no transition").
+     *
+     * Max. PA voltage lives in the RADIO and survives a Tab5 reboot untouched -
+     * a reflash does not reset it. WSPR's declared power legitimately drives it
+     * right down (measured: 2.3 V = 200 mW for 23 dBm on 20 m), and the ONLY
+     * place that ever handed it back was ui_set_base_mode()'s
+     * `cur == UI_MODE_WSPR` stand-down branch: a LIVE mode change away from the
+     * WSPR page. Boot has no such transition - ui_apply_saved_mode_view()/
+     * _start() restore the mode directly - so WSPR -> reboot -> FT8 came up
+     * transmitting at whatever WSPR last declared, with the drawer showing the
+     * Output power target the radio was NOT at. Operator, 2026-09-17: "I moved
+     * to ft8 and the output is now 200 mW and not 3.6 W as the drawer
+     * indicate". Confirmed on the bench: the radio answered MM2.30; while the
+     * drawer read 3.6 W, and that whole boot's log had no `PA voltage ->` line.
+     *
+     * ⚠ NOT hung off ui_apply_saved_mode_start() even though that is where the
+     * gap is: it runs from app_main at a few seconds of uptime and CAT does not
+     * open until ~17 s, so it would read no frequency, find no band, and skip
+     * the write on every boot - silently. That is CLAUDE.md's own CW-pitch trap
+     * ("that write went nowhere on EVERY boot - measured, with timestamps").
+     * Keying it to the link going ready instead cannot race it, and re-arming
+     * on every drop also covers a QMX power-cycled mid-session, which comes
+     * back with its own stored configuration.
+     *
+     * Change-detected, so this is one CAT write per link-up, not a 1 Hz poll -
+     * MM writes are expensive and want spacing (see cat.c's MM notes). */
+    static bool s_outpwr_seeded_for_link = false;
+    if (!cat_is_ready()) {
+        s_outpwr_seeded_for_link = false;
+    } else if (!s_outpwr_seeded_for_link) {
+        s_outpwr_seeded_for_link = true;
+        output_power_area_refresh();
+    }
+
     if (!s_topbar_stale) return;
     s_topbar_stale = false;
     char buf[32];
