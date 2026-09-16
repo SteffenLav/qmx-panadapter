@@ -4,6 +4,15 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.14.3** — 2026-09-17
+
+**Fixed a v1.14.2 crash: picking a new TX tone from the web UI while a QSO or CQ run was armed could reboot the Tab5.**
+
+- **Reproduced 100% on two benches** *(Randy N4OPI)* - it never happened while actually transmitting, only while armed and waiting. Same underlying bug as the v1.14.0 crash - a whole settings structure copied onto a task's stack just to read one value - reached this time from the web server's own task instead of the display or CAT tasks. Fixed the same way: read one setting at a time. Reproduced and confirmed fixed on the bench before release.
+- **The TX Hold checkbox not applying**, reported in the same message, was very likely the same crash: tone and hold travel in one web request, and the device rebooted while handling the tone half, before hold was ever reached. Confirmed applying and reading back correctly now.
+
+## Previous Releases
+
 **v1.14.2** — 2026-09-17
 
 **General sluggishness since v1.13.0, root-caused — plus a web UI hang, an output-power surprise after calibration, and a SelfSpotter map bug.**
@@ -736,7 +745,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.3.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

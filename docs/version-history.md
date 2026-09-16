@@ -3676,3 +3676,19 @@ invisible against the near-black backgrounds it appears on.
 
 **Waterfall scroll speed** is now a real setting (1x–4x, in the Waterfall Controls drawer
 section) instead of a fixed rate baked into the firmware.
+
+### Shipped in v1.14.3 — 2026-09-17
+
+**Fixed a v1.14.2 crash: picking a new TX tone from the web UI while a QSO or CQ run was
+ARMED could reboot the Tab5** *(Randy N4OPI, reproduced 100% on two benches)*. It never
+happened while actually transmitting, only while armed and waiting - the same stack-
+overflow bug class that crashed v1.14.0 on tuning, this time reached from the web server's
+own task rather than the display or CAT tasks. Fixed with the same technique: read one
+setting at a time instead of copying the whole settings structure onto the stack.
+Reproduced and confirmed fixed on the bench via FT8 simulation mode before release.
+
+The **TX Hold checkbox not applying**, reported in the same message, was very likely the
+same crash: tone and hold travel in one request, and the crash happened while processing
+the tone half, before hold was ever reached. Worth confirming it now behaves once you've
+updated - reads back correctly on the bench, but reported symptoms sometimes have more
+than one cause.
