@@ -2518,6 +2518,20 @@ bool wspr_rx_start(void)
     s_run = true;
     ui_mode_set(UI_MODE_WSPR);
 
+    /* ⭐ WSPR NOW OWNS Max. PA voltage - so apply the declared power HERE,
+     * unconditionally, rather than relying on something else having done it.
+     *
+     * Needed because wspr_pa_apply_declared_dbm() refuses to write while WSPR
+     * is not running (see its own header - a drawer refresh was cutting FT8's
+     * power to WSPR's level). With that gate in place, the only other path
+     * that applied it was wspr_screen_view.c's dial push, which is ONE SHOT
+     * and only fires when the frequency actually has to change - so entering
+     * WSPR already on the right frequency would have left the radio at
+     * whatever the general Output power slider last set, for a ~110 s
+     * key-down. That is the dangerous direction: the whole point of declaring
+     * a low power is that the finals see it. */
+    wspr_pa_apply_declared_dbm(settings_get_wspr_tx_dbm());
+
     /* 32 KB and in PSRAM: wspr_decode_candidate() alone reserves a flat 16 KB
      * frame in its prologue, the self-test measured ~27.5 KB of high-water, and
      * xTaskCreate() would take that from the ~40 KB of free INTERNAL RAM. This
@@ -2833,6 +2847,43 @@ static bool s_pa_cal_status_ok  = false;
 
 void wspr_pa_apply_declared_dbm(int8_t dbm)
 {
+    /* ⛔ WSPR MAY ONLY WRITE Max. PA VOLTAGE WHILE IT ACTUALLY OWNS THE RADIO.
+     *
+     * Operator, 2026-09-17: mid-FT8 at full power, opening the settings drawer
+     * to reach SelfSpotter dropped the radio to WSPR's declared level (2.3 V =
+     * 200 mW) and LEFT it there after closing SelfSpotter and returning to the
+     * FT8 page. The capture shows it exactly:
+     *
+     *     declared-power calibration: 20M: Max. PA voltage set to 2.3V ...
+     *     ui: Settings drawer open
+     *     cat: PA voltage -> 2.3 V (ok)
+     *
+     * wspr_dbm_area_refresh() ends by calling this on EVERY drawer open, to
+     * keep its own hint label truthful - and the hint was costing the operator
+     * 12 dB of transmit power on a completely different mode. On one of the
+     * opens in that same capture the general Output power area's own write
+     * landed last instead ("PA voltage -> 12.0 V"), so which power you
+     * transmitted at came down to the order two drawer sections happened to
+     * refresh in.
+     *
+     * This is the mirror of the gate output_power_area_refresh() already has
+     * (`!wspr_rx_running()` before ITS write, added 2026-09-16 for the same
+     * collision seen from the other side). One of the two has to yield while
+     * the other owns the register, and the rule is: whoever is actually
+     * running the radio right now wins. A REFRESH must never change what the
+     * radio transmits at.
+     *
+     * Not a refusal: the dBm is still stored, still shown, and wspr_rx_start()
+     * applies it the moment WSPR takes the radio - which is also why the
+     * status text below says "when WSPR starts" rather than reporting failure.
+     */
+    if (!s_run) {
+        snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
+                 "%d dBm - applied when WSPR starts", dbm);
+        s_pa_cal_status_ok = true;
+        return;
+    }
+
     if (settings_get_wspr_pa_saved_x10() != 0) {
         /* The guard is CURRENTLY holding the radio down for WSPR's long
          * key-down - writing a calibrated-for-full-power voltage over that

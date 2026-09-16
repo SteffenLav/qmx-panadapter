@@ -762,6 +762,7 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
 // Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).
 // Never the whole blob: both copy exactly one pwr_cal_band_t (28 bytes), so a
 // caller has no reason to reach for settings_load_all() just for this.

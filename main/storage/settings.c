@@ -2103,6 +2103,17 @@ bool settings_get_wspr_tx_en(void)
     return v;
 }
 
+// Narrow: wspr_rx_start() applies the declared power the moment WSPR takes
+// ownership of Max. PA voltage, and runs on taskLVGL via ui_set_base_mode().
+int8_t settings_get_wspr_tx_dbm(void)
+{
+    if (!s_ready) return 23;   /* the field's own default - 200 mW */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int8_t v = s_pending.wspr_tx_dbm;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 // Narrow on purpose (#409, 2026-09-17): ft8_tx_arm() used to declare a whole
 // qmx_settings_t on its own stack just to read this one bool, in its Digi
 // pre-flight. That function runs on WHATEVER task called ft8_tx_arm() -

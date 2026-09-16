@@ -10945,8 +10945,16 @@ static void wspr_dbm_area_refresh(void)
     char dbm_opts[WSPR_STD_DBM_N * 24];
     int n_ach = build_wspr_dbm_options(band, dbm_opts, sizeof(dbm_opts));
 
-    qmx_settings_t ws;
-    settings_load_all(&ws);
+    /* ⛔ WAS A WHOLE qmx_settings_t ON THE STACK FOR ONE int8_t FIELD, and it
+     * crashed the device: `/api/cmd {"action":"drawer"}` opens the drawer from
+     * the HTTPD WORKER TASK (10 KB stack, vs taskLVGL's 12 KB), so this whole
+     * refresh chain ran there - Stack protection fault, task httpd, 2026-09-17,
+     * landing inside vsnprintf() because that is simply what tipped an already
+     * exhausted stack over. Third instance of this exact bug class in one
+     * night; see settings_get_sim_mode_en()'s comment for the other two.
+     * Narrow read instead - the struct was only ever consulted for
+     * wspr_tx_dbm. */
+    struct { int8_t wspr_tx_dbm; } ws = { settings_get_wspr_tx_dbm() };
 
     if (n_ach == 0) {
         /* Not calibrated (or no swept point classifies as ANY standard
