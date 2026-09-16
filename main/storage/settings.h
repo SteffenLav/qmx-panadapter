@@ -569,9 +569,11 @@ void settings_set_cq_sel(uint8_t idx);
 // Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
 // preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
 void settings_set_cq_max_calls(uint8_t n);
+uint8_t settings_get_cq_max_calls(void);    // narrow: rearm_current() runs on whatever task re-armed (#409)
 void settings_set_hound_mode(uint8_t m);    // 0 off, 1 guided, 2 automatic
 /* Spend one slot listening after every N CQ calls. 0 = never. */
 void settings_set_cq_listen_every(uint8_t n);
+uint8_t settings_get_cq_listen_every(void); // narrow, same reason (#409)
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never
@@ -683,6 +685,8 @@ bool settings_get_spotmap_en(void);     // narrow: callers are on small stacks
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
 bool settings_get_sota_en(void);        // narrow, same reason as settings_get_spots_en
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
+bool settings_get_sim_mode_en(void);    // narrow: ft8_tx_arm()'s Digi pre-flight runs on WHATEVER
+                                         // task armed it - the httpd worker among them (#409)
 void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot
 
 // ---- Known WiFi networks --------------------------------------------------

@@ -1458,6 +1458,19 @@ void settings_set_cq_max_calls(uint8_t n)
     mark_dirty(DIRTY_CQ_MAX_CALLS);
 }
 
+// Narrow (#409): ft8_qso.c's rearm_current() reads this from whatever task
+// re-arms a CQ run, which now includes the httpd worker task via the web
+// tone-apply path - see settings_get_sim_mode_en()'s comment for the crash
+// this class of bug produces.
+uint8_t settings_get_cq_max_calls(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.cq_max_calls;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_hound_mode(uint8_t m)
 {
     if (!s_ready) return;
@@ -1924,6 +1937,16 @@ void settings_set_cq_listen_every(uint8_t n)
     mark_dirty(DIRTY_CQ_LISTEN);
 }
 
+// Narrow, same reason as settings_get_cq_max_calls() (#409).
+uint8_t settings_get_cq_listen_every(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.cq_listen_every;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_cluster_en(bool v)
 {
     if (!s_ready) return;
@@ -2076,6 +2099,25 @@ bool settings_get_wspr_tx_en(void)
     if (!s_ready) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool v = s_pending.wspr_tx_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+// Narrow on purpose (#409, 2026-09-17): ft8_tx_arm() used to declare a whole
+// qmx_settings_t on its own stack just to read this one bool, in its Digi
+// pre-flight. That function runs on WHATEVER task called ft8_tx_arm() -
+// taskLVGL and the CAT poll task normally, but also the httpd worker task
+// (10 KB stack) when the web UI's tone-apply POST re-arms a running QSO at
+// a new tone. Randy N4OPI: picking a new tone and hitting Apply while a QSO
+// was ARMED (not actively transmitting) rebooted the Tab5 every time on two
+// benches - exactly this task/stack combination. See CLAUDE.md's "Task
+// stacks on this board are TINY" - this is the fourth settings_load_all()
+// caught doing it, not the first.
+bool settings_get_sim_mode_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.sim_mode_en;
     xSemaphoreGive(s_mutex);
     return v;
 }

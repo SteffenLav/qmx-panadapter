@@ -928,12 +928,16 @@ static void rearm_current(void)
     }
 
     if (st == FT8_QSO_CQ) {
-        qmx_settings_t qs;
-        settings_load_all(&qs);
-        if (qs.cq_max_calls > 0 && cq_sent >= qs.cq_max_calls) {
+        // ⛔ Was a whole qmx_settings_t settings_load_all() here (#409) - this
+        // function runs on whatever task re-armed the CQ, which now includes
+        // the httpd worker task (10 KB stack) via the web tone-apply path.
+        // Two narrow byte-sized reads instead.
+        uint8_t cq_max_calls    = settings_get_cq_max_calls();
+        uint8_t cq_listen_every = settings_get_cq_listen_every();
+        if (cq_max_calls > 0 && cq_sent >= cq_max_calls) {
             lock(); s_cq_exhausted = true; unlock();
-            ft8_status_set("CQ %d of %d sent - listening", cq_sent, qs.cq_max_calls);
-            ESP_LOGI(TAG, "CQ auto-stop: %d of %d sent - not re-arming", cq_sent, qs.cq_max_calls);
+            ft8_status_set("CQ %d of %d sent - listening", cq_sent, cq_max_calls);
+            ESP_LOGI(TAG, "CQ auto-stop: %d of %d sent - not re-arming", cq_sent, cq_max_calls);
             return;
         }
         // Listening slot (Roy KI0ER): while transmitting we are deaf to our own
@@ -943,8 +947,8 @@ static void rearm_current(void)
         // The guard matters: cq_calls_sent does NOT advance on a slot we skip,
         // so without remembering which count we already paused at, the run would
         // stop at N and never call again.
-        if (qs.cq_listen_every > 0 && cq_sent > 0 &&
-            (cq_sent % qs.cq_listen_every) == 0 && s_cq_listen_done_at != cq_sent) {
+        if (cq_listen_every > 0 && cq_sent > 0 &&
+            (cq_sent % cq_listen_every) == 0 && s_cq_listen_done_at != cq_sent) {
             lock(); s_cq_listen_done_at = cq_sent; unlock();
             ft8_status_set("listening (after %d CQ calls)", cq_sent);
             ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);

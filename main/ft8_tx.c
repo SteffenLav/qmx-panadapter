@@ -760,9 +760,12 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
     // Skipped entirely under the FT8 simulation-mode hard interlock (see
     // ft8_sim.h) - cat_set_mode() below is a real CAT write, and sim mode's
     // whole point is that NOTHING here touches a possibly-connected QMX.
-    qmx_settings_t arm_sim_s;
-    settings_load_all(&arm_sim_s);
-    bool sim = arm_sim_s.sim_mode_en;
+    //
+    // ⛔ Read via the narrow accessor, NOT settings_load_all() (#409) - this
+    // function runs on whatever task called ft8_tx_arm(), which includes the
+    // httpd worker task (10 KB stack) via the web UI's tone-apply re-arm path.
+    // A whole qmx_settings_t on that stack rebooted the Tab5 every time.
+    bool sim = settings_get_sim_mode_en();
     const char *mode = sim ? "DiGi" : cat_get_mode_str();
     if (strcmp(mode, "DiGi") != 0) {
         ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
