@@ -2714,6 +2714,38 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(exit_lbl, LV_SYMBOL_CLOSE "  Exit");
 
+    // Flush - same header-bar treatment as Exit (child of the OVERLAY for the
+    // same extended-hit-area reason), sat directly left of it via align_to so
+    // it never depends on Exit's own content-sized width. Reuses
+    // flush_btn_cb() - the same "empty all three self-spot ring buffers"
+    // action the settings-drawer Flush button already has; this is a second,
+    // quicker-to-reach way to trigger it, not a replacement for that one.
+    lv_obj_t *flush_hdr_btn = lv_button_create(s_overlay);
+    // align_to(exit_btn, OUT_LEFT_MID) was tried first and measured wrong on
+    // real hardware TWICE, overlapping Exit both times (operator: "muss
+    // weiter nach links geschoben werden ... etwas höher align mit dem exit
+    // button") - a pixel-level screenshot check (/ss.bmp, scanning for the
+    // button's own background colour) found exit_btn's rendered box at
+    // x=1147..1249, y=9..56, while align_to had placed flush's right edge at
+    // x=1219 and its vertical band at y=19..64 - both badly off, and adding
+    // lv_obj_update_layout(exit_btn) right before the align_to call (the
+    // fix adif_view_modal.c/ft8_filter_modal.c use for a lazily-sized
+    // sibling) made no measurable difference on a re-flash, so the problem
+    // isn't (only) that. Rather than keep guessing against align_to's
+    // timing, this uses the SAME fixed TOP_RIGHT-of-s_overlay recipe
+    // exit_btn itself uses - identical y formula, so vertical match is
+    // exact instead of inferred, and an x offset sized from exit_btn's
+    // MEASURED width (-24 right edge, ~109 px wide) plus a 20 px gap.
+    lv_obj_align(flush_hdr_btn, LV_ALIGN_TOP_RIGHT, -153, (HEADER_H - 46) / 2);
+    lv_obj_set_style_bg_color(flush_hdr_btn, lv_color_hex(UI_COLOR_DANGER), 0);
+    lv_obj_set_style_pad_hor(flush_hdr_btn, 20, 0);
+    lv_obj_set_height(flush_hdr_btn, 46);
+    lv_obj_set_ext_click_area(flush_hdr_btn, 44);
+    lv_obj_add_event_cb(flush_hdr_btn, flush_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *flush_hdr_lbl = lv_label_create(flush_hdr_btn);
+    lv_obj_set_style_text_font(flush_hdr_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(flush_hdr_lbl, LV_SYMBOL_TRASH "  Flush");
+
     // Zoom - centered in the header, same lv_dropdown + montserrat_28 +
     // "fix the popup list's own font" recipe every other dropdown in this
     // app uses (e.g. ui.c's waterfall-colour-map dropdown). A child of the
@@ -2893,6 +2925,13 @@ void spot_map_view_init(lv_obj_t *parent)
 
     lv_obj_move_foreground(hdr);
     lv_obj_move_foreground(exit_btn);
+    lv_obj_move_foreground(flush_hdr_btn);   // same reason as exit_btn just above - built
+                                              // before the tabview, so without this the
+                                              // tabview content draws OVER it and it's
+                                              // invisible - caught on hardware (operator:
+                                              // "ich sehe den button nicht"), not by reading
+                                              // the code, exactly like the exit_btn/hdr case
+                                              // the comment below already describes.
     /* The settings drawer + its edge strip must sit above the tabview content
      * for the same reason hdr/exit_btn do - built after it, so without this
      * they would be UNDER it in the child list and lose every hit test. The
