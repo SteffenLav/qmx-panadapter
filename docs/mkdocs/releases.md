@@ -6,9 +6,9 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.14.1** — 2026-09-16
 
-**Emergency fix for a v1.14.0 crash on tuning or QMX power-on.**
+**A fix for a v1.14.0 crash on tuning or QMX power-on.**
 
-- **⛔ Fixed a crash reported within a day of v1.14.0 shipping** *(Martin Howard; Rick Trommer W5NR)*. `spots_any_source_enabled()` copied the whole settings struct onto a task stack as small as 4096 bytes — the render task, and independently the CAT poll task, either of which runs on nearly every frequency change — overflowing it on almost any tuning motion, or the frequency update an immediate QMX reconnect sends. Fixed by Uwe DL8UG: four narrow getters reading one bool each, instead of the whole struct. **If you are running v1.14.0, please update.**
+- **Fixed a crash reported by Martin Howard and Rick Trommer W5NR - thanks to both for the quick reports.** `spots_any_source_enabled()` copied the whole settings struct onto a task stack as small as 4096 bytes — the render task, and independently the CAT poll task, either of which runs on nearly every frequency change — overflowing it on almost any tuning motion, or the frequency update an immediate QMX reconnect sends. Fixed by Uwe DL8UG: four narrow getters reading one bool each, instead of the whole struct. If you are running v1.14.0, please update.
 
 ## Previous Releases
 

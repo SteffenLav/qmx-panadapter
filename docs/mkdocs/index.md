@@ -115,9 +115,10 @@ on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF loggin
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**v1.14.1 — emergency fix for a v1.14.0 crash on tuning or QMX power-on**
-*(Uwe DL8UG)*. A settings copy too large for a 4096-byte task stack, hit by nearly any
-frequency change. **If you are on v1.14.0, update.**
+**v1.14.1 — a fix for a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
+large for a 4096-byte task stack, hit by nearly any frequency change. Thanks to Martin
+Howard and Rick Trommer W5NR for the reports, and Uwe DL8UG for the fix. If you are on
+v1.14.0, update.
 
 **New in v1.14.0 — Calibrate Power.** Sweeps *Max. PA voltage* through 45 points on a
 dummy load and measures the real RF output at each, per band. **Declared power** (WSPR)
