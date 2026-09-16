@@ -126,7 +126,13 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
  * too-bright values (2026-06-30 feedback). */
 #define UI_COLOR_MODE_DIGI 0xB37724  /* amber     — matches bandplan BP_DIGI */
 #define UI_COLOR_MODE_CW   0x2477B3  /* blue      — matches bandplan BP_CW */
-#define UI_COLOR_MODE_USB  0x8B3A2B  /* brick red/brown — was steel blue, too close to CW's blue */
+/* Brightened 2026-09-16 (operator: "the SB colour is almost invisible on
+ * black background") - the 2026-06-30 dim pass (see comment above) went too
+ * far for this one specifically. Every other mode colour here sits on a
+ * dark background too (freq keypad, memory grid, spots lane tag, band-plan
+ * strip), so this needed to move for ALL of them, not just one caller - the
+ * whole reason this is one shared constant rather than four local copies. */
+#define UI_COLOR_MODE_USB  0xD9634B  /* brick red/brown — was steel blue, too close to CW's blue */
 #define UI_COLOR_MODE_LSB  0x633079  /* purple */
 #define UI_COLOR_MODE_WSPR 0x3D8C40  /* green     — ui/spot_map_view.c's third self-spotting source, no bandplan analogue to match */
 

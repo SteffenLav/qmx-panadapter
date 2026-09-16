@@ -12257,53 +12257,64 @@ static void drawer_build(void)
         qmx_settings_t scfg_spots;
         settings_load_all(&scfg_spots);
         lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 278);   /* four source rows + the mode-filter row */
+        // Reordered and renamed (operator, 2026-09-16): "POTA spots / SOTA
+        // spots / CW spots / Phone spots", each row's text coloured to match
+        // what that source actually draws on the spectrum
+        // (SPOTS_COL_POTA/SPOTS_COL_RBN, spots_lane.h) - the checkbox text
+        // was plain white before, so there was nothing here to connect a row
+        // to the colour it turns on. POTA/SOTA/Phone all read the same
+        // amber: that is not a labelling shortcut, it is what spots_lane.c
+        // actually paints for all three today (see that file's own colour
+        // table comment) - only CW (RBN) has a distinct hue.
         lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "Live spots (POTA)");
-        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_label_set_text(hdr, "POTA spots");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(SPOTS_COL_POTA), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 10);
         s_check_spots = make_drawer_checkbox(sec, scfg_spots.spots_en, drawer_spots_cb, NULL);
         lv_obj_align(s_check_spots, LV_ALIGN_TOP_RIGHT, 0, 6);
 
-        lv_obj_t *rbn_lbl = lv_label_create(sec);
-        // Same weight and indent as the POTA row: RBN is a second SOURCE, not a
-        // sub-option of the first (operator, 2026-08-09).
-        lv_label_set_text(rbn_lbl, "RBN spots (CW skimmers)");
-        lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(rbn_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 0, 62);
-        s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
-        lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 62);
-
-        // DX cluster: the third source, and the only one carrying PHONE spots -
-        // RBN is skimmers and no SSB skimmer exists. Same weight and indent as
-        // the other two: it is a SOURCE, not a sub-option of either.
-        lv_obj_t *dxc_lbl = lv_label_create(sec);
-        lv_label_set_text(dxc_lbl, "DX cluster spots (phone)");
-        lv_obj_set_style_text_color(dxc_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(dxc_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(dxc_lbl, LV_ALIGN_TOP_LEFT, 0, 114);
-        s_check_cluster = make_drawer_checkbox(sec, scfg_spots.cluster_en, drawer_cluster_cb, NULL);
-        lv_obj_align(s_check_cluster, LV_ALIGN_TOP_RIGHT, 0, 114);
-
-        // SOTA: the fourth source, summit activations by way of spothole.app.
-        // Same weight and indent as the other three - a SOURCE, not a
-        // sub-option. Off by default, and the only source whose default is about
-        // courtesy to the server rather than to this board (see settings.h).
+        // SOTA: summit activations by way of spothole.app. Same weight and
+        // indent as the others - a SOURCE, not a sub-option. Off by default,
+        // and the only source whose default is about courtesy to the server
+        // rather than to this board (see settings.h).
         lv_obj_t *sota_lbl = lv_label_create(sec);
-        lv_label_set_text(sota_lbl, "SOTA spots (summits)");
-        lv_obj_set_style_text_color(sota_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_label_set_text(sota_lbl, "SOTA spots");
+        lv_obj_set_style_text_color(sota_lbl, lv_color_hex(SPOTS_COL_POTA), 0);
         lv_obj_set_style_text_font(sota_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(sota_lbl, LV_ALIGN_TOP_LEFT, 0, 166);
+        lv_obj_align(sota_lbl, LV_ALIGN_TOP_LEFT, 0, 62);
         s_check_sota = make_drawer_checkbox(sec, scfg_spots.sota_en, drawer_sota_cb, NULL);
-        lv_obj_align(s_check_sota, LV_ALIGN_TOP_RIGHT, 0, 166);
+        lv_obj_align(s_check_sota, LV_ALIGN_TOP_RIGHT, 0, 62);
+
+        // RBN: CW skimmers, the only source with its own colour (green) -
+        // see spots_lane.c. Same weight and indent as the others: a SOURCE,
+        // not a sub-option of any of them (operator, 2026-08-09).
+        lv_obj_t *rbn_lbl = lv_label_create(sec);
+        lv_label_set_text(rbn_lbl, "CW spots");
+        lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(SPOTS_COL_RBN), 0);
+        lv_obj_set_style_text_font(rbn_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 0, 114);
+        s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
+        lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 114);
+
+        // DX cluster: the only source carrying PHONE spots - RBN is skimmers
+        // and no SSB skimmer exists. Same weight and indent as the others: a
+        // SOURCE, not a sub-option of either.
+        lv_obj_t *dxc_lbl = lv_label_create(sec);
+        lv_label_set_text(dxc_lbl, "Phone spots");
+        lv_obj_set_style_text_color(dxc_lbl, lv_color_hex(SPOTS_COL_POTA), 0);
+        lv_obj_set_style_text_font(dxc_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(dxc_lbl, LV_ALIGN_TOP_LEFT, 0, 166);
+        s_check_cluster = make_drawer_checkbox(sec, scfg_spots.cluster_en, drawer_cluster_cb, NULL);
+        lv_obj_align(s_check_cluster, LV_ALIGN_TOP_RIGHT, 0, 166);
 
         // Not a source - a filter over all four, so it sits below them with a
         // blank line between. Tapping a spot sets the MODE as well as the
         // frequency, so with this off a CW operator can land in FT8 without
-        // meaning to (Michael KZ4LY).
+        // meaning to (Michael KZ4LY). Plain white: it isn't a source, so it
+        // gets no source colour.
         lv_obj_t *smf_lbl = lv_label_create(sec);
-        lv_label_set_text(smf_lbl, "Mode filter the spots");
+        lv_label_set_text(smf_lbl, "Mode-filter the spots");
         lv_obj_set_style_text_color(smf_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(smf_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(smf_lbl, LV_ALIGN_TOP_LEFT, 0, 228);

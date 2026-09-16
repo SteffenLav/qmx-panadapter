@@ -146,13 +146,20 @@ static float s_map_zoom = 1.0f;
 static void map_sync_scroll_chain(void);   // defined with the drag-pan, far below
 static float s_map_pan_dx = 0.0f, s_map_pan_dy = 0.0f;
 #define MAP_ZOOM_MIN 1.0f
-/* ⛔ THE CHALLENGE THE OPERATOR ASKED FOR. This was 8.0 - the new Zoom
- * dropdown's top preset is x10, and a preset the pinch ceiling cannot then
- * reach would be a control that lies about what it just did (pick x10, pinch
- * out one notch, and the picture would already be past the dropdown's own
- * stated maximum). Raised to 10 so pinch and the dropdown share one ceiling -
- * whichever one you used last, the other is never surprised by it. */
-#define MAP_ZOOM_MAX 10.0f
+/* ⛔ THE CHALLENGE THE OPERATOR ASKED FOR, TWICE NOW. This was 8.0, then 10 -
+ * the second time (2026-09-16, right after the coastline decimation fix
+ * below started showing Italy's real boot shape instead of a box): "I would
+ * like to be able to zoom in further by pinching (until it make no sense)".
+ * That is a real ceiling to aim for, not "as far as possible" - the source
+ * data was simplified at generation time to a 0.05 deg Douglas-Peucker
+ * tolerance (tools/gen_world_map.py), so past a certain zoom every remaining
+ * "detail" is just that tolerance's own straight-line segments getting large
+ * enough to see, not real coastline. 50 is comfortably past that (at x50 the
+ * screen covers roughly a European country's width - the segments are still
+ * far smaller than that) while stopping short of zooming into visibly blocky
+ * nothing. Raised again so pinch and the dropdown (below) keep sharing one
+ * ceiling - whichever one you used last, the other is never surprised by it. */
+#define MAP_ZOOM_MAX 50.0f
 
 // Filter: CW (RBN), Digi (PSK Reporter) and WSPR (net/wspr_self.c) are the
 // only three sources there are, so this is three checkboxes, not the eight
@@ -199,30 +206,36 @@ static bool passes_filter(const self_spot_t *sp)
     }
 }
 
-// Brighter than ui_theme.h's UI_COLOR_MODE_CW/_DIGI/_WSPR, ON PURPOSE and
-// MAP-ONLY - those match the bandplan strip elsewhere in the UI, and dimming
-// this map's traces to match them was never the point. Traces are drawn at
-// LV_OPA_80 (recent) or LV_OPA_30 (older than 30 min, see map_render_spots())
-// over a now much-discussed land/water fill, and the original hues read as
-// visibly dim once blended at those opacities - operator, 2026-09-13, after
-// the land-colour passes above: "all three colours ... seems to be dim...
-// this will also give a better contrast to the historic traces". Same hues,
-// pushed brighter/more saturated so the source is still identifiable at a
-// glance and the faded (old) traces still read as traces, not noise.
-#define MAP_SRC_COLOR_CW   0x42A5F5   /* was UI_COLOR_MODE_CW   0x2477B3 */
-#define MAP_SRC_COLOR_DIGI 0xFFB300   /* was UI_COLOR_MODE_DIGI 0xB37724 */
-#define MAP_SRC_COLOR_WSPR 0x66BB6A   /* was UI_COLOR_MODE_WSPR 0x3D8C40 */
-
+// ⛔ COLLAPSED BACK INTO ui_theme.h's SHARED PALETTE (operator, 2026-09-16).
+// This used to hand-shift its own brighter CW/Digi/WSPR hues - see git
+// history for the 2026-09-13 reasoning (contrast against the land/water fill
+// at LV_OPA_80/LV_OPA_30) - but a project-wide colour audit turned up FOUR
+// independent palettes all claiming "amber"/"green"/"CW" with different
+// hexes, this one drifting from ui_theme.h's UI_COLOR_MODE_* by nothing but a
+// comment (`/* was ... */`) rather than shared code. Operator's call: one
+// palette, everywhere a MODE is the thing being coloured - if the map's
+// traces read dim again at these hexes, that is a reason to brighten
+// ui_theme.h's palette itself (so the bandplan strip and Memory Channels
+// gain the same fix), not to fork a second copy back into existence here.
+//
 // The sidebar's three source checkboxes ARE this map's legend (add_filter_
-// checkbox() below), so their swatches use these same brighter values, not
-// ui_theme.h's - a legend that shows a different colour than what the map
-// actually draws would be worse than no legend.
+// checkbox() below), so their swatches must stay exactly what the map draws -
+// both now read the shared UI_COLOR_MODE_* constants directly, so they cannot
+// drift from each other again.
+//
+// ⚠ NOT routed through ui_theme_mode_color(mode_string) - that helper
+// substring-matches a free-text mode string and has NO case that returns
+// UI_COLOR_MODE_WSPR at all (checked: only DiGi/FT8/FT4/RTTY, USB, LSB, CW
+// are recognised, so "WSPR" falls through to its UI_COLOR_KEY_BG default).
+// This dispatch is off spot_kind_t, an enum with an unambiguous answer for
+// all three cases, so it reads the constants directly rather than going
+// through string-matching built for a different, noisier input.
 static uint32_t source_color(spot_kind_t src)
 {
     switch (src) {
-    case SPOT_SRC_DIGI: return MAP_SRC_COLOR_DIGI;
-    case SPOT_SRC_WSPR: return MAP_SRC_COLOR_WSPR;
-    default:            return MAP_SRC_COLOR_CW;
+    case SPOT_SRC_DIGI: return UI_COLOR_MODE_DIGI;
+    case SPOT_SRC_WSPR: return UI_COLOR_MODE_WSPR;
+    default:            return UI_COLOR_MODE_CW;
     }
 }
 
@@ -1555,9 +1568,16 @@ static void rebuild_table(void)
         format_age(sp->heard_unix, now, age_buf, sizeof(age_buf));
         snprintf(snr_buf, sizeof(snr_buf), "%d dB", sp->snr_db);
         if (sp->distance_km >= 0) {
-            char km_dotted[16];
-            format_km_dotted((long)sp->distance_km, km_dotted, sizeof(km_dotted));
-            snprintf(dist_buf, sizeof(dist_buf), "%s km", km_dotted);
+            // Randy N4OPI, 2026-09-16: the FT8 decode list already honours
+            // distance_in_miles (ft8_screen_view.c) - this table never did,
+            // and always showed km regardless of the setting. Same conversion
+            // as that screen (km * 0.621371), formatted with the same
+            // thousands-dotted style either way.
+            char dist_dotted[16];
+            bool mi = settings_get_distance_in_miles();
+            long shown = mi ? (long)(sp->distance_km * 0.621371 + 0.5) : (long)sp->distance_km;
+            format_km_dotted(shown, dist_dotted, sizeof(dist_dotted));
+            snprintf(dist_buf, sizeof(dist_buf), "%s %s", dist_dotted, mi ? "mi" : "km");
         } else {
             snprintf(dist_buf, sizeof(dist_buf), "-");
         }
@@ -2097,7 +2117,28 @@ static void build_settings_drawer(lv_obj_t *parent)
     lv_obj_set_flex_flow(sb, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sb, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(sb, 20, 0);
-    lv_obj_clear_flag(sb, LV_OBJ_FLAG_SCROLLABLE);
+    // ⛔ THIS WAS THE SAME "PANEL HEIGHT IS ONE BUDGET" BUG CLAUDE.md ALREADY
+    // WARNS ABOUT, IN A NEW PLACE. Scrolling was cleared here, and by the time
+    // the Age section (label + checkbox + the "bright/faded" key) was added
+    // below the three Source checkboxes, the drawer's own content ran to
+    // roughly 718 px against 656 px of actual height (SCR_H - HEADER_H, minus
+    // top/bottom padding) - a ~62 px overrun that landed almost exactly on
+    // Flush, at the very bottom. With scrolling off there was no scrollbar to
+    // even hint that more content existed: Flush was not hidden, not moved,
+    // just silently clipped and permanently unreachable. Operator, 2026-09-16,
+    // looking straight at a screenshot ending at "faded = older": "I might be
+    // blind - but where is the flush button right now?" He was not blind -
+    // scrolling was OFF, so there was truly nothing further to find.
+    // Re-enabled rather than shrinking content to fit THIS session's row
+    // count: the next Source/Age row added would only reopen the same gap.
+    // settings_swipe_cb's open/close gesture (above) tracks horizontal drag
+    // distance only (dx) and fires from PRESSED/PRESSING/RELEASED events that
+    // LVGL delivers to this object regardless of its own scroll state, so a
+    // sideways swipe to close the drawer and an up/down scroll inside it
+    // cannot conflict - and add_filter_checkbox() already clears
+    // LV_OBJ_FLAG_SCROLL_CHAIN_VER on each row, so a tap ON a checkbox still
+    // cannot be mistaken for a drag on the drawer around it.
+    lv_obj_set_scrollbar_mode(sb, LV_SCROLLBAR_MODE_AUTO);
 
     // User Manual + Need Guidance - same two doors the main drawer offers,
     // same order, so this panel reads as a drawer rather than a stranger.
@@ -2132,20 +2173,16 @@ static void build_settings_drawer(lv_obj_t *parent)
     lv_obj_set_style_pad_top(lbl, 6, 0);
     lv_label_set_text(lbl, "Source");
 
-    add_filter_checkbox(sb, "CW (RBN)",    MAP_SRC_COLOR_CW,   cw_cb);
-    add_filter_checkbox(sb, "Digi (PSKR)", MAP_SRC_COLOR_DIGI, digi_cb);
-    add_filter_checkbox(sb, "WSPR",        MAP_SRC_COLOR_WSPR, wspr_cb);
+    add_filter_checkbox(sb, "CW (RBN)",    UI_COLOR_MODE_CW,   cw_cb);
+    add_filter_checkbox(sb, "Digi (PSKR)", UI_COLOR_MODE_DIGI, digi_cb);
+    add_filter_checkbox(sb, "WSPR",        UI_COLOR_MODE_WSPR, wspr_cb);
 
-    /* Age, below the three SOURCE boxes and visually separated from them,
-     * because it filters a different axis: those three say WHERE a spot came
-     * from, this one says WHEN. Drawn in muted text rather than a source
-     * colour for the same reason - it is not a fourth source. */
-    lv_obj_t *age_lbl = lv_label_create(sb);
-    lv_label_set_text(age_lbl, "Age");
-    lv_obj_set_style_text_font(age_lbl, &lv_font_montserrat_22, 0);
-    lv_obj_set_style_text_color(age_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_pad_top(age_lbl, 10, 0);
-
+    // "Age" heading REMOVED (operator, 2026-09-16: "remove the text line Age
+    // and move up the Older >30 min") - it filters a different axis than the
+    // three Source rows above it (WHEN a spot arrived, not WHERE it came
+    // from), but that distinction did not need its own row once the panel was
+    // already tight on vertical room. The checkbox's own label still says
+    // "Older >30 min", which carries the same meaning on its own.
     add_filter_checkbox(sb, "Older >30 min", UI_COLOR_TEXT_SECONDARY, older_cb);
 
     /* Says what the dimming MEANS. The map draws older spots at a third of the
@@ -2163,6 +2200,17 @@ static void build_settings_drawer(lv_obj_t *parent)
     lv_obj_set_width(s_grid_warn, SIDEBAR_W - 28);
     lv_obj_set_style_pad_top(s_grid_warn, 10, 0);
     lv_label_set_text(s_grid_warn, "");   // filled in by refresh, see refresh_timer_cb
+    // HIDDEN when empty (the common case - a grid square is normally set),
+    // not just empty-texted. A flex child still claims a row for its own
+    // empty-string line height plus this label's own 10 px pad_top even with
+    // nothing to show, and that is exactly the blank line the operator saw
+    // sitting between the "bright/faded" key text above and Flush below
+    // ("remove the line space between the helping grey text and the Flush
+    // button") - LVGL's flex layout skips a HIDDEN object entirely, which a
+    // merely-empty one does not get. refresh_timer_cb toggles this flag in
+    // the same place it sets the text, so a grid square typed in later still
+    // makes the real warning reappear and claim its row back.
+    lv_obj_add_flag(s_grid_warn, LV_OBJ_FLAG_HIDDEN);
 
     // A one-child row of its own, centered - the drawer's own flex cross-
     // align is START (so the checkboxes/labels above hug the left edge),
@@ -2468,6 +2516,10 @@ static void refresh_timer_cb(lv_timer_t *t)
     if (s_grid_warn) {
         lv_label_set_text(s_grid_warn, s_have_me ? "" :
             "No home grid square set (Settings -> My Grid) - the map cannot draw any lines.");
+        // See its own comment at creation - hidden (not just empty-texted)
+        // so it claims no flex row when there is nothing to warn about.
+        if (s_have_me) lv_obj_add_flag(s_grid_warn, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_clear_flag(s_grid_warn, LV_OBJ_FLAG_HIDDEN);
     }
 
     // Band conditions update roughly hourly - fetched_ms is the same cheap
@@ -2515,7 +2567,10 @@ static void exit_btn_cb(lv_event_t *e)
  *    already computes on every fresh open, so selecting it just re-runs that
  *    same function rather than jumping to some particular zoom value.
  *
- * Picking x1..x10 marks the view as the operator's (s_view_is_users = true),
+ * Extended to x20/x50, 2026-09-16, matching MAP_ZOOM_MAX's own second raise -
+ * same reasoning, this list must never fall short of what pinching can reach.
+ *
+ * Picking x1..x50 marks the view as the operator's (s_view_is_users = true),
  * same as a pinch would - a deliberate zoom choice should not be silently
  * overridden the next time a new spot arrives (see s_view_is_users's own
  * comment). It does NOT track live pinch zoom back onto itself - the
@@ -2525,7 +2580,7 @@ static void zoom_dropdown_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
     uint32_t idx = lv_dropdown_get_selected(dd);
-    static const float kZoom[] = { 0.0f /* Fit */, 1, 2, 3, 4, 5, 10 };
+    static const float kZoom[] = { 0.0f /* Fit */, 1, 2, 3, 4, 5, 10, 20, 50 };
     if (idx >= sizeof(kZoom) / sizeof(kZoom[0])) return;
     if (idx == 0) {
         s_view_is_users = false;   /* map_fit_to_spots() sets it back anyway - explicit for clarity */
@@ -2633,7 +2688,7 @@ void spot_map_view_init(lv_obj_t *parent)
                  -(ZOOM_DD_W / 2 + ZOOM_GAP + ZOOM_LBL_W / 2), HEADER_H / 2 - 14);
 
     lv_obj_t *zoom_dd = lv_dropdown_create(hdr);
-    lv_dropdown_set_options(zoom_dd, "Fit\nx1\nx2\nx3\nx4\nx5\nx10");
+    lv_dropdown_set_options(zoom_dd, "Fit\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
     lv_obj_set_size(zoom_dd, ZOOM_DD_W, 46);
     lv_obj_align(zoom_dd, LV_ALIGN_TOP_MID, (ZOOM_LBL_W + ZOOM_GAP) / 2, (HEADER_H - 46) / 2);
     lv_obj_set_style_text_font(zoom_dd, &lv_font_montserrat_24, 0);

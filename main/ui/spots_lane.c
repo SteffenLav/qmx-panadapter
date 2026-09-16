@@ -76,8 +76,11 @@ static const char *TAG = "spots_ui";
 // a vivid green trace, so a mid-tone would disappear into it. Worked-before is
 // the only muted one, and even that is light enough to read - it needs to be
 // legible but not to compete for attention.
-#define COL_POTA    0xFFC864
-#define COL_RBN     0x70FF90
+// Shared with the settings-drawer checkboxes now (spots_lane.h) - see that
+// header's own comment. #define'd here to the same names so nothing else in
+// this file has to change.
+#define COL_POTA    SPOTS_COL_POTA
+#define COL_RBN     SPOTS_COL_RBN
 #define COL_WORKED  0xC0C0C0
 // An activation spot the RBN independently heard on the same frequency. The
 // duplicate entry is gone (spots.c folds it in), so this colour is the only
@@ -112,9 +115,43 @@ static const char *spot_mode_tag(spot_mode_t m)
     }
 }
 
+// Operator, 2026-09-16 (same colour-scheme cleanup as spot_map_view.c's
+// source_color()): the tag says the spot's MODE, not which network reported
+// it, so it now uses ui_theme.h's shared mode palette instead of inheriting
+// COL_POTA/COL_RBN - the callsign it's attached to still does, via
+// s_w->colour[si] at the CALLSIGN label's own colour (see the two-label
+// split in the render loop below - s_labels[]/s_tag_labels[]). LVGL 9 has no
+// inline multi-colour text (the old "#RRGGBB text#" recolour markup was
+// removed; the replacement is lv_span_group, a different widget this file's
+// tap/drag geometry is not built around), so getting two colours on one row
+// needs two label objects, not one. Chosen over the simpler "colour the
+// whole label by mode" alternative because that made the tick (still
+// source-coloured) disagree with its own label - shown to the operator as a
+// side-by-side mockup, 2026-09-16, "Option 1" picked.
+//
+// spot_mode_t has one SSB bucket for both sidebands (spot_mode_from_cat()
+// above never distinguishes USB/LSB), so UI_COLOR_MODE_USB stands in for
+// "SB" - no worse a choice than the other, and consistent with how the
+// band-plan strip's own single "Phone" colour already treats both alike.
+static uint32_t spot_mode_color(spot_mode_t m)
+{
+    switch (m) {
+    case SPOT_MODE_CW:   return UI_COLOR_MODE_CW;
+    case SPOT_MODE_SSB:  return UI_COLOR_MODE_USB;
+    case SPOT_MODE_DIGI: return UI_COLOR_MODE_DIGI;
+    default:              return UI_COLOR_MODE_CW;   // unreachable: spot_mode_tag() already returns NULL for this case
+    }
+}
+
 static lv_obj_t *s_lane;
 static lv_obj_t *s_ticks[MAX_TICKS];
 static lv_obj_t *s_labels[MAX_LABELS];
+// Mode tag, positioned right after its callsign in s_labels[] - see
+// spot_mode_color()'s own comment for why this is a second label object
+// rather than coloured text inside the first. Not itself a tap target: the
+// callsign label already is one (label_gesture_cb), and duplicating that
+// onto a 2-letter tag would just be two overlapping hit areas for one spot.
+static lv_obj_t *s_tag_labels[MAX_LABELS];
 static lv_obj_t *s_edge_l, *s_edge_r;
 static lv_obj_t *s_edge_l_hit, *s_edge_r_hit;   // generous invisible tap targets
 
@@ -250,6 +287,7 @@ static void hide_all(void)
 {
     for (int i = 0; i < MAX_TICKS; i++)  if (s_ticks[i])  lv_obj_add_flag(s_ticks[i],  LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < MAX_LABELS; i++) if (s_labels[i]) lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < MAX_LABELS; i++) if (s_tag_labels[i]) lv_obj_add_flag(s_tag_labels[i], LV_OBJ_FLAG_HIDDEN);
     if (s_edge_l) lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
     if (s_edge_r) lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
     // The tap targets go with them - an invisible live target over empty
@@ -426,39 +464,56 @@ static void repaint(void)
 
         lv_obj_t *lb = s_labels[used];
         if (!lb) break;
+        lv_obj_t *tg = s_tag_labels[used];
         // Only tag the mode when the lane is showing more than one. With the
         // filter on, every label is your mode and a tag would be noise on every
         // single one - the sleekest indicator is the one that is not drawn.
         const char *tag = st.spots_mode_filter ? NULL : spot_mode_tag(sp->mode);
-        if (tag) {
-            char buf[20];
-            snprintf(buf, sizeof(buf), "%s %s", sp->call, tag);
-            lv_label_set_text(lb, buf);
-        } else {
-            lv_label_set_text(lb, sp->call);
-        }
+        lv_label_set_text(lb, sp->call);
         lv_obj_update_layout(lb);
-        int w = lv_obj_get_width(lb);
-        int x = s_w->x[i] - w / 2;                      // centre the name on its tick
+        int call_w = lv_obj_get_width(lb);
+
+        // Two labels, not one recoloured string - see spot_mode_color()'s
+        // comment above for why (LVGL 9 dropped inline multi-colour text).
+        int tag_w = 0;
+        if (tag && tg) {
+            lv_label_set_text(tg, tag);
+            lv_obj_update_layout(tg);
+            tag_w = lv_obj_get_width(tg);
+        }
+        int gap = (tag && tg) ? 4 : 0;
+        int w = call_w + gap + tag_w;                   // combined block width
+        int x = s_w->x[i] - w / 2;                      // centre the BLOCK on its tick
         if (x < 0) x = 0;
         if (x + w > DISPLAY_H_RES) x = DISPLAY_H_RES - w;
 
         int row = pick_row(x, w, row_end);
         if (row < 0) continue;                          // no room: line only
 
-        lv_obj_set_pos(lb, x, label_row_y(s_lane_h, row));
+        int y = label_row_y(s_lane_h, row);
+        lv_obj_set_pos(lb, x, y);
         lv_obj_set_style_text_color(lb, lv_color_hex(s_w->colour[si]), 0);
         lv_obj_set_style_text_opa(lb, s_w->opa[si], 0);
         lv_obj_set_style_bg_opa(lb, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
-        // The label is the tap target (the container cannot be, or it would eat
-        // every spectrum gesture). It carries an index into s_label_target[]
-        // rather than a bare frequency, because a tap has to set the MODE too.
+        // The callsign label is the tap target (the container cannot be, or it
+        // would eat every spectrum gesture). It carries an index into
+        // s_label_target[] rather than a bare frequency, because a tap has to
+        // set the MODE too.
         s_label_target[used].freq_hz = sp->freq_hz;
         s_label_target[used].mode    = (uint8_t)sp->mode;
         s_label_target[used].colour  = s_w->colour[si];
         s_label_target[used].x       = (int16_t)s_w->x[i];   // the tick, for drag-snap
         lv_obj_set_user_data(lb, (void *)(uintptr_t)(used + 1));
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
+
+        if (tag && tg) {
+            lv_obj_set_pos(tg, x + call_w + gap, y);
+            lv_obj_set_style_text_color(tg, lv_color_hex(spot_mode_color(sp->mode)), 0);
+            lv_obj_set_style_text_opa(tg, s_w->opa[si], 0);
+            lv_obj_set_style_bg_opa(tg, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
+            lv_obj_clear_flag(tg, LV_OBJ_FLAG_HIDDEN);
+        }
+
         s_w->row[i] = (int8_t)row;          // the line pass needs this
         used++;
         s_label_n = used;
@@ -746,6 +801,20 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
         lv_obj_add_event_cb(lb, label_gesture_cb, LV_EVENT_PRESS_LOST, NULL);
         lv_obj_add_flag(lb, LV_OBJ_FLAG_HIDDEN);
         s_labels[i] = lb;
+
+        // The mode tag, same backing/font, but NOT clickable - see its
+        // pool's own comment above (the callsign label beside it is the tap
+        // target; two overlapping hit areas for one spot would only confuse
+        // label_gesture_cb about which one a drag started on).
+        lv_obj_t *tg = lv_label_create(lane);
+        lv_obj_set_style_text_font(tg, SPOT_FONT, 0);
+        lv_label_set_text(tg, "");
+        lv_obj_set_style_bg_color(tg, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(tg, LABEL_BG_OPA, 0);
+        lv_obj_set_style_pad_hor(tg, 2, 0);
+        lv_obj_set_style_radius(tg, 2, 0);
+        lv_obj_add_flag(tg, LV_OBJ_FLAG_HIDDEN);
+        s_tag_labels[i] = tg;
     }
 
     // Off-screen counts sit near the BOTTOM corners: the upper rows belong to the

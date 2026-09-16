@@ -1240,6 +1240,7 @@ static char          s_web_reply_result[64];
 static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
 static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
 static bool          s_web_done_said;            // DONE reported once per QSO
+static bool          s_web_timeout_said;          // TIMEOUT reported once per QSO - see web_result_set_sticky's TIMEOUT call below
 
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
@@ -1527,8 +1528,24 @@ static void t_clock_cb(lv_timer_t *t)
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
             // "mid-QSO over-ride/cancel button".
+            //
+            // ⛔ THIS USED TO STOP ONLY AT THE NEXT SLOT BOUNDARY, NOT
+            // IMMEDIATELY - Randy again, 2026-09-16, wanting it to work like the
+            // Tab5's own tap "in case the operator has turned off the SWR
+            // protection and needs to cancel quickly". ft8_tx_disarm() is a
+            // no-op while a burst is ACTIVE (see its own comment) - it only
+            // clears an ARMED request - so an in-progress transmission ran to
+            // the end of the slot regardless of this handler firing. The Tab5's
+            // own tap (tx_indicator_tap_cb, above) also calls
+            // ft8_tx_request_abort(), which is what actually breaks the live
+            // symbol-send loop mid-burst; the web path never did. Added here,
+            // same as the Tab5 tap - safe to call whether or not a burst is
+            // actually running (it is a plain flag ft8_tx_run() checks between
+            // symbols, and is silently ignored if nothing is transmitting).
+            ft8_robot_stand_down("you cancelled a transmission");
             ft8_tx_disarm();
             ft8_qso_abort();
+            ft8_tx_request_abort();
             // No confirmation text - operator, 2026-09-05: "do not show
             // anything - just go back to the initial view". Every other
             // override outcome is worth reading (Armed/Busy/refused); Cancel
@@ -1743,7 +1760,8 @@ static void t_clock_cb(lv_timer_t *t)
         ft8_qso_state_t qso_st = ft8_qso_get_state();
         // Re-armed for the next contact the moment this one stops being DONE,
         // so every completed QSO announces itself exactly once.
-        if (qso_st != FT8_QSO_DONE) s_web_done_said = false;
+        if (qso_st != FT8_QSO_DONE)    s_web_done_said    = false;
+        if (qso_st != FT8_QSO_TIMEOUT) s_web_timeout_said = false;
         char b[128];
 
         // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
@@ -1937,6 +1955,21 @@ static void t_clock_cb(lv_timer_t *t)
                 snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
+
+            // Randy N4OPI, 2026-09-16: wants a browser watching from another
+            // room to keep seeing the timeout, "like the 'QSO Completed'
+            // notification behaviour" - which already solves exactly this via
+            // web_r (see web_result_set_sticky's own comment above: the state
+            // machine is not the right owner of a message that stands until
+            // the operator reacts, because the same "it blocks new processes"
+            // problem THAT quoted comment names is why this sticky state
+            // auto-clears after 20s in the first place). Same treatment,
+            // reported once per timeout the same way DONE is reported once
+            // per QSO, right above.
+            if (!s_web_timeout_said) {
+                s_web_timeout_said = true;
+                web_result_set_sticky("%s  QSO timeout", target);
+            }
 
         } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
                    qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
