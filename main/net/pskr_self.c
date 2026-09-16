@@ -247,6 +247,31 @@ static bool client_create(void)
         // esp_mqtt_client_start()'s internal xTaskCreate() (always INTERNAL
         // RAM, see watchdog_task()'s comment) needs to find contiguous.
         .task.stack_size = 4096,
+        /* ⛔ ABOVE taskLVGL BY DEFAULT, AND THAT IS A UI STALL.
+         *
+         * esp-mqtt's own Kconfig default is priority 5 (its Kconfig:120-122,
+         * applied in mqtt_client.c:423-425 only when this field is <= 0), and
+         * with core selection off its task runs tskNO_AFFINITY - so it could
+         * float onto CORE 0 and preempt taskLVGL (priority 4, pinned to core
+         * 0) on every incoming publish, for the whole session, whether or not
+         * the SelfSpotter screen was ever opened. That is exactly the class
+         * CLAUDE.md's own history names: nothing above priority 4 may contend
+         * with the LVGL thread on core 0.
+         *
+         * Randy N4OPI, 2026-09-17, on v1.13.0 (the first release shipping
+         * SelfSpotter): "things are generally sluggish, especially the
+         * Panadapter. In FT8, clicking a CQ caller is very slow to act, 1-3
+         * seconds. Sometimes it doesn't register the mouse click unless I
+         * click it again... If I go back to 1.12.4, life is good" - and,
+         * separately, that it happens "even without the map being enabled",
+         * which is the half a rendering-cost explanation cannot cover and
+         * this one does: the feed connects at boot regardless.
+         *
+         * 3 matches this file's own watchdog_task, i.e. a background feed
+         * with nothing latency-critical about it. The other half of the fix
+         * is CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED + core 1 in sdkconfig,
+         * keeping it off core 0 entirely. */
+        .task.priority = 3,
     };
     s_client = esp_mqtt_client_init(&cfg);
     if (!s_client) return false;

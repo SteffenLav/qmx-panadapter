@@ -326,3 +326,20 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 # The Reader needs a fourth heading size: body is 24 and h3 is gold 24,
 # so a h4 had to be either smaller than its own prose or identical to h3.
 CONFIG_LV_FONT_MONTSERRAT_26=y
+
+# SelfSpotter's PSK Reporter client (net/pskr_self.c) is the only MQTT user
+# here, and esp-mqtt spawns its own task. Left alone that task is
+# tskNO_AFFINITY, so it can float onto CORE 0 and preempt taskLVGL (priority
+# 4, pinned to core 0) on every incoming publish - for the whole session,
+# since the feed connects at boot whether or not the SelfSpotter screen is
+# ever opened. Randy N4OPI reported exactly that on v1.13.0, the first
+# release to ship SelfSpotter: 1-3 s to register an FT8 row tap, a generally
+# sluggish panadapter, "if I go back to 1.12.4, life is good".
+#
+# Core 1 for the same reason every other new background task in this project
+# goes there (see CLAUDE.md's core-0 accounting: taskLVGL alone is ~74% of
+# core 0, while core 1 idles ~90%). The other half is .task.priority = 3 in
+# pskr_self.c's own client config - priority and affinity are set in two
+# different places because esp-mqtt exposes them that way.
+CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
+CONFIG_MQTT_USE_CORE_1=y

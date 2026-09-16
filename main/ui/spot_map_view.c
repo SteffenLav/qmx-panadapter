@@ -41,6 +41,7 @@
 #include "util/geo_coords.h"    // geo_coords_iso_for_call() - LIST tab's ISO column
 #include "util/format_freq.h"
 #include "storage/settings.h"
+#include "cat.h"                // cat_get_frequency() - the header's own info line
 #include "adif/adif_log.h"      // adif_log_band_for_freq() - the ONE band table, see its own comment
 
 #include "esp_log.h"
@@ -100,6 +101,7 @@ static lv_obj_t *s_table_list = NULL;   // Tabelle tab: scrollable row list
 static lv_obj_t *s_grid_warn  = NULL;   // "set my_grid" notice, shown when it's empty
 static lv_obj_t *s_tabview    = NULL;   // so map_pinch_poll_cb() can tell MAP is the visible tab
 static lv_obj_t *s_zoom_dd    = NULL;   // greyed out on LIST/PROP - see tabview_changed_cb
+static lv_obj_t *s_info_lbl   = NULL;   // callsign/date/time/freq - see update_info_line()
 static lv_timer_t *s_refresh_timer = NULL;
 static lv_timer_t *s_pinch_timer   = NULL;
 static bool s_active = false;
@@ -266,6 +268,51 @@ static void format_km_dotted(long km, char *out, size_t out_sz)
         if (o + 1 < out_sz) out[o++] = digits[i];
     }
     out[o] = '\0';
+}
+
+// Gyula HA3HZ, 2026-09-17: "If I don't include the time and location in the
+// screenshot filename, the image itself doesn't convey much information...
+// I would like to see my own callsign, the date, the time, and the
+// frequency displayed in the 'Selfspotter' line of the header." A
+// screenshot is a self-contained record of what it shows, and callsign,
+// UTC and dial frequency are exactly the three facts a bare image cannot
+// otherwise carry - so this reads it back off the same sources the rest
+// of the UI already trusts (settings_get_my_callsign(), time(NULL)/
+// gmtime_r() - the same pair status.c uses for the bottom-bar clock,
+// cat_get_frequency(), and format_freq_hz() - #302's one shared frequency
+// formatter) rather than inventing new ones. Called once at build and
+// every refresh_timer_cb tick (1 Hz) - a single small label's text does
+// not need change-detection to stay cheap.
+static void update_info_line(void)
+{
+    if (!s_info_lbl || !lv_obj_is_valid(s_info_lbl)) return;
+
+    char call[16];
+    settings_get_my_callsign(call, sizeof(call));
+
+    char freq_buf[16];
+    format_freq_hz(cat_get_frequency(), g_freq_style, freq_buf, sizeof(freq_buf));
+
+    time_t now = time(NULL);
+    struct tm tm_utc;
+    gmtime_r(&now, &tm_utc);
+
+    char buf[96];
+    if (call[0]) {
+        snprintf(buf, sizeof(buf), "%s  %s\n%04d-%02d-%02d %02d:%02d UTC",
+                 call, freq_buf,
+                 tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
+                 tm_utc.tm_hour, tm_utc.tm_min);
+    } else {
+        // No callsign set yet - still show date/time/freq rather than an
+        // empty line, same "something is better than a gap" reasoning as
+        // s_grid_warn's own row elsewhere in this file.
+        snprintf(buf, sizeof(buf), "%s\n%04d-%02d-%02d %02d:%02d UTC",
+                 freq_buf,
+                 tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
+                 tm_utc.tm_hour, tm_utc.tm_min);
+    }
+    lv_label_set_text(s_info_lbl, buf);
 }
 
 // Refreshes s_have_me/s_my_lat/s_my_lon from storage/settings.h's my_grid.
@@ -2473,6 +2520,7 @@ static void refresh_timer_cb(lv_timer_t *t)
     (void)t;
     if (!s_active) return;
 
+    update_info_line();
     refresh_own_position();
 
     // A spot fades when it passes 30 min even if nothing new arrives - redraw
@@ -2696,6 +2744,39 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_add_event_cb(zoom_dd, zoom_dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(zoom_dd, zoom_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
     s_zoom_dd = zoom_dd;   // tabview_changed_cb greys this out off the MAP tab
+
+    // Callsign/freq/UTC info line - see update_info_line()'s own header
+    // comment. Sits in the free space between the Zoom group and Exit
+    // (there is no room for a second row within HEADER_H's 64 px without
+    // growing it, but there is horizontal slack here: title ends well
+    // before the centred Zoom group at x=767, and Exit starts around
+    // x=1141 - see the constants below).
+    //
+    // ⛔ FIRST VERSION used lv_obj_align_to(..., exit_btn, LV_ALIGN_OUT_LEFT_MID,
+    // ...) with the label's text set AFTER the align call, on an initially-EMPTY
+    // label. lv_obj_align_to() computes its offset from the object's size AT THE
+    // MOMENT OF THE CALL, so it anchored against a near-zero-width box; setting
+    // the real (much wider) text afterwards only grew the box to the right from
+    // that same top-left corner - landing it UNDER Exit instead of left of it
+    // (operator screenshot, 2026-09-17: text fragments visible peeking out from
+    // behind the Exit button). Fixed by giving this a FIXED width and centring
+    // text within it, positioned at a fixed gap between the two neighbours
+    // instead of measuring either one at build time - same width regardless of
+    // whether the callsign is set, so it cannot drift again if the content's
+    // own size changes later. LV_ALIGN_LEFT_MID centres it vertically in the
+    // header for free (this is a direct child of hdr, whose height IS
+    // HEADER_H, so "centred on the banner" falls out of that alignment
+    // without a separate y calculation).
+    #define INFO_GAP_X   780
+    #define INFO_GAP_W   340
+    lv_obj_t *info_lbl = lv_label_create(hdr);
+    lv_obj_set_style_text_font(info_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(info_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_align(info_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(info_lbl, INFO_GAP_W);
+    lv_obj_align(info_lbl, LV_ALIGN_LEFT_MID, INFO_GAP_X, 0);
+    s_info_lbl = info_lbl;
+    update_info_line();
 
     build_settings_drawer(s_overlay);
     build_settings_scrim(s_overlay);

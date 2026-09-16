@@ -2329,9 +2329,25 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     memcpy(&header[58], &g_mask,    4);
     memcpy(&header[62], &b_mask,    4);
 
+    // Gyula HA3HZ, 2026-09-17: "If I don't include the time and location in
+    // the screenshot filename, the image itself doesn't convey much
+    // information... have the date and time included in the screenshot
+    // filename; this would save me from having to use the keyboard every
+    // time." "inline" (not "attachment") is unchanged on purpose - this
+    // still opens/previews in the browser tab exactly as before, but the
+    // SUGGESTED filename a "Save image as" offers now carries the moment
+    // it was taken instead of a fixed "ss.bmp" every single time.
+    char cd[64];
+    time_t now = time(NULL);
+    struct tm tm_utc;
+    gmtime_r(&now, &tm_utc);
+    snprintf(cd, sizeof(cd), "inline; filename=qmx-shot-%04d%02d%02d-%02d%02d%02d.bmp",
+             tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
+             tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+
     httpd_resp_set_type(req, "image/bmp");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=ss.bmp");
+    httpd_resp_set_hdr(req, "Content-Disposition", cd);
 
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
 
