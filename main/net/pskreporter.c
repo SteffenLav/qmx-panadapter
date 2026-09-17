@@ -54,7 +54,12 @@ typedef struct {
     uint32_t utc_sec;
 } spot_t;
 
-static spot_t            s_batch[BATCH_MAX];
+/* PSRAM (2026-09-17): 2,304 bytes of internal DIRAM for a buffer that is
+ * appended to a few times per slot and drained once every 5+ minutes - cold by
+ * any measure, and mutex-protected below, so no ISR reaches it. Part of the
+ * DIRAM reclamation that took the internal-free watermark off 0 KB; see
+ * ft8_screen.c's s_table for the measurements and the reason it matters. */
+static EXT_RAM_BSS_ATTR spot_t s_batch[BATCH_MAX];
 static int               s_batch_n = 0;
 static SemaphoreHandle_t s_lock;
 static bool              s_running = false;

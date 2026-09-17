@@ -212,7 +212,14 @@ void app_main(void)
      * failed allocation here means something is badly wrong, so fall back to
      * a zeroed on-stack instance rather than dereference NULL for the next
      * couple hundred lines. */
-    static qmx_settings_t s_cfg_fallback;  // static, NOT stack - see the comment above
+    /* ...and in PSRAM, not internal DIRAM (2026-09-17): this is 3,596 bytes of
+     * the scarcest memory on the board, held for the entire session, insuring
+     * a path that by the comment above only runs when "something is badly
+     * wrong". Safe despite insuring a PSRAM allocation - .ext_ram.bss is
+     * mapped at LINK time, so it does not depend on the heap that failed.
+     * Part of the DIRAM reclamation that took the internal-free watermark off
+     * 0 KB; see ft8_screen.c's s_table for the measurements. */
+    static EXT_RAM_BSS_ATTR qmx_settings_t s_cfg_fallback;  // static, NOT stack - see above
     qmx_settings_t *cfg = heap_caps_malloc(sizeof(*cfg), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (cfg) {
         settings_load_all(cfg);
