@@ -74,9 +74,10 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   band presets, live TX status with a **Call CQ** button, a sortable QSO log you can
   correct entries in, config download and upload, a microSD file browser, screenshots,
   and the diagnostic log.
-- **Updating from the device** *(needs WiFi)* — a new release is fetched quietly in the
-  background and offered once, with **Restart now** or **Later**. Nothing is installed
-  without you asking, and the automatic download can be switched off.
+- **Updating from the device** *(needs WiFi)* — tap the version line, press **Download
+  now**, then **Restart now**. Nothing is fetched or installed until you ask.
+  ⚠ **The release after v1.14.4 needs a one-time USB-C cable update** — see
+  [Settings](guide/settings.md#firmware-updates).
 - **Built-in manual** — this whole guide is compiled into the firmware, so it is instant
   and needs no WiFi and no card. It opens at the chapter for the screen you are on,
   warning banners are tappable, and a **Need guidance?** panel takes your symptom in plain
@@ -109,17 +110,27 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.14.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.14.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-**v1.14.3 fixes a v1.14.2 crash** — picking a new TX tone from the web UI while a QSO or
-CQ run was armed (not actively transmitting) could reboot the Tab5. Same underlying bug
-class as the v1.14.0 crash, reached from a different task this time. See
-[releases](releases.md) for the full list, including v1.14.2's sluggishness and web UI
-fixes.
+!!! warning "v1.14.4 is the last over-the-air release for a while"
+
+    The next firmware reclaims 2.81 MB of unused flash, which means rewriting the
+    partition table — something an over-the-air update cannot do. It arrives as a
+    **flasher download** over the same USB-C cable you used the first time. One
+    time, then back to normal. **Your settings and QSO log are kept** — press
+    **Enter** at the flash-type prompt, never **E**. The Tab5 will tell you when
+    the time comes, and new users are unaffected.
+
+**v1.14.4 fixes the reboots.** Fifteen runs on the bench before the fix lasted a median
+of 15 minutes; with it, the same bench ran 14.7 hours with none — three rarely-read
+arrays were occupying the internal RAM that USB, WiFi and the SD card need. It also
+stops the settings drawer cutting your transmit power, spells out country names on the
+FT8 and WSPR lists, and corrects 79 callsign prefixes that named the wrong country. See
+[releases](releases.md) for the full list.
 
 **v1.14.1 fixed a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
 large for a 4096-byte task stack, hit by nearly any frequency change. Thanks to Martin
@@ -259,7 +270,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.3.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.4.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -29,12 +29,12 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 | **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
 | **GRID** | Their Maidenhead locator, as transmitted |
-| **COUNTRY** | Country from the callsign prefix |
+| **COUNTRY** | Country from the callsign prefix, spelled out where it fits, otherwise its 3-letter code |
 | **SNR** | Signal-to-noise, in the WSPR convention (a 2500 Hz reference — figures around −25 dB are entirely normal and perfectly decodable) |
 | **DRF** | Drift, in Hz per minute. A stable transmitter reads 0 |
 | **TONE** | Where in the 200 Hz sub-band they were heard |
 | **PWR** | The power **they declared**, not a measurement |
-| **KM / BRG** | Great-circle distance and bearing from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md) |
+| **KM** | Great-circle distance from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md). A leading `~` means the distance came from the station's country rather than its grid |
 | **DT** | How far into the two-minute cycle that transmission actually started, in seconds. **Nominal is +1.0**, because a WSPR transmission begins one second into its even minute — so a value far from that is the other station's clock rather than anything at your end |
 
 Below the list:
@@ -126,7 +126,11 @@ There is no separate "allow transmitting" setting. The **TX** button on the page
 
 #### Calibrate Power
 
-Before Declared power can offer anything real, the current band needs calibrating. **Calibrate Power** sweeps the QMX's *Max. PA voltage* through 45 points on a **dummy load** — not the antenna — and records the real RF output at each with the radio's own `PC;` readback. Takes a few minutes; the result is saved for that band and used from then on.
+Before Declared power can offer anything real, the current band needs calibrating. **Calibrate Power** sweeps the QMX's *Max. PA voltage* on a **dummy load** — not the antenna — and records the real RF output at each step with the radio's own `PC;` readback. The result is saved for that band and used from then on.
+
+*(v1.14.4)* The sweep **stops at your own Max. PA voltage**, and the window shows that figure before you start — so a 9 V QMX, or one you have deliberately limited, is never driven past the setting you chose. It also **stops early once the measured power stops rising**, which is what happens above your supply voltage: on an 8 V supply every step above ~8 V would otherwise re-measure the same watts for minutes of pointless key-down. Bruce N9JCV found both.
+
+Because the sweep can end early, a shorter results table is normal rather than a failure — the window says which of the two limits ended it.
 
 You reach it two ways: the **"Calibrate this band"** button that appears in place of Declared power (or Output power, on other modes) whenever the current band has no data yet, or **"Recalibrate this band"** in the same place once it does — for redoing a band after a change to your antenna or feedline.
 
@@ -152,9 +156,28 @@ A separate slider, filed next to Calibrate Power, sets the radio's output for ev
 
 #### Duty cycle
 
-How much of the time you are willing to transmit, as a fraction of cycles: **0%** (receive only), **10%**, **20%**, **33%** or **50%**. Each cycle is decided independently at random, which is deliberate — a fixed pattern would have you transmitting in step with everyone else who chose the same setting.
+How often you transmit, as an exact period: **Receive only**, **1 in 2**, **1 in 3**, **1 in 4**, **1 in 5** or **1 in 10**.
 
-WSPR convention is to transmit a minority of the time and listen the rest. 20% is a reasonable default; 50% is a lot on a shared, very quiet sub-band.
+This is a **period, not a chance**. "1 in 5" means one transmission then four receive cycles, every time — you can look at the setting and say which cycle will key the radio. It used to be a percentage rolled independently each cycle, which meant nobody could predict it and two bursts could land back to back by accident.
+
+WSPR convention is to transmit a minority of the time and listen the rest. 1 in 5 is a reasonable default; 1 in 2 is a lot on a shared, very quiet sub-band.
+
+#### Bursts per transmission *(v1.14.4)*
+
+How many **consecutive** cycles each transmission occupies: **1** (single), **2** (back to back), **3** or **4**.
+
+The duty cycle above counts the *receive* cycles that follow, so the two read together:
+
+| Duty cycle | Bursts | Pattern, repeating |
+|---|---|---|
+| 1 in 2 | 1 | Tx Rx |
+| 1 in 2 | 2 | Tx Tx Rx |
+| 1 in 3 | 1 | Tx Rx Rx |
+| 1 in 3 | 2 | Tx Tx Rx Rx |
+
+Two transmissions in a row give a distant receiver a second chance at you when the first one falls in a fade, which is why the QMX's own beacon offers it. It also doubles how much of the time you are keying the finals, so pick the declared power to match — see the note under **Declared power** above.
+
+Default is **1**, which is exactly the behaviour before this setting existed.
 
 #### Band hopping
 
@@ -174,7 +197,7 @@ It needs WiFi and your callsign and grid.
 
 ### 4. Transmitting
 
-With a callsign and grid set and a duty cycle above 0%, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the duty cycle, and the button shows what is happening.
+With a callsign and grid set and a duty cycle other than **Receive only**, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the duty cycle and the burst count, and the button shows what is happening.
 
 **The countdown on the button is the time until a real transmission.** The duty-cycle decision is taken in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.
 

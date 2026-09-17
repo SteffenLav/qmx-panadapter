@@ -30,13 +30,15 @@ The list shows every decoded FT8 message:
 | **SL** | Slot parity: **E** (blue) or **O** (amber) |
 | **CALL** | Their callsign |
 | **MESSAGE** | The full decoded message text |
-| **CTY** | Country as a 3-letter code (from the callsign prefix) |
+| **CTY** | Country, spelled out where it fits the column, otherwise its 3-letter code (v1.14.4) |
 | **SNR** | Signal-to-noise estimate, colour-banded by strength |
 | **DT** | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 (v1.3.1) |
 | **HZ** | The station's audio tone within the FT8 passband (v1.3.1) |
-| **KM / MI** | Great-circle distance from your grid |
-| **BRG** | Bearing from your grid |
+| **KM / MI** | Great-circle distance from your grid. A `~` means the station never sent a grid, so the distance is worked out from its country and is approximate (v1.14.4) |
 | **HRD** | Times decoded since last appearance |
+
+The **BRG** column was removed in v1.14.4 to make room for spelled-out country
+names; a bearing is derivable from the distance and the map.
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 

@@ -386,18 +386,37 @@ a large part of the display, and with a real keyboard you get that space back.
 
 ## Firmware updates
 
-**Download updates automatically** *(Network — on by default, v1.9.3)* — when a
-newer release appears, the Tab5 fetches it quietly in the background so that
-the only thing left for you is one decision: restart now, or later. The
-spectrum, waterfall and FT8 decoding keep running while it downloads.
+!!! warning "The next update after v1.14.4 needs a USB-C cable, once"
 
-Switch it off if you are on a metered connection — a phone hotspot in a field,
-for example — as each update is about 3.3 MB. With it off nothing is fetched
-until you ask: the bottom bar still offers the update, and the window's button
-reads **Download now**.
+    v1.14.4 is the last release that installs over the air for a while. The one
+    after it claims 2.81 MB of flash that no partition has ever used, which
+    means rewriting the partition table — and an over-the-air update can only
+    ever write the app, never the map of the flash. That is deliberate: it is
+    what stops a failed download taking the layout with it.
 
-⚠ Turning this on never installs anything by itself. Applying an update
-restarts the Tab5, and only you can ask for that — see
+    So the next firmware arrives as a **flasher download** — the same USB-C data
+    cable and the same `flash.bat` / `flash.command` you used the first time.
+    One time, and everything after it is over the air again.
+
+    **Your settings and your log are kept.** Press **Enter** at the flash-type
+    prompt. Do *not* press **E** — that erases the whole chip, including your
+    QSO log and your LoTW private key, and it is not needed here.
+
+    The Tab5 will tell you when the time comes: the update window says so
+    instead of offering a download, and it refuses to fetch an image it cannot
+    install.
+
+**Updating is one route, and you are always asked** *(v1.14.4)* — when a newer
+release appears, the version at the bottom of the screen changes to show it.
+Tap it, and a window opens with **Download now**. The download runs in the
+background, and when it finishes the same window offers **Restart now**.
+
+Nothing is fetched and nothing is installed until you press something. The
+earlier "download updates in the background" option is gone: it had been
+suppressed by a memory guard for months and never actually ran, so removing it
+made the behaviour match what it had always been in practice.
+
+⚠ Applying an update
 [Keeping It Up To Date](../quick-start.md#step-10-keeping-it-up-to-date).
 
 ---

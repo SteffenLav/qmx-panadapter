@@ -3702,6 +3702,97 @@ back only ever happened when you *left* the WSPR page live; a reboot has no such
 The radio is now told the right level again whenever the CAT link comes up, which also
 covers the radio itself being power-cycled mid-session.
 
+### Shipped in v1.14.4 — 2026-09-18
+
+**⚠ The last release that installs over the air for a while.** The one after it
+reclaims 2.81 MB of flash that no partition has ever used, which means rewriting
+the partition table — and an over-the-air update can only ever write the app,
+never the map of the flash. That is deliberate: it is what stops a failed
+download taking the layout with it. The next firmware therefore arrives as a
+flasher download, over the same USB-C cable you used the first time. Settings,
+memory channels and the QSO log are kept; press Enter at the flash-type prompt,
+never E. Brand-new users are unaffected, because a first install already uses
+the flasher and lands on the new layout directly.
+
+**THE REBOOTS ARE FIXED.** Fifteen consecutive runs on the bench before this
+change lasted a **median of 15 minutes** before a crash, the longest 35. With
+it, the same bench ran **14.7 hours** with no crash record, no reboot and no
+failed allocation, and was still going when it was stopped to cut the release.
+
+The cause was internal RAM, not any one of the tasks that kept dying. Three
+rarely-read arrays - the FT8 heard-station table (11,264 B), a settings fallback
+(3,596 B) and the PSK Reporter batch (2,304 B) - sat in the small internal
+region that USB, WiFi and the SD card all draw on for transfers. Moving them to
+PSRAM freed 17,172 B of it. The DMA-capable pool went from 1,715 B free to about
+11 KB and stayed flat across all fifteen hours; the internal watermark went from
+0 KB to 9-10 KB. That is why the crashes appeared in unrelated tasks with
+unrelated reasons: they were all the same exhaustion, arriving wherever the next
+allocation happened to be.
+
+**Opening the settings drawer cut your transmit power.** Mid-FT8 at full power,
+opening the drawer dropped the radio to WSPR's declared level - as little as
+200 mW - and left it there after returning to the FT8 page. The WSPR section
+re-applied its own power setting on every drawer open purely to keep its own
+hint label truthful, and that cost 12 dB on a different mode entirely. It now
+writes only while WSPR is actually running. The same fix closed a stack-overflow
+crash reachable by opening the drawer from the web UI.
+
+**Countries are spelled out, and more stations show a distance.** The FT8 and
+WSPR lists show `Spain` and `Kuwait` rather than `ESP` and `KWT`. A name that
+does not fit its column falls back to the three-letter code rather than being
+chopped in half - `Netherlands` shows as `NLD`, never `Netherlan`. Paying for
+the width meant dropping the **BRG** column and the `s` from **AGE**; a bearing
+is derivable from the distance and the map, and the country is read far more
+often. Distances now also appear for stations that never sent a grid - most FT8
+messages carry none, so a station heard sending a report or an `RR73` used to
+show nothing. Those rows show a distance derived from the callsign's country,
+marked with a leading `~`. A real grid always wins where there is one.
+
+**79 prefixes named the wrong country.** Checked against the standard country
+file rather than by eye: of its 6,310 prefixes, 973 had no answer at all and 496
+named a different place. Among the wrong ones - **Taiwan reported as China**
+(half its prefix block fell through), **Ukraine and Uzbekistan as Russia**,
+**Guam, the Northern Marianas, American Samoa, Wake, Midway and four more all as
+Hawaii**, **the US Virgin Islands as Puerto Rico**, **sixteen UK prefixes as
+England** including Scottish and Welsh ones, and **ZK as the Cook Islands**
+(reassigned to New Zealand years ago). About 130 entities the table never knew -
+Monaco, Malta, Andorra, Nepal, Aruba, Vatican City - now resolve as well, using
+the larger table Uwe DL8UG contributed.
+
+**WSPR: two transmissions back to back.** New **Bursts per transmission**
+setting beside the duty cycle, 1 to 4. The duty counts the receive cycles that
+follow, so 1 in 3 with 2 bursts is Tx Tx Rx Rx, repeating. Asked for by John
+W5JSS - the QMX's own beacon can do it and this could not. Default is 1, exactly
+the previous behaviour.
+
+**Antenna Tune shows power and SWR without the menu open.** The readout lived in
+the menu item's own label, so watching SWR while adjusting an ATU meant
+reopening the menu every time, and so did stopping the tune. There is now a
+panel with SWR, watts, the seconds left on the 60-second safety stop and a STOP
+button, on the web page and on the Tab5. Randy N4OPI asked for it.
+
+**Calibrate Power stops where it should.** It used to sweep to 12 V on every
+radio. On a 9 V QMX from an 8 V supply that is minutes of keying the finals at
+settings the radio cannot reach, and it overrode the Max PA voltage the operator
+had deliberately set. It now stops at your own Max PA voltage, shows that figure
+before you start, and stops early once the measured power stops rising. Bruce
+N9JCV found this, and the cut-off warning text in the same window, which is also
+fixed.
+
+**SelfSpotter: a Flush button in the header**, beside Exit, so the spot buffer
+can be cleared without opening the drawer - useful on a band change.
+Contributed by Uwe DL8UG. The drawer's own Flush is gone, since it did the same
+thing one click further away. The header's four controls were also re-spaced
+onto one shared budget: three different anchors meant inserting a control drew
+it over the callsign and time line instead of moving anything aside.
+
+**Updating is one route now.** Tap the version line, press Download now, press
+Restart now. The "download updates in the background" option is gone - it had
+been suppressed by a 32 KB free-heap guard for months and never actually ran, so
+removing it made the behaviour match what it had always been in practice. This
+release also refuses to download an image larger than its own app slot, which is
+what makes the cable release above announce itself instead of failing.
+
 ---
 
 ## Appendix - archived engineering notes from CLAUDE.md
@@ -3715,6 +3806,10 @@ They are the engineering voice rather than the user-facing one - root causes,
 hypotheses that were falsified on hardware, and the generalisation drawn from
 each. They complement the release entries above, which stay authoritative for
 what shipped. Newest first.
+
+### v1.14.0
+
+**v1.14.0 (2026-09-16) - Calibrate Power, and the WSPR PA-voltage story finally settled.** ⭐⭐ **Calibrate Power** (`power_cal_modal.c`, new this cycle): sweeps Max. PA voltage through 45 points (1.0-12.0 V) on a **dummy load**, keying a real TX;/TA;/RX; DiGi carrier (the same primitives WSPR/FT8 use) at each, and records the measured `PC;` output per band. Two designs were tried and measured WRONG before this one: QMX SWR Tune mode scales power independently of Max. PA voltage (every reading low by the same factor), and a bare CW `TX;` with no tone produces zero RF at all (a naive 3-reading-agree stability check was fooled by three identical zeros). Persisted per band, read by `power_cal_voltage_for_dbm()`/`power_cal_list_watts()`/`power_cal_watts_for_voltage()` (all in the same file) for every other control this cycle touches. ⛔ **45 steps (up from 23) cost real flash and RAM margin** - see `PWRCAL_STEPS` in settings.h and the taskLVGL stack bump (8192->12288) already in this branch-state history two cycles back. ⭐ **The declared-power dropdown used to fuzzy-match a standard dBm's NOMINAL wattage against the nearest calibrated point within 3 dB - backwards for a "declare what you actually do" feature.** A radio whose calibration topped out at 3.6 W (35.6 dBm) fell within 3 dB of BOTH 33 dBm (2.6 dB away) and 37 dBm (1.4 dB away), so "37 dBm (5 W)" was offered and labelled with 5 W nominal text while the radio only ever produced 3.6 W. Operator, 2026-09-16: *"I see 37 dBm (5 W) but I am not able to do that? ... the whole idea here is to be as precise as can be - this is research... not a candy store."* Fixed by inverting the direction: `power_cal_dbm_for_watts()` classifies a REAL measured wattage to its nearest LEGAL WSPR dBm step (the exact rounding rule `wspr_proto.c`'s own `pack_grid_and_power()` already applies to whatever gets transmitted - **the WSPR wire format cannot carry anything else**, confirmed by reading the packer, not assumed) and `power_cal_voltage_for_dbm()` only considers calibration rows that classify to the TARGET step, breaking ties by closest-to-nominal rather than lowest voltage (lowest-voltage was tried first and picked a materially worse representative - 3.3 W over 3.6 W for the "37 dBm" bucket - operator caught it by eye: *"why?"*). Every real wattage now classifies to exactly one step; the fuzzy "within 3 dB, else refuse" tolerance is gone entirely. Same classification now used for `render_results()` (the modal's own table) and the WSPR page's live "PA X.X V" line, so all three surfaces agree. ⭐ **The retired "Protect finals" 6.0 V guard was retired TWICE, and the first attempt missed the actually-live code path.** 2026-09-15's fix disabled `wspr_pa_guard_engage_if_pending()` (a secondary, wait-loop-driven engage helper) - the PRIMARY mechanism, `wspr_pa_guard_update()`, called every WSPR cycle from the slot loop and gated on the still-default-true `wspr_pa_reduce` setting (its own Tab5 toggle had already been deleted, leaving it invisible AND unreachable), kept force-writing 6.0 V regardless of Declared power's own calibrated voltage - hardware-confirmed 2026-09-16: Declared power set to 23 dBm/2.3 V, PA read 6.0 V, and `wspr_pa_guard_ready()` held the burst waiting for a reduction nobody asked for. Both the engage branch and the readiness gate are now neutered (dead code kept inline for history, matching this file's own established pattern); the restore-if-pending path is deliberately left live so a radio reduced by a PRE-fix session still gets its voltage back. ⭐ **A second, independent bug was racing the first**: `output_power_area_refresh()` (the general, mode-agnostic Output power slider, also new this cycle) wrote Max. PA voltage unconditionally on every band-change/drawer-open, with no concept that WSPR might currently own that register - so WSPR's own declared-power write and Output power's own re-apply landed 52 ms apart in the capture log, and whichever the CAT poll task drained last won. Gated on `!wspr_rx_running()`, with a hand-back call when leaving WSPR so Output power's target reasserts the instant WSPR stops owning the register. **Output power is now hidden entirely on the WSPR page** (`drawer_sec_visible()`) rather than left visible-but-inert - operator: *"the Declared power will ALWAYS win in WSPR ... remove the Power slider completely ... we dont listen to it anyways"*, the same "a bright control that does nothing is a broken promise" rule `drawer_sec_visible()`'s own header already states for the FT8-only sections. The standalone "Calibrate Power" button next to Antenna Tune is DELETED (`DRAWER_TUNE2_H` 136->72) - both Declared power and Output power now grow their own "Recalibrate this band" button once calibrated, closing the last duplicate entry point; every "PA X.X V" surface (drawer hint, WSPR TX burst-start log, WSPR page's live line) now also states the real wattage, and the WSPR page's live PA line is recoloured to the SAME red/amber/green thresholds (`WSPR_DBM_CAUTION`/`WSPR_DBM_LIMIT`, moved to `wspr_tx.h` so both files share one definition) as the Declared power dropdown, replacing the retired guard's stale "confirmed/pending/unprotected" scheme. ⭐ **Uwe DL8UG's `geo_coords.c` rebuilt from an authoritative cty.dat-style source** (`tools/gen_geo_coords.py`): ~580 hand-curated prefixes -> ~4,100 generated ones, plus `geo_coords_iso_for_call()` (ISO 3166-1 alpha-3) wired into the SelfSpotter map's LIST tab as a new sortable column. Measured cost, isolated by a real test-merge before merging for real: **zero DIRAM/stack impact** (PREFIX_COORDS is `static const`, lives in flash/rodata - identical DIRAM before/after), but **~74 KB of flash**, taking the app partition from 4% to 2% free (`0x400000` budget). `dxcc.c`'s own smaller, separate A3 table (~190 entries, DXCC-entity-granular - Hawaii/Alaska/Sardinia keep distinct tags rather than collapsing to parent-country ISO) was measured and deliberately kept rather than pruned: removing it recovers only ~1.9 KB, not enough to matter against the 74 KB, and pruning it would have cost that granularity for no real gain. Every dropdown sharing the generic `drawer_dropdown_cmap_open_cb` now unfolds fully (no scrollbar) - the fix the Sleep dropdown already had, extended everywhere once the Declared power dropdown grew enough real rows to need it.  **Older releases: the per-release engineering notes that used to continue here are archived in [docs/version-history.md](docs/version-history.md) under "Appendix - archived engineering notes from CLAUDE.md" (v1.12.4 back to v0.15.3). That file is the authoritative changelog; this cell is a pointer to the CURRENT release and the two before it, not a complete record. Keep it that way - when a new release lands, move the oldest entry here into that appendix.**
 
 ### v1.12.4
 

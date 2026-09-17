@@ -4,6 +4,42 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.14.4** — 2026-09-18
+
+!!! warning "The next release needs a USB-C cable, once"
+
+    **v1.14.4 is the last release that installs over the air for a while.** The
+    one after it reclaims 2.81 MB of flash that no partition has ever used,
+    which means rewriting the partition table — something an over-the-air update
+    cannot do by design, since it can only ever write the app and never the map
+    of the flash.
+
+    The next firmware therefore arrives as a **flasher download**, over the same
+    USB-C data cable and the same script you used to install it the first time.
+    One time, and everything after it is over the air again.
+
+    **Your settings, memory channels and QSO log are kept.** Press **Enter** at
+    the flash-type prompt — never **E**, which erases the whole chip including
+    your LoTW private key.
+
+    You will not have to remember: from v1.14.4 the Tab5 says so itself when the
+    time comes, and refuses to download an image it cannot install. **New users
+    are unaffected** — a first install already uses the flasher.
+
+**The reboots are fixed, countries are spelled out, and 79 callsign prefixes named the wrong country.**
+
+- **The reboots.** Fifteen consecutive runs on the bench before this change lasted a median of **15 minutes**; with it, the same bench ran **14.7 hours** with none. Three rarely-read arrays were sitting in the small internal RAM that USB, WiFi and the SD card all need for transfers — moving them freed 17 KB of it. That is why the crashes turned up in unrelated tasks for unrelated reasons: one exhaustion, arriving wherever the next allocation happened to be.
+- **Opening the settings drawer cut your transmit power** to WSPR's declared level — as little as 200 mW mid-FT8 — and left it there. The WSPR section was re-applying its own power on every drawer open just to keep a hint label truthful.
+- **Countries spelled out** on the FT8 and WSPR lists: `Spain`, not `ESP`. A name that does not fit falls back to its 3-letter code rather than being chopped in half. Paid for by dropping the **BRG** column. **Stations that never sent a grid now show a distance too**, marked `~` because it comes from the callsign's country rather than a real locator.
+- **79 prefixes named the wrong country.** Taiwan read as China, Ukraine and Uzbekistan as Russia, Guam and American Samoa as Hawaii, the US Virgin Islands as Puerto Rico, sixteen UK prefixes — Scottish and Welsh among them — as England. About 130 entities the table never knew, including Monaco, Malta, Andorra and Nepal, now resolve as well *(using Uwe DL8UG's table)*.
+- **WSPR bursts per transmission** *(John W5JSS)* — 1 to 4 consecutive cycles. 1 in 3 with 2 bursts gives Tx Tx Rx Rx, repeating.
+- **Antenna Tune shows SWR, watts and the seconds left** in a panel that stays put, on the Tab5 and in the browser, instead of only in the menu item's label *(Randy N4OPI)*.
+- **Calibrate Power stops at your own Max PA voltage** and stops early once the power stops rising — no more keying the finals at settings a 9 V radio or an 8 V supply can never reach *(Bruce N9JCV)*, and the cut-off warning text in that window is fixed.
+- **A Flush button in the SelfSpotter header** *(contributed by Uwe DL8UG)*, so the spot buffer clears without opening the drawer.
+- **Updating is one route**: tap, Download now, Restart now. The background-download option is gone — a memory guard had been suppressing it for months, so it had never actually run.
+
+## Previous Releases
+
 **v1.14.3** — 2026-09-17
 
 **Fixed a v1.14.2 crash: picking a new TX tone from the web UI while a QSO or CQ run was armed could reboot the Tab5.**
@@ -746,7 +782,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.3.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.14.4.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

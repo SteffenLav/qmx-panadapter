@@ -139,45 +139,53 @@ again unless something goes badly wrong. **From v1.9.3 it also fetches the
 update quietly in the background**, so by the time it says anything, the work
 is already done and only one decision is left.
 
-When a newer release has been downloaded and is waiting for you, the version at
-the bottom of the screen changes to show it, in light green, and breathes
-gently so you notice it:
+!!! warning "The next update after v1.14.4 needs a USB-C cable, once"
+
+    v1.14.4 is the last release that installs over the air for a while. The one
+    after it reclaims 2.81 MB of flash that has never been used, which means
+    rewriting the partition table — something an over-the-air update cannot do,
+    by design.
+
+    So the next firmware comes as a **flasher download**: the same USB-C data
+    cable and the same script you used to install it the first time. One time,
+    then back to over-the-air as normal.
+
+    **Your settings, memories and QSO log are kept.** Press **Enter** at the
+    flash-type prompt — not **E**, which erases everything including your LoTW
+    private key.
+
+    You will not have to remember this. When that release appears, the update
+    window tells you instead of offering a download.
+
+When a newer release is available, the version at the bottom of the screen
+changes to show it, in light green, and breathes gently so you notice it:
 
 ```
-v1.9.2 -> v1.9.3 ?
+v1.14.3 -> v1.14.4 ?
 ```
 
 Tap the bar — anywhere along it — and a window opens in the middle of the
-screen with the version, what will happen, and two buttons:
+screen with the version and two buttons:
 
-- **Restart now** — the screen goes dark and the Tab5 comes back on the new
-  firmware, about 20 seconds.
-- **Later** — the window closes and the bar stops breathing. The line stays,
-  quietly, and tapping it opens the window again whenever you are ready.
+- **Download now** — the download runs in the background while the spectrum,
+  waterfall and FT8 decoding keep working. Expect a slight stutter and one brief
+  pause right at the end while the new firmware is verified.
+- **Dismiss** — the window closes. The line stays, quietly, and tapping it opens
+  the window again whenever you are ready.
 
-Nothing restarts on its own. You choose when, so it can never interrupt a
-contact.
-
-While a download is running the line is amber and counts up, and the spectrum,
-waterfall and FT8 decoding all keep working — expect a slight stutter and one
-brief pause right at the end while the new firmware is verified:
+While the download runs the window shows the percentage:
 
 ```
-v1.9.2 -> v1.9.3  42%
+Downloading  42%
 ```
+
+When it finishes, the same window offers **Restart now** — the screen goes dark
+and the Tab5 comes back on the new firmware, about 20 seconds.
+
+Nothing is fetched until you press **Download now**, and nothing restarts until
+you press **Restart now**. It can never interrupt a contact.
 
 The same window is available from the web page, in the same words.
-
-### If you would rather it did not download by itself
-
-The background download is **on by default** and can be switched off in
-**Settings -> Network -> Download updates automatically**. Turn it off if you
-are on a metered connection — a phone hotspot in a field, for instance — since
-each update is about 3.3 MB. With it off, the bar offers the update and the
-window's button reads **Download now** instead.
-
-Downloading never applies anything on its own. Only the restart does that, and
-only you can ask for it.
 
 ### Checking straight away
 

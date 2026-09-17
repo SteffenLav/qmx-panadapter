@@ -12,9 +12,29 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.14.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> ## ⚠ The next release after v1.14.4 needs a USB-C cable, once
 >
-> **v1.14.3 fixes a v1.14.2 crash** (thanks to Randy N4OPI for the reproducible report) — picking a new TX tone from the web UI while a QSO or CQ run was armed (not actively transmitting) could reboot the Tab5. Same underlying bug class as the v1.14.0 crash, reached from a different task this time. If you're on v1.14.2, update.
+> **v1.14.4 is the last release that installs over the air for a while.** The
+> one after it reclaims 2.81 MB of flash that no partition has ever used, and
+> that means rewriting the partition table — which an over-the-air update cannot
+> do, by design: it can only ever write the app, never the map of the flash.
+>
+> So the next firmware arrives as a **flasher download**, using the same USB-C
+> data cable and the same `flash.bat` / `flash.command` you used to install it
+> the first time. One time, and everything after that is over the air again.
+>
+> **Your settings, memory channels and QSO log are kept.** Press **Enter** at
+> the flash-type prompt. Do *not* press **E** — that erases the whole chip,
+> including your log and your LoTW private key, and it is not needed here.
+>
+> You do not have to remember any of this: from v1.14.4 the Tab5 tells you when
+> the time comes, and refuses to download an image it cannot install. **Brand-new
+> users are unaffected** — a first install already uses the flasher, so it lands
+> on the new layout directly.
+
+> **Release — v1.14.4.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.14.4 fixes the reboots.** Fifteen consecutive runs on the bench before this change lasted a median of **15 minutes**; with it, the same bench ran **14.7 hours** with none. Three rarely-read arrays were sitting in the small internal RAM that USB, WiFi and the SD card all need for transfers — moving them freed 17 KB of it. It also fixes opening the settings drawer cutting your transmit power to WSPR's declared level (as little as 200 mW mid-FT8), spells out country names on the FT8 and WSPR lists, corrects **79 callsign prefixes that named the wrong country** — Taiwan read as China, Ukraine and Uzbekistan as Russia, Guam and American Samoa as Hawaii, Scottish and Welsh prefixes as England — and adds WSPR **bursts per transmission**, a live power/SWR readout for Antenna Tune, and a **Flush** button in the SelfSpotter header (thanks Uwe DL8UG).
 >
 > **v1.14.2 fixed general sluggishness some users saw starting with v1.13.0** (thanks to Randy N4OPI for tracking it down with me) — SelfSpotter's background PSK Reporter connection could hold up the display, whether or not the map was ever opened. Also fixed a web UI "find open slot" tool that could hang and lose contact with the radio mid-QSO, output power reading near-zero right after Calibrate Power (thanks Gyula HA3HZ), and a SelfSpotter map bug that drew some countries as boxes.
 >
@@ -24,7 +44,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.14.3.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.14.4.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -674,12 +694,11 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15
 | SL | Slot parity: **E** (blue, :00/:30) or **O** (amber, :15/:45) |
 | CALL | Extracted callsign |
 | MESSAGE | Full decoded FT8 message text |
-| CTY | DXCC entity as a 3-letter code (ISO alpha-3 where it exists; ~190 entities) |
+| CTY | Country, spelled out where it fits, otherwise its 3-letter code. 227 DXCC entities, with ~4,100 further prefixes resolved at country level |
 | SNR | FFT-based estimate, colour-banded: green ≥0 / white −5..−1 / orange −15..−6 / grey <−15 |
 | DT | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 |
 | HZ | The station's audio tone (its offset within the FT8 passband) |
-| KM | Great-circle distance from your grid |
-| BRG | Bearing from your grid |
+| KM | Great-circle distance from your grid. A leading `~` means the station sent no grid and the distance comes from its country — approximate, and marked as such |
 | HRD | Times decoded since last appearance |
 
 CQ calls always appear at the top sorted strongest-SNR first; all other rows follow by SNR descending.

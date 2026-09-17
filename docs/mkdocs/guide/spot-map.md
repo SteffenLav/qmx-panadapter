@@ -62,9 +62,11 @@ what other people have already published about you.
 A report stays on the map for **half an hour**, then drops off. The map is a
 picture of who is hearing you *now*.
 
-The **Source** checkboxes in the left sidebar show or hide each one. **Flush**
-empties the map immediately so you can start a fresh picture — it does not stop
-any of the feeds, they simply begin filling it again.
+The **Source** checkboxes in the left sidebar show or hide each one. **Flush**,
+in the header beside **Exit**, empties the map immediately so you can start a
+fresh picture — useful when you change band. It does not stop any of the feeds;
+they simply begin filling it again. *(Contributed by Uwe DL8UG. It was in the
+sidebar until v1.14.4.)*
 
 ---
 
