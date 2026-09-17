@@ -10762,6 +10762,14 @@ static void drawer_btn_wspr_hop_cb(lv_event_t *e)
     wspr_screen_view_open_hop_picker();
 }
 
+static void drawer_dropdown_wspr_burst_cb(lv_event_t *e)
+{
+    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_set_wspr_tx_burst_n((uint8_t)(i + 1));   /* index 0 == 1 burst */
+    wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
+                              settings_get_wspr_duty_pct());
+}
+
 static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
 {
     uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
@@ -13293,7 +13301,11 @@ static void drawer_build(void)
     {
         qmx_settings_t ws;
         settings_load_all(&ws);
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDUTY, y, 100);
+        /* 200, not 100: the bursts-per-transmission dropdown below adds a
+         * second header+dropdown pair. SECTION HEIGHT AND THE y += AT THE END
+         * OF THIS BLOCK MUST MOVE TOGETHER - this file records a release where
+         * they did not and the next section drew on top of this one. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDUTY, y, 200);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR duty cycle");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -13322,7 +13334,31 @@ static void drawer_build(void)
          * everything around it. Every other dropdown in this drawer
          * already does this; these two were added without it. */
         lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 100;
+
+        /* Bursts per transmission (John W5JSS). Sits directly under the period
+         * because the two only make sense read together: "1 in 10, 2 bursts"
+         * is a pair of transmissions every twenty minutes. The period is
+         * measured group start to group start, so changing this lengthens the
+         * group without moving the groups. */
+        lv_obj_t *bhdr = lv_label_create(sec);
+        lv_label_set_text(bhdr, "Bursts per transmission");
+        lv_obj_set_style_text_color(bhdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(bhdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(bhdr, LV_ALIGN_TOP_LEFT, 0, 100);
+        lv_obj_t *bdd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(bdd, "1 (single)\n2 (back to back)\n3\n4");
+        lv_obj_set_size(bdd, DRAWER_W - 32, 50);
+        lv_obj_align(bdd, LV_ALIGN_TOP_LEFT, 0, 140);
+        lv_obj_set_style_text_font(bdd, &lv_font_montserrat_28, 0);
+        {
+            uint8_t b = ws.wspr_tx_burst_n ? ws.wspr_tx_burst_n : 1;
+            if (b > 4) b = 4;
+            lv_dropdown_set_selected(bdd, (uint16_t)(b - 1));
+        }
+        lv_obj_add_event_cb(bdd, drawer_dropdown_wspr_burst_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(bdd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        /* Matches drawer_section(..., 200) above - see the note there. */
+        y += 200;
     }
     {
         qmx_settings_t ws;

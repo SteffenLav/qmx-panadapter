@@ -118,6 +118,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_DIAL      "wspr_dial"
 #define KEY_WSPR_TX_EN     "wspr_tx_en"
 #define KEY_WSPR_DUTY      "wspr_duty"
+#define KEY_WSPR_BURST     "wspr_burst"
 #define KEY_WSPR_DBM       "wspr_dbm"
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
@@ -376,6 +377,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
 #define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
 #define DIRTY_WF_SPEED       121
+#define DIRTY_WSPR_BURST     122  /* consecutive cycles per scheduled WSPR transmission */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -604,6 +606,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_DIAL))    nvs_set_u32(s_nvs, KEY_WSPR_DIAL, snap.wspr_dial_hz);
         if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_BURST))   nvs_set_u8(s_nvs, KEY_WSPR_BURST, snap.wspr_tx_burst_n);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
         if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
             nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
@@ -847,6 +850,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_dial_hz  = 14095600u;   /* 20 m, the busiest WSPR band */
     out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
     out->wspr_duty_pct = 5;           /* 1 in 5 - closest match to the old "20%" default */
+    out->wspr_tx_burst_n = 1;         /* one burst per scheduled transmission - the old behaviour */
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
     out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
     out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
@@ -1086,6 +1090,8 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
     { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
+    { uint8_t b; if (nvs_get_u8(s_nvs, KEY_WSPR_BURST, &b) == ESP_OK && b >= 1 && b <= 4)
+          out->wspr_tx_burst_n = b; }
     if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) {
         /* ⛔ MIGRATE THE OLD PERCENTAGE SCALE, DO NOT LET IT LEAK THROUGH AS A
          * PERIOD. This field's meaning changed 2026-09-12 from "chance per
@@ -2191,6 +2197,15 @@ bool settings_get_sota_en(void)
     return v;
 }
 
+uint8_t settings_get_wspr_tx_burst_n(void)
+{
+    if (!s_ready) return 1;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.wspr_tx_burst_n;
+    xSemaphoreGive(s_mutex);
+    return v ? v : 1;   /* 0 would mean "never transmit", which is wspr_tx_en's job */
+}
+
 uint8_t settings_get_wspr_duty_pct(void)
 {
     if (!s_ready) return 0;
@@ -2673,6 +2688,18 @@ void settings_set_wspr_duty_pct(uint8_t v)
     s_pending.wspr_duty_pct = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_DUTY);
+}
+
+void settings_set_wspr_tx_burst_n(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v < 1) v = 1;
+    if (v > 4) v = 4;   /* four consecutive cycles is ~8 minutes of key-down */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_tx_burst_n == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_tx_burst_n = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_BURST);
 }
 
 void settings_set_wspr_dump_cycles(uint8_t v)

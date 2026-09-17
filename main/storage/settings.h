@@ -381,6 +381,15 @@ typedef struct {
     uint32_t wspr_dial_hz;    // standard WSPR dial for the chosen band (default 20 m)
     bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
     uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
+    /* How many CONSECUTIVE cycles each scheduled transmission occupies. 1 is a
+     * single burst and is the default and the old behaviour; 2 gives the
+     * back-to-back pair John W5JSS asked for ("10:46 & 10:48, 11:06 & 11:08"),
+     * which the QMX's own Virtual U3S beacon can do and this could not.
+     *
+     * wspr_duty_pct stays the period measured GROUP START TO GROUP START, so
+     * raising this does not move the groups - it lengthens them. A group can
+     * never be longer than its own period, so the scheduler clamps it. */
+    uint8_t  wspr_tx_burst_n; // consecutive cycles per scheduled transmission, 1-4
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
@@ -613,6 +622,7 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
 uint8_t settings_get_wspr_duty_pct(void);
+uint8_t settings_get_wspr_tx_burst_n(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
@@ -761,6 +771,7 @@ void settings_set_sim_mode_en(bool v);
 void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
+void settings_set_wspr_tx_burst_n(uint8_t v);  // clamped 1-4
 void settings_set_wspr_tx_dbm(int8_t v);
 int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
 // Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).

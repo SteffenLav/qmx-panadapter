@@ -389,6 +389,20 @@ static bool s_first_tx_forced = false;
 #define WSPR_PA_TARGET_X10 60   /* 6.0 V - about 1 W, per the QMX manual */
 
 static uint8_t s_sched_duty    = 0;    /* the duty this schedule was rolled at */
+/* ---- burst groups (John W5JSS, 2026-09-17) --------------------------------
+ * He asked for two transmissions back to back - "10:46 & 10:48, 11:06 &
+ * 11:08" - which the QMX's own Virtual U3S beacon does and this did not. The
+ * v1.12.x move from a statistical duty to a deterministic "1 in N" is what
+ * took it out; it was a side effect of making the timing predictable, not a
+ * judgement that consecutive bursts are wrong.
+ *
+ * ⛔ THE PERIOD IS MEASURED GROUP START TO GROUP START, not from the last
+ * burst. Otherwise raising the burst count would silently push every later
+ * group later, and the whole point of the deterministic schedule is that the
+ * operator can say which cycle will transmit. So the group's FIRST cycle is
+ * remembered and the next group is rolled from that. */
+static int64_t s_group_start   = -1;   /* cycle index the current group began on */
+static uint8_t s_burst_done    = 0;    /* bursts already sent in this group */
 
 /* ⛔ "1 IN N", NOT A PERCENTAGE - A SCHEDULE THE OPERATOR CAN PREDICT, NOT A
  * DICE ROLL THAT HAPPENS TO AVERAGE OUT TO ONE.
@@ -595,6 +609,8 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
     if (!tx_en || duty_pct == 0) {
         s_next_tx_cycle   = -1;
         s_sched_duty      = 0;
+        s_group_start     = -1;
+        s_burst_done      = 0;
         s_first_tx_forced = false;
         /* Disarming (or duty going to 0) deserves the same immediate
          * attempt arming gets below, not a wait for the next WSPR cycle's
@@ -2049,14 +2065,42 @@ static void wspr_rx_task(void *arg)
              * first cycle after transmitting is switched on. */
             s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx - 1, ws.wspr_duty_pct);
             s_sched_duty    = ws.wspr_duty_pct;
+            /* A re-roll abandons any group in progress: the schedule it was
+             * part of no longer exists. Starting the next group cleanly is
+             * right - continuing a group across a stall would put its second
+             * burst at an interval nobody asked for. */
+            s_group_start   = -1;
+            s_burst_done    = 0;
         }
         const bool tx_this_cycle = tx_possible && s_next_tx_cycle == last_cycle_idx;
         if (tx_this_cycle) {
-            /* Roll the next one now, before anything below can fail. */
-            /* THIS cycle is about to transmit, so the next one is exactly N
-             * cycles from here - guaranteed by roll_next_tx_cycle's own return
-             * (after + N), never a roll that could land back on THIS cycle. */
-            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx, ws.wspr_duty_pct);
+            /* Roll the next one now, before anything below can fail.
+             *
+             * With burst_n == 1 this is exactly what it always was: the next
+             * cycle is N from here. With burst_n > 1 the group continues on the
+             * VERY NEXT cycle until it is used up, and only then does the next
+             * group get rolled - from the group's FIRST cycle, so the period is
+             * group-start to group-start and the groups do not drift. */
+            uint8_t burst_n = settings_get_wspr_tx_burst_n();
+            /* A group can never be longer than its own period, or it would run
+             * into the next group and transmit continuously. */
+            if (burst_n > ws.wspr_duty_pct) burst_n = ws.wspr_duty_pct;
+            if (burst_n < 1) burst_n = 1;
+
+            if (s_group_start < 0) {        /* first burst of a group */
+                s_group_start = last_cycle_idx;
+                s_burst_done  = 0;
+            }
+            s_burst_done++;
+            if (s_burst_done < burst_n) {
+                s_next_tx_cycle = last_cycle_idx + 1;   /* back to back */
+                ESP_LOGI(TAG, "burst %u of %u in this group - next cycle too",
+                         (unsigned)s_burst_done, (unsigned)burst_n);
+            } else {
+                s_next_tx_cycle = roll_next_tx_cycle(s_group_start, ws.wspr_duty_pct);
+                s_group_start   = -1;
+                s_burst_done    = 0;
+            }
         }
 
         if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {

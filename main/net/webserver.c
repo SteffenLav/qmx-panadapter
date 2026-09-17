@@ -4084,6 +4084,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
      * file's warnings. */
     cJSON_AddNumberToObject(root, "wspr_dump_cycles", c.wspr_dump_cycles);
     cJSON_AddNumberToObject(root, "wspr_duty_pct", c.wspr_duty_pct);
+    cJSON_AddNumberToObject(root, "wspr_tx_burst_n", c.wspr_tx_burst_n ? c.wspr_tx_burst_n : 1);
     cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
@@ -4305,6 +4306,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en"))) {
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
         wspr_sched_dirty = true;
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_burst_n"))) {
+        int v = it->valueint;
+        if (v >= 1 && v <= 4) { settings_set_wspr_tx_burst_n((uint8_t)v); wspr_sched_dirty = true; }
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
         /* An exact allow-list, not a range: this is a literal 1-in-N period
