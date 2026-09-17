@@ -74,6 +74,39 @@ static const char *TAG = "power_cal";
 // basically never fire in practice.
 #define PWRCAL_TOTAL_TIMEOUT_MS 480000
 
+// ---- how far the sweep actually goes (Bruce N9JCV, 2026-09-17) ------------
+// The sweep used to run the whole fixed 1.0-12.0 V table on every radio. On a
+// 9 V QMX fed from an 8 V supply that is minutes of keying the PA at settings
+// it physically cannot reach, and it writes 12.0 V to a radio whose operator
+// deliberately set a lower ceiling. Two independent limits now stop it.
+//
+// 1. THE OPERATOR'S OWN CEILING. Never sweep past the radio's Max. PA voltage.
+//    It is shown on the modal before Start, because the value is whatever the
+//    radio currently holds and that is not always what the operator intends -
+//    a WSPR session legitimately drives it down to 2.3 V, and a bench session
+//    once left it at 7.5 V. Capping silently at a leftover would produce a
+//    near-empty calibration and say nothing. Showing the number lets them see
+//    it first.
+//
+// 2. A MEASURED PLATEAU. Above the supply the output stops rising, so further
+//    steps re-measure the same watts. Detected rather than modelled - the same
+//    reason the classifier reads PC; instead of assuming watts from volts, and
+//    the reason this works on a 9 V build whose PA transformer is wound
+//    differently (RWTST vs WTST) without knowing which radio it is talking to.
+#define PWRCAL_PLATEAU_SAMPLES        3   // consecutive steps that fail to rise
+#define PWRCAL_PLATEAU_ARM_W_X100    30   // only look once 0.30 W has been seen
+#define PWRCAL_PLATEAU_MIN_V_X10     40   // and never stop below 4.0 V
+#define PWRCAL_PLATEAU_TOL_PCT        3   // "not rising" = within this of the best so far
+#define PWRCAL_PLATEAU_TOL_MIN_X100   5   // 0.05 W floor - PC; resolution is coarse
+
+// Panel geometry. Every label inside the panel must be sized against the
+// CONTENT box, so it is derived here once instead of being written out at each
+// call site - that is what stops a label being wider than the panel that
+// clips it.
+#define PWRCAL_PANEL_W          680
+#define PWRCAL_PANEL_PAD         24
+#define PWRCAL_PANEL_CONTENT_W  (PWRCAL_PANEL_W - 2 * PWRCAL_PANEL_PAD)
+
 // 1.0-12.0 V, alternating +0.3/+0.2 V (average 0.25 V) - see the
 // PWRCAL_STEPS comment in settings.h for why this range, this resolution,
 // and why it is not a literal 0.25 V step (the radio only accepts 0.1 V
@@ -125,6 +158,12 @@ static int                s_stable_count  = 0;       // consecutive samples with
 static uint32_t            s_last_ta_ms   = 0;       // last time TA<freq>; was (re)sent, for the resend cadence
 static char              s_prior_mode[8]  = "USB";
 static uint16_t          s_orig_pa_x10    = 120;      // restored at the end
+static int               s_last_step      = PWRCAL_STEPS - 1; // highest step this sweep will reach
+static uint16_t          s_max_w_x100     = 0;        // best output seen this sweep
+static int               s_plateau_run    = 0;        // consecutive steps that did not beat it
+static bool              s_stopped_early  = false;    // plateau ended the sweep, not the table
+static lv_timer_t       *s_idle_timer     = NULL;     // polls the ceiling for the pre-Start line
+static int               s_idle_ticks     = 0;        // reset when that timer is created
 static char              s_band[8]        = "";
 
 static void render_results(void);
@@ -371,14 +410,49 @@ static void begin_step(int step)
     enter_state(PC_SET_VOLTAGE);
     char buf[64];
     snprintf(buf, sizeof(buf), "Step %d of %d - setting %u.%uV...",
-             step + 1, PWRCAL_STEPS, s_test_voltage_x10[step] / 10, s_test_voltage_x10[step] % 10);
+             step + 1, s_last_step + 1, s_test_voltage_x10[step] / 10, s_test_voltage_x10[step] % 10);
     status_set_text(buf);
+}
+
+// Highest table index at or below the operator's ceiling. Always returns a
+// valid index: a ceiling below the first step still sweeps one point, which is
+// visible in the "of N" count rather than silently doing nothing.
+static int step_index_for_ceiling(uint16_t ceiling_x10)
+{
+    int last = 0;
+    for (int i = 0; i < PWRCAL_STEPS; i++) {
+        if (s_test_voltage_x10[i] <= ceiling_x10) last = i;
+    }
+    return last;
+}
+
+// Called once per completed step. A step with NO reading (w == 0) is not
+// evidence either way and leaves the run untouched - a single failed settle
+// mid-sweep must not look like the radio has stopped responding to voltage.
+static void note_plateau(uint16_t w_x100)
+{
+    if (w_x100 == 0) return;
+    uint16_t tol = (uint16_t)((uint32_t)s_max_w_x100 * PWRCAL_PLATEAU_TOL_PCT / 100);
+    if (tol < PWRCAL_PLATEAU_TOL_MIN_X100) tol = PWRCAL_PLATEAU_TOL_MIN_X100;
+    bool armed = (s_max_w_x100 >= PWRCAL_PLATEAU_ARM_W_X100) &&
+                 (s_test_voltage_x10[s_step] >= PWRCAL_PLATEAU_MIN_V_X10);
+    if (armed && w_x100 <= (uint16_t)(s_max_w_x100 + tol)) s_plateau_run++;
+    else                                                   s_plateau_run = 0;
+    if (w_x100 > s_max_w_x100) s_max_w_x100 = w_x100;
 }
 
 static void advance_or_finish(void)
 {
+    if (s_plateau_run >= PWRCAL_PLATEAU_SAMPLES) {
+        s_stopped_early = true;
+        ESP_LOGI(TAG, "plateau at %u.%uV after %d steps with no rise (best %u.%02u W) - stopping",
+                 s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10,
+                 s_plateau_run, s_max_w_x100 / 100, s_max_w_x100 % 100);
+        enter_restore();
+        return;
+    }
     int next = s_step + 1;
-    if (next < PWRCAL_STEPS) {
+    if (next <= s_last_step) {
         begin_step(next);
     } else {
         enter_restore();
@@ -401,7 +475,21 @@ static void finish_done(void)
     settings_set_pwr_cal_band(s_band, s_test_voltage_x10, s_measured_w_x100);
     render_results();
     enter_state(PC_DONE);
-    status_set_text("Done.");
+    // A short sweep is not a failed one, and an operator who expected 45 steps
+    // and got 29 needs to be told which of the two limits ended it.
+    if (s_stopped_early) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "Done - power stopped rising at %u.%uV.",
+                 s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10);
+        status_set_text(buf);
+    } else if (s_last_step < PWRCAL_STEPS - 1) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "Done - swept to your %u.%uV limit.",
+                 s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);
+        status_set_text(buf);
+    } else {
+        status_set_text("Done.");
+    }
     if (s_action_lbl) lv_label_set_text(s_action_lbl, "Start Calibration");
     if (s_action_btn) lv_obj_set_style_bg_color(s_action_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     if (s_cancel_btn) lv_obj_clear_state(s_cancel_btn, LV_STATE_DISABLED);
@@ -521,11 +609,11 @@ static void timer_cb(lv_timer_t *t)
         char buf[80];
         if (s_last_pw >= 0.0f) {
             snprintf(buf, sizeof(buf), "Step %d of %d - %u.%uV - %.2fW, settling (%d/%d)...",
-                     s_step + 1, PWRCAL_STEPS, s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10,
+                     s_step + 1, s_last_step + 1, s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10,
                      (double)s_last_pw, s_stable_count, PWRCAL_STABLE_SAMPLES);
         } else {
             snprintf(buf, sizeof(buf), "Step %d of %d - %u.%uV - waiting for a reading...",
-                     s_step + 1, PWRCAL_STEPS, s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10);
+                     s_step + 1, s_last_step + 1, s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10);
         }
         status_set_text(buf);
         bool min_time_met = state_elapsed_ms() >= PWRCAL_MEASURE_MIN_MS;
@@ -536,6 +624,7 @@ static void timer_cb(lv_timer_t *t)
             cat_tune_poll_set_active(false);
             cat_request_mode(s_prior_mode);
             s_measured_w_x100[s_step] = (s_last_pw >= 0.0f) ? (uint16_t)(s_last_pw * 100.0f + 0.5f) : 0;
+            note_plateau(s_measured_w_x100[s_step]);
             ESP_LOGI(TAG, "step %d: %u.%uV -> %.2f W (%s, %d stable samples)", s_step,
                      s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10, (double)s_last_pw,
                      (min_time_met && s_stable_count >= PWRCAL_STABLE_SAMPLES) ? "settled" : "gave up waiting",
@@ -609,6 +698,17 @@ static void start_btn_cb(lv_event_t *e)
         s_orig_pa_x10 = 120;  // full power - the QMX's own default/max, safest guess if truly unknown
         ui_toast("Could not read the current PA voltage - will restore to 12.0V when done");
     }
+
+    // Never sweep past the operator's own Max. PA voltage. See the
+    // PWRCAL_PLATEAU_* block for why it is capped here rather than trusted
+    // blindly, and why the figure is on the modal before Start.
+    if (s_idle_timer) { lv_timer_del(s_idle_timer); s_idle_timer = NULL; }
+    s_last_step     = step_index_for_ceiling(s_orig_pa_x10);
+    s_max_w_x100    = 0;
+    s_plateau_run   = 0;
+    s_stopped_early = false;
+    ESP_LOGI(TAG, "sweep capped at %u.%uV (radio's Max. PA voltage) - %d of %d steps",
+             s_orig_pa_x10 / 10, s_orig_pa_x10 % 10, s_last_step + 1, PWRCAL_STEPS);
 
     strncpy(s_band, adif_log_band_for_freq(cat_get_frequency()), sizeof(s_band) - 1);
     s_band[sizeof(s_band) - 1] = '\0';
@@ -698,14 +798,14 @@ static void modal_build(void)
     // the tallest this can go and still centre with real margin inside the
     // 720 px screen height; the rest of the fix is tightening the layout
     // above the results table so there is room to spare, not just enough.
-    lv_obj_set_size(s_panel, 680, 680);
+    lv_obj_set_size(s_panel, PWRCAL_PANEL_W, 680);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(s_panel, 2, 0);
     lv_obj_set_style_radius(s_panel, 10, 0);
-    lv_obj_set_style_pad_all(s_panel, 24, 0);
+    lv_obj_set_style_pad_all(s_panel, PWRCAL_PANEL_PAD, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
@@ -719,19 +819,39 @@ static void modal_build(void)
         static char warn_txt[128];
         snprintf(warn_txt, sizeof(warn_txt),
                  LV_SYMBOL_WARNING " Connect a DUMMY LOAD, not the antenna.\n"
-                 "Keys a brief full carrier at %d voltage steps, about 5-8 minutes.",
+                 "Keys a real carrier at %d steps - 5 to 8 minutes.",
                  PWRCAL_STEPS);
         lv_label_set_text(warn, warn_txt);
     }
     lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(warn, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_align(warn, LV_TEXT_ALIGN_CENTER, 0);
+    // WIDTH + WRAP, never a content-sized label. Reported by Bruce N9JCV on
+    // v1.14.3 with a photo: the second line read "...ys a brief full carrier
+    // at 45 voltage steps, about 5-8 minut" - clipped at BOTH ends, because a
+    // centred label with no width sizes to its own content and the panel clips
+    // whatever hangs over it.
+    //
+    // THE TEXT MUST STILL FIT TWO LINES AT THIS WIDTH. Everything below is
+    // hand-positioned with 12 px of clearance (status at y=130, Start at
+    // y=176), so a third line would draw over the status line. The wrap is the
+    // backstop that stops a future edit clipping again; it is not room to write
+    // more. Shortened from 63 characters to 48 to leave that margin.
+    lv_obj_set_width(warn, PWRCAL_PANEL_CONTENT_W);
+    lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
     lv_obj_align(warn, LV_ALIGN_TOP_MID, 0, 60);
 
     s_status_lbl = lv_label_create(s_panel);
     lv_label_set_text(s_status_lbl, "Ready.");
     lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_status_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_align(s_status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    // Same class as the warning above, different remedy: this one sits 12 px
+    // above the Start button, so it may never grow a line. LONG_DOT truncates
+    // with an ellipsis, which cannot change the height - and an ellipsis reads
+    // as "there is more", where clipping mid-word reads as a broken screen.
+    lv_obj_set_width(s_status_lbl, PWRCAL_PANEL_CONTENT_W);
+    lv_label_set_long_mode(s_status_lbl, LV_LABEL_LONG_DOT);
     lv_obj_align(s_status_lbl, LV_ALIGN_TOP_MID, 0, 130);
 
     s_action_btn = lv_btn_create(s_panel);
@@ -786,6 +906,42 @@ static void modal_build(void)
     ESP_LOGI(TAG, "Calibrate Power modal built");
 }
 
+// The pre-Start line. The ceiling is whatever the radio currently holds, and
+// that is exactly the thing worth seeing before committing to a sweep: a WSPR
+// session leaves it at 2.3 V quite legitimately, and calibrating 1.0-2.3 V is
+// not what anyone pressing Start has in mind.
+static void idle_status_refresh(void)
+{
+    if (s_state != PC_IDLE && s_state != PC_DONE) return;
+    int16_t pa   = cat_get_pa_voltage_x10();
+    bool    have = settings_get_pwr_cal_band(s_band, NULL, NULL);
+    char buf[80];
+    // Kept short on purpose: this label is one line inside a 632 px content
+    // box and cannot grow one (see its LONG_DOT note), so the longest form
+    // here - "Calibrated. Sweeps 1.0-12.0V (radio max)." - is 41 characters.
+    if (pa >= 0) {
+        snprintf(buf, sizeof(buf), "%s. Sweeps 1.0-%d.%dV (radio max).",
+                 have ? "Calibrated" : "Ready", pa / 10, pa % 10);
+    } else {
+        snprintf(buf, sizeof(buf), "%s", have ? "Calibrated. Start to re-measure." : "Ready.");
+    }
+    status_set_text(buf);
+}
+
+// Polls only until the radio answers, then deletes itself - the modal has no
+// tick of its own while idle and does not need one for anything else.
+static void idle_timer_cb(lv_timer_t *t)
+{
+    bool done = (++s_idle_ticks > 25)                 /* ~5 s, then give up */
+             || (cat_get_pa_voltage_x10() >= 0)       /* answered */
+             || (s_state != PC_IDLE && s_state != PC_DONE);
+    idle_status_refresh();
+    if (done) {
+        lv_timer_del(t);
+        s_idle_timer = NULL;
+    }
+}
+
 void power_cal_modal_init(void)
 {
     modal_build();
@@ -801,11 +957,20 @@ void power_cal_modal_show(void)
     uint8_t v_x10[PWRCAL_STEPS];
     if (s_state == PC_IDLE && settings_get_pwr_cal_band(s_band, v_x10, s_measured_w_x100)) {
         render_results();
-        status_set_text("Previously calibrated - Start to re-measure.");
     } else if (s_state == PC_IDLE) {
-        status_set_text("Ready.");
         if (s_results_lbl) lv_label_set_text(s_results_lbl, "");
         if (s_results_lbl2) lv_label_set_text(s_results_lbl2, "");
+    }
+    if (s_state == PC_IDLE || s_state == PC_DONE) {
+        // Ask the radio for its Max. PA voltage and show it as soon as it
+        // answers, so the sweep range is on screen BEFORE Start rather than
+        // discovered afterwards from a short results table.
+        cat_query_pa_voltage();
+        idle_status_refresh();
+        if (!s_idle_timer) {
+            s_idle_ticks = 0;
+            s_idle_timer = lv_timer_create(idle_timer_cb, 200, NULL);
+        }
     }
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
