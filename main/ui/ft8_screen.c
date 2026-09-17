@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "esp_log.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR - s_table lives in PSRAM, see its comment
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -64,7 +65,27 @@ static int row_stale_sec(void)
 // away from a tone that is actually free.
 #define FT8_ROW_PAUSED_MAX_SEC 600
 
-static ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
+/* ⭐ 11,264 BYTES OF INTERNAL DIRAM, AND THE LAST ft8_call_t ARRAY STILL IN IT.
+ *
+ * CLAUDE.md's 2026-08-05 audit moved the two `static ft8_call_t snap[]`
+ * heard-table snapshots (11.25 KB each) to PSRAM and named THIS one as "the
+ * next candidate" - it was measured, written down, and then never actioned.
+ * `nm --size-sort` on 2026-09-17 still had it third in internal DIRAM, behind
+ * only audio.c's raw[]/decoded[], which are deliberately internal.
+ *
+ * Why it is safe here and not for audio.c's buffers: this table is touched a
+ * few tens of times per 15 s slot (once per decode, plus a list rebuild), NOT
+ * per sample. It is also mutex-protected, which by itself proves no ISR
+ * touches it - you cannot take a mutex in one. v0.19.4's finding that a PSRAM
+ * spill makes the STFT ~10x slower is about the FFT inner loop; nothing in
+ * this file is in that class.
+ *
+ * Context for why 11 KB matters at all: the DMA-capable pool on this board is
+ * carved out of the same DIRAM, and a capture on 2026-09-17 caught it at
+ * `DMA free=231 lblk=32` with 353 logged `esp_dma_capable_malloc(): Not enough
+ * heap memory` failures - the state CLAUDE.md already records as the one that
+ * breaks TLS, USB endpoint allocation and the SD card. */
+static EXT_RAM_BSS_ATTR ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
 static SemaphoreHandle_t s_mutex = NULL;
 
 // Extract the transmitter callsign from an FT8 message.
