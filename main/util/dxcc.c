@@ -15,6 +15,82 @@ typedef struct { const char *p; const char *name; } dxcc_row_t;
 // for equal-length prefixes). Longer prefixes are matched first by
 // the lookup loop, so the order across length classes is flexible.
 static const dxcc_row_t TBL[] = {
+    // ---- Corrections measured against cty.dat (AD1C), 2026-09-17 ----
+    // Every row below fixes a callsign the table answered with the WRONG
+    // PLACE, not merely a coarser one. Found by resolving all 6,310 cty
+    // prefixes through both tables and diffing; the method and the full
+    // discrepancy list are in the commit message. Longest-prefix match means
+    // each of these simply outranks the shorter catch-all above it.
+
+    // Taiwan. BM-BQ and BU-BX are Taiwan; BR/BS/BT stay China. Only BU-BX
+    // were listed, so half of Taiwan fell through the bare "B" row and every
+    // BM/BN/BO/BP/BQ station was reported as China.
+    { "BM",  "Taiwan"          }, { "BN",  "Taiwan"          },
+    { "BO",  "Taiwan"          }, { "BP",  "Taiwan"          },
+    { "BQ",  "Taiwan"          },
+
+    // Ukraine and Uzbekistan were being swallowed by the bare "U" Russia row.
+    { "U5",  "Ukraine"         }, { "UM",  "Uzbekistan"      },
+
+    // The US Pacific. AH/KH/NH/WH were unqualified, so Guam, the Marianas,
+    // American Samoa and six more all reported as Hawaii. Hawaii itself is
+    // KH6/KH7 (minus KH7K); the bare rows above still catch anything else.
+    { "AH0", "Mariana Is."     }, { "KH0", "Mariana Is."     },
+    { "NH0", "Mariana Is."     }, { "WH0", "Mariana Is."     },
+    { "AH1", "Baker Howland"   }, { "KH1", "Baker Howland"   },
+    { "NH1", "Baker Howland"   }, { "WH1", "Baker Howland"   },
+    { "AH2", "Guam"            }, { "KH2", "Guam"            },
+    { "NH2", "Guam"            }, { "WH2", "Guam"            },
+    { "AH3", "Johnston I."     }, { "KH3", "Johnston I."     },
+    { "NH3", "Johnston I."     }, { "WH3", "Johnston I."     },
+    { "AH4", "Midway I."       }, { "KH4", "Midway I."       },
+    { "NH4", "Midway I."       }, { "WH4", "Midway I."       },
+    { "AH5", "Palmyra I."      }, { "KH5", "Palmyra I."      },
+    { "NH5", "Palmyra I."      }, { "WH5", "Palmyra I."      },
+    { "AH7K","Kure I."         }, { "KH7K","Kure I."         },
+    { "NH7K","Kure I."         }, { "WH7K","Kure I."         },
+    { "AH8", "Am. Samoa"       }, { "KH8", "Am. Samoa"       },
+    { "NH8", "Am. Samoa"       }, { "WH8", "Am. Samoa"       },
+    { "AH9", "Wake I."         }, { "KH9", "Wake I."         },
+    { "NH9", "Wake I."         }, { "WH9", "Wake I."         },
+
+    // The KP/NP/WP block. KP4 was the only qualified row, so NP2/WP2 - the US
+    // Virgin Islands - reported as Puerto Rico, and KP1/KP2/KP5 fell through
+    // to the bare "K" USA row.
+    { "KP1", "Navassa I."      }, { "NP1", "Navassa I."      },
+    { "WP1", "Navassa I."      }, { "KP2", "US Virgin Is."   },
+    { "NP2", "US Virgin Is."   }, { "WP2", "US Virgin Is."   },
+    { "KP3", "Puerto Rico"     }, { "KP5", "Desecheo I."     },
+    { "NP5", "Desecheo I."     }, { "WP5", "Desecheo I."     },
+
+    // The UK. The primary prefixes were right (GM/GW/GD/GU/GJ/GI); every
+    // SECONDARY form fell through to "England", so a Scottish MS0 or a Welsh
+    // GC station was reported as England.
+    { "GS",  "Scotland"        }, { "MA",  "Scotland"        },
+    { "MS",  "Scotland"        }, { "MM",  "Scotland"        },
+    { "GC",  "Wales"           }, { "MC",  "Wales"           },
+    { "MW",  "Wales"           }, { "GT",  "Isle of Man"     },
+    { "MD",  "Isle of Man"     }, { "MT",  "Isle of Man"     },
+    { "GP",  "Guernsey"        }, { "MP",  "Guernsey"        },
+    { "MU",  "Guernsey"        }, { "GH",  "Jersey"          },
+    { "MH",  "Jersey"          }, { "MJ",  "Jersey"          },
+    { "GN",  "N. Ireland"      }, { "MN",  "N. Ireland"      },
+    { "MI",  "N. Ireland"      },
+
+    // ZK was reassigned to New Zealand; the Cook Islands are E5, which is
+    // already listed. ZK3 is Tokelau.
+    { "ZK3", "Tokelau"         },
+
+    // The Dutch Caribbean is six entities, not one. PJ2 is Curacao, and the
+    // bare "PJ" row was claiming the rest of them.
+    { "PJ4", "Bonaire"         }, { "PJ5", "Saba & St.Eus."  },
+    { "PJ6", "Saba & St.Eus."  }, { "PJ7", "St. Maarten"     },
+
+    // VP2 is three separate entities. "Br. Caribbean" was not a DXCC entity
+    // at all - it was this table's own invention - so it is gone.
+    { "VP2E","Anguilla"        }, { "VP2M","Montserrat"      },
+    { "VP2V","Br. Virgin Is."  },
+
     // ---- USA, Canada, Mexico ----
     { "K",   "USA"   }, { "N",   "USA"   },
     { "W",   "USA"   }, { "AA",  "USA"   },
@@ -45,7 +121,7 @@ static const dxcc_row_t TBL[] = {
     { "J7",  "Dominica"        }, { "J8",  "St. Vincent"     },
     { "FG",  "Guadeloupe"      }, { "FM",  "Martinique"      },
     { "V2",  "Antigua"         }, { "V3",  "Belize"          },
-    { "V4",  "St. Kitts"       }, { "VP2", "Br. Caribbean"   },
+    { "V4",  "St. Kitts"       },
     { "VP5", "Turks&Caic."  }, { "VP9", "Bermuda"         },
     { "ZF",  "Cayman Is."      }, { "8P",  "Barbados"        },
     { "9Y",  "Trinidad"        }, { "HK",  "Colombia"        },
@@ -272,7 +348,7 @@ static const dxcc_row_t TBL[] = {
     { "VI",  "Australia"       }, { "VJ",  "Australia"       },
     { "VL",  "Australia"       }, { "VM",  "Australia"       },
     { "VN",  "Australia"       }, { "ZL",  "New Zealand"     },
-    { "ZK",  "Cook Is."        }, { "ZM",  "New Zealand"     },
+    { "ZK",  "New Zealand"     }, { "ZM",  "New Zealand"     },
     { "FK",  "New Caledonia"   }, { "FO",  "Fr. Polynesia"},
     { "FW",  "Wallis & F." }, { "E5",  "Cook Is."        },
     { "3D2", "Fiji"            }, { "YJ",  "Vanuatu"         },
@@ -336,13 +412,21 @@ static void normalise_call(const char *in, char *out, size_t cap)
 // Keyed on the exact name strings in TBL - keep the two tables in step.
 typedef struct { const char *name; const char *a3; } dxcc_a3_row_t;
 static const dxcc_a3_row_t A3[] = {
+    { "Taiwan", "TWN" },
+    { "Mariana Is.", "MNP" }, { "Guam", "GUM" }, { "Am. Samoa", "ASM" },
+    { "Wake I.", "WAK" }, { "Midway I.", "MID" }, { "Johnston I.", "JON" },
+    { "Palmyra I.", "PLM" }, { "Kure I.", "KUR" }, { "Baker Howland", "BKR" },
+    { "US Virgin Is.", "VIR" }, { "Navassa I.", "NAV" }, { "Desecheo I.", "DES" },
+    { "Tokelau", "TKL" }, { "Bonaire", "BES" }, { "Saba & St.Eus.", "SAB" },
+    { "St. Maarten", "SXM" }, { "Anguilla", "AIA" }, { "Montserrat", "MSR" },
+    { "Br. Virgin Is.", "VGB" },
     { "USA", "USA" }, { "Hawaii", "HAW" }, { "Alaska", "ALK" },
     { "Puerto Rico", "PRI" }, { "Canada", "CAN" }, { "Mexico", "MEX" },
     { "Bahamas", "BHS" }, { "Cuba", "CUB" }, { "Haiti", "HTI" },
     { "Dom. Rep.", "DOM" }, { "Grenada", "GRD" }, { "St. Lucia", "LCA" },
     { "Dominica", "DMA" }, { "St. Vincent", "VCT" }, { "Guadeloupe", "GLP" },
     { "Martinique", "MTQ" }, { "Antigua", "ATG" }, { "Belize", "BLZ" },
-    { "St. Kitts", "KNA" }, { "Br. Caribbean", "VP2" }, { "Turks&Caic.", "TCA" },
+    { "St. Kitts", "KNA" }, { "Turks&Caic.", "TCA" },
     { "Bermuda", "BMU" }, { "Cayman Is.", "CYM" }, { "Barbados", "BRB" },
     { "Trinidad", "TTO" }, { "Colombia", "COL" }, { "Venezuela", "VEN" },
     { "Costa Rica", "CRI" }, { "Guatemala", "GTM" }, { "Nicaragua", "NIC" },
