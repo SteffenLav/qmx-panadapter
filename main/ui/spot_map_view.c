@@ -2259,27 +2259,13 @@ static void build_settings_drawer(lv_obj_t *parent)
     // makes the real warning reappear and claim its row back.
     lv_obj_add_flag(s_grid_warn, LV_OBJ_FLAG_HIDDEN);
 
-    // A one-child row of its own, centered - the drawer's own flex cross-
-    // align is START (so the checkboxes/labels above hug the left edge),
-    // and that applies to every direct child alike. Centering just this one
-    // button needs its own centered flex row rather than fighting the
-    // drawer's container-wide alignment.
-    lv_obj_t *flush_wrap = lv_obj_create(sb);
-    lv_obj_remove_style_all(flush_wrap);
-    lv_obj_set_size(flush_wrap, SIDEBAR_W - 28, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_top(flush_wrap, 14, 0);
-    lv_obj_set_flex_flow(flush_wrap, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(flush_wrap, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(flush_wrap, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *flush_btn = lv_button_create(flush_wrap);
-    lv_obj_set_style_bg_color(flush_btn, lv_color_hex(UI_COLOR_DANGER), 0);
-    lv_obj_set_style_pad_hor(flush_btn, 16, 0);
-    lv_obj_set_height(flush_btn, 52);
-    lv_obj_add_event_cb(flush_btn, flush_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *flush_lbl = lv_label_create(flush_btn);
-    lv_obj_set_style_text_font(flush_lbl, &lv_font_montserrat_24, 0);
-    lv_label_set_text(flush_lbl, "Flush");
+    /* ⛔ THE DRAWER'S OWN FLUSH BUTTON IS GONE (2026-09-17, operator's call).
+     * Uwe DL8UG's header button does the same job - it calls this same
+     * flush_btn_cb() - and is reachable without opening the drawer at all,
+     * which was his whole reason for adding it. Two entry points to one
+     * destructive action is one more than the screen needs.
+     *
+     * flush_btn_cb() itself stays: it is now the header button's callback. */
 
     /* The handle, a CHILD of the drawer on its LEFT edge - the edge that
      * travels - copied from ui.c's s_drawer_grip. ⛔ Not on the screen edge:
@@ -2692,6 +2678,35 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* ---- THE HEADER IS ONE BUDGET, NOT FOUR ANCHORS -----------------------
+     * Zoom was anchored to the header's CENTRE while Flush and Exit were
+     * anchored to its RIGHT edge and the ID line to its LEFT - so inserting
+     * Flush moved nothing and simply drew over the ID line (Gyula HA3HZ's
+     * callsign/time/frequency, added in v1.14.2). Three origins, no shared
+     * budget, and the collision was invisible until a screenshot with a
+     * callsign actually set.
+     *
+     * All four now sit on ONE run with EQUAL gaps, laid out left to right
+     * from the title's right edge to the right margin. Widths are measured,
+     * not guessed - Exit and Flush from a pixel scan of a live screenshot.
+     *
+     *   run   = HDR_RUN_R - HDR_RUN_L            = 1256 - 256 = 1000
+     *   items = 254 (zoom) + 193 + 138 + 102     = 687
+     *   gap   = (1000 - 687) / 4                 = 78
+     *
+     * Add or resize anything here and the gap recomputes itself. */
+    #define HDR_RUN_L     256   /* right edge of "SELFSPOTTER" (montserrat_32) */
+    #define HDR_RUN_R    1256   /* SCR_W - 24 right margin */
+    #define ZOOM_GRP_W    254   /* ZOOM_LBL_W + ZOOM_GAP + ZOOM_DD_W, below */
+    #define INFO_GAP_W    193
+    #define FLUSH_BTN_W   138   /* measured: trash glyph + "Flush" + 2*20 pad */
+    #define EXIT_BTN_W    102   /* measured: x=1147..1249 on a live screenshot */
+    #define HDR_GAP  (((HDR_RUN_R - HDR_RUN_L) - (ZOOM_GRP_W + INFO_GAP_W +                        FLUSH_BTN_W + EXIT_BTN_W)) / 4)
+    #define ZOOM_X   (HDR_RUN_L + HDR_GAP)
+    #define INFO_GAP_X (ZOOM_X + ZOOM_GRP_W + HDR_GAP)
+    #define FLUSH_X  (INFO_GAP_X + INFO_GAP_W + HDR_GAP)
+    #define EXIT_X   (FLUSH_X + FLUSH_BTN_W + HDR_GAP)
+
     lv_obj_t *title = lv_label_create(hdr);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
@@ -2702,7 +2717,7 @@ void spot_map_view_init(lv_obj_t *parent)
     // area can reach below the 64 px bar - same reasoning as reader_view.c's
     // header buttons (LVGL clips a child's hit area to its parent).
     lv_obj_t *exit_btn = lv_button_create(s_overlay);
-    lv_obj_align(exit_btn, LV_ALIGN_TOP_RIGHT, -24, (HEADER_H - 46) / 2);
+    lv_obj_align(exit_btn, LV_ALIGN_TOP_LEFT, EXIT_X, (HEADER_H - 46) / 2);
     lv_obj_set_style_bg_color(exit_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(exit_btn, 20, 0);
     lv_obj_set_height(exit_btn, 46);
@@ -2736,7 +2751,7 @@ void spot_map_view_init(lv_obj_t *parent)
     // exit_btn itself uses - identical y formula, so vertical match is
     // exact instead of inferred, and an x offset sized from exit_btn's
     // MEASURED width (-24 right edge, ~109 px wide) plus a 20 px gap.
-    lv_obj_align(flush_hdr_btn, LV_ALIGN_TOP_RIGHT, -153, (HEADER_H - 46) / 2);
+    lv_obj_align(flush_hdr_btn, LV_ALIGN_TOP_LEFT, FLUSH_X, (HEADER_H - 46) / 2);
     lv_obj_set_style_bg_color(flush_hdr_btn, lv_color_hex(UI_COLOR_DANGER), 0);
     lv_obj_set_style_pad_hor(flush_hdr_btn, 20, 0);
     lv_obj_set_height(flush_hdr_btn, 46);
@@ -2764,13 +2779,12 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_label_set_text(zoom_lbl, "Zoom:");
     lv_obj_set_style_text_font(zoom_lbl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(zoom_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(zoom_lbl, LV_ALIGN_TOP_MID,
-                 -(ZOOM_DD_W / 2 + ZOOM_GAP + ZOOM_LBL_W / 2), HEADER_H / 2 - 14);
+    lv_obj_align(zoom_lbl, LV_ALIGN_LEFT_MID, ZOOM_X, 0);
 
     lv_obj_t *zoom_dd = lv_dropdown_create(hdr);
     lv_dropdown_set_options(zoom_dd, "Fit\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
     lv_obj_set_size(zoom_dd, ZOOM_DD_W, 46);
-    lv_obj_align(zoom_dd, LV_ALIGN_TOP_MID, (ZOOM_LBL_W + ZOOM_GAP) / 2, (HEADER_H - 46) / 2);
+    lv_obj_align(zoom_dd, LV_ALIGN_TOP_LEFT, ZOOM_X + ZOOM_LBL_W + ZOOM_GAP, (HEADER_H - 46) / 2);
     lv_obj_set_style_text_font(zoom_dd, &lv_font_montserrat_24, 0);
     lv_dropdown_set_selected(zoom_dd, 0);   /* "Fit" - what a fresh open already does */
     lv_obj_add_event_cb(zoom_dd, zoom_dropdown_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -2799,13 +2813,28 @@ void spot_map_view_init(lv_obj_t *parent)
     // header for free (this is a direct child of hdr, whose height IS
     // HEADER_H, so "centred on the banner" falls out of that alignment
     // without a separate y calculation).
-    #define INFO_GAP_X   780
-    #define INFO_GAP_W   340
+    // ⛔ THIS WIDTH IS DERIVED FROM THE FLUSH BUTTON, not chosen. Uwe DL8UG's
+    // header Flush button (added 2026-09-17) lands at x=989..1126 - measured on
+    // a live screenshot, and it matches its own geometry: right-aligned at -153
+    // in a 1280 px header, 138 px wide. At the previous width of 340 this label
+    // ran to 1120 and the button was drawn straight over its right-hand third,
+    // clipping the callsign and the time - which is the whole content Gyula
+    // HA3HZ asked for in v1.14.2 ("a screenshot with no callsign/time/freq in
+    // it doesn't convey much information"). One contributor's feature silently
+    // ate another's, and only a screenshot with a callsign SET shows it, which
+    // is why it reached me and not him.
+    //
+    // 193 = 989 (Flush's left edge) - 16 (gap) - 780 (this label's own x). Move
+    // the button and this must move with it.
+    /* INFO_GAP_X / INFO_GAP_W come from the header budget above. */
     lv_obj_t *info_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(info_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(info_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_align(info_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(info_lbl, INFO_GAP_W);
+    /* Wrap, never clip - the same rule the Calibrate Power modal needed on the
+     * same day. A long compound callsign must push a line, not lose one. */
+    lv_label_set_long_mode(info_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_align(info_lbl, LV_ALIGN_LEFT_MID, INFO_GAP_X, 0);
     s_info_lbl = info_lbl;
     update_info_line();
