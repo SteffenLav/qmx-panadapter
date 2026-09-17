@@ -24,6 +24,7 @@
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 
 // v0.12.0: Manual FT8 TX (Reply + Call CQ) - tap a heard-station row, or
 // the "Call CQ" button below, to open the confirmation modal; a small
@@ -57,35 +58,47 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | AGE
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | AGE
 // SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
-// the pre-v1.3.1 layout; the country column shrank from full entity names
-// (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
-// tighter SNR (no " dB" suffix) - freed the width for two new columns
-// (Roy KI0ER request): DT (slot-timing offset, seconds, band-consensus-
-// relative so on-time stations read ~0.0) and HZ (the station's audio tone).
+// the pre-v1.3.1 layout.
+//
+// The country column was cut to 3-letter codes in v1.3.1 to pay for DT and HZ
+// (Roy KI0ER). It is back to spelled-out names at 126 px / ~10 characters,
+// paid for by DROPPING BRG (62 px) and by AGE losing its "s" suffix (~12 px) -
+// the operator's call, 2026-09-17: a bearing is derivable from the distance
+// and the map, and the country is read far more often.
+//
+// 10 IS A COLUMN WIDTH, NOT A TRUNCATION. country_display() spells the name
+// out when it fits and returns the 3-letter code when it does not, so
+// "Netherlands" prints NLD rather than "Netherlan". A half-country reads as a
+// bug; the code is the shorter TRUE answer. Same rule wspr_screen_view.c has
+// always used.
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
 #define COL_CALL_X      46
 #define COL_TEXT_X      184
 #define COL_COUNTRY_X   479
-#define COL_SNR_X       537
-#define COL_DT_X        599
-#define COL_HZ_X        669
-#define COL_KM_X        739
-#define COL_BRG_X       817
-#define COL_AGE_X       885
+#define COL_SNR_X       611
+#define COL_DT_X        673
+#define COL_HZ_X        743
+#define COL_KM_X        813
+#define COL_AGE_X       903
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
 #define COL_CALL_W      (COL_TEXT_X    - COL_CALL_X    - 8)
 #define COL_MSG_W       272
-#define COL_COUNTRY_W   52
+// 126 px is ~10 characters of montserrat_24, which spells out 195 of the 227
+// entities in dxcc.c whole; the rest fall back to their 3-letter code.
+#define COL_COUNTRY_W   126
 #define COL_SNR_W       56
 #define COL_DT_W        64
 #define COL_HZ_W        64
-#define COL_KM_W        72
-#define COL_BRG_W       62
+// KM carries a leading "~" when the distance came from a country centroid
+// instead of a decoded grid, so it is a character wider than the digits need.
+#define COL_KM_W        84
+// What COL_COUNTRY_W is worth in characters of montserrat_24 (~12.1 px each).
+#define COL_COUNTRY_CHARS 10
 #define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
@@ -121,7 +134,6 @@ static lv_style_t s_style_col_snr;      // SNR base (font/pos/align), colour set
 static lv_style_t s_style_col_dt;       // DT (dim, right)
 static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
-static lv_style_t s_style_col_brg;      // BRG (dim, right)
 static lv_style_t s_style_col_age;      // AGE (dim, right)
 static lv_style_t s_style_header;       // column header row
 static lv_style_t s_style_header_label; // column header text
@@ -137,7 +149,6 @@ typedef struct {
     lv_obj_t *l_dt;
     lv_obj_t *l_hz;
     lv_obj_t *l_km;
-    lv_obj_t *l_brg;
     lv_obj_t *l_age;
     // Dirty-tracking cache: skip lv_label_set_text when unchanged.
     char prev_call[16];
@@ -147,7 +158,6 @@ typedef struct {
     char prev_dt[12];
     char prev_hz[12];
     char prev_km[12];
-    char prev_brg[12];
     char prev_age[12];
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
@@ -358,11 +368,10 @@ static void styles_init(void)
     lv_style_set_y         (&s_style_col_snr, 6);
 
     INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    // HZ/KM/BRG values sit +10 px right of their (unchanged) header labels so
+    // HZ/KM values sit +10 px right of their (unchanged) header labels so
     // the numbers center under the right-aligned headings (operator request).
     INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
@@ -854,7 +863,6 @@ static void build_row(int i)
     r->l_dt      = make_label_styled(r->row, &s_style_col_dt);
     r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
-    r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
     r->l_age     = make_label_styled(r->row, &s_style_col_age);
 
     // SNR colour starts white; per-row local override on update.
@@ -867,7 +875,6 @@ static void build_row(int i)
     r->prev_country[0] = '\0';
     r->prev_snr[0]     = '\0';
     r->prev_km[0]      = '\0';
-    r->prev_brg[0]     = '\0';
     r->prev_age[0]     = '\0';
     r->prev_snr_db       = -127;
     r->prev_color        = -1;
@@ -880,11 +887,15 @@ static void update_row(int i, const ft8_call_t *src)
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
-    const char *country = dxcc_lookup_alpha3(src->call);
+    /* Width, not truncation - see the layout note at the top of this file.
+     * country_display() also falls back to Uwe's geo_coords table for the ~130
+     * entities dxcc.c has never known, so Monaco, Malta, Andorra and the rest
+     * stop printing nothing. */
+    const char *country = country_display(src->call, COL_COUNTRY_CHARS);
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_age[12];
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_age[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
     // Seconds since last heard, not heard_count - the browser's decode list
     // already shows this (Randy N4OPI asked for parity between the two, and
@@ -894,7 +905,9 @@ static void update_row(int i, const ft8_call_t *src)
     {
         int64_t age = (int64_t)time(NULL) - src->last_utc;
         if (age < 0) age = 0;
-        snprintf(b_age, sizeof(b_age), "%us", (unsigned)age);
+        // No "s" suffix: the heading says AGE and every value is seconds, so
+        // the letter was 12 px of the width the country column now uses.
+        snprintf(b_age, sizeof(b_age), "%u", (unsigned)age);
     }
 
     // DT: the station's slot-timing offset in seconds, relative to the band
@@ -910,25 +923,39 @@ static void update_row(int i, const ft8_call_t *src)
     }
     snprintf(b_hz, sizeof(b_hz), "%d", (int)src->last_freq);
 
+    /* Distance. THE GRID IS THE SOURCE AND THE CENTROID IS ONLY THE BACKSTOP,
+     * never the other way round: a 4-character Maidenhead square places a
+     * station to ~70-150 km, while geo_coords collapses a whole country to one
+     * point - ~2,000 km from either US coast. Using the centroid where a grid
+     * exists would replace a real measurement with a worse one.
+     *
+     * The column is blank so often because most FT8 messages carry no grid at
+     * all: only a CQ and the opening exchange do, so a station heard sending a
+     * report or an RR73 has never told us where it is. Those are the rows the
+     * fallback fills.
+     *
+     * A centroid distance is PREFIXED WITH "~". It is an estimate, and an
+     * unmarked estimate is a measurement we did not make - the same rule that
+     * keeps a fabricated 599 out of the log. */
+    bool km_ok = false, km_approx = false;
+    double km_val = 0.0;
     if (s_user_loc_valid && src->last_grid[0]) {
         double rlat = 0.0, rlon = 0.0;
         if (maidenhead_to_latlon(src->last_grid, &rlat, &rlon)) {
-            double km  = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
-            double brg = bearing_deg (s_user_lat, s_user_lon, rlat, rlon);
-            if (s_distance_in_miles) {
-                double miles = km * 0.621371;
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(miles + 0.5));
-            } else {
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
-            }
-            snprintf(b_brg, sizeof(b_brg), "%d°", (int)(brg + 0.5));
-        } else {
-            snprintf(b_km,  sizeof(b_km),  "--");
-            snprintf(b_brg, sizeof(b_brg), "--");
+            km_val = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
+            km_ok  = true;
         }
+    }
+    if (!km_ok && s_user_loc_valid) {
+        km_ok = km_approx = country_centroid_km(src->call, s_user_lat,
+                                                s_user_lon, &km_val);
+    }
+    if (km_ok) {
+        double shown = s_distance_in_miles ? km_val * 0.621371 : km_val;
+        snprintf(b_km, sizeof(b_km), "%s%d", km_approx ? "~" : "",
+                 (int)(shown + 0.5));
     } else {
-        snprintf(b_km,  sizeof(b_km),  "--");
-        snprintf(b_brg, sizeof(b_brg), "--");
+        snprintf(b_km, sizeof(b_km), "--");
     }
 
     /* E (blue) / O (amber) slot parity indicator, on the ACTIVE protocol's
@@ -958,7 +985,6 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_dt,      r->prev_dt,      sizeof(r->prev_dt),      b_dt);
     set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
-    set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     b_age);
 
     /* Colour scheme: AMBER=actively working now, RED=own call heard,
@@ -3179,7 +3205,6 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "DT",      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT },
         { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
-        { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
         { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };
     for (int i = 0; i < 10; i++) {

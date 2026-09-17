@@ -18,6 +18,7 @@
 #include "cat.h"
 #include "esp_heap_caps.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 #include "wspr_tx.h"
 #include <math.h>
 #include "esp_timer.h"
@@ -1389,13 +1390,17 @@ static void arm_dial_push(const char *why)
 #define W_BAND  3
 #define W_CALL  7
 #define W_GRID  4
-#define W_CTY   7
+/* EIGHT since 2026-09-17, paid for by dropping BRG. Not a truncation limit -
+ * country_field() spells the name out when it fits and returns the 3-letter
+ * code when it does not, the same rule the FT8 decode list now follows. */
+#define W_CTY   8
 #define W_SNR   3
 #define W_DRF   2
 #define W_TONE  6
 #define W_PWR   3
-#define W_KM    5
-#define W_BRG   3
+/* SIX: five digits plus a leading "~" when the distance came from a country
+ * centroid rather than a decoded grid. */
+#define W_KM    6
 /* DT in seconds to one decimal, signed: "+1.0", "-0.4". Four is exactly enough
  * for the range WSPR produces and one more than the heading needs. */
 #define W_DT    4
@@ -1403,11 +1408,11 @@ static void arm_dial_push(const char *why)
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_S) "s %-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s %"                       STRINGIFY(W_DT)   "s"
+#define ROW_FMT "%-" STRINGIFY(W_S) "s %-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"                       STRINGIFY(W_DT)   "s"
 
-/* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
- * Stat" is not a country and a clipped name reads as a bug, while USA is
- * simply the shorter true answer. The full name comes from the callsign via
+/* Spelled out if it fits, else the DXCC alpha-3 - see country_field() below,
+ * which is now the single implementation of that rule for every screen. The
+ * full name comes from the callsign via
  * dxcc_lookup(), the same source the web panel uses, so the two screens
  * cannot disagree. */
 #define COUNTRY_W W_CTY   /* one number, see the widths above */
@@ -1424,16 +1429,21 @@ static void arm_dial_push(const char *why)
  * A country name is a label, not an identity - which is why it may be. */
 static const char *country_field(const wspr_spot_t *sp)
 {
-    static char buf[COUNTRY_W + 1];   /* one row is formatted at a time */
-    const char *full = dxcc_lookup(sp->call);
-    if (!full || !full[0]) full = sp->cty[0] ? sp->cty : "--";
-    snprintf(buf, sizeof(buf), "%.*s", COUNTRY_W, full);
-    return buf;
+    /* SPELL IT OUT OR GIVE THE CODE - never a clipped name. This used to
+     * truncate, under a comment arguing that "United " still reads as a place.
+     * It sat directly below an older comment in the same file saying the
+     * opposite ("NEVER truncated"), so the file disagreed with itself and the
+     * code followed the weaker rule. Settled 2026-09-17, the same way the FT8
+     * decode list now does it: a half-country reads as a bug, and the 3-letter
+     * code is the shorter TRUE answer. */
+    const char *name = country_display(sp->call, COUNTRY_W);
+    if (name && name[0]) return name;
+    return sp->cty[0] ? sp->cty : "--";
 }
 
 static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
 {
-    char snr[16], drift[16], hz[16], pwr[16], km[20], brg[16], dt[16];
+    char snr[16], drift[16], hz[16], pwr[16], km[20], dt[16];
 
     /* An unmeasured value prints as a dash, never as a number. WSPR_SNR_UNKNOWN
      * and WSPR_DRIFT_UNKNOWN exist precisely so this cannot quietly become a
@@ -1452,13 +1462,15 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
      * and the FT8 list has honoured it all along; this list simply never
      * looked. The heading follows the same switch - see fmt_header() - because
      * a number in the wrong unit under the right label is worse than either. */
+    /* "~" marks a distance derived from the callsign's COUNTRY CENTROID rather
+     * than the station's grid - see wspr_spot_t.km_approx. W_KM carries the
+     * extra character. */
+    const char *approx = sp->km_approx ? "~" : "";
     if (sp->km < 0) snprintf(km, sizeof(km), "--");
     else if (wspr_dist_in_miles())
-        snprintf(km, sizeof(km), "%d", (int)lround(sp->km * 0.621371));
-    else snprintf(km, sizeof(km), "%d", (int)sp->km);
+        snprintf(km, sizeof(km), "%s%d", approx, (int)lround(sp->km * 0.621371));
+    else snprintf(km, sizeof(km), "%s%d", approx, (int)sp->km);
 
-    if (sp->bearing_deg < 0) snprintf(brg, sizeof(brg), "--");
-    else snprintf(brg, sizeof(brg), "%d", (int)sp->bearing_deg);
 
     /* An unmeasured DT prints as a dash, never as 0.0 - a spot recorded before
        this field existed has no alignment to report, and a fabricated zero
@@ -1477,7 +1489,7 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
     if (!sch[0]) sch[0] = ' ';
 
     snprintf(out, n, ROW_FMT, sch, utc, bnd ? bnd : "", sp->call, sp->grid,
-             country_field(sp), snr, drift, hz, pwr, km, brg, dt);
+             country_field(sp), snr, drift, hz, pwr, km, dt);
 }
 
 static void fmt_header(char *out, size_t n)
@@ -1490,13 +1502,13 @@ static void fmt_header(char *out, size_t n)
      * "TONE" rather than "HZ": every column here is a number in some unit, so
      * "HZ" named the unit while the others name the quantity. What the column
      * holds is the station's audio tone within the 200 Hz window. */
-    char h[13][16];   /* 13 columns since S was added - keep in step with raw[]/w[] */
+    char h[12][16];   /* 12 columns since BRG went - keep in step with raw[]/w[] */
     /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
      * so the unit belongs in the heading and not repeated on every row. */
-    const char *raw[13] = { "S", "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
-                            "DR", "TONE", "PWR", wspr_dist_in_miles() ? "MI" : "KM", "BRG", "DT" };
-    const int   w[13]   = { W_S, W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
-                            W_DRF, W_TONE, W_PWR, W_KM, W_BRG, W_DT };
+    const char *raw[12] = { "S", "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
+                            "DR", "TONE", "PWR", wspr_dist_in_miles() ? "MI" : "KM", "DT" };
+    const int   w[12]   = { W_S, W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
+                            W_DRF, W_TONE, W_PWR, W_KM, W_DT };
     /* ⭐ BIAS THE HEADING THE WAY ITS DATA IS ALIGNED (operator, 2026-09-01:
      * "KM header should be moved one character right to centre properly above
      * the column").
@@ -1513,8 +1525,8 @@ static void fmt_header(char *out, size_t n)
      * hand - which matters here, because the hand-spaced header is exactly what
      * drifted out of step with the rows before ROW_FMT was made to serve both. */
     /* BAND is right-aligned with the other numbers. */
-    const bool right_aligned[13] = { false, false, true, false, false, false,
-                                     true, true, true, true, true, true, true };
+    const bool right_aligned[12] = { false, false, true, false, false, false,
+                                     true, true, true, true, true, true };
     /* ⛔ A HEADING LONGER THAN ITS COLUMN SILENTLY WIDENS THE ROW. printf does
      * not truncate, so an over-long title pushes every later column right and
      * the last one off the pane - invisible in code review, obvious only on
@@ -1525,8 +1537,8 @@ static void fmt_header(char *out, size_t n)
         static bool checked = false;
         if (!checked) {
             checked = true;
-            int total = 12;   /* the single spaces between 13 columns */
-            for (int i = 0; i < 13; i++) {
+            int total = 11;   /* the single spaces between 12 columns */
+            for (int i = 0; i < 12; i++) {
                 total += w[i];
                 if ((int)strlen(raw[i]) > w[i])
                     ESP_LOGE(TAG, "column %d: heading '%s' is %d chars in a %d "
@@ -1539,7 +1551,7 @@ static void fmt_header(char *out, size_t n)
                          total, WSPR_ROW_MAX_CHARS);
         }
     }
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 12; i++) {
         const int len  = (int)strlen(raw[i]);
         const int pad  = w[i] > len ? w[i] - len : 0;
         /* ⭐ THE HEADING IS ALIGNED THE SAME WAY ITS DATA IS - not centred.
@@ -1562,7 +1574,7 @@ static void fmt_header(char *out, size_t n)
         h[i][k] = '\0';
     }
     snprintf(out, n, ROW_FMT, h[0], h[1], h[2], h[3], h[4],
-             h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12]);
+             h[5], h[6], h[7], h[8], h[9], h[10], h[11]);
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)

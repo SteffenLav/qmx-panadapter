@@ -26,6 +26,7 @@
 #include "util/psram_task.h"
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 #include "storage/settings.h"
 #include "fft/kiss_fftr.h"
 #include "wspr_decode.h"
@@ -816,10 +817,21 @@ static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc,
     qmx_settings_t qs;
     settings_load_all(&qs);
     double mlat, mlon, tlat, tlon;
-    if (qs.my_grid[0] && maidenhead_to_latlon(qs.my_grid, &mlat, &mlon) &&
-        maidenhead_to_latlon(sp.grid, &tlat, &tlon)) {
-        sp.km          = (int32_t)haversine_km(mlat, mlon, tlat, tlon);
-        sp.bearing_deg = (int16_t)bearing_deg(mlat, mlon, tlat, tlon);
+    if (qs.my_grid[0] && maidenhead_to_latlon(qs.my_grid, &mlat, &mlon)) {
+        if (maidenhead_to_latlon(sp.grid, &tlat, &tlon)) {
+            sp.km          = (int32_t)haversine_km(mlat, mlon, tlat, tlon);
+            sp.bearing_deg = (int16_t)bearing_deg(mlat, mlon, tlat, tlon);
+        } else {
+            /* No usable grid. Fall back to the callsign's country centroid so
+             * the row is not simply blank - marked approximate, and ONLY here,
+             * because the grid above is an order of magnitude better and must
+             * always win when it exists. */
+            double km = 0.0;
+            if (country_centroid_km(sp.call, mlat, mlon, &km)) {
+                sp.km        = (int32_t)km;
+                sp.km_approx = true;
+            }
+        }
     }
     sp.dial_hz = s_cycle_dial_hz;   /* the band it was HEARD on - see wspr_dec_job_t */
     wspr_spots_add(&sp);

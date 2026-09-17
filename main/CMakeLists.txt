@@ -51,6 +51,7 @@ idf_component_register(
     "util/ansi_term.c"
         "util/bandplan.c"
         "util/dxcc.c"
+        "util/country.c"
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"

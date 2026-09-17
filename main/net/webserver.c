@@ -85,7 +85,8 @@
    tools/patches/apply_lv_event_chain_guard.ps1). Declared here rather than in
    a header because the definition lives in a patched vendor file. */
 extern uint32_t qmx_lv_event_chain_bad;
-#include "util/dxcc.h"        // dxcc_lookup - the decode list's COUNTRY column
+#include "util/dxcc.h"
+#include "util/country.h"     // country_display - one country answer for every screen
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_timer.h"         // web tune 60 s safety timeout
@@ -4853,7 +4854,7 @@ static esp_err_t wspr_handler(httpd_req_t *req)
              * reason: the browser has the width. Falls back the way the Tab5's
              * own line does when the callsign is not in the DXCC table. */
             {
-                const char *full = dxcc_lookup(dx.call);
+                const char *full = country_display(dx.call, 64);
                 cJSON_AddStringToObject(o, "country",
                     (full && full[0]) ? full : (dx.cty[0] ? dx.cty : dx.grid));
             }
@@ -4930,7 +4931,7 @@ static esp_err_t wspr_handler(httpd_req_t *req)
          * FT8 list already makes. Looked up from the callsign here rather than
          * stored, so the spot struct stays small. */
         {
-            const char *full = dxcc_lookup(snap[i].call);
+            const char *full = country_display(snap[i].call, 64);
             cJSON_AddStringToObject(o, "country", full ? full : "");
         }
         cJSON_AddNumberToObject(o, "utc",   (double)snap[i].cycle_utc);
@@ -5050,7 +5051,7 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         // to three letters; a browser window has room for "Czech Republic", and
         // a name you can read beats a code you have to decode.
         {
-            const char *cty = dxcc_lookup(r->call);
+            const char *cty = country_display(r->call, 64);
             if (cty && cty[0]) cJSON_AddStringToObject(o, "cty", cty);
         }
         cJSON_AddNumberToObject(o, "snr",  r->last_snr_db);
