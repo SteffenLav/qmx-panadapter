@@ -3131,7 +3131,6 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask)
     }
 }
 
-static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 
 static bool      s_drawer_expert = false;
@@ -3408,7 +3407,6 @@ static void drawer_term_btn_cb(lv_event_t *e);
 static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
-static void drawer_otadl_cb(lv_event_t *e);
 static void drawer_expert_btn_cb(lv_event_t *e);
 static void drawer_expert_paint(void);
 static void drawer_check_flip_cb(lv_event_t *e);
@@ -11441,7 +11439,6 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_cw_decode,      c.cw_decode_en);
     sync_cb(s_check_wspr_net,       c.wspr_net_en);
     sync_cb(s_check_charge_limit,   c.charge_limit_en);
-    sync_cb(s_switch_otadl,         c.ota_autodl);
     sync_cb(s_cb_bt,                c.bt_mouse_en);
     sync_cb(s_check_rit_pill,       c.rit_pill_show);
     /* These three are owned by a module rather than read straight from the
@@ -12278,22 +12275,17 @@ static void drawer_build(void)
     // the 3.3 MB is fetched, not about whether an update can happen behind
     // anyone's back.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_OTADL, y, 88);
-        lv_obj_t *l1 = lv_label_create(sec);
-        lv_label_set_text(l1, "Download updates");
-        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
-        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 6);
-        lv_obj_t *l2 = lv_label_create(sec);
-        lv_label_set_text(l2, "in the background, ready to install");
-        lv_obj_set_style_text_color(l2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        lv_obj_set_style_text_font(l2, &lv_font_montserrat_20, 0);
-        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 44);
-        qmx_settings_t oc;
-        settings_load_all(&oc);
-        s_switch_otadl = make_drawer_checkbox(sec, oc.ota_autodl, drawer_otadl_cb, NULL);
-        lv_obj_align(s_switch_otadl, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 88;
+        /* ⛔ THE "Download updates in the background" CHECKBOX IS GONE
+         * (2026-09-17). The feature behind it is gone too - see the tombstone
+         * in update_check.c. It had been suppressed by a 32 KB free-heap guard
+         * for months without anyone noticing, so this control had been
+         * promising something that never happened, and the operator had long
+         * since concluded it was obsolete. He was right.
+         *
+         * DRAWER_SEC_OTADL is left defined so a stored Basic/Advanced layout
+         * that mentions it stays readable - see the third mask in #268/#272,
+         * which exists precisely so an absent section is not confused with an
+         * unticked one. */
     }
 
     /* #298 STILL SPECTRUM. Two sentences of explanation under the switch,
@@ -13335,11 +13327,10 @@ static void drawer_build(void)
          * already does this; these two were added without it. */
         lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
-        /* Bursts per transmission (John W5JSS). Sits directly under the period
-         * because the two only make sense read together: "1 in 10, 2 bursts"
-         * is a pair of transmissions every twenty minutes. The period is
-         * measured group start to group start, so changing this lengthens the
-         * group without moving the groups. */
+        /* Bursts per transmission (John W5JSS). Sits directly under the duty
+         * cycle because the two only make sense read together: the duty sets
+         * how many RECEIVE cycles follow the group, so "1 in 3, 2 bursts" is
+         * Tx Tx Rx Rx repeating. See the note at s_burst_done in wspr_rx.c. */
         lv_obj_t *bhdr = lv_label_create(sec);
         lv_label_set_text(bhdr, "Bursts per transmission");
         lv_obj_set_style_text_color(bhdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -14292,13 +14283,6 @@ static void drawer_expert_paint(void)
 // Background download on/off. Nothing else changes: the update check still
 // runs, the bar still says when a new version exists, and installing one is
 // still a deliberate press.
-static void drawer_otadl_cb(lv_event_t *e)
-{
-    lv_obj_t *cb = lv_event_get_target(e);
-    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
-    settings_set_ota_autodl(on);
-    ESP_LOGI(TAG, "background download of updates: %s", on ? "ON" : "OFF");
-}
 
 // Flip the view and re-lay the drawer out for whichever screen is showing.
 static void drawer_expert_btn_cb(lv_event_t *e)

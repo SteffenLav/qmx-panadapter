@@ -386,9 +386,9 @@ typedef struct {
      * back-to-back pair John W5JSS asked for ("10:46 & 10:48, 11:06 & 11:08"),
      * which the QMX's own Virtual U3S beacon can do and this could not.
      *
-     * wspr_duty_pct stays the period measured GROUP START TO GROUP START, so
-     * raising this does not move the groups - it lengthens them. A group can
-     * never be longer than its own period, so the scheduler clamps it. */
+     * wspr_duty_pct counts the RECEIVE cycles that follow the group (N-1 of
+     * them), so the real period is bursts + N - 1 and it grows with this
+     * setting: 1 in 3 with 2 bursts is Tx Tx Rx Rx, repeating. */
     uint8_t  wspr_tx_burst_n; // consecutive cycles per scheduled transmission, 1-4
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
