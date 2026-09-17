@@ -808,6 +808,53 @@
   .btn-ok[disabled], .btn-primary[disabled], .btn-danger[disabled],
   .btn-neutral[disabled] { opacity: .45; cursor: default; }
 
+  /* ---- Antenna Tune live readout (Randy N4OPI) ----
+     The readout used to live in the Radio menu ITEM'S OWN LABEL, so watching
+     power and SWR meant holding that menu open - and the bar's document-level
+     "a click anywhere closes every menu" handler shuts it on the first click
+     anywhere else. Randy: "it would be nice if the PWR and SWR would be
+     displayed instead of having to re-open the menu to see the results and
+     stop the tune sequence." So the numbers and the stop get their own panel.
+
+     ⛔ position:fixed, which is what keeps it OUT of the page grid. <body> is
+     the grid container and every in-flow child is pinned to an explicit
+     grid-row (see the note at the top of this stylesheet); a normal-flow
+     element added here would be auto-placed into a row and move the spectrum.
+     The modals escape the same way.
+
+     Centred like the Tab5's own tune modal, and deliberately WITHOUT a
+     backdrop: the radio is keying a carrier for up to a minute and the
+     operator is turning an ATU, so the rest of the page stays live and
+     clickable. z-index sits under the modals (1000) - a modal opened over a
+     running tune should still be on top. */
+  #tune-panel {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 900;
+    background: var(--card); border: 2px solid #b83030; border-radius: 10px;
+    padding: 14px 20px 16px; text-align: center;
+    box-shadow: 0 10px 34px rgba(0,0,0,.6);
+    min-width: min(20rem, 92vw);
+  }
+  #tune-panel[hidden] { display: none; }
+  #tune-panel-head {
+    color: #ff6060; font-weight: 700; letter-spacing: .06em;
+    font-size: .95rem; margin-bottom: .55rem;
+  }
+  #tune-panel-nums {
+    display: flex; gap: 1.6rem; justify-content: center; margin-bottom: .8rem;
+  }
+  #tune-panel-nums .k {
+    color: var(--dim); font-size: .72rem; letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  /* Tabular figures so the numbers do not jitter sideways as they change -
+     this updates once a second with someone watching it closely. */
+  #tune-panel-nums .v {
+    font-size: clamp(1.5rem, 4vw, 2.3rem); font-weight: 700; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  #tune-panel button { font-size: 1rem; padding: 8px 26px; }
+
   .bot-menu-wrap { position: relative; display: inline-block; margin-left: 1.4rem; }
   .bot-menu-wrap > .bot-btn { margin-left: 0; }
   /* position:fixed (coords set in JS on open) so the popup escapes #bot's
@@ -1273,6 +1320,20 @@
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
     <input type="file" id="adif-restore-file" accept=".adi,.adif,text/plain" style="display:none">
+  </div>
+
+  <!-- Antenna Tune live readout. Filled by tuneAntSync() from /api/status's
+       "tune" object, which only exists while a web tune is running - so the
+       panel's visibility is driven by the DEVICE's idea of whether it is
+       transmitting, never by this page's memory of having started one. -->
+  <div id="tune-panel" hidden>
+    <div id="tune-panel-head">&#9888; ANTENNA TUNE &mdash; TRANSMITTING</div>
+    <div id="tune-panel-nums">
+      <div><div class="k">SWR</div><div class="v" id="tune-swr">--</div></div>
+      <div><div class="k">Power</div><div class="v" id="tune-watts">--</div></div>
+      <div><div class="k">Stops in</div><div class="v" id="tune-secs">--</div></div>
+    </div>
+    <button id="tune-stop-btn" class="btn-danger">STOP Tune</button>
   </div>
 
   <!-- POTA / SOTA activation. Mirrors ui/activation_modal.c: pick the programme,
@@ -5752,17 +5813,50 @@ let tuneAntRunning = false;
 function tuneAntSync(s) {
   const btn = document.getElementById("tune-ant-btn");
   btn.style.display = s.tune_ok ? "" : "none";
+  const panel = document.getElementById("tune-panel");
   if (s.tune) {
     tuneAntRunning = true;
     btn.textContent = "STOP Tune  " + (s.tune.watts || 0).toFixed(1) + " W  SWR " +
                       (s.tune.swr ? s.tune.swr.toFixed(2) : "-");
     btn.style.color = "#ff4040"; btn.style.borderColor = "#ff4040";
+    /* The panel says the same thing without the menu having to stay open.
+       Wording matches the Tab5's tune_modal.c ("SWR %.2f   %.1f W") so the two
+       screens read the same during the same transmission. */
+    const swrEl = document.getElementById("tune-swr");
+    swrEl.textContent = s.tune.swr ? s.tune.swr.toFixed(2) : "--";
+    /* Colour is an ADDITION to the number, never the only channel carrying it
+       (Don N2VGU) - the figure is always there to read. 1.5 and 2.5 are the
+       ordinary "fine" / "workable" / "stop and look at it" marks. */
+    swrEl.style.color = !s.tune.swr      ? "var(--dim)"
+                      : s.tune.swr < 1.5 ? "var(--ok)"
+                      : s.tune.swr < 2.5 ? "var(--accent)"
+                                         : "#ff6060";
+    document.getElementById("tune-watts").textContent =
+      (s.tune.watts || 0).toFixed(1) + " W";
+    /* secs is absent on a device running firmware older than this change; show
+       a dash rather than "undefined" or a wrong zero. */
+    const secs = document.getElementById("tune-secs");
+    secs.textContent = (typeof s.tune.secs === "number") ? s.tune.secs + " s" : "--";
+    secs.style.color = (typeof s.tune.secs === "number" && s.tune.secs <= 10)
+                       ? "#ff6060" : "var(--fg)";
   } else if (tuneAntRunning) {
     tuneAntRunning = false;
     btn.textContent = "Antenna Tune";
     btn.style.color = ""; btn.style.borderColor = "";
   }
+  /* Set unconditionally rather than only on the transition the button label
+     uses. The panel says the radio is transmitting, so it must never be able to
+     drift out of step with /api/status - including when this page is opened
+     while a tune started somewhere else is already running. */
+  panel.hidden = !s.tune;
 }
+/* Stopping from the panel is the SAME command the menu item sends - one path,
+   so the two controls cannot end up disagreeing about how a tune is stopped.
+   The panel is not hidden here: it goes away when /api/status stops reporting a
+   tune, i.e. when the RADIO has actually come out of it. */
+document.getElementById("tune-stop-btn").addEventListener("click", async () => {
+  await sendCmd({ action: "tune_stop" });
+});
 document.getElementById("tune-ant-btn").addEventListener("click", async () => {
   if (tuneAntRunning) { await sendCmd({ action: "tune_stop" }); return; }
   /* No confirm here either, at the operator's instruction - see the note on the

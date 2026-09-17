@@ -407,9 +407,15 @@ static void add_ft8_tx_status(cJSON *root)
 // Gated on cat_qmx_fw_at_least(1,4,0) like the Tab5 button. If the Tab5's own
 // tune modal is in use at the same moment the two would fight over the mode -
 // single-operator device, judged acceptable, same as two fingers on one radio.
+// ONE definition of the safety limit. It used to be an inline 60 * 1000000LL at
+// the esp_timer_start_once() below, and /api/status now reports the time left -
+// two numbers that must agree, so there is only one of them.
+#define WEB_TUNE_LIMIT_US (60 * 1000000LL)
+
 static volatile bool s_web_tune_active = false;
 static char          s_web_tune_prior[8] = "USB";
 static esp_timer_handle_t s_web_tune_timer = NULL;
+static volatile int64_t s_web_tune_started_us = 0;
 
 static void web_tune_stop(bool restore)
 {
@@ -450,9 +456,10 @@ static bool web_tune_start(void)
         if (esp_timer_create(&a, &s_web_tune_timer) != ESP_OK) return false;
     }
     s_web_tune_active = true;
+    s_web_tune_started_us = esp_timer_get_time();
     cat_request_mode("TUNE");
     cat_tune_poll_set_active(true);
-    esp_timer_start_once(s_web_tune_timer, 60 * 1000000LL);
+    esp_timer_start_once(s_web_tune_timer, WEB_TUNE_LIMIT_US);
     // Say so on the Tab5 as well (TODO #95d). A tune started from a browser
     // keys the radio for up to a minute while anyone standing at the Tab5 sees
     // nothing at all - the top bar keeps showing the pre-Tune mode, because
@@ -1053,6 +1060,14 @@ static esp_err_t status_handler(httpd_req_t *req)
         cat_pwr_swr_async_read(&pw, &swr);
         cJSON_AddNumberToObject(tn, "watts", pw);
         cJSON_AddNumberToObject(tn, "swr",   swr);
+        // Seconds left on the safety timeout. Randy N4OPI asked to be able to
+        // watch power and SWR without keeping the Radio menu open; a tune that
+        // stops on its own needs to say when, or the readout going still reads
+        // as the page having frozen. Clamped at 0 - the timer callback and this
+        // read are on different tasks, so the last poll before the stop lands
+        // can legitimately compute a negative.
+        int64_t left_us = WEB_TUNE_LIMIT_US - (esp_timer_get_time() - s_web_tune_started_us);
+        cJSON_AddNumberToObject(tn, "secs", left_us > 0 ? (int)((left_us + 999999) / 1000000) : 0);
     }
     // Bluetooth, mirroring the Tab5's bottom-bar glyph: "the radio is up" and
     // "something is actually connected" are separate facts.

@@ -208,12 +208,24 @@ it: a channel you cannot legally tune is worse than no channel.
 ## Antenna Tune from the browser (QMX 1.04+)
 
 With a QMX on firmware 1.04+, an **Antenna Tune** button
-appears in the bottom bar. It **keys the radio with a steady carrier**, so it
-confirms first - and while running, the button itself becomes the readout:
-**live power and SWR**, click again to stop. Both ends carry a **60-second
-safety stop**: the device's own timer fires even if the browser tab dies, and
-the radio's prior mode is restored, never left keyed. Stopping Tune from the
-QMX's own front panel is honoured too.
+appears in the bottom bar. It **keys the radio with a steady carrier** the
+moment you click it - there is no confirmation step, because tuning into a load
+is an ordinary part of operating and the 60-second stop is the real safety net.
+
+While it runs, a **panel appears in the middle of the page** with the live
+**SWR**, the **power** in watts, and the **seconds left** before the tune stops
+itself, plus a **STOP Tune** button. The panel stays up whatever else you click,
+so you can keep both hands on an ATU and still read the SWR; the rest of the
+page carries on working underneath it. The SWR figure is also colour-coded -
+green below 1.5, amber below 2.5, red above - and the number itself is always
+shown, so the colour is never the only thing telling you.
+
+The bottom-bar button doubles as the same readout and the same stop, for when
+the menu happens to be open.
+
+Both ends carry a **60-second safety stop**: the device's own timer fires even
+if the browser tab dies, and the radio's prior mode is restored, never left
+keyed. Stopping Tune from the QMX's own front panel is honoured too.
 
 ## Settings, with a real keyboard
 

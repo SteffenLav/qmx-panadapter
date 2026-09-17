@@ -21,6 +21,18 @@ almost certainly already shipped and verified in a release the table predates.
 This section is the honest, current answer to "what is hanging, right now,
 2026-09-13" — built from `git log v1.12.4..HEAD`, not from the stale table.
 
+### ⚠ 2026-09-17 — built on top of v1.14.3.1, NOT FLASHED, NOT RELEASED
+
+The dev bench has been soaking since 07:49 on the DIRAM-reclamation build and
+must not be flashed until that soak is called. Everything here is built and
+compiles clean; none of it has run on hardware.
+
+| # | What | State |
+|---|---|---|
+| a | Drawer open cut TX power to WSPR's declared level (`16565a7`) | Committed, unpushed. Hardware-verified before the soak started |
+| b | 17,172 B of internal DIRAM reclaimed (`85ff840`, `53ccadd`) | Committed, unpushed. **This is what is soaking** |
+| c | **Antenna Tune: live PWR/SWR without the Radio menu** (Randy N4OPI) | ⚠ **BUILT, NEVER RUN.** His words: *"it would be nice if the PWR and SWR would be displayed instead of having to re-open the menu to see the results and stop the tune sequence."* The readout lived in the menu ITEM'S LABEL, and the bar closes every menu on the first click elsewhere - so watching SWR while turning an ATU meant reopening the menu, and so did stopping. Now a centred panel with SWR, watts, seconds-left and a STOP button, driven by `/api/status` `tune` so it can never disagree with the radio. `/api/status` gained `tune.secs`. Layout checked by rendering the panel standalone in a browser; **the live path has not been exercised against a radio** - that needs a dummy load and a QMX on 1.04+ |
+
 ### Ready for today's release (v1.12.4 → next), built and flashed, awaiting your look
 | # | What | State |
 |---|---|---|
