@@ -93,6 +93,9 @@ void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to N
  * leaving it at a screen edge (Roy KI0ER). Call it BEFORE the tune; it is
  * consumed by the next frequency update, whatever that turns out to be. */
 void ui_note_frequency_jump(void);
+/* Stronger: the VIEW was dragged (band-plan knob), so it re-frames on the new
+ * dial unconditionally - no fits-test, no push/land. See ui.c. */
+void ui_note_view_reframe(void);
 
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);

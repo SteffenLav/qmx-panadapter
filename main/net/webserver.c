@@ -666,6 +666,12 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     cJSON_AddNumberToObject(root, "zoom",        (double)ui_get_zoom_factor());
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
+    /* The still-display SETTING, not the viewport it produces. The viewport
+     * above says where the window is NOW; the band-plan drag has to predict
+     * where it will be after the commit, and that depends on whether the view
+     * holds or follows. It was only in /api/settings, which the panadapter page
+     * never reads - so the browser's strip could not mirror ui.c's. */
+    cJSON_AddBoolToObject(root, "still_view", ui_get_still_view());
 
     /* THE VIEWPORT, so the browser stops deriving its own (#298 phase 5).
      *

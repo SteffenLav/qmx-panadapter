@@ -1592,7 +1592,15 @@ int64_t ui_get_pan_offset_hz(void) { return sv_effective() ? s_sv_pan_hz
  * the view inside the capture window drags it with the dial and there is no
  * still display left. Tuning away from here still holds the view and lets the
  * hatching grow, which is the behaviour he approved. */
-static void sv_frame_on_capture(void)
+/* The pan sv_frame_on_capture() WOULD apply, without applying it.
+ *
+ * Split out for the band-plan drag, which has to draw the window where it is
+ * GOING to land rather than where it would be if the view followed the dial.
+ * Before this the drag previewed one thing and the release produced another,
+ * and the operator saw the window spring back the instant he lifted his finger
+ * ("it does not stop where i left it but bounces off that position"). A
+ * preview is only honest if it runs the same arithmetic the commit will. */
+static int64_t sv_pan_on_capture(void)
 {
     int32_t span   = (int32_t)((double)DSP_SAMPLE_RATE_HZ / (double)s_zoom_factor + 0.5);
     int64_t cap_hi = (int64_t)ui_get_if_offset_hz();          /* relative to the dial */
@@ -1600,7 +1608,12 @@ static void sv_frame_on_capture(void)
     int64_t lo     = -(int64_t)span / 2;                      /* dial-centred */
     if (lo + span > cap_hi) lo = cap_hi - span;
     if (lo < cap_lo)        lo = cap_lo;
-    sv_apply_pan_hz(lo + span / 2);
+    return lo + span / 2;
+}
+
+static void sv_frame_on_capture(void)
+{
+    sv_apply_pan_hz(sv_pan_on_capture());
 }
 
 /* ⭐ A JUMP IS NOT TUNING, AND SIZE ALONE CANNOT TELL THEM APART (Roy KI0ER,
@@ -1623,19 +1636,58 @@ static void sv_frame_on_capture(void)
  * is wrong for a JUMP, where they have named a frequency and want to see it.
  * So the caller says which it was, rather than the arithmetic guessing. */
 static bool s_sv_jump_pending = false;
+static bool s_sv_reframe_pending = false;
 
 void ui_note_frequency_jump(void)
 {
     s_sv_jump_pending = true;
 }
 
+/* ⛔ STRONGER THAN ui_note_frequency_jump(), AND THE DIFFERENCE IS THE SUBJECT
+ * OF THE GESTURE.
+ *
+ * A jump asks "does the new passband still fit inside the view I am holding?"
+ * and holds if it does - right for a spot pick, where the operator named a
+ * FREQUENCY and the picture should move only if it must.
+ *
+ * The band-plan knob is not that. The knob IS the visible window - it is drawn
+ * as a frame around the span currently on the spectrum precisely so it reads as
+ * a grab-and-slide handle - so a drag of it is direct manipulation of the
+ * window itself. Holding the window still while the finger slides it is the one
+ * outcome the gesture cannot have, and that is what shipped: the drag wrote the
+ * DIAL, the still display faithfully held the view, and the operator watched
+ * the box jump back to where it started while the marker and passband were left
+ * at whichever edge of it the new dial fell on. Reported 2026-09-18: "i would
+ * expect the slider comprising the visible spectrum + freq and BW to move
+ * together: It doesn't".
+ *
+ * So this re-frames unconditionally. The still display keeps its hold policy
+ * for every way of TUNING; only a gesture whose subject is the window itself
+ * moves the window. */
+void ui_note_view_reframe(void)
+{
+    s_sv_reframe_pending = true;
+}
+
 static void still_view_follow_dial(uint32_t prev_hz, uint32_t now_hz)
 {
     int64_t d = (int64_t)now_hz - (int64_t)prev_hz;
-    const bool jumped = s_sv_jump_pending;
+    const bool jumped  = s_sv_jump_pending;
+    const bool reframe = s_sv_reframe_pending;
     s_sv_jump_pending = false;      /* consumed either way - a stale flag would
                                      * re-frame on some later ordinary tune */
+    s_sv_reframe_pending = false;   /* same reasoning - see ui_note_view_reframe */
     if (d == 0) return;
+
+    /* The window itself was dragged (band-plan knob): it must land where the
+     * finger left it, so there is no fits-test and no push/land policy to run -
+     * just re-frame. See ui_note_view_reframe(). */
+    if (reframe) {
+        s_sv_push = 0; s_sv_side = 0;
+        sv_frame_on_capture();
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+        return;
+    }
 
     /* A jump larger than the whole captured window - band change, memory
      * recall - leaves nothing on screen worth holding still. */
@@ -2374,6 +2426,12 @@ static lv_obj_t *s_bp_knob       = NULL;  // bordered box framing the marker so 
 // never reaches the spectrum gesture code at all.
 static bool      s_touch_on_bandplan   = false;
 static bool      s_bp_dragging         = false;
+/* Where the visible-span window will BE once the drag is committed. Held for
+ * the duration of the drag so update_bandplan_strip() draws the box at its
+ * landing place rather than at "dial + the pan we happen to hold right now" -
+ * the two differ by exactly the drag distance, which is what used to make the
+ * box spring back on release. See sv_pan_on_capture() and ui_note_view_reframe(). */
+static int64_t   s_bp_preview_pan_hz   = 0;
 static lv_point_t s_bp_drag_start_pt;
 static int64_t   s_bp_drag_start_freq  = 0;
 static uint32_t  s_bp_drag_band_lo     = 0;
@@ -5088,7 +5146,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         /* Same exact pan the trace is drawn with (see sv_apply_pan_hz) - deriving it
      * from the rounded bin count here would let the labels creep against the
      * signals by up to half a bin. */
-    int32_t pan_hz  = (int32_t)ui_get_pan_offset_hz();
+    int32_t pan_hz  = (int32_t)(s_bp_dragging ? s_bp_preview_pan_hz
+                                                 : ui_get_pan_offset_hz());
         int64_t center  = (int64_t)freq_hz + pan_hz;
         int64_t vis_lo  = center - span_hz / 2;
         int64_t vis_hi  = center + span_hz / 2;
@@ -7537,6 +7596,12 @@ void ui_update_frequency(uint32_t freq_hz)
      * sitting there stays workable, then a page carrying some of the old screen
      * over. */
     if (!sv_effective() || prev_freq_hz == 0) {
+        /* Consume them here too, or a flag raised while the still display is
+         * off survives until it is switched back on and re-frames some later,
+         * unrelated tune. still_view_follow_dial() is the only other consumer
+         * and it never runs on this path. */
+        s_sv_jump_pending    = false;
+        s_sv_reframe_pending = false;
         s_pan_offset_bins = 0;
         s_sv_pan_hz = 0;
         recompute_zoom_pan();
@@ -9597,6 +9662,10 @@ static void touch_event_cb(lv_event_t *e)
         s_bp_drag_start_pt = p;
         s_bp_drag_start_freq = (int64_t)s_last_qmx_freq_hz;
         s_bp_drag_target_hz = s_bp_drag_start_freq;
+        /* Once per gesture: sv_pan_on_capture() reads only the zoom, the filter
+         * and the IF offset, none of which move while a finger is down. */
+        s_bp_preview_pan_hz = sv_effective() ? sv_pan_on_capture()
+                                             : ui_get_pan_offset_hz();
 
         qmx_settings_t s;
         settings_load_all(&s);
@@ -9716,6 +9785,7 @@ static void touch_event_cb(lv_event_t *e)
             if (was_dragging) {
                 uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
                 cat_set_frequency_forced(tgt);
+                ui_note_view_reframe();   /* the window was dragged - it moves */
                 ui_update_frequency(tgt);
             }
             s_touch_on_bandplan = false;
@@ -9748,6 +9818,7 @@ static void touch_event_cb(lv_event_t *e)
             if (s_bp_dragging && s_bp_drag_band_hi > s_bp_drag_band_lo) {
                 uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
                 cat_set_frequency_forced(tgt);  // deliberate user action — bypass the 200ms rate-limiter so it always lands
+                ui_note_view_reframe();   /* the window was dragged - it moves */
                 ui_update_frequency(tgt);
             }
             // A plain tap (never exceeded the drag threshold): jump straight
@@ -9765,6 +9836,7 @@ static void touch_event_cb(lv_event_t *e)
                 if (tap_hz < (int64_t)s_bp_drag_band_lo) tap_hz = (int64_t)s_bp_drag_band_lo;
                 if (tap_hz > (int64_t)s_bp_drag_band_hi) tap_hz = (int64_t)s_bp_drag_band_hi;
                 cat_set_frequency_forced((uint32_t)tap_hz);
+                ui_note_view_reframe();   /* a place in the band was pointed at */
                 ui_update_frequency((uint32_t)tap_hz);
             }
             s_touch_on_bandplan = false;

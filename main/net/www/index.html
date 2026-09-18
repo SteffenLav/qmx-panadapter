@@ -1707,6 +1707,35 @@
    State from /api/status
    ===================================================================== */
 let lastFreqHz     = 0;
+/* ⛔ EVERY LOCAL TUNE MUST ARM THIS, NOT JUST THE WHEEL.
+ *
+ * The status poll overwrites lastFreqHz, and for a moment after a commit it is
+ * still carrying the radio's OLD frequency: the CAT write has to go out, the
+ * device's own FA poll has to read it back, and the next poll has to carry it
+ * here. Write the poll's value in that window and the display snaps backwards,
+ * then forwards when the real one lands - the rubber band.
+ *
+ * The wheel path fixed this for itself and the other three tune paths were left
+ * on the old behaviour. The band-plan drag is where it shows worst, because the
+ * strip draws the marker, the passband AND the window box from lastFreqHz, so
+ * the whole strip twitches: "it does not stop where i left it but bounces off
+ * that position" (2026-09-18). */
+let freqHoldUntil  = 0;
+/* The debounce, plus a POST round trip, plus a poll interval to carry the new
+   value back. Generous on purpose - being briefly stale is invisible, whereas
+   being briefly WRONG is the rubber band. */
+const FREQ_HOLD_MS = 1520;
+/* Adopt a frequency this browser just asked for, and outrank the poll until the
+   device has had time to agree. Does NOT send - callers own the commit. */
+function holdLocalFreq(hz) {
+  lastFreqHz    = hz;
+  freqHoldUntil = Date.now() + FREQ_HOLD_MS;
+  document.getElementById("vfo").textContent = fmtHz(hz);
+  updateFreqAxis();
+}
+/* The still-display SETTING, mirrored from /api/status. Decides whether a tune
+   holds the window (still) or drags it along (off) - see bpPredictViewCenter. */
+let lastStillView  = true;
 let lastPassbandHz = 0;
 /* RIT: the OFFSET is radio state and comes from the device; the ARMED flag is
    local to this browser on purpose. Arming changes what a CLICK does, and a
@@ -6176,7 +6205,7 @@ async function tick() {
      * one poll has had time to return carrying it. That window is the debounce
      * plus a round trip; anything shorter and the last snap-back still shows. */
     radioFreqHz = s.freq_hz || 0;      /* always - see its declaration */
-    if (Date.now() >= wheelHoldUntil) lastFreqHz = s.freq_hz || 0;
+    if (Date.now() >= freqHoldUntil) lastFreqHz = s.freq_hz || 0;
     lastPassbandHz = s.passband_hz || 0;
     lastCwFilterMask = (typeof s.cw_filter_mask === "number") ? s.cw_filter_mask : 0;
     /* Absent means older firmware: keep whatever we had and let the local
@@ -6224,6 +6253,9 @@ async function tick() {
     lastIfCalHz    = s.if_cal_hz   || 0;
     lastZoom       = s.zoom        || 1.0;
     lastPanBins    = s.pan_bins    || 0;
+    /* Absent means older firmware - assume still, which is the default and the
+       only case where the prediction differs from "the view follows the dial". */
+    lastStillView  = (typeof s.still_view === "boolean") ? s.still_view : true;
     /* Absent means the device is on the zoom-FFT path (or is older firmware):
      * keep the last viewport rather than blanking, exactly as "spots" does. */
     if (s.view_lo_hz !== undefined && s.span_hz > 0) {
@@ -7113,9 +7145,7 @@ function tuneToSpot(box) {
   if (!box || !box.hz) return;
   sendCmd({ action: "set_freq", hz: box.hz });
   if (box.mode) sendCmd({ action: "set_mode", mode: box.mode });
-  lastFreqHz = box.hz;
-  document.getElementById("vfo").textContent = fmtHz(box.hz);
-  updateFreqAxis();
+  holdLocalFreq(box.hz);
 }
 
 /* Draw the cyan cursor line + freq label on a canvas context */
@@ -7212,9 +7242,7 @@ function handleTuneCommit(clientX, rect) {
   }
   if (hz > 0) {
     sendCmd({ action: "set_freq", hz: hz });
-    lastFreqHz = hz;
-    document.getElementById("vfo").textContent = fmtHz(hz);
-    updateFreqAxis();
+    holdLocalFreq(hz);
   }
   tuneCursorX = -1;
   tuneActive  = false;
@@ -7900,6 +7928,27 @@ async function forceUpdateCheck() {
 }
 
 
+/* Where the visible-span window will BE once `targetHz` is committed.
+   Mirrors ui.c's sv_pan_on_capture(): dial-centred, clamped into the capture
+   window (what the radio can actually hear), because a band-plan drag is a
+   deliberate move of the WINDOW and re-frames unconditionally - ui.c's
+   ui_note_view_reframe(). With the still display off the device resets the pan
+   on every tune, so the answer is simply the dial. */
+function bpPredictViewCenter(targetHz) {
+  const span = lastView ? lastView.span : 48000 / (lastZoom || 1);
+  if (!lastStillView || !lastView ||
+      typeof lastView.capLo !== "number" || typeof lastView.capHi !== "number") {
+    return targetHz;
+  }
+  /* The capture window travels with the dial, so measure it dial-relative. */
+  const capLoRel = lastView.capLo - lastFreqHz;
+  const capHiRel = lastView.capHi - lastFreqHz;
+  let loRel = -span / 2;
+  if (loRel + span > capHiRel) loRel = capHiRel - span;
+  if (loRel < capLoRel)        loRel = capLoRel;
+  return targetHz + loRel + span / 2;
+}
+
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
   if (!canvas) return;
@@ -7944,11 +7993,19 @@ function drawBandplan(previewHz) {
   // spectrum/waterfall (depends on zoom + pan), same formula as the
   // frequency-axis labels so the two stay in lockstep.
   /* Device viewport when we have one; the old dial-centred derivation is
-     the fallback for a device not sending one. */
+     the fallback for a device not sending one.
+
+     ⛔ WHILE DRAGGING, THIS IS A PREDICTION, NOT THE CURRENT VIEWPORT.
+     It used to be drawn as `previewHz + (current view centre - lastFreqHz)`,
+     i.e. the window slid along under the finger - and then the commit ran the
+     still display's hold rule and put it back where it started. The preview and
+     the release disagreed by exactly the drag distance. Now both re-frame, so
+     the box lands where it was left. See bpPredictViewCenter. */
   const spanHz = lastView ? lastView.span : 48000 / lastZoom;
-  const panHz  = lastView ? (lastView.lo + lastView.span / 2 - lastFreqHz)
-                          : lastPanBins * HZ_PER_BIN;
-  const center = freqHz + panHz;
+  const center = (previewHz !== undefined)
+                   ? bpPredictViewCenter(previewHz)
+                   : (lastView ? lastView.lo + lastView.span / 2
+                               : freqHz + lastPanBins * HZ_PER_BIN);
   let sx0 = Math.round((center - spanHz / 2 - bandLo) / span * W);
   let sx1 = Math.round((center + spanHz / 2 - bandLo) / span * W);
   sx0 = Math.max(0, sx0); sx1 = Math.min(W, sx1);
@@ -8109,10 +8166,21 @@ function drawBandplanOob(ctx, W, H, dpr) {
   });
 
   function commit(hz) {
+    /* Carry the local VIEWPORT with the dial as well, computed BEFORE
+       lastFreqHz moves. Without it the box snaps back to the old centre for the
+       ~100 ms until the device's next frame arrives - the same rubber band as
+       the frequency, one layer up, and on this control it is the thing the eye
+       is following. The device's own frames overwrite this within a frame or
+       two; this only has to cover the gap. */
+    if (lastView && typeof lastView.capLo === "number") {
+      const c = bpPredictViewCenter(hz);
+      const d = hz - lastFreqHz;
+      lastView = { ...lastView,
+                   lo: c - lastView.span / 2, hi: c + lastView.span / 2,
+                   capLo: lastView.capLo + d, capHi: lastView.capHi + d };
+    }
     sendCmd({ action: "set_freq", hz: hz });
-    lastFreqHz = hz;
-    document.getElementById("vfo").textContent = fmtHz(hz);
-    updateFreqAxis();
+    holdLocalFreq(hz);
     drawBandplan();
   }
 
@@ -9032,13 +9100,9 @@ function connectWs() {
    click still feels immediate. The device rate-limits CAT writes at 200 ms, so
    there is nothing to gain by going below that. */
 const WHEEL_SETTLE_MS = 120;
-/* How long the LOCAL frequency outranks the polled one after a wheel click:
-   the debounce, plus a POST round trip, plus a poll interval to carry the new
-   value back. Generous on purpose - being briefly stale is invisible, whereas
-   being briefly WRONG is the rubber band. */
-const WHEEL_HOLD_MS   = WHEEL_SETTLE_MS + 1400;
+/* The hold window itself is FREQ_HOLD_MS, declared with lastFreqHz - it belongs
+   to every local tune, not to the wheel (see holdLocalFreq). */
 let wheelTimer     = null;
-let wheelHoldUntil = 0;
 function handleWheel(e) {
   e.preventDefault();
   if (!lastFreqHz) return;
@@ -9072,18 +9136,14 @@ function handleWheel(e) {
    * each click still lands on the grid) and only the COMMIT is deferred until
    * the wheel has been still for WHEEL_SETTLE_MS. Same shape as the Tab5's own
    * touch path, which defers its CAT write to release for the same reason. */
-  lastFreqHz = newHz;
-  document.getElementById("vfo").textContent = fmtHz(newHz);
-  updateFreqAxis();
-
-  wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+  holdLocalFreq(newHz);
   if (wheelTimer) clearTimeout(wheelTimer);
   wheelTimer = setTimeout(() => {
     wheelTimer = null;
     sendCmd({ action: "set_freq", hz: lastFreqHz });
     /* Re-armed from the COMMIT, not from the last click: the poll that must be
        ignored is the one racing this request, and it has not happened yet. */
-    wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+    freqHoldUntil = Date.now() + FREQ_HOLD_MS;
   }, WHEEL_SETTLE_MS);
 }
 document.getElementById("spec-overlay").addEventListener("wheel", handleWheel, { passive: false });
