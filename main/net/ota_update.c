@@ -317,8 +317,21 @@ static void ota_task(void *arg)
         /* s_msg is 128 bytes and ota_modal's body is 192 - short enough that
          * neither truncates, and it says what to DO, not what broke. */
         set_failed("Needs a USB-C cable, once - it is bigger than this Tab5's "
-                   "app slot.\nSettings and log are kept. Press Enter, not E.");
-        return;
+                   "app slot. Your settings and log are kept.");
+        /* ⛔ goto out, NEVER a bare return. This is a TASK FUNCTION, and the
+         * only legal way out of one is vTaskDelete(NULL) at `out:`. A plain
+         * return runs off the end of the entry point into whatever the return
+         * address happens to be - which on this board is 0.
+         *
+         * That is not theory. This line WAS `return;` and it crashed the
+         * device the FIRST TIME the guard ever fired, 2026-09-18:
+         *     Guru Meditation Error: Core 1 panic'ed (Instruction access fault)
+         *     MEPC=0x00000000  RA=0x00000000  task: ota
+         * printed immediately after this very message. Every other exit in
+         * this function already used `goto out`; this one was written later
+         * and did not. The comment at `out:` even anticipated "a future
+         * early-return" - for the quiet flags, not for the task's lifetime. */
+        goto out;
     }
 
     int64_t t0 = esp_timer_get_time();
