@@ -1,7 +1,8 @@
 # Name,    Type, SubType, Offset,    Size,     Flags
 #
-# 16 MB flash. #218: three app slots so firmware can be updated from the device
-# itself, while the existing flasher keeps working exactly as before.
+# 16 MB flash. TWO app slots so firmware can be updated from the device itself,
+# while the existing flasher keeps working exactly as before. It was three until
+# v1.15.0 - see the `factory` note below for why the third one went.
 #
 # ⛔ user_nvs (0x810000) and storage (0x820000) MUST NOT MOVE. They hold the
 # settings, the QSO log, and the LoTW certificate AND PRIVATE KEY. The flasher
@@ -33,7 +34,9 @@
 # (0x930000 -> 0x1000000 = 6.81 MB). Nothing else could grow without moving
 # the QSO log and the LoTW private key.
 #
-# App slots are 4 MB. An overflow is a BUILD failure, not a field failure.
+# ota_0 is 8 MB and ota_1 is 6.81 MB; the BUILD is bounded by the smaller of the
+# two, so 6.81 MB is the real ceiling. An overflow is a BUILD failure, not a
+# field failure.
 #
 # ⚠ THIS LAYOUT EXISTS BECAUSE HEADROOM RAN OUT. Measured 2026-09-18 on the
 # OLD three-slot layout: 4,146,720 B against a 4,194,304 B slot, i.e. 47 KB or
@@ -51,12 +54,12 @@
 # answer today (a microSD card) and a partial one without (the 256 KB SPIFFS
 # window).
 #
-# ⚠ GROWING A SLOT IS CONSTRAINED, NOT FREE. user_nvs (0x810000) and storage
-# (0x820000) cannot move, so `factory` and `ota_0` are boxed into the 8 MB below
-# them - 4 MB each, exactly what they are now. Only `ota_1` can grow into the
-# tail (0x930000 -> 0x1000000 = 6.81 MB). Making every slot bigger therefore
-# means giving one of the three up; that choice is open and belongs with the
-# repartition release, not before it.
+# ⚠ GROWING A SLOT IS CONSTRAINED, NOT FREE, AND THIS LAYOUT HAS ALREADY SPENT
+# THE ROOM. user_nvs (0x810000) and storage (0x820000) cannot move, so ota_0 is
+# boxed into the 8 MB below them and ota_1 takes everything above otadata to the
+# end of flash. Giving the third slot up is what bought both their sizes; there
+# is no second time to do that. The next increase would have to move user data,
+# which is the one thing this file exists to prevent.
 nvs,       data, nvs,     0x9000,    0x6000,
 phy_init,  data, phy,     0xf000,    0x1000,
 ota_0,     app,  ota_0,   0x10000,   0x800000,
