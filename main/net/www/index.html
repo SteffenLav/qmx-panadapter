@@ -1734,7 +1734,7 @@ function holdLocalFreq(hz) {
   updateFreqAxis();
 }
 /* The still-display SETTING, mirrored from /api/status. Decides whether a tune
-   holds the window (still) or drags it along (off) - see bpPredictViewCenter. */
+   holds the window (still) or drags it along (off) - see bpSolveView. */
 let lastStillView  = true;
 let lastPassbandHz = 0;
 /* RIT: the OFFSET is radio state and comes from the device; the ARMED flag is
@@ -7928,25 +7928,34 @@ async function forceUpdateCheck() {
 }
 
 
-/* Where the visible-span window will BE once `targetHz` is committed.
-   Mirrors ui.c's sv_pan_on_capture(): dial-centred, clamped into the capture
-   window (what the radio can actually hear), because a band-plan drag is a
-   deliberate move of the WINDOW and re-frames unconditionally - ui.c's
-   ui_note_view_reframe(). With the still display off the device resets the pan
-   on every tune, so the answer is simply the dial. */
-function bpPredictViewCenter(targetHz) {
-  const span = lastView ? lastView.span : 48000 / (lastZoom || 1);
-  if (!lastStillView || !lastView ||
-      typeof lastView.capLo !== "number" || typeof lastView.capHi !== "number") {
-    return targetHz;
+/* The band-plan knob moves the WINDOW, not the dial - the full rationale is at
+   bp_solve_view() in main/ui/ui.c, and this is the same arithmetic so the two
+   screens cannot disagree about what the gesture does. Given a wanted window
+   centre it answers where the dial and the pan end up: the dial is left alone
+   while the radio can reach that window, and comes along by exactly the
+   shortfall when it cannot. Pure, so the drag preview and the commit agree. */
+function bpSolveView(wantCenterHz) {
+  const dial = lastFreqHz;
+  if (!lastStillView || !lastView || typeof lastView.ifOff !== "number") {
+    /* No still display (or no viewport yet): the device resets the pan on every
+       tune, so the window can only be moved by taking the dial there. */
+    let d = Math.round(wantCenterHz / 1000) * 1000;
+    if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
+    return { dial: d, center: d };
   }
-  /* The capture window travels with the dial, so measure it dial-relative. */
-  const capLoRel = lastView.capLo - lastFreqHz;
-  const capHiRel = lastView.capHi - lastFreqHz;
-  let loRel = -span / 2;
-  if (loRel + span > capHiRel) loRel = capHiRel - span;
-  if (loRel < capLoRel)        loRel = capLoRel;
-  return targetHz + loRel + span / 2;
+  const SR     = 48000;
+  const panHi  = lastView.ifOff;
+  const panLo  = panHi - SR;
+  let   pan    = wantCenterHz - dial;
+  if (pan <= panHi && pan >= panLo) return { dial: dial, center: dial + pan };
+
+  let d = wantCenterHz - (pan > panHi ? panHi : panLo);
+  d = Math.round(d / 1000) * 1000;
+  if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
+  pan = wantCenterHz - d;
+  if (pan > panHi) pan = panHi;
+  if (pan < panLo) pan = panLo;
+  return { dial: d, center: d + pan };
 }
 
 function drawBandplan(previewHz) {
@@ -7968,7 +7977,10 @@ function drawBandplan(previewHz) {
   const bp      = lastBandplan;
   const bandLo  = bp.lo, bandHi = bp.hi;
   const span    = Math.max(1, bandHi - bandLo);
-  const freqHz  = (previewHz !== undefined) ? previewHz : lastFreqHz;
+  /* previewCenter is a WINDOW centre during a drag, not a dial - the dial only
+     moves when the radio cannot reach that window. See bpSolveView. */
+  const sol     = (previewHz !== undefined) ? bpSolveView(previewHz) : null;
+  const freqHz  = sol ? sol.dial : lastFreqHz;
   const LABEL_MIN_FRAC = 56 / 1280;   // same visual threshold as the Tab5 (56px @ 1280px wide)
 
   // CW/Digi/Phone segments, with a label once the block is wide enough.
@@ -7997,15 +8009,15 @@ function drawBandplan(previewHz) {
 
      ⛔ WHILE DRAGGING, THIS IS A PREDICTION, NOT THE CURRENT VIEWPORT.
      It used to be drawn as `previewHz + (current view centre - lastFreqHz)`,
-     i.e. the window slid along under the finger - and then the commit ran the
-     still display's hold rule and put it back where it started. The preview and
-     the release disagreed by exactly the drag distance. Now both re-frame, so
-     the box lands where it was left. See bpPredictViewCenter. */
+     i.e. the window slid along under the finger while the commit wrote the
+     DIAL - and the still display then held the view, so the box computed
+     straight back to where it started. Preview and release disagreed by exactly
+     the drag distance. The gesture moves the window now, and both ends run
+     bpSolveView, so the box lands where it was let go. */
   const spanHz = lastView ? lastView.span : 48000 / lastZoom;
-  const center = (previewHz !== undefined)
-                   ? bpPredictViewCenter(previewHz)
-                   : (lastView ? lastView.lo + lastView.span / 2
-                               : freqHz + lastPanBins * HZ_PER_BIN);
+  const center = sol ? sol.center
+                     : (lastView ? lastView.lo + lastView.span / 2
+                                 : freqHz + lastPanBins * HZ_PER_BIN);
   let sx0 = Math.round((center - spanHz / 2 - bandLo) / span * W);
   let sx1 = Math.round((center + spanHz / 2 - bandLo) / span * W);
   sx0 = Math.max(0, sx0); sx1 = Math.min(W, sx1);
@@ -8104,6 +8116,7 @@ function drawBandplanOob(ctx, W, H, dpr) {
   const BP_DRAG_THRESHOLD_PX = 8;
 
   let active = false, startX = 0, startFreq = 0, targetHz = 0;
+  let startCenter = 0, targetCenter = 0;
 
   function clamp(hz) {
     hz = Math.round(hz / 1000) * 1000;
@@ -8117,6 +8130,11 @@ function drawBandplanOob(ctx, W, H, dpr) {
     startX = e.clientX;
     startFreq = lastFreqHz;
     targetHz = lastFreqHz;
+    /* The drag moves the WINDOW, so what it tracks is the window centre. */
+    startCenter = (lastView && typeof lastView.span === "number")
+                    ? lastView.lo + lastView.span / 2
+                    : lastFreqHz;
+    targetCenter = startCenter;
     canvas.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
@@ -8160,25 +8178,43 @@ function drawBandplanOob(ctx, W, H, dpr) {
     }
 
     const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rectW;
-    targetHz = clamp(startFreq + dx * hzPerPx);
-    drawBandplan(targetHz);
+    targetCenter = Math.max(lastBandplan.lo,
+                     Math.min(lastBandplan.hi, startCenter + dx * hzPerPx));
+    drawBandplan(targetCenter);
+    /* Usually unchanged - a drag inside the radio's reach moves the window and
+       leaves the dial alone, which is the point of the gesture. */
+    targetHz = bpSolveView(targetCenter).dial;
     document.getElementById("vfo").textContent = fmtHz(targetHz);
   });
 
-  function commit(hz) {
-    /* Carry the local VIEWPORT with the dial as well, computed BEFORE
-       lastFreqHz moves. Without it the box snaps back to the old centre for the
-       ~100 ms until the device's next frame arrives - the same rubber band as
-       the frequency, one layer up, and on this control it is the thing the eye
-       is following. The device's own frames overwrite this within a frame or
-       two; this only has to cover the gap. */
-    if (lastView && typeof lastView.capLo === "number") {
-      const c = bpPredictViewCenter(hz);
-      const d = hz - lastFreqHz;
+  /* Put the window at centerHz. Goes out as "view_center", NOT "set_freq":
+     the gesture must be allowed to leave the dial alone, and a frequency write
+     cannot say that. Same device entry point the Tab5's own strip uses. */
+  function commitCenter(centerHz) {
+    const sol = bpSolveView(centerHz);
+    /* Carry the local VIEWPORT too, computed BEFORE lastFreqHz moves. Without
+       it the box snaps back to the old centre for the ~100 ms until the
+       device's next frame arrives - the same rubber band as the frequency, one
+       layer up, and on this control it is the thing the eye is following. The
+       device's own frames overwrite this within a frame or two; this only has
+       to cover the gap. */
+    if (lastView && typeof lastView.span === "number") {
+      const d = sol.dial - lastFreqHz;
       lastView = { ...lastView,
-                   lo: c - lastView.span / 2, hi: c + lastView.span / 2,
-                   capLo: lastView.capLo + d, capHi: lastView.capHi + d };
+                   lo: sol.center - lastView.span / 2,
+                   hi: sol.center + lastView.span / 2,
+                   capLo: (typeof lastView.capLo === "number") ? lastView.capLo + d : lastView.capLo,
+                   capHi: (typeof lastView.capHi === "number") ? lastView.capHi + d : lastView.capHi };
     }
+    sendCmd({ action: "view_center", hz: Math.round(centerHz) });
+    holdLocalFreq(sol.dial);
+    drawBandplan();
+  }
+
+  /* A TAP is still a tune - pointing at a place in the band means "go there",
+     while dragging the window means "look there". Same split the spectrum makes
+     between tap-to-tune and swipe-to-pan; see bp_solve_view() in ui.c. */
+  function commit(hz) {
     sendCmd({ action: "set_freq", hz: hz });
     holdLocalFreq(hz);
     drawBandplan();
@@ -8199,7 +8235,7 @@ function drawBandplanOob(ctx, W, H, dpr) {
       return;
     }
     if (bpDragging) {
-      commit(targetHz);
+      commitCenter(targetCenter);
     } else {
       const rect = canvas.getBoundingClientRect();
       const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rect.width;

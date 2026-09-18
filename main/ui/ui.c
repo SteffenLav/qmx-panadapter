@@ -2432,6 +2432,10 @@ static bool      s_bp_dragging         = false;
  * the two differ by exactly the drag distance, which is what used to make the
  * box spring back on release. See sv_pan_on_capture() and ui_note_view_reframe(). */
 static int64_t   s_bp_preview_pan_hz   = 0;
+/* The band-plan drag moves the WINDOW, so what it tracks is the view centre,
+ * not a dial frequency. See bp_solve_view(). */
+static int64_t   s_bp_drag_start_view_hz = 0;
+static int64_t   s_bp_drag_view_hz       = 0;
 static lv_point_t s_bp_drag_start_pt;
 static int64_t   s_bp_drag_start_freq  = 0;
 static uint32_t  s_bp_drag_band_lo     = 0;
@@ -5214,6 +5218,106 @@ static void update_bandplan_strip(uint32_t freq_hz)
     if (s_bp_knob && !lv_obj_has_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_move_foreground(s_bp_knob);
     }
+}
+
+/* ⭐ THE BAND-PLAN KNOB MOVES THE WINDOW, NOT THE DIAL.
+ *
+ * It was a tune control: the drag wrote a frequency and the visible-span box
+ * was redrawn wherever the still display then decided to put it. Two rounds of
+ * bench reports killed that reading. Dragging the box a little "does not leave
+ * it where i left it - it bounces back but moved the dial instead", and what
+ * the operator wants is the plain one: "I want the box (spectrum) always to
+ * follow and stay where i drag it to - no matter a little or a big jump. Dial +
+ * BW can stay on freq as long as the box is not dragged more than it can show
+ * in the new position" (2026-09-18).
+ *
+ * So the knob is a PAN control with a retune as its overflow:
+ *   - move the pan, leaving the dial and the passband exactly where they are;
+ *   - if the requested window is further from the dial than the radio can hear,
+ *     take the dial along by EXACTLY the shortfall, so the box still lands
+ *     where it was dropped.
+ * A small drag therefore never touches the radio, and a big one tunes only as
+ * much as it must. The bound is the same one the spectrum's own swipe-to-pan
+ * uses - the view CENTRE stays inside the capture window, so at least half the
+ * screen is real spectrum - deliberately the same number, because the two
+ * gestures do the same thing and disagreeing would be a bug in waiting.
+ *
+ * ⛔ A TAP IS STILL A TUNE, and that asymmetry is deliberate: it is the split
+ * the spectrum already makes (tap to tune, swipe to look), and pointing at a
+ * place in the band means "go there", while dragging the window means "look
+ * there". Do not unify them.
+ *
+ * Pure - no state written - so the drag PREVIEW and the release can run the
+ * identical arithmetic. A preview that predicts something else is what produced
+ * the bounce in the first place. */
+static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *pan_out)
+{
+    const uint32_t dial = s_last_qmx_freq_hz;
+    uint32_t lo, hi;
+
+    if (!sv_effective()) {
+        /* With the still display off, ui_update_frequency() resets the pan on
+         * every tune, so the only way to put the window anywhere is to take the
+         * dial there. Same destination, one step. */
+        int64_t d = view_center_hz;
+        d = ((d + 500) / 1000) * 1000;
+        if (legal_band_edges(dial, &lo, &hi)) {
+            if (d < (int64_t)lo) d = (int64_t)lo;
+            if (d > (int64_t)hi) d = (int64_t)hi;
+        }
+        *dial_out = (uint32_t)d;
+        *pan_out  = 0;
+        return;
+    }
+
+    const int64_t pan_hi = (int64_t)ui_get_if_offset_hz();
+    const int64_t pan_lo = pan_hi - DSP_SAMPLE_RATE_HZ;
+
+    int64_t pan = view_center_hz - (int64_t)dial;
+    if (pan <= pan_hi && pan >= pan_lo) {
+        *dial_out = dial;               /* the radio can reach it - do not tune */
+        *pan_out  = pan;
+        return;
+    }
+
+    int64_t d = view_center_hz - ((pan > pan_hi) ? pan_hi : pan_lo);
+    d = ((d + 500) / 1000) * 1000;      /* the dial lands on a whole kHz */
+    if (legal_band_edges(dial, &lo, &hi)) {
+        if (d < (int64_t)lo) d = (int64_t)lo;
+        if (d > (int64_t)hi) d = (int64_t)hi;
+    }
+    pan = view_center_hz - d;           /* re-derive, the band edge may have bitten */
+    if (pan > pan_hi) pan = pan_hi;
+    if (pan < pan_lo) pan = pan_lo;
+    *dial_out = (uint32_t)d;
+    *pan_out  = pan;
+}
+
+uint32_t ui_bandplan_move_view(int64_t view_center_hz)
+{
+    uint32_t dial = 0;
+    int64_t  pan  = 0;
+    bp_solve_view(view_center_hz, &dial, &pan);
+
+    if (dial != s_last_qmx_freq_hz) {
+        cat_set_frequency_forced(dial);   /* deliberate - never rate-limited away */
+        /* This runs still_view_follow_dial(), which moves the pan to hold the
+         * same absolute frequencies. We want a DIFFERENT pan, so it is
+         * overwritten immediately below - calling it anyway is what keeps every
+         * other consumer (axis, cursor, spots lane, waterfall anchor) in step. */
+        ui_update_frequency(dial);
+    }
+    if (sv_effective() && pan != ui_get_pan_offset_hz()) {
+        sv_apply_pan_hz(pan);
+        dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+        /* The push/land policy measures from where the view was left. A pan the
+         * operator placed by hand is a new starting point, not a push in
+         * progress, or the next tune pages immediately. */
+        s_sv_push = 0;
+        s_sv_side = 0;
+    }
+    update_bandplan_strip(s_last_qmx_freq_hz);
+    return s_last_qmx_freq_hz;
 }
 
 static void build_bandplan_strip(lv_obj_t *parent)
@@ -9662,10 +9766,9 @@ static void touch_event_cb(lv_event_t *e)
         s_bp_drag_start_pt = p;
         s_bp_drag_start_freq = (int64_t)s_last_qmx_freq_hz;
         s_bp_drag_target_hz = s_bp_drag_start_freq;
-        /* Once per gesture: sv_pan_on_capture() reads only the zoom, the filter
-         * and the IF offset, none of which move while a finger is down. */
-        s_bp_preview_pan_hz = sv_effective() ? sv_pan_on_capture()
-                                             : ui_get_pan_offset_hz();
+        s_bp_preview_pan_hz     = ui_get_pan_offset_hz();
+        s_bp_drag_start_view_hz = (int64_t)s_last_qmx_freq_hz + s_bp_preview_pan_hz;
+        s_bp_drag_view_hz       = s_bp_drag_start_view_hz;
 
         qmx_settings_t s;
         settings_load_all(&s);
@@ -9757,21 +9860,29 @@ static void touch_event_cb(lv_event_t *e)
                 }
             }
             double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
-            int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
-            target = ((target + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
-            if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
-            if (target > (int64_t)s_bp_drag_band_hi) target = (int64_t)s_bp_drag_band_hi;
-            s_bp_drag_target_hz = target;
+            /* What moves is the WINDOW CENTRE - see bp_solve_view(). The dial
+             * comes with it only when the radio cannot reach that far. */
+            int64_t cwant = s_bp_drag_start_view_hz + (int64_t)lround((double)dx * hz_per_px);
+            if (cwant < (int64_t)s_bp_drag_band_lo) cwant = (int64_t)s_bp_drag_band_lo;
+            if (cwant > (int64_t)s_bp_drag_band_hi) cwant = (int64_t)s_bp_drag_band_hi;
+            s_bp_drag_view_hz = cwant;
 
-            update_bandplan_strip((uint32_t)target);
+            uint32_t dial_pred = s_last_qmx_freq_hz;
+            int64_t  pan_pred  = ui_get_pan_offset_hz();
+            bp_solve_view(cwant, &dial_pred, &pan_pred);
+            s_bp_drag_target_hz = (int64_t)dial_pred;
+            s_bp_preview_pan_hz = pan_pred;
+
+            update_bandplan_strip(dial_pred);
             // Live top-bar "Freq: ..." text during the drag - display only,
             // no CAT write (deferred to release, same reasoning as the
             // spectrum's own pan gesture: a fast drag must not flood the
-            // QMX with frequency writes).
+            // QMX with frequency writes). Usually it does not change at all:
+            // a drag inside the radio's reach moves the window and leaves the
+            // dial alone, which is the whole point of the gesture.
             if (s_freq_label) {
                 char fb[32];
-                uint32_t t = (uint32_t)target;
-                { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
+                { char fs[16]; format_freq_hz(dial_pred, g_freq_style, fs, sizeof(fs));
                   snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
             }
@@ -9816,10 +9927,8 @@ static void touch_event_cb(lv_event_t *e)
         if (code == LV_EVENT_RELEASED) {
             bool was_dragging = s_bp_dragging;
             if (s_bp_dragging && s_bp_drag_band_hi > s_bp_drag_band_lo) {
-                uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
-                cat_set_frequency_forced(tgt);  // deliberate user action — bypass the 200ms rate-limiter so it always lands
-                ui_note_view_reframe();   /* the window was dragged - it moves */
-                ui_update_frequency(tgt);
+                s_bp_dragging = false;   /* so the strip draws from the REAL pan now */
+                ui_bandplan_move_view(s_bp_drag_view_hz);
             }
             // A plain tap (never exceeded the drag threshold): jump straight
             // to the tapped position in the band, same "tap anywhere to go

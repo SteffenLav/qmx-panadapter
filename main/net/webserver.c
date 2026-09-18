@@ -1255,6 +1255,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
              * the CAT write. The web path simply never did. */
             ui_update_frequency(hz);
         }
+    } else if (action && strcmp(action, "view_center") == 0) {
+        /* The band-plan knob, from the browser. Deliberately NOT set_freq: the
+         * gesture moves the WINDOW and must be allowed to leave the dial alone,
+         * which a frequency write cannot express. Same entry point the Tab5's
+         * own strip uses, so the two screens cannot drift. */
+        cJSON *item = cJSON_GetObjectItem(root, "hz");
+        if (cJSON_IsNumber(item)) {
+            (void)ui_bandplan_move_view((int64_t)item->valuedouble);
+        }
     } else if (action && strcmp(action, "set_band") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {

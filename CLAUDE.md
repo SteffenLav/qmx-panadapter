@@ -1592,9 +1592,48 @@ five-element array**. All four mutations are caught now. The harness also pins t
 default range to the exact old five values — this fix must be invisible to anyone who
 never touched the sliders.
 
-### The band-plan strip is an ABSOLUTE map in band and a RELATIVE control out of it (v1.8.3)
-In band, x is a frequency inside the band. Out of band there is no band to map onto, so
-the same strip becomes centre-detented: the knob (which already carries `<` `>` arrows)
+### ⛔ THE BAND-PLAN KNOB IS THE WINDOW - A DRAG PANS, A TAP TUNES (v1.14.5)
+The knob is drawn as a frame around the visible span precisely so it reads as a
+grab-and-slide handle, and until now a drag of it wrote the **dial**. The still
+display (#298) then faithfully held the view, so the box sprang back to where it
+started and left the marker and passband at whichever edge of it the new dial
+fell on. Operator, 2026-09-18: *"it does not stop where i left it but bounces off
+that position ... i would expect the slider comprising the visible spectrum +
+freq and BW to move together"*, then, when it was fixed as a re-frame-on-tune:
+*"I want the box (spectrum) always to follow and stay where i drag it to - no
+matter a little or a big jump. Dial + BW can stay on freq as long as the box is
+not dragged more than it can show in the new position."*
+
+`bp_solve_view()` / `ui_bandplan_move_view()` (`main/ui/ui.c`) implement exactly
+that: **pan** to put the window where it was dropped, leaving the radio alone,
+and retune by **only the shortfall** when the requested window is further from
+the dial than the radio can hear. The pan bound is the same one the spectrum's
+own swipe-to-pan uses (the view CENTRE stays inside the capture window, so at
+least half the screen is real spectrum) - deliberately the same number, because
+the two gestures do the same thing.
+
+⛔ **A TAP IS STILL A TUNE.** Pointing at a place in the band means "go there";
+dragging the window means "look there". It is the split the spectrum already
+makes, and unifying them would break one of the two.
+
+⚠ **The browser sends `{"action":"view_center","hz":N}`, NOT `set_freq`** - a
+frequency write cannot express "leave the dial alone". `bpSolveView()` in
+`index.html` is the same arithmetic so the preview, the release and the Tab5
+cannot disagree. `still_view` had to join `/api/status` for it: it was only in
+`/api/settings`, which the panadapter page never reads.
+
+⛔ **And a browser tune path must arm `freqHoldUntil`.** The status poll carries
+the radio's OLD frequency until the CAT write has gone out and come back, so
+writing it into `lastFreqHz` snaps the display backwards and then forwards. The
+wheel path fixed this for itself in v1.9.x and the other three - band-plan
+commit, spectrum tap-to-tune, spot tune - were left behind for four releases.
+`holdLocalFreq()` is the one way in now. The local **viewport** is carried with
+the dial on commit for the same reason, one layer up.
+
+### The band-plan strip is a RELATIVE control out of band (v1.8.3)
+In band, a TAP is an absolute map: x is a frequency inside the band. Out of band
+there is no band to map onto, so the same strip becomes centre-detented: the
+knob (which already carries `<` `>` arrows)
 sits mid-screen, you drag off centre to move the dial, and it springs back on release.
 Full deflection = **half the visible span**, so consecutive drags overlap rather than
 skipping a gap, and it scales with zoom for free.
