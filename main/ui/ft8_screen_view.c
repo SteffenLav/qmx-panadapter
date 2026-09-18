@@ -68,11 +68,15 @@ static const char *TAG = "ft8_view";
 // the operator's call, 2026-09-17: a bearing is derivable from the distance
 // and the map, and the country is read far more often.
 //
-// 10 IS A COLUMN WIDTH, NOT A TRUNCATION. country_display() spells the name
-// out when it fits and returns the 3-letter code when it does not, so
-// "Netherlands" prints NLD rather than "Netherlan". A half-country reads as a
-// bug; the code is the shorter TRUE answer. Same rule wspr_screen_view.c has
-// always used.
+// 10 IS A COLUMN WIDTH. country_display() spells the name out when it fits and
+// SHORTENS it when it does not - "Netherlan." with the full stop that marks an
+// abbreviation, never a bare "Netherlan" and never the 3-letter code.
+//
+// ⛔ It DID return the code until 2026-09-19, on the reasoning that a clipped
+// name reads as a bug while NLD is the shorter true answer. Reversed by the
+// operator, who was looking at a column of mixed names and codes: "apples and
+// pears". See country_shorten.c, and CLAUDE.md for the width table - at 10
+// chars 28 of 340 names need shortening, at 18 none do.
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
 #define COL_CALL_X      46

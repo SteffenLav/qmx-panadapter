@@ -1383,9 +1383,12 @@ static void arm_dial_push(const char *why)
 #define W_BAND  3
 #define W_CALL  7
 #define W_GRID  4
-/* EIGHT since 2026-09-17, paid for by dropping BRG. Not a truncation limit -
- * country_field() spells the name out when it fits and returns the 3-letter
- * code when it does not, the same rule the FT8 decode list now follows. */
+/* EIGHT since 2026-09-17, paid for by dropping BRG - the TIGHTEST country
+ * column in the firmware, and the one to raise first if names read badly.
+ * Measured over all 340 names (test/country_shorten_harness.c): at 8 chars far
+ * more of them are abbreviated than at the FT8 list's 10 or the SelfSpotter
+ * LIST's 18. Not a hard truncation - country_shorten() marks a cut with a full
+ * stop and never ends on a connective - but eight characters is eight. */
 #define W_CTY   8
 #define W_SNR   3
 #define W_DRF   2
@@ -1422,13 +1425,14 @@ static void arm_dial_push(const char *why)
  * A country name is a label, not an identity - which is why it may be. */
 static const char *country_field(const wspr_spot_t *sp)
 {
-    /* SPELL IT OUT OR GIVE THE CODE - never a clipped name. This used to
-     * truncate, under a comment arguing that "United " still reads as a place.
-     * It sat directly below an older comment in the same file saying the
-     * opposite ("NEVER truncated"), so the file disagreed with itself and the
-     * code followed the weaker rule. Settled 2026-09-17, the same way the FT8
-     * decode list now does it: a half-country reads as a bug, and the 3-letter
-     * code is the shorter TRUE answer. */
+    /* SPELL IT OUT OR SHORTEN IT - never a 3-letter code, and never a bare
+     * clipped word. This file has now held BOTH of the previous rules and
+     * contradicted itself between them: it truncated under a comment arguing
+     * "United " still reads as a place, sat below an older comment saying
+     * "NEVER truncated", was settled on the code in 2026-09-17, and the code
+     * was dropped in turn on 2026-09-19 because a column mixing names and codes
+     * is worse than either. country_shorten() is the single answer now - see
+     * its file, and CLAUDE.md for the width/legibility table. */
     const char *name = country_display(sp->call, COUNTRY_W);
     if (name && name[0]) return name;
     return sp->cty[0] ? sp->cty : "--";

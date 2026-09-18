@@ -22,10 +22,17 @@ extern "C" {
 
 // The name to print in a column `max_chars` wide.
 //
-// Spelled out when it fits, otherwise the 3-letter code - NEVER truncated.
-// "United Stat" is not a country and a clipped name reads as a bug, whereas
-// USA is simply the shorter true answer. This is wspr_screen_view.c's own
-// long-standing rule, lifted here so every screen follows it.
+// Spelled out when it fits, SHORTENED when it does not - never a 3-letter code.
+// See util/country_shorten.c: a parenthetical goes first, then a known short
+// form, then abbreviations, then a cut that marks itself with a full stop.
+//
+// ⛔ REVERSED 2026-09-19. This returned the ISO code for anything too long -
+// "NLD", not "Netherlan" - because a clipped name reads as a bug. True, but the
+// worse fault was mixing the two: "Sweden / Ireland / NLD / Italy" asks the
+// reader to switch alphabets mid-column. Operator: "apples and pears".
+//
+// ⚠ The shortened result lives in a STATIC buffer, valid until the next call.
+// Every caller prints it immediately. Do not store the pointer.
 //
 // Returns NULL when neither table knows the callsign.
 const char *country_display(const char *call, int max_chars);
