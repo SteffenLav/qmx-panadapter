@@ -2104,6 +2104,12 @@ static void wspr_rx_task(void *arg)
             }
         }
 
+        /* Ask the radio about split every cycle while transmit is enabled. The
+         * answer lands a poll or two later and is judged at the NEXT burst, so
+         * this costs one short query and never blocks - the same
+         * request-early-judge-later shape the PA voltage read uses. */
+        if (tx_possible) cat_request_split_read();
+
         if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {
             /* Loud, and only while it is actually holding something up. */
             /* -1 means "not answered yet", and printing that as tenths gave
@@ -2128,7 +2134,37 @@ static void wspr_rx_task(void *arg)
         } else if (tx_this_cycle) {
             wspr_tx_request_t req;
             char err[80] = "";
-            if (!ws.my_callsign[0] || !ws.my_grid[0]) {
+            /* ⛔ NEVER BEACON IN SPLIT.
+             *
+             * WSPR is transmitted on the dial frequency by definition, and the
+             * spot published to wsprnet carries that frequency. In split the
+             * radio keys VFO B while FA; still reports A, so every spot is a
+             * measurement of somewhere the signal never was - published to a
+             * global database, unattended, for hours. That is the same rule as
+             * never fabricating a signal report, with a wider blast radius.
+             *
+             * John W5JSS, 2026-09-18: his WSPR was not being spotted at all,
+             * and it started working the moment he "cleared the B VFO display".
+             * The QMX's dual-VFO state is not clearable over CAT (only MU; or a
+             * power cycle - see the CAT notes), so the firmware cannot fix this
+             * for him even if it wanted to.
+             *
+             * ⛔ AND IT DELIBERATELY DOES NOT TRY. cw_split_maintain() refuses
+             * to clear a split it did not set - "an operator running their own
+             * split has not asked us to interfere" - and changing mode does not
+             * repeal that. So this refuses the burst and says why, which costs
+             * one cycle and leaves the radio exactly as the operator left it.
+             *
+             * ⚠ -1 is "not answered yet" and must NOT refuse: grounding the
+             * beacon because the radio was slow to reply would be a worse fault
+             * than the one being prevented. */
+            if (cat_get_split_state() == 1 && !cat_cw_tx_offset_engaged()) {
+                ESP_LOGE(TAG, "TX skipped: the radio is in SPLIT, so a burst would go "
+                              "out on VFO B and every spot would name the wrong "
+                              "frequency. Clear split on the radio (VFO A only) - "
+                              "the Tab5 cannot do it over CAT.");
+                set_status("TX held - radio is in SPLIT, clear VFO B");
+            } else if (!ws.my_callsign[0] || !ws.my_grid[0]) {
                 ESP_LOGW(TAG, "TX skipped: callsign/grid not set");
             } else if (!wspr_tx_build_request(ws.my_callsign, ws.my_grid,
                                               ws.wspr_tx_dbm, WSPR_TX_DEFAULT_FREQ_HZ,

@@ -95,6 +95,17 @@ bool cat_is_ready(void);
  */
 int cat_get_cw_offset_hz(void);
 
+/* Ask the RADIO whether it is in split, and read the answer back. The answer is
+ * -1 (unknown), 0 (simplex) or 1 (split), and it arrives asynchronously a poll
+ * or two after the request - so request early and judge later, never block.
+ *
+ * cat_cw_tx_offset_engaged() answers a DIFFERENT question: whether WE put it
+ * there. A split the operator left on, or one a menu visit created, is invisible
+ * to that and visible to this. Anything about to transmit unattended wants this
+ * one. */
+void cat_request_split_read(void);
+int  cat_get_split_state(void);
+
 // True while WE are holding the radio in split for the CW transmit offset.
 // RIT is refused while this is true - the two are mutually exclusive, since the
 // offset is implemented as split (the QMX has no XIT) and RIT would move the
