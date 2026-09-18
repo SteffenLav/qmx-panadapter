@@ -52,6 +52,7 @@ idf_component_register(
         "util/bandplan.c"
         "util/dxcc.c"
         "util/country.c"
+        "util/country_shorten.c"
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"

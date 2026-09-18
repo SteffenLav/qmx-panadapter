@@ -27,3 +27,9 @@ bool geo_coords_for_call(const char *call, float *lat_out, float *lon_out);
 // entity - see tools/dxcc_iso3.py). The returned pointer is a string literal
 // with static storage duration - never free it.
 const char *geo_coords_iso_for_call(const char *call);
+
+/* The entity NAME for a callsign's prefix - "Canary Is.", "European Russia".
+ * Added with Uwe DL8UG's 2026-09-18 table, which carries names as well as
+ * codes; before it, a caller wanting a name had to go to dxcc.c and this table
+ * could only ever back it up with a 3-letter code. NULL if unknown. */
+const char *geo_coords_name_for_call(const char *call);

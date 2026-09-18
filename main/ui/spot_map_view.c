@@ -38,7 +38,8 @@
 #include "net/band_conditions.h"
 #include "util/world_map_data.h"
 #include "util/maidenhead.h"
-#include "util/geo_coords.h"    // geo_coords_iso_for_call() - LIST tab's ISO column
+#include "util/geo_coords.h"    // per-prefix coordinates for placing a station
+#include "util/country.h"       // country_display() - the ONE country-name rule, shared with the FT8/WSPR lists
 #include "util/format_freq.h"
 #include "storage/settings.h"
 #include "cat.h"                // cat_get_frequency() - the header's own info line
@@ -1476,6 +1477,15 @@ static void map_drag_cb(lv_event_t *e)
 // ---- Tabelle tab --------------------------------------------------------
 
 #define COL_GAP 10
+/* How many characters the Country column can show before country_display()
+ * gives up and returns the 3-letter code instead. The columns are flex-grow,
+ * so this is a judgement about the RENDERED width rather than a derivation -
+ * if a common country starts showing as a code, this is the number to raise
+ * (and something else must give a grow unit back). */
+/* The LIST tab is the widest place a country name is shown - 1280 px with only
+ * a 140 px tab bar beside it - so it gets the generous limit. The FT8 and WSPR
+ * decode lists are far tighter and pass their own, smaller number. */
+#define LIST_COUNTRY_CHARS 18
 /* ⛔ THE SAME UNBOUNDED-COST BUG THE MAP HAD, NOW FOUND IN THE LIST.
  *
  * This used to be SELF_SPOT_MAX (300) - "the buffer is the limit, nothing
@@ -1582,8 +1592,12 @@ static int cmp_spots(const void *pa, const void *pb)
     // same as the column's own render below - not stored on self_spot_t, so
     // it is looked up here rather than compared as a field.
     case SORT_COL_ISO: {
-        const char *ia = geo_coords_iso_for_call(a->call);
-        const char *ib = geo_coords_iso_for_call(b->call);
+        /* Sorted on what is SHOWN, so the order matches the column the operator
+         * is reading - country_display() spells the name out where it fits and
+         * falls back to the 3-letter code where it does not, and sorting on the
+         * underlying ISO would have put "Spain" and "ESP" in different places. */
+        const char *ia = country_display(a->call, LIST_COUNTRY_CHARS);
+        const char *ib = country_display(b->call, LIST_COUNTRY_CHARS);
         if (!ia || !ib) { cmp = (!ia == !ib) ? 0 : (ia ? -1 : 1); break; }
         cmp = strcmp(ia, ib);
         break;
@@ -1691,7 +1705,11 @@ static void rebuild_table(void)
     add_sort_header_col(hdr, "Freq",     3, SORT_COL_FREQ,  true);
     add_sort_header_col(hdr, "SNR",      2, SORT_COL_SNR,   true);
     add_sort_header_col(hdr, "Distance", 3, SORT_COL_DIST,  true);
-    add_sort_header_col(hdr, "ISO",      2, SORT_COL_ISO,   true);
+    /* LEFT-aligned, like its values. Every other text column here is left and
+     * every numeric one is right; "Country" was the one header sitting right
+     * over left-aligned names, which reads as a column out of step - visible
+     * immediately in the operator's screenshot, 2026-09-19. */
+    add_sort_header_col(hdr, "Country",  3, SORT_COL_ISO,   false);
     add_sort_header_col(hdr, "Age",      2, SORT_COL_AGE,   true);
 
     static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];   // NOT internal .bss - see the note above map_draw_cb()'s copy of this array
@@ -1727,7 +1745,13 @@ static void rebuild_table(void)
         // The ONE band table (adif_log_band_for_freq(), adif_log.c) - do not
         // reimplement this locally, see that function's own comment.
         const char *band = adif_log_band_for_freq(sp->freq_hz);
-        const char *iso = geo_coords_iso_for_call(sp->call);
+        /* ⛔ COUNTRY, NOT ISO. This column showed a 3-letter code while the FT8
+         * and WSPR lists spell the name out - two answers to the same question
+         * in one firmware. Operator, 2026-09-19: "In LIST tap we have ISO....
+         * in all other pages we have COUNTRY". country_display() is the single
+         * rule those pages already use: the name where it fits, the 3-letter
+         * code where it does not, and NEVER a name chopped in half. */
+        const char *iso = country_display(sp->call, LIST_COUNTRY_CHARS);
 
         lv_obj_t *row = make_row(s_table_list);
         /* ⛔ THE MODE COLUMN IS COLOURED BY THE MODE, NOT BY THE SOURCE.
@@ -1765,7 +1789,7 @@ static void rebuild_table(void)
         add_col(row, freq_buf, 3, UI_COLOR_TEXT, false, true);
         add_col(row, snr_buf, 2, UI_COLOR_TEXT, false, true);
         add_col(row, dist_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
-        add_col(row, iso ? iso : "-", 2, UI_COLOR_TEXT_SECONDARY, false, true);
+        add_col(row, iso ? iso : "-", 3, UI_COLOR_TEXT_SECONDARY, false, false);
         add_col(row, age_buf, 2, UI_COLOR_TEXT_SECONDARY, false, true);
         shown++;
     }
