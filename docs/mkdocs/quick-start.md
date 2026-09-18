@@ -135,24 +135,27 @@ If you set up WiFi:
 ## Step 10: Keeping It Up To Date
 
 From v1.8.9 the Tab5 can update itself over WiFi. You do not need the cable
-again unless something goes badly wrong. **From v1.9.3 it also fetches the
-update quietly in the background**, so by the time it says anything, the work
-is already done and only one decision is left.
+again unless something goes badly wrong. The version on the bottom bar turns
+amber when a newer one exists; tap it, choose **Download now**, and then
+**Restart now** when it suits you — nothing is fetched or installed until you
+ask for it.
 
-!!! warning "The next update after v1.14.4 needs a USB-C cable, once"
+!!! warning "v1.15.0 needs a USB-C cable, once"
 
-    v1.14.4 is the last release that installs over the air for a while. The one
-    after it reclaims 2.81 MB of flash that has never been used, which means
+    v1.15.0 reclaims 2.81 MB of flash that had never been used, and that means
     rewriting the partition table — something an over-the-air update cannot do,
-    by design.
+    by design. It is the only release that needs the cable, and afterwards
+    over-the-air updates work as before, with more than twice the room.
 
-    So the next firmware comes as a **flasher download**: the same USB-C data
-    cable and the same script you used to install it the first time. One time,
-    then back to over-the-air as normal.
+    So v1.15.0 comes as a **flasher download**: the same USB-C data cable and
+    the same script you used to install the firmware the first time.
 
-    **Your settings, memories and QSO log are kept.** Press **Enter** at the
-    flash-type prompt — not **E**, which erases everything including your LoTW
-    private key.
+    If you tap the update notice instead, it will simply fail — there is no
+    over-the-air image to fetch, on purpose.
+
+    **Your settings, memories, QSO log and LoTW certificate are kept.** Press
+    **Enter** at the flash-type prompt — not **E**, which erases everything
+    including your LoTW private key.
 
     You will not have to remember this. When that release appears, the update
     window tells you instead of offering a download.

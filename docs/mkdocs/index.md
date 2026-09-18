@@ -76,7 +76,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   and the diagnostic log.
 - **Updating from the device** *(needs WiFi)* — tap the version line, press **Download
   now**, then **Restart now**. Nothing is fetched or installed until you ask.
-  ⚠ **The release after v1.14.4 needs a one-time USB-C cable update** — see
+  ⚠ **v1.15.0 needs a one-time USB-C cable update** — see
   [Settings](guide/settings.md#firmware-updates).
 - **Built-in manual** — this whole guide is compiled into the firmware, so it is instant
   and needs no WiFi and no card. It opens at the chapter for the screen you are on,
@@ -110,27 +110,33 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.14.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.15.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-!!! warning "v1.14.4 is the last over-the-air release for a while"
+!!! warning "v1.15.0 needs a USB-C cable, once"
 
-    The next firmware reclaims 2.81 MB of unused flash, which means rewriting the
-    partition table — something an over-the-air update cannot do. It arrives as a
-    **flasher download** over the same USB-C cable you used the first time. One
-    time, then back to normal. **Your settings and QSO log are kept** — press
-    **Enter** at the flash-type prompt, never **E**. The Tab5 will tell you when
-    the time comes, and new users are unaffected.
+    It reclaims 2.81 MB of unused flash, which means rewriting the partition
+    table — something an over-the-air update cannot do. It arrives as a **flasher
+    download** over the same USB-C cable you used the first time, and everything
+    after it is over the air again with more than twice the room. **There is no
+    over-the-air image for this one on purpose**: tapping the update notice will
+    say the download could not be reached. **Your settings, QSO log and LoTW
+    certificate are kept** — press **Enter** at the flash-type prompt, never
+    **E**. New users are unaffected.
 
-**v1.14.4 fixes the reboots.** Fifteen runs on the bench before the fix lasted a median
-of 15 minutes; with it, the same bench ran 14.7 hours with none — three rarely-read
-arrays were occupying the internal RAM that USB, WiFi and the SD card need. It also
-stops the settings drawer cutting your transmit power, spells out country names on the
-FT8 and WSPR lists, and corrects 79 callsign prefixes that named the wrong country. See
+**v1.15.0 makes the band-plan slider a window you drag** rather than a dial you scrub —
+the block, the frequency marker and the filter passband travel together and stay where
+you let go. The **Config download was missing 31 settings, including the measured power
+calibration**, the one thing in that file nobody could recreate from memory. **WSPR
+refuses to beacon while the radio is in split**, where every spot would name a frequency
+your signal was never on, and its transmit block is legible again. See
 [releases](releases.md) for the full list.
+
+**v1.14.4 fixed the reboots.** Fifteen runs on the bench before the fix lasted a median
+of 15 minutes; with it, the same bench ran 14.7 hours with none.
 
 **v1.14.1 fixed a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
 large for a 4096-byte task stack, hit by nearly any frequency change. Thanks to Martin
@@ -270,7 +276,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.14.4.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.15.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

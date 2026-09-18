@@ -3795,6 +3795,78 @@ what makes the cable release above announce itself instead of failing.
 
 ---
 
+### Shipped in v1.15.0 — 2026-09-18
+
+**This one needs the USB-C cable, once.** It rewrites the partition table, which
+an over-the-air update cannot do — that limit is deliberate, and it is what stops
+a failed download taking the flash layout with it. So v1.15.0 arrives as a
+flasher download, over the same cable and the same script you used to install the
+firmware the first time. Everything after it is over the air again, with more
+than twice the room.
+
+There is no over-the-air image attached to this release on purpose. If you tap
+the update notice it will simply say the download could not be reached — that is
+the release refusing to be installed the wrong way, not a fault.
+
+**Your settings, memory channels, QSO log and LoTW certificate are kept.** Press
+**Enter** at the flash-type prompt, never **E**. Brand-new users are unaffected:
+a first install already uses the flasher and lands on the new layout directly.
+
+**What the cable buys.** The firmware had 47 KB of room left in its 4 MB slot —
+about one feature from refusing to build. Dropping a third, never-used copy of
+the firmware leaves two slots of 6.81 MB, with **2.87 MB free**. Over-the-air
+updates keep working exactly as before, alternating between the two.
+
+**The band-plan slider is a window you drag, not a dial you scrub.** Grab the
+framed block and the whole picture travels with it — the block, the frequency
+marker and the filter passband move together and stay where you let go, with the
+radio following. It used to write a frequency and let the display decide where to
+land, so the box sprang back the moment you lifted your finger. The grab area is
+also about 8 mm tall now instead of 4, because the strip alone was never a
+finger, and the filter passband fades back in twice as fast when you release.
+
+**Your settings backup was missing thirty-one of them, including the power
+calibration.** The Config download is a complete backup again: the measured
+per-band power calibration, your per-band power target, the WSPR schedule and
+band hopping, Field Day class and section, the activation reference, the FT8
+transmit tone, and twenty more. The calibration is an hour at a dummy load per
+band and was the one thing in the whole file that could not be recreated from
+memory — it had never been included. Two settings, the transmit tone and its
+hold, were worse than missing: the file would accept them but never wrote them,
+so saving and restoring quietly reverted both.
+
+Band names in that file are now case-insensitive, and an empty value removes a
+band, so the file can be edited by hand without creating invisible duplicates.
+
+**Three settings reached the web page** that had been on the Tab5 only: waterfall
+speed, WSPR band hopping, and whether your QMX has GPS. The last is not cosmetic
+— claiming it stops the Tab5 keeping the radio's clock.
+
+**WSPR will not beacon while the radio is in split.** In split the radio
+transmits on VFO B while still reporting VFO A, so every spot you publish names a
+frequency your signal was never on. The Tab5 now asks the radio before each
+transmission and holds the burst with **TX held - radio is in SPLIT, clear VFO B**
+on the screen. It will not clear it for you — that is your setting, and on the
+QMX it cannot be cleared over the cable anyway.
+
+**The WSPR transmit block was unreadable.** Red text on an orange background
+measures 1.15 to 1 for contrast; it is black on orange now. The same block
+sometimes kept the orange of a finished transmission while merely counting down.
+
+**The on-screen keyboard came back on a second tap.** Tapping a text field that
+was already selected did nothing, because the keyboard was tied to a field
+*gaining* focus. Reported by Samuel W7STF; it affected nine fields across seven
+windows.
+
+**A missing SD card says so.** The card indicator is crossed out in grey when no
+card is present, and tapping it opens a page explaining what a card is for. A tap
+on the bottom bar used to open the updater wherever you touched it.
+
+**The WSPR transmit schedule is two plain counts.** "1 in 5" meant different
+things to different people, so it is now the number of transmit cycles and the
+number of receive cycles in a group that repeats — with the result written out in
+words underneath as you change it.
+
 ## Appendix - archived engineering notes from CLAUDE.md
 
 These are the per-release notes that used to live in the `main` row of

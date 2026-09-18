@@ -4,39 +4,51 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.15.0** — 2026-09-18
+
+!!! warning "This release needs a USB-C cable, once"
+
+    **v1.15.0 rewrites the partition table**, and an over-the-air update cannot
+    do that — it can only ever write the app, never the map of the flash. That
+    limit is deliberate: it is what stops a failed download taking the layout
+    with it.
+
+    So v1.15.0 arrives as a **flasher download**, over the same USB-C data cable
+    and the same script you used to install the firmware the first time. It is
+    the only release that needs it, and everything after it is over the air again
+    — with more than twice the room.
+
+    **There is no over-the-air image attached to this release, on purpose.** If
+    you tap the update notice it will say the download could not be reached. That
+    is the release refusing to be installed the wrong way, not a fault.
+
+    **Your settings, memory channels, QSO log and LoTW certificate are kept.**
+    Press **Enter** at the flash-type prompt — never **E**, which erases the whole
+    chip including your LoTW private key. **New users are unaffected**: a first
+    install already uses the flasher.
+
+**The band-plan slider is a window you drag, the settings backup was missing thirty-one settings, and WSPR will not beacon in split.**
+
+- **What the cable buys.** The firmware had **47 KB** left in its 4 MB slot — about one feature from refusing to build. Dropping a third, never-used copy of the firmware leaves two slots of 6.81 MB with **2.87 MB free**. Over-the-air updates work exactly as before afterwards, alternating between the two.
+- **The band-plan slider moves the window, not a dial.** Grab the framed block and the whole picture travels with it — block, frequency marker and filter passband together — and it stays where you let go, with the radio following. It used to write a frequency and let the display decide where to land, so the box sprang back the moment you lifted your finger. The grab area is about **8 mm** tall now rather than 4, because the strip alone was never a finger, and the passband fades back twice as fast on release.
+- **Your Config download was missing 31 settings, including the power calibration** *(found from a question by Bruce N9JCV)*. That calibration is an hour at a dummy load per band and was the one thing in the file nobody could recreate from memory — it had never been included. Also added: the per-band power target, the WSPR schedule and band hopping, Field Day class and section, the activation reference, the FT8 transmit tone and twenty more. Two of them were worse than missing — the file would *accept* the transmit tone and its hold but never wrote them, so saving and restoring quietly reverted both.
+- **Three settings reached the web page** that had been Tab5-only: waterfall speed, WSPR band hopping, and whether your QMX has GPS. The last is not cosmetic — claiming it stops the Tab5 keeping the radio's clock.
+- **WSPR will not beacon while the radio is in split** *(John W5JSS)*. In split the radio transmits on VFO B while still reporting VFO A, so every spot you publish names a frequency your signal was never on. The Tab5 asks the radio before each transmission and holds the burst, saying so on screen. It will not clear the split for you — that is your setting, and on the QMX it cannot be cleared over the cable anyway.
+- **The WSPR transmit block was unreadable** *(John W5JSS)*: red text on an orange background, a contrast ratio of 1.15 to 1. Black on orange now. The same block sometimes kept the orange of a finished transmission while merely counting down.
+- **The on-screen keyboard came back on a second tap** *(Samuel W7STF)*. Tapping a field that was already selected did nothing — nine fields across seven windows.
+- **A missing SD card says so**: the indicator is crossed out in grey, and tapping it explains what a card is for. A tap anywhere on the bottom bar used to open the updater.
+- **The WSPR transmit schedule is two plain counts** — transmit cycles and receive cycles in a repeating group — with the result written out in words as you change it. "1 in 5" meant different things to different people.
+
+## Previous Releases
+
 **v1.14.4** — 2026-09-18
-
-!!! warning "The next release needs a USB-C cable, once"
-
-    **v1.14.4 is the last release that installs over the air for a while.** The
-    one after it reclaims 2.81 MB of flash that no partition has ever used,
-    which means rewriting the partition table — something an over-the-air update
-    cannot do by design, since it can only ever write the app and never the map
-    of the flash.
-
-    The next firmware therefore arrives as a **flasher download**, over the same
-    USB-C data cable and the same script you used to install it the first time.
-    One time, and everything after it is over the air again.
-
-    **Your settings, memory channels and QSO log are kept.** Press **Enter** at
-    the flash-type prompt — never **E**, which erases the whole chip including
-    your LoTW private key.
-
-    You will not have to remember: from v1.14.4 the Tab5 says so itself when the
-    time comes, and refuses to download an image it cannot install. **New users
-    are unaffected** — a first install already uses the flasher.
 
 **The reboots are fixed, countries are spelled out, and 79 callsign prefixes named the wrong country.**
 
-- **The reboots.** Fifteen consecutive runs on the bench before this change lasted a median of **15 minutes**; with it, the same bench ran **14.7 hours** with none. Three rarely-read arrays were sitting in the small internal RAM that USB, WiFi and the SD card all need for transfers — moving them freed 17 KB of it. That is why the crashes turned up in unrelated tasks for unrelated reasons: one exhaustion, arriving wherever the next allocation happened to be.
-- **Opening the settings drawer cut your transmit power** to WSPR's declared level — as little as 200 mW mid-FT8 — and left it there. The WSPR section was re-applying its own power on every drawer open just to keep a hint label truthful.
-- **Countries spelled out** on the FT8 and WSPR lists: `Spain`, not `ESP`. A name that does not fit falls back to its 3-letter code rather than being chopped in half. Paid for by dropping the **BRG** column. **Stations that never sent a grid now show a distance too**, marked `~` because it comes from the callsign's country rather than a real locator.
-- **79 prefixes named the wrong country.** Taiwan read as China, Ukraine and Uzbekistan as Russia, Guam and American Samoa as Hawaii, the US Virgin Islands as Puerto Rico, sixteen UK prefixes — Scottish and Welsh among them — as England. About 130 entities the table never knew, including Monaco, Malta, Andorra and Nepal, now resolve as well *(using Uwe DL8UG's table)*.
-- **WSPR bursts per transmission** *(John W5JSS)* — 1 to 4 consecutive cycles. 1 in 3 with 2 bursts gives Tx Tx Rx Rx, repeating.
-- **Antenna Tune shows SWR, watts and the seconds left** in a panel that stays put, on the Tab5 and in the browser, instead of only in the menu item's label *(Randy N4OPI)*.
-- **Calibrate Power stops at your own Max PA voltage** and stops early once the power stops rising — no more keying the finals at settings a 9 V radio or an 8 V supply can never reach *(Bruce N9JCV)*, and the cut-off warning text in that window is fixed.
-- **A Flush button in the SelfSpotter header** *(contributed by Uwe DL8UG)*, so the spot buffer clears without opening the drawer.
-- **Updating is one route**: tap, Download now, Restart now. The background-download option is gone — a memory guard had been suppressing it for months, so it had never actually run.
+- **The reboots.** Fifteen bench runs before the fix lasted a median of **15 minutes**; with it the same bench ran **14.7 hours** with none. Three rarely-read arrays sat in the small internal RAM that USB, WiFi and the SD card all need — moving them freed 17 KB. One exhaustion, arriving wherever the next allocation happened to be.
+- **Opening the settings drawer cut your transmit power** to WSPR's declared level and left it there.
+- **Countries spelled out** on the FT8 and WSPR lists, **79 prefixes** corrected (Taiwan as China, Ukraine as Russia, sixteen UK prefixes as England), and stations with no grid now show an approximate distance.
+- **WSPR bursts per transmission** *(John W5JSS)*, **Antenna Tune shows SWR, watts and seconds left** *(Randy N4OPI)*, **Calibrate Power stops at your own Max PA voltage** *(Bruce N9JCV)*, and **a Flush button in the SelfSpotter header** *(Uwe DL8UG)*.
 
 ## Previous Releases
 
