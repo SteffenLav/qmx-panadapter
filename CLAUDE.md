@@ -187,6 +187,26 @@ capture, not after a result looks strange.**
    fine. The PORT dies, not the process, so the file's timestamp is the only
    honest liveness test. Running several sessions at once is the operator's
    normal daily practice, so treat this as expected, not exotic.
+   ⛔ **CORRECTION 2026-09-18: `LastWriteTime` is NOT "the only honest
+   liveness test" — it LAGS, in both directions, and both errors were seen in
+   one session.** Windows does not update an open file's directory entry on
+   every buffered write, so a capture that is genuinely writing can read
+   minutes stale (measured: metadata said 228 s while `Get-Content -Tail`
+   returned lines newer than the previous read), and a capture that has just
+   died can read 1 s old. **The honest test is CONTENT: read the last line,
+   wait ~20 s, read it again.** Timestamp-stale plus content-advancing means
+   healthy; content frozen means dead, whatever the clock says. The watchdog
+   still uses the timestamp, which is the right trade for an unattended
+   one-minute cycle (it errs toward a restart), but do NOT report liveness to
+   the operator from metadata.
+   ⛔ **AND `bench.standdown.<name>` MAKES A DEAD CAPTURE PERMANENT AND
+   SILENT.** 2026-09-18: the dev capture died at 01:18:38 and the flag was
+   written at 01:18:41 by a concurrent session, so the watchdog skipped that
+   bench by design — four cycles, no restart, nothing in
+   `bench-watchdog.log` (it only logs when it ACTS, so silence is not evidence
+   of health). **When a capture is dead and the watchdog is not fixing it,
+   check for the standdown flag BEFORE debugging the watchdog.** `bench
+   capture <name>` clears it.
 11. ⛔ **A CAPTURE I START FROM A TOOL CALL GETS KILLED — use `bench capture`,
    which registers a SCHEDULED TASK.** Three deaths on the night of 2026-09-11,
    across two ports and two trees, after 20 s, 9 min and 1 min: every one with
