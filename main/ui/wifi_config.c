@@ -315,6 +315,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_ssid, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_ssid);
     lv_obj_add_event_cb(s_ta_ssid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_ssid, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     // Scan button - opens the SSID picker (avoids typing a case-sensitive SSID).
     lv_obj_t *scan_btn = lv_btn_create(s_panel);
@@ -347,6 +348,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_pass, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_pass);
     lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     // Password show/hide eye-icon button — directly under the Scan button,
     // mirroring the SSID+Scan row above (the password field is shortened to

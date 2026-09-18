@@ -15422,7 +15422,26 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  *
  * A BLE MOUSE does not count: bt_hid_keyboard_active() requires the device's own
  * report map to declare a keyboard. And it goes false on disconnect, so a
- * keyboard that runs flat or walks out of range brings this straight back. */
+ * keyboard that runs flat or walks out of range brings this straight back.
+ *
+ * ⛔ EVERY CALLER MUST BE WIRED TO LV_EVENT_CLICKED AS WELL AS LV_EVENT_FOCUSED,
+ * AND THAT IS NOT BELT-AND-BRACES - IT IS THE ONLY ONE THAT ALWAYS FIRES.
+ * LVGL sends FOCUSED when an object GAINS focus. Tap a field, type, tap
+ * somewhere else, then tap the same field again: if LVGL still considers it the
+ * focused object, the second tap sends NO FOCUSED event, so nothing re-shows the
+ * keyboard and the field cannot be typed into again. The dialog is left looking
+ * alive with no way to finish the entry.
+ *
+ * Samuel W7STF, 2026-09-18, on the WiFi and Callsign/QTH dialogs: "the keyboard
+ * disappears, but input dialog remains. you cannot press the input field again
+ * to call up the keyboard and finish the entry." All SIX modals and all NINE
+ * text fields had the same wiring; he happened to hit two of them.
+ *
+ * CLICKED fires on every tap regardless of focus state, so it is correct
+ * whatever hid the keyboard in the first place - which matters, because what
+ * hides it on a stray press is NOT established (LVGL indev/group behaviour, a
+ * CANCEL, or z-order are all candidates and were not discriminated). The fix
+ * does not depend on knowing. */
 static lv_obj_t *s_osk_cur = NULL;   /* the on-screen keyboard currently shown */
 
 void ui_osk_show(lv_obj_t *kb)

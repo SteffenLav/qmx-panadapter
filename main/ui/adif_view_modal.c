@@ -1451,6 +1451,7 @@ static void modal_build(void)
     ui_theme_style_textarea(s_search_ta);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_FOCUSED,       NULL);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_CLICKED,       NULL);  /* see ui_osk_show() */
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_DEFOCUSED,     NULL);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_READY,         NULL);
 

@@ -949,6 +949,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_action_ta, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_action_ta);
     lv_obj_add_event_cb(s_action_ta, action_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_action_ta, action_ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     lv_obj_t *act_cancel = lv_btn_create(s_action_panel);
     lv_obj_set_size(act_cancel, 160, 56);

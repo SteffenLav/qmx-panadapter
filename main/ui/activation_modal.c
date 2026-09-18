@@ -228,6 +228,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_ref, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_ref);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     s_lbl_count = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
