@@ -571,6 +571,19 @@ Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is 
 
 **After inserting the SD card your Tab5 needs a restart.** The Tab5 can only claim the card during a short window early in boot, so a card pushed in while it is running is not used until you restart.
 
+### Benefits of a microSD card
+
+The Tab5 works perfectly well without one. With a card in, you also get:
+
+- **A full diagnostic history instead of the last few minutes.** Without a card, the log that survives a restart is held in a small area of internal flash and is overwritten roughly every 11 minutes of busy operating. On the card it is kept whole — so if something goes wrong overnight, or an hour ago, the evidence is still there when you come to report it.
+- **A grab-and-go station backup.** Your QSO log, every setting, your WiFi details and your LoTW certificate and key, mirrored automatically. Move the card to another Tab5 and your station comes with it, with no computer involved.
+- **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
+- **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
+
+A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
+
+**After inserting the SD card your Tab5 needs a restart.**
+
 ### When the mirror runs
 
 The microSD card and the WiFi co-processor share a bus on this hardware and cannot both use it reliably. Rather than fail at an unpredictable moment, the Tab5 picks the behaviour that works:

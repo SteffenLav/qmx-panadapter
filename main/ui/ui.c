@@ -2419,6 +2419,7 @@ static lv_obj_t *s_bot_wifi_ip = NULL;
 static lv_coord_t s_bot_wifi_min_x = 0;  /* leftmost x the WiFi zone may use (clock's right edge) */
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
+static lv_obj_t *s_bot_sd_slash = NULL; /* diagonal stroke over the SD dot+label when NO card is in */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
 // Desired microSD-dot state, set by ui_set_sd_active() (called from the
 // sd_archive task) and reconciled on the LVGL thread in sim_border_keepalive_cb.
@@ -2427,7 +2428,7 @@ static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hi
 // the UI is busy, that single lock timed out, and with no retry the dot never
 // appeared for the whole session. Reconciling on an LVGL-thread timer is
 // lock-free and self-correcting within ~1 s.
-static volatile int8_t s_sd_want = -1;
+static volatile int8_t s_sd_want = 0;   /* 0 = no card, which is the truth until sd_archive says otherwise */
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
@@ -3731,17 +3732,19 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
         static int8_t s_sd_applied = -1;
         if (s_sd_want != s_sd_applied) {
             s_sd_applied = s_sd_want;
-            bool want_show = (s_sd_want != 0);
-            if (want_show) {
-                // GREEN = mirroring live, YELLOW = boot backup written but live
-                // mirroring unavailable while WiFi is on.
-                lv_obj_set_style_bg_color(s_bot_diag_dot,
-                        lv_color_hex(s_sd_want == 1 ? 0x30D030 : 0xE0C020), 0);
-                lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
-                if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
-                if (s_bot_diag_label) lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
+            // Three colours, never hidden. GREEN = mirroring live, YELLOW = boot
+            // backup written but live mirroring unavailable while WiFi is on,
+            // GREY + a stroke through it = no card in the slot.
+            const bool no_card = (s_sd_want == 0);
+            uint32_t col = no_card    ? UI_COLOR_TEXT_SECONDARY
+                         : (s_sd_want == 1) ? 0x30D030
+                                            : 0xE0C020;
+            lv_obj_set_style_bg_color(s_bot_diag_dot, lv_color_hex(col), 0);
+            if (s_bot_diag_label)
+                lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(col), 0);
+            if (s_bot_sd_slash) {
+                if (no_card) lv_obj_clear_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
+                else         lv_obj_add_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
             }
         }
     }
@@ -5483,6 +5486,23 @@ static void build_waterfall(lv_obj_t *parent)
 }
 
 // ==== Bottom status bar ====
+// The bottom-bar SD indicator is tappable in ALL FOUR states, not just the
+// crossed-out one: "what is actually on my card" is a fair question with a card
+// in, and one target with one behaviour is simpler to learn than two.
+//
+// ⭐ IT OPENS THE MANUAL RATHER THAN A MODAL OF ITS OWN, DELIBERATELY. The
+// benefit list already exists in docs/mkdocs/guide/settings.md, which is the
+// single source for the website, the PDF and the embedded manual. A modal would
+// be a FOURTH copy, and this project has been bitten by exactly that (see the
+// "docs live in TWO trees" note in CLAUDE.md). Going through help_open() also
+// means tools/pack_manual.py FAILS THE BUILD if that heading is ever renamed,
+// so the link cannot rot quietly.
+static void sd_indicator_cb(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    help_open(HELP_SD_BENEFITS);
+}
+
 static void build_bottom_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -5570,7 +5590,18 @@ static void build_bottom_bar(lv_obj_t *parent)
     // every time that text is updated, so it stays glued just to the right
     // of "(X.XV)" instead of a fixed offset that drifts with text length.
     lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
-    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while a card is mounted
+    // ⛔ NO LONGER HIDDEN WHEN THERE IS NO CARD. It used to disappear, and an
+    // absent widget tells the operator nothing at all - it reads exactly like
+    // "I have not noticed it". Now it is always on the bar and says which of the
+    // four states it is in: green mirroring, yellow boot-backup-only, grey with
+    // a stroke through it for no card. Same reasoning, and the same mechanism,
+    // as ui_set_bottom_battery_absent().
+    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_bot_diag_dot, sd_indicator_cb, LV_EVENT_CLICKED, NULL);
+    // A 14 px dot is not a finger target. The halo is CLIPPED TO THE PARENT, and
+    // the parent is the 36 px bottom bar, so it can grow sideways but barely
+    // vertically - hence the asymmetric figure rather than a round number.
+    lv_obj_set_ext_click_area(s_bot_diag_dot, 14);
 
     // "SD" label next to the dot - same visibility lifecycle, re-anchored
     // off the dot itself in reposition_diag_dot() so it tracks along with it.
@@ -5579,7 +5610,21 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_diag_label, &lv_font_montserrat_24, 0);
     lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-    lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_bot_diag_label, sd_indicator_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_ext_click_area(s_bot_diag_label, 10);
+
+    // The "no card" stroke, drawn across BOTH the dot and the label - a slash
+    // over a 14 px dot alone would not read at arm's length. Points persist for
+    // the line's lifetime, hence static, same as batt_slash_pts.
+    static lv_point_precise_t sd_slash_pts[2] = { {0, 28}, {52, 4} };
+    s_bot_sd_slash = lv_line_create(bar);
+    lv_line_set_points(s_bot_sd_slash, sd_slash_pts, 2);
+    lv_obj_set_style_line_color(s_bot_sd_slash, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_line_width(s_bot_sd_slash, 3, 0);
+    lv_obj_set_style_line_rounded(s_bot_sd_slash, true, 0);
+    lv_obj_align_to(s_bot_sd_slash, s_bot_diag_dot, LV_ALIGN_LEFT_MID, -4, 0);
+    lv_obj_add_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
 
     // Firmware version, centered between the battery text and the UTC clock.
     s_bot_version = lv_label_create(bar);
@@ -9088,6 +9133,10 @@ static void reposition_diag_dot(void)
     }
     if (s_bot_diag_label && s_bot_diag_dot) {
         lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    }
+    // The slash spans the dot AND the label, so it has to travel with them.
+    if (s_bot_sd_slash && s_bot_diag_dot) {
+        lv_obj_align_to(s_bot_sd_slash, s_bot_diag_dot, LV_ALIGN_LEFT_MID, -4, 0);
     }
 }
 

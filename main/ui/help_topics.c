@@ -12,6 +12,7 @@
 #include "cat.h"
 #include "wifi/wifi.h"
 #include "spot_map_view.h"
+#include "storage/sd_archive.h"
 
 #include "esp_log.h"
 
@@ -79,6 +80,7 @@ static const help_entry_t s_topics[] = {
     { HELP_TROUBLE_NO_TX,       "reference/troubleshooting.md", "doesn't key the QMX",       "TX not keying"        },
     { HELP_TROUBLE_FLAT,        "reference/troubleshooting.md", "Spectrum is flat",          "No signal on screen"  },
     { HELP_TROUBLE_IQ,          "reference/troubleshooting.md", "shifted/mirrored",          "Spectrum looks wrong" },
+    { HELP_SD_BENEFITS,         "guide/settings.md",            "Benefits of a microSD card","microSD benefits"     },
     { HELP_SPOTMAP_EMPTY,       "guide/spot-map.md",            "stays empty",               "Empty spot map"       },
     { HELP_WSPR_EMPTY,          "guide/wspr.md",                "If nothing is decoded",     "No WSPR decodes"      },
 };
@@ -145,6 +147,13 @@ static bool cond_spotmap_empty(void)
     return spot_map_view_is_active() && spot_map_view_spot_count() == 0;
 }
 
+// No card in the slot. Deliberately NOT phrased as a fault anywhere it shows:
+// a Tab5 with no microSD is a perfectly normal Tab5, so this is flagged only to
+// float an OFFER to the top, and the symptom text is a question rather than a
+// complaint. The same state crosses out the bottom-bar SD icon, and tapping that
+// icon lands on this same page - one answer, two ways in.
+static bool cond_no_sd(void)      { return !sd_archive_is_mounted(); }
+
 // Order here is the tie-break among rows that are equally (un)flagged, so it runs
 // most-serious first: no radio at all, then a radio that is misbehaving, then the
 // things that are merely puzzling.
@@ -164,6 +173,13 @@ static const triage_cand_t s_cands[] = {
     //     the SelfSpotter overlay (the map still needs the radio and WiFi). ---
     { HELP_TROUBLE_USB,        "My radio is not showing up",              cond_no_radio,   true,  true,  true,  true  },
     { HELP_TROUBLE_WIFI,       "I cannot reach the web page",             cond_no_wifi,    true,  true,  true,  true  },
+
+    // --- microSD discovery row. Universal on purpose: the card is a
+    //     whole-device facility, not a feature of one screen. Flagged when
+    //     there is no card in, so it floats up exactly for the operator who
+    //     stands to gain from reading it and drops to an ordinary row for the
+    //     one who already has one. ---
+    { HELP_SD_BENEFITS,        "What do I get from an SD card?",          cond_no_sd,      true,  true,  true,  true  },
 
     // --- SelfSpotter fault row. spotmap:true ONLY - "the spot map is empty"
     //     is meaningless language unless you are actually looking at it, and

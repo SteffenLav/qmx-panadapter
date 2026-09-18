@@ -47,6 +47,7 @@ typedef enum {
     HELP_ANTENNA_TUNE,
     HELP_RELEASE_RADIO,
     HELP_RADIO_MENUS,
+    HELP_SD_BENEFITS,
 
     // --- What just went wrong (Layer 3: tappable warnings) ---
     HELP_TROUBLE_USB,
