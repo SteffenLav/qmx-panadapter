@@ -7935,26 +7935,15 @@ async function forceUpdateCheck() {
    while the radio can reach that window, and comes along by exactly the
    shortfall when it cannot. Pure, so the drag preview and the commit agree. */
 function bpSolveView(wantCenterHz) {
-  const dial = lastFreqHz;
-  if (!lastStillView || !lastView || typeof lastView.ifOff !== "number") {
-    /* No still display (or no viewport yet): the device resets the pan on every
-       tune, so the window can only be moved by taking the dial there. */
-    let d = Math.round(wantCenterHz / 1000) * 1000;
-    if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
-    return { dial: d, center: d };
-  }
-  const SR     = 48000;
-  const panHi  = lastView.ifOff;
-  const panLo  = panHi - SR;
-  let   pan    = wantCenterHz - dial;
-  if (pan <= panHi && pan >= panLo) return { dial: dial, center: dial + pan };
-
-  let d = wantCenterHz - (pan > panHi ? panHi : panLo);
-  d = Math.round(d / 1000) * 1000;
+  /* The pan is preserved exactly: box, VFO marker and passband translate
+     together. Same arithmetic as bp_solve_view() in main/ui/ui.c - the long
+     rationale, including why the pan-only version was dropped, is there. */
+  const pan = (lastStillView && lastView && typeof lastView.span === "number")
+                ? (lastView.lo + lastView.span / 2 - lastFreqHz) : 0;
+  /* The DIAL lands on a whole kHz, so the box lands within 500 Hz of where it
+     was dropped - under two pixels at band scale. */
+  let d = Math.round((wantCenterHz - pan) / 1000) * 1000;
   if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
-  pan = wantCenterHz - d;
-  if (pan > panHi) pan = panHi;
-  if (pan < panLo) pan = panLo;
   return { dial: d, center: d + pan };
 }
 

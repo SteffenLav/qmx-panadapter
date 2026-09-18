@@ -2428,9 +2428,9 @@ static bool      s_touch_on_bandplan   = false;
 static bool      s_bp_dragging         = false;
 /* Where the visible-span window will BE once the drag is committed. Held for
  * the duration of the drag so update_bandplan_strip() draws the box at its
- * landing place rather than at "dial + the pan we happen to hold right now" -
- * the two differ by exactly the drag distance, which is what used to make the
- * box spring back on release. See sv_pan_on_capture() and ui_note_view_reframe(). */
+ * landing place rather than where the still display would put it - the two
+ * differ by exactly the drag distance, which is what used to make the box
+ * spring back on release. See bp_solve_view(). */
 static int64_t   s_bp_preview_pan_hz   = 0;
 /* The band-plan drag moves the WINDOW, so what it tracks is the view centre,
  * not a dial frequency. See bp_solve_view(). */
@@ -5252,45 +5252,45 @@ static void update_bandplan_strip(uint32_t freq_hz)
  * the bounce in the first place. */
 static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *pan_out)
 {
-    const uint32_t dial = s_last_qmx_freq_hz;
+    /* ⭐ THE PAN IS PRESERVED EXACTLY, AND THAT IS THE WHOLE RULE.
+     *
+     * Whatever offset the dial had inside the window before the drag, it has
+     * after it: the box, the VFO marker and the passband translate together as
+     * one rigid object. Operator, 2026-09-18: "we need to let the dial follow
+     * the pan exactly as it were before panning."
+     *
+     * ⛔ THIS REPLACED A PAN-FIRST-RETUNE-ONLY-IF-FORCED SOLVER, AND THE REASON
+     * IT WENT IS WORTH KEEPING. That version left the radio alone while the
+     * requested window was inside what it can hear, which sounds like exactly
+     * what a still display wants - but the QMX puts the VFO at +12 kHz in a
+     * +/-24 kHz baseband, so the reachable spectrum is dial-36k..dial+12k.
+     * Three times as much room below the dial as above it. Dragging left moved
+     * the box 40 kHz with the dial untouched; dragging right ran out after a
+     * few kHz and then dragged the dial along welded to the box's left edge.
+     * Measured and predicted, not a surprise - but "a strange manner" to use,
+     * and the asymmetry is the radio's, so no amount of tuning fixes it.
+     *
+     * The window onto the band is 48 kHz wide however it is placed, so panning
+     * without the dial buys very little and costs that asymmetry. The dial
+     * comes along instead.
+     *
+     * Pure - no state written - so the drag PREVIEW and the release run the
+     * identical arithmetic. A preview that predicts something else is what
+     * produced the original bounce. */
+    int64_t pan = sv_effective() ? ui_get_pan_offset_hz() : 0;
+
+    /* The DIAL lands on a whole kHz; the box therefore lands within 500 Hz of
+     * where it was dropped, which at band scale is under two pixels. Snapping
+     * the box instead would drift the pan by the remainder on every drag. */
+    int64_t d = ((view_center_hz - pan) + 500) / 1000 * 1000;
+
     uint32_t lo, hi;
-
-    if (!sv_effective()) {
-        /* With the still display off, ui_update_frequency() resets the pan on
-         * every tune, so the only way to put the window anywhere is to take the
-         * dial there. Same destination, one step. */
-        int64_t d = view_center_hz;
-        d = ((d + 500) / 1000) * 1000;
-        if (legal_band_edges(dial, &lo, &hi)) {
-            if (d < (int64_t)lo) d = (int64_t)lo;
-            if (d > (int64_t)hi) d = (int64_t)hi;
-        }
-        *dial_out = (uint32_t)d;
-        *pan_out  = 0;
-        return;
-    }
-
-    const int64_t pan_hi = (int64_t)ui_get_if_offset_hz();
-    const int64_t pan_lo = pan_hi - DSP_SAMPLE_RATE_HZ;
-
-    int64_t pan = view_center_hz - (int64_t)dial;
-    if (pan <= pan_hi && pan >= pan_lo) {
-        *dial_out = dial;               /* the radio can reach it - do not tune */
-        *pan_out  = pan;
-        return;
-    }
-
-    int64_t d = view_center_hz - ((pan > pan_hi) ? pan_hi : pan_lo);
-    d = ((d + 500) / 1000) * 1000;      /* the dial lands on a whole kHz */
-    if (legal_band_edges(dial, &lo, &hi)) {
+    if (legal_band_edges(s_last_qmx_freq_hz, &lo, &hi)) {
         if (d < (int64_t)lo) d = (int64_t)lo;
         if (d > (int64_t)hi) d = (int64_t)hi;
     }
-    pan = view_center_hz - d;           /* re-derive, the band edge may have bitten */
-    if (pan > pan_hi) pan = pan_hi;
-    if (pan < pan_lo) pan = pan_lo;
     *dial_out = (uint32_t)d;
-    *pan_out  = pan;
+    *pan_out  = pan;                 /* unchanged, by construction */
 }
 
 /* ⛔ THE WEB MUST NOT APPLY THIS ON ITS OWN TASK.
