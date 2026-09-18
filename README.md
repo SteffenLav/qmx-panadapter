@@ -218,8 +218,8 @@ callsign can be resolved afterwards *(Michael K Johnson KZ4LY)*.
 and spectrum scale can be punctuated `14.074.000` (the default, and what the QMX shows
 on its own LCD) or `14,074,000` *(Don N2VGU)*. Settings drawer, under Advanced.
 
-**microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) **before
-switching on** and your whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
+**microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) and your
+whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
 full config export, your LoTW certificate and key, the diagnostic log and a
 self-describing `README.txt`. Continuous with WiFi off (green **SD** dot); one complete
 backup per start-up with WiFi on (yellow dot), because the card and the WiFi
@@ -227,6 +227,8 @@ co-processor share a bus. It restores too, which is the half that was missing: *
 from SD** in the Tab5's own log window, or from the browser. And because the card mirrors
 the *present*, the copy from just before the log last got **smaller** is kept beside it as
 `qso.prev.adi` — so a deletion you notice two restarts later is still recoverable.
+**After inserting the SD card your Tab5 needs a restart** — the card is claimed during a
+short window early in boot, so one pushed in while it is running is not used until then.
 *(The card holds credentials — WiFi password, QRZ/eQSL logins, LoTW private key — so keep
 it physically secure.)*
 

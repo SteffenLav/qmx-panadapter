@@ -558,7 +558,7 @@ Useful for troubleshooting rare issues.
 
 ## microSD Auto-Archive — Station Backup
 
-Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) **before switching the Tab5 on** and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
+Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
 
 | File | Contents |
 |------|----------|
@@ -569,7 +569,7 @@ Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is 
 | `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
 | `README.txt` | A plain-text description of every file, written on each mount |
 
-**Insert the card before switching the Tab5 on.** A card pushed in later is not picked up until the next start-up — the Tab5 can only claim the card during a short window early in boot.
+**After inserting the SD card your Tab5 needs a restart.** The Tab5 can only claim the card during a short window early in boot, so a card pushed in while it is running is not used until you restart.
 
 ### When the mirror runs
 

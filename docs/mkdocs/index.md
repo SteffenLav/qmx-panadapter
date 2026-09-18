@@ -86,7 +86,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   power-off, the QMX's clock as an offline fallback, automatic GPS phase-lock if your QMX
   has one, a manual set-and-sync panel, and FT8 timing that self-corrects from the decoded
   band consensus.
-- **microSD backup** — insert a card *before switching on* and your ADIF log, full config,
+- **microSD backup** — insert a card (restart afterwards) and your ADIF log, full config,
   LoTW certificate and key, and diagnostic log are mirrored automatically. Continuous with
   WiFi off (green SD dot); one complete backup per start-up with WiFi on (yellow dot).
 - **Diagnostics** — an always-on log with nothing to enable: 5 MB in RAM, a rolling copy
