@@ -65,6 +65,7 @@
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
+#include "render.h"            // render_set_waterfall_speed_mult - same group
 #include "ft8_pileup.h"        // pileup list - /api/decodes
 #include "ft8_greylist.h"      // grey-list viewer - /api/decodes + greylist_clear
 #include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
@@ -4101,7 +4102,32 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "wspr_dump_cycles", c.wspr_dump_cycles);
     cJSON_AddNumberToObject(root, "wspr_tx_cycles", c.wspr_tx_cycles);
     cJSON_AddNumberToObject(root, "wspr_rx_cycles", c.wspr_rx_cycles ? c.wspr_rx_cycles : 4);
+    /* Added 2026-09-18: settable on the Tab5's drawer only, and it is not a
+       cosmetic flag - claiming GPS stops the Tab5 maintaining the radio's
+       clock, so a wrong answer costs FT8 timing. See #173. */
+    cJSON_AddBoolToObject(root, "qmx_gps", c.qmx_gps);
     cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
+    /* ⛔ BAND NAMES, NEVER THE MASK. wspr_hop_mask is a bitmask over kBands'
+     * own index order, so publishing the number would ask the operator to know
+     * an internal encoding - the exact thing the swr_limit_x10 row was rewritten
+     * to stop doing. The device owns the table, so it does the conversion and
+     * the browser only ever sees "40,30,20".
+     *
+     * ⚠ There is deliberately NO separate wspr_hop_en here. The Tab5 derives it
+     * (hopping is on exactly when more than one band is ticked), and a second
+     * switch would be a second thing to get wrong - see hop_toggled_cb(). */
+    {
+        int nb = 0;
+        const wspr_band_t *bl = wspr_bands(&nb);
+        char hops[96]; int hn = 0; hops[0] = 0;
+        for (int i = 0; i < nb && i < 16; i++) {
+            if (!(c.wspr_hop_mask & (1u << i))) continue;
+            hn += snprintf(hops + hn, sizeof(hops) - hn, "%s%s",
+                           hn ? "," : "", bl[i].name);
+            if (hn >= (int)sizeof(hops)) break;
+        }
+        cJSON_AddStringToObject(root, "wspr_hop_bands", hops);
+    }
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -4141,6 +4167,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(d, "wf_contrast_db", c.wf_contrast_db);
     cJSON_AddNumberToObject(d, "wf_floor_blend", c.wf_floor_blend);
     cJSON_AddNumberToObject(d, "wf_window",      c.wf_window);
+    /* Added 2026-09-18: it was a Tab5-drawer setting only, while every other
+       waterfall control on the same drawer row was already here. */
+    cJSON_AddNumberToObject(d, "wf_speed_mult",  c.wf_speed_mult);
     cJSON_AddNumberToObject(d, "colormap",       c.colormap_idx);
     cJSON_AddNumberToObject(d, "brightness",     c.brightness_pct);
     cJSON_AddNumberToObject(d, "sleep_min",      c.display_sleep_min);
@@ -4345,6 +4374,26 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
                                   settings_get_wspr_tx_cycles(),
                                   settings_get_wspr_rx_cycles());
+    /* "40,30,20" -> mask, matched against the device's own table so an unknown
+       name is ignored rather than guessed at. Hopping follows the same rule the
+       Tab5 uses: on when more than one band is selected. */
+    if (cJSON_IsString(it = cJSON_GetObjectItem(root, "wspr_hop_bands"))) {
+        const char *txt = cJSON_GetStringValue(it);
+        int nb = 0;
+        const wspr_band_t *bl = wspr_bands(&nb);
+        uint16_t mask = 0;
+        char tmp[96];
+        snprintf(tmp, sizeof(tmp), "%s", txt ? txt : "");
+        for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
+            while (*tok == ' ') tok++;
+            char *e = tok + strlen(tok);
+            while (e > tok && (e[-1] == ' ' || e[-1] == 'm' || e[-1] == 'M')) *--e = 0;
+            for (int i = 0; i < nb && i < 16; i++)
+                if (strcasecmp(tok, bl[i].name) == 0) { mask |= (uint16_t)(1u << i); break; }
+        }
+        settings_set_wspr_hop_mask(mask);
+        settings_set_wspr_hop_en(__builtin_popcount(mask) > 1);
+    }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not
@@ -4430,6 +4479,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
     BOOLTOP("greylist_en",       settings_set_greylist_en);
+    BOOLTOP("qmx_gps",           settings_set_qmx_gps);
     // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool
     // because it is a ladder, not a switch - see ft8_hound.h.
     {
@@ -4555,6 +4605,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             if (pct > 100) pct = 100;
             render_waterfall_set_floor_blend((float)pct / 100.0f);
             settings_set_wf_floor_blend((uint8_t)pct);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_speed_mult"))) {
+            int m = (int)v->valuedouble;
+            if (m < 1) m = 1;
+            if (m > 4) m = 4;
+            /* Apply AND store, same as every slider in this block - storing
+               alone leaves the live waterfall on the old value until reboot. */
+            render_set_waterfall_speed_mult((uint8_t)m);
+            settings_set_wf_speed_mult((uint8_t)m);
         }
         if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_window"))) {
             uint8_t idx = (uint8_t)v->valuedouble; if (idx > 2) idx = 0;

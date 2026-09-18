@@ -4231,6 +4231,15 @@ const SET_FIELDS = [
      "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
 
+  /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
+     this page can reach. All three were Tab5-only for no reason anyone could
+     name - the rest of their own group was already here. */
+  ["Radio & display", "display.wf_speed_mult", "sel", "Waterfall speed",
+     "How fast the waterfall scrolls. Faster spreads a signal out in time; slower fits more history on screen. The spectrum and S-meter are unaffected",
+     [["1","Normal"],["2","2x"],["3","3x"],["4","4x"]]],
+  ["Radio & display", "qmx_gps", "bool", "My QMX has GPS",
+     "A GPS-disciplined QMX+ keeps better time than the network does. Leave this off unless yours really has one - claiming it stops the Tab5 maintaining the radio's clock"],
+
   /* The same five choices the Tab5's dropdown offers, in the same words. It was a
      free "x10" number, which asked the operator to know the encoding and let them
      type a value the Tab5 would only ever show as the nearest option anyway. */
@@ -4290,6 +4299,11 @@ const SET_FIELDS = [
   // PA-voltage guard below (measured 5.4 W -> 1.6 W on the bench). The colours
   // stay as a hint, since they are honest as a correlate: if you are genuinely
   // declaring 37, you are running full power into a ~110 s key-down.
+  /* Band NAMES, not the bitmask the setting stores: the device converts, so
+     nobody has to know the encoding. Hopping is on whenever more than one band
+     is listed - the same rule the Tab5 uses, not a second switch. */
+  ["WSPR", "wspr_hop_bands", "text", "Band hopping",
+     "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
      "What your transmitter really produces - it is published worldwide",
      [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
