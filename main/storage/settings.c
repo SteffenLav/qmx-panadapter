@@ -2170,6 +2170,18 @@ bool settings_get_wspr_tx_en(void)
 
 // Narrow: wspr_rx_start() applies the declared power the moment WSPR takes
 // ownership of Max. PA voltage, and runs on taskLVGL via ui_set_base_mode().
+/* Narrow, for the same reason every other getter here is: the declared-power
+ * apply runs on the LVGL thread and on the WSPR slot loop, and a whole
+ * qmx_settings_t on either stack is this project's most-repeated crash. */
+uint32_t settings_get_wspr_dial_hz(void)
+{
+    if (!s_ready) return 14095600u;   /* the field's own default - 20 m */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t v = s_pending.wspr_dial_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 int8_t settings_get_wspr_tx_dbm(void)
 {
     if (!s_ready) return 23;   /* the field's own default - 200 mW */

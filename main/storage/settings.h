@@ -799,6 +799,10 @@ void settings_set_wspr_rx_cycles(uint8_t v);   // clamped 1-20
 void settings_set_wspr_tx_cycles(uint8_t v);   // clamped 0-4, 0 = receive only
 void settings_set_wspr_tx_dbm(int8_t v);
 int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
+/* WSPR's OWN dial, which is what its declared power is calibrated against - not
+ * wherever the radio happens to be when WSPR is entered. See the long note at
+ * wspr_pa_apply_declared_dbm(). */
+uint32_t settings_get_wspr_dial_hz(void);
 // Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).
 // Never the whole blob: both copy exactly one pwr_cal_band_t (28 bytes), so a
 // caller has no reason to reach for settings_load_all() just for this.

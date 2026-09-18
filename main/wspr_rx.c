@@ -3016,7 +3016,32 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
         return;
     }
 
-    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    /* ⛔ THE BAND WSPR IS GOING TO, NOT THE ONE THE RADIO IS LEAVING.
+     *
+     * This asked cat_get_frequency() - where the radio is RIGHT NOW - and on
+     * entry from FT8 that is still FT8's frequency, because wspr_rx_start()
+     * applies the declared power before it has pushed its own dial. Operator,
+     * 2026-09-19, entering WSPR from FT8 on 7.074: "Entering WSPR PA still say
+     * 12.0 V". The log line this release added says it outright:
+     *
+     *     declared power NOT applied: not calibrated for 40M
+     *                                 (freq 7074000 Hz, 30 dBm)
+     *
+     * 40 m was never calibrated, so the refusal was CORRECT - about a band WSPR
+     * was about to leave. A moment later it retuned to 14.095600 and sat there
+     * at 12.0 V, because the apply had already had its turn.
+     *
+     * ⚠ Three fixes before this one all addressed WHEN the apply runs (boot,
+     * TX-enable, whether it logs). The fault was WHAT IT ASKED ABOUT. Getting
+     * the timing right cannot help a question aimed at the wrong band.
+     *
+     * WSPR's declared power belongs to WSPR's own dial, which is a stored
+     * setting and is known before CAT says anything - so this is also immune to
+     * the boot ordering that started the whole chain. cat_get_frequency() stays
+     * as the fallback for the case where no WSPR dial has been chosen yet. */
+    uint32_t band_hz = settings_get_wspr_dial_hz();
+    if (!band_hz) band_hz = cat_get_frequency();
+    const char *band = adif_log_band_for_freq(band_hz);
     uint16_t v_x10, w_x100;
     if (!band || !band[0] || !power_cal_voltage_for_dbm(band, dbm, &v_x10, &w_x100)) {
         snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
@@ -3035,7 +3060,7 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
          * boot case - see the retry in wspr_rx_start(). */
         ESP_LOGW(TAG, "declared power NOT applied: %s (freq %lu Hz, %d dBm) - "
                       "the radio stays at whatever Max. PA voltage it already had",
-                 s_pa_cal_status, (unsigned long)cat_get_frequency(), dbm);
+                 s_pa_cal_status, (unsigned long)band_hz, dbm);
         return;
     }
 
