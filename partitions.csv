@@ -15,8 +15,21 @@
 # images are bad. That escape hatch is why factory is kept rather than going
 # ota-only.
 #
-# App slots are 4 MB against a ~3.3 MB binary (~20% headroom). An overflow is a
-# BUILD failure, not a field failure.
+# App slots are 4 MB. An overflow is a BUILD failure, not a field failure.
+#
+# ⛔ HEADROOM IS ESSENTIALLY GONE - MEASURED 2026-09-18, v1.14.4.
+# The shipped binary is 4,140,864 B against a 4,194,304 B slot: 53,440 B free,
+# i.e. 1.3%, not the ~20% this comment claimed while the binary was ~3.3 MB.
+# The embedded manual alone grew 8,280 B in v1.14.4. So the next feature of any
+# size does not fit, and the build will say so.
+#
+# ⚠ THAT IS THE REAL CLAIM ON THE FREE TAIL. ota_1 ends at 0xD30000, leaving
+# 2.81 MB unallocated to the end of the 16 MB flash - and TODO #192 wants it for
+# a diag-log partition. It cannot have all of it: three app slots need that
+# space first if the firmware is to keep growing (2.81 MB spread over three
+# slots is +0.94 MB each, taking them to ~4.94 MB). Decide the app-slot size
+# BEFORE allocating anything else up there, because moving an app slot later is
+# a second flash-layout event on units in the field.
 nvs,       data, nvs,     0x9000,    0x6000,
 phy_init,  data, phy,     0xf000,    0x1000,
 factory,   app,  factory, 0x10000,   0x400000,
