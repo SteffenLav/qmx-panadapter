@@ -23,13 +23,21 @@
 # The embedded manual alone grew 8,280 B in v1.14.4. So the next feature of any
 # size does not fit, and the build will say so.
 #
-# ⚠ THAT IS THE REAL CLAIM ON THE FREE TAIL. ota_1 ends at 0xD30000, leaving
-# 2.81 MB unallocated to the end of the 16 MB flash - and TODO #192 wants it for
-# a diag-log partition. It cannot have all of it: three app slots need that
-# space first if the firmware is to keep growing (2.81 MB spread over three
-# slots is +0.94 MB each, taking them to ~4.94 MB). Decide the app-slot size
-# BEFORE allocating anything else up there, because moving an app slot later is
-# a second flash-layout event on units in the field.
+# ⛔ THE FREE TAIL IS FIRMWARE HEADROOM. DECIDED 2026-09-18 by the operator:
+# "my first priority is kept - fw expendabilities and stack maintenance comes
+# first". ota_1 ends at 0xD30000, leaving 2.81 MB unallocated to the end of the
+# 16 MB flash, and TODO #192 wanted it for a diag-log partition. It does not get
+# it. The app slots have the prior claim and the claim is not close: 47 KB of
+# headroom is one feature from a build failure, while the diag log has a working
+# answer today (a microSD card) and a partial one without (the 256 KB SPIFFS
+# window).
+#
+# ⚠ GROWING A SLOT IS CONSTRAINED, NOT FREE. user_nvs (0x810000) and storage
+# (0x820000) cannot move, so `factory` and `ota_0` are boxed into the 8 MB below
+# them - 4 MB each, exactly what they are now. Only `ota_1` can grow into the
+# tail (0x930000 -> 0x1000000 = 6.81 MB). Making every slot bigger therefore
+# means giving one of the three up; that choice is open and belongs with the
+# repartition release, not before it.
 nvs,       data, nvs,     0x9000,    0x6000,
 phy_init,  data, phy,     0xf000,    0x1000,
 factory,   app,  factory, 0x10000,   0x400000,
