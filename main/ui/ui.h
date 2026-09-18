@@ -102,8 +102,13 @@ void ui_note_view_reframe(void);
  * exactly the shortfall when it is not - so the window always lands where it
  * was asked for. This is what dragging the band-plan knob does, on the Tab5 and
  * from the web page, and the long rationale is at bp_solve_view() in ui.c.
- * Returns the dial it settled on. */
+ * Returns the dial it settled on.
+ *
+ * ⛔ LVGL-THREAD ONLY. Anything off taskLVGL - the web server above all - must
+ * call ui_request_bandplan_view() instead, which queues it for the LVGL thread.
+ * See the comment above that function in ui.c. */
 uint32_t ui_bandplan_move_view(int64_t view_center_hz);
+void ui_request_bandplan_view(int64_t view_center_hz);
 
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);

@@ -1262,7 +1262,8 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * own strip uses, so the two screens cannot drift. */
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
-            (void)ui_bandplan_move_view((int64_t)item->valuedouble);
+            /* QUEUED, never applied here - see ui_request_bandplan_view(). */
+            ui_request_bandplan_view((int64_t)item->valuedouble);
         }
     } else if (action && strcmp(action, "set_band") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");

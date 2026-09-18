@@ -5293,6 +5293,37 @@ static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *p
     *pan_out  = pan;
 }
 
+/* ⛔ THE WEB MUST NOT APPLY THIS ON ITS OWN TASK.
+ *
+ * ui_bandplan_move_view() drives LVGL objects, reads the whole settings struct
+ * (via update_bandplan_strip) and reconfigures the zoom FFT. httpd runs at
+ * priority 5 with a 10 KB stack; taskLVGL is 4. Both halves of that are
+ * documented hazards in this project - a priority above 4 touching the display
+ * path is what lent taskLVGL priority 10 and starved the USB audio, and a
+ * multi-kilobyte settings struct on a small task stack is the fault that has
+ * now landed four times, once on this very task.
+ *
+ * So the web endpoint QUEUES and the LVGL thread applies, which is the pattern
+ * already used for the keyboard queue and for cat.c's pending CAT writes. One
+ * slot, last-writer-wins: a drag sends exactly one request on release, and if
+ * two ever raced, the newer one is the one the operator asked for. */
+static volatile int64_t s_bp_view_req_hz = 0;
+static volatile bool    s_bp_view_req    = false;
+
+void ui_request_bandplan_view(int64_t view_center_hz)
+{
+    s_bp_view_req_hz = view_center_hz;
+    s_bp_view_req    = true;
+}
+
+static void bp_view_q_drain_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_bp_view_req) return;
+    s_bp_view_req = false;
+    ui_bandplan_move_view(s_bp_view_req_hz);
+}
+
 uint32_t ui_bandplan_move_view(int64_t view_center_hz)
 {
     uint32_t dial = 0;
@@ -6903,6 +6934,7 @@ void ui_init(lv_display_t *disp)
     /* BLE keystrokes, applied on this thread - see ui_kbd_feed(). */
     s_kbd_q = xQueueCreate(32, sizeof(kbd_q_ev_t));
     lv_timer_create(kbd_q_drain_cb, 20, NULL);
+    lv_timer_create(bp_view_q_drain_cb, 20, NULL);   /* band-plan view move, off the httpd task */
 
     // "Waiting for QMX" prompt (see qmx_wait_poll_cb above). Full-screen,
     // transparent background so it reads over whatever's underneath on any
