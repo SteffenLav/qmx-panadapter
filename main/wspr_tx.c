@@ -3,6 +3,7 @@
 // TA; "Transmit Audio" technique as ft8_tx.c).
 
 #include "wspr_tx.h"
+#include "ui/power_cal_modal.h"   // power_cal_dbm_for_watts - the ONE watts->dBm rule
 #include "wspr_proto.h"
 #include "wspr_fano.h"
 
@@ -301,13 +302,57 @@ static void run_burst(const wspr_tx_request_t *req)
      * unknown (-1) or this voltage was never in the sweep (a value the
      * operator set by hand, or a band never calibrated). */
     char wbuf[20] = "";
+    int8_t pa_dbm = -1;
     if (pa_x10 > 0) {
         const char *band = adif_log_band_for_freq(cat_get_frequency());
         uint16_t w_x100;
         if (band && band[0] && power_cal_watts_for_voltage(band, (uint16_t)pa_x10, &w_x100)) {
             if (w_x100 < 100) snprintf(wbuf, sizeof(wbuf), " = %u mW", (unsigned)w_x100 * 10);
             else              snprintf(wbuf, sizeof(wbuf), " = %u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+            pa_dbm = power_cal_dbm_for_watts(w_x100);
         }
+    }
+
+    /* ⛔ REFUSE A BURST THAT WOULD PUBLISH A FALSE POWER.
+     *
+     * Everything needed to know this is already in hand a line above: the
+     * voltage the radio is actually at, and the wattage Calibrate Power
+     * measured at that voltage on this band. Until now it was only CHECKED
+     * AFTER the fact, from the PC; measurement taken ~11 s into the burst - by
+     * which point the wrong figure is already going out.
+     *
+     * 2026-09-19, measured on the operator's own bench: a burst went out at
+     * 12.0 V = 3.8 W while declaring 30 dBm (1 W). Two separate harms, and the
+     * second is the one that makes this a refusal rather than a warning:
+     *
+     *   - the finals key for ~110 s at nearly four times the intended power,
+     *     which is how this very radio lost its BS170s once already;
+     *   - wsprnet publishes the DECLARED figure worldwide, so every propagation
+     *     conclusion drawn from that spot is drawn from a number we knew was
+     *     wrong. That is the "never fabricate a measurement" rule, and it does
+     *     not bend just because the radio would have transmitted happily.
+     *
+     * ⚠ NOT the same class as the "FULL PWR" warning, which this project
+     * deliberately leaves as a warning - that one only risks the operator's own
+     * finals, and it is his radio. This one puts bad data in other people's
+     * hands, which is not his to spend.
+     *
+     * Only when BOTH figures are known. An uncalibrated band or an unknown
+     * voltage gives pa_dbm == -1 and the burst proceeds exactly as before -
+     * refusing on "do not know" would ground every beacon that never ran
+     * Calibrate Power. */
+    if (pa_dbm >= 0 && pa_dbm > req->power_dbm) {
+        ESP_LOGE(TAG, "WSPR TX REFUSED: the radio is set to put out %s (%d dBm) but "
+                      "the declared power is %d dBm. wsprnet publishes the DECLARED "
+                      "figure, so this burst would tell the world a number we know is "
+                      "wrong - and key the finals for ~110 s at more than declared. "
+                      "Set Declared power to match, or recalibrate this band.",
+                 wbuf[0] ? wbuf + 3 : "?", pa_dbm, req->power_dbm);
+        /* run_burst() returns void and owns the state machine, so the refusal
+         * looks exactly like a burst that ended: back to IDLE, nothing keyed,
+         * and the slot loop schedules the next cycle as usual. */
+        s_state = WSPR_TX_IDLE;
+        return;
     }
     ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz, "
                   "PA=%d.%d V%s%s",

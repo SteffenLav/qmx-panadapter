@@ -653,6 +653,27 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles)
         s_next_tx_cycle   = cycle_now + 1;
         s_first_tx_forced = true;
         ESP_LOGI(TAG, "TX enabled - first burst is the next cycle, duty applies from the one after");
+        /* ⛔ APPLY THE DECLARED POWER HERE TOO. This is the moment the operator
+         * says "transmit", and the only moment where CAT is certainly up, the
+         * band is certainly known, and their intent is unambiguous.
+         *
+         * wspr_rx_start() already calls this - but on a Tab5 that BOOTS into
+         * WSPR it runs at ~8 s while CAT does not open until ~17 s, so
+         * cat_get_frequency() is 0, the band is unknown and the apply refuses.
+         * That is this project's boot trap for the fourth time (the CW pitch,
+         * the output-power re-assert, the top bar) and the shape is always the
+         * same: the entry path with no transition is the one that gets missed.
+         *
+         * Measured, 2026-09-19: boot restored WSPR at 8.2 s, the operator left
+         * to FT8 (which correctly re-asserted 12.0 V), came back to WSPR at
+         * 173 s, enabled TX at 191 s - and the burst went out at 12.0 V = 3.8 W
+         * while declaring 30 dBm (1 W). wsprnet publishes the DECLARED figure,
+         * so that is a wrong number sent worldwide as well as ~110 s of finals
+         * at full power, which is how this radio lost its finals once before.
+         *
+         * Cheap and idempotent: one MM write, and a no-op when the voltage is
+         * already right. */
+        wspr_pa_apply_declared_dbm(settings_get_wspr_tx_dbm());
         /* ⛔ TURN THE PA DOWN NOW, NOT AT THE BOUNDARY - or the first burst is
          * held and the operator waits another full cycle.
          *
@@ -2988,6 +3009,10 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
         snprintf(s_pa_cal_status, sizeof(s_pa_cal_status),
                  "PA guard is protecting the radio - power not adjusted");
         s_pa_cal_status_ok = false;
+        ESP_LOGW(TAG, "declared power NOT applied: the PA guard still holds %u.%u V "
+                      "- transmitting at whatever that is, not at %d dBm",
+                 (unsigned)(settings_get_wspr_pa_saved_x10() / 10),
+                 (unsigned)(settings_get_wspr_pa_saved_x10() % 10), dbm);
         return;
     }
 
@@ -2998,6 +3023,19 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
                  "not calibrated for %s - Max. PA voltage unchanged",
                  (band && band[0]) ? band : "this band");
         s_pa_cal_status_ok = false;
+        /* ⛔ LOUD, because this is the dangerous silence. Both of this
+         * function's refusals used to write a status string and nothing else -
+         * a string only the drawer shows, and only if someone opens it. The
+         * capture of 2026-09-19 has NO line at all between "slot loop up" and a
+         * burst going out at 12.0 V while declaring 30 dBm: the apply ran,
+         * refused, and left no trace. A safety-relevant write that declines
+         * must say so where the log will keep it.
+         *
+         * ⚠ band is NULL when CAT has not answered yet, which is exactly the
+         * boot case - see the retry in wspr_rx_start(). */
+        ESP_LOGW(TAG, "declared power NOT applied: %s (freq %lu Hz, %d dBm) - "
+                      "the radio stays at whatever Max. PA voltage it already had",
+                 s_pa_cal_status, (unsigned long)cat_get_frequency(), dbm);
         return;
     }
 
