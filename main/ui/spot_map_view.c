@@ -1909,6 +1909,32 @@ static void tabview_changed_cb(lv_event_t *e)
     if (!s_tabview) return;
     uint32_t active = lv_tabview_get_tab_active(s_tabview);
 
+    /* ⛔ NO SWIPE OFF THE MAP. The whole map page is a pan surface, so a drag
+     * across it is nearly always someone moving the map - and a tabview changes
+     * tab by scrolling its own content sideways, so the two gestures are the
+     * same gesture. Operator, 2026-09-18: "I want to zoom into New Zealand and
+     * while panning down there the page tends to swipe to LIST instead - its
+     * fighting the swipe feature".
+     *
+     * ⚠ map_sync_scroll_chain() already gave up the HORIZONTAL chain while
+     * zoomed, and it was not enough: it only covers a press that lands on
+     * s_map_obj itself, and only the horizontal axis, while a mostly-vertical
+     * drag still carries enough sideways motion for the tabview to claim it.
+     * Turning the content's own scrollability off is the whole-page answer and
+     * does not depend on which child was pressed.
+     *
+     * ⭐ ONE DIRECTION ONLY, which is what makes this safe: it is switched off
+     * while MAP is showing and back on everywhere else, so LIST -> CONDITIONS,
+     * CONDITIONS -> LIST and LIST -> MAP all still swipe exactly as before.
+     * The only journey that loses its gesture is the one that was fighting the
+     * map, and the tab bar on the left is right there for it - a button, which
+     * cannot be confused with a pan. */
+    lv_obj_t *content = lv_tabview_get_content(s_tabview);
+    if (content) {
+        if (active == 0) lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+        else             lv_obj_add_flag  (content, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
     // Zoom only means anything on MAP - operator, 2026-09-13: "the zoom
     // dropdown shall be greyed out when not useful in LIST and CONDITIONS".
     // DISABLED blocks the tap; the opacity is what actually reads as
@@ -2846,6 +2872,14 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_t *tv = lv_tabview_create(s_overlay);
     s_tabview = tv;   // map_pinch_poll_cb() needs to know when MAP is the visible tab
     lv_obj_add_event_cb(tv, tabview_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    /* ⛔ AND RUN IT ONCE NOW. VALUE_CHANGED has not fired yet, but MAP is
+     * already the tab on screen - so without this the FIRST swipe off the map
+     * still worked and the fix only took effect after the operator had changed
+     * tab by hand at least once. Same shape as the top-bar bug this project has
+     * now had three times: a state that must hold for a whole mode belongs in
+     * something re-derived, and the entry path with no transition is the one
+     * that gets missed. */
+    tabview_changed_cb(NULL);
     /* ⛔ FULL WIDTH NOW - the checkbox sidebar is gone (build_settings_drawer()
      * above is a separate, hidden-by-default panel reached by the edge swipe),
      * so lv_tabview's OWN tab bar, moved to the left, is the only thing
