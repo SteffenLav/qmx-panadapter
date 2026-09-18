@@ -1604,13 +1604,46 @@ freq and BW to move together"*, then, when it was fixed as a re-frame-on-tune:
 matter a little or a big jump. Dial + BW can stay on freq as long as the box is
 not dragged more than it can show in the new position."*
 
-`bp_solve_view()` / `ui_bandplan_move_view()` (`main/ui/ui.c`) implement exactly
-that: **pan** to put the window where it was dropped, leaving the radio alone,
-and retune by **only the shortfall** when the requested window is further from
-the dial than the radio can hear. The pan bound is the same one the spectrum's
-own swipe-to-pan uses (the view CENTRE stays inside the capture window, so at
-least half the screen is real spectrum) - deliberately the same number, because
-the two gestures do the same thing.
+`bp_solve_view()` / `ui_bandplan_move_view()` (`main/ui/ui.c`) **preserve the pan
+exactly and move the dial by the drag**: box, VFO marker and passband translate
+as one rigid object, and whatever offset the dial had inside the window it
+keeps. The dial lands on a whole kHz, so the box lands within 500 Hz of where it
+was dropped - under two pixels at band scale. Snapping the box instead would
+drift the pan by the remainder on every drag.
+
+⛔ **THE OBVIOUS DESIGN - pan freely, retune only when forced - WAS BUILT,
+TESTED ON THE BENCH AND REJECTED. Do not re-propose it.** It leaves the radio
+alone while the requested window is inside what it can hear, which sounds
+exactly like what a still display wants. But **the QMX puts the VFO at +12 kHz
+in a ±24 kHz baseband, so the reachable spectrum is `dial-36k .. dial+12k`** -
+three times as much room below the dial as above. Dragging left moved the box
+40 kHz with the dial untouched; dragging right ran out after a few kHz and then
+dragged the dial along **welded to the box's left edge** (at x2 the pinned view
+low edge is `dial + 12000 - span/2` = exactly the dial). Predicted from the IF
+offset and then confirmed by the operator - *"the dial stay as much as possible
+in a strange manner"*. The asymmetry is the RADIO's, so no bound can fix it, and
+the window onto the band is 48 kHz wide however it is placed - so panning
+without the dial buys very little and costs that. His call: *"we need to let the
+dial follow the pan exactly as it were before panning."*
+
+⛔ **AND IT WEDGED THE DEVICE FROM THE WEB - ui_bandplan_move_view() IS
+LVGL-THREAD ONLY.** Applied on the httpd task (priority 5, 10 KB stack) it
+stopped `fft_task` dead: the audio ring went permanently full
+(`DROPPED=48000/s`), core 1 sat at **0.0% idle for 400 s**, the httpd worker
+stopped answering, and LVGL carried on at 13 fps drawing the last frame it had -
+so the screen showed vertical stripes and the browser lost contact, with **no
+crash, no reboot and no allocation failure anywhere in the log.** The pan itself
+had landed correctly one second earlier. It calls LVGL, reads the whole
+`qmx_settings_t` via `update_bandplan_strip()`, and reconfigures the zoom FFT -
+every one of those is a documented hazard above priority 4 here. The web
+endpoint QUEUES (`ui_request_bandplan_view()`, drained by a 20 ms LVGL timer);
+the discriminating test was a drag on the touchscreen, which does identical work
+on taskLVGL and does not wedge.
+
+⚠ **Open, found while measuring this:** `/api/status` omits `if_offset_hz` and
+`cap_lo/cap_hi` whenever **zoom > 1** - they ride on the `ui_pan_view_current()`
+path, which declines while the zoom FFT drives the display. The rigid rule
+removed the only consumer, so nothing is broken today.
 
 ⛔ **A TAP IS STILL A TUNE.** Pointing at a place in the band means "go there";
 dragging the window means "look there". It is the split the spectrum already
