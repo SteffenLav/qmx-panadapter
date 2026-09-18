@@ -2543,13 +2543,20 @@ void wspr_screen_view_tick(void)
          * down). It just may not be silent. */
         bool unprotected = st.wspr_tx_en && !st.wspr_pa_reduce;
 
+        /* ⛔ EVERY BRANCH BELOW MUST SET ITS OWN PLATE COLOUR, and one did not.
+         * The "TX ON next m:ss" branch set no background at all, so the button
+         * kept whatever the PREVIOUS state had left on it - in practice the
+         * orange of ON AIR, long after the burst had finished. John W5JSS sent
+         * a screenshot of exactly that: an orange plate while the radio was
+         * merely counting down. */
+        uint32_t plate;
         if (tst == WSPR_TX_ACTIVE) {
             snprintf(txt, sizeof(txt), unprotected ? "TX  ON AIR  FULL PWR" : "TX  ON AIR");
-            lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_TX_ACTIVE), 0);
+            plate = UI_COLOR_TX_ACTIVE;
         } else if (tst == WSPR_TX_ARMED) {
             snprintf(txt, sizeof(txt), "TX  in %d:%02d%s", secs / 60, secs % 60,
                      unprotected ? "  FULL PWR" : "");
-            lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            plate = UI_COLOR_PRIMARY;
         } else if (st.wspr_tx_en) {
             /* ⭐ COUNT DOWN WHENEVER TRANSMIT IS ON, not only while ARMED
              * (operator, 2026-09-02: "TX ON button never count down any more?
@@ -2592,17 +2599,42 @@ void wspr_screen_view_tick(void)
             else
                 snprintf(txt, sizeof(txt), "TX  ON%s",
                          unprotected ? "  FULL PWR" : "");
+            plate = UI_COLOR_PRIMARY;     /* transmit is on and waiting - same as ARMED */
         } else {
             snprintf(txt, sizeof(txt), "TX  OFF%s",
                      unprotected ? "  FULL PWR" : "");
-            lv_obj_set_style_bg_color(s_btn_tx,
-                lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
+            plate = UI_COLOR_SURFACE_RAISED;
         }
-        /* Red text on the TX block whenever the finals are unprotected, in every
-         * one of the three states above - the risk does not pause between
-         * bursts, because the next one is coming in under two minutes. */
-        lv_obj_set_style_text_color(s_lbl_tx,
-            lv_color_hex(unprotected ? 0xFF4010 : 0xFFFFFF), 0);
+        lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(plate), 0);
+
+        /* ⛔ THE TEXT COLOUR IS CHOSEN FROM THE PLATE, NOT FROM THE WARNING.
+         *
+         * It used to be "red whenever the finals are unprotected", on every
+         * plate - and red on the orange ON-AIR plate is a contrast ratio of
+         * 1.15:1. That is not a warning, it is an invisible one. John W5JSS,
+         * 2026-09-18, with a screenshot: "red-orange text on an orange
+         * background and is very hard to see ... maybe I have some peculiar
+         * form of color blindness". He does not - 0xFF4010 on 0xFF6020 is
+         * barely two shades apart and nobody could read it.
+         *
+         * ⚠ And the blue plate was just as bad at 1.50:1, which nobody had
+         * reported because ARMED lasts about a second. Fixing only the orange
+         * would have left the same fault in the state next to it.
+         *
+         * Measured (WCAG relative luminance), and the warning is NOT lost:
+         * "FULL PWR" is in the text of every state already, so the alarm is
+         * carried by words, which no plate colour can wash out.
+         *
+         *   plate                      text     contrast
+         *   orange 0xFF6020 (ON AIR)   black     6.9:1   (was red, 1.15:1)
+         *   blue   0x2a6fb0            white     5.3:1   (was red, 1.50:1)
+         *   dark   0x252b33 (OFF)      red       4.1:1   red works HERE, and only here
+         */
+        uint32_t ink;
+        if      (plate == UI_COLOR_TX_ACTIVE)     ink = 0x000000;   /* his own suggestion, and the right one */
+        else if (plate == UI_COLOR_SURFACE_RAISED) ink = unprotected ? 0xFF4010 : 0xFFFFFF;
+        else                                       ink = 0xFFFFFF;
+        lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(ink), 0);
         if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0) {
             lv_label_set_text(s_lbl_tx, txt);
             tx_label_fit(txt);
