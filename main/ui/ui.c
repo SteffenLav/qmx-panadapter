@@ -3736,12 +3736,15 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
             // backup written but live mirroring unavailable while WiFi is on,
             // GREY + a stroke through it = no card in the slot.
             const bool no_card = (s_sd_want == 0);
+            // ⛔ THE DOT CARRIES THE COLOUR, THE "SD" LABEL NEVER DOES.
+            // Colouring both was tried and rejected on sight - operator,
+            // 2026-09-18: "please keep the dot yellow only". The label is a
+            // name, not a state; two things saying the same thing in the same
+            // colour just makes the bar shout.
             uint32_t col = no_card    ? UI_COLOR_TEXT_SECONDARY
                          : (s_sd_want == 1) ? 0x30D030
                                             : 0xE0C020;
             lv_obj_set_style_bg_color(s_bot_diag_dot, lv_color_hex(col), 0);
-            if (s_bot_diag_label)
-                lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(col), 0);
             if (s_bot_sd_slash) {
                 if (no_card) lv_obj_clear_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
                 else         lv_obj_add_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
@@ -5486,23 +5489,6 @@ static void build_waterfall(lv_obj_t *parent)
 }
 
 // ==== Bottom status bar ====
-// The bottom-bar SD indicator is tappable in ALL FOUR states, not just the
-// crossed-out one: "what is actually on my card" is a fair question with a card
-// in, and one target with one behaviour is simpler to learn than two.
-//
-// ⭐ IT OPENS THE MANUAL RATHER THAN A MODAL OF ITS OWN, DELIBERATELY. The
-// benefit list already exists in docs/mkdocs/guide/settings.md, which is the
-// single source for the website, the PDF and the embedded manual. A modal would
-// be a FOURTH copy, and this project has been bitten by exactly that (see the
-// "docs live in TWO trees" note in CLAUDE.md). Going through help_open() also
-// means tools/pack_manual.py FAILS THE BUILD if that heading is ever renamed,
-// so the link cannot rot quietly.
-static void sd_indicator_cb(lv_event_t *e)
-{
-    LV_UNUSED(e);
-    help_open(HELP_SD_BENEFITS);
-}
-
 static void build_bottom_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -5596,12 +5582,14 @@ static void build_bottom_bar(lv_obj_t *parent)
     // four states it is in: green mirroring, yellow boot-backup-only, grey with
     // a stroke through it for no card. Same reasoning, and the same mechanism,
     // as ui_set_bottom_battery_absent().
-    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_bot_diag_dot, sd_indicator_cb, LV_EVENT_CLICKED, NULL);
-    // A 14 px dot is not a finger target. The halo is CLIPPED TO THE PARENT, and
-    // the parent is the 36 px bottom bar, so it can grow sideways but barely
-    // vertically - hence the asymmetric figure rather than a round number.
-    lv_obj_set_ext_click_area(s_bot_diag_dot, 14);
+    // ⛔ NO CLICK HANDLER HERE, AND THAT IS NOT AN OVERSIGHT. `s_bottom_edge_strip`
+    // is a full-width clickable object over this whole zone, foregrounded on the
+    // SCREEN - and LVGL hit-tests a parent’s children in REVERSE CREATION ORDER,
+    // taking the first hit, without comparing areas. The strip is last in that
+    // list, so it swallows every press on the bar and an event callback on this
+    // dot can never fire. It was written that way first and was completely inert
+    // on the glass. The tap is arbitrated by x inside bottom_edge_swipe_cb()
+    // instead, the same way the update line already is - see sd_indicator_hit().
 
     // "SD" label next to the dot - same visibility lifecycle, re-anchored
     // off the dot itself in reposition_diag_dot() so it tracks along with it.
@@ -5610,9 +5598,6 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_diag_label, &lv_font_montserrat_24, 0);
     lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-    lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_bot_diag_label, sd_indicator_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_set_ext_click_area(s_bot_diag_label, 10);
 
     // The "no card" stroke, drawn across BOTH the dot and the label - a slash
     // over a 14 px dot alone would not read at arm's length. Points persist for
@@ -9342,6 +9327,27 @@ static bool update_line_hit(int x)
     return x >= (int)a.x1 - margin && x <= (int)a.x2 + margin;
 }
 
+// True when x falls on the microSD indicator (the dot AND the "SD" label).
+//
+// The dot is 14 px, so the span is taken from the dot’s left edge to the
+// label’s right edge plus a finger margin, rather than from either object
+// alone. Same arbitration-by-x as update_line_hit(), for the same reason: the
+// bottom edge strip owns every press down here, so a target on the bar has to
+// be recognised inside bottom_edge_swipe_cb() or it does not exist.
+static bool sd_indicator_hit(int x)
+{
+    if (!s_bot_diag_dot) return false;
+    lv_area_t d, l;
+    lv_obj_get_coords(s_bot_diag_dot, &d);
+    int x1 = (int)d.x1, x2 = (int)d.x2;
+    if (s_bot_diag_label) {
+        lv_obj_get_coords(s_bot_diag_label, &l);
+        if ((int)l.x2 > x2) x2 = (int)l.x2;
+    }
+    const int margin = 18;
+    return x >= x1 - margin && x <= x2 + margin;
+}
+
 void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
@@ -10154,7 +10160,23 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
              * page has its own band control for the only move that makes sense
              * here. */
             ui_show_memories();
-        } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb) {
+        } else if (be_decided == 0 && be_start_x >= 0 && sd_indicator_hit(be_start_x)) {
+            // The microSD indicator. Tappable in every state, including the
+            // crossed-out one - "what is on my card" is a fair question with a
+            // card in, and "what would one give me" is the better question
+            // without. Both are answered by the same manual section, so this is
+            // one target with one behaviour rather than two.
+            //
+            // ⭐ IT OPENS THE MANUAL, NOT A MODAL OF ITS OWN. The benefit list
+            // already exists in docs/mkdocs/guide/settings.md, the single source
+            // for the website, the PDF and the embedded manual; a modal would be
+            // a FOURTH copy of it, which is the rot CLAUDE.md records under
+            // "the docs live in TWO trees". Going through help_open() also means
+            // pack_manual.py fails the build if that heading is ever renamed.
+            ESP_LOGI("ui", "SD indicator tapped (x=%d)", (int)be_start_x);
+            help_open(HELP_SD_BENEFITS);
+        } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb &&
+                   update_line_hit(s_update_press_x)) {
             // #239: a SHORT TAP now acts, and that is the whole point of the
             // rework. It opens ota_modal and does nothing else - no download,
             // no reboot - so the thing the 700 ms hold was protecting against
