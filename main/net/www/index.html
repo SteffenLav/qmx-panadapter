@@ -1773,6 +1773,37 @@ let lastTimeSrc      = "";     // what maintains the Tab5 clock: NTP/GPS/QMX/RTC
 let spotBoxes        = [];     // hit-test rects in CANVAS px: {x,y,w,h,hz,mode}
 let spotOffBoxes     = [];     // the two off-screen counters, same shape
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
+/* The passband block and the CW/Digi/Phone labels are hidden for the duration of
+   a band-plan drag and fade back in after it - the Tab5 has done this since
+   v1.8.x and the browser only ever popped them straight back. Worth matching,
+   because since the drag moves the dial with the window the returning passband
+   is what SHOWS the dial came along. Same two numbers as ui.c's
+   PASSBAND_FADE_DELAY_MS / PASSBAND_FADE_DURATION_MS - keep them in step. */
+const BP_FADE_DELAY_MS = 500;
+const BP_FADE_MS       = 1000;
+let   bpFadeFrom       = 0;    // ms timestamp the fade may start at; 0 = fully shown
+let   bpFadeRaf        = 0;
+/* 0 while dragging, ramps 0..1 after the delay, 1 once done. Clears bpFadeFrom
+   on completion, which is also what stops the redraw loop below. */
+function bpFadeAlpha() {
+  if (bpDragging) return 0;
+  if (!bpFadeFrom) return 1;
+  const t = Date.now() - bpFadeFrom;
+  if (t <= 0)          return 0;
+  if (t >= BP_FADE_MS) { bpFadeFrom = 0; return 1; }
+  return t / BP_FADE_MS;
+}
+/* The strip is otherwise only redrawn on a status poll, which is far too coarse
+   to fade with - so drive it from rAF for the second or so it takes, and stop. */
+function bpStartFade() {
+  bpFadeFrom = Date.now() + BP_FADE_DELAY_MS;
+  if (bpFadeRaf) return;
+  const step = () => {
+    drawBandplan();
+    bpFadeRaf = bpFadeFrom ? requestAnimationFrame(step) : 0;
+  };
+  bpFadeRaf = requestAnimationFrame(step);
+}
 
 const SPEC_W     = 1024;
 const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
@@ -7974,6 +8005,7 @@ function drawBandplan(previewHz) {
 
   // CW/Digi/Phone segments, with a label once the block is wide enough.
   const labelFontPx = Math.max(10, Math.round(H * 0.55));  // scales with strip height/dpr, not a fixed px size
+  const fadeA = bpFadeAlpha();   // 0 while dragging, ramping back to 1 after
   ctx.textBaseline = "middle";
   ctx.textAlign    = "center";
   bp.segs.forEach(seg => {
@@ -7982,9 +8014,9 @@ function drawBandplan(previewHz) {
     const w  = Math.max(1, x1 - x0);
     ctx.fillStyle = "#" + seg.c;
     ctx.fillRect(x0, 0, w, H);
-    if (w / W >= LABEL_MIN_FRAC && !bpDragging) {
+    if (w / W >= LABEL_MIN_FRAC && fadeA > 0) {
       ctx.font      = "bold " + labelFontPx + "px ui-monospace, monospace";
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = "rgba(255,255,255," + fadeA + ")";
       ctx.fillText(seg.l, x0 + w / 2, Math.round(H / 2) + 1);
     }
   });
@@ -8014,9 +8046,9 @@ function drawBandplan(previewHz) {
   ctx.fillStyle = "rgba(255,255,255,0.10)";
   ctx.fillRect(sx0, 0, sw, H);
 
-  // Passband sub-block (filter passband, mode + width dependent) - hidden
-  // during a drag, same as the Tab5's own strip.
-  if (!bpDragging) {
+  // Passband sub-block (filter passband, mode + width dependent) - hidden for
+  // the drag and faded back in, same as the Tab5's own strip.
+  if (fadeA > 0) {
     const edges = computePassbandEdgesHz();
     if (edges) {
       let px0 = Math.round((freqHz + edges.loHz - bandLo) / span * W);
@@ -8024,7 +8056,7 @@ function drawBandplan(previewHz) {
       px0 = Math.max(0, px0); px1 = Math.min(W, px1);
       let pw = px1 - px0;
       if (pw < 6 * dpr) pw = 6 * dpr;
-      ctx.fillStyle = "rgba(176,176,176,0.8)";
+      ctx.fillStyle = "rgba(176,176,176," + (0.8 * fadeA) + ")";
       ctx.fillRect(px0, 0, pw, H);
     }
   }
@@ -8085,9 +8117,10 @@ function drawBandplanOob(ctx, W, H, dpr) {
 
   // The label is the only thing telling you why the segments vanished, so it
   // stays put while idle and gets out of the way during a drag.
-  if (!bpDragging) {
+  const fadeA = bpFadeAlpha();
+  if (fadeA > 0) {
     ctx.textAlign = "center";
-    ctx.fillStyle = "#95a0ab";
+    ctx.fillStyle = "rgba(149,160,171," + fadeA + ")";
     ctx.fillText("Out of band  -  drag to tune", half, H / 2);
   }
 }
@@ -8220,10 +8253,12 @@ function drawBandplanOob(ctx, W, H, dpr) {
       const dragged = bpDragging;
       bpDragging = false;
       bpOobOffPx = 0;
-      if (dragged) commit(targetHz); else drawBandplan();
+      if (dragged) { bpStartFade(); commit(targetHz); } else drawBandplan();
       return;
     }
     if (bpDragging) {
+      bpDragging = false;      /* before the fade starts, or alpha stays pinned at 0 */
+      bpStartFade();
       commitCenter(targetCenter);
     } else {
       const rect = canvas.getBoundingClientRect();

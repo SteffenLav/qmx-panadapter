@@ -2296,7 +2296,13 @@ static bool     s_tune_mode_locked  = false; // once 250ms passes without pannin
 // Passband fade-in after pan settles
 static uint64_t s_passband_fade_start_us = 0;  // when passband fade began, 0 if not fading
 static bool s_hide_passband_now = false;       // immediately hide on pan settle, before fade kicks in
-#define PASSBAND_FADE_DELAY_MS 1000         // delay before fade starts
+/* Halved from 1000 on the operator's call, 2026-09-18: with the band-plan drag
+ * now moving the dial with the window, the hidden passband is what SHOWS that
+ * the dial came along - "i like it as it shows that the dial also moved on the
+ * band.... however, its a bit slow fading in again". Shared with the spectrum's
+ * own passband tint after a pan settle, which is the same gesture and the same
+ * reason to come back promptly. */
+#define PASSBAND_FADE_DELAY_MS 500          // delay before fade starts
 #define PASSBAND_FADE_DURATION_MS 1000      // fade-in duration (after delay)
 // One-finger hold for tune: only tunes if held still >= TUNE_HOLD_MS.
 static uint64_t s_touch_down_us     = 0;    // timestamp of last PRESSED event
@@ -2400,7 +2406,23 @@ static lv_obj_t *s_bandplan_obj  = NULL;
 // Invisible touch extension ABOVE the band plan (operator, 2026-08-23: the
 // 22 px strip is "super difficult to land on"). Tap-to-tune gives up these
 // pixels; the waterfall is 370 px tall and can spare them.
-#define BP_CATCH_PX 50
+//
+// ⭐ 50 -> 92 px on 2026-09-18, and the number is stated in MILLIMETRES because
+// that is what a finger is. The operator asked for "a 8mm point to tune free
+// band above the band-plan strip where the box/slider can be grabbed ... Most
+// user will always point to tune higher up the wf anyways".
+//
+// The Tab5 panel is 5.0" at 1280x720, so the diagonal is 127 mm, the long edge
+// is 127 x 16/sqrt(16^2+9^2) = 110.7 mm, and the pixels are square:
+//     1280 / 110.7 = 11.56 px/mm   ->   8 mm = 92 px
+// Grab height end to end is then 92 + BANDPLAN_H = 114 px, just under 10 mm.
+//
+// 50 px was 4.3 mm, which is below every touch-target guideline going (iOS 44 pt
+// ~ 7 mm, Material 48 dp ~ 7.6 mm) - so "difficult to grab" was the predictable
+// outcome and raising it is not a matter of taste. It matters more now than in
+// August: the knob is a DRAG target, not a tap target, so a miss does not just
+// fail, it starts a tune-to-dial gesture instead.
+#define BP_CATCH_PX 92
 static lv_obj_t *s_bp_catch      = NULL;
 static lv_obj_t *s_bp_seg[BANDPLAN_MAX_SEG];
 static lv_obj_t *s_bp_seg_lbl[BANDPLAN_MAX_SEG];
@@ -5604,9 +5626,9 @@ static void build_waterfall(lv_obj_t *parent)
     // bottom bar". 22 px is simply not a finger.
     //
     // So the strip's TOUCH area grows upward into the waterfall while its drawn
-    // height stays 22 px. Tap-to-tune gives up the same 50 px, which it can
-    // afford - the waterfall is 370 px tall and none of the interesting part of
-    // it is in the last centimetre.
+    // height stays 22 px. Tap-to-tune gives up the same BP_CATCH_PX, which it
+    // can afford - the waterfall is 370 px tall and none of the interesting
+    // part of it is in the last centimetre.
     //
     // Deliberately a separate transparent object rather than a taller
     // s_bandplan_obj: every segment, label, marker and knob inside that object
