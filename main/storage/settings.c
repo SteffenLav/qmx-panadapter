@@ -5,6 +5,7 @@
 #include "sd_archive.h"
 
 #include <string.h>
+#include <strings.h>   // strncasecmp - band names are matched case-INSENSITIVELY
 #include <stdint.h>
 #include <time.h>   // time(NULL) - power-calibration row timestamp
 
@@ -1569,13 +1570,34 @@ void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCA
                                 const uint16_t watts_x100[PWRCAL_STEPS])
 {
     if (!s_ready || !band || !band[0] || !voltage_x10 || !watts_x100) return;
+    /* ⛔ A SWEEP WITH NO POINTS CLEARS THE BAND, it does not store an empty row.
+     * The config import needs a way to REMOVE a calibration - "20m =" with
+     * nothing after it - and a row whose band name is set but whose voltages
+     * are all zero is worse than no row: it occupies a slot, it is invisible to
+     * the export (which skips rows with no points), and it makes the band look
+     * calibrated to anything that only checks band[0]. */
+    bool has_point = false;
+    for (int k = 0; k < PWRCAL_STEPS; k++) if (voltage_x10[k]) { has_point = true; break; }
+
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     pwr_cal_table_t *t = &s_pending.pwr_cal;
     int slot = -1, oldest = -1;
     for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
-        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
+        /* ⛔ CASE-INSENSITIVE. adif_log_band_for_freq() returns "20M", but a
+         * config file is hand-edited and "20m" is what anyone would type.
+         * strncmp() made those two DIFFERENT bands, so an edited file silently
+         * grew a duplicate row the firmware would never look at. Caught on the
+         * bench 2026-09-18 by round-tripping the export through the import. */
+        if (strncasecmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
         if (t->bands[i].band[0] == '\0' && slot < 0) slot = i;  // first empty, keep looking for an exact match
         if (oldest < 0 || t->bands[i].cal_unix_time < t->bands[oldest].cal_unix_time) oldest = i;
+    }
+    if (!has_point) {
+        /* Clear an EXISTING row; never allocate a slot just to blank it. */
+        if (slot >= 0 && t->bands[slot].band[0]) memset(&t->bands[slot], 0, sizeof(t->bands[slot]));
+        xSemaphoreGive(s_mutex);
+        mark_dirty(DIRTY_PWR_CAL);
+        return;
     }
     if (slot < 0) slot = oldest;  // table full and this band isn't in it - replace the stalest row
     pwr_cal_band_t *row = &t->bands[slot];
@@ -1596,7 +1618,7 @@ bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEP
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     const pwr_cal_table_t *t = &s_pending.pwr_cal;
     for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
-        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
+        if (strncasecmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
             if (voltage_x10) memcpy(voltage_x10, t->bands[i].voltage_x10, sizeof(t->bands[i].voltage_x10));
             if (watts_x100)  memcpy(watts_x100,  t->bands[i].watts_x100,  sizeof(t->bands[i].watts_x100));
             found = true;
@@ -1614,8 +1636,17 @@ void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100)
     pwr_target_table_t *t = &s_pending.pwr_target;
     int slot = -1;
     for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
-        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
+        /* Case-insensitive for the same reason as the calibration table above. */
+        if (strncasecmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) { slot = i; break; }
         if (t->bands[i].band[0] == '\0' && slot < 0) slot = i;
+    }
+    if (watts_x100 == 0) {
+        /* Zero watts is not a target, it is "no preference on this band" - so
+           it removes the row rather than storing a target of nothing. */
+        if (slot >= 0 && t->bands[slot].band[0]) memset(&t->bands[slot], 0, sizeof(t->bands[slot]));
+        xSemaphoreGive(s_mutex);
+        mark_dirty(DIRTY_PWR_TARGET);
+        return;
     }
     if (slot < 0) slot = 0;   /* table somehow full of distinct bands - overwrite the first rather than drop the write */
     strncpy(t->bands[slot].band, band, sizeof(t->bands[slot].band) - 1);
@@ -1632,7 +1663,7 @@ bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     const pwr_target_table_t *t = &s_pending.pwr_target;
     for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
-        if (strncmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
+        if (strncasecmp(t->bands[i].band, band, sizeof(t->bands[i].band)) == 0) {
             if (watts_x100) *watts_x100 = t->bands[i].target_w_x100;
             found = true;
             break;
