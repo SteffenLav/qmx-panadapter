@@ -119,6 +119,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_TX_EN     "wspr_tx_en"
 #define KEY_WSPR_DUTY      "wspr_duty"
 #define KEY_WSPR_BURST     "wspr_burst"
+#define KEY_WSPR_SCHED_V   "wspr_schedv"   /* 1 = tx/rx cycle counts; absent = old "1 in N" + bursts */
 #define KEY_WSPR_DBM       "wspr_dbm"
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
@@ -605,8 +606,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SIM_MODE))     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DIAL))    nvs_set_u32(s_nvs, KEY_WSPR_DIAL, snap.wspr_dial_hz);
         if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
-        if (dirty_test(&dirty_local, DIRTY_WSPR_BURST))   nvs_set_u8(s_nvs, KEY_WSPR_BURST, snap.wspr_tx_burst_n);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))  { nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_rx_cycles);
+                                                          nvs_set_u8(s_nvs, KEY_WSPR_SCHED_V, 1); }
+        if (dirty_test(&dirty_local, DIRTY_WSPR_BURST)) { nvs_set_u8(s_nvs, KEY_WSPR_BURST, snap.wspr_tx_cycles);
+                                                          nvs_set_u8(s_nvs, KEY_WSPR_SCHED_V, 1); }
         if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
         if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
             nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
@@ -849,8 +852,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->sim_mode_en = false;
     out->wspr_dial_hz  = 14095600u;   /* 20 m, the busiest WSPR band */
     out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
-    out->wspr_duty_pct = 5;           /* 1 in 5 - closest match to the old "20%" default */
-    out->wspr_tx_burst_n = 1;         /* one burst per scheduled transmission - the old behaviour */
+    out->wspr_rx_cycles = 4;          /* 1 transmit + 4 receive = 10 min, 20% - the long-standing default */
+    out->wspr_tx_cycles = 1;
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
     out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
     out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
@@ -1090,29 +1093,54 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
     { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
-    { uint8_t b; if (nvs_get_u8(s_nvs, KEY_WSPR_BURST, &b) == ESP_OK && b >= 1 && b <= 4)
-          out->wspr_tx_burst_n = b; }
-    if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) {
-        /* ⛔ MIGRATE THE OLD PERCENTAGE SCALE, DO NOT LET IT LEAK THROUGH AS A
-         * PERIOD. This field's meaning changed 2026-09-12 from "chance per
-         * cycle, 0-50" to "literal 1-in-N period" (operator: "No % but only 1
-         * in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10 ... this way ... operator knows
-         * the TX plan"). roll_next_tx_cycle() now does a bare `after + duty`,
-         * so a stored 50 (used to mean "roughly half the cycles") would
-         * silently become "one cycle in fifty" - 100 minutes idle instead of
-         * frequent bursts, with no error and no visible cause. The five values
-         * below are the ONLY ones the old UI could ever have written (kDuty[]
-         * had exactly these five options), so the mapping is exhaustive, not a
-         * guess: higher percentage (more frequent) maps to smaller N (more
-         * frequent), preserving what the operator actually chose. Anything
-         * else (should not occur) falls back to 5 rather than an unbounded N. */
-        static const uint8_t legacy_from[] = { 0, 10, 20, 33, 50 };
-        static const uint8_t legacy_to[]   = { 0, 10,  5,  3,  2 };
-        bool known = false;
-        for (size_t i = 0; i < sizeof(legacy_from); i++) {
-            if (u8v == legacy_from[i]) { out->wspr_duty_pct = legacy_to[i]; known = true; break; }
+    /* ---- WSPR schedule: two cycle counts, migrated from "1 in N" + bursts ----
+     *
+     * ⛔ THE STORED BYTES ARE AMBIGUOUS WITHOUT THE VERSION MARKER, and this
+     * field has already changed meaning once before (percentage -> "1 in N",
+     * 2026-09-12), so reinterpreting in place is exactly the trap that
+     * migration was written to avoid. A stored duty of 5 means "one cycle in
+     * five", i.e. FOUR receive cycles - read as the new field directly it would
+     * become five, and every unit would quietly slip from a 10-minute period to
+     * 12 with nothing to see.
+     *
+     * The mapping is exact rather than approximate: the old period was
+     * duty + bursts - 1, and tx = bursts, rx = duty - 1 reproduces it
+     * cycle-for-cycle. A unit that upgrades keeps the schedule it had.
+     *
+     * duty == 0 was the dropdown's "Receive only" row, which is now
+     * wspr_tx_cycles == 0. */
+    {
+        uint8_t ver = 0;
+        (void)nvs_get_u8(s_nvs, KEY_WSPR_SCHED_V, &ver);
+        uint8_t stored_rx = 0, stored_tx = 0;
+        bool have_rx = (nvs_get_u8(s_nvs, KEY_WSPR_DUTY,  &stored_rx) == ESP_OK);
+        bool have_tx = (nvs_get_u8(s_nvs, KEY_WSPR_BURST, &stored_tx) == ESP_OK);
+
+        if (ver >= 1) {
+            if (have_rx) out->wspr_rx_cycles = (stored_rx >= 1 && stored_rx <= 20) ? stored_rx : 4;
+            if (have_tx) out->wspr_tx_cycles = (stored_tx <= 4) ? stored_tx : 1;
+        } else if (have_rx || have_tx) {
+            /* Old semantics. The 2026-09-12 percentage migration ran on read
+             * and was never version-stamped, so a unit can still hold a raw
+             * percentage here; fold that in first, with the same exhaustive
+             * table, then convert to cycle counts. */
+            uint8_t duty = have_rx ? stored_rx : 5;
+            static const uint8_t legacy_from[] = { 10, 20, 33, 50 };
+            static const uint8_t legacy_to[]   = { 10,  5,  3,  2 };
+            for (size_t i = 0; i < sizeof(legacy_from); i++)
+                if (duty == legacy_from[i]) { duty = legacy_to[i]; break; }
+
+            uint8_t bursts = (have_tx && stored_tx >= 1 && stored_tx <= 4) ? stored_tx : 1;
+            if (duty == 0) {
+                out->wspr_tx_cycles = 0;            /* the old "Receive only" row */
+                out->wspr_rx_cycles = 4;
+            } else {
+                if (duty < 2)  duty = 2;            /* period 1 would be continuous TX */
+                if (duty > 21) duty = 21;
+                out->wspr_tx_cycles = bursts;
+                out->wspr_rx_cycles = (uint8_t)(duty - 1);
+            }
         }
-        if (!known) out->wspr_duty_pct = (u8v == 0) ? 0 : 5;
     }
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_PARED, &u8v) == ESP_OK) out->wspr_pa_reduce = (u8v != 0); }
@@ -2197,22 +2225,24 @@ bool settings_get_sota_en(void)
     return v;
 }
 
-uint8_t settings_get_wspr_tx_burst_n(void)
+uint8_t settings_get_wspr_tx_cycles(void)
 {
     if (!s_ready) return 1;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    uint8_t v = s_pending.wspr_tx_burst_n;
+    uint8_t v = s_pending.wspr_tx_cycles;
     xSemaphoreGive(s_mutex);
-    return v ? v : 1;   /* 0 would mean "never transmit", which is wspr_tx_en's job */
+    return (v <= 4) ? v : 1;   /* 0 is legitimate here: receive only */
 }
 
-uint8_t settings_get_wspr_duty_pct(void)
+uint8_t settings_get_wspr_rx_cycles(void)
 {
-    if (!s_ready) return 0;
+    if (!s_ready) return 4;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    uint8_t v = s_pending.wspr_duty_pct;
+    uint8_t v = s_pending.wspr_rx_cycles;
     xSemaphoreGive(s_mutex);
-    return v;
+    /* Never 0. A group with no receive cycles keys the radio continuously and
+     * the page never receives - measured on the bench, see settings.h. */
+    return (v >= 1 && v <= 20) ? v : 4;
 }
 
 uint16_t settings_get_wspr_pa_saved_x10(void)
@@ -2680,24 +2710,25 @@ void settings_set_wspr_tx_en(bool v)
     mark_dirty(DIRTY_WSPR_TX_EN);
 }
 
-void settings_set_wspr_duty_pct(uint8_t v)
+void settings_set_wspr_rx_cycles(uint8_t v)
 {
     if (!s_ready) return;
+    if (v < 1)  v = 1;    /* 0 would be continuous transmit - see settings.h */
+    if (v > 20) v = 20;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.wspr_duty_pct == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.wspr_duty_pct = v;
+    if (s_pending.wspr_rx_cycles == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_rx_cycles = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_DUTY);
 }
 
-void settings_set_wspr_tx_burst_n(uint8_t v)
+void settings_set_wspr_tx_cycles(uint8_t v)
 {
     if (!s_ready) return;
-    if (v < 1) v = 1;
     if (v > 4) v = 4;   /* four consecutive cycles is ~8 minutes of key-down */
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.wspr_tx_burst_n == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.wspr_tx_burst_n = v;
+    if (s_pending.wspr_tx_cycles == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_tx_cycles = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_BURST);
 }

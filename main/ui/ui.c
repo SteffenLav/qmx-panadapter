@@ -10831,18 +10831,71 @@ static void drawer_btn_wspr_hop_cb(lv_event_t *e)
     wspr_screen_view_open_hop_picker();
 }
 
-static void drawer_dropdown_wspr_burst_cb(lv_event_t *e)
+/* The schedule is two counts and one sentence. The sentence is regenerated
+ * from the counts every time either changes, so it can never describe a
+ * schedule that is not the one running - which is the whole reason "1 in N"
+ * plus "bursts per transmission" was replaced (see settings.h). */
+static lv_obj_t *s_wspr_sched_desc = NULL;
+static lv_obj_t *s_wspr_rx_dd     = NULL;   /* greyed out while "Receive only" */
+static lv_obj_t *s_wspr_rx_hdr    = NULL;
+
+static void wspr_sched_desc_refresh(void)
 {
-    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
-    settings_set_wspr_tx_burst_n((uint8_t)(i + 1));   /* index 0 == 1 burst */
-    wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
-                              settings_get_wspr_duty_pct());
+    if (!s_wspr_sched_desc) return;
+    uint8_t tx = settings_get_wspr_tx_cycles();
+    uint8_t rx = settings_get_wspr_rx_cycles();
+    char buf[128];
+    /* ⛔ GREYED MEANS INERT, and that is not decoration here. "Receive only"
+     * leaves the receive count with nothing to describe - there is no group -
+     * so it is DISABLED as well as dimmed. This project has already shipped a
+     * control that looked dead and still took input (the top-bar frequency
+     * label, v1.12.1); the operator called that a broken promise and he was
+     * right. Both states are set from this one function so they cannot drift. */
+    if (s_wspr_rx_dd) {
+        if (tx == 0) {
+            lv_obj_add_state(s_wspr_rx_dd, LV_STATE_DISABLED);
+            lv_obj_clear_flag(s_wspr_rx_dd, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_opa(s_wspr_rx_dd, LV_OPA_40, 0);
+            if (s_wspr_rx_hdr) lv_obj_set_style_opa(s_wspr_rx_hdr, LV_OPA_40, 0);
+        } else {
+            lv_obj_remove_state(s_wspr_rx_dd, LV_STATE_DISABLED);
+            lv_obj_add_flag(s_wspr_rx_dd, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_opa(s_wspr_rx_dd, LV_OPA_COVER, 0);
+            if (s_wspr_rx_hdr) lv_obj_set_style_opa(s_wspr_rx_hdr, LV_OPA_COVER, 0);
+        }
+    }
+    if (tx == 0) {
+        snprintf(buf, sizeof(buf), "Receive only - never transmits.");
+    } else {
+        unsigned period = (unsigned)(tx + rx);
+        snprintf(buf, sizeof(buf),
+                 "Transmit %u, then listen %u - repeating every %u min.\n"
+                 "Transmitting %u%% of the time.",
+                 (unsigned)tx, (unsigned)rx, period * 2u,
+                 (unsigned)((tx * 100u) / period));
+    }
+    lv_label_set_text(s_wspr_sched_desc, buf);
 }
 
-static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
+static void drawer_dropdown_wspr_tx_cycles_cb(lv_event_t *e)
 {
     uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
-    if (i < WSPR_N_DUTY) settings_set_wspr_duty_pct(kDuty[i]);
+    settings_set_wspr_tx_cycles((uint8_t)i);   /* index 0 == receive only */
+    wspr_sched_desc_refresh();
+    wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
+                              settings_get_wspr_tx_cycles(),
+                              settings_get_wspr_rx_cycles());
+}
+
+static void drawer_dropdown_wspr_rx_cycles_cb(lv_event_t *e)
+{
+    if (settings_get_wspr_tx_cycles() == 0) return;   /* greyed = inert, belt and braces */
+    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
+    settings_set_wspr_rx_cycles((uint8_t)(i + 1));   /* index 0 == 1 receive cycle */
+    wspr_sched_desc_refresh();
+    wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
+                              settings_get_wspr_tx_cycles(),
+                              settings_get_wspr_rx_cycles());
 }
 
 /* Declared power. This is PUBLISHED WORLDWIDE with every spot and is what other
@@ -13368,59 +13421,76 @@ static void drawer_build(void)
          * second header+dropdown pair. SECTION HEIGHT AND THE y += AT THE END
          * OF THIS BLOCK MUST MOVE TOGETHER - this file records a release where
          * they did not and the next section drew on top of this one. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDUTY, y, 200);
+        /* 260, not 200: two dropdowns plus the two-line description that
+         * spells the schedule out. SECTION HEIGHT AND THE y += AT THE END OF
+         * THIS BLOCK MUST MOVE TOGETHER - this file records a release where
+         * they did not and the next section drew on top of this one. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDUTY, y, 260);
         lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "WSPR duty cycle");
+        lv_label_set_text(hdr, "WSPR transmit schedule");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_t *dd = lv_dropdown_create(sec);
-        /* "1 in N", not a percentage, and not "about" - it is now an exact
-         * period. See kDuty[]/roll_next_tx_cycle() in wspr_rx.c. */
-        lv_dropdown_set_options(dd,
-            "Receive only\n1 in 2\n1 in 3\n1 in 4\n1 in 5\n1 in 10");
-        lv_obj_set_size(dd, DRAWER_W - 32, 50);
-        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 40);
-        lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+
+        /* ⛔ TWO COUNTS, NOT A RATIO. "1 in 5" plainly means one cycle in
+         * five and the code did exactly that for a single burst - but it says
+         * nothing about what a SECOND burst does to the period, and the
+         * operator and I each read it the other way round in the same
+         * afternoon. Two counts cannot be read two ways. See settings.h. */
+        lv_obj_t *thdr = lv_label_create(sec);
+        lv_label_set_text(thdr, "Transmit cycles");
+        lv_obj_set_style_text_color(thdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(thdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(thdr, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_t *tdd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(tdd, "Receive only\n1\n2\n3\n4");
+        lv_obj_set_size(tdd, (DRAWER_W - 48) / 2, 50);
+        lv_obj_align(tdd, LV_ALIGN_TOP_LEFT, 0, 78);
+        lv_obj_set_style_text_font(tdd, &lv_font_montserrat_28, 0);
         {
-            /* Fallback index 4 = kDuty[4] = 5 ("1 in 5"), matching settings.c's
-             * own default - was index 2 against the old 5-entry array, which
-             * would now silently mean "1 in 3" if nothing matched. */
-            uint16_t idx = 4;
-            for (int k = 0; k < WSPR_N_DUTY; k++)
-                if (kDuty[k] == ws.wspr_duty_pct) { idx = (uint16_t)k; break; }
-            lv_dropdown_set_selected(dd, idx);
+            uint8_t t = ws.wspr_tx_cycles;
+            if (t > 4) t = 1;
+            lv_dropdown_set_selected(tdd, (uint16_t)t);
         }
-        lv_obj_add_event_cb(dd, drawer_dropdown_wspr_duty_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(tdd, drawer_dropdown_wspr_tx_cycles_cb, LV_EVENT_VALUE_CHANGED, NULL);
         /* The OPTION LIST is a separate object with its own font - without
          * this it opens at LVGL's default, which is much smaller than
-         * everything around it. Every other dropdown in this drawer
-         * already does this; these two were added without it. */
-        lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+         * everything around it. */
+        lv_obj_add_event_cb(tdd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
-        /* Bursts per transmission (John W5JSS). Sits directly under the duty
-         * cycle because the two only make sense read together: the duty sets
-         * how many RECEIVE cycles follow the group, so "1 in 3, 2 bursts" is
-         * Tx Tx Rx Rx repeating. See the note at s_burst_done in wspr_rx.c. */
-        lv_obj_t *bhdr = lv_label_create(sec);
-        lv_label_set_text(bhdr, "Bursts per transmission");
-        lv_obj_set_style_text_color(bhdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_font(bhdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(bhdr, LV_ALIGN_TOP_LEFT, 0, 100);
-        lv_obj_t *bdd = lv_dropdown_create(sec);
-        lv_dropdown_set_options(bdd, "1 (single)\n2 (back to back)\n3\n4");
-        lv_obj_set_size(bdd, DRAWER_W - 32, 50);
-        lv_obj_align(bdd, LV_ALIGN_TOP_LEFT, 0, 140);
-        lv_obj_set_style_text_font(bdd, &lv_font_montserrat_28, 0);
+        lv_obj_t *rhdr = lv_label_create(sec);
+        lv_label_set_text(rhdr, "Receive cycles");
+        lv_obj_set_style_text_color(rhdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(rhdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(rhdr, LV_ALIGN_TOP_LEFT, (DRAWER_W - 48) / 2 + 16, 40);
+        s_wspr_rx_hdr = rhdr;
+        lv_obj_t *rdd = lv_dropdown_create(sec);
+        /* 1-20. Never 0 - that keys the radio continuously (settings.h). */
+        lv_dropdown_set_options(rdd,
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20");
+        lv_obj_set_size(rdd, (DRAWER_W - 48) / 2, 50);
+        lv_obj_align(rdd, LV_ALIGN_TOP_LEFT, (DRAWER_W - 48) / 2 + 16, 78);
+        lv_obj_set_style_text_font(rdd, &lv_font_montserrat_28, 0);
         {
-            uint8_t b = ws.wspr_tx_burst_n ? ws.wspr_tx_burst_n : 1;
-            if (b > 4) b = 4;
-            lv_dropdown_set_selected(bdd, (uint16_t)(b - 1));
+            uint8_t r = ws.wspr_rx_cycles;
+            if (r < 1 || r > 20) r = 4;
+            lv_dropdown_set_selected(rdd, (uint16_t)(r - 1));
         }
-        lv_obj_add_event_cb(bdd, drawer_dropdown_wspr_burst_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_add_event_cb(bdd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        /* Matches drawer_section(..., 200) above - see the note there. */
-        y += 200;
+        lv_obj_add_event_cb(rdd, drawer_dropdown_wspr_rx_cycles_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(rdd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        s_wspr_rx_dd = rdd;
+
+        /* The schedule in words, regenerated from the counts - see
+         * wspr_sched_desc_refresh(). */
+        s_wspr_sched_desc = lv_label_create(sec);
+        lv_obj_set_style_text_color(s_wspr_sched_desc, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(s_wspr_sched_desc, &lv_font_montserrat_24, 0);
+        lv_obj_set_width(s_wspr_sched_desc, DRAWER_W - 32);
+        lv_label_set_long_mode(s_wspr_sched_desc, LV_LABEL_LONG_WRAP);
+        lv_obj_align(s_wspr_sched_desc, LV_ALIGN_TOP_LEFT, 0, 140);
+        wspr_sched_desc_refresh();
+        /* Matches drawer_section(..., 260) above - see the note there. */
+        y += 260;
     }
     {
         qmx_settings_t ws;

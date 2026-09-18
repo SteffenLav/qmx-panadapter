@@ -44,7 +44,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   contact mode: a very slow, very weak signal carrying your callsign, grid and power,
   which stations worldwide report hearing. What was heard each two-minute cycle with band,
   distance and bearing, the furthest of the session, and a per-cycle history. Receiving is
-  the default; transmitting is opt-in, with a duty cycle and optional band hopping.
+  the default; transmitting is opt-in, with a transmit schedule and optional band hopping.
   **Calibrate Power** measures real RF output per band on a dummy load, so **Declared
   power** only offers standard dBm steps the radio actually reaches — labelled with the
   real wattage, not a textbook figure — which is also how you protect the finals for a

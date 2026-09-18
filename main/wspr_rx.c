@@ -423,7 +423,7 @@ static uint8_t s_burst_done    = 0;    /* bursts already sent in this group */
  * Operator, 2026-09-12: "No % but only 1 in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10
  * - this way we keep consistency and operator knows the TX plan." So `duty` is
  * now the literal period N: cycle `after + N` transmits, every time, no roll.
- * N >= 2 always (see kDuty[] in wspr_screen_view.c - the option list has no
+ * The receive count is never 0 (settings.h - the option list has no
  * "1 in 1"), so the old back-to-back problem cannot recur by construction and
  * the separate min_gap mechanism it needed is gone with it.
  *
@@ -431,10 +431,14 @@ static uint8_t s_burst_done    = 0;    /* bursts already sent in this group */
  * value (NVS key, /api/settings field, config export) is unchanged, only its
  * meaning is, and renaming it would be a bigger and less honest diff than the
  * behaviour change itself. */
-static int64_t roll_next_tx_cycle(int64_t after, uint8_t duty)
+/* First transmit cycle of the NEXT group, given the last transmit cycle of this
+ * one. The group is tx_cycles of transmit followed by rx_cycles of receive, so
+ * the next group starts one cycle after the last transmit plus the listening
+ * time - and the period is simply tx + rx, with nothing to infer. */
+static int64_t roll_next_group_cycle(int64_t last_tx_cycle, uint8_t rx_cycles)
 {
-    if (duty == 0) return -1;
-    return after + (int64_t)duty;
+    if (rx_cycles < 1) rx_cycles = 1;   /* 0 would key the radio continuously */
+    return last_tx_cycle + 1 + (int64_t)rx_cycles;
 }
 
 /* ⛔ THE TX-ENABLE ENGAGE BELOW IS ONE SYNCHRONOUS CHECK, AND THE CACHE IS
@@ -580,7 +584,7 @@ static void wspr_pa_guard_restore_if_pending(void)
     if (back == 0) return;   /* nothing owed */
 
     bool want_reduced = settings_get_wspr_tx_en() && settings_get_wspr_pa_reduce()
-                       && settings_get_wspr_duty_pct() > 0;
+                       && settings_get_wspr_tx_cycles() > 0;
     if (want_reduced) return;   /* still genuinely wanted - not this function's job */
 
     int16_t cur = cat_get_pa_voltage_x10();
@@ -604,14 +608,14 @@ static void wspr_pa_guard_restore_if_pending(void)
              back / 10, back % 10);
 }
 
-void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles)
 {
     /* ⚠ Takes the two values it needs as ARGUMENTS rather than reading the
      * settings itself. Both callers are UI paths - the Tab5's TX button on
      * taskLVGL and the /api/settings handler on httpd - and settings_load_all()
      * is a multi-kilobyte struct on the caller's stack. That is the bug class
      * this board has hit four times; see "Task stacks on this board are TINY". */
-    if (!tx_en || duty_pct == 0) {
+    if (!tx_en || tx_cycles == 0) {
         s_next_tx_cycle   = -1;
         s_sched_duty      = 0;
         s_burst_done      = 0;
@@ -621,7 +625,7 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
          * own check - see wspr_pa_guard_restore_if_pending()'s own
          * comment. A no-op if nothing is owed or the guard has genuinely
          * been switched off, so calling it unconditionally here costs
-         * nothing on the common paths (duty_pct==0 is rare; !tx_en is the
+         * nothing on the common paths (tx_cycles==0 is rare; !tx_en is the
          * disarm case this exists for). */
         wspr_pa_guard_restore_if_pending();
         return;
@@ -698,9 +702,10 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct)
         /* Nothing has just transmitted here - this is transmitting being
          * switched on, or the duty being changed mid-session - so the very
          * next cycle is allowed. */
-        s_next_tx_cycle = roll_next_tx_cycle(cycle_now, duty_pct);
+        s_next_tx_cycle = roll_next_group_cycle(cycle_now, rx_cycles);
     }
-    s_sched_duty    = duty_pct;
+    s_sched_duty    = (uint8_t)((tx_cycles ? tx_cycles : 1) * 32u +
+                                (rx_cycles ? rx_cycles : 1));
 
     /* ⭐ PRE-WARM THE PA-GUARD QUERY, not wait for the first cycle to ask.
      *
@@ -1734,7 +1739,7 @@ static void wspr_pa_guard_release(void);
 
 static void wspr_pa_guard_update(const qmx_settings_t *ws)
 {
-    bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0;
+    bool want_reduced = ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_tx_cycles > 0;
 
     /* ⛔ RETIRED, 2026-09-16 - same operator decision as
      * wspr_pa_guard_engage_if_pending() above ("the wspr finals-protection
@@ -1840,7 +1845,7 @@ static bool wspr_pa_guard_ready(const qmx_settings_t *ws)
     (void)ws;
     return true;
 
-    if (!(ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_duty_pct > 0))
+    if (!(ws->wspr_tx_en && ws->wspr_pa_reduce && ws->wspr_tx_cycles > 0))
         return true;                    /* protection not wanted - nothing to wait for */
     int16_t cur = cat_get_pa_voltage_x10();
     return cur >= 0 && (uint16_t)cur <= WSPR_PA_TARGET_X10;
@@ -2050,25 +2055,29 @@ static void wspr_rx_task(void *arg)
         }
 
         /* ---- is THIS the cycle the schedule picked? --------------------
-         * The roll itself happened earlier (see roll_next_tx_cycle) so that
+         * The roll itself happened earlier (see roll_next_group_cycle) so that
          * the TX button can count down to a real burst instead of to the next
          * mere opportunity. All that is left here is to act on it, and to roll
          * the following one - whether this cycle transmitted or not, so a held
          * or refused burst moves the countdown on rather than leaving it at
          * zero promising something that is not coming. */
-        const bool tx_possible = ws.wspr_tx_en && ws.wspr_duty_pct > 0;
+        const uint8_t sched_tx = ws.wspr_tx_cycles;
+        const uint8_t sched_rx = ws.wspr_rx_cycles ? ws.wspr_rx_cycles : 1;
+        const bool tx_possible = ws.wspr_tx_en && sched_tx > 0;
         if (!tx_possible) {
             s_next_tx_cycle = -1;
             s_sched_duty    = 0;
         } else if (s_next_tx_cycle < last_cycle_idx ||
-                   s_sched_duty != ws.wspr_duty_pct) {
+                   s_sched_duty != (uint8_t)(sched_tx * 32u + sched_rx)) {
             /* Nothing scheduled, the schedule was overtaken (a stalled cycle,
-             * a clock step), or the operator changed the duty. Rolled from
-             * last_cycle_idx - 1 so THIS cycle is the first candidate, which
-             * keeps the old behaviour that a burst can happen in the very
-             * first cycle after transmitting is switched on. */
-            s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx - 1, ws.wspr_duty_pct);
-            s_sched_duty    = ws.wspr_duty_pct;
+             * a clock step), or the operator changed either count. THIS cycle
+             * becomes the first transmit of a fresh group, which keeps the
+             * behaviour that a burst can happen in the very first cycle after
+             * transmitting is switched on. */
+            s_next_tx_cycle = last_cycle_idx;
+            /* Both counts fold into one comparison value so a change to either
+             * re-rolls. rx is 1-20 and tx is 0-4, so tx*32+rx cannot collide. */
+            s_sched_duty    = (uint8_t)(sched_tx * 32u + sched_rx);
             /* A re-roll abandons any group in progress: the schedule it was
              * part of no longer exists. */
             s_burst_done    = 0;
@@ -2082,17 +2091,15 @@ static void wspr_rx_task(void *arg)
              * VERY NEXT cycle until it is used up, and only then does the next
              * group get rolled - from the group's FIRST cycle, so the period is
              * group-start to group-start and the groups do not drift. */
-            uint8_t burst_n = settings_get_wspr_tx_burst_n();
-            if (burst_n < 1) burst_n = 1;
+            uint8_t tx_n = sched_tx ? sched_tx : 1;
             s_burst_done++;
-            if (s_burst_done < burst_n) {
+            if (s_burst_done < tx_n) {
                 s_next_tx_cycle = last_cycle_idx + 1;   /* back to back */
-                ESP_LOGI(TAG, "burst %u of %u in this group - next cycle too",
-                         (unsigned)s_burst_done, (unsigned)burst_n);
+                ESP_LOGI(TAG, "transmit %u of %u in this group - next cycle too",
+                         (unsigned)s_burst_done, (unsigned)tx_n);
             } else {
-                /* Group finished. N-1 receive cycles follow, so the next group
-                 * begins duty cycles after THIS burst - no clamp needed. */
-                s_next_tx_cycle = roll_next_tx_cycle(last_cycle_idx, ws.wspr_duty_pct);
+                /* Group finished: rx_cycles of listening follow. */
+                s_next_tx_cycle = roll_next_group_cycle(last_cycle_idx, sched_rx);
                 s_burst_done    = 0;
             }
         }
@@ -2130,9 +2137,11 @@ static void wspr_rx_task(void *arg)
             } else if (!wspr_tx_arm(&req, err, sizeof(err))) {
                 ESP_LOGW(TAG, "TX arm refused: %s", err);
             } else {
-                ESP_LOGW(TAG, "TX armed for THIS cycle: %s %s %d dBm (duty %u%%)",
+                ESP_LOGW(TAG, "TX armed for THIS cycle: %s %s %d dBm "
+                              "(group %u tx + %u rx = %u min)",
                          ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
-                         (unsigned)ws.wspr_duty_pct);
+                         (unsigned)sched_tx, (unsigned)sched_rx,
+                         (unsigned)((sched_tx + sched_rx) * 2u));
             }
             /* Cleared however this turned out. A build failure or a missing
              * callsign is a configuration problem that will not fix itself,

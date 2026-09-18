@@ -154,30 +154,28 @@ A separate slider, filed next to Calibrate Power, sets the radio's output for ev
 
 **If you intend to beacon on WSPR for hours, feed the QMX from a lower supply.** The QMX accepts **6.0 to 12.0 V**, and running it at around 9 V means less voltage to throw away as heat anywhere in the radio. This is the one thing that helps which no firmware setting can do for you.
 
-#### Duty cycle
+#### Transmit schedule *(changed in v1.14.5)*
 
-How often you transmit, as an exact period: **Receive only**, **1 in 2**, **1 in 3**, **1 in 4**, **1 in 5** or **1 in 10**.
+Two numbers describe one repeating group: **Transmit cycles**, then **Receive cycles**.
 
-This is a **period, not a chance**. "1 in 5" means one transmission then four receive cycles, every time — you can look at the setting and say which cycle will key the radio. It used to be a percentage rolled independently each cycle, which meant nobody could predict it and two bursts could land back to back by accident.
+Set transmit to 2 and receive to 8, and the beacon transmits for two cycles, listens for eight, and repeats for ever. The period is simply the two added together — ten cycles, twenty minutes — and the Tab5 spells it out under the two controls as you change them:
 
-WSPR convention is to transmit a minority of the time and listen the rest. 1 in 5 is a reasonable default; 1 in 2 is a lot on a shared, very quiet sub-band.
+> Transmit 2, then listen 8 — repeating every 20 min. Transmitting 20% of the time.
 
-#### Bursts per transmission *(v1.14.4)*
+| Transmit | Receive | Pattern, repeating | Period |
+|---|---|---|---|
+| 1 | 4 | Tx Rx Rx Rx Rx | 10 min |
+| 1 | 9 | Tx Rx ×9 | 20 min |
+| 2 | 8 | Tx Tx Rx ×8 | 20 min |
+| 2 | 3 | Tx Tx Rx Rx Rx | 10 min |
 
-How many **consecutive** cycles each transmission occupies: **1** (single), **2** (back to back), **3** or **4**.
+Setting transmit to **Receive only** never keys the radio, and greys out the receive count — with no transmission there is no group to space out.
 
-The duty cycle above counts the *receive* cycles that follow, so the two read together:
+**Why two numbers and not a duty cycle.** This used to be "1 in N" plus a separate "bursts per transmission", and that pair had no agreed meaning. "1 in 5" plainly means one cycle in five, and with a single burst that is exactly what it did — but ask for two bursts and the phrase stops saying anything. Does the group grow into the listening time, or is the listening time kept? Two people can read it two ways, and did. Two counts cannot be read two ways.
 
-| Duty cycle | Bursts | Pattern, repeating |
-|---|---|---|
-| 1 in 2 | 1 | Tx Rx |
-| 1 in 2 | 2 | Tx Tx Rx |
-| 1 in 3 | 1 | Tx Rx Rx |
-| 1 in 3 | 2 | Tx Tx Rx Rx |
+**Your existing setting is carried over exactly.** A Tab5 upgrading from v1.14.4 or earlier keeps the schedule it was already running, cycle for cycle — the old "1 in 5" becomes 1 transmit and 4 receive, which is the same thing said plainly.
 
-Two transmissions in a row give a distant receiver a second chance at you when the first one falls in a fade, which is why the QMX's own beacon offers it. It also doubles how much of the time you are keying the finals, so pick the declared power to match — see the note under **Declared power** above.
-
-Default is **1**, which is exactly the behaviour before this setting existed.
+**Transmitting more means keying the finals more.** Two cycles in a row give a distant receiver a second chance at you when the first falls in a fade, which is why the QMX's own beacon offers it — and it doubles your share of key-down time. Pick the declared power to match; see **Declared power** above.
 
 #### Band hopping
 
@@ -197,9 +195,9 @@ It needs WiFi and your callsign and grid.
 
 ### 4. Transmitting
 
-With a callsign and grid set and a duty cycle other than **Receive only**, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the duty cycle and the burst count, and the button shows what is happening.
+With a callsign and grid set and a transmit count other than **Receive only**, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the transmit schedule, and the button shows what is happening.
 
-**The countdown on the button is the time until a real transmission.** The duty-cycle decision is taken in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.
+**The countdown on the button is the time until a real transmission.** The schedule is worked out in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.
 
 A few things worth knowing before you leave it running:
 

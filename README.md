@@ -140,7 +140,7 @@ levels where nothing else would be heard at all. Nobody replies and nothing goes
 log. The page lists what was heard each two-minute cycle with the band, distance and
 bearing, the furthest of the session, and a per-cycle history, so an opening band looks
 different from a closing one. Receiving is the default; transmitting is opt-in, refuses to
-key without your callsign and grid, and has a duty cycle and optional band hopping.
+key without your callsign and grid, and has a transmit schedule and optional band hopping.
 **Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output
 at each step, per band. **Declared power** then only offers the standard WSPR dBm steps
 your calibration actually reaches — each one labelled with its real measured wattage, not

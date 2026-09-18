@@ -491,7 +491,7 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 ## WSPR
 
 The **WSPR** group appears only while the WSPR page is up, and holds **Allow
-transmitting**, **Declared power**, **Duty cycle**, **Band hopping** and **Publish spots
+transmitting**, **Declared power**, **Transmit schedule**, **Band hopping** and **Publish spots
 to wsprnet**. They are described where they make sense — see [WSPR](wspr.md).
 
 ## The snap-on keyboard

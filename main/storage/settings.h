@@ -380,16 +380,41 @@ typedef struct {
      * 0.2 W whatever the operator was actually running. */
     uint32_t wspr_dial_hz;    // standard WSPR dial for the chosen band (default 20 m)
     bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
-    uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
-    /* How many CONSECUTIVE cycles each scheduled transmission occupies. 1 is a
-     * single burst and is the default and the old behaviour; 2 gives the
-     * back-to-back pair John W5JSS asked for ("10:46 & 10:48, 11:06 & 11:08"),
-     * which the QMX's own Virtual U3S beacon can do and this could not.
+    /* ⛔ THE SCHEDULE IS SPELLED OUT, NOT NAMED. Two counts describing one
+     * repeating group: transmit this many cycles back to back, then receive
+     * this many, for ever.
      *
-     * wspr_duty_pct counts the RECEIVE cycles that follow the group (N-1 of
-     * them), so the real period is bursts + N - 1 and it grows with this
-     * setting: 1 in 3 with 2 bursts is Tx Tx Rx Rx, repeating. */
-    uint8_t  wspr_tx_burst_n; // consecutive cycles per scheduled transmission, 1-4
+     *     wspr_tx_cycles = 2, wspr_rx_cycles = 8
+     *     -> Tx Tx Rx Rx Rx Rx Rx Rx Tx Tx Rx Rx ...   period 10 cycles = 20 min
+     *
+     * It replaced a "1 in N" dropdown plus a separate "bursts per
+     * transmission", and the reason is that the pair had no agreed meaning.
+     * "1 in 5" plainly means one cycle in five - and with a single burst that
+     * is exactly what the code did. Ask for TWO bursts and the phrase stops
+     * saying anything: does the group grow into the listening time (period
+     * stays 5) or is the listening time preserved (period becomes 6)? The code
+     * did the second, and I told John W5JSS on 2026-09-18 that it did the
+     * first. Neither of us was misreading the other; the label could not settle
+     * it. Operator: "why dont we just skip the '1 in X' change it all to:
+     * number of TX's + number of RX's in a forever repeating group".
+     *
+     * The period is now simply wspr_tx_cycles + wspr_rx_cycles, which is the
+     * whole point: nothing has to be inferred.
+     *
+     * ⚠ MIGRATION IS EXACT, not approximate. The old period was
+     * duty + bursts - 1, so rx = duty - 1 and tx = bursts reproduce it
+     * cycle-for-cycle - no unit changes behaviour on upgrade. Guarded by
+     * KEY_WSPR_SCHED_V so a stored 5 is never reinterpreted as 5 receive
+     * cycles; this field's meaning has already changed once (percentage ->
+     * period, 2026-09-12) and that migration is the precedent.
+     *
+     * wspr_tx_cycles == 0 means RECEIVE ONLY - it is how transmitting is turned
+     * off from this control, replacing the old dropdown's "Receive only" row.
+     * wspr_rx_cycles is never 0: that would key the radio continuously and the
+     * page would never receive, which was measured on the bench and is recorded
+     * in CLAUDE.md under the bursts-per-transmission note. */
+    uint8_t  wspr_rx_cycles;  // receive cycles after each group, 1-20
+    uint8_t  wspr_tx_cycles;  // consecutive transmit cycles per group, 0-4 (0 = RX only)
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
@@ -621,8 +646,8 @@ int16_t settings_get_cw_tx_offset_hz(void);
 /* Narrow reads for the WSPR transmit schedule - see the note in settings.c.
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
-uint8_t settings_get_wspr_duty_pct(void);
-uint8_t settings_get_wspr_tx_burst_n(void);
+uint8_t settings_get_wspr_rx_cycles(void);
+uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
@@ -770,8 +795,8 @@ void settings_set_fd_section(const char *section);
 void settings_set_sim_mode_en(bool v);
 void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
-void settings_set_wspr_duty_pct(uint8_t v);
-void settings_set_wspr_tx_burst_n(uint8_t v);  // clamped 1-4
+void settings_set_wspr_rx_cycles(uint8_t v);   // clamped 1-20
+void settings_set_wspr_tx_cycles(uint8_t v);   // clamped 0-4, 0 = receive only
 void settings_set_wspr_tx_dbm(int8_t v);
 int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
 // Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).

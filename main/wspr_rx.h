@@ -387,10 +387,10 @@ bool wspr_pa_calibrated_status(char *out, size_t out_sz);
 
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
- * wspr_duty_pct, or the countdown keeps describing the previous setting until
+ * the tx/rx cycle counts, or the countdown keeps describing the previous setting until
  * the next cycle boundary.
  *
  * ⚠ Takes the two values rather than reading the settings, because both callers
  * are UI tasks and settings_load_all() is a multi-kilobyte stack allocation -
  * the bug class that has boot-looped this board four times. */
-void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct);
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles);

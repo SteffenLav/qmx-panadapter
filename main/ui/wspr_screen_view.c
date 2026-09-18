@@ -249,15 +249,8 @@ static const char *TAG = "wspr_view";
 /* Duty is a CYCLING VALUE, per docs/wspr-ui-design.md: WSPR asks "what
  * fraction of slots", never "transmit now". 0 is a legitimate state - enabled
  * but silent - while setting up. */
-/* The ONLY legal duty values, and now shared with the settings drawer so the
- * two cannot offer different sets. Exported through wspr_screen_view.h. */
-/* ⛔ THIS IS A PERIOD NOW, NOT A PERCENTAGE. Operator, 2026-09-12: "No % but
- * only 1 in 2, 1 in 3, 1 in 4, 1 in 5, 1 in 10 - this way we keep consistency
- * and operator knows the TX plan." See roll_next_tx_cycle() in wspr_rx.c -
- * cycle `after + N` transmits, every time, no roll. WSPR_N_DUTY grew 5 -> 6 to
- * carry the new "1 in 4" option that was not part of the old percentage set. */
-const uint8_t kDuty[] = { 0, 2, 3, 4, 5, 10 };
-#define N_DUTY ((int)(sizeof(kDuty) / sizeof(kDuty[0])))
+/* kDuty[] is gone: the schedule is two plain counts now (transmit cycles,
+ * receive cycles) with no option list to keep in step. See settings.h. */
 
 /* Which kBands entries this radio can reach, in table order. Built when the
  * page is constructed and refreshed whenever CAT reports a band list, because
@@ -1217,7 +1210,7 @@ static void tx_toggle_cb(lv_event_t *e)
     settings_set_wspr_tx_en(!st.wspr_tx_en);
     /* Re-roll which cycle transmits next, so the countdown on this very button
      * is right the moment it is pressed rather than at the next boundary. */
-    wspr_rx_tx_schedule_reset(!turning_off, st.wspr_duty_pct);
+    wspr_rx_tx_schedule_reset(!turning_off, st.wspr_tx_cycles, st.wspr_rx_cycles);
 
     /* ⭐ SWITCHING OFF STOPS A BURST THAT IS ON THE AIR (Roy KI0ER, 2026-09-01:
      * "if that button is tapped while actively transmitting, nothing happens and

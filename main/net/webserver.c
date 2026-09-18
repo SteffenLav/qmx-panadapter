@@ -4083,8 +4083,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
      * cannot be read back is the same silent-state trap as the rest of this
      * file's warnings. */
     cJSON_AddNumberToObject(root, "wspr_dump_cycles", c.wspr_dump_cycles);
-    cJSON_AddNumberToObject(root, "wspr_duty_pct", c.wspr_duty_pct);
-    cJSON_AddNumberToObject(root, "wspr_tx_burst_n", c.wspr_tx_burst_n ? c.wspr_tx_burst_n : 1);
+    cJSON_AddNumberToObject(root, "wspr_tx_cycles", c.wspr_tx_cycles);
+    cJSON_AddNumberToObject(root, "wspr_rx_cycles", c.wspr_rx_cycles ? c.wspr_rx_cycles : 4);
     cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
@@ -4307,22 +4307,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_wspr_tx_en(cJSON_IsTrue(it));
         wspr_sched_dirty = true;
     }
-    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_burst_n"))) {
+    /* The schedule is two plain counts now - transmit this many cycles, then
+     * receive this many, repeating - so these are RANGES rather than the exact
+     * allow-list "1 in N" needed. That allow-list existed because a value
+     * outside the dropdown became a period nobody chose; a count cannot do
+     * that, it just is what it says. tx 0 is receive-only; rx is never 0,
+     * which would key the radio continuously (see settings.h). */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_cycles"))) {
         int v = it->valueint;
-        if (v >= 1 && v <= 4) { settings_set_wspr_tx_burst_n((uint8_t)v); wspr_sched_dirty = true; }
+        if (v >= 0 && v <= 4) { settings_set_wspr_tx_cycles((uint8_t)v); wspr_sched_dirty = true; }
     }
-    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
-        /* An exact allow-list, not a range: this is a literal 1-in-N period
-         * now (see roll_next_tx_cycle() in wspr_rx.c), and any value outside
-         * the option list the web/Tab5 UIs actually offer would silently
-         * become a period nobody chose. 0..50 used to be a valid RANGE when
-         * this meant a percentage; it is not one any more. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_rx_cycles"))) {
         int v = it->valueint;
-        static const int allowed[] = { 0, 2, 3, 4, 5, 10 };
-        bool ok = false;
-        for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
-            if (v == allowed[i]) { ok = true; break; }
-        if (ok) { settings_set_wspr_duty_pct((uint8_t)v); wspr_sched_dirty = true; }
+        if (v >= 1 && v <= 20) { settings_set_wspr_rx_cycles((uint8_t)v); wspr_sched_dirty = true; }
     }
     /* Re-roll which cycle transmits next, or the TX countdown goes on
      * describing the previous setting until the next cycle boundary - up to two
@@ -4330,7 +4327,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * values are passed in rather than re-read: this is the httpd task. */
     if (wspr_sched_dirty)
         wspr_rx_tx_schedule_reset(settings_get_wspr_tx_en(),
-                                  settings_get_wspr_duty_pct());
+                                  settings_get_wspr_tx_cycles(),
+                                  settings_get_wspr_rx_cycles());
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not
