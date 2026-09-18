@@ -147,6 +147,13 @@ static bool s_view_is_users = false;
 static float s_map_zoom = 1.0f;
 static void map_sync_scroll_chain(void);   // defined with the drag-pan, far below
 static float s_map_pan_dx = 0.0f, s_map_pan_dy = 0.0f;
+/* Screen fraction the current pinch is anchored on - see map_pinch_poll_cb. */
+static float s_map_pinch_fx = 0.5f, s_map_pinch_fy = 0.5f;
+/* Last touch point LVGL reported on the map, in SCREEN coordinates. Written by
+ * map_drag_cb (where an indev is valid) and read by the pinch timer (where one
+ * is not). See the comment at its capture. */
+static lv_point_t s_map_last_pt;
+static bool       s_map_have_last_pt = false;
 #define MAP_ZOOM_MIN 1.0f
 /* ⛔ THE CHALLENGE THE OPERATOR ASKED FOR, TWICE NOW. This was 8.0, then 10 -
  * the second time (2026-09-16, right after the coastline decimation fix
@@ -1286,6 +1293,52 @@ static void map_pinch_poll_cb(lv_timer_t *t)
         s_map_pinch_active = true;
         s_map_pinch_start_dist = dist;
         s_map_pinch_start_zoom = s_map_zoom;
+        /* ⭐ WHERE THE ZOOM IS ANCHORED, captured ONCE when the pinch starts.
+         *
+         * This used to change s_map_zoom and nothing else, so the zoom was
+         * anchored on the STATION (project()'s ax/ay) and everything else flew
+         * away from it. Operator, 2026-09-18: "it does not stay centred where i
+         * start pinching - so when zooming in i move fast to another place in
+         * the region and need to zoom out again to orient my self".
+         *
+         * ⚠ He asked whether the one-finger pan was fighting it. It is not -
+         * map_drag_cb() returns while s_map_pinch_active, and has since the
+         * gesture was written. The pan was simply never updated to match.
+         *
+         * ⛔ TAKEN FROM LVGL, NOT FROM THE RAW TOUCH DRIVER. The pinch reads
+         * esp_lcd_touch directly because LVGL tracks only one point, and those
+         * raw coordinates are in the PANEL's portrait frame - ui.c's own pinch
+         * uses `coords[].y` as a landscape x for exactly that reason. Deriving
+         * the full rotation here would be a second copy of that transform, and
+         * a wrong one would be invisible: the map would simply drift the wrong
+         * way. LVGL's tracked point is already in screen coordinates, which is
+         * what map_drag_cb() uses two functions down, so the two gestures agree
+         * by construction. It is one finger of the two rather than their
+         * midpoint - a few tens of pixels out, against a whole screen of drift
+         * before. */
+        s_map_pinch_fx = s_map_pinch_fy = 0.5f;   /* centre if nothing better */
+        if (s_map_have_last_pt && s_map_obj) {
+            lv_area_t a;
+            lv_obj_get_coords(s_map_obj, &a);
+            int32_t aw = lv_area_get_width(&a), ah = lv_area_get_height(&a);
+            if (aw > 0 && ah > 0) {
+                float fx = (float)(s_map_last_pt.x - a.x1) / (float)aw;
+                float fy = (float)(s_map_last_pt.y - a.y1) / (float)ah;
+                if (fx >= 0.0f && fx <= 1.0f && fy >= 0.0f && fy <= 1.0f) {
+                    s_map_pinch_fx = fx;
+                    s_map_pinch_fy = fy;
+                }
+            }
+        }
+        /* ⚠ KEPT, at DEBUG. This is the one line that distinguishes "the anchor
+         * is wrong" from "the anchor never arrived", and the difference is
+         * invisible on screen - the first version of this fix took the centre
+         * fallback on every pinch and looked exactly like no fix at all. It is
+         * DEBUG rather than INFO so it does not fill the diag log, and rather
+         * than deleted because the next person to touch this gesture will want
+         * it. Raise it to ESP_LOGI for one build if the map ever drifts again. */
+        ESP_LOGD(TAG, "pinch anchor: %.2f,%.2f (%s)", (double)s_map_pinch_fx,
+                 (double)s_map_pinch_fy, s_map_have_last_pt ? "finger" : "CENTRE FALLBACK");
         return;
     }
 
@@ -1293,6 +1346,27 @@ static void map_pinch_poll_cb(lv_timer_t *t)
     if (zoom < MAP_ZOOM_MIN) zoom = MAP_ZOOM_MIN;
     if (zoom > MAP_ZOOM_MAX) zoom = MAP_ZOOM_MAX;
     if (fabsf(zoom - s_map_zoom) > 0.01f) {
+        /* Hold the point under the fingers still. project() maps a world
+         * fraction w to the screen as
+         *      f = a + (w - a) * zoom + pan
+         * so for the screen point f to name the same w after the zoom changes:
+         *      w - a = (f - a - pan0) / z0
+         *      pan1  = f - a - (f - a - pan0) * z1 / z0
+         *
+         * ⚠ z0 is read as 1.0 below MAP_ZOOM_MIN because project() skips the
+         * whole transform at zoom 1 - treating the unzoomed view as
+         * (zoom 1, pan 0) is what makes the first pinch out of it land right
+         * rather than jumping. */
+        float z0 = (s_map_zoom > 1.0f) ? s_map_zoom : 1.0f;
+        float p0x = (s_map_zoom > 1.0f) ? s_map_pan_dx : 0.0f;
+        float p0y = (s_map_zoom > 1.0f) ? s_map_pan_dy : 0.0f;
+        float ax = ((s_have_me ? (float)s_my_lon : 0.0f) + 180.0f) / 360.0f;
+        float ay = (90.0f - (s_have_me ? (float)s_my_lat : 0.0f)) / 180.0f;
+        float r  = zoom / z0;
+
+        s_map_pan_dx = s_map_pinch_fx - ax - (s_map_pinch_fx - ax - p0x) * r;
+        s_map_pan_dy = s_map_pinch_fy - ay - (s_map_pinch_fy - ay - p0y) * r;
+
         s_map_zoom = zoom;
         s_view_is_users = true;    /* stop auto-re-fitting under their fingers */
         map_sync_scroll_chain();   /* pan, or swipe-to-tab - see its comment */
@@ -1344,9 +1418,31 @@ static void map_drag_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         s_map_drag_active = false;
+        s_map_have_last_pt = false;   /* never anchor the next pinch on an old touch */
         return;
     }
     if (code != LV_EVENT_PRESSING) return;
+
+    /* ⛔ READ THE POINT BEFORE ANY EARLY RETURN - THE PINCH NEEDS IT.
+     *
+     * map_pinch_poll_cb() runs from an lv_timer, and lv_indev_get_act() is only
+     * valid INSIDE an event callback, so from there it is always NULL. My first
+     * attempt at anchoring the pinch asked for it anyway, silently fell back to
+     * the screen centre every single time, and the operator reported exactly
+     * that: "its still zooming around the center of the screen".
+     *
+     * Here the indev is the event's own and is always valid. Storing it on
+     * every PRESSING - including the ones the drag itself ignores, which is why
+     * this sits above the returns below - means that when a second finger lands
+     * the pinch already knows where the first one is. */
+    {
+        lv_indev_t *iv = lv_event_get_indev(e);
+        if (iv) {
+            lv_indev_get_point(iv, &s_map_last_pt);
+            s_map_have_last_pt = true;
+        }
+    }
+
     if (s_map_zoom <= MAP_ZOOM_MIN || s_map_pinch_active) {
         s_map_drag_active = false;   // re-baseline once dragging is valid again
         return;
