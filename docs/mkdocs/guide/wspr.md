@@ -204,6 +204,13 @@ A few things worth knowing before you leave it running:
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
 - **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops.
 - **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
+- **Split stops it, and says so.** WSPR is transmitted on the dial frequency, and
+  the spot you publish names that frequency. If your radio is in split it keys VFO
+  B while still reporting VFO A, so every spot would name somewhere the signal
+  never was. Before each transmission the Tab5 asks the radio, and if split is on
+  it holds the burst and shows **TX held - radio is in SPLIT, clear VFO B**. It
+  will not clear it for you: that is your setting, and on the QMX split cannot be
+  cleared over the cable anyway — use the radio's own menu or power-cycle it.
 - **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **FT8 Simulation Mode** in the drawer; it interlocks WSPR TX as well.
 
 ---

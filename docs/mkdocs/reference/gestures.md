@@ -51,7 +51,8 @@ The thin coloured strip just above the bottom status bar shows where you are wit
 | Gesture | Effect |
 |---|---|
 | **Tap** the strip | Jump to that frequency in the band |
-| **Drag** the strip sideways | Scrub along the band — frequency updates live, QMX retunes on release |
+| **Drag** the visible-span block sideways | Move the window along the band. Block, VFO marker and passband travel together and stay where you let go; the radio follows |
+| **Touch just above the strip** | Counts as the strip — about 8 mm of the waterfall above it is a grab area, so the handle is catchable first time |
 | **Drag from the bottom bar** (sideways) | Same band scrub, grabbed on/under the slider handle *anywhere along the bottom status bar* — a taller, easier target |
 | **Swipe ↑** from the bottom bar | Still opens the memory picker (vertical = memory, sideways = band-plan — the two share the row) |
 

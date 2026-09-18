@@ -150,10 +150,22 @@ The **visible-span block** inside the strip shows the exact portion of the band 
 
 A **passband sub-block** inside the visible-span block mirrors the current filter width at band scale (grey tint), so you can see how your passband sits within the CW/Digi/Phone zones.
 
-**Tune directly from the strip:**
+**Tap and drag do different things, on purpose:**
 
-- **Tap** anywhere on the strip to jump to that frequency
-- **Drag** to scrub along the band — the frequency label updates live and the QMX retunes on release
+- **Tap** anywhere on the strip to jump to that frequency. Tapping says *go there*.
+- **Drag the visible-span block** to move the window along the band. Dragging says
+  *look there*. The block, the VFO marker and the passband all travel together as
+  one piece, keeping the dial exactly where it sits inside the window, and the
+  radio follows. Let go and it stays where you put it.
+
+The filter passband and the CW/Digi/Phone labels hide while you drag and fade back
+in when you let go, so you can see the VFO marker arrive at its new home.
+
+**The grab area is taller than the strip looks.** The strip itself is only a few
+millimetres, which is not a finger, so touches are accepted for about 8 mm of the
+waterfall directly above it as well. Tap-to-tune gives up that last centimetre of
+the waterfall — nothing interesting lives there, and it is the difference between
+catching the handle first time and getting a tune cursor instead.
 
 **Drag from the bottom bar too.** The visible-span block acts as a slider handle that reaches *below* the thin strip: touch on or just under it — anywhere along the bottom status bar — and **drag sideways** to scrub the band, exactly like dragging the strip itself. This gives you a much taller grab target. It coexists with the memory-picker gesture on the same row: a **sideways** drag retunes the band-plan, while a **vertical up-swipe** still opens the memory picker.
 
