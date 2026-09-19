@@ -2646,6 +2646,42 @@ Non-GPS QMX: the QMX internal RTC drifts freely (no GPS). Trusting it above SNTP
 `DSP_DB_CALIBRATION_OFFSET = -148.0 dB` (measured on dummy load, noise floor → -130 dBm). S9 = -73 dBm. Display range: -130 to -30 dBm.
 
 ### The QMX makes its own spurs, and the fix is to MOVE THE LO, not to filter
+
+⛔ **THE SPUR MAP MOVES THE OPERATOR'S DIAL, SO IT IS A SECOND WRITER OF THE
+RADIO - AND THAT COST A FIELD FAULT (John W5JSS, 2026-09-19).** Three separate
+bugs, all from one assumption: that the frequency it was handed is still the
+frequency the radio is on.
+
+- **It ran on the WSPR and FT8 pages.** A measurement begun on the panadapter
+  was still running when he opened WSPR; the WSPR dial push landed and the spur
+  map then "restored" the OLD frequency over it. His QMX sat on **14.074 while
+  WSPR believed 14.0956** - it heard nothing, and a burst would have gone out on
+  the FT8 frequency while the spot named 14.0956. Gated to
+  `UI_MODE_PANADAPTER` now, in `spur_task` AND in `safe_to_dither()`. Not
+  relevant is literal: `fft_task` takes the IQ-capture branch in those modes and
+  never reaches `spur_map_apply()`, so the suppression does nothing there and
+  there is nothing to pay 25 Hz for.
+- **`grab_average()` takes SECONDS**, so the dial must be re-read before each of
+  the two writes, never carried from the argument.
+- ⭐⭐ **A "FORCED" FREQUENCY WRITE CAN STILL BE DEFERRED, AND IT RETURNS
+  `ESP_OK`.** This is the general one and it is not about spurs.
+  `cat_set_frequency_forced()` is forced against the **200 ms rate limiter**
+  only; if a burst owns the pipe the write is parked in `s_pending_freq_hz` and
+  sent seconds later. Measured: the nudge was deferred, the restore went out
+  **first**, and the nudge landed 7 s afterwards, leaving the radio 25 Hz high -
+  precisely what that code's own "always restore, FORCED" comment claimed to
+  prevent. **Anything that writes a frequency it intends to take back must ask
+  `cat_poll_is_paused()` first and withdraw with
+  `cat_cancel_pending_freq_if()`** (value-matched, so it can only cancel its own
+  write and never an operator band change in the same one-slot queue).
+
+⚠ **Two things the bench taught that reasoning did not.** A 1.5 s confirm window
+gave three consecutive timeouts in the first 15 s of a boot, because the `FA`
+poll was queued behind the twelve `MM` reads of the band table - the radio was
+fine and the instrument was slow, so it is 3 s. And an **unconfirmed** nudge
+must still be restored: the bytes went out, so the radio may be 25 Hz high and
+merely not polled yet. Abandon the measurement, never the restore.
+
 Measured 2026-08-13 with the **BNC open** (they are self-generated — no antenna needed to
 reproduce any of this). At 14.074: teeth every **8015.6 Hz**, strongest **+38.6 dB** over
 the noise floor, plus a 2nd harmonic and a mirror image ~9 dB down. The noise floor itself
