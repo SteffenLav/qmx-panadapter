@@ -83,9 +83,16 @@ static const char *TAG = "ft8_view";
 #define COL_TEXT_X      184
 #define COL_COUNTRY_X   479
 #define COL_SNR_X       611
-#define COL_DT_X        673
-#define COL_HZ_X        743
-#define COL_KM_X        813
+/* ⭐ TONE BEFORE DT (operator, 2026-09-19), so all three list screens read in
+ * the same order: ... SNR TONE DT KM ... A straight swap of the two x
+ * positions, because both columns are 64 px wide. */
+#define COL_HZ_X        673
+/* One character (montserrat_24 advances ~12.1 px) closer to KM - operator,
+ * 2026-09-19. KM's own box moves with it by half that, so DT's box still ENDS
+ * exactly where KM's begins and the two can never overlap even on the widest
+ * value KM can print ("~12.345"). */
+#define COL_DT_X        755
+#define COL_KM_X        819
 #define COL_AGE_X       903
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
@@ -3204,10 +3211,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "SL",      COL_SLOT_X,    COL_SLOT_W,    LV_TEXT_ALIGN_LEFT  },
         { "CALL",    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT  },
         { "MESSAGE", COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT  },
-        { "CTY",     COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
+        { "COUNTRY", COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
         { "SNR",     COL_SNR_X,     COL_SNR_W,     LV_TEXT_ALIGN_RIGHT },
+        { "TONE",    COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "DT",      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT },
-        { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
         { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };

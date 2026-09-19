@@ -39,6 +39,7 @@ typedef struct {
     uint32_t freq_hz;
     int      snr_db;
     int64_t  heard_unix;
+    char     grid[7];     // the reporter's OWN grid as they sent it, "" if absent
     float    lat, lon;    // resolved from the receiver's own reported grid
     bool     has_pos;
 } pskr_self_spot_t;

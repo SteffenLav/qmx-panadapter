@@ -194,6 +194,11 @@ typedef enum { SPOT_SRC_CW, SPOT_SRC_DIGI, SPOT_SRC_WSPR } spot_kind_t;
 
 typedef struct {
     char        call[16];      // who heard us
+    /* The reporter's OWN grid, exactly as they sent it - "" when the source
+     * does not carry one. RBN skimmers never do (a skimmer reports a callsign,
+     * not a location; its position comes from QRZ or a DXCC centroid), so that
+     * column is honestly blank for CW rather than filled from a guess. */
+    char        grid[7];
     char        mode[8];       // "CW" (RBN), "FT8"/"FT4"/... (PSK Reporter), or "WSPR"
     uint32_t    freq_hz;
     int         snr_db;
@@ -458,6 +463,7 @@ static int gather_self_spots(self_spot_t *out, int max)
         self_spot_t *o = &out[n++];
         snprintf(o->call, sizeof(o->call), "%.15s", psk[i].call);   // see the note above
         snprintf(o->mode, sizeof(o->mode), "%.7s", psk[i].mode);
+        snprintf(o->grid, sizeof(o->grid), "%.6s", psk[i].grid);
         o->freq_hz    = psk[i].freq_hz;
         o->snr_db     = psk[i].snr_db;
         o->heard_unix = psk[i].heard_unix;
@@ -476,6 +482,7 @@ static int gather_self_spots(self_spot_t *out, int max)
         self_spot_t *o = &out[n++];
         snprintf(o->call, sizeof(o->call), "%.15s", wspr[i].call);   // see the note above
         snprintf(o->mode, sizeof(o->mode), "WSPR");
+        snprintf(o->grid, sizeof(o->grid), "%.6s", wspr[i].grid);
         o->freq_hz    = wspr[i].freq_hz;
         o->snr_db     = wspr[i].snr_db;
         o->heard_unix = wspr[i].heard_unix;
@@ -1552,7 +1559,7 @@ static void add_col(lv_obj_t *row, const char *text, int grow, uint32_t color, b
 // direction.
 typedef enum {
     SORT_COL_NONE = 0,
-    SORT_COL_CALL, SORT_COL_MODE, SORT_COL_BAND, SORT_COL_ISO,
+    SORT_COL_CALL, SORT_COL_GRID, SORT_COL_MODE, SORT_COL_BAND, SORT_COL_ISO,
     SORT_COL_FREQ, SORT_COL_SNR, SORT_COL_DIST, SORT_COL_AGE,
 } sort_col_t;
 typedef enum { SORT_ASC, SORT_DESC } sort_dir_t;
@@ -1581,6 +1588,7 @@ static int cmp_spots(const void *pa, const void *pb)
     int cmp;
     switch (s_sort_col) {
     case SORT_COL_CALL: cmp = strcasecmp(a->call, b->call); break;
+    case SORT_COL_GRID: cmp = strcasecmp(a->grid, b->grid); break;
     case SORT_COL_MODE: cmp = strcasecmp(a->mode, b->mode); break;
     // Band has no numeric value of its own (it's a name derived from
     // frequency, adif_log_band_for_freq()) - sorting on the underlying
@@ -1699,22 +1707,56 @@ static void rebuild_table(void)
     // RX/Freq could shrink and Distance grow by whole-number steps and still
     // land on the same total (20 vs 10) - see add_col()'s own comment for why
     // SNR/Distance also right-align.
-    add_sort_header_col(hdr, "RX",       4, SORT_COL_CALL,  false);
-    add_sort_header_col(hdr, "Mode",     2, SORT_COL_MODE,  true);
-    add_sort_header_col(hdr, "Band",     2, SORT_COL_BAND,  true);
-    add_sort_header_col(hdr, "Freq",     3, SORT_COL_FREQ,  true);
-    add_sort_header_col(hdr, "SNR",      2, SORT_COL_SNR,   true);
+/* ⭐ CAPITALS AND ONE COMMON ORDER ACROSS ALL THREE LISTS (operator,
+     * 2026-09-19). FT8, this list and WSPR now read left to right as
+     * WHO - WHERE - WHAT - HOW WELL - HOW FAR - HOW LONG AGO, so the eye
+     * lands in the same place on every screen:
+     *   FT8   CALL MESSAGE COUNTRY SNR TONE DT KM AGE
+     *   LIST  RECEIVER GRID COUNTRY MODE BAND FREQUENCY SNR KM AGE
+     *   WSPR  S UTC CALL GRID COUNTRY BND PWR SNR TONE DR DT KM
+     *
+     * ⚠ TONE AND DT ARE NOT HERE, AND THAT IS THE DATA'S FAULT, NOT AN
+     * OVERSIGHT. The operator asked for both. No feed reports the audio tone
+     * we were heard on - PSK Reporter and RBN give a dial frequency, wsprnet
+     * gives ours as they measured it, none gives an offset within a passband -
+     * and DT exists only in the wsprnet scrape, i.e. one source of three. A
+     * column that is a dash on two thirds of the rows is worse than no column,
+     * and inventing either would be the "never fabricate a measurement" rule
+     * again. Add them the day a feed actually carries them.
+     *
+     * Weights total 24 (was 21): GRID takes 3 and RECEIVER gives up one, since
+     * "RECEIVER" is a wider heading than "RX" but the CALLSIGNS under it did
+     * not change length. */
+/* ⚠ WEIGHTS DOUBLED so the columns can be tuned in HALF steps. At the old
+     * 2/3/4 granularity the smallest change was ~4 % of the table width, which
+     * is why GRID ended up a character short of a 6-character locator and
+     * FREQUENCY clipped (operator, 2026-09-19: "GRID and FREQUENCY columns are
+     * not wide enough - look at last line in GRID").
+     *
+     * What the values have to hold, which is what these are sized from:
+     *   RECEIVER  a callsign, up to ~10 with a portable suffix
+     *   GRID      SIX characters - a 6-char locator is normal, not an edge case
+     *   FREQUENCY "14.095.600" - ten characters in the dotted style
+     *   SNR       "-19"   KM "12.345"   AGE "5m"
+     * SNR, KM and AGE are the three narrowest things in the table and were
+     * each as wide as GRID; they give up the room. */
+    add_sort_header_col(hdr, "RECEIVER",  8, SORT_COL_CALL,  false);
+    add_sort_header_col(hdr, "GRID",      6, SORT_COL_GRID,  false);
     /* Country BEFORE Distance - operator, 2026-09-19. Reads better: the country
      * names it, the distance qualifies it, and the two numeric columns (Freq,
      * SNR) no longer have a text column wedged between them and Distance.
      *
-     * LEFT-aligned, like its values. Every other text column here is left and
-     * every numeric one is right; "Country" was the one header sitting right
-     * over left-aligned names, which reads as a column out of step - visible
-     * immediately in the operator's screenshot the same day. */
-    add_sort_header_col(hdr, "Country",  3, SORT_COL_ISO,   false);
-    add_sort_header_col(hdr, "Distance", 3, SORT_COL_DIST,  true);
-    add_sort_header_col(hdr, "Age",      2, SORT_COL_AGE,   true);
+     * LEFT-aligned, like its values. */
+    add_sort_header_col(hdr, "COUNTRY",   6, SORT_COL_ISO,   false);
+    add_sort_header_col(hdr, "MODE",      4, SORT_COL_MODE,  true);
+    add_sort_header_col(hdr, "BAND",      4, SORT_COL_BAND,  true);
+    add_sort_header_col(hdr, "FREQUENCY",10, SORT_COL_FREQ,  true);
+    add_sort_header_col(hdr, "SNR",       3, SORT_COL_SNR,   true);
+    /* The UNIT lives in the heading now, not on every row - the same trade the
+     * FT8 and WSPR lists already make. */
+    add_sort_header_col(hdr, settings_get_distance_in_miles() ? "MI" : "KM",
+                                          4, SORT_COL_DIST,  true);
+    add_sort_header_col(hdr, "AGE",       3, SORT_COL_AGE,   true);
 
     static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];   // NOT internal .bss - see the note above map_draw_cb()'s copy of this array
     int count = gather_self_spots(spots, SELF_SPOT_MAX);
@@ -1731,7 +1773,7 @@ static void rebuild_table(void)
         char freq_buf[16], age_buf[24], snr_buf[8], dist_buf[24];
         format_freq_hz(sp->freq_hz, g_freq_style, freq_buf, sizeof(freq_buf));
         format_age(sp->heard_unix, now, age_buf, sizeof(age_buf));
-        snprintf(snr_buf, sizeof(snr_buf), "%d dB", sp->snr_db);
+        snprintf(snr_buf, sizeof(snr_buf), "%d", sp->snr_db);
         if (sp->distance_km >= 0) {
             // Randy N4OPI, 2026-09-16: the FT8 decode list already honours
             // distance_in_miles (ft8_screen_view.c) - this table never did,
@@ -1742,7 +1784,7 @@ static void rebuild_table(void)
             bool mi = settings_get_distance_in_miles();
             long shown = mi ? (long)(sp->distance_km * 0.621371 + 0.5) : (long)sp->distance_km;
             format_km_dotted(shown, dist_dotted, sizeof(dist_dotted));
-            snprintf(dist_buf, sizeof(dist_buf), "%s %s", dist_dotted, mi ? "mi" : "km");
+            snprintf(dist_buf, sizeof(dist_buf), "%s", dist_dotted);
         } else {
             snprintf(dist_buf, sizeof(dist_buf), "-");
         }
@@ -1776,7 +1818,7 @@ static void rebuild_table(void)
          * what the sidebar's three checkboxes are the legend for - one column
          * per meaning, and no colour describing something it is not. */
         uint32_t col = source_color(sp->src);
-        add_col(row, sp->call[0] ? sp->call : "-", 4, col, true, false);
+        add_col(row, sp->call[0] ? sp->call : "-", 8, col, true, false);
         /* ⛔ ui_theme_mode_color() WAS THE WRONG FIX. Operator, 2026-09-12:
          * "The Mode text in the LIST tap is almost invisible - make text same
          * colour as Band". Cause found rather than guessed: that helper has no
@@ -1788,13 +1830,14 @@ static void rebuild_table(void)
          * mode colour" to add instead - it is a protocol on top of DiGi, not a
          * QMX CAT mode - so the plain, correct answer is the one asked for:
          * the same neutral UI_COLOR_TEXT the Band column already uses. */
-        add_col(row, sp->mode[0] ? sp->mode : "-", 2, UI_COLOR_TEXT, false, true);
-        add_col(row, band[0] ? band : "-", 2, UI_COLOR_TEXT, false, true);
-        add_col(row, freq_buf, 3, UI_COLOR_TEXT, false, true);
-        add_col(row, snr_buf, 2, UI_COLOR_TEXT, false, true);
-        add_col(row, iso ? iso : "-", 3, UI_COLOR_TEXT_SECONDARY, false, false);
-        add_col(row, dist_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
-        add_col(row, age_buf, 2, UI_COLOR_TEXT_SECONDARY, false, true);
+        add_col(row, sp->grid[0] ? sp->grid : "-", 6, UI_COLOR_TEXT_SECONDARY, false, false);
+        add_col(row, iso ? iso : "-", 6, UI_COLOR_TEXT_SECONDARY, false, false);
+        add_col(row, sp->mode[0] ? sp->mode : "-", 4, UI_COLOR_TEXT, false, true);
+        add_col(row, band[0] ? band : "-", 4, UI_COLOR_TEXT, false, true);
+        add_col(row, freq_buf, 10, UI_COLOR_TEXT, false, true);
+        add_col(row, snr_buf, 3, UI_COLOR_TEXT, false, true);
+        add_col(row, dist_buf, 4, UI_COLOR_TEXT_SECONDARY, false, true);
+        add_col(row, age_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
         shown++;
     }
 

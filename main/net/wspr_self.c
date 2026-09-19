@@ -208,6 +208,8 @@ static void parse_and_store(const char *html)
         double lat, lon;
         if (maidenhead_to_latlon(field[9], &lat, &lon)) {
             sp.lat = (float)lat; sp.lon = (float)lon; sp.has_pos = true;
+            /* The grid as SENT - see the same note in net/pskr_self.c. */
+            snprintf(sp.grid, sizeof(sp.grid), "%.6s", field[9]);
         } else {
             // Same diagnostic shape as net/pskr_self.c's own - wsprnet.org's
             // "loc" column IS the reporter's own grid, straight from their

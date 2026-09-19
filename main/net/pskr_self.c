@@ -161,6 +161,11 @@ static void handle_payload(const char *data, int len)
         sp.lat = (float)lat;
         sp.lon = (float)lon;
         sp.has_pos = true;
+        /* Keep the grid ITSELF, not just the position it resolves to - the LIST
+         * shows it, and re-deriving a grid from lat/lon would hand back a
+         * DIFFERENT string from the one the station sent (the position is a
+         * square's centre, so the round trip is lossy at 6 characters). */
+        snprintf(sp.grid, sizeof(sp.grid), "%.6s", rl->valuestring);
     }
 
     // Copy sc's/rl's strings out BEFORE deleting root - cJSON_GetObjectItemCaseSensitive()
