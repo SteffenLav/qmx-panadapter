@@ -330,8 +330,17 @@ void wspr_screen_view_freq_style_changed(void)
  * history is a section height and its y drifting apart; keep the arithmetic
  * here, where all four are visible at once. */
 #define EX_DX_Y   258
-#define EX_HIST_Y 340
-#define EX_NET_Y  406
+/* The three blocks are packed by MEASURED height, not by eye, because eye has
+ * been wrong here twice. montserrat_18 is 21 px a line, montserrat_22 is 26.
+ *   BEST DX  : heading 258..279, value 280..306
+ *   HISTORY  : heading 312..333, bars  334..364 (22 px offset + HIST_H)
+ *   WSPRNET  : 376..454 - THREE lines, because "N of M publishable" wraps at
+ *              the 150 px the Clear button leaves it. The TX-tone line at 464
+ *              is what the third line used to print through.
+ * Anything added here must be costed the same way: count the lines the text
+ * really wraps to, at the width it really has. */
+#define EX_HIST_Y 312
+#define EX_NET_Y  376
 /* Bottom of the panel, one button height plus a margin. */
 #define EX_TX_Y   (MID_H - 72)
 /* ⚠ BAND HOP SITS AT THE BOTTOM, and the gap above it is not slack.
@@ -425,15 +434,23 @@ static void tx_tone_label_refresh(void)
     if (!s_lbl_tone) return;
     uint16_t pinned = settings_get_wspr_tx_tone_hz();
     char t[48];
-    /* ONE LINE, always. EX_W_LOW at montserrat_22 is not wide enough for the
-     * hints that used to be here, and a wrap costs 22 px this column does not
-     * have. The hint moved into the toast that fires when a tone is pinned,
-     * which is where someone is actually looking at that moment. */
+    /* ⛔ ONE LINE, AND IT MUST CARRY THE AFFORDANCE. There is room for exactly
+     * one montserrat_22 line here (40 px between the wsprnet block and the PA
+     * line), so an earlier version dropped the hints and moved them into the
+     * pin toast. That left NOTHING on screen saying the waterfall picks a tone
+     * or that tapping here undoes it - a toast you have already dismissed is
+     * not guidance. Operator: "how do you know now that you can pick a line -
+     * or even go back to random? No guidance any more?"
+     *
+     * Both strings are MEASURED against the font's own glyph advances, not
+     * estimated: EX_W_LOW is 250 px, "Tone: random - tap wf" is 246.7 and
+     * "Tone: 8888 Hz - free it" is 237.4. Anything longer wraps and walks into
+     * the PA line. Re-measure before changing a word. */
     if (pinned) {
-        snprintf(t, sizeof(t), "TX tone: %u Hz", (unsigned)pinned);
+        snprintf(t, sizeof(t), "Tone: %u Hz - free it", (unsigned)pinned);
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(0xFFA040), 0);
     } else {
-        snprintf(t, sizeof(t), "TX tone: random");
+        snprintf(t, sizeof(t), "Tone: random - tap wf");
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     }
     if (strcmp(lv_label_get_text(s_lbl_tone), t) != 0) lv_label_set_text(s_lbl_tone, t);
@@ -490,7 +507,7 @@ static void wf_pick_cb(lv_event_t *e)
     settings_set_wspr_tx_tone_hz(tone);
     ESP_LOGI(TAG, "WSPR TX tone pinned to %u Hz by tap (x=%d)", (unsigned)tone, (int)p.x);
     tx_tone_label_refresh();
-    ui_toast("TX tone pinned - tap \"TX tone\" to free it");
+    ui_toast("TX tone pinned - tap the Tone line to free it");
 }
 
 static void hover_tick_cb(lv_timer_t *timer)
@@ -1036,7 +1053,7 @@ static void build_left_extras(void)
      * That is this project's recorded hit-area trap for the third time - an
      * enlarged target swallowing its neighbour, same as the SD dot and the
      * update line on the bottom bar. The gap that IS free is between the
-     * wsprnet lines (ending ~458) and PA at 494. */
+     * wsprnet lines (ending 454) and PA at 494. */
     lv_obj_set_pos(s_lbl_tone, EX_X, EX_TXI_Y - 30);
     lv_obj_add_flag(s_lbl_tone, LV_OBJ_FLAG_CLICKABLE);
     /* Kept small AND now 88 px clear of the TX button - a halo is only safe
