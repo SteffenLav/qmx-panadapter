@@ -330,18 +330,24 @@ void wspr_screen_view_freq_style_changed(void)
  * history is a section height and its y drifting apart; keep the arithmetic
  * here, where all four are visible at once. */
 #define EX_DX_Y   258
-/* The three blocks are packed by MEASURED height, not by eye, because eye has
- * been wrong here twice. montserrat_18 is 21 px a line, montserrat_22 is 26.
- *   BEST DX  : heading 258..279, value 280..306
- *   HISTORY  : heading 312..333, bars  334..364 (22 px offset + HIST_H)
- *   WSPRNET  : 376..454 - THREE lines, because "N of M publishable" wraps at
- *              the 150 px the Clear button leaves it. The TX-tone line at 464
- *              is what the third line used to print through.
- * Anything added here must be costed the same way: count the lines the text
- * really wraps to, at the width it really has. */
-#define EX_HIST_Y 312
-#define EX_NET_Y  376
-/* Bottom of the panel, one button height plus a margin. */
+/* ⛔ STATIONS PER CYCLE IS GONE (operator, 2026-09-19: "lets remove the whole
+ * STATIONS PER CYCLE thing - never understood the value anyways"). It was a
+ * 35-bar strip showing how many stations each recent cycle heard, meant to
+ * show an opening band from a closing one. It cost 82 px of the one column
+ * this page is short of, and the same information is in the list itself.
+ *
+ * The space it freed is spent on AIR, not on more content. Packed by measured
+ * line height (montserrat_18 is 21 px a line, montserrat_22 is 26):
+ *   BEST DX  : heading 258..279, value  280..306
+ *   WSPRNET  : 330..408 - THREE lines, because "N of M publishable" wraps at
+ *              the 150 px the Clear button leaves it
+ *   TONE     : 430..456
+ *   PA       : 494..520, measured W/SWR 520..546   (anchored to the button)
+ *   TX       : 552..608
+ * Gaps of 24, 22 and 38 px. Anything added here must be costed the same way:
+ * count the lines the text really wraps to, at the width it really has. */
+#define EX_NET_Y  330
+#define EX_TONE_Y 430
 #define EX_TX_Y   (MID_H - 72)
 /* ⚠ BAND HOP SITS AT THE BOTTOM, and the gap above it is not slack.
  * The wsprnet line above wraps to TWO lines once the counts reach two digits
@@ -363,25 +369,7 @@ void wspr_screen_view_freq_style_changed(void)
  * montserrat_22 is ~52 px, so this clears EX_TX_Y with room. */
 #define EX_TXI_Y  (EX_TX_Y - 58)
 
-#define HIST_BAR_W 6
-#define HIST_GAP   1
-/* ⛔ HOW MANY BARS FIT, not how many cycles are remembered. Those had been the
- * same number, and 40 of them run to x=295 while the left pane's own controls
- * stop at x=266 - so the strip reached under the decode list and collided with
- * the S column (operator, 2026-09-09: "the mini dashed line for STATIONS PER
- * CYCLE collides with the S letter column"). Derived from the pane width so it
- * cannot drift out of step with the Clear button beside it, whose right edge is
- * the same EX_X + EX_W_LOW; at 372/250 that is 35 bars ending flush at 266.
- *
- * The HISTORY is still WSPR_CYCLE_HISTORY deep - only the drawing is capped,
- * and it draws the NEWEST that many. */
-#define HIST_BARS  ((EX_W_LOW + HIST_GAP) / (HIST_BAR_W + HIST_GAP))
-_Static_assert(HIST_BARS <= WSPR_CYCLE_HISTORY,
-               "the strip cannot show more cycles than are kept");
-#define HIST_H     30
-
 static lv_obj_t *s_lbl_dx;
-static lv_obj_t *s_hist_bar[HIST_BARS];
 static lv_obj_t *s_lbl_net;
 static lv_obj_t *s_lbl_hdr;        /* the column headings over the decode list */
 static bool      s_hdr_miles;      /* the unit the headings were built for */
@@ -433,24 +421,23 @@ static void tx_tone_label_refresh(void)
 {
     if (!s_lbl_tone) return;
     uint16_t pinned = settings_get_wspr_tx_tone_hz();
-    char t[48];
-    /* ⛔ ONE LINE, AND IT MUST CARRY THE AFFORDANCE. There is room for exactly
-     * one montserrat_22 line here (40 px between the wsprnet block and the PA
-     * line), so an earlier version dropped the hints and moved them into the
-     * pin toast. That left NOTHING on screen saying the waterfall picks a tone
-     * or that tapping here undoes it - a toast you have already dismissed is
-     * not guidance. Operator: "how do you know now that you can pick a line -
-     * or even go back to random? No guidance any more?"
+    char t[64];
+    /* ⛔ TWO LINES, AND THE SECOND ONE IS THE INSTRUCTION (operator,
+     * 2026-09-19: "use a line more to Tone picker to make it more easy to
+     * understand"). It was one line carrying both state and affordance in
+     * about twenty characters - "Tone: random - tap wf" - which fitted but
+     * read as shorthand. With STATIONS PER CYCLE gone there is room to say it
+     * properly, so the state is on top and what to do about it underneath.
      *
-     * Both strings are MEASURED against the font's own glyph advances, not
-     * estimated: EX_W_LOW is 250 px, "Tone: random - tap wf" is 246.7 and
-     * "Tone: 8888 Hz - free it" is 237.4. Anything longer wraps and walks into
-     * the PA line. Re-measure before changing a word. */
+     * Widths MEASURED against the font's own glyph advances, not estimated -
+     * the column is 250 px and the longest line here is "tap a trace to pin"
+     * at 190.6. The pair sits 430..482 with PA at 494, so the second line
+     * cannot reach it. Re-measure before changing a word. */
     if (pinned) {
-        snprintf(t, sizeof(t), "Tone: %u Hz - free it", (unsigned)pinned);
+        snprintf(t, sizeof(t), "Tone: %u Hz\ntap here to free it", (unsigned)pinned);
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(0xFFA040), 0);
     } else {
-        snprintf(t, sizeof(t), "Tone: random - tap wf");
+        snprintf(t, sizeof(t), "Tone: random\ntap a trace to pin");
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     }
     if (strcmp(lv_label_get_text(s_lbl_tone), t) != 0) lv_label_set_text(s_lbl_tone, t);
@@ -777,7 +764,7 @@ static void clear_spots_cb(lv_event_t *e)
     if (s_clr_armed_us && (now - s_clr_armed_us) < CLR_ARM_WINDOW_US) {
         s_clr_armed_us = 0;
         wspr_spots_clear();
-        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Clear");
+        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Flush");
         ESP_LOGI(TAG, "WSPR decode list cleared by the operator");
         ui_toast("Decodes cleared");
         return;
@@ -986,21 +973,6 @@ static void build_left_extras(void)
     lv_obj_set_width(s_lbl_dx, EX_W_LOW);
     lv_obj_set_pos(s_lbl_dx, EX_X, EX_DX_Y + 22);
 
-    /* ---- cycle history ---- */
-    ex_heading("STATIONS PER CYCLE", EX_HIST_Y);
-    for (int i = 0; i < HIST_BARS; i++) {
-        lv_obj_t *b = lv_obj_create(s_container);
-        lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, HIST_BAR_W, 2);
-        lv_obj_set_pos(b, EX_X + i * (HIST_BAR_W + HIST_GAP),
-                       EX_HIST_Y + 22 + HIST_H - 2);
-        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(b, 1, 0);
-        lv_obj_add_flag(b, UI_FLAG_NOT_HOT);
-        s_hist_bar[i] = b;
-    }
-
     /* ---- wsprnet ---- */
     s_lbl_net = lv_label_create(s_container);
     lv_label_set_text(s_lbl_net, "wsprnet: -");
@@ -1054,7 +1026,7 @@ static void build_left_extras(void)
      * enlarged target swallowing its neighbour, same as the SD dot and the
      * update line on the bottom bar. The gap that IS free is between the
      * wsprnet lines (ending 454) and PA at 494. */
-    lv_obj_set_pos(s_lbl_tone, EX_X, EX_TXI_Y - 30);
+    lv_obj_set_pos(s_lbl_tone, EX_X, EX_TONE_Y);
     lv_obj_add_flag(s_lbl_tone, LV_OBJ_FLAG_CLICKABLE);
     /* Kept small AND now 88 px clear of the TX button - a halo is only safe
      * when nothing else is within it. */
@@ -1083,7 +1055,7 @@ static void build_left_extras(void)
     lv_obj_set_style_border_width(s_btn_clr, 1, 0);
     lv_obj_add_event_cb(s_btn_clr, clear_spots_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_clr = lv_label_create(s_btn_clr);
-    lv_label_set_text(s_lbl_clr, "Clear");
+    lv_label_set_text(s_lbl_clr, "Flush");
     lv_obj_set_style_text_font(s_lbl_clr, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_clr, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(s_lbl_clr);
@@ -1224,12 +1196,17 @@ static void refresh_left_extras(void)
         wspr_spot_t dx;
         char t[64];
         if (wspr_spots_best_dx(&dx) && dx.km >= 0) {
-            /* SPELLED OUT here, unlike the table's COUNTRY column. That
-             * column is one of ten on a fixed-width line and has to fall back
-             * to the alpha-3; this line has the whole panel width to itself,
-             * so "Germany" beats "DEU" with nothing to trade for it. Falls
-             * back the same way when the callsign is not in the DXCC table. */
-            const char *full = dxcc_lookup(dx.call);
+            /* SPELLED OUT here, unlike the table's COUNTRY column - this line
+             * has the whole panel width to itself, so 64 characters.
+             *
+             * ⛔ country_display(), NOT dxcc_lookup(). This was the LAST place
+             * on any screen still asking dxcc.c directly, and dxcc.c answers
+             * nothing for ~130 entities that Uwe DL8UG's geo_coords table
+             * does - so this line fell through to the alpha-3 (or to a GRID)
+             * for exactly the stations the browser, which already uses
+             * country_display(), named correctly. Two screens, one station,
+             * two different answers. */
+            const char *full = country_display(dx.call, 64);
             const char *where = (full && full[0]) ? full
                               : (dx.cty[0] ? dx.cty : dx.grid);
             /* Miles if that is what the operator asked for - the same switch
@@ -1244,35 +1221,6 @@ static void refresh_left_extras(void)
             snprintf(t, sizeof(t), "-");
         }
         lv_label_set_text(s_lbl_dx, t);
-    }
-
-    /* Stations per cycle. Scaled to the busiest cycle held rather than to a
-     * fixed ceiling: what matters is the SHAPE - rising or falling - and a fixed
-     * scale would flatten a quiet band into nothing. */
-    {
-        uint8_t h[WSPR_CYCLE_HISTORY];
-        int n = wspr_rx_cycle_history(h, WSPR_CYCLE_HISTORY);
-        /* ⛔ SHOW THE NEWEST ONES. The store is deeper than the strip now, and
-         * h[0] is the oldest - taking the first HIST_BARS would pin the display
-         * to ancient history and never move again once the store filled. */
-        const int first = (n > HIST_BARS) ? (n - HIST_BARS) : 0;
-        const int shown = n - first;
-        int peak = 1;
-        for (int i = first; i < n; i++) if (h[i] > peak) peak = h[i];
-        for (int i = 0; i < HIST_BARS; i++) {
-            if (!s_hist_bar[i]) continue;
-            /* Oldest at the left, so a partly-filled history grows rightwards
-             * the way the decode list does. */
-            int v = (i < shown) ? h[first + i] : -1;
-            int px = (v <= 0) ? 2 : 2 + (v * (HIST_H - 2)) / peak;
-            lv_obj_set_size(s_hist_bar[i], HIST_BAR_W, px);
-            lv_obj_set_pos(s_hist_bar[i], EX_X + i * (HIST_BAR_W + HIST_GAP),
-                           EX_HIST_Y + 22 + HIST_H - px);
-            uint32_t c = (v < 0)  ? UI_COLOR_BORDER          /* no cycle yet */
-                       : (v == 0) ? 0x553333                 /* heard nothing */
-                                  : UI_COLOR_SUCCESS_BORDER;
-            lv_obj_set_style_bg_color(s_hist_bar[i], lv_color_hex(c), 0);
-        }
     }
 
     /* ⛔ THIS SAID "off" AS A STRING LITERAL, AND WENT ON SAYING IT AFTER THE
@@ -1299,7 +1247,7 @@ static void refresh_left_extras(void)
     if (s_clr_armed_us &&
         (esp_timer_get_time() - s_clr_armed_us) >= CLR_ARM_WINDOW_US) {
         s_clr_armed_us = 0;
-        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Clear");
+        if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Flush");
     }
 
     if (s_lbl_net) {
@@ -1328,12 +1276,55 @@ static void refresh_left_extras(void)
     }
 }
 
+/* ⛔ TX ON AN UNCALIBRATED BAND IS REFUSED AT THE BUTTON, NOT AT THE BURST.
+ *
+ * wspr_tx.c refuses the burst too, and must - it is the last line and it also
+ * covers a band changed after TX was switched on. But refusing only there
+ * leaves the operator looking at "TX ON next 1:23" for two minutes before
+ * nothing happens, which is a promise the firmware cannot keep.
+ *
+ * True when the radio has told us its Max. PA voltage AND this band has no
+ * calibration that can price it. A voltage we have not been told yet (-1) is
+ * NOT this case - that is a timing gap which clears itself. */
+static bool wspr_band_uncalibrated(void)
+{
+    const int16_t pa = cat_get_pa_voltage_x10();
+    if (pa <= 0) return false;
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    uint16_t w_x100;
+    return !(band && band[0] && power_cal_watts_for_voltage(band, (uint16_t)pa, &w_x100));
+}
+
+/* ⭐ THE WARNING WAITS FOR THE OPERATOR TO ASK FOR TX (operator, 2026-09-19:
+ * "if the user for any reason just want to receive wspr and no TX'ing i think
+ * we should wait to print the red 40 m not cali... until the user push the TX
+ * OFF button").
+ *
+ * Quite right: a red line about transmit calibration is noise to someone who
+ * only ever listens, and this page is perfectly useful RX-only. So the PA area
+ * stays blank until TX is actually wanted, and only then says why it cannot be
+ * had. Cleared whenever the dial moves, so picking a calibrated band puts the
+ * page straight back to normal without another tap. */
+static bool s_tx_wanted_uncal;
+
 static void tx_toggle_cb(lv_event_t *e)
 {
     (void)e;
     qmx_settings_t st;
     settings_load_all(&st);
     const bool turning_off = st.wspr_tx_en;
+
+    if (!turning_off && wspr_band_uncalibrated()) {
+        /* Leave wspr_tx_en alone: the switch stays OFF, the button keeps
+         * reading TX OFF, and no countdown starts. */
+        s_tx_wanted_uncal = true;
+        ESP_LOGW(TAG, "TX not switched on: %s is not calibrated, so the declared "
+                      "power cannot be backed - run Calibrate Power on this band",
+                 adif_log_band_for_freq(cat_get_frequency()));
+        ui_toast("Not calibrated on this band - run Calibrate Power");
+        return;
+    }
+    s_tx_wanted_uncal = false;
     settings_set_wspr_tx_en(!st.wspr_tx_en);
     /* Re-roll which cycle transmits next, so the countdown on this very button
      * is right the moment it is pressed rather than at the next boundary. */
@@ -1531,7 +1522,7 @@ static void arm_dial_push(const char *why)
 #define STRINGIFY2(x) #x
 #define STRINGIFY(x)  STRINGIFY2(x)
 
-#define ROW_FMT "%-" STRINGIFY(W_S) "s %-" STRINGIFY(W_UTC)  "s %"  STRINGIFY(W_BAND) "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"                       STRINGIFY(W_DT)   "s"
+#define ROW_FMT "%-" STRINGIFY(W_S) "s" " %-" STRINGIFY(W_UTC) "s" " %-" STRINGIFY(W_CALL) "s" " %-" STRINGIFY(W_GRID) "s" " %-" STRINGIFY(W_CTY) "s" " %" STRINGIFY(W_BAND) "s" " %" STRINGIFY(W_PWR) "s" " %" STRINGIFY(W_SNR) "s" " %" STRINGIFY(W_TONE) "s" "  %" STRINGIFY(W_DRF) "s" " %" STRINGIFY(W_DT) "s" "%" STRINGIFY(W_KM) "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3 - see country_field() below,
  * which is now the single implementation of that rule for every screen. The
@@ -1612,8 +1603,8 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
     char sch[2] = { wspr_rx_mark_for_freq(sp->freq_hz, sp->cycle_utc), 0 };
     if (!sch[0]) sch[0] = ' ';
 
-    snprintf(out, n, ROW_FMT, sch, utc, bnd ? bnd : "", sp->call, sp->grid,
-             country_field(sp), snr, drift, hz, pwr, km, dt);
+    snprintf(out, n, ROW_FMT, sch, utc, sp->call, sp->grid, country_field(sp),
+             bnd ? bnd : "", pwr, snr, hz, drift, dt, km);
 }
 
 static void fmt_header(char *out, size_t n)
@@ -1629,10 +1620,11 @@ static void fmt_header(char *out, size_t n)
     char h[12][16];   /* 12 columns since BRG went - keep in step with raw[]/w[] */
     /* "M" for metres - the values are bare band numbers (160, 40, 20, 17, 10),
      * so the unit belongs in the heading and not repeated on every row. */
-    const char *raw[12] = { "S", "UTC", "BND", "CALL", "GRID", "COUNTRY", "SNR",
-                            "DR", "TONE", "PWR", wspr_dist_in_miles() ? "MI" : "KM", "DT" };
-    const int   w[12]   = { W_S, W_UTC, W_BAND, W_CALL, W_GRID, W_CTY, W_SNR,
-                            W_DRF, W_TONE, W_PWR, W_KM, W_DT };
+    const char *raw[12] = { "S", "UTC", "CALL", "GRID", "COUNTRY", "BND", "PWR",
+                            "SNR", "TONE", "DR", "DT",
+                            wspr_dist_in_miles() ? "MI" : "KM" };
+    const int   w[12]   = { W_S, W_UTC, W_CALL, W_GRID, W_CTY, W_BAND, W_PWR,
+                            W_SNR, W_TONE, W_DRF, W_DT, W_KM };
     /* ⭐ BIAS THE HEADING THE WAY ITS DATA IS ALIGNED (operator, 2026-09-01:
      * "KM header should be moved one character right to centre properly above
      * the column").
@@ -1649,8 +1641,8 @@ static void fmt_header(char *out, size_t n)
      * hand - which matters here, because the hand-spaced header is exactly what
      * drifted out of step with the rows before ROW_FMT was made to serve both. */
     /* BAND is right-aligned with the other numbers. */
-    const bool right_aligned[12] = { false, false, true, false, false, false,
-                                     true, true, true, true, true, true };
+    const bool right_aligned[12] = { false, false, false, false, false,
+                                     true, true, true, true, true, true, true };
     /* ⛔ A HEADING LONGER THAN ITS COLUMN SILENTLY WIDENS THE ROW. printf does
      * not truncate, so an over-long title pushes every later column right and
      * the last one off the pane - invisible in code review, obvious only on
@@ -2857,12 +2849,35 @@ void wspr_screen_view_tick(void)
                                                             * used tofu'd, this font subset lacks it */
                 pa_col = 0xB0B0B0;                       /* neutral - not a verdict yet */
                 cat_query_pa_voltage();
+            } else if (pa_dbm < 0) {
+                /* ⛔ NEVER PRINT A BARE "PA 12.0 V" WE CANNOT INTERPRET
+                 * (operator, 2026-09-19: "it should still never print
+                 * PA 12.0 V").
+                 *
+                 * A voltage with no wattage beside it is the one reading on
+                 * this page that looks like an answer and is not. It printed
+                 * "PA 12.0 V" in neutral grey on an uncalibrated 40 m, which
+                 * reads as a healthy setting - while the truth is that nothing
+                 * here knows what the radio would put out.
+                 *
+                 * ⭐ AND IT SAYS NOTHING AT ALL UNTIL TX IS ASKED FOR. See
+                 * s_tx_wanted_uncal: an operator who only listens is not
+                 * shown a transmit problem. The voltage is not lost either
+                 * way - it is in the log and in the drawer. */
+                if (s_tx_wanted_uncal) {
+                    const char *bn = wspr_band_name_for_dial(cat_get_frequency());
+                    snprintf(pa_s, sizeof(pa_s), "%s%s not calibrated",
+                             bn ? bn : "band", bn ? " m" : "");
+                    pa_col = 0xFF4010;
+                } else {
+                    pa_s[0] = '\0';
+                    pa_col = 0xB0B0B0;
+                }
             } else {
                 snprintf(pa_s, sizeof(pa_s), "PA %d.%d V%s", pa / 10, pa % 10, pa_wsuf);
                 if      (pa_dbm >= WSPR_DBM_LIMIT)   pa_col = 0xFF4010;   /* same red as the dropdown */
                 else if (pa_dbm >= WSPR_DBM_CAUTION) pa_col = 0xFFA040;   /* same amber */
-                else if (pa_dbm >= 0)                pa_col = 0x40D060;  /* same "fine" green */
-                else                                 pa_col = 0xB0B0B0; /* voltage not in the sweep - unclassifiable, not a verdict */
+                else                                 pa_col = 0x40D060;  /* same "fine" green */
             }
 
             /* ⛔ ONLY WHILE THE RADIO IS ACTUALLY KEYED. These two numbers are
@@ -2881,8 +2896,11 @@ void wspr_screen_view_tick(void)
              * The PA line above deliberately does NOT do this: it describes the
              * SETTING, which is just as true between bursts as during one, and
              * the risk it guards against does not pause either. */
+            const bool uncal = (pa >= 0 && pa_dbm < 0 && s_tx_wanted_uncal);
             if (tst == WSPR_TX_ACTIVE && wspr_tx_get_last_power_swr(&pw, &sw))
                 snprintf(ps_s, sizeof(ps_s), "TX %.1f W  SWR %.2f", pw, sw);
+            else if (uncal)
+                snprintf(ps_s, sizeof(ps_s), "Calibrate Power first");
             else
                 ps_s[0] = '\0';
 
@@ -2892,6 +2910,10 @@ void wspr_screen_view_tick(void)
 
             if (strcmp(lv_label_get_text(s_lbl_txi2), ps_s) != 0)
                 lv_label_set_text(s_lbl_txi2, ps_s);
+            /* Cyan is the MEASURED-power colour; the uncalibrated notice is not
+             * a measurement, so it takes the warning colour instead. */
+            lv_obj_set_style_text_color(s_lbl_txi2,
+                uncal ? lv_color_hex(0xFF4010) : lv_palette_main(LV_PALETTE_CYAN), 0);
         }
 
         /* The Duty readout that used to live here went to the drawer with its
