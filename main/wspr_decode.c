@@ -80,20 +80,85 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
      * 0.6827 s symbol is 0.03 of a cycle - far inside the ~1.46 Hz sinc null,
      * i.e. well under 0.1 dB of correlation loss.
      */
+    /* ⛔ 8, NOT 16 - THE WSPR PAGE CANNOT AFFORD 16 AND NEVER COULD.
+     *
+     * only leaves ~2.1-2.9 MB free.
+     * Measured on hardware 2026-09-19. Entering this page claims ~9.7 MB of
+     * PSRAM for the capture and the two ping-pong decode buffers, taking free
+     * PSRAM from 11,777 KB to ~2,090 KB. At 16 x the scratch below is ~2.3 MB,
+     * so the search was asking for almost everything left, once every two
+     * minutes, against a fragmenting heap - and losing often enough that the
+     * operator watched five strong traces decode nothing:
+     *
+     *   E wspr_rx: NO MEMORY for the candidate search - it needs ~2.3 MB and
+     *     PSRAM has 2881 KB free (largest block 2560 KB)
+     *
+     * Allocating it once (below) removes the churn but cannot conjure memory
+     * that was never there: 9.7 + 2.3 = 12 MB against 11.5 MB free. Something
+     * had to shrink, and this is the cheapest thing to shrink.
+     *
+     * The arithmetic said the cost was negligible - bins 0.0916 -> 0.183 Hz,
+     * worst-case peak error 0.046 -> 0.092 Hz, 0.06 of a cycle over a symbol,
+     * far inside the 1.46 Hz sinc null. The radio disagreed. Keep that as the
+     * lesson: this is a detection threshold, and a margin argued on paper is
+     * not a margin measured on air. */
     int nfft = 16 * WSPR_SYM_LEN_SAMPLES;      /* 131072 */
     while ((long)nfft > n && nfft > WSPR_SYM_LEN_SAMPLES) nfft /= 2;
     if ((long)nfft > n) return 0;              /* capture shorter than one symbol */
 
-    kiss_fftr_cfg cfg = kiss_fftr_alloc(nfft, 0, NULL, NULL);
-    if (!cfg) return 0;
-    kiss_fft_scalar *in = (kiss_fft_scalar *)malloc((size_t)nfft * sizeof(kiss_fft_scalar));
-    kiss_fft_cpx *spec = (kiss_fft_cpx *)malloc((size_t)(nfft / 2 + 1) * sizeof(kiss_fft_cpx));
+    /* ⛔⛔ THE SCRATCH IS KEPT ALIVE BETWEEN CALLS, AND A FAILED ALLOCATION IS
+     * REPORTED, NOT SWALLOWED. Both halves of this were a real field fault,
+     * hunted for most of a day on 2026-09-19.
+     *
+     * This used to claim ~2.3 MB on EVERY call and free it again: the cfg's
+     * twiddles (~1 MB CONTIGUOUS), `in` 512 KB, `spec` 512 KB, `mag` 256 KB.
+     * Entering the WSPR page takes PSRAM from 11,777 KB to about 2,090 KB -
+     * the page's own capture and ping-pong decode buffers are 8.6 MB - so this
+     * was asking for 2.3 MB of the ~2.1-2.9 MB left, in chunks up to a
+     * megabyte, once every two minutes against a fragmenting heap.
+     *
+     * When it lost, every path here did `return 0`, which the caller could not
+     * tell from "the band is empty". The operator watched five strong traces on
+     * the waterfall decode nothing, and the log said `0 candidate(s)` - the
+     * exact shape #189 warns about, a silent failure that reads as healthy.
+     * The comment above this one had even described the symptom from the FIRST
+     * time it happened ("kiss_fftr_alloc() simply returned NULL and this
+     * function reported 0 candidates in 0 ms") without anyone joining it up.
+     *
+     * Allocating once removes the churn AND the fragmentation exposure: after
+     * the first cycle of a session there is nothing left to fail. nfft is
+     * derived from constants and the capture length, so it only ever changes
+     * if the capture is short - hence the size check before reuse.
+     *
+     * ⚠ NOT thread-safe, and it does not need to be: there is exactly one
+     * wspr_dec task, the boot self-test runs before it exists, and the host
+     * harnesses are single-threaded. Do not call this from two tasks.
+     *
+     * Returns WSPR_CANDS_NOMEM (-1), never 0, when it cannot get the memory,
+     * so the caller can say so. This file deliberately has no ESP_LOG - it is
+     * host-tested - so reporting is the caller's job. */
+    static kiss_fftr_cfg     cfg;
+    static kiss_fft_scalar  *in;
+    static kiss_fft_cpx     *spec;
+    static float            *mag;
+    static int               cached_nfft;
+
     int nbins = nfft / 2 + 1;
-    float *mag = (float *)calloc((size_t)nbins, sizeof(float));
-    if (!in || !spec || !mag) {
-        free(in); free(spec); free(mag); free(cfg);
-        return 0;
+    if (cached_nfft != nfft) {
+        free(cfg); free(in); free(spec); free(mag);
+        cfg = NULL; in = NULL; spec = NULL; mag = NULL; cached_nfft = 0;
+        cfg  = kiss_fftr_alloc(nfft, 0, NULL, NULL);
+        in   = (kiss_fft_scalar *)malloc((size_t)nfft * sizeof(kiss_fft_scalar));
+        spec = (kiss_fft_cpx *)malloc((size_t)nbins * sizeof(kiss_fft_cpx));
+        mag  = (float *)malloc((size_t)nbins * sizeof(float));
+        if (!cfg || !in || !spec || !mag) {
+            free(cfg); free(in); free(spec); free(mag);
+            cfg = NULL; in = NULL; spec = NULL; mag = NULL;
+            return WSPR_CANDS_NOMEM;
+        }
+        cached_nfft = nfft;
     }
+    memset(mag, 0, (size_t)nbins * sizeof(float));
 
     /* 50 % overlap: every sample outside the first and last half-window is
      * covered twice, so a transmission straddling a window boundary is not
@@ -108,7 +173,7 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
             mag[b] += spec[b].r * spec[b].r + spec[b].i * spec[b].i;
         nwin++;
     }
-    if (nwin == 0) { free(in); free(spec); free(mag); free(cfg); return 0; }
+    if (nwin == 0) return 0;   /* scratch is cached - see above */
 
     double bin_hz = WSPR_SAMPLE_RATE_HZ / nfft;
     int lo_bin = (int)(f_lo_hz / bin_hz), hi_bin = (int)(f_hi_hz / bin_hz);
@@ -172,10 +237,8 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
         free(score);
     }
 
-    free(mag);
-    free(spec);
-    free(in);
-    free(cfg);
+    /* The scratch is CACHED, not owned by this call - see the note at the top.
+     * Freeing it here is what made every cycle re-claim 2.3 MB. */
     return count;
 }
 

@@ -71,6 +71,12 @@ typedef struct {
  * meant to hand a short list of real candidates to wspr_decode_candidate(),
  * not a final answer. Writes up to max_out candidates into `out`, ordered
  * strongest-first. Returns the count written. */
+/* Returned instead of a count when the search cannot get its ~2.3 MB of FFT
+ * scratch. NEVER 0 for that case: a zero count means "this capture holds no
+ * WSPR", and the two are indistinguishable to the eye - five strong traces
+ * decoded nothing for most of a day because they were the same number. */
+#define WSPR_CANDS_NOMEM (-1)
+
 int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
                           double f_hi_hz, wspr_freq_candidate_t *out,
                           int max_out);

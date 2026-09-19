@@ -1265,7 +1265,35 @@ uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
  * which breaks WSPR timing outright, and overwriting corrupts a decode in
  * flight. With a 105 s budget against a 120 s cycle this should never fire; it
  * exists so that if it does, it is visible rather than silently wrong. */
-#define WSPR_PCM_SLOTS 2
+/* ⛔⛔ ONE, NOT TWO, AND THE SECOND ONE WAS STARVING THE DECODER (2026-09-19).
+ *
+ * The page's PSRAM claim is what makes wspr_find_candidates() fail: entering
+ * WSPR takes free PSRAM from 11,777 KB to ~2,090 KB, and the candidate search
+ * needs ~2.3 MB of what is left. Measured on this bench, the same cycle, twice:
+ *
+ *   E wspr_rx: NO MEMORY for the candidate search - it needs ~2.3 MB and
+ *     PSRAM has 2877 KB free (largest block 2560 KB)
+ *
+ * so the page was losing that toss most cycles and reporting it, until today,
+ * as a plain "0 candidate(s)" - a dead band with strong traces on the carpet.
+ *
+ * This slot is 2,812 KB of that claim, and it buys ONE thing: the ability to
+ * start capturing the next cycle while the previous one is still decoding.
+ * Measured, that never happens - a decode is 30-45 s of a 120 s cycle, and the
+ * budget itself is 115 s. The second buffer has been insurance against an
+ * overrun that the timing does not permit, paid for with the memory the
+ * decoder needed to work at all.
+ *
+ * ⚠ The drop path below is now reachable in principle rather than in theory,
+ * so it keeps its loud log line. If "DROPPING this window" ever appears, the
+ * decode really did outrun the cycle and THAT is the thing to fix - not this
+ * number. Putting it back to 2 would buy the overrun and re-break the search.
+ *
+ * ⚠ ALSO NOT THE WHOLE STORY. With the search's memory guaranteed there were
+ * still cycles that found 20 candidates on the right frequencies and decoded
+ * none of them. That is a separate question, one stage downstream, and this
+ * change is what makes it possible to ask it at all. */
+#define WSPR_PCM_SLOTS 1
 
 /* Up to ~20 s of retries: an FT8 slot is 15 s and that is the longest the
  * previous page can hold its pool after the mode has changed. */
@@ -1471,6 +1499,23 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
   next_pass:
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                   cands, WSPR_MAX_CANDS);
+    /* ⛔ OUT OF MEMORY IS NOT AN EMPTY BAND, AND IT USED TO PRINT AS ONE.
+     * wspr_find_candidates() needs ~2.3 MB of FFT scratch and entering this
+     * page leaves only ~2.1-2.9 MB of PSRAM; when it lost, it returned 0 and
+     * the cycle line said "0 candidate(s)" - identical to a dead band, which
+     * is exactly how this hid behind a day of wrong hypotheses while the
+     * operator watched strong traces decode nothing. Say it, at ERROR, with
+     * the number that explains it. */
+    if (ncand == WSPR_CANDS_NOMEM) {
+        ESP_LOGE(TAG, "cycle %lld: NO MEMORY for the candidate search - it needs "
+                      "~2.3 MB and PSRAM has %u KB free (largest block %u KB). "
+                      "This cycle decodes NOTHING, and it is not the band.",
+                 (long long)cycle_utc,
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+        set_status("out of memory - no decode");
+        ncand = 0;
+    }
     if (pass == 0) {
         nmarks = ncand > WSPR_MARKS_MAX ? WSPR_MARKS_MAX : ncand;
         for (int i = 0; i < nmarks; i++) {
@@ -1485,6 +1530,33 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
          * carpet shows where the search is about to look, and each mark turns
          * into its letter as that line decodes. */
         marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
+
+        /* ⚠ TEMPORARY DIAGNOSTIC (2026-09-19) - remove once the "several
+         * strong traces, one decode" question is settled.
+         *
+         * Operator, looking at five traces and one decode: "it is not an
+         * argument for me that its the stronger signals that are difficult to
+         * decode". He is right, and it kills the hypothesis that a 20-deep cap
+         * ranked by comb score squeezes loud signals out - the loudest would
+         * rank FIRST. So the question is no longer "how many candidates" but
+         * "WHERE were they", and this is the only way to know: the '?' marks
+         * on the carpet are filtered for the noise tail, so what is drawn is
+         * not the raw list.
+         *
+         * One line per cycle at INFO, which is nothing next to the per-decode
+         * lines already there. Frequency and comb score for each, so a
+         * candidate sitting on a visible trace can be told from one sitting on
+         * noise. */
+        {
+            char cl[320];
+            cl[0] = '\0';          /* ncand can be 0 - never print a stale buffer */
+            size_t o = 0;
+            for (int i = 0; i < ncand && o < sizeof(cl) - 24; i++)
+                o += (size_t)snprintf(cl + o, sizeof(cl) - o, "%s%.1f/%.0f",
+                                      i ? " " : "", cands[i].freq_hz,
+                                      cands[i].comb_score);
+            ESP_LOGI(TAG, "cands(%d): %s", ncand, cl);
+        }
     }
     found_in_pass = 0;
     tried_this_pass = 0;
@@ -1973,11 +2045,14 @@ static void wspr_rx_task(void *arg)
      * precisely so the next few boots can settle it: if fast boots share an
      * alignment that slow boots do not, it is confirmed; if they do not, the
      * cause is elsewhere and this line costs nothing. */
-    ESP_LOGI(TAG, "buffers: cap=%p pcm0=%p pcm1=%p (align %u/%u/%u)",
-             (void *)cap, (void *)s_pcm[0], (void *)s_pcm[1],
-             (unsigned)((uintptr_t)cap      & 63u),
-             (unsigned)((uintptr_t)s_pcm[0] & 63u),
-             (unsigned)((uintptr_t)s_pcm[1] & 63u));
+    /* Every slot, however many there are - this named pcm0 and pcm1 outright
+     * and stopped compiling the moment WSPR_PCM_SLOTS became 1. -Werror=
+     * array-bounds caught it, which is the compiler doing the job a hand-
+     * maintained second copy of a constant always eventually needs. */
+    for (int i = 0; i < WSPR_PCM_SLOTS; i++)
+        ESP_LOGI(TAG, "buffers: cap=%p (align %u)  pcm%d=%p (align %u)",
+                 (void *)cap, (unsigned)((uintptr_t)cap & 63u),
+                 i, (void *)s_pcm[i], (unsigned)((uintptr_t)s_pcm[i] & 63u));
 
     int64_t last_cycle_idx = -1;
 
