@@ -7639,42 +7639,117 @@ document.addEventListener("keypress", (e) => {
   if (diagBoth) {
     diagBoth.addEventListener("click", (e) => {
       e.preventDefault();
-      /* ⛔ SEQUENTIAL, AND WITH THE SPECTRUM STREAM PAUSED. This used to fire
-         both downloads as plain <a download> clicks 600 ms apart. /api/log
-         serves a 5 MB PSRAM ring, which takes far longer than that, so the
-         second request landed on a SINGLE-WORKER httpd that was still
-         streaming the first - on top of the ~10 fps WebSocket. Exactly the
-         combination that hard-wedged httpd during LoTW setup, and fixed there
-         the same way.
+      /* ⛔ ONE ZIP, FETCHED SEQUENTIALLY, WITH THE SPECTRUM STREAM PAUSED.
+         Three separate faults, all reported by John W5JSS on 2026-09-19 as
+         "the qmx-log.txt is not saved. Chrome is showing that site wasn't
+         available", and what finally reached us was a corrupt binary file.
 
-         ⛔⛔ AND A FAILED DOWNLOAD DESTROYS THE LOG. `GET /api/log` calls
-         diag_log_clear() after a successful send, so the ring is "since the
-         last download" - a transfer that dies half way takes the evidence
-         with it. John W5JSS, 2026-09-19: "the qmx-log.txt is not saved.
-         Chrome is showing that site wasn't available", and what reached us
-         was a corrupt binary file. He had been losing the log every time.
+         1. It fired both files as plain <a download> clicks 600 ms apart.
+            /api/log serves a 5 MB PSRAM ring, which takes far longer, so the
+            second request landed on a SINGLE-WORKER httpd still streaming the
+            first - on top of the ~10 fps WebSocket. Exactly the combination
+            that hard-wedged httpd during LoTW setup, fixed there the same way.
 
-         So: await each one, save it only once the whole body has arrived, and
-         SAY SO when it fails instead of leaving a half file on disk. */
-      const save = (blob, name) => {
-        const u = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = u; a.download = name;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(u), 10000);
+         2. ⛔ A FAILED DOWNLOAD DESTROYS THE LOG. GET /api/log calls
+            diag_log_clear() after a successful send, so the ring is "since the
+            last download" - a transfer that dies half way takes the evidence
+            with it. He had been losing it every attempt.
+
+         3. Two files meant a "this site wants to download multiple files"
+            prompt, and two attachments for the user to find and send.
+            Operator: "why are we not making a zip file of the two? Much
+            easier to attach for users?"
+
+         ⭐ NO ZIP LIBRARY. The archive is built here, and deflate comes from
+         the browser's own CompressionStream - the same reasoning as the
+         device-side gzip in lotw_upload.c, which hand-rolls stored blocks
+         rather than pulling in a compressor. A text log deflates roughly
+         10:1, which is the difference between a 5 MB attachment and one that
+         goes through by e-mail. Where CompressionStream is missing the entry
+         is STORED instead, so the zip is always valid. */
+      const crc32 = (() => {
+        const t = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+          let c = i;
+          for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+          t[i] = c >>> 0;
+        }
+        return (u8) => {
+          let c = 0xFFFFFFFF;
+          for (let i = 0; i < u8.length; i++) c = t[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+          return (c ^ 0xFFFFFFFF) >>> 0;
+        };
+      })();
+
+      const deflateRaw = async (u8) => {
+        if (typeof CompressionStream === "undefined") return null;
+        try {
+          const cs = new CompressionStream("deflate-raw");
+          const blob = await new Response(
+            new Blob([u8]).stream().pipeThrough(cs)).blob();
+          return new Uint8Array(await blob.arrayBuffer());
+        } catch (e) { return null; }
       };
+
+      /* Minimal ZIP writer: local headers + data + central directory + EOCD.
+         No zip64 - these logs are megabytes, not gigabytes - and no unicode
+         path flag, because the names are plain ASCII. */
+      const makeZip = async (files) => {
+        const enc = new TextEncoder();
+        const parts = [], central = [];
+        let offset = 0;
+        const u16 = (n) => [n & 0xFF, (n >>> 8) & 0xFF];
+        const u32 = (n) => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+        for (const [name, raw] of files) {
+          const nm = enc.encode(name);
+          const crc = crc32(raw);
+          const def = await deflateRaw(raw);
+          const useDef = def && def.length < raw.length;
+          const body = useDef ? def : raw;
+          const method = useDef ? 8 : 0;
+          const hdr = new Uint8Array([
+            ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(method),
+            ...u16(0), ...u16(0),                       /* no meaningful mtime */
+            ...u32(crc), ...u32(body.length), ...u32(raw.length),
+            ...u16(nm.length), ...u16(0), ...nm]);
+          parts.push(hdr, body);
+          central.push(new Uint8Array([
+            ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(method),
+            ...u16(0), ...u16(0),
+            ...u32(crc), ...u32(body.length), ...u32(raw.length),
+            ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+            ...u32(0), ...u32(offset), ...nm]));
+          offset += hdr.length + body.length;
+        }
+        let cdSize = 0;
+        for (const c of central) cdSize += c.length;
+        const eocd = new Uint8Array([
+          ...u32(0x06054b50), ...u16(0), ...u16(0),
+          ...u16(central.length), ...u16(central.length),
+          ...u32(cdSize), ...u32(offset), ...u16(0)]);
+        return new Blob([...parts, ...central, eocd], { type: "application/zip" });
+      };
+
       (async () => {
         const jobs = [["/api/log", "qmx-log.txt"],
                       ["/api/log/saved", "qmx-log-saved.txt"]];
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
         pauseWs();
         try {
+          const files = [];
           for (const [url, name] of jobs) {
             const r = await fetch(url, { cache: "no-store" });
             if (!r.ok) throw new Error(name + ": HTTP " + r.status);
-            const b = await r.blob();
-            if (!b.size) throw new Error(name + ": empty");
-            save(b, name);
+            const u8 = new Uint8Array(await r.arrayBuffer());
+            if (!u8.length) throw new Error(name + ": empty");
+            files.push([name, u8]);
           }
+          const zip = await makeZip(files);
+          const u = URL.createObjectURL(zip);
+          const a = document.createElement("a");
+          a.href = u; a.download = "qmx-diag-" + stamp + ".zip";
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(u), 10000);
         } catch (err) {
           alert("Diagnostic download failed - " + err.message +
                 "\n\nThe live log is cleared by a successful download, so " +

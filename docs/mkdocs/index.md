@@ -43,7 +43,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **WSPR** — a third page, reached by the same swipe. A propagation beacon rather than a
   contact mode: a very slow, very weak signal carrying your callsign, grid and power,
   which stations worldwide report hearing. What was heard each two-minute cycle with band,
-  distance and bearing, the furthest of the session, and a per-cycle history. Receiving is
+  distance and bearing, and the furthest of the session. Receiving is
   the default; transmitting is opt-in, with a transmit schedule and optional band hopping.
   **Calibrate Power** measures real RF output per band on a dummy load, so **Declared
   power** only offers standard dBm steps the radio actually reaches — labelled with the
@@ -276,7 +276,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.15.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.15.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

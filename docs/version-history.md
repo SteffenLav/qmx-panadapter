@@ -3795,6 +3795,78 @@ what makes the cable release above announce itself instead of failing.
 
 ---
 
+### Shipped in v1.15.1 — 2026-09-19
+
+**WSPR was deaf on a busy band, and the reason was memory - not the band, not
+the antenna, not the decoder.** wspr_find_candidates() needs ~2.3 MB of FFT
+scratch and entering the WSPR page left it ~2.1-2.9 MB of PSRAM, so it lost
+that toss most cycles and reported it as "0 candidate(s)" - indistinguishable
+from an empty band. Three changes: the failure now returns WSPR_CANDS_NOMEM and
+is logged at ERROR with the actual figures, the scratch is allocated once
+instead of per cycle, and WSPR_PCM_SLOTS went 2 -> 1. The second ping-pong
+buffer was 2,812 KB bought to allow capturing while the previous cycle decodes,
+which the timing never needs (a decode is 30-45 s of a 120 s cycle). Measured
+on 40 m where the same band had decoded nothing all afternoon: 3, 4, 2, 4, 4,
+3, 2 across seven consecutive cycles, with DROPPING: 0 proving one buffer is
+enough.
+
+⛔ A wrong turn on the way, recorded at the code: nfft was halved 131072 ->
+65536 to shrink the scratch on the strength of a 5/5 host-test pass. That
+script's own header says it checks CORRECTNESS, NOT SENSITIVITY. Reverted
+within the hour - and the harness passing at both sizes is the proof it cannot
+see that change at all.
+
+**The diagnostic download was destroying the log it fetched.** GET /api/log
+calls diag_log_clear() after a successful send, so a failed transfer takes the
+evidence with it - and the page was firing both files 600 ms apart at a
+single-worker httpd while the spectrum WebSocket streamed. John W5JSS reported
+it as a browser problem three times; what reached us was a corrupt binary file
+because there was nothing left to send. Now sequential, with pauseWs() held for
+the duration and a real error message.
+
+**The spur remover was writing stale frequencies over the WSPR dial.** A
+measurement begun on the panadapter was still running when the WSPR page was
+opened; the page pushed 14.0956, and the spur map then "restored" 14.074 over
+it - so the beacon listened, and would have transmitted, on the FT8 frequency
+while every spot named 14.0956. Three faults behind it: it ran on pages where
+its own suppression never applies, it assumed the dial it was handed was still
+current across a multi-second average, and cat_set_frequency_forced() is forced
+against the RATE LIMITER only - a write issued while a burst owns the pipe is
+parked and still returns ESP_OK. cat_poll_is_paused() and
+cat_cancel_pending_freq_if() exist for that now.
+
+**WSPR refuses to beacon on an uncalibrated band.** The declared power is
+inside the transmitted message, so a burst on a band whose voltage cannot be
+priced tells the world a figure we know we cannot back - measured at 3.8 W
+while declaring 1 W. The refusal happens at the button, not at the burst, so no
+countdown is promised that cannot be kept. And the page never prints a bare
+"PA 12.0 V" again: a voltage with no wattage beside it looks like an answer and
+is not.
+
+**Calibrate Power warns when the radio is turned down** (Rick W5NR). It caps
+the sweep at the operator's own Max PA voltage, correctly - but his QMX+ was at
+6.00 V, which is exactly the old WSPR guard's target, so the sweep measured a
+600 mW ceiling on 20 m and every reconnect held him there. The pre-Start line
+did say "Sweeps 1.0-6.0V" in plain grey; below 10.0 V it now says "Radio max is
+only 6.0V - raise it first!" in amber.
+
+**One column order across all three lists**, capitalised, so the eye lands in
+the same place on every screen. The SelfSpotter list gains GRID - the locator
+the reporter actually sent, kept as a string rather than re-derived from
+lat/lon, which would hand back the square's centre. TONE and DT were asked for
+and are deliberately absent: no feed reports the audio tone, and DT exists in
+one source of three.
+
+**The WSPR panel loses STATIONS PER CYCLE** and spends the 82 px on air rather
+than content, the Clear button is Flush, and the tone picker explains itself in
+two lines. The uncalibrated notice waits until transmit is actually asked for -
+an operator who only listens is not shown a transmit problem.
+
+⚠ Still open: cycles that find 20 candidates on the right frequencies and
+decode none of them. It predates this release and none of the above touches it.
+
+---
+
 ### Shipped in v1.15.0 — 2026-09-18
 
 **This one needs the USB-C cable, once.** It rewrites the partition table, which

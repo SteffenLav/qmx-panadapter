@@ -35,7 +35,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **Brand-new users are unaffected** — a first install already uses the flasher,
 > so it lands on the new layout directly.
 
-> **Release — v1.15.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.15.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > **v1.15.0 makes the band-plan slider a window you drag rather than a dial you scrub** — grab the framed block and the picture, the frequency marker and the filter passband all travel together and stay where you let go, with the radio following. The **Config download was missing 31 settings, including the measured power calibration** — an hour at a dummy load per band, and the one thing in the file nobody could recreate from memory (found from a question by Bruce N9JCV). **WSPR now refuses to beacon while the radio is in split**, where every spot would name a frequency your signal was never on (John W5JSS), and the WSPR transmit block is legible again after being red-on-orange at a contrast ratio of 1.15 to 1 (John W5JSS). The **on-screen keyboard comes back on a second tap** (Samuel W7STF), a **missing SD card says so and explains what a card is for**, and the **WSPR transmit schedule is two plain counts** instead of a ratio nobody could agree on.
 >
@@ -47,7 +47,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.15.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.15.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -141,8 +141,7 @@ carrying only your callsign, grid and power, which stations worldwide report hea
 over an evening you get a picture of where your antenna and your band actually reach at
 levels where nothing else would be heard at all. Nobody replies and nothing goes in your
 log. The page lists what was heard each two-minute cycle with the band, distance and
-bearing, the furthest of the session, and a per-cycle history, so an opening band looks
-different from a closing one. Receiving is the default; transmitting is opt-in, refuses to
+bearing, and the furthest of the session. Receiving is the default; transmitting is opt-in, refuses to
 key without your callsign and grid, and has a transmit schedule and optional band hopping.
 **Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output
 at each step, per band. **Declared power** then only offers the standard WSPR dBm steps

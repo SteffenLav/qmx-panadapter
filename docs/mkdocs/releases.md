@@ -4,6 +4,26 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.15.1** — 2026-09-19
+
+**WSPR was deaf on a busy band, the diagnostic download was deleting the log it fetched, and the lists now read the same way on every screen.**
+
+- **WSPR could not decode, and it was never the band.** With strong traces right there on the waterfall, cycle after cycle found nothing. The search that locates signals needs about 2.3 MB of working memory and the WSPR page had been leaving it barely that much, so it lost the toss most cycles — and when it lost it said "0 candidates", which looks exactly like an empty band. It now has the room, and it says so plainly if it ever runs short again. Measured on 40 m where the same band had decoded nothing all afternoon: **3, 4, 2, 4, 4, 3, 2 stations across seven consecutive cycles.**
+- **The diagnostic download was destroying the log.** Downloading the live log clears it from the Tab5 — that is how "since the last download" works — so a transfer that failed took the evidence with it. Both files were being fetched at once from a web server that handles one request at a time, which is why the second one often failed. They now come one after the other with the spectrum paused, and you get a real error message instead of a broken file. *(John W5JSS, who reported it three times before I looked at our own page.)*
+- **One column order on every list.** FT8, the SelfSpotter list and WSPR now read left to right the same way, with capitalised headings, so your eye lands in the same place on each screen. The SelfSpotter list gains a **GRID** column — the locator the receiving station actually sent, not one worked backwards from a position.
+- **Calibrate Power warns when your radio is turned down.** It never sweeps past the Max PA voltage your radio is holding, which is right — but if a WSPR session left that at 6 V, the calibration measured only as far as 6 V and then held you there. It now says *"Radio max is only 6.0V — raise it first!"* in amber before you start. *(Rick W5NR.)*
+- **WSPR will not beacon on a band you have not calibrated.** The declared power travels inside the transmitted message, so a burst on an uncalibrated band tells the world a figure the firmware knows it cannot back. Switching transmit on now refuses and says which band needs calibrating, rather than promising a countdown it cannot keep.
+- **The WSPR panel has room to breathe.** The stations-per-cycle strip is gone — it cost a lot of column for something the list already tells you — and the transmit-tone line now explains itself in two lines instead of shorthand.
+- **The spur remover no longer moves your dial behind your back.** It measures by shifting the radio 25 Hz and putting it back; if you changed page or band while it was working, it put the *old* frequency back. That is how a WSPR session ended up listening on the FT8 frequency. It now only ever runs on the panadapter, and never writes a frequency it has not re-checked.
+
+!!! info "Over the air, from v1.15.0"
+
+    If you are on **v1.15.0**, this updates normally over WiFi. If you are still
+    on **v1.14.x or earlier**, you need the one-time USB-C flasher first — see
+    the v1.15.0 notes below. Pressing update on an older build will fail
+    harmlessly; on v1.14.0–v1.14.3 the message will not be helpful, because
+    those builds predate the size check.
+
 **v1.15.0** — 2026-09-18
 
 !!! warning "This release needs a USB-C cable, once"
