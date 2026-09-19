@@ -76,7 +76,8 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   and the diagnostic log.
 - **Updating from the device** *(needs WiFi)* — tap the version line, press **Download
   now**, then **Restart now**. Nothing is fetched or installed until you ask.
-  ⚠ **v1.15.0 needs a one-time USB-C cable update** — see
+  ⚠ **Coming from v1.14.x or earlier? v1.15.0 needed a one-time USB-C cable
+  update** — do that first and everything after it is over the air. See
   [Settings](guide/settings.md#firmware-updates).
 - **Built-in manual** — this whole guide is compiled into the firmware, so it is instant
   and needs no WiFi and no card. It opens at the chapter for the screen you are on,
@@ -110,30 +111,24 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.15.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.15.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
 and in daily use.
 
-!!! warning "v1.15.0 needs a USB-C cable, once"
+!!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
-    It reclaims 2.81 MB of unused flash, which means rewriting the partition
-    table — something an over-the-air update cannot do. It arrives as a **flasher
-    download** over the same USB-C cable you used the first time, and everything
-    after it is over the air again with more than twice the room. **There is no
-    over-the-air image for this one on purpose**: tapping the update notice will
-    say the download could not be reached. **Your settings, QSO log and LoTW
-    certificate are kept** — press **Enter** at the flash-type prompt, never
-    **E**. New users are unaffected.
+    **v1.15.0** reclaimed 2.81 MB of unused flash, which meant rewriting the
+    partition table — something an over-the-air update cannot do. If you are
+    still on v1.14.x or earlier you need that one **flasher download**, over
+    the same USB-C cable you used the first time. **Everything from v1.15.0
+    onwards, including this release, is over the air again** with more than
+    twice the room. **Your settings, QSO log and LoTW certificate are kept** —
+    press **Enter** at the flash-type prompt, never **E**. New users are
+    unaffected, and anyone already on v1.15.0 simply updates from the device.
 
-**v1.15.0 makes the band-plan slider a window you drag** rather than a dial you scrub —
-the block, the frequency marker and the filter passband travel together and stay where
-you let go. The **Config download was missing 31 settings, including the measured power
-calibration**, the one thing in that file nobody could recreate from memory. **WSPR
-refuses to beacon while the radio is in split**, where every spot would name a frequency
-your signal was never on, and its transmit block is legible again. See
-[releases](releases.md) for the full list.
+**v1.15.1 fixes WSPR being deaf on a busy band.** With strong traces on the waterfall, cycle after cycle decoded nothing: the search that locates signals needs about 2.3 MB of working memory and the WSPR page had been leaving it barely that much, so it lost the toss most cycles — and when it lost it said "0 candidates", which looks exactly like an empty band. Measured afterwards on 40 m, where the same band had decoded nothing all afternoon: **3, 4, 2, 4, 4, 3, 2 stations across seven consecutive cycles**. The **Diagnostic download** is now a single zip, and it no longer destroys the log it is fetching. **FT8, the SelfSpotter list and WSPR share one column order** so the same information sits in the same place on every screen.
 
 **v1.14.4 fixed the reboots.** Fifteen runs on the bench before the fix lasted a median
 of 15 minutes; with it, the same bench ran 14.7 hours with none.
