@@ -93,6 +93,12 @@ static const char *TAG = "power_cal";
 //    reason the classifier reads PC; instead of assuming watts from volts, and
 //    the reason this works on a 9 V build whose PA transformer is wound
 //    differently (RWTST vs WTST) without knowing which radio it is talking to.
+/* Below this, the pre-Start line warns instead of stating the range - see
+ * idle_status_refresh(). 10.0 V is chosen to sit above a 9 V QMX's legitimate
+ * ceiling and well below the 12.0 V a full-power 12 V build calibrates to, so
+ * it catches "left turned down" without nagging a correctly-set 9 V radio. */
+#define PWRCAL_LOW_CEILING_X10      100
+
 #define PWRCAL_PLATEAU_SAMPLES        3   // consecutive steps that fail to rise
 #define PWRCAL_PLATEAU_ARM_W_X100    30   // only look once 0.30 W has been seen
 #define PWRCAL_PLATEAU_MIN_V_X10     40   // and never stop below 4.0 V
@@ -185,6 +191,16 @@ static uint32_t state_elapsed_ms(void)
 static void status_set_text(const char *s)
 {
     if (s_status_lbl) lv_label_set_text(s_status_lbl, s);
+}
+
+/* The status line is white by default; a warning takes the same amber the rest
+ * of this firmware uses. Every caller that sets the text back to an ordinary
+ * message calls status_set_plain() first, so a warning cannot stick. */
+static void status_set_warn(bool warn)
+{
+    if (s_status_lbl)
+        lv_obj_set_style_text_color(s_status_lbl,
+            lv_color_hex(warn ? 0xFFA040 : 0xFFFFFF), 0);
 }
 
 // ---- results rendering -----------------------------------------------
@@ -920,9 +936,37 @@ static void idle_status_refresh(void)
     // box and cannot grow one (see its LONG_DOT note), so the longest form
     // here - "Calibrated. Sweeps 1.0-12.0V (radio max)." - is 41 characters.
     if (pa >= 0) {
+        /* ⛔ A LOW CEILING IS A WARNING, NOT A FOOTNOTE (Rick W5NR, 2026-09-19).
+         *
+         * His QMX+ was at 6.00 V when he pressed Start - which is exactly
+         * WSPR_PA_TARGET_X10, the old fixed WSPR guard's figure, so a WSPR
+         * session had almost certainly left it there. The sweep dutifully
+         * capped at 6.0 V, measured a 600 mW ceiling, and the declared-power
+         * slider has offered him 100-600 mW ever since. Every reconnect then
+         * re-applies a voltage from that table: "if I disconnect my Tab5 ...
+         * I can run my QMX+ at 3.7 watts ... But when I reconnect my Tab5 back
+         * to the QMX+ the power will drop back to 600mW."
+         *
+         * The line already SAID "Sweeps 1.0-6.0V (radio max)". In neutral grey
+         * that does not read as "you are about to calibrate half your radio",
+         * and he had no reason to think it mattered. Our failure, not his.
+         *
+         * So below PWRCAL_LOW_CEILING_X10 it says what the sweep will actually
+         * reach and what to do first, in the warning colour. No threshold can
+         * know the operator's supply - a 9 V build legitimately tops out near
+         * 9 V - so this INFORMS and never blocks. */
+        if (pa < PWRCAL_LOW_CEILING_X10) {
+            snprintf(buf, sizeof(buf), "Radio max is only %d.%dV - raise it first!",
+                     pa / 10, pa % 10);
+            status_set_warn(true);
+            status_set_text(buf);
+            return;
+        }
+        status_set_warn(false);
         snprintf(buf, sizeof(buf), "%s. Sweeps 1.0-%d.%dV (radio max).",
                  have ? "Calibrated" : "Ready", pa / 10, pa % 10);
     } else {
+        status_set_warn(false);
         snprintf(buf, sizeof(buf), "%s", have ? "Calibrated. Start to re-measure." : "Ready.");
     }
     status_set_text(buf);

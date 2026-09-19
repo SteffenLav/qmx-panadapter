@@ -7639,13 +7639,51 @@ document.addEventListener("keypress", (e) => {
   if (diagBoth) {
     diagBoth.addEventListener("click", (e) => {
       e.preventDefault();
-      const dl = (url, name) => {
+      /* ⛔ SEQUENTIAL, AND WITH THE SPECTRUM STREAM PAUSED. This used to fire
+         both downloads as plain <a download> clicks 600 ms apart. /api/log
+         serves a 5 MB PSRAM ring, which takes far longer than that, so the
+         second request landed on a SINGLE-WORKER httpd that was still
+         streaming the first - on top of the ~10 fps WebSocket. Exactly the
+         combination that hard-wedged httpd during LoTW setup, and fixed there
+         the same way.
+
+         ⛔⛔ AND A FAILED DOWNLOAD DESTROYS THE LOG. `GET /api/log` calls
+         diag_log_clear() after a successful send, so the ring is "since the
+         last download" - a transfer that dies half way takes the evidence
+         with it. John W5JSS, 2026-09-19: "the qmx-log.txt is not saved.
+         Chrome is showing that site wasn't available", and what reached us
+         was a corrupt binary file. He had been losing the log every time.
+
+         So: await each one, save it only once the whole body has arrived, and
+         SAY SO when it fails instead of leaving a half file on disk. */
+      const save = (blob, name) => {
+        const u = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = name;
+        a.href = u; a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(u), 10000);
       };
-      dl("/api/log", "qmx-log.txt");
-      setTimeout(() => dl("/api/log/saved", "qmx-log-saved.txt"), 600);
+      (async () => {
+        const jobs = [["/api/log", "qmx-log.txt"],
+                      ["/api/log/saved", "qmx-log-saved.txt"]];
+        pauseWs();
+        try {
+          for (const [url, name] of jobs) {
+            const r = await fetch(url, { cache: "no-store" });
+            if (!r.ok) throw new Error(name + ": HTTP " + r.status);
+            const b = await r.blob();
+            if (!b.size) throw new Error(name + ": empty");
+            save(b, name);
+          }
+        } catch (err) {
+          alert("Diagnostic download failed - " + err.message +
+                "\n\nThe live log is cleared by a successful download, so " +
+                "some of it may be gone. Close other browser tabs on the " +
+                "Tab5 and try again.");
+        } finally {
+          resumeWs();
+        }
+      })();
     });
   }
 })();
