@@ -76,6 +76,38 @@ typedef struct {
 // picker for a first cut - WSPR has no reply logic and no per-station clash
 // concern the way FT8 does, so a fixed default is enough to start with.
 #define WSPR_TX_DEFAULT_FREQ_HZ   1500
+
+/* ⭐ EVERY TRANSMISSION PICKS A NEW TONE INSIDE THE SUB-BAND, AND THAT IS THE
+ * STANDALONE-BEACON CONVENTION, NOT AN INVENTION.
+ *
+ * WSPR gives each band one 200 Hz sub-band, 1400-1600 Hz above the dial, shared
+ * by everyone on it. A signal is only ~6 Hz wide, so a decoder separates
+ * simultaneous stations BY FREQUENCY - and a transmitter that always sits on
+ * 1500 Hz sits exactly where every other unthinking transmitter sits.
+ *
+ * This firmware did precisely that until 2026-09-19: WSPR_TX_DEFAULT_FREQ_HZ,
+ * unconditionally, on every burst. The operator spotted it from the receive
+ * list - "I had a feeling that all users were using the same tx tone" - and he
+ * was right: every QMX Panadapter beacon in the world was on the same 6 Hz.
+ *
+ * ⛔ WSJT-X DOES NOT DO THIS, AND THAT IS NOT A COUNTER-ARGUMENT. There you pick
+ * the Tx tone by double-clicking the waterfall and it stays put, which works
+ * because a human is watching a display full of other stations and choosing a
+ * gap. (The "Random" control people cite is the BAND-HOPPING scheduler, not the
+ * tone.) Our operator has neither that view nor that control, so we are a
+ * standalone beacon in behaviour and follow the standalone-beacon convention:
+ *
+ *   ZachTek WSPR-TX    "pick a random transmit frequency within the 200 Hertz
+ *                       WSPR block ... subsequent transmission will use another
+ *                       random picked frequency"
+ *   WsprryPi           "add a random frequency offset to each transmission to
+ *                       minimize collisions" - +/- 80 Hz
+ *   HB9VQQ WSPRBeacon  "picked randomly by the Firmware"
+ *
+ * +/- 80 Hz matches WsprryPi exactly, and leaves 20 Hz of guard inside the
+ * sub-band at each end - worth having because the signal has width and a
+ * receiver's own decode window has edges. */
+#define WSPR_TX_RANDOM_SPAN_HZ    80
 #define WSPR_TX_TONE_MIN_HZ        200
 #define WSPR_TX_TONE_MAX_HZ       2800
 
@@ -101,6 +133,11 @@ void wspr_tx_init(void);
 // (WSPR's own grid field is 4 characters). On success fills *out_req and
 // returns true; on failure returns false and writes a short reason to
 // out_err.
+/* A fresh tone for one transmission: WSPR_TX_DEFAULT_FREQ_HZ +/-
+ * WSPR_TX_RANDOM_SPAN_HZ, uniformly. Call it once per burst, not once per
+ * session - re-rolling is the whole point. See the constant's own comment. */
+int wspr_tx_pick_tone_hz(void);
+
 bool wspr_tx_build_request(const char *callsign, const char *grid,
                             int power_dbm, int audio_freq_hz,
                             wspr_tx_request_t *out_req,

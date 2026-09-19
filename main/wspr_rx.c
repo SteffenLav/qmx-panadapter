@@ -2187,8 +2187,12 @@ static void wspr_rx_task(void *arg)
                 set_status("TX held - radio is in SPLIT, clear VFO B");
             } else if (!ws.my_callsign[0] || !ws.my_grid[0]) {
                 ESP_LOGW(TAG, "TX skipped: callsign/grid not set");
+            /* ⭐ A NEW TONE FOR EVERY BURST - see WSPR_TX_RANDOM_SPAN_HZ. This
+             * passed WSPR_TX_DEFAULT_FREQ_HZ unconditionally, so every unit
+             * running this firmware beaconed on the same 6 Hz of a 200 Hz
+             * sub-band and collided with itself worldwide. */
             } else if (!wspr_tx_build_request(ws.my_callsign, ws.my_grid,
-                                              ws.wspr_tx_dbm, WSPR_TX_DEFAULT_FREQ_HZ,
+                                              ws.wspr_tx_dbm, wspr_tx_pick_tone_hz(),
                                               &req, err, sizeof(err))) {
                 ESP_LOGW(TAG, "TX skipped: %s", err);
             } else if (!wspr_tx_arm(&req, err, sizeof(err))) {

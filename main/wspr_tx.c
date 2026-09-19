@@ -14,6 +14,7 @@
 #include <sys/time.h>
 
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -285,6 +286,16 @@ bool wspr_tx_get_last_power_swr(float *power_w, float *swr)
     return true;
 }
 
+int wspr_tx_pick_tone_hz(void)
+{
+    /* esp_random() is the hardware RNG and needs no seeding - important here,
+     * because a PRNG seeded from the clock would give every Tab5 that booted in
+     * the same second the same sequence, which is the collision this exists to
+     * prevent wearing a disguise. */
+    uint32_t r = esp_random() % (uint32_t)(2 * WSPR_TX_RANDOM_SPAN_HZ + 1);
+    return WSPR_TX_DEFAULT_FREQ_HZ - WSPR_TX_RANDOM_SPAN_HZ + (int)r;
+}
+
 static void run_burst(const wspr_tx_request_t *req)
 {
     s_abort_requested = false;
@@ -354,9 +365,15 @@ static void run_burst(const wspr_tx_request_t *req)
         s_state = WSPR_TX_IDLE;
         return;
     }
-    ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz, "
-                  "PA=%d.%d V%s%s",
+    /* The ABSOLUTE frequency the signal appears on, not just the audio tone -
+     * dial + tone is what wsprnet reports back and what the operator compares
+     * against, and doing that sum by hand from two log lines is exactly the
+     * kind of attribution this file already refuses to rely on elsewhere. */
+    uint32_t rf_hz = cat_get_frequency() + (uint32_t)req->audio_freq_hz;
+    ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz "
+                  "(RF %lu.%06lu MHz), PA=%d.%d V%s%s",
              req->callsign, req->grid, req->power_dbm, req->audio_freq_hz,
+             (unsigned long)(rf_hz / 1000000u), (unsigned long)(rf_hz % 1000000u),
              pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0, wbuf,
              s_burst_sim      ? "  [SIMULATION - radio not keyed]"
              : WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
