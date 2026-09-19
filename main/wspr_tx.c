@@ -357,10 +357,36 @@ static void run_burst(const wspr_tx_request_t *req)
      * finals, and it is his radio. This one puts bad data in other people's
      * hands, which is not his to spend.
      *
-     * Only when BOTH figures are known. An uncalibrated band or an unknown
-     * voltage gives pa_dbm == -1 and the burst proceeds exactly as before -
-     * refusing on "do not know" would ground every beacon that never ran
-     * Calibrate Power. */
+     * ⛔⛔ "DO NOT KNOW" IS ALSO A REFUSAL NOW (operator, 2026-09-19).
+     *
+     * This used to let pa_dbm == -1 through, on the grounds that refusing on
+     * ignorance "would ground every beacon that never ran Calibrate Power".
+     * That reasoning protected the wrong party. The declared power is not a
+     * note in a database - it is INSIDE THE TRANSMITTED MESSAGE, so a burst on
+     * an uncalibrated band tells every receiver in the world a power figure
+     * this firmware knows it cannot back. Measured on this bench the same day:
+     * 40 m uncalibrated, radio at 12.0 V = about 3.8 W, message declaring
+     * 30 dBm = 1 W.
+     *
+     * Operator, choosing between refusing and warning: "then we need to write
+     * that you are trying to TX on a uncalibrated band - please calibrate
+     * first". Same rule as never fabricating a signal report, and the wider
+     * blast radius decides it - a wrong number in other people's propagation
+     * data is not ours to spend.
+     *
+     * ⚠ pa_x10 < 0 is NOT this case. That is "the radio has not answered yet",
+     * which is a timing gap and clears itself; grounding a beacon for it would
+     * be the fault this paragraph replaced. Only a KNOWN voltage we cannot
+     * price refuses. */
+    if (pa_x10 > 0 && pa_dbm < 0) {
+        ESP_LOGE(TAG, "WSPR TX REFUSED: this band is not calibrated, so the radio's "
+                      "%d.%d V cannot be turned into watts - and the message would "
+                      "still declare %d dBm to the world. Run Calibrate Power on "
+                      "this band first.",
+                 pa_x10 / 10, pa_x10 % 10, req->power_dbm);
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
     if (pa_dbm >= 0 && pa_dbm > req->power_dbm) {
         ESP_LOGE(TAG, "WSPR TX REFUSED: the radio is set to put out %s (%d dBm) but "
                       "the declared power is %d dBm. wsprnet publishes the DECLARED "
