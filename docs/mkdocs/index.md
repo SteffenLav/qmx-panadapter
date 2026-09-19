@@ -128,7 +128,7 @@ and in daily use.
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
 
-**v1.15.1 fixes WSPR being deaf on a busy band.** With strong traces on the waterfall, cycle after cycle decoded nothing: the search that locates signals needs about 2.3 MB of working memory and the WSPR page had been leaving it barely that much, so it lost the toss most cycles — and when it lost it said "0 candidates", which looks exactly like an empty band. Measured afterwards on 40 m, where the same band had decoded nothing all afternoon: **3, 4, 2, 4, 4, 3, 2 stations across seven consecutive cycles**. The **Diagnostic download** is now a single zip, and it no longer destroys the log it is fetching. **FT8, the SelfSpotter list and WSPR share one column order** so the same information sits in the same place on every screen.
+**v1.15.1 gives WSPR more working memory.** The routine that picks signals out of a cycle needs a large block of it, and on a busy page it could be left with only just enough — so a cycle could come back empty with traces plainly visible on the waterfall, most often after moving between pages. Freeing 2.8 MB removes the squeeze. The **Diagnostic download** is now a single zip file you can attach to an email, and it no longer clears the log when a transfer fails. **FT8, the SelfSpotter list and WSPR share one column order** so the same information sits in the same place on every screen.
 
 **v1.14.4 fixed the reboots.** Fifteen runs on the bench before the fix lasted a median
 of 15 minutes; with it, the same bench ran 14.7 hours with none.
