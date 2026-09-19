@@ -16,6 +16,7 @@
 #include "ft8_tx.h"
 #include "psram_task.h"
 #include "settings.h"
+#include "ui/ui_mode.h"
 
 static const char *TAG = "spurmap";
 
@@ -408,6 +409,13 @@ static bool safe_to_dither(void)
     // Retuning clears RIT, so a nudge would silently wipe the operator's offset.
     if (cat_get_rit_hz() != 0) return false;
     if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) return false;
+    /* ⛔ PANADAPTER ONLY. This exists to clean the panadapter's own display,
+     * and it pays for that by MOVING THE RADIO 25 Hz for several seconds. On
+     * the FT8 and WSPR pages there is no panadapter to clean and there IS a
+     * capture running, so the nudge is pure damage: a 25 Hz step mid-capture
+     * shifts every tone by 25 Hz and the slot decodes nothing.
+     * John W5JSS, 2026-09-19 - seen doing exactly that on his WSPR page. */
+    if (ui_mode_get() != UI_MODE_PANADAPTER) return false;
     return true;
 }
 
@@ -419,17 +427,56 @@ static void detect_at(uint32_t freq)
     ESP_LOGI(TAG, "learning spurs at %lu Hz (nudge %d Hz)",
              (unsigned long)freq, DITHER_HZ);
 
-    bool ok = grab_average(s_bufA);
+    /* ⛔ WE ARE NOT THE ONLY WRITER OF THE DIAL, AND THIS USED TO ASSUME WE
+     * WERE. grab_average() takes seconds, so "the dial is still where it was
+     * when this measurement started" is a claim that has to be RE-CHECKED
+     * before each of the two writes - never assumed from the argument.
+     *
+     * John W5JSS, 2026-09-19, from his own diag log: a measurement started at
+     * 14.074000 while he was on the panadapter; 1.5 s later he opened the WSPR
+     * page, which pushed 14.095600 and the radio confirmed it; 0.4 s after
+     * that THIS function wrote its nudge (14.074025) and then "restored"
+     * 14.074000 straight over the top. His beacon then received - and would
+     * have transmitted - on the FT8 frequency while every spot it filed said
+     * 14.095600. He reported it as "not receiving spots and no one spotting
+     * me", and nothing on screen could have told him why.
+     *
+     * So: no write unless the radio is still where we left it, and if it has
+     * moved we abandon the measurement and DO NOT restore. Whoever moved it
+     * meant to, and their frequency is the current one. */
+    bool ok      = grab_average(s_bufA);
+    bool nudged  = false;
     if (ok) {
-        cat_set_frequency_forced(freq + DITHER_HZ);
-        vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
-        ok = grab_average(s_bufB);
+        const uint32_t now = cat_get_frequency();
+        if (now != freq) {
+            ESP_LOGW(TAG, "dial moved to %lu Hz during the first average - "
+                          "abandoning the measurement at %lu Hz, and NOT nudging",
+                     (unsigned long)now, (unsigned long)freq);
+            ok = false;
+        } else {
+            cat_set_frequency_forced(freq + DITHER_HZ);
+            nudged = true;
+            vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
+            ok = grab_average(s_bufB);
+        }
     }
-    // Always put the dial back, even if a step failed - and FORCED, because a
-    // restore dropped by the 200 ms rate limiter would leave the operator's dial
-    // sitting 25 Hz high with nothing to indicate it.
-    cat_set_frequency_forced(freq);
-    vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
+    if (nudged) {
+        /* Either value is us: the FA poll lags a write by up to ~150 ms, so
+         * the pre-nudge frequency can still be the last one reported. */
+        const uint32_t now = cat_get_frequency();
+        if (now == freq + DITHER_HZ || now == freq) {
+            // FORCED, because a restore dropped by the 200 ms rate limiter would
+            // leave the operator's dial sitting 25 Hz high with nothing to
+            // indicate it.
+            cat_set_frequency_forced(freq);
+            vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
+        } else {
+            ESP_LOGW(TAG, "dial moved to %lu Hz while nudged - leaving it there "
+                          "rather than restoring %lu Hz over someone else's tune",
+                     (unsigned long)now, (unsigned long)freq);
+            ok = false;
+        }
+    }
     if (ok) ok = grab_average(s_bufC);
 
     if (ok) {
@@ -489,6 +536,19 @@ static void spur_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(100));
         if (s_mode == SPUR_MODE_OFF) { last_freq = 0; continue; }
+        /* ⛔ PANADAPTER ONLY - the same rule safe_to_dither() enforces at the
+         * write, stated here as well so the whole task behaves exactly as if
+         * the feature were switched off on any other page. Operator, after
+         * John W5JSS's log: "far too much digi stuff is going on in the other
+         * modes to interfere with - and its not relevant either".
+         *
+         * Not relevant is literal: fft_task takes the IQ-capture branch in FT8
+         * and WSPR and never reaches spur_map_apply(), so the suppression has
+         * no effect on those pages and there is nothing to pay 25 Hz for.
+         *
+         * last_freq is cleared, so coming back to the panadapter looks like a
+         * fresh tune: it waits DIAL_STABLE_MS and then measures. */
+        if (ui_mode_get() != UI_MODE_PANADAPTER) { last_freq = 0; continue; }
 
         uint32_t f = cat_get_frequency();
         if (f == 0) continue;
