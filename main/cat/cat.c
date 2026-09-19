@@ -2725,6 +2725,23 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     return ESP_OK;
 }
 
+bool cat_poll_is_paused(void)
+{
+    return s_poll_paused;
+}
+
+/* Withdraw a parked frequency write, but ONLY if it is still the one the
+ * caller asked for - see the note in cat.h. Anything else in that slot belongs
+ * to someone else and must go out. */
+bool cat_cancel_pending_freq_if(uint32_t freq_hz)
+{
+    if (s_pending_freq_hz != freq_hz) return false;
+    s_pending_freq_hz = 0;
+    ESP_LOGW(TAG, "deferred freq %lu Hz withdrawn by its caller - it never went out",
+             (unsigned long)freq_hz);
+    return true;
+}
+
 esp_err_t cat_set_frequency_forced(uint32_t freq_hz)
 {
     s_last_tx_us = 0;  // bypass the 200 ms rate-limiter for deliberate user writes

@@ -409,6 +409,8 @@ static bool safe_to_dither(void)
     // Retuning clears RIT, so a nudge would silently wipe the operator's offset.
     if (cat_get_rit_hz() != 0) return false;
     if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) return false;
+    /* A write issued now would be PARKED, not sent - see tune_and_confirm(). */
+    if (cat_poll_is_paused()) return false;
     /* ⛔ PANADAPTER ONLY. This exists to clean the panadapter's own display,
      * and it pays for that by MOVING THE RADIO 25 Hz for several seconds. On
      * the FT8 and WSPR pages there is no panadapter to clean and there IS a
@@ -417,6 +419,54 @@ static bool safe_to_dither(void)
      * John W5JSS, 2026-09-19 - seen doing exactly that on his WSPR page. */
     if (ui_mode_get() != UI_MODE_PANADAPTER) return false;
     return true;
+}
+
+/* ⛔ WRITE THE DIAL AND PROVE IT LANDED. Everything below depends on the radio
+ * really being where we just asked it to be, and cat_set_frequency_forced()
+ * cannot promise that: "forced" beats the 200 ms rate limiter and NOT
+ * deferral, so a write issued while a burst owns the pipe is parked and
+ * returns ESP_OK anyway. See the note at cat_poll_is_paused().
+ *
+ * Measured on the bench, 2026-09-19, and it is why this exists:
+ *   120434  learning spurs at 14095600 Hz (nudge 25 Hz)
+ *   120775  freq 14095625 Hz deferred - a TX burst owns the pipe
+ *   121352  Sent: FA00014095600;      <- the RESTORE went out first
+ *   127707  Sent: FA00014095625;      <- the NUDGE arrived 7 s later
+ * and the radio was left sitting 25 Hz high, which the old code's own comment
+ * claimed could not happen.
+ *
+ * So: refuse to write while the pipe is owned, then WAIT FOR THE RADIO to
+ * report the new frequency, and if it never does, withdraw the parked write
+ * so it cannot surface later behind our backs. */
+#define TUNE_CONFIRM_STEP_MS  60
+/* ⚠ 3 s, NOT 1.5. Measured on the bench: three consecutive confirmations timed
+ * out in the first 15 s of a boot, because the FA poll is sharing the pipe with
+ * the twelve MM reads of the band table and cat_get_frequency() simply had not
+ * been refreshed yet. The radio was fine; the instrument was slow. */
+#define TUNE_CONFIRM_TRIES    50
+
+/* `sent_out` says whether the bytes LEFT - which is a different question from
+ * whether the radio got there, and the caller needs both. A write that went out
+ * unconfirmed still has to be taken back; a write that was never sent does not. */
+static bool tune_and_confirm(uint32_t target, bool *sent_out)
+{
+    if (sent_out) *sent_out = false;
+    if (cat_poll_is_paused()) return false;      /* would be parked, not sent */
+    cat_set_frequency_forced(target);
+    if (sent_out) *sent_out = true;
+    for (int i = 0; i < TUNE_CONFIRM_TRIES; i++) {
+        vTaskDelay(pdMS_TO_TICKS(TUNE_CONFIRM_STEP_MS));
+        if (cat_get_frequency() == target) return true;
+    }
+    /* Withdraw it if it is still parked. If it is NOT parked the bytes are
+     * already gone and the radio may well be there - which is why an
+     * unconfirmed nudge is still restored, not abandoned. */
+    if (cat_cancel_pending_freq_if(target)) {
+        if (sent_out) *sent_out = false;
+    }
+    ESP_LOGW(TAG, "the radio never reported %lu Hz - abandoning this measurement",
+             (unsigned long)target);
+    return false;
 }
 
 static void detect_at(uint32_t freq)
@@ -441,11 +491,12 @@ static void detect_at(uint32_t freq)
      * 14.095600. He reported it as "not receiving spots and no one spotting
      * me", and nothing on screen could have told him why.
      *
-     * So: no write unless the radio is still where we left it, and if it has
-     * moved we abandon the measurement and DO NOT restore. Whoever moved it
-     * meant to, and their frequency is the current one. */
-    bool ok      = grab_average(s_bufA);
-    bool nudged  = false;
+     * So: no nudge unless the radio is still where we left it, and if SOMEONE
+     * ELSE has moved it we abandon the measurement and do NOT restore - they
+     * meant to, and their frequency is the current one. An unconfirmed nudge of
+     * our own is the opposite case and IS restored; see below. */
+    bool ok     = grab_average(s_bufA);
+    bool nudged = false;
     if (ok) {
         const uint32_t now = cat_get_frequency();
         if (now != freq) {
@@ -453,28 +504,41 @@ static void detect_at(uint32_t freq)
                           "abandoning the measurement at %lu Hz, and NOT nudging",
                      (unsigned long)now, (unsigned long)freq);
             ok = false;
+        } else if (!tune_and_confirm(freq + DITHER_HZ, &nudged)) {
+            /* ⛔ `nudged` IS STILL TRUE IF THE BYTES WENT OUT. An unconfirmed
+             * write is not a write that did not happen - the radio may be 25 Hz
+             * high and simply not have been polled yet - so it is restored
+             * below exactly as a confirmed one is. Only the measurement is
+             * abandoned. Caught on the bench: the first version returned here
+             * without restoring, which is the very fault this file is about. */
+            ok = false;
         } else {
-            cat_set_frequency_forced(freq + DITHER_HZ);
-            nudged = true;
             vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
             ok = grab_average(s_bufB);
         }
     }
     if (nudged) {
-        /* Either value is us: the FA poll lags a write by up to ~150 ms, so
-         * the pre-nudge frequency can still be the last one reported. */
+        /* The dial is ours to put back unless someone else has taken it. Either
+         * of our own two values counts as ours: the FA poll lags a write by up
+         * to ~150 ms, so the pre-nudge frequency can still be the last one
+         * reported. */
         const uint32_t now = cat_get_frequency();
-        if (now == freq + DITHER_HZ || now == freq) {
-            // FORCED, because a restore dropped by the 200 ms rate limiter would
-            // leave the operator's dial sitting 25 Hz high with nothing to
-            // indicate it.
-            cat_set_frequency_forced(freq);
-            vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
-        } else {
+        if (now != freq + DITHER_HZ && now != freq) {
             ESP_LOGW(TAG, "dial moved to %lu Hz while nudged - leaving it there "
                           "rather than restoring %lu Hz over someone else's tune",
                      (unsigned long)now, (unsigned long)freq);
             ok = false;
+        } else if (!tune_and_confirm(freq, NULL)) {
+            /* ⛔ THE ONE CASE WITH NOTHING LEFT TO TRY. We moved the radio and
+             * cannot move it back, so say so loudly and at ERROR - a dial
+             * silently 25 Hz off is how this whole fault stayed invisible. */
+            ESP_LOGE(TAG, "COULD NOT RESTORE THE DIAL to %lu Hz - the radio may be "
+                          "%d Hz high. Retune it, and switch spur suppression off "
+                          "if this repeats.",
+                     (unsigned long)freq, DITHER_HZ);
+            ok = false;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(RETUNE_SETTLE_MS));
         }
     }
     if (ok) ok = grab_average(s_bufC);

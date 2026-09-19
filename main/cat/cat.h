@@ -424,6 +424,24 @@ void cat_request_cw_passband(uint32_t hz);
  */
 void cat_poll_set_paused(bool paused);
 
+/* ⛔ A "FORCED" FREQUENCY WRITE CAN STILL BE DEFERRED, AND IT RETURNS ESP_OK.
+ * cat_set_frequency_forced() is forced against the 200 ms RATE LIMITER only.
+ * If a burst owns the pipe the write is parked in s_pending_freq_hz and sent
+ * seconds later, and the caller is told nothing.
+ *
+ * That cost a real fault on 2026-09-19: the spur map's 25 Hz nudge was
+ * deferred, its own restore went out FIRST, and the nudge then landed seven
+ * seconds later - leaving the radio 25 Hz high, which is precisely what that
+ * code's "always restore, forced" comment claimed to prevent.
+ *
+ * So anything that writes a frequency it intends to take back needs both of
+ * these: ask BEFORE writing, and withdraw the parked write if it never
+ * arrived. The withdrawal is value-matched so it can only ever cancel the
+ * caller's OWN write, never an operator band change parked in the same slot
+ * (it is one slot, last-one-wins). */
+bool cat_poll_is_paused(void);
+bool cat_cancel_pending_freq_if(uint32_t freq_hz);
+
 // Close the CAT link deliberately, on our way out - see util/usb_shutdown.h.
 // Sends TA0;RX; first so the radio is never left keyed, then tears the CDC
 // handle down using the same poll-task-aware sequence the disconnect path uses.
