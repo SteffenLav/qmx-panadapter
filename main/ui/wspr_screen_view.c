@@ -130,6 +130,7 @@ static lv_obj_t *s_btn_tx;
 static lv_obj_t *s_lbl_tx;
 static lv_obj_t *s_lbl_txi;        /* PA volts of the last burst - coloured by protection */
 static lv_obj_t *s_lbl_txi2;       /* measured watts / SWR - cyan, as FT8 shows the same pair */
+static lv_obj_t *s_lbl_tone;       /* TX tone: random, or the pinned value - tap to release */
 
 /* ⛔ TWO LABELS, NOT ONE WITH TWO COLOURS. LVGL 9.2.2 dropped in-label recolor
  * markup, so a line that needs a colour of its own needs an object of its own -
@@ -414,6 +415,78 @@ static void hover_hide(void)
 {
     if (s_hover_lbl && !lv_obj_has_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN))
         lv_obj_add_flag(s_hover_lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Shows which tone mode is in force. Amber when pinned, because a pin is a
+ * decision the operator made and can forget - the random default is the quiet
+ * state and reads muted. */
+static void tx_tone_label_refresh(void)
+{
+    if (!s_lbl_tone) return;
+    uint16_t pinned = settings_get_wspr_tx_tone_hz();
+    char t[48];
+    if (pinned) {
+        snprintf(t, sizeof(t), "TX tone %u Hz  (tap to free)", (unsigned)pinned);
+        lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(0xFFA040), 0);
+    } else {
+        snprintf(t, sizeof(t), "TX tone random  (tap carpet to pin)");
+        lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    }
+    if (strcmp(lv_label_get_text(s_lbl_tone), t) != 0) lv_label_set_text(s_lbl_tone, t);
+}
+
+static void tone_label_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!settings_get_wspr_tx_tone_hz()) return;   /* already random - nothing to undo */
+    settings_set_wspr_tx_tone_hz(0);
+    ESP_LOGI(TAG, "WSPR TX tone released - a fresh random tone every burst again");
+    tx_tone_label_refresh();
+    ui_toast("WSPR TX tone: random again");
+}
+
+/* ---- TX tone picker ------------------------------------------------------
+ *
+ * Tap the waterfall to pin the transmit tone; tap the state label in the left
+ * pane to go back to a fresh random tone per burst.
+ *
+ * ⚠ CLAMPED TO THE SAME WINDOW THE RANDOMISER USES, not to the full
+ * 1400-1600 sub-band the carpet draws. The carpet deliberately shows a little
+ * margin either side (1360-1650) so you can see signals just outside your own
+ * decode range - but a TRANSMISSION out there is outside the convention and
+ * some receivers would never look. +/- 80 Hz is WsprryPi's figure and leaves
+ * 20 Hz of guard inside the sub-band; a pin gets the same treatment as a roll.
+ *
+ * ⛔ SNAPPED TO THE WSPR TONE GRID (1.4648 Hz). The carpet is one column per
+ * tone-space, so an unsnapped pick would claim a precision the display cannot
+ * show and would sit between two columns.
+ */
+static void wf_pick_cb(lv_event_t *e)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    if (p.x < RIGHT_X || p.x >= RIGHT_X + RIGHT_W) return;
+
+    float hz = WSPR_WF_LO_HZ +
+        (float)(p.x - RIGHT_X) * (WSPR_WF_HI_HZ - WSPR_WF_LO_HZ) / (float)RIGHT_W;
+
+    const float lo = (float)(WSPR_TX_DEFAULT_FREQ_HZ - WSPR_TX_RANDOM_SPAN_HZ);
+    const float hi = (float)(WSPR_TX_DEFAULT_FREQ_HZ + WSPR_TX_RANDOM_SPAN_HZ);
+    if (hz < lo) hz = lo;
+    if (hz > hi) hz = hi;
+
+    /* Snap to the tone grid, measured from the sub-band centre so the grid is
+     * the same one every station's decoder bins against. */
+    const float step = 1.46484375f;
+    int k = (int)lroundf((hz - (float)WSPR_TX_DEFAULT_FREQ_HZ) / step);
+    uint16_t tone = (uint16_t)lroundf((float)WSPR_TX_DEFAULT_FREQ_HZ + (float)k * step);
+
+    settings_set_wspr_tx_tone_hz(tone);
+    ESP_LOGI(TAG, "WSPR TX tone pinned to %u Hz by tap (x=%d)", (unsigned)tone, (int)p.x);
+    tx_tone_label_refresh();
+    ui_toast("WSPR TX tone pinned");
 }
 
 static void hover_tick_cb(lv_timer_t *timer)
@@ -934,6 +1007,25 @@ static void build_left_extras(void)
     lv_obj_set_style_text_color(s_lbl_txi2, lv_palette_main(LV_PALETTE_CYAN), 0);
     lv_obj_set_width(s_lbl_txi2, EX_W_LOW);
     lv_obj_set_pos(s_lbl_txi2, EX_X, EX_TXI_Y + 26);
+
+    /* ⭐ THE TONE STATE, AND THE WAY BACK. Pinning happens on the waterfall,
+     * which is discoverable enough once you know - but nothing on screen would
+     * have told you it had happened, and there would have been no way to undo
+     * it. This says which mode you are in and is itself the toggle: tap it to
+     * release a pin and go back to a fresh tone every burst.
+     *
+     * Same principle as the pause banner and the IQ warning elsewhere in this
+     * firmware: a state the operator chose must be visible AND reversible from
+     * the thing that shows it. */
+    s_lbl_tone = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_tone, "");
+    lv_obj_set_style_text_font(s_lbl_tone, &lv_font_montserrat_22, 0);
+    lv_obj_set_width(s_lbl_tone, EX_W_LOW);
+    lv_obj_set_pos(s_lbl_tone, EX_X, EX_TXI_Y + 52);
+    lv_obj_add_flag(s_lbl_tone, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_lbl_tone, 14);
+    lv_obj_add_event_cb(s_lbl_tone, tone_label_cb, LV_EVENT_CLICKED, NULL);
+    tx_tone_label_refresh();
 
     /* ---- Clear, beside the confirmed line ----
      *
@@ -1781,6 +1873,13 @@ void wspr_screen_view_init(lv_obj_t *parent)
         lv_obj_set_pos(s_wf_canvas, RIGHT_X, WF_Y);
         lv_canvas_fill_bg(s_wf_canvas, lv_color_hex(0x000000), LV_OPA_COVER);
         lv_obj_add_flag(s_wf_canvas, UI_FLAG_NOT_HOT);
+        /* ⭐ TAP THE CARPET TO PLACE YOUR TRANSMISSION. The display was already
+         * here - 1360-1650 Hz, one WSPR tone-space per column - and showed the
+         * operator exactly where the band is busy while offering no way to act
+         * on it. WSJT-X users double-click their waterfall for this; ours could
+         * only watch. See wf_pick_cb(). */
+        lv_obj_add_flag(s_wf_canvas, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_wf_canvas, wf_pick_cb, LV_EVENT_RELEASED, NULL);
 
         /* ⭐ WHY THERE IS A LABEL ON TOP OF THE CARPET AT ALL (Gyula HA3HZ).
          *

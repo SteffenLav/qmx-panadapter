@@ -15,6 +15,7 @@
 
 #include "esp_log.h"
 #include "esp_random.h"
+#include "settings.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -288,6 +289,14 @@ bool wspr_tx_get_last_power_swr(float *power_w, float *swr)
 
 int wspr_tx_pick_tone_hz(void)
 {
+    /* ⭐ A PINNED TONE WINS. The operator can tap the WSPR waterfall to place
+     * the transmission in a gap they can actually see - which is what WSJT-X
+     * users do, and what this page's own 1360-1650 Hz display was already
+     * showing without offering. 0 means nothing is pinned, which is the
+     * default and the one that randomises. */
+    uint16_t pinned = settings_get_wspr_tx_tone_hz();
+    if (pinned) return (int)pinned;
+
     /* esp_random() is the hardware RNG and needs no seeding - important here,
      * because a PRNG seeded from the clock would give every Tab5 that booted in
      * the same second the same sequence, which is the collision this exists to

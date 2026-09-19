@@ -126,6 +126,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_PASAVE    "wspr_pasave"
 #define KEY_PWR_CAL        "pwrcal"
 #define KEY_PWR_TARGET     "pwrtarget"
+#define KEY_WSPR_TONE      "wsprtone"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
@@ -380,6 +381,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
 #define DIRTY_WF_SPEED       121
 #define DIRTY_WSPR_BURST     122  /* consecutive cycles per scheduled WSPR transmission */
+#define DIRTY_WSPR_TONE      123  /* pinned WSPR TX tone, 0 = random per burst */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -612,6 +614,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_BURST)) { nvs_set_u8(s_nvs, KEY_WSPR_BURST, snap.wspr_tx_cycles);
                                                           nvs_set_u8(s_nvs, KEY_WSPR_SCHED_V, 1); }
         if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_TONE))    nvs_set_u16(s_nvs, KEY_WSPR_TONE, snap.wspr_tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_WSPR_PA)) {
             nvs_set_u8(s_nvs, KEY_WSPR_PARED, snap.wspr_pa_reduce ? 1 : 0);
             nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, snap.wspr_pa_saved_x10);
@@ -856,6 +859,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_rx_cycles = 4;          /* 1 transmit + 4 receive = 10 min, 20% - the long-standing default */
     out->wspr_tx_cycles = 1;
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
+    out->wspr_tx_tone_hz = 0;         /* 0 = random per burst, the default */
     out->wspr_pa_reduce = true;       /* #290 - protecting the finals is the safe default */
     out->wspr_pa_saved_x10 = 0;       /* nothing outstanding to restore */
     out->wspr_dump_cycles = 0;        /* never dump unless asked */
@@ -1144,6 +1148,7 @@ static void load_from_nvs(qmx_settings_t *out)
         }
     }
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
+    { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_TONE, &u16v) == ESP_OK) out->wspr_tx_tone_hz = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_PARED, &u8v) == ESP_OK) out->wspr_pa_reduce = (u8v != 0); }
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_PASAVE, &u16v) == ESP_OK) out->wspr_pa_saved_x10 = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
@@ -2180,6 +2185,23 @@ uint32_t settings_get_wspr_dial_hz(void)
     uint32_t v = s_pending.wspr_dial_hz;
     xSemaphoreGive(s_mutex);
     return v;
+}
+
+uint16_t settings_get_wspr_tx_tone_hz(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.wspr_tx_tone_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_wspr_tx_tone_hz(uint16_t hz)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.wspr_tx_tone_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_TONE);
 }
 
 int8_t settings_get_wspr_tx_dbm(void)

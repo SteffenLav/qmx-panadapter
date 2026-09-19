@@ -416,6 +416,10 @@ typedef struct {
     uint8_t  wspr_rx_cycles;  // receive cycles after each group, 1-20
     uint8_t  wspr_tx_cycles;  // consecutive transmit cycles per group, 0-4 (0 = RX only)
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
+    /* Pinned WSPR transmit tone in Hz, or 0 for a fresh random one per burst
+     * (the default, and the standalone-beacon convention - see
+     * WSPR_TX_RANDOM_SPAN_HZ). Set by tapping the WSPR waterfall. */
+    uint16_t wspr_tx_tone_hz;
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
     /* Captured windows still to be written to the SD card as WAV.
@@ -803,6 +807,9 @@ int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
  * wherever the radio happens to be when WSPR is entered. See the long note at
  * wspr_pa_apply_declared_dbm(). */
 uint32_t settings_get_wspr_dial_hz(void);
+/* 0 = pick a new random tone every burst; otherwise the pinned tone in Hz. */
+uint16_t settings_get_wspr_tx_tone_hz(void);
+void     settings_set_wspr_tx_tone_hz(uint16_t hz);
 // Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).
 // Never the whole blob: both copy exactly one pwr_cal_band_t (28 bytes), so a
 // caller has no reason to reach for settings_load_all() just for this.

@@ -1704,12 +1704,16 @@ static void rebuild_table(void)
     add_sort_header_col(hdr, "Band",     2, SORT_COL_BAND,  true);
     add_sort_header_col(hdr, "Freq",     3, SORT_COL_FREQ,  true);
     add_sort_header_col(hdr, "SNR",      2, SORT_COL_SNR,   true);
-    add_sort_header_col(hdr, "Distance", 3, SORT_COL_DIST,  true);
-    /* LEFT-aligned, like its values. Every other text column here is left and
+    /* Country BEFORE Distance - operator, 2026-09-19. Reads better: the country
+     * names it, the distance qualifies it, and the two numeric columns (Freq,
+     * SNR) no longer have a text column wedged between them and Distance.
+     *
+     * LEFT-aligned, like its values. Every other text column here is left and
      * every numeric one is right; "Country" was the one header sitting right
      * over left-aligned names, which reads as a column out of step - visible
-     * immediately in the operator's screenshot, 2026-09-19. */
+     * immediately in the operator's screenshot the same day. */
     add_sort_header_col(hdr, "Country",  3, SORT_COL_ISO,   false);
+    add_sort_header_col(hdr, "Distance", 3, SORT_COL_DIST,  true);
     add_sort_header_col(hdr, "Age",      2, SORT_COL_AGE,   true);
 
     static EXT_RAM_BSS_ATTR self_spot_t spots[SELF_SPOT_MAX];   // NOT internal .bss - see the note above map_draw_cb()'s copy of this array
@@ -1788,8 +1792,8 @@ static void rebuild_table(void)
         add_col(row, band[0] ? band : "-", 2, UI_COLOR_TEXT, false, true);
         add_col(row, freq_buf, 3, UI_COLOR_TEXT, false, true);
         add_col(row, snr_buf, 2, UI_COLOR_TEXT, false, true);
-        add_col(row, dist_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
         add_col(row, iso ? iso : "-", 3, UI_COLOR_TEXT_SECONDARY, false, false);
+        add_col(row, dist_buf, 3, UI_COLOR_TEXT_SECONDARY, false, true);
         add_col(row, age_buf, 2, UI_COLOR_TEXT_SECONDARY, false, true);
         shown++;
     }
