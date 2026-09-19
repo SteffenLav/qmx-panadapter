@@ -425,11 +425,15 @@ static void tx_tone_label_refresh(void)
     if (!s_lbl_tone) return;
     uint16_t pinned = settings_get_wspr_tx_tone_hz();
     char t[48];
+    /* ONE LINE, always. EX_W_LOW at montserrat_22 is not wide enough for the
+     * hints that used to be here, and a wrap costs 22 px this column does not
+     * have. The hint moved into the toast that fires when a tone is pinned,
+     * which is where someone is actually looking at that moment. */
     if (pinned) {
-        snprintf(t, sizeof(t), "TX tone %u Hz  (tap to free)", (unsigned)pinned);
+        snprintf(t, sizeof(t), "TX tone: %u Hz", (unsigned)pinned);
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(0xFFA040), 0);
     } else {
-        snprintf(t, sizeof(t), "TX tone random  (tap carpet to pin)");
+        snprintf(t, sizeof(t), "TX tone: random");
         lv_obj_set_style_text_color(s_lbl_tone, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     }
     if (strcmp(lv_label_get_text(s_lbl_tone), t) != 0) lv_label_set_text(s_lbl_tone, t);
@@ -486,7 +490,7 @@ static void wf_pick_cb(lv_event_t *e)
     settings_set_wspr_tx_tone_hz(tone);
     ESP_LOGI(TAG, "WSPR TX tone pinned to %u Hz by tap (x=%d)", (unsigned)tone, (int)p.x);
     tx_tone_label_refresh();
-    ui_toast("WSPR TX tone pinned");
+    ui_toast("TX tone pinned - tap \"TX tone\" to free it");
 }
 
 static void hover_tick_cb(lv_timer_t *timer)
@@ -1021,9 +1025,23 @@ static void build_left_extras(void)
     lv_label_set_text(s_lbl_tone, "");
     lv_obj_set_style_text_font(s_lbl_tone, &lv_font_montserrat_22, 0);
     lv_obj_set_width(s_lbl_tone, EX_W_LOW);
-    lv_obj_set_pos(s_lbl_tone, EX_X, EX_TXI_Y + 52);
+    /* ⛔ ABOVE the PA line, not below it. There are only 58 px between PA
+     * (EX_TXI_Y) and the TX button (EX_TX_Y), and the PA and measured-W/SWR
+     * lines already use 52 of them - so this first sat SIX PIXELS above the
+     * button, wrapped to two lines, and drew straight over it. Worse, its 14 px
+     * ext_click_area then covered the button's top edge, so every tap meant for
+     * TX released the tone instead: "after picking a TX tone the TX button does
+     * nothing other than cancel the tone" (operator, with screenshots).
+     *
+     * That is this project's recorded hit-area trap for the third time - an
+     * enlarged target swallowing its neighbour, same as the SD dot and the
+     * update line on the bottom bar. The gap that IS free is between the
+     * wsprnet lines (ending ~458) and PA at 494. */
+    lv_obj_set_pos(s_lbl_tone, EX_X, EX_TXI_Y - 30);
     lv_obj_add_flag(s_lbl_tone, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(s_lbl_tone, 14);
+    /* Kept small AND now 88 px clear of the TX button - a halo is only safe
+     * when nothing else is within it. */
+    lv_obj_set_ext_click_area(s_lbl_tone, 10);
     lv_obj_add_event_cb(s_lbl_tone, tone_label_cb, LV_EVENT_CLICKED, NULL);
     tx_tone_label_refresh();
 
