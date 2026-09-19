@@ -26,16 +26,16 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 |---|---|
 | **S** | The letter this station is marked with on the waterfall for that cycle — see [Which trace is which](#which-trace-is-which) below. Blank once the cycle it belongs to has scrolled out of the picture |
 | **UTC** | The cycle this spot came from |
-| **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **CALL** | The station heard |
 | **GRID** | Their Maidenhead locator, as transmitted |
-| **COUNTRY** | Country from the callsign prefix, spelled out where it fits, otherwise its 3-letter code |
-| **SNR** | Signal-to-noise, in the WSPR convention (a 2500 Hz reference — figures around −25 dB are entirely normal and perfectly decodable) |
-| **DRF** | Drift, in Hz per minute. A stable transmitter reads 0 |
-| **TONE** | Where in the 200 Hz sub-band they were heard |
+| **COUNTRY** | Country from the callsign prefix, spelled out where it fits and shortened where it does not - never a 3-letter code |
+| **BND** | The band it was heard on, in metres. Blank for spots recorded before v1.10.5, and worth having the moment band hopping is on |
 | **PWR** | The power **they declared**, not a measurement |
-| **KM** | Great-circle distance from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md). A leading `~` means the distance came from the station's country rather than its grid |
+| **SNR** | Signal-to-noise, in the WSPR convention (a 2500 Hz reference — figures around −25 dB are entirely normal and perfectly decodable) |
+| **TONE** | Where in the 200 Hz sub-band they were heard |
+| **DR** | Drift: how far the sender moved during the transmission. A stable, oven- or GPS-referenced transmitter reads +0; a crystal warming through the burst reads +1 or -2. Whole Hz, which is what wsprnet publishes, and a coarser measurement than TONE beside it - it is the difference between two half-window estimates, so read a trend across several spots rather than one |
 | **DT** | How far into the two-minute cycle that transmission actually started, in seconds. **Nominal is +1.0**, because a WSPR transmission begins one second into its even minute — so a value far from that is the other station's clock rather than anything at your end |
+| **KM** | Great-circle distance from your grid. The heading reads **MI** if you have chosen miles — see [Settings](settings.md). A leading `~` means the distance came from the station's country rather than its grid |
 
 Below the list:
 

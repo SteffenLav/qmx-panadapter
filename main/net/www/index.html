@@ -4237,8 +4237,23 @@ const SET_FIELDS = [
   ["Radio & display", "display.wf_speed_mult", "sel", "Waterfall speed",
      "How fast the waterfall scrolls. Faster spreads a signal out in time; slower fits more history on screen. The spectrum and S-meter are unaffected",
      [["1","Normal"],["2","2x"],["3","3x"],["4","4x"]]],
-  ["Radio & display", "qmx_gps", "bool", "My QMX has GPS",
-     "A GPS-disciplined QMX+ keeps better time than the network does. Leave this off unless yours really has one - claiming it stops the Tab5 maintaining the radio's clock"],
+  /* ⛔ "My QMX has GPS" IS NOT HERE, AND MUST NOT COME BACK. GPS is DETECTED,
+     not declared - time_sync.c compares the radio's own second tick against
+     SNTP - and the Tab5's drawer dropped this checkbox on 2026-07-19 when that
+     landed. It was re-added HERE in v1.15.0 as one of "three settings that had
+     been Tab5-only", which was wrong: the setting had been dead for two months
+     and only the web page had not noticed.
+
+     Ticking it changed nothing that lasted, because the NVS qmx_gps field is
+     now just where the firmware PERSISTS its own verdict for an offline
+     session - so the next detection wrote over whatever the operator chose.
+     John W5JSS, 2026-09-19: "Your release notes mentioned a checkbox for 'my
+     QMX has GPS' ... I have checked the QMX menus ... How can I get it to use
+     the GPS?" He could not, and there was nothing wrong with his radio.
+
+     Same rule as the Adaptive floor slider, removed for exactly this reason: a
+     control that cannot change anything is worse than a missing one, because
+     it invites tuning something that is not there. */
 
   /* The same five choices the Tab5's dropdown offers, in the same words. It was a
      free "x10" number, which asked the operator to know the encoding and let them

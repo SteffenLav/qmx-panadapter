@@ -83,12 +83,15 @@ drawn on top of everything.
 - **Pinch** with two fingers to zoom, up to 50×. Zoom is anchored on your own
   station, so your QTH stays put while the world grows around it.
 
-**LIST** is the same data as a table — receiver, mode, band, frequency, SNR,
-distance, age and **ISO** (the receiving station's country) — when you want the
-numbers rather than the picture. Every column is sortable; tap a header to
-sort by it. The ISO column names the *country*, which can differ from the
-DXCC entity the map itself plots — a Hawaiian station's marker sits on Hawaii,
-but its ISO reads `USA`.
+**LIST** is the same data as a table — **RECEIVER, GRID, COUNTRY, MODE, BAND,
+FREQUENCY, SNR, KM** and **AGE** — when you want the numbers rather than the
+picture. Every column is sortable; tap a header to sort by it.
+
+**GRID** is the locator the receiving station itself sent, not one worked
+backwards from a position, so it is blank for CW skimmers: they report a
+callsign and not a location. **COUNTRY** names the *country*, which can differ
+from the DXCC entity the map plots — a Hawaiian station's marker sits on
+Hawaii, while its country reads United States.
 
 **CONDITIONS** is HF propagation from hamqsl.com: day and night ratings per band
 group, plus solar flux, A and K index, sunspot number, geomagnetic field and
