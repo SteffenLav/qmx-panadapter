@@ -30,6 +30,10 @@
 
 param(
     [int] $StaleSeconds = 90,   # no new bytes for this long = dead
+    # A stand-down EXPIRES. See the block in Invoke-Pass for why this exists at
+    # all: a flag that never expires is how a bench ends up with no capture for
+    # a whole working day, and the crash that then happens is unanalysable.
+    [int] $StandDownMinutes = 60,
     [switch] $Once              # run one pass and exit (for testing)
 )
 
@@ -114,8 +118,41 @@ function Invoke-Pass {
         if (-not $b.com -or $b.com -eq "UNASSIGNED") { continue }
 
         # `bench standdown <name>` - the operator asked for the port back. Never
-        # respawn over that; `bench capture <name>` clears the flag.
-        if (Test-Path "C:/dev/bench.standdown.$($b.name)") { continue }
+        # respawn over that WHILE IT IS FRESH; `bench capture <name>` clears it.
+        #
+        # AND IT EXPIRES AFTER $StandDownMinutes. A stand-down means "I need the
+        # port for a moment", not "stop watching this bench". Before this, the
+        # flag was honoured for ever and the skip was SILENT - this file only
+        # logs when it ACTS - so a bench could sit with no capture all day and
+        # nothing said so.
+        #
+        # ⛔ THIS IS WRITTEN IN CLAUDE.MD AND STILL HAPPENED AGAIN, 2026-09-20:
+        # a flag set at 00:32 was still there at 13:00, the Tab5 crashed in the
+        # meantime, and the panic dump went nowhere because nothing was on the
+        # port. Operator: "This has happened over and over again..... no matter
+        # how much you write it in Claude.md or anywhere else". A written rule
+        # is not a mechanism. The cost of expiring too early is that somebody
+        # has to type `bench standdown` again; the cost of never expiring is an
+        # unanalysable crash, and that has now been paid several times.
+        $sdFlag = "C:/dev/bench.standdown.$($b.name)"
+        if (Test-Path $sdFlag) {
+            $sdAge = (New-TimeSpan -Start (Get-Item $sdFlag).LastWriteTime -End (Get-Date)).TotalMinutes
+            if ($sdAge -lt $StandDownMinutes) {
+                # Logged, not silent - but not every minute either, or the log
+                # becomes noise nobody reads. Once when it is first seen, then
+                # every 10th pass.
+                if (-not $script:SdSeen) { $script:SdSeen = @{} }
+                $n = 0; if ($script:SdSeen.ContainsKey($b.name)) { $n = $script:SdSeen[$b.name] }
+                if ($n % 10 -eq 0) {
+                    Note ("bench '{0}': SKIPPED - stand-down set {1:N0} min ago, expires at {2:N0}. NO CAPTURE IS RUNNING on {3}." -f $b.name, $sdAge, $StandDownMinutes, $b.com)
+                }
+                $script:SdSeen[$b.name] = $n + 1
+                continue
+            }
+            Note ("bench '{0}': stand-down EXPIRED ({1:N0} min old) - taking {2} back and restarting the capture" -f $b.name, $sdAge, $b.com)
+            Remove-Item $sdFlag -Force -ErrorAction SilentlyContinue
+            if ($script:SdSeen) { $script:SdSeen.Remove($b.name) }
+        }
 
         # Not plugged in is not a fault - say nothing, do nothing.
         if (-not ([System.IO.Ports.SerialPort]::GetPortNames() -contains $b.com)) { continue }
