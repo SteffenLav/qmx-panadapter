@@ -304,6 +304,39 @@ static float   *s_delay_im = NULL;  // [FIR_LEN+4] - independent delay line, ima
 static fir_f32_t s_fir_re;
 static fir_f32_t s_fir_im;
 
+// ---- Panoramic CW split (2026-09-20) --------------------------------------
+// Splits the mode's already-selected passband (s_narrow_re/im above, which
+// spans the QMX's own chosen CW filter width) into its LOWER and UPPER
+// halves and pans each hard L/R, so two DIFFERENT CW stations sitting on
+// opposite sides of the tuned pitch separate spatially instead of both
+// landing in one mono note. This replaced an earlier "binaural" attempt
+// (one signal at two nearly-identical detuned pitches - a weak-signal aid,
+// not spatial separation of multiple signals) that was the wrong technique
+// for what was actually wanted; see the git log for that one's own reasoning
+// if it is ever worth reviving as a separate mode.
+//
+// Standard "complex bandpass via pre-shift + real lowpass + remix": no
+// complex-coefficient filter is implemented directly (this file's FIR
+// machinery is real-coefficient only). Instead each half is shifted to
+// baseband first (s_nco_pre, +/- half_bw_hz/2), passed through a REAL
+// lowpass at half that cutoff (reusing build_lpf's own sinc/Hamming design,
+// just called with a smaller bandwidth - build_lpf_half() below), then
+// remixed up to its true position by s_nco_l / s_nco_r (repurposed from the
+// old technique - same struct, same retune() call site, new meaning).
+// s_nco_pre itself is declared below, alongside s_nco_l/s_nco_r - it is an
+// nco_t, and that typedef isn't in scope yet at this point in the file.
+static float   *s_coeff_half     = NULL;  // [FIR_LEN] - cutoff = half_bw_hz/2, shared by low+high, low+re/im
+static float   *s_delay_low_re   = NULL;  // [FIR_LEN+4] each - four independent legs, one per (channel,I/Q)
+static float   *s_delay_low_im   = NULL;
+static float   *s_delay_high_re  = NULL;
+static float   *s_delay_high_im  = NULL;
+static fir_f32_t s_fir_low_re, s_fir_low_im, s_fir_high_re, s_fir_high_im;
+static float   *s_low_re  = NULL, *s_low_im  = NULL;  // [DSP_FFT_SIZE/RX_DECIM_D] each - final, post-filter
+static float   *s_high_re = NULL, *s_high_im = NULL;
+static float   *s_pre_low_re  = NULL, *s_pre_low_im  = NULL;  // scratch: pre-shifted, pre-filter
+static float   *s_pre_high_re = NULL, *s_pre_high_im = NULL;
+static int s_half_built_for_hz = -1;   // half_bw_hz the panoramic filter pair was last built for
+
 // NCO1 shifts the wanted signal down to complex baseband 0 (removes the QMX's
 // +12 kHz IF AND the mode's own center/offset in one step); NCO2 shifts the
 // filtered result back up so it is audible at the same pitch the QMX's own
@@ -326,16 +359,35 @@ static fir_f32_t s_fir_im;
 // point, so magnitude drifts very slowly without it) rather than per sample.
 typedef struct { float re, im, step_re, step_im; } nco_t;
 static nco_t s_nco1 = {1.0f, 0.0f, 1.0f, 0.0f};
-static nco_t s_nco2 = {1.0f, 0.0f, 1.0f, 0.0f};
+// NCO2 is now TWO instances, L and R - the FINAL remix step for panoramic
+// CW's two already-separated halves (see the "Panoramic CW split" block
+// below). Plain mono (binaural off, or any non-CW mode) drives both to the
+// same center_hz, which makes mono not an approximation of the panoramic
+// code but an EXACT special case of it: same steps, same phase, so L and R
+// compute byte-identical output every sample, same as the single-NCO
+// version this replaced did.
+static nco_t s_nco_l = {1.0f, 0.0f, 1.0f, 0.0f};
+static nco_t s_nco_r = {1.0f, 0.0f, 1.0f, 0.0f};
+// Pre-shift NCO for the panoramic split - see the "Panoramic CW split" block
+// above for what it does and why it needs only one instance for both halves.
+static nco_t s_nco_pre = {1.0f, 0.0f, 1.0f, 0.0f};
 #define NCO_RENORM_EVERY 64   // samples between renormalisations
+
+// RAM-only (see rx_audio.h) - CW/CW-R only; retune() below enforces that by
+// only ever splitting when mode == RXAUD_MODE_CW.
+static volatile bool s_binaural_en = false;
 
 static float s_agc_env = 1.0f;
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
-// Linear-interpolation upsample state - the value the last frame's ramp
-// ended on, carried forward so this frame's ramp starts from where the last
-// one left off instead of jumping. See the upsample comment below for why
-// plain sample-and-hold was replaced.
-static float s_last_up_v = 0.0f;
+// Linear-interpolation upsample state, one per ear - the value each
+// channel's ramp ended on, carried forward so the next frame's ramp starts
+// from where the last one left off instead of jumping. In plain mono these
+// two are always numerically identical (same input, same filter, same
+// history), which is exactly what makes the mono case exact rather than
+// approximate. See the upsample comment below for why plain sample-and-hold
+// was replaced in the first place.
+static float s_last_up_v_l = 0.0f;
+static float s_last_up_v_r = 0.0f;
 // Counts DOWN the samples remaining in the post-gap ramp-in - the mirror
 // of the ~10 ms fade-down in the read-timeout branch. See the long note
 // there for the measurement that showed the resume, not the entry, was
@@ -361,7 +413,15 @@ static int   s_half_bw_hz = 0;     // half-bandwidth the current lowpass is buil
 // another decimating FIR pass would not have been.
 #define SMOOTH_FC_HZ 3200.0f
 typedef struct { float b0, b1, b2, a1, a2; float x1, x2, y1, y2; } biquad_t;
-static biquad_t s_smooth_a, s_smooth_b;  // two cascaded stages = 4th order
+// Two cascaded stages = 4th order, one full set per ear so panoramic CW's
+// two channels each get their own independent filter STATE (x1/x2/y1/y2) -
+// a single shared filter fed alternating L/R samples would smear one
+// channel's history into the other's output. In plain mono both channels
+// are fed the identical input sequence from identical initial state, so
+// they stay numerically identical throughout - same "exact, not
+// approximate" property as the NCOs and the upsample state above.
+static biquad_t s_smooth_l_a, s_smooth_l_b;
+static biquad_t s_smooth_r_a, s_smooth_r_b;
 
 // ---- Low-pass FIR design (windowed sinc) ------------------------------------
 static inline float sinc_norm(float x)  // sin(pi x)/(pi x)
@@ -436,6 +496,47 @@ static void build_lpf(int half_bw_hz)
     s_half_bw_hz = half_bw_hz;
 }
 
+// Panoramic CW's per-half filter. Same sinc/Hamming design as build_lpf(),
+// at HALF the cutoff (half_bw_hz/2) so it isolates one half of the already-
+// selected passband once that half has been shifted to baseband by
+// s_nco_pre (see the per-sample loop). Coefficients are shared between the
+// low and high channels - same cutoff, same window - only the four delay
+// lines (independent per channel/leg) differ, which is why this builds one
+// coefficient array but initialises four fir_f32_t instances from it.
+static void build_lpf_half(int half_bw_hz)
+{
+    if (half_bw_hz < 20) half_bw_hz = 20;
+    int quarter_bw_hz = half_bw_hz / 2;
+    if (quarter_bw_hz < 10) quarter_bw_hz = 10;
+
+    float fs = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
+    float fc = (float)quarter_bw_hz / fs;
+    int   M  = FIR_LEN - 1;
+    float half = M / 2.0f;
+
+    for (int n = 0; n < FIR_LEN; n++) {
+        float m  = (float)n - half;
+        float lp = 2.0f * fc * sinc_norm(2.0f * fc * m);
+        float w  = 0.54f - 0.46f * cosf(2.0f * (float)M_PI * (float)n / (float)M); // Hamming
+        s_coeff_half[n] = lp * w;
+    }
+    float sum = 0.0f;
+    for (int n = 0; n < FIR_LEN; n++) sum += s_coeff_half[n];
+    if (fabsf(sum) > 1e-6f) {
+        for (int n = 0; n < FIR_LEN; n++) s_coeff_half[n] /= sum;
+    }
+
+    memset(s_delay_low_re,  0, (FIR_LEN + 4) * sizeof(float));
+    memset(s_delay_low_im,  0, (FIR_LEN + 4) * sizeof(float));
+    memset(s_delay_high_re, 0, (FIR_LEN + 4) * sizeof(float));
+    memset(s_delay_high_im, 0, (FIR_LEN + 4) * sizeof(float));
+    dsps_fir_init_f32(&s_fir_low_re,  s_coeff_half, s_delay_low_re,  FIR_LEN);
+    dsps_fir_init_f32(&s_fir_low_im,  s_coeff_half, s_delay_low_im,  FIR_LEN);
+    dsps_fir_init_f32(&s_fir_high_re, s_coeff_half, s_delay_high_re, FIR_LEN);
+    dsps_fir_init_f32(&s_fir_high_im, s_coeff_half, s_delay_high_im, FIR_LEN);
+    s_half_built_for_hz = half_bw_hz;
+}
+
 // Stage 1: fixed, coarse anti-alias/decimate filter, built exactly ONCE
 // (called from rx_audio_init(), never rebuilt on mode/width change - it has
 // no mode-dependent parameter). dsps_fird_f32 IS a single-stage decimator,
@@ -490,8 +591,8 @@ static void build_smoothing_biquad(void)
     float a2 = 1.0f - alpha;
 
     biquad_t c = { b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0, 0, 0, 0, 0 };
-    s_smooth_a = c;
-    s_smooth_b = c;
+    s_smooth_l_a = c; s_smooth_l_b = c;
+    s_smooth_r_a = c; s_smooth_r_b = c;
 }
 
 static inline float biquad_step(biquad_t *bq, float x)
@@ -504,25 +605,58 @@ static inline float biquad_step(biquad_t *bq, float x)
 }
 
 // Two cascaded stages = 4th order, ~19.8 dB more image suppression on CW for
-// negligible cost - see the SMOOTH_FC_HZ comment above.
+// negligible cost - see the SMOOTH_FC_HZ comment above. One version per ear;
+// smooth_step() (the original name) stays as the L-channel/mono call so every
+// existing call site keeps working unchanged, smooth_step_r() is new.
 static inline float smooth_step(float x)
 {
-    return biquad_step(&s_smooth_b, biquad_step(&s_smooth_a, x));
+    return biquad_step(&s_smooth_l_b, biquad_step(&s_smooth_l_a, x));
+}
+static inline float smooth_step_r(float x)
+{
+    return biquad_step(&s_smooth_r_b, biquad_step(&s_smooth_r_a, x));
 }
 
-// (Re)point both NCOs at a new center frequency and reset their phase - a
-// phase jump here is one click on a mode/filter change, same tradeoff the old
-// AGC-reset-on-mode-change already made.
-static void retune(int center_hz)
+// (Re)point NCO1, the pre-shift NCO, and both ears' final-remix NCO2 at a
+// new center frequency/half-bandwidth and reset phase - a phase jump here is
+// one click on a mode/filter change, same tradeoff the old AGC-reset-on-
+// mode-change already made.
+//
+// Panoramic CW's three extra frequencies are all derived HERE, not in the
+// per-sample loop, for the same reason the plain center frequency already
+// was: computing sinf/cosf once here instead of every sample is the whole
+// reason this file has an NCO struct at all (see the "called sinf/cosf
+// FRESH EVERY SAMPLE" comment above).
+//
+// CW/CW-R + binaural-on only: any other case forces the split to 0, which
+// points s_nco_l and s_nco_r at the SAME frequency as plain center_hz would
+// have used - i.e. the mono path is an exact special case of this one, not
+// an approximation of it (see the per-sample loop for what that buys).
+static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     float fs = (float)DSP_SAMPLE_RATE_HZ;
-    float fs_dec = fs / (float)RX_DECIM_D;   // NCO2 now runs on the decimated stream
+    float fs_dec = fs / (float)RX_DECIM_D;   // NCO2/pre run on the decimated stream
     float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
-    float w2 = 2.0f * (float)M_PI * (float)center_hz / fs_dec;
+
+    bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
+    float half_split = panoramic ? (float)half_bw_hz / 2.0f : 0.0f;
+
+    float w2l = 2.0f * (float)M_PI * ((float)center_hz - half_split) / fs_dec;
+    float w2r = 2.0f * (float)M_PI * ((float)center_hz + half_split) / fs_dec;
+    // Pre-shift: moves the LOWER half [-half_bw,0] up to baseband (shift-up
+    // formula in the loop) and the UPPER half [0,+half_bw] down to baseband
+    // (shift-down formula) using the SAME nco_pre at +half_split - one NCO,
+    // two mix formulas, see the per-sample loop.
+    float wpre = 2.0f * (float)M_PI * half_split / fs_dec;
+
     s_nco1.step_re = cosf(w1); s_nco1.step_im = sinf(w1);
-    s_nco2.step_re = cosf(w2); s_nco2.step_im = sinf(w2);
+    s_nco_l.step_re = cosf(w2l); s_nco_l.step_im = sinf(w2l);
+    s_nco_r.step_re = cosf(w2r); s_nco_r.step_im = sinf(w2r);
+    s_nco_pre.step_re = cosf(wpre); s_nco_pre.step_im = sinf(wpre);
     s_nco1.re = 1.0f; s_nco1.im = 0.0f;
-    s_nco2.re = 1.0f; s_nco2.im = 0.0f;
+    s_nco_l.re = 1.0f; s_nco_l.im = 0.0f;
+    s_nco_r.re = 1.0f; s_nco_r.im = 0.0f;
+    s_nco_pre.re = 1.0f; s_nco_pre.im = 0.0f;
     s_center_hz = center_hz;
 }
 
@@ -593,6 +727,7 @@ static void rx_audio_task(void *arg)
     (void)arg;
     bool active_prev = false;
     rxaud_mode_t mode_prev = RXAUD_MODE_NONE;
+    bool binaural_prev = false;
     // Set on the first real read after going active, cleared on every
     // false->true transition. While false, every timeout retries
     // dsp_rxaudio_forward_enable(true) - see the timeout branch below for
@@ -633,7 +768,8 @@ static void rx_audio_task(void *arg)
         if (!active_prev) {
             s_agc_env = 1.0f;
             s_noise   = 1.0f;
-            s_last_up_v = 0.0f;
+            s_last_up_v_l = 0.0f;
+            s_last_up_v_r = 0.0f;
             ever_got_data = false;
             dsp_rxaudio_forward_enable(true);
             active_prev = true;
@@ -642,15 +778,25 @@ static void rx_audio_task(void *arg)
         }
 
         // Track the live filter target (CW offset moves; SSB is fixed but the
-        // mode itself can change) and retune/rebuild if it moved.
+        // mode itself can change) and retune/rebuild if it moved. Panoramic
+        // CW's enable flag is also live-tunable (rx_audio.h), tracked
+        // separately since it changes neither want_center nor mode - and
+        // retune() now needs half_bw too (the split/pre-shift frequencies
+        // depend on it), so a width change re-retunes as well as rebuilding
+        // the filters, where it used to only do the latter.
         int want_center, want_half_bw;
         filter_params_for_mode(mode, &want_center, &want_half_bw);
-        if (mode != mode_prev || want_center != s_center_hz) {
-            retune(want_center);
+        bool want_binaural = s_binaural_en;
+        bool half_bw_changed = (want_half_bw != s_half_bw_hz);
+        if (mode != mode_prev || want_center != s_center_hz ||
+            want_binaural != binaural_prev || half_bw_changed) {
+            retune(want_center, want_half_bw, mode);
             mode_prev = mode;
+            binaural_prev = want_binaural;
         }
-        if (want_half_bw != s_half_bw_hz) {
+        if (half_bw_changed) {
             build_lpf(want_half_bw);
+            build_lpf_half(want_half_bw);
         }
 
         s_loop_count++;
@@ -743,15 +889,22 @@ static void rx_audio_task(void *arg)
             // they are gone.
             {
                 const int fade_n = DSP_SAMPLE_RATE_HZ / 100;  // ~10 ms
-                float from = s_last_up_v;
+                float from_l = s_last_up_v_l;
+                float from_r = s_last_up_v_r;
                 for (int i = 0; i < DSP_FFT_SIZE; i++) {
-                    float v = (i < fade_n) ? from * (1.0f - (float)i / (float)fade_n) : 0.0f;
-                    float ys = smooth_step(v);   // <- keeps the biquads in step with what is played
-                    int16_t o = (int16_t)ys;
-                    s_out[2 * i] = o; s_out[2 * i + 1] = o;
+                    float vl = (i < fade_n) ? from_l * (1.0f - (float)i / (float)fade_n) : 0.0f;
+                    float vr = (i < fade_n) ? from_r * (1.0f - (float)i / (float)fade_n) : 0.0f;
+                    // Both channels' filters must be stepped, or the one not
+                    // stepped keeps its pre-gap state frozen and rings it back
+                    // out on resume - the exact bug this whole fade exists to
+                    // avoid, just reintroduced in whichever ear got skipped.
+                    float ysl = smooth_step(vl);
+                    float ysr = smooth_step_r(vr);
+                    s_out[2 * i] = (int16_t)ysl; s_out[2 * i + 1] = (int16_t)ysr;
                 }
             }
-            s_last_up_v = 0.0f;
+            s_last_up_v_l = 0.0f;
+            s_last_up_v_r = 0.0f;
             // Mirror of the fade-down: ramp the first ~10 ms of resumed audio
             // up from silence. Without it the recovery still has to climb
             // from 0 to full inside RX_DECIM_D == 8 samples (167 us), which
@@ -799,6 +952,41 @@ static void rx_audio_task(void *arg)
             // into stage 1.
             dsps_fir_f32(&s_fir_re, s_filt_re, s_narrow_re, n_out);
             dsps_fir_f32(&s_fir_im, s_filt_im, s_narrow_im, n_out);
+
+            // Panoramic CW split: only when CW/CW-R + the flag is on. Splits
+            // the passband s_narrow_re/im already carries (the QMX's own
+            // selected CW filter width) into its lower and upper halves.
+            //
+            // Pre-shift both halves to baseband with ONE nco_pre (frequency
+            // half_bw/2, set in retune()) using the two complex-multiply
+            // variants: shift UP moves the LOWER half [-half_bw,0] to sit at
+            // baseband; shift DOWN moves the UPPER half [0,+half_bw] to sit
+            // at baseband. Then a REAL lowpass at half_bw/2 (build_lpf_half)
+            // isolates each - a real filter cannot separate +f from -f, but
+            // once a half is sitting at baseband a lowpass IS that half's
+            // own selectivity filter. This is the standard "complex bandpass
+            // via pre-shift + real lowpass + remix" construction, not a true
+            // complex-coefficient filter (this file's FIR machinery is
+            // real-coefficient only) - cheaper, and reuses build_lpf's exact
+            // sinc/Hamming design unchanged.
+            bool panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
+            if (panoramic_now) {
+                for (int i = 0; i < n_out; i++) {
+                    float cp, sp;
+                    nco_step(&s_nco_pre, (uint32_t)i, &cp, &sp);
+                    float zre = s_narrow_re[i], zim = s_narrow_im[i];
+                    // Shift UP by half_bw/2 (Z * e^{+j*wpre*n}): lower half -> baseband.
+                    s_pre_low_re[i]  = zre * cp - zim * sp;
+                    s_pre_low_im[i]  = zre * sp + zim * cp;
+                    // Shift DOWN by half_bw/2 (Z * e^{-j*wpre*n}): upper half -> baseband.
+                    s_pre_high_re[i] = zre * cp + zim * sp;
+                    s_pre_high_im[i] = zim * cp - zre * sp;
+                }
+                dsps_fir_f32(&s_fir_low_re,  s_pre_low_re,  s_low_re,  n_out);
+                dsps_fir_f32(&s_fir_low_im,  s_pre_low_im,  s_low_im,  n_out);
+                dsps_fir_f32(&s_fir_high_re, s_pre_high_re, s_high_re, n_out);
+                dsps_fir_f32(&s_fir_high_im, s_pre_high_im, s_high_im, n_out);
+            }
         }
 
         // NCO2 + AGC now run at the DECIMATED rate (n_out samples, not
@@ -814,14 +1002,39 @@ static void rx_audio_task(void *arg)
         float agc_target   = s_agc_target;
         float agc_gain_max = s_agc_gain_max;
         float out_clamp    = s_out_clamp;
+        bool  panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
 
         for (int i = 0; i < n_out; i++) {
-            float c, s;
-            nco_step(&s_nco2, (uint32_t)i, &c, &s);
-            // (narrow_re + j*narrow_im) * (c + js), real part: re*c - im*s
-            float re = s_narrow_re[i] * c - s_narrow_im[i] * s;
+            float cl, sl, cr, sr;
+            nco_step(&s_nco_l, (uint32_t)i, &cl, &sl);
+            nco_step(&s_nco_r, (uint32_t)i, &cr, &sr);
+            // (X_re + j*X_im) * (c + js), real part: re*c - im*s. Plain mono
+            // (panoramic off, or any non-CW mode) reads BOTH channels from
+            // the same s_narrow_re/im with s_nco_l == s_nco_r (retune()
+            // forces the split to 0), so re_l == re_r every sample - the
+            // mono case is an exact special case of this code, not merely
+            // close to it. Panoramic reads each channel from its OWN
+            // already-separated half (computed above).
+            float re_l, re_r;
+            if (panoramic_now) {
+                re_l = s_low_re[i]  * cl - s_low_im[i]  * sl;
+                re_r = s_high_re[i] * cr - s_high_im[i] * sr;
+            } else {
+                re_l = s_narrow_re[i] * cl - s_narrow_im[i] * sl;
+                re_r = s_narrow_re[i] * cr - s_narrow_im[i] * sr;
+            }
 
-            float a = fabsf(re);
+            // AGC/squelch are driven from ONE shared envelope, not each
+            // channel's own - in mono that's re_l alone (byte-identical to
+            // the original single-channel path, since re_l == re_r there
+            // anyway). In panoramic mode a station can genuinely exist on
+            // only ONE side, so take the STRONGER of the two - an L-only
+            // envelope would fail to bring up a station that only exists on
+            // the right. Either way it stays ONE shared gain applied to both
+            // channels: a per-ear AGC would let the two ears' loudness drift
+            // apart independently, which defeats the spatial cue this whole
+            // feature exists to provide.
+            float a = panoramic_now ? fmaxf(fabsf(re_l), fabsf(re_r)) : fabsf(re_l);
             if (a > s_agc_env) s_agc_env += (a - s_agc_env) * agc_attack;
             else               s_agc_env += (a - s_agc_env) * agc_release;
 
@@ -837,9 +1050,12 @@ static void rx_audio_task(void *arg)
             else if (sq > 1.0f) sq = 1.0f;
             sq = SQ_FLOOR + (1.0f - SQ_FLOOR) * sq;
 
-            float v = re * gain * sq;
-            if (v >  out_clamp) { v =  out_clamp; s_clip_count++; }
-            if (v < -out_clamp) { v = -out_clamp; s_clip_count++; }
+            float v_l = re_l * gain * sq;
+            float v_r = re_r * gain * sq;
+            if (v_l >  out_clamp) { v_l =  out_clamp; s_clip_count++; }
+            if (v_l < -out_clamp) { v_l = -out_clamp; s_clip_count++; }
+            if (v_r >  out_clamp) { v_r =  out_clamp; s_clip_count++; }
+            if (v_r < -out_clamp) { v_r = -out_clamp; s_clip_count++; }
             // Upsample back to the full 48 kHz output rate by LINEAR
             // INTERPOLATION between this sample and the last, not plain
             // sample-and-hold. Found 2026-09-04, on the air: a zero-order
@@ -852,32 +1068,38 @@ static void rx_audio_task(void *arg)
             // (linear) hold's spectrum falls off as sinc^2 instead of sinc -
             // roughly twice the rolloff in dB/octave - which is why this is
             // the documented fallback in the FIR_LEN comment above rather
-            // than a new idea. s_last_up_v carries the ramp's end value
+            // than a new idea. s_last_up_v_l/r carry each ramp's end value
             // across frame boundaries so there is no click at i=0 either.
             int base = i * RX_DECIM_D;
             for (int k = 0; k < RX_DECIM_D; k++) {
                 float frac = (float)(k + 1) / (float)RX_DECIM_D;
-                float y = s_last_up_v + (v - s_last_up_v) * frac;
+                float yl = s_last_up_v_l + (v_l - s_last_up_v_l) * frac;
+                float yr = s_last_up_v_r + (v_r - s_last_up_v_r) * frac;
                 // Post-upsample smoothing (see SMOOTH_FC_HZ comment above) -
                 // knocks down the interpolation image further, effectively
                 // free next to the FIR stages. A Butterworth has no passband
                 // overshoot, but re-clamp defensively before the int16 cast
                 // anyway - cheap insurance, not expected to ever trigger.
-                float ys = smooth_step(y);
+                float ysl = smooth_step(yl);
+                float ysr = smooth_step_r(yr);
                 if (s_resume_ramp > 0) {
                     // Linear ramp-in over RESUME_RAMP_N samples. Counted in
                     // OUTPUT samples so it is the same 10 ms as the fade-down
-                    // regardless of RX_DECIM_D.
-                    ys *= 1.0f - (float)s_resume_ramp / (float)(DSP_SAMPLE_RATE_HZ / 100);
+                    // regardless of RX_DECIM_D. Shared by both channels - the
+                    // gap that triggered it was silence in both ears alike.
+                    float ramp = 1.0f - (float)s_resume_ramp / (float)(DSP_SAMPLE_RATE_HZ / 100);
+                    ysl *= ramp; ysr *= ramp;
                     s_resume_ramp--;
                 }
-                if (ys >  out_clamp) ys =  out_clamp;
-                if (ys < -out_clamp) ys = -out_clamp;
-                int16_t o = (int16_t)ys;
-                s_out[2 * (base + k)]     = o;   // L
-                s_out[2 * (base + k) + 1] = o;   // R
+                if (ysl >  out_clamp) ysl =  out_clamp;
+                if (ysl < -out_clamp) ysl = -out_clamp;
+                if (ysr >  out_clamp) ysr =  out_clamp;
+                if (ysr < -out_clamp) ysr = -out_clamp;
+                s_out[2 * (base + k)]     = (int16_t)ysl;   // L
+                s_out[2 * (base + k) + 1] = (int16_t)ysr;   // R
             }
-            s_last_up_v = v;
+            s_last_up_v_l = v_l;
+            s_last_up_v_r = v_r;
         }
         // Any tail beyond n_out*RX_DECIM_D (the un-consumed remainder from
         // the floor-divide above) gets silence rather than stale/garbage data.
@@ -963,17 +1185,52 @@ void rx_audio_init(void)
     s_coeff    = heap_caps_malloc(FIR_LEN * sizeof(float),           MALLOC_CAP_SPIRAM);
     s_delay_re = heap_caps_malloc((FIR_LEN + 4) * sizeof(float),     MALLOC_CAP_SPIRAM);
     s_delay_im = heap_caps_malloc((FIR_LEN + 4) * sizeof(float),     MALLOC_CAP_SPIRAM);
+    // Panoramic CW split - see the block comment by the statics above.
+    // Internal RAM, NOT PSRAM, unlike every other buffer in this file - these
+    // four are read on EVERY tap of EVERY inner-loop iteration of FOUR FIR
+    // instances per sample (dsps_fir_f32_ansi's delay-line scan touches up to
+    // FIR_LEN=255 floats per call), not once per sample like the output
+    // arrays. First panoramic build measured frame_us_avg 25-32 ms against a
+    // 21.3 ms budget (7-9x the ~3.5 ms mono baseline, which uses the exact
+    // same dsps_fir_f32 on PSRAM buffers of the same shape) - the existing 2
+    // filter instances' PSRAM traffic fits comfortably, but tripling to 6
+    // simultaneous instances (2 existing + 4 new) saturates something PSRAM
+    // access doesn't have the headroom for at that rate. Same class of fix
+    // as dsp.c's FFT buffers and audio.c's ring (CLAUDE.md: "a PSRAM spill
+    // makes the STFT ~10x slower") - hot per-sample DSP state belongs
+    // internal on this board. ~5 KB, affordable after tonight's taskLVGL fix
+    // (internal free 7 KB -> 50 KB steady state). UNVERIFIED until measured
+    // on hardware - this is a hypothesis about the mechanism, not a proven
+    // fix; say so if asked, and check frame_us before trusting it.
+    s_coeff_half    = heap_caps_malloc(FIR_LEN * sizeof(float),       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_delay_low_re  = heap_caps_malloc((FIR_LEN + 4) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_delay_low_im  = heap_caps_malloc((FIR_LEN + 4) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_delay_high_re = heap_caps_malloc((FIR_LEN + 4) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_delay_high_im = heap_caps_malloc((FIR_LEN + 4) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_low_re  = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),        MALLOC_CAP_SPIRAM);
+    s_low_im  = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),        MALLOC_CAP_SPIRAM);
+    s_high_re = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),        MALLOC_CAP_SPIRAM);
+    s_high_im = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),        MALLOC_CAP_SPIRAM);
+    s_pre_low_re  = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),    MALLOC_CAP_SPIRAM);
+    s_pre_low_im  = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),    MALLOC_CAP_SPIRAM);
+    s_pre_high_re = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),    MALLOC_CAP_SPIRAM);
+    s_pre_high_im = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),    MALLOC_CAP_SPIRAM);
     if (!s_rxbuf || !s_mix_re || !s_mix_im || !s_filt_re || !s_filt_im ||
         !s_narrow_re || !s_narrow_im || !s_out ||
         !s_dec_coeff || !s_dec_delay_re || !s_dec_delay_im ||
-        !s_coeff || !s_delay_re || !s_delay_im) {
+        !s_coeff || !s_delay_re || !s_delay_im ||
+        !s_coeff_half || !s_delay_low_re || !s_delay_low_im ||
+        !s_delay_high_re || !s_delay_high_im ||
+        !s_low_re || !s_low_im || !s_high_re || !s_high_im ||
+        !s_pre_low_re || !s_pre_low_im || !s_pre_high_re || !s_pre_high_im) {
         ESP_LOGE(TAG, "buffer alloc failed; RX audio disabled");
         return;
     }
-    retune(CW_DEF_OFFSET);
+    retune(CW_DEF_OFFSET, CW_DEF_WIDTH_HZ, RXAUD_MODE_NONE);   // panoramic is never live before mode is known
     build_decimator();                // stage 1 - fixed, built once
     build_smoothing_biquad();         // post-upsample smoothing - fixed, built once
-    build_lpf(CW_DEF_WIDTH_HZ / 2);   // stage 2 placeholder - rebuilt on first active loop iteration
+    build_lpf(CW_DEF_WIDTH_HZ / 2);        // stage 2 placeholder - rebuilt on first active loop iteration
+    build_lpf_half(CW_DEF_WIDTH_HZ / 2);   // panoramic split placeholder - same
 
     // ⛔ FOUND 2026-09-20: this return value was never checked, and the task
     // never got created - SILENTLY, every boot, for the whole session. No
@@ -1157,6 +1414,12 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out)
     out->agc_release  = s_agc_release;
     out->agc_gain_max = s_agc_gain_max;
 }
+
+// Takes effect via the same mode/center-tracking check rx_audio_task()
+// already runs every loop (binaural_prev comparison) - no restart, no
+// re-enable, same "live" promise as the AGC tuning above.
+void rx_audio_set_binaural_enabled(bool en) { s_binaural_en = en; }
+bool rx_audio_get_binaural_enabled(void) { return s_binaural_en; }
 
 uint32_t rx_audio_take_clip_count(void)
 {

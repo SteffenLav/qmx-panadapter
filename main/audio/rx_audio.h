@@ -72,6 +72,21 @@ void rx_audio_set_agc_release(float v);
 void rx_audio_set_agc_gain_max(float v);
 void rx_audio_get_tuning(rx_audio_tuning_t *out);
 
+// ---- Panoramic CW (2026-09-20) ---------------------------------------------
+// Splits the CW filter's own selected width in half AT THE TUNED PITCH and
+// pans each half hard L/R - two different stations sitting on opposite
+// sides of the dial separate spatially (one leans left, one leans right)
+// instead of both landing in one mono note. This is frequency-based stereo
+// SEPARATION OF MULTIPLE SIGNALS, not a weak-signal aid applied to one -
+// see rx_audio.c for the "pre-shift + real lowpass + remix" implementation
+// and why an earlier detuned-tone attempt was the wrong technique for this.
+// CW/CW-R only; any other mode is plain mono regardless of this setting.
+// RAM-only, not persisted - same class of live tuning as the AGC params
+// above, takes effect on the next retune (same loop that already tracks
+// mode/center-frequency changes).
+void rx_audio_set_binaural_enabled(bool en);
+bool rx_audio_get_binaural_enabled(void);
+
 // Output samples clamped at out_clamp since the last call - an objective
 // answer to "how much is it actually clipping", not a guess by ear. Reading
 // it resets the count, so each call reports the rate since the previous one.
