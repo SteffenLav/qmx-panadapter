@@ -1780,6 +1780,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // filter's own width in half at the tuned pitch, pans each half hard
         // L/R. CW/CW-R only, plain mono in every other mode regardless.
         if ((jc = cJSON_GetObjectItem(root, "binaural")) && cJSON_IsBool(jc)) rx_audio_set_binaural_enabled(cJSON_IsTrue(jc));
+        if ((jc = cJSON_GetObjectItem(root, "pan_blend")) && cJSON_IsNumber(jc)) rx_audio_set_pan_blend((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "pan_overlap")) && cJSON_IsNumber(jc)) rx_audio_set_pan_overlap((float)jc->valuedouble);
+        if ((jc = cJSON_GetObjectItem(root, "pan_width")) && cJSON_IsNumber(jc)) rx_audio_set_pan_width((float)jc->valuedouble);
         rx_audio_tuning_t t;
         rx_audio_get_tuning(&t);
         uint32_t clips = rx_audio_take_clip_count();
@@ -1794,6 +1797,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(resp, "agc_release",  t.agc_release);
         cJSON_AddNumberToObject(resp, "agc_gain_max", t.agc_gain_max);
         cJSON_AddBoolToObject(resp,   "binaural",     rx_audio_get_binaural_enabled());
+        cJSON_AddNumberToObject(resp, "pan_blend",    rx_audio_get_pan_blend());
+        cJSON_AddNumberToObject(resp, "pan_overlap",  rx_audio_get_pan_overlap());
+        cJSON_AddNumberToObject(resp, "pan_width",    rx_audio_get_pan_width());
         cJSON_AddNumberToObject(resp, "clips_since_last_read", (double)clips);
         // frame_us_* excludes the I2S write on purpose - compare against
         // ~21333 (DSP_FFT_SIZE/DSP_SAMPLE_RATE_HZ) to see if the math itself

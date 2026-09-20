@@ -376,6 +376,25 @@ static nco_t s_nco_pre = {1.0f, 0.0f, 1.0f, 0.0f};
 // RAM-only (see rx_audio.h) - CW/CW-R only; retune() below enforces that by
 // only ever splitting when mode == RXAUD_MODE_CW.
 static volatile bool s_binaural_en = false;
+// Cross-feed fraction, 0.0 (hard L/R split) .. 0.5 (fully centered/mono).
+// See the per-sample loop for why a hard split reads as "always one ear,
+// never the middle" even for a dead-center station. RAM-only, live-tunable,
+// same class as the AGC params. 0.35 (the first value tried) collapsed the
+// image to "a mix more or less in the center" - too much. 0.15 confirmed on
+// the air, real separation still intact plus noticeable center presence.
+static volatile float s_pan_blend = 0.15f;
+// 0.0 (hard split, original behaviour) .. 1.0 (each half filter nearly as
+// wide as the original passband - heavy overlap in the middle). See
+// build_lpf_half() for the full reasoning. Changing this needs a filter
+// REBUILD (unlike pan_blend, which is a plain per-sample multiply), so it is
+// tracked alongside half_bw in the main loop rather than read fresh every
+// sample.
+static volatile float s_pan_overlap = 0.3f;
+// Mid/side stereo width multiplier, 1.0 = unchanged, >1.0 = wider (exaggerates
+// L-R difference), <1.0 = narrower. Plain per-sample multiply, unlike
+// pan_overlap - no filter rebuild needed. See the per-sample loop for the
+// full reasoning; default picked to noticeably widen the perceived image.
+static volatile float s_pan_width = 1.8f;
 
 static float s_agc_env = 1.0f;
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
@@ -497,17 +516,40 @@ static void build_lpf(int half_bw_hz)
 }
 
 // Panoramic CW's per-half filter. Same sinc/Hamming design as build_lpf(),
-// at HALF the cutoff (half_bw_hz/2) so it isolates one half of the already-
-// selected passband once that half has been shifted to baseband by
-// s_nco_pre (see the per-sample loop). Coefficients are shared between the
-// low and high channels - same cutoff, same window - only the four delay
-// lines (independent per channel/leg) differ, which is why this builds one
-// coefficient array but initialises four fir_f32_t instances from it.
+// at a cutoff of half_bw_hz/2 * (1 + s_pan_overlap) so it isolates one half
+// of the already-selected passband once that half has been shifted to
+// baseband by s_nco_pre (see the per-sample loop). Coefficients are shared
+// between the low and high channels - same cutoff, same window - only the
+// four delay lines (independent per channel/leg) differ, which is why this
+// builds one coefficient array but initialises four fir_f32_t instances
+// from it.
+//
+// s_pan_overlap is the STRUCTURAL fix for "the middle disappeared, and
+// bringing it back weakens the sides" (operator, 2026-09-20): a post-mix
+// blend (s_pan_blend, see the per-sample loop) can only trade separation for
+// center presence, because it is redistributing energy that the two half
+// filters already put ENTIRELY on one side or the other - overlap changes
+// how much energy near the crossover lands in BOTH filters' passbands to
+// begin with. At overlap=0 each filter's cutoff is exactly half_bw/2 (the
+// original hard split - the crossover sits right at each filter's own edge,
+// where its transition band gives only the fixed, narrow ~78 Hz blend this
+// file shipped with first). At overlap=1 each filter's cutoff approaches
+// half_bw_hz itself - nearly the WHOLE original passband - so a station well
+// off-center still gets real separation (it is still much closer to one
+// filter's passband center than the other), while a station near the
+// crossover now has genuine energy in both from the filtering itself, not
+// from mixing borrowed from the other channel. The two controls are meant to
+// be used together: overlap sets how gradual the pan is across the whole
+// width, pan_blend is a lighter final touch on top.
 static void build_lpf_half(int half_bw_hz)
 {
     if (half_bw_hz < 20) half_bw_hz = 20;
-    int quarter_bw_hz = half_bw_hz / 2;
+    float overlap = s_pan_overlap;
+    if (overlap < 0.0f) overlap = 0.0f;
+    if (overlap > 1.0f) overlap = 1.0f;
+    int quarter_bw_hz = (int)((float)(half_bw_hz / 2) * (1.0f + overlap));
     if (quarter_bw_hz < 10) quarter_bw_hz = 10;
+    if (quarter_bw_hz > half_bw_hz) quarter_bw_hz = half_bw_hz;   // never wider than the source passband itself
 
     float fs = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
     float fc = (float)quarter_bw_hz / fs;
@@ -728,6 +770,7 @@ static void rx_audio_task(void *arg)
     bool active_prev = false;
     rxaud_mode_t mode_prev = RXAUD_MODE_NONE;
     bool binaural_prev = false;
+    float overlap_prev = -1.0f;   // force a build_lpf_half() call on the first active loop pass
     // Set on the first real read after going active, cleared on every
     // false->true transition. While false, every timeout retries
     // dsp_rxaudio_forward_enable(true) - see the timeout branch below for
@@ -787,7 +830,9 @@ static void rx_audio_task(void *arg)
         int want_center, want_half_bw;
         filter_params_for_mode(mode, &want_center, &want_half_bw);
         bool want_binaural = s_binaural_en;
+        float want_overlap = s_pan_overlap;
         bool half_bw_changed = (want_half_bw != s_half_bw_hz);
+        bool overlap_changed = (want_overlap != overlap_prev);
         if (mode != mode_prev || want_center != s_center_hz ||
             want_binaural != binaural_prev || half_bw_changed) {
             retune(want_center, want_half_bw, mode);
@@ -796,7 +841,10 @@ static void rx_audio_task(void *arg)
         }
         if (half_bw_changed) {
             build_lpf(want_half_bw);
+        }
+        if (half_bw_changed || overlap_changed) {
             build_lpf_half(want_half_bw);
+            overlap_prev = want_overlap;
         }
 
         s_loop_count++;
@@ -1017,8 +1065,13 @@ static void rx_audio_task(void *arg)
             // already-separated half (computed above).
             float re_l, re_r;
             if (panoramic_now) {
-                re_l = s_low_re[i]  * cl - s_low_im[i]  * sl;
-                re_r = s_high_re[i] * cr - s_high_im[i] * sr;
+                // Swapped 2026-09-20 per the operator's ear: the lower half
+                // of the passband (below the tuned pitch) sounds right to
+                // him in the RIGHT ear, not the left - nco_l/s_low_* etc.
+                // keep their names (they still mean "the -half_split-shifted
+                // channel"), only which output channel they feed is flipped.
+                re_r = s_low_re[i]  * cl - s_low_im[i]  * sl;
+                re_l = s_high_re[i] * cr - s_high_im[i] * sr;
             } else {
                 re_l = s_narrow_re[i] * cl - s_narrow_im[i] * sl;
                 re_r = s_narrow_re[i] * cr - s_narrow_im[i] * sr;
@@ -1052,6 +1105,40 @@ static void rx_audio_task(void *arg)
 
             float v_l = re_l * gain * sq;
             float v_r = re_r * gain * sq;
+            // Cross-feed: a hard L/R split (blend=0) means a station right
+            // at the crossover point only gets picked up by whichever half
+            // filter's transition band happens to catch it - a real tone is
+            // narrow enough that it lands mostly on ONE side even when it is
+            // sitting dead-center, so the stereo image reads as "always hard
+            // L or hard R, nothing in between" (operator's report,
+            // 2026-09-20). Mixing a fraction of each channel into the other
+            // widens the effective blend zone across the whole passband
+            // instead of just the filters' own narrow transition band -
+            // still panned by which side a station is actually on, just not
+            // ALL THE WAY to one ear. panoramic_now-gated only for cost;
+            // mono already has v_l == v_r so it would be a no-op regardless.
+            if (panoramic_now) {
+                float blend = s_pan_blend;
+                float bl = v_l + blend * (v_r - v_l);
+                float br = v_r + blend * (v_l - v_r);
+                v_l = bl; v_r = br;
+
+                // Stereo WIDTH, standard mid/side widening: at width=1 this
+                // is a no-op (mid+side == v_l, mid-side == v_r, always); at
+                // width>1 it exaggerates the difference between the ears
+                // beyond what pan_overlap/pan_blend produced, without
+                // touching how centered a centered station sounds (mid is
+                // untouched - only side is scaled). This is the answer to
+                // "the whole image only swings +/-30 degrees, needs to be
+                // +/-60 or more" (operator, 2026-09-20): overlap/blend shape
+                // WHERE energy goes near the crossover, width controls how
+                // FAR APART the two ears end up sounding once it has.
+                float mid  = 0.5f * (v_l + v_r);
+                float side = 0.5f * (v_l - v_r);
+                float w    = s_pan_width;
+                v_l = mid + w * side;
+                v_r = mid - w * side;
+            }
             if (v_l >  out_clamp) { v_l =  out_clamp; s_clip_count++; }
             if (v_l < -out_clamp) { v_l = -out_clamp; s_clip_count++; }
             if (v_r >  out_clamp) { v_r =  out_clamp; s_clip_count++; }
@@ -1420,6 +1507,12 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out)
 // re-enable, same "live" promise as the AGC tuning above.
 void rx_audio_set_binaural_enabled(bool en) { s_binaural_en = en; }
 bool rx_audio_get_binaural_enabled(void) { return s_binaural_en; }
+void rx_audio_set_pan_blend(float v) { if (v >= 0.0f && v <= 0.5f) s_pan_blend = v; }
+float rx_audio_get_pan_blend(void) { return s_pan_blend; }
+void rx_audio_set_pan_overlap(float v) { if (v >= 0.0f && v <= 1.0f) s_pan_overlap = v; }
+float rx_audio_get_pan_overlap(void) { return s_pan_overlap; }
+void rx_audio_set_pan_width(float v) { if (v >= 0.0f && v <= 3.0f) s_pan_width = v; }
+float rx_audio_get_pan_width(void) { return s_pan_width; }
 
 uint32_t rx_audio_take_clip_count(void)
 {

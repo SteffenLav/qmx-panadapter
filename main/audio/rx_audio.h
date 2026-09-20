@@ -87,6 +87,35 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out);
 void rx_audio_set_binaural_enabled(bool en);
 bool rx_audio_get_binaural_enabled(void);
 
+// Cross-feed fraction, 0.0 (hard L/R split) .. 0.5 (fully centered/mono) -
+// widens the effective stereo blend zone so a station near the tuned pitch
+// doesn't snap entirely to one ear. Live, RAM-only. Default 0.15 (0.35 was
+// tried first and confirmed on the air as too much - collapsed the image).
+// A post-mix trick - see rx_audio_set_pan_overlap() for the structural
+// control that does not trade away separation to get it.
+void rx_audio_set_pan_blend(float v);
+float rx_audio_get_pan_blend(void);
+
+// How much the two half-band filters THEMSELVES overlap in the middle of
+// the passband, 0.0 (original hard split) .. 1.0 (each half nearly as wide
+// as the whole original filter). This is the structural fix for "fixing the
+// middle weakens the sides" - pan_blend above can only redistribute energy
+// the filters already put entirely on one side; overlap changes how much
+// energy near the crossover the filters hand to BOTH sides to begin with,
+// so a station well off-center keeps full separation while a centered one
+// gets real presence in both ears. Live, RAM-only, takes effect on the next
+// filter rebuild (automatic, same loop pass). Default 0.3.
+void rx_audio_set_pan_overlap(float v);
+float rx_audio_get_pan_overlap(void);
+
+// Mid/side stereo width, 1.0 = unchanged, up to 3.0 = strongly widened,
+// down to 0.0 = mono. Exaggerates the L-R difference AFTER overlap/blend
+// have shaped where energy goes - this is "how far apart do the two ears
+// end up", not "where does a station near the crossover go". Live,
+// RAM-only, plain per-sample multiply (no filter rebuild). Default 1.8.
+void rx_audio_set_pan_width(float v);
+float rx_audio_get_pan_width(void);
+
 // Output samples clamped at out_clamp since the last call - an objective
 // answer to "how much is it actually clipping", not a guess by ear. Reading
 // it resets the count, so each call reports the rate since the previous one.
