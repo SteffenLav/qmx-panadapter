@@ -26,14 +26,15 @@ typedef struct {
     lv_obj_t   *lbl;      // the row's own label, dimmed to show "held off"
 } resmgmt_row_t;
 
-#define ROW_AUDIO    0
-#define ROW_SPOTMAP  1
-#define ROW_RBN      2
-#define ROW_CLUSTER  3
-#define ROW_SPOTS    4
-#define ROW_PSKRX    5
-#define ROW_PSKTX    6
-#define ROW_COUNT    7
+#define ROW_AUDIO     0
+#define ROW_SPOTMAP   1
+#define ROW_RBN       2
+#define ROW_CLUSTER   3
+#define ROW_SPOTS     4
+#define ROW_PSKRX     5
+#define ROW_PSKTX     6
+#define ROW_BINAURAL  7
+#define ROW_COUNT     8
 
 static resmgmt_row_t s_rows[ROW_COUNT];
 static lv_obj_t *s_cb_audio  = NULL;   // row 0's checkbox - kept separately,
@@ -82,13 +83,14 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent)
 // un-clickable, not just informational: a checkbox the operator could tick
 // with no effect would be worse than one they can't reach.
 static const bool ROW_GATED[ROW_COUNT] = {
-    [ROW_AUDIO]   = false,
-    [ROW_SPOTMAP] = true,
-    [ROW_RBN]     = true,
-    [ROW_CLUSTER] = true,
-    [ROW_SPOTS]   = false,
-    [ROW_PSKRX]   = true,
-    [ROW_PSKTX]   = false,
+    [ROW_AUDIO]    = false,
+    [ROW_SPOTMAP]  = true,
+    [ROW_RBN]      = true,
+    [ROW_CLUSTER]  = true,
+    [ROW_SPOTS]    = false,
+    [ROW_PSKRX]    = true,
+    [ROW_PSKTX]    = false,
+    [ROW_BINAURAL] = false,   // gated the OPPOSITE way - see refresh_gating()
 };
 
 static void refresh_gating(void)
@@ -109,6 +111,20 @@ static void refresh_gating(void)
     if (s_gate_note) {
         if (audio_on && any_gated_shown) lv_obj_clear_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
         else                             lv_obj_add_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Binaural is a SUB-feature of RX audio, not a competitor for its
+    // memory - it does nothing (silently falls back to mono, see
+    // rx_audio.c) unless audio is already on, so the opposite rule applies:
+    // dimmed/disabled while audio is OFF, live once it is ON.
+    if (s_rows[ROW_BINAURAL].cb) {
+        if (audio_on) {
+            lv_obj_clear_state(s_rows[ROW_BINAURAL].cb, LV_STATE_DISABLED);
+            if (s_rows[ROW_BINAURAL].lbl) lv_obj_set_style_text_opa(s_rows[ROW_BINAURAL].lbl, LV_OPA_COVER, 0);
+        } else {
+            lv_obj_add_state(s_rows[ROW_BINAURAL].cb, LV_STATE_DISABLED);
+            if (s_rows[ROW_BINAURAL].lbl) lv_obj_set_style_text_opa(s_rows[ROW_BINAURAL].lbl, LV_OPA_50, 0);
+        }
     }
 }
 
@@ -156,6 +172,12 @@ static void psktx_cb(lv_event_t *e)
     settings_set_pskreporter_en(on);
 }
 
+static void binaural_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state((lv_obj_t *)lv_event_get_target(e), LV_STATE_CHECKED);
+    rx_audio_set_binaural_enabled(on);
+}
+
 // Tapping the label toggles its row's checkbox - same reasoning as every
 // other modal in this app: a 31 px box next to 200 px of dead label space
 // is the single biggest reason these rows feel hard to hit.
@@ -182,6 +204,7 @@ static const row_def_t ROW_DEFS[ROW_COUNT] = {
     { ROW_SPOTS,   "POTA / SOTA spots",                   spots_cb },
     { ROW_PSKRX,   "PSK Reporter - who's hearing me",     pskrx_cb },
     { ROW_PSKTX,   "PSK Reporter - report my decodes",    psktx_cb },
+    { ROW_BINAURAL,"Binaural CW (stereo separation)",     binaural_cb },
 };
 
 static void close_btn_cb(lv_event_t *e)
@@ -207,12 +230,18 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    // 660: 7 rows + the row-0 separator end at content-y=496 (see the row
-    // loop below), and the Close button needs its own 64 px + gap below
-    // that. The original 8-row/560 version had the last two rows sitting
-    // UNDER the button - measured on hardware 2026-09-20 (screenshot from
-    // the operator) - so this is sized with margin, not just enough.
-    lv_obj_set_size(s_panel, 760, 660);
+    // 700: 8 rows + the row-0 separator now end at content-y=548 (was 496
+    // for 7 rows before Binaural CW was added, 2026-09-20 - +52 for the new
+    // row); +164 margin (which the 660 figure already proved is enough for
+    // the Close button + padding) would be 712, but the screen itself is
+    // only 720 tall and centering that leaves just 4 px top/bottom - too
+    // tight to trust without a screenshot. Capped at 700 instead (still 152
+    // px of margin below the content, more than the button needs) pending
+    // an on-hardware screenshot check, same discipline as the ORIGINAL
+    // sizing bug here (a panel sized "just enough" put the Close button on
+    // top of the rows - measured wrong from arithmetic before, verify with
+    // a screenshot, don't just trust the numbers again).
+    lv_obj_set_size(s_panel, 760, 700);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -311,12 +340,13 @@ static void rows_refresh_from_settings(void)
     settings_load_all(&s);
 
     struct { int row; bool val; } vals[] = {
-        { ROW_SPOTMAP, s.spotmap_en },
-        { ROW_RBN,     s.rbn_en },
-        { ROW_CLUSTER, s.cluster_en },
-        { ROW_SPOTS,   s.spots_en },
-        { ROW_PSKRX,   s.psk_rx_en },
-        { ROW_PSKTX,   s.pskreporter_en },
+        { ROW_SPOTMAP,  s.spotmap_en },
+        { ROW_RBN,      s.rbn_en },
+        { ROW_CLUSTER,  s.cluster_en },
+        { ROW_SPOTS,    s.spots_en },
+        { ROW_PSKRX,    s.psk_rx_en },
+        { ROW_PSKTX,    s.pskreporter_en },
+        { ROW_BINAURAL, rx_audio_get_binaural_enabled() },
     };
     if (s_cb_audio) {
         if (rx_audio_is_enabled()) lv_obj_add_state(s_cb_audio, LV_STATE_CHECKED);

@@ -1052,6 +1052,31 @@ static void rx_audio_task(void *arg)
         float out_clamp    = s_out_clamp;
         bool  panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
 
+        // Stereo width, BANDWIDTH-COMPENSATED: the two half-band filters'
+        // own transition zone is a FIXED number of Hz (FIR_LEN taps at
+        // fs_dec, not a function of half_bw_hz at all), so it eats a much
+        // bigger FRACTION of a narrow CW filter than a wide one - at
+        // half_bw=250 (500 Hz filter) it is maybe a sixth of the passband;
+        // at half_bw=50 (100 Hz filter) it can be most of it. That is why
+        // narrowing the filter collapsed the stereo spread even with
+        // pan_width unchanged (operator, 2026-09-20: "when I narrow the bw
+        // ... it needs to be tied to the bw"). Compensate by scaling width
+        // UP as half_bw shrinks below the reference it was tuned at (250 Hz
+        // half-width = 500 Hz filter, the session's own test bandwidth), so
+        // the FELT spread stays roughly constant as the operator zooms the
+        // CW filter in or out. Clamped both ways: never below the operator's
+        // own pan_width (a WIDE filter should not get LESS spread than what
+        // was tuned), never above 4x it (an extremely narrow filter, e.g.
+        // 50 Hz, would otherwise demand an absurd multiplier).
+        float eff_pan_width = s_pan_width;
+        if (panoramic_now && s_half_bw_hz > 0) {
+            const float PAN_WIDTH_REF_HALF_BW_HZ = 250.0f;   // half of the 500 Hz test filter
+            float scale = PAN_WIDTH_REF_HALF_BW_HZ / (float)s_half_bw_hz;
+            if (scale < 1.0f) scale = 1.0f;   // never REDUCE width for a wider-than-reference filter
+            if (scale > 4.0f) scale = 4.0f;
+            eff_pan_width = s_pan_width * scale;
+        }
+
         for (int i = 0; i < n_out; i++) {
             float cl, sl, cr, sr;
             nco_step(&s_nco_l, (uint32_t)i, &cl, &sl);
@@ -1135,9 +1160,8 @@ static void rx_audio_task(void *arg)
                 // FAR APART the two ears end up sounding once it has.
                 float mid  = 0.5f * (v_l + v_r);
                 float side = 0.5f * (v_l - v_r);
-                float w    = s_pan_width;
-                v_l = mid + w * side;
-                v_r = mid - w * side;
+                v_l = mid + eff_pan_width * side;
+                v_r = mid - eff_pan_width * side;
             }
             if (v_l >  out_clamp) { v_l =  out_clamp; s_clip_count++; }
             if (v_l < -out_clamp) { v_l = -out_clamp; s_clip_count++; }
