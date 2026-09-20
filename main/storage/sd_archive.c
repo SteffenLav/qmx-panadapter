@@ -273,6 +273,24 @@ static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see 
 #define SD_WRITE_FAIL_UNMOUNT 5
 static int s_consec_write_fail = 0;
 
+// A write failure while MALLOC_CAP_DMA is this starved is almost certainly the
+// boot-time trough (WiFi+BLE+the TLS feeds all converging on the same pool),
+// not a pulled card - measured 2026-09-20: DMA free=151 B / lblk=84 B for the
+// entire ~30 s span that killed every one of that boot's 5 write attempts and
+// got the card declared removed, while INT free stayed 1.7-14 KB throughout
+// (healthy operation elsewhere on this bench runs 10-18 KB DMA free). A real
+// unplug is not a memory event and does not care about this threshold.
+//
+// Failures attributed to the trough do NOT count toward SD_WRITE_FAIL_UNMOUNT
+// - they get their own, much longer budget instead, so the card survives a
+// trough that outlasts 15 s (this one ran ~56 s) without declaring itself
+// gone. 40 x WORK_MS = 2 min, comfortably past every trough measured so far,
+// while still bounded so a card that is ACTUALLY gone during a starved boot
+// is not retried forever.
+#define SD_DMA_STARVED_BYTES     4096
+#define SD_MEM_RETRY_MAX         40
+static int s_consec_mem_fail = 0;
+
 // Quick mount retries inside the boot window, while DMA memory is still plentiful.
 // Forward declaration: the temp instrument in mirror_diag() reports it.
 static bool s_parked;
@@ -1336,6 +1354,17 @@ static void sd_archive_task(void *arg)
         // several consecutive failed bursts. A genuinely removed card just fails
         // SD_WRITE_FAIL_UNMOUNT times first, which costs nothing that matters.
         if (!ok) {
+            size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+            if (dma_free < SD_DMA_STARVED_BYTES && s_consec_mem_fail < SD_MEM_RETRY_MAX) {
+                s_consec_mem_fail++;
+                ESP_LOGW(TAG, "SD write failed with DMA pool starved (%u B free, "
+                              "< %u) - NOT counting toward removal (%d/%d mem retries)",
+                         (unsigned)dma_free, SD_DMA_STARVED_BYTES,
+                         s_consec_mem_fail, SD_MEM_RETRY_MAX);
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+                vTaskDelay(pdMS_TO_TICKS(WORK_MS));
+                continue;
+            }
             s_consec_write_fail++;
             if (s_consec_write_fail < SD_WRITE_FAIL_UNMOUNT) {
                 ESP_LOGW(TAG, "SD write failed (%d/%d) - retrying on live handle",
@@ -1347,17 +1376,20 @@ static void sd_archive_task(void *arg)
             ESP_LOGW(TAG, "SD write failed %d times consecutively - treating as removal",
                      s_consec_write_fail);
             s_consec_write_fail = 0;
+            s_consec_mem_fail = 0;
             unmount("write failures");
             if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
         }
-        if (s_consec_write_fail) {
+        if (s_consec_write_fail || s_consec_mem_fail) {
             // The measured answer to "is the EIO transient?" - if this line ever
             // appears, retrying on the live handle is the right fix.
-            ESP_LOGW(TAG, "SD write RECOVERED after %d consecutive failure(s)",
-                     s_consec_write_fail);
+            ESP_LOGW(TAG, "SD write RECOVERED after %d consecutive failure(s) "
+                          "(%d attributed to a starved DMA pool)",
+                     s_consec_write_fail + s_consec_mem_fail, s_consec_mem_fail);
             s_consec_write_fail = 0;
+            s_consec_mem_fail = 0;
         }
 
         int burst_ms = (int)((esp_timer_get_time() - burst_t0) / 1000);

@@ -6223,9 +6223,27 @@ esp_err_t webserver_start(void)
     config.recv_wait_timeout = 2;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
-    esp_err_t err = httpd_start(&s_server, &config);
+    // httpd_start()'s task creation needs a contiguous ~10.5 KB internal-RAM
+    // block (config.stack_size above). It runs on the got-IP path, which lands
+    // squarely inside the boot-time trough where WiFi/BLE/the TLS feeds are all
+    // still converging on the same pool - measured 2026-09-20: ESP_ERR_HTTPD_TASK
+    // at 32.8 s of a boot where MALLOC_CAP_DMA sat at 151 B for the previous
+    // 30 s. Unlike that trough's other victim (sd_archive's write retry), a
+    // one-shot failure here was never retried at all - no web UI for the rest
+    // of the session, silently. Retry with the trough's own timescale: the
+    // measured episode cleared inside ~60 s.
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 1; attempt <= 10; attempt++) {
+        err = httpd_start(&s_server, &config);
+        if (err == ESP_OK) break;
+        ESP_LOGW(TAG, "httpd_start failed (%d/10): %s - retrying in 3 s",
+                 attempt, esp_err_to_name(err));
+        s_server = NULL;
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "httpd_start failed after 10 attempts: %s - no web UI this session",
+                 esp_err_to_name(err));
         s_server = NULL;
         return err;
     }
