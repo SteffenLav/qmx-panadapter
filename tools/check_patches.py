@@ -187,6 +187,17 @@ PATCHES = [
      "after WiFi bring-up and the allocation failed outright, silently "
      "killing live PSK Reporter self-spotting (net/pskr_self.c) for the "
      "whole session"),
+
+    # Same FILE as the row above, different marker - mqtt_client.c now carries
+    # two of our fixes and one apply script does not apply the other.
+    ("apply_mqtt_event_loop_create_checked.ps1", "idf",
+     "components/mqtt/esp-mqtt/mqtt_client.c",
+     "QMX_MQTT_EVENT_LOOP_CREATE_CHECKED",
+     "esp_mqtt_client_init() never checked esp_event_loop_create()'s return "
+     "value; under the same boot-time memory pressure it returns a non-NULL "
+     "client with event_loop_handle left NULL, and the first "
+     "esp_mqtt_client_register_event() call asserts - crash-reboot-crash loop, "
+     "captured 2026-09-20 task pskr_self at 22.6 s of uptime"),
 ]
 
 
