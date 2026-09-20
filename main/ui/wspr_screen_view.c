@@ -678,7 +678,7 @@ static void bp_open(void)
         char fs[20];
         format_freq_hz(kBands[s_avail[k]].dial_hz, g_freq_style, fs, sizeof(fs));
         char txt[40];
-        snprintf(txt, sizeof(txt), "%s m  %s", kBands[s_avail[k]].name, fs);
+        snprintf(txt, sizeof(txt), "%sm  %s", kBands[s_avail[k]].name, fs);
         lv_obj_t *l = lv_label_create(r);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
@@ -707,7 +707,7 @@ static void bp_button_refresh(void)
     const char *bn = wspr_band_name_for_dial(hz);
     char fs[20], t[44];
     format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
-    snprintf(t, sizeof(t), "%s m  %s", bn ? bn : "--", fs);
+    snprintf(t, sizeof(t), "%sm  %s", bn ? bn : "--", fs);
     lv_label_set_text(s_lbl_dial, t);
 }
 
@@ -1183,7 +1183,7 @@ static void hop_maybe(void)
     wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
     cat_set_frequency_forced(kBands[pick].dial_hz);
     bp_button_refresh();   /* the hop changed the dial - say so on the button */
-    ESP_LOGI(TAG, "band hop -> %s m (%lu Hz) for the cycle starting in %llds",
+    ESP_LOGI(TAG, "band hop -> %sm (%lu Hz) for the cycle starting in %llds",
              kBands[pick].name, (unsigned long)kBands[pick].dial_hz,
              (long long)(120 - (now % 120)));
 }
@@ -2867,7 +2867,7 @@ void wspr_screen_view_tick(void)
                 if (s_tx_wanted_uncal) {
                     const char *bn = wspr_band_name_for_dial(cat_get_frequency());
                     snprintf(pa_s, sizeof(pa_s), "%s%s not calibrated",
-                             bn ? bn : "band", bn ? " m" : "");
+                             bn ? bn : "band", bn ? "m" : "");
                     pa_col = 0xFF4010;
                 } else {
                     pa_s[0] = '\0';
@@ -2963,7 +2963,7 @@ void wspr_screen_view_tick(void)
      * than absent. Blank if the dial matches no WSPR band. */
     qmx_settings_t bs; settings_load_all(&bs);
     const char *bn = wspr_band_name_for_dial(bs.wspr_dial_hz);
-    if (bn) snprintf(c, sizeof(c), "%s m   cycle  %d:%02d / 2:00", bn, into / 60, into % 60);
+    if (bn) snprintf(c, sizeof(c), "%sm   cycle  %d:%02d / 2:00", bn, into / 60, into % 60);
     else    snprintf(c, sizeof(c), "cycle  %d:%02d / 2:00", into / 60, into % 60);
     lv_label_set_text(s_lbl_cycle, c);
 

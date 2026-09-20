@@ -1660,23 +1660,41 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
         /* Stamp the mark this decode belongs to. Matched by frequency rather
          * than by index because a later pass has its own candidate ordering. */
         {
+            /* ⛔ ONLY AN UNCLAIMED MARK MAY BE MATCHED, or two stations share
+             * one letter. Samuel W7STF, v1.15.1: the same 'H' against two
+             * different callsigns in one cycle. Successive subtraction exists
+             * precisely to pull a second station out from under a first, so
+             * two decodes 2 Hz apart is the DESIGNED case, not a rare one -
+             * and both land inside this 3 Hz window.
+             *
+             * ⭐ The old code guarded the letter with "only if this mark has
+             * not already got one", reasoning that a later pass can decode the
+             * same station again. THAT CASE CANNOT REACH HERE: a repeat of a
+             * callsign already in seen[] is `continue`d thirty lines above.
+             * So the guard only ever fired for the case it was not written
+             * for - a DIFFERENT station landing on a lettered mark - which it
+             * then silently left letterless, and the list's frequency lookup
+             * handed it the neighbour's letter.
+             *
+             * Skipping claimed marks is right whether or not the finder listed
+             * the second signal separately: if it did, that mark is still '?'
+             * and gets claimed; if it did not, one is appended below. Either
+             * way no '?' is left sitting on top of a station that decoded. */
             float best = 3.0f; int bi = -1;
             for (int k = 0; k < nmarks; k++) {
+                if (marks[k].ch != '?') continue;   /* another station's */
                 float d = fabsf(marks[k].freq_hz - (float)r.freq_hz);
                 if (d < best) { best = d; bi = k; }
             }
-            /* A decode with no candidate near it can only come from a later
-             * pass finding something the first pass did not list at all. It is
-             * a real station, so it gets its own mark rather than being lost. */
+            /* A decode with no FREE candidate near it is either the second
+             * station on one trace, or a later pass finding something the
+             * first pass did not list at all. Both are real stations, so both
+             * get their own mark rather than being lost or duplicated. */
             if (bi < 0 && nmarks < WSPR_MARKS_MAX) { bi = nmarks++; mscore[bi] = 0.0f; }
             if (bi >= 0) {
                 marks[bi].freq_hz = (float)r.freq_hz;   /* the decoder's figure
                                                          * is the accurate one */
-                /* Claimed here and kept - see next_mark_letter(). Only if
-                 * this mark has not already got one: a later pass can decode
-                 * the same station again, and it must not consume a second
-                 * letter or change the one the operator is already reading. */
-                if (marks[bi].ch == '?') marks[bi].ch = next_mark_letter();
+                marks[bi].ch      = next_mark_letter(); /* claimed here and kept */
             }
             /* Straight to the carpet. */
             marks_letter_and_publish(marks, mscore, nmarks, cycle_utc);
