@@ -22,7 +22,7 @@
 1. Try a **different USB cable** — use one you know works for data (USB stick, phone file transfer, etc.)
 2. Power cycle the QMX (off 5 seconds, back on)
 3. Power cycle the Tab5
-4. Check QMX firmware version is v1.03.002 or newer (the v1.04 betas also work)
+4. Check QMX firmware version is v1.03.002 or newer, up to v1.04.010 (v1.04.011 is not recommended yet — see [Quick Start Step 1](../quick-start.md))
 
 If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-diagnostics).
 
@@ -57,7 +57,7 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 
 **Fix:**
 
-1. Verify QMX firmware is v1.03.002 or newer (see Step 1 in [Quick Start](../quick-start.md); the v1.04 betas also work)
+1. Verify QMX firmware is v1.03.002 or newer, up to v1.04.010 (see Step 1 in [Quick Start](../quick-start.md))
 2. Try a shorter/higher-quality USB cable
 3. Restart both devices
 

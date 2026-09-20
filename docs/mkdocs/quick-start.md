@@ -12,7 +12,12 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04 betas** work with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Everything from **v1.03.002** up to and including **v1.04.010** works with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+
+!!! warning "Stay on v1.04.010 for now"
+
+    **v1.04.011** (19-Sep-2026) is not recommended with the panadapter yet. One operator reports the radio producing **no transmit output** when keyed over CAT from the Tab5, and others report the radio's own Tune SWR and Hardware Test screens freezing until it is power-cycled — all of which go away on v1.04.010. These are being reported to QRP Labs. If you are already on v1.04.011 and see either, roll back to v1.04.010.
+
 
 ## Step 2: Flash the Tab5
 
@@ -215,7 +220,7 @@ off and on again afterwards — the screen will tell you if so.
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04 betas also work)
+- Check QMX firmware version (Step 1 above) — v1.03.002 up to v1.04.010 (not v1.04.011 yet — see Step 1)
 - Try a different USB cable
 
 **Flashing keeps failing, but the COM port is there?**

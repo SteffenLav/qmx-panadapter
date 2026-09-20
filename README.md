@@ -297,7 +297,9 @@ restore as a text file; and a settings reset that does not need a reflash.
 
 ### Step 0 — Check your QMX firmware first
 
-Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. Both **1.03.002** and the **1.04 betas** work with the panadapter (1.04.004 is what this is developed against day to day); on 1.04 the Tab5 additionally offers **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout) — both stay hidden on 1.03.002, so there's no downside either way.
+Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. Everything from **1.03.002** up to and including **1.04.010** works with the panadapter; on 1.04 the Tab5 additionally offers **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout) — both stay hidden on 1.03.002, so there's no downside either way.
+
+**Do not use 1.04.011 (19-Sep-2026) yet.** One operator reports no transmit output when the radio is keyed over CAT from the Tab5, and others report the radio's own Tune SWR and Hardware Test screens freezing until power-cycled. All of it clears on 1.04.010. Reported to QRP Labs; this note will go when there is a fix.
 
 ### Step 1 — Flash the Tab5 firmware
 
@@ -1012,7 +1014,7 @@ The QMX's +12 kHz IF injection varies slightly between units. If signals appear 
 ### Hardware
 
 - **M5Stack Tab5** — ESP32-P4 v1.3 (ECO2), ST7121 or ST7123 5" 720×1280 MIPI-DSI touch display, 32 MB PSRAM, ESP32-C6 co-processor for WiFi
-- **QRP Labs QMX or QMX+** — firmware 1.03.002 or newer (the 1.04 betas also work, and unlock AM mode + Antenna Tune)
+- **QRP Labs QMX or QMX+** — firmware 1.03.002 up to 1.04.010 (1.04 unlocks AM mode + Antenna Tune; 1.04.011 is not recommended yet)
 - **USB-A → USB-C data cable** between Tab5 USB-A host port and QMX (full data, not charge-only)
 - **USB-C power supply** for the Tab5 (5 V / 2 A or better, or internal battery)
 
