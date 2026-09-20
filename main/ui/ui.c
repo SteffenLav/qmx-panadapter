@@ -2605,6 +2605,8 @@ static bool outpwr_tx_busy(void)
            wspr_tx_get_status(NULL, 0, NULL) != WSPR_TX_IDLE;
 }
 
+static void outpwr_relayout(void);   /* defined with its twin, wspr_dbm_relayout() */
+
 static void outpwr_update_warning(uint16_t w_x100)
 {
     if (!s_outpwr_warn_lbl) return;
@@ -2615,6 +2617,19 @@ static void outpwr_update_warning(uint16_t w_x100)
     } else {
         lv_obj_add_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
     }
+    /* ⛔ VISIBILITY IS A LAYOUT INPUT - re-stack, or this label appears at
+     * wherever it last sat. Operator, 2026-09-20, with a screenshot: the amber
+     * "...risks the finals" peeking out from UNDER the Recalibrate button, in
+     * both Basic and Advanced.
+     *
+     * The stack pass skips hidden children by design (that is what removes the
+     * dead space), so a label hidden AT THAT MOMENT keeps its build-time y.
+     * This function is also called straight from the slider's drag callback,
+     * which does no refresh of its own - so dragging past 1 W un-hid a label
+     * the layout had already stepped over, on top of the button that had since
+     * moved into its place. Cheap: outpwr_relayout() returns immediately when
+     * the resulting height is unchanged. */
+    outpwr_relayout();
 }
 
 /* Decide whether the CURRENT band has anything real to offer, same
@@ -2625,8 +2640,6 @@ static void outpwr_update_warning(uint16_t w_x100)
  * change (called from topbar_reconcile_cb below) puts the radio back
  * where the operator last left it on that band without having to reopen
  * the drawer. */
-static void outpwr_relayout(void);   /* defined with its twin, wspr_dbm_relayout() */
-
 static void output_power_area_refresh(void)
 {
     if (!s_outpwr_nc_lbl || !lv_obj_is_valid(s_outpwr_nc_lbl)) return;   // section not built yet
@@ -11533,6 +11546,11 @@ static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
             } else {
                 lv_obj_add_flag(s_wspr_dbm_warn_lbl, LV_OBJ_FLAG_HIDDEN);
             }
+            /* Visibility is a layout input - same reason as the twin in
+             * outpwr_update_warning(); the stack pass steps over a hidden
+             * child, so un-hiding one without re-stacking puts it wherever it
+             * last sat, which is under the button by now. */
+            wspr_dbm_relayout();
         }
     }
 }
