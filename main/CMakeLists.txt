@@ -30,6 +30,7 @@ idf_component_register(
         "ui/ft8_tone_modal.c"
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
+        "ui/resource_mgmt_modal.c"
         "ui/reader_view.c"
         "ui/spot_map_view.c"
         "ui/qmx_term_view.c"

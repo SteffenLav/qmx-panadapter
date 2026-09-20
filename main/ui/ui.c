@@ -54,6 +54,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "date_confirm_modal.h"
 #include "ft8_tone_modal.h"
 #include "ft8_pileup_modal.h"
+#include "resource_mgmt_modal.h"
 #include "activation_modal.h"
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
@@ -10161,14 +10162,17 @@ static void touch_event_cb(lv_event_t *e)
             }
             return;
         }
-        // Double-tap: reset zoom+pan to 1.0/0.
+        // Double-tap: open Resource Management. Repurposed 2026-09-20 from
+        // "reset zoom+pan to 1.0/0" - operator's own call: that reset is
+        // still reachable from the top-bar Zoom menu, so nothing was lost,
+        // and this gesture "does not do anything and in reality never
+        // needed to" otherwise.
         uint64_t now_us = esp_timer_get_time();
         if (s_last_tap_x >= 0 &&
             (now_us - s_last_tap_us) < (uint64_t)DOUBLE_TAP_MS * 1000 &&
             abs((int)p.x - s_last_tap_x) < DOUBLE_TAP_PX) {
-            ESP_LOGI("ui_touch", "Double-tap: reset zoom+pan");
-            ui_set_zoom(1.0f, 0);
-            update_bandplan_strip(s_last_qmx_freq_hz);
+            ESP_LOGI("ui_touch", "Double-tap: open Resource Management");
+            resource_mgmt_modal_open();
             s_last_tap_x = -1;
             return;
         }
