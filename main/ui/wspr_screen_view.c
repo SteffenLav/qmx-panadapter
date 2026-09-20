@@ -2583,6 +2583,45 @@ void wspr_screen_view_tick(void)
             }
         }
 
+        /* ⛔ THE DECLARED POWER FOLLOWS THE BAND, AND NOTHING WAS MAKING IT.
+         *
+         * Steffen OZ1LAV, 2026-09-20, after moving to 40 m: "PA 11.8 V = 3.6 W
+         * when I told you to always make sure that it never exceed the limit
+         * set up in the drawer..... Now that I open the drawer it immediately
+         * changed to green PA 6.0 V = 1.0 W". The log has exactly ONE
+         * declared-power apply in that whole window, at the instant the drawer
+         * opened. So the radio sat above the declared limit from the band
+         * change until he happened to look.
+         *
+         * The apply was wired to the dial WRITE, inside the branch above, and
+         * to a dial push that is only armed by page entry, CAT returning and
+         * simulation being switched off. Choosing a band arms none of them:
+         * bp_apply() sets the dial and retunes directly, and so does the
+         * automatic band HOP - which is the dangerous one, because it runs
+         * unattended and every hop would leave the finals at the previous
+         * band's voltage for a ~110 s key-down.
+         *
+         * ⭐ SAME SHAPE AS THE TOP-BAR (v1.12.1) AND BOOT-POWER (v1.14.3)
+         * BUGS, AND THE SAME ANSWER: a state that must hold for a whole band
+         * belongs in something RE-DERIVED, not in the two or three places that
+         * happen to enter that band. Keyed on the STORED dial because that is
+         * what wspr_pa_apply_declared_dbm() itself resolves the band from - so
+         * this cannot be fooled by the radio still reporting the old frequency
+         * during the 3 s settle window.
+         *
+         * One attempt per change, not per tick: the apply logs loudly when it
+         * refuses (uncalibrated band, guard holding), and the TX-enable path in
+         * wspr_rx.c retries before anything is keyed. */
+        {
+            static uint32_t s_pa_dial_applied = 0;
+            const uint32_t dial_now = settings_get_wspr_dial_hz();
+            if (cat_now && wspr_rx_running() && dial_now &&
+                dial_now != s_pa_dial_applied) {
+                s_pa_dial_applied = dial_now;
+                wspr_pa_apply_declared_dbm(settings_get_wspr_tx_dbm());
+            }
+        }
+
         /* ⛔ AND SAY SO IF THEY EVER DISAGREE AGAIN.
          *
          * The push above is deliberately one-shot, so that this page never
