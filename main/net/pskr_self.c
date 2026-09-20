@@ -320,7 +320,11 @@ static void watchdog_task(void *arg)
     int  backoff_ms = 2000;
 
     for (;;) {
-        bool want = settings_get_spotmap_en();
+        // net_quiet ALSO tears down an already-running session here, not just
+        // the initial wait before the loop - this is the standing MQTT client
+        // task (esp-mqtt's own xTaskCreate() has no PSRAM option), so it is
+        // exactly the feed RX audio needs the room back from (2026-09-20).
+        bool want = settings_get_spotmap_en() && !net_quiet_active();
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }

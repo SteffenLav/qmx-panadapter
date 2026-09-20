@@ -188,7 +188,7 @@ static void ota_task(void *arg)
     // at the end needs internal heap, and a 6-minute download gives POTA five
     // TLS sessions and RBN/DX several reconnects to churn it down to ~10 KB.
     // See net_quiet.h for the measurements.
-    if (s_pause_feeds) net_quiet_set(true);
+    if (s_pause_feeds) net_quiet_hold();
     // ⚠ dsp_set_transfer_quiet(true) is NOT taken for the whole download any
     // more - only around the verify at the end (see esp_https_ota_finish()).
     // It idles fft_task, and fft_task feeds the spectrum, the waterfall AND
@@ -423,7 +423,7 @@ out:
     // but a future early-return between the two must not leave the spectrum
     // dead for the rest of the session.
     dsp_set_transfer_quiet(false);
-    net_quiet_set(false);
+    if (s_pause_feeds) net_quiet_release();   // must mirror the hold() above exactly
     webserver_ws_set_paused(false);
     vTaskDelete(NULL);
 }

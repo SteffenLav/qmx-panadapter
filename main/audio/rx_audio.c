@@ -20,6 +20,7 @@
 #include "cat.h"          // cat_get_mode_str(), cat_get_cw_offset_hz()
 #include "settings.h"
 #include "ui.h"           // ui_get_passband_width_hz() - the QMX's actual selected filter width
+#include "net/net_quiet.h" // hold this while RX audio is on - see net_quiet.h's 2026-09-20 note
 
 static const char *TAG = "rx_audio";
 
@@ -938,6 +939,10 @@ void rx_audio_init(void)
     settings_load_all(&cfg);
     s_enabled = cfg.rx_audio_en;
     s_volume  = cfg.rx_audio_vol;
+    // Claim the room from the background feeds for the whole time RX audio is
+    // persisted-on, not just from the moment it starts producing frames - see
+    // net_quiet.h. Matches rx_audio_set_enabled()'s own hold/release pairing.
+    if (s_enabled) net_quiet_hold();
 
     // Work buffers in PSRAM (core-1 only). Putting all of these in internal
     // RAM starved the internal heap and destabilised boot, so only the
@@ -1083,8 +1088,13 @@ void rx_audio_preopen(void)
 
 void rx_audio_set_enabled(bool en)
 {
+    bool was = s_enabled;
     s_enabled = en;
     settings_set_rx_audio_en(en);
+    // Mirrors rx_audio_init()'s own hold on a transition, never on a
+    // same-value call (the UI can call this repeatedly with the same state).
+    if (en && !was) net_quiet_hold();
+    else if (!en && was) net_quiet_release();
     if (!en) return;
     if (!s_codec_ready) {
         // Codec is only opened at boot (before the USB host takes the DMA
