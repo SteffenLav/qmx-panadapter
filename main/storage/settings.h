@@ -816,6 +816,34 @@ void     settings_set_wspr_tx_tone_hz(uint16_t hz);
 // _set replaces the row for `band` (adding it if the table has a free slot, else
 // overwriting whichever row is oldest by cal_unix_time). _get returns false and
 // leaves the buffers untouched if `band` has never been calibrated.
+/* ---- PER-RADIO power calibration ------------------------------------
+ *
+ * The calibration is a measurement of ONE radio's PA: a 9 V build, a 12 V
+ * build and one with the 4:4 PA mod all answer `PC;` differently at the same
+ * Max. PA voltage. Keyed by band alone, swapping in a second QMX would apply
+ * the first one's curve - and the declared power we publish to wsprnet would
+ * be a figure never measured on the radio actually transmitting.
+ *
+ * `UI;` (1_04_003 and later) returns the STM32's 96-bit unique ID as 24 hex
+ * characters, which is a per-radio identity. settings_radio_identity_changed()
+ * is called with it once CAT knows it:
+ *
+ *   - same radio as last time -> nothing happens;
+ *   - different radio -> the table in NVS is PARKED to /spiffs/pcal_<uid>.bin
+ *     and that radio's own parked table is loaded in its place, or the table
+ *     is cleared if this radio has never been calibrated here.
+ *
+ * So NVS always holds the ATTACHED radio's table and every existing reader and
+ * writer is untouched; only the swap moves anything. Parked tables live in
+ * SPIFFS rather than NVS because user_nvs is 24 KB total and one table is
+ * ~2.4 KB - three radios would have eaten a third of it.
+ *
+ * ⚠ A 1_03 radio has no `UI;`, so a swap between two of those cannot be seen.
+ * Passing NULL/"" leaves everything alone rather than guessing.
+ */
+void settings_radio_identity_changed(const char *uid);
+bool settings_get_radio_uid(char *out, size_t n);
+
 void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCAL_STEPS],
                                 const uint16_t watts_x100[PWRCAL_STEPS]);
 bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEPS],

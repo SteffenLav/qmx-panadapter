@@ -8,6 +8,9 @@
 #include <strings.h>   // strncasecmp - band names are matched case-INSENSITIVELY
 #include <stdint.h>
 #include <time.h>   // time(NULL) - power-calibration row timestamp
+#include <stdio.h>   // parked per-radio calibration files in /spiffs
+#include <errno.h>
+#include <unistd.h>  // fsync
 
 #include "esp_log.h"
 #include "nvs.h"
@@ -125,6 +128,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
 #define KEY_PWR_CAL        "pwrcal"
+#define KEY_RADIO_UID      "radiouid"   /* UI; of the radio the table above belongs to */
 #define KEY_PWR_TARGET     "pwrtarget"
 #define KEY_WSPR_TONE      "wsprtone"
 #define KEY_WSPR_DUMP      "wspr_dump"
@@ -1569,6 +1573,116 @@ void settings_set_kbd_bindings(const kbd_bindings_t *b)
     s_pending.kbd_bindings = *b;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_KBD_BIND);
+}
+
+/* ---- per-radio calibration: park and check out -----------------------
+ * See settings.h for the why. Everything here runs on whichever task learns
+ * the radio's identity (the CAT link task today), so it must not put a table
+ * on the stack - both are read and written straight out of s_pending under the
+ * mutex, and the file I/O is done in chunks with no big local.
+ *
+ * ⚠ pwr_target (the per-band watts the operator picked) travels WITH the
+ * calibration: a target of "2 W on 20 m" is only meaningful against the curve
+ * it was chosen from. The declared power for WSPR does NOT - that is an
+ * operator's choice about what to put on the air, not a property of the PA. */
+#define PCAL_PARK_MAGIC  0x50434131u   /* "PCA1" */
+
+static void pcal_park_path(char *out, size_t n, const char *uid)
+{
+    snprintf(out, n, "/spiffs/pcal_%.16s.bin", uid);   /* 16 of the 24 hex chars is
+                                                        * already 2^64 of identity,
+                                                        * and SPIFFS names are short */
+}
+
+/* Caller holds s_mutex. */
+static void pcal_park_locked(const char *uid)
+{
+    if (!uid || !uid[0]) return;
+    bool any = false;
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++)
+        if (s_pending.pwr_cal.bands[i].band[0]) { any = true; break; }
+    if (!any) return;                 /* nothing worth a file */
+
+    char path[64];
+    pcal_park_path(path, sizeof(path), uid);
+    FILE *f = fopen(path, "wb");
+    if (!f) { ESP_LOGW(TAG, "pwr_cal: cannot park to %s (errno %d)", path, errno); return; }
+    const uint32_t magic = PCAL_PARK_MAGIC;
+    bool ok = fwrite(&magic, sizeof(magic), 1, f) == 1
+           && fwrite(&s_pending.pwr_cal,    sizeof(s_pending.pwr_cal),    1, f) == 1
+           && fwrite(&s_pending.pwr_target, sizeof(s_pending.pwr_target), 1, f) == 1;
+    /* fsync, not just fclose - CLAUDE.md records the ADIF/SD case where the
+     * bytes sat in the filesystem buffer and the file read back empty. */
+    if (ok) { fflush(f); ok = (fsync(fileno(f)) == 0); }
+    fclose(f);
+    ESP_LOGW(TAG, "pwr_cal: parked this radio's calibration to %s (%s)",
+             path, ok ? "ok" : "WRITE FAILED");
+}
+
+/* Caller holds s_mutex. Returns true if a parked table was restored. */
+static bool pcal_checkout_locked(const char *uid)
+{
+    char path[64];
+    pcal_park_path(path, sizeof(path), uid);
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    uint32_t magic = 0;
+    bool ok = fread(&magic, sizeof(magic), 1, f) == 1 && magic == PCAL_PARK_MAGIC
+           && fread(&s_pending.pwr_cal,    sizeof(s_pending.pwr_cal),    1, f) == 1
+           && fread(&s_pending.pwr_target, sizeof(s_pending.pwr_target), 1, f) == 1;
+    fclose(f);
+    if (!ok) {
+        /* A short or corrupt file must not leave HALF a table in place - that
+         * would be one radio's rows mixed with another's, which is exactly the
+         * failure this whole feature exists to prevent. */
+        memset(&s_pending.pwr_cal,    0, sizeof(s_pending.pwr_cal));
+        memset(&s_pending.pwr_target, 0, sizeof(s_pending.pwr_target));
+        ESP_LOGE(TAG, "pwr_cal: %s is unreadable - starting this radio uncalibrated", path);
+    }
+    return ok;
+}
+
+bool settings_get_radio_uid(char *out, size_t n)
+{
+    if (!s_ready || !out || n == 0) return false;
+    size_t sz = n;
+    out[0] = '\0';
+    return nvs_get_str(s_nvs, KEY_RADIO_UID, out, &sz) == ESP_OK && out[0];
+}
+
+void settings_radio_identity_changed(const char *uid)
+{
+    if (!s_ready || !uid || !uid[0]) return;   /* 1_03 has no UI; - never guess */
+
+    char known[40] = {0};
+    size_t sz = sizeof(known);
+    esp_err_t e = nvs_get_str(s_nvs, KEY_RADIO_UID, known, &sz);
+
+    if (e == ESP_OK && strcmp(known, uid) == 0) return;    /* same radio - nothing to do */
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (e == ESP_OK && known[0]) {
+        pcal_park_locked(known);
+        const bool restored = pcal_checkout_locked(uid);
+        ESP_LOGW(TAG, "pwr_cal: RADIO CHANGED %.16s -> %.16s - %s",
+                 known, uid, restored ? "restored this radio's own calibration"
+                                      : "no calibration stored for it yet");
+    } else {
+        /* First time we have ever been able to identify the radio. ADOPT the
+         * existing table rather than discarding it: it was measured on
+         * whatever is attached now, which on any single-radio station is this
+         * radio. Throwing away a calibration the operator spent ten minutes
+         * per band on, purely because we only just learned how to name the
+         * radio, would be the wrong direction to be wrong in. */
+        ESP_LOGW(TAG, "pwr_cal: radio identified as %.16s - adopting the existing "
+                      "calibration as belonging to it", uid);
+    }
+    xSemaphoreGive(s_mutex);
+
+    nvs_set_str(s_nvs, KEY_RADIO_UID, uid);
+    nvs_commit(s_nvs);
+    mark_dirty(DIRTY_PWR_CAL);
+    mark_dirty(DIRTY_PWR_TARGET);
 }
 
 void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCAL_STEPS],

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>   // isxdigit - validating the UI; unique id
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -75,6 +76,11 @@ static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
 static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
+/* UI; - the STM32's 96-bit unique ID as 24 hex chars, i.e. WHICH RADIO this is.
+ * 1_04_003 and later only; stays empty on anything older, and an empty string
+ * means "unknown", never "a radio with no id". See settings.h's per-radio
+ * calibration note for what it is for. */
+static char   s_qmx_uid[28] = {0};
 // Last AF gain read back from the radio via AG;, in the radio's own 0.25 dB
 // steps. -1 = never read. The QMX shows this value on its LCD IN DECIBELS
 // (operation manual: "the new volume is displayed ... The volume is shown in
@@ -420,6 +426,7 @@ void cat_query_af_gain(void)
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
+const char *cat_get_qmx_uid(void) { return s_qmx_uid; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
 bool cat_get_vox_disabled(void) { return s_vox_disabled; }
 
@@ -985,6 +992,29 @@ static void process_cat_message(const char *msg, size_t len)
         // that the version is known - the drawer may already have been built
         // (lazy, first-open) before VN; answered.
         ui_notify_qmx_fw_known();
+        return;
+    }
+    /* UI response: "UI<24 hex>;" - the processor's unique id, i.e. which radio
+     * is on the other end of the cable. Handing it to settings is what makes
+     * the power calibration per-RADIO instead of per-band-name; see
+     * settings_radio_identity_changed(). Only 1_04_003 and later answer at
+     * all, and an unrecognisable answer is left as "unknown" rather than
+     * stored - a WRONG identity would swap a calibration for no reason. */
+    if (len >= 4 && msg[0] == 'U' && msg[1] == 'I' && msg[2] != ';') {
+        size_t ulen = len - 3;
+        if (ulen >= sizeof(s_qmx_uid)) ulen = sizeof(s_qmx_uid) - 1;
+        memcpy(s_qmx_uid, msg + 2, ulen);
+        s_qmx_uid[ulen] = ' ';
+        bool hex = ulen >= 16;
+        for (size_t i = 0; i < ulen && hex; i++)
+            if (!isxdigit((unsigned char)s_qmx_uid[i])) hex = false;
+        if (!hex) {
+            ESP_LOGW(TAG, "QMX unique id not recognised ('%s') - ignoring", s_qmx_uid);
+            s_qmx_uid[0] = ' ';
+        } else {
+            ESP_LOGI(TAG, "QMX unique id: %s", s_qmx_uid);
+            settings_radio_identity_changed(s_qmx_uid);
+        }
         return;
     }
     // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the
@@ -2329,6 +2359,27 @@ static void link_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "Failed to query firmware version (VN): 0x%x", verr);
                 }
+            }
+
+            /* WHICH radio is this? UI; (1_04_003+) returns the STM32's unique
+             * id, and settings_radio_identity_changed() uses it to park this
+             * radio's power calibration and check out the attached one's - see
+             * settings.h. Sent right after VN; because the gate depends on the
+             * version that reply just established.
+             *
+             * ⚠ Gated, not merely attempted: on 1_03 an unknown command is
+             * answered "?;" and this file already records that a stray reply
+             * can be read as another command's. Nothing is lost by not asking
+             * - an unidentifiable radio keeps today's behaviour. */
+            if (cat_qmx_fw_at_least(1, 4, 3)) {
+                const char *ui_q = "UI;";
+                esp_err_t uerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)ui_q, strlen(ui_q), 200);
+                if (uerr == ESP_OK) vTaskDelay(pdMS_TO_TICKS(100));  /* handled in process_cat_message */
+                else ESP_LOGW(TAG, "Failed to query unique id (UI): 0x%x", uerr);
+            } else {
+                ESP_LOGI(TAG, "QMX firmware predates UI; - cannot tell one radio "
+                              "from another, power calibration stays per-band only");
             }
 
             // Read CW offset from QMX menu (session value, EEPROM-persisted on QMX side)

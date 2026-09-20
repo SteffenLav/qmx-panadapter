@@ -167,6 +167,10 @@ int cat_probe_terminal(void);
  * Returns an empty string until the radio has answered VN; after link-up.
  */
 const char *cat_get_qmx_fw(void);
+/* WHICH radio is attached: the STM32 unique id from UI;, 24 hex chars, or ""
+ * when unknown (1_03 has no such command). Used to keep the power calibration
+ * per-radio - see settings.h. */
+const char *cat_get_qmx_uid(void);
 /**
  * @brief Check whether the connected QMX's firmware is at least major.minor.patch.
  *
