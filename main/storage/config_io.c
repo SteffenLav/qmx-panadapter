@@ -14,7 +14,17 @@
 
 static const char *TAG = "config_io";
 
-#define CFG_BUF_BYTES 16384  // settings + 32 memories + LoTW cert/key base64 fit comfortably
+/* ⛔ SIZED FOR THE WORST CASE, NOT THE USUAL ONE, and the 2026-09-18 audit is
+ * why it had to grow. A fully calibrated radio adds a lot of text: 16 bands x
+ * 45 "v:w" points is ~7 KB on its own, on top of ~4 KB of settings, up to ~4 KB
+ * of LoTW cert+key base64, 32 memories and 6 remembered networks - about 19 KB,
+ * past the old 16384.
+ *
+ * APP() clamps rather than overruns, so the failure mode was never a crash: it
+ * was a config file that simply STOPPED, mid-section, with no indication. A
+ * truncated backup that looks complete is the worst shape this file can take,
+ * which is why the export now says so in the log as well. */
+#define CFG_BUF_BYTES 32768
 
 static const char *yn(bool b) { return b ? "true" : "false"; }
 
@@ -59,6 +69,7 @@ char *config_io_export(size_t *out_len)
     APP("still_spectrum     = %s\n", yn(c.still_view));
     APP("spots              = %s\n", yn(c.spots_en));
     APP("spots_rbn          = %s\n", yn(c.rbn_en));
+    APP("spot_map           = %s\n", yn(c.spotmap_en));
     APP("spots_sota         = %s\n", yn(c.sota_en));
     APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
@@ -71,6 +82,7 @@ char *config_io_export(size_t *out_len)
     APP("wf_contrast_db     = %.0f\n", (double)c.wf_contrast_db);
     APP("wf_floor_blend     = %u\n", (unsigned)c.wf_floor_blend);
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
+    APP("wf_speed_mult      = %u\n", (unsigned)c.wf_speed_mult);
     APP("display_flip       = %s\n", yn(c.display_flip));
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
@@ -82,10 +94,17 @@ char *config_io_export(size_t *out_len)
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
     APP("display_sleep_min  = %u\n", (unsigned)c.display_sleep_min);
+    APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
+    APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
+    APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
+    /* #302: 0 = 14.074.000, 1 = 14,074,000 */
+    APP("freq_sep_style     = %u\n", (unsigned)c.freq_sep_style);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
     APP("qrz_key            = %s\n", c.qrz_api_key);
+    APP("qrz_lookup_user    = %s\n", c.qrz_lookup_user);
+    APP("qrz_lookup_pass    = %s\n", c.qrz_lookup_pass);
     APP("eqsl_user          = %s\n", c.eqsl_user);
     APP("eqsl_pass          = %s\n", c.eqsl_pswd);
     APP("cloudlog_url       = %s\n", c.cloudlog_url);
@@ -96,6 +115,57 @@ char *config_io_export(size_t *out_len)
     APP("lotw_ituz          = %s\n", c.lotw_ituz);
     APP("lotw_state         = %s\n", c.lotw_state);
     APP("lotw_county        = %s\n", c.lotw_county);
+    /* ⛔ EVERYTHING BELOW WAS MISSING FROM THE BACKUP UNTIL 2026-09-18.
+     *
+     * Found by auditing qmx_settings_t against this file field by field, after
+     * Bruce N9JCV lost his WSPR power calibration across an update and asked
+     * whether that was intentional. It was not - and the audit turned up 30
+     * more settings in the same state, several of them a year old. A setting
+     * that is not here is one the operator can only get back by remembering it.
+     *
+     * ⚠ tx_tone_hz and tx_tone_hold were WORSE than missing: the importer has
+     * always accepted them and the exporter never wrote them, so a
+     * save-and-restore silently reverted both. Add the two halves in the SAME
+     * commit - the import and export key sets must be equal, and a diff of the
+     * two is the cheapest test there is. */
+    APP("bandplan_region    = %u\n", (unsigned)c.bandplan_region);   // 0=auto 1=R1 2=R2 3=R3
+    APP("tune_snap_hz       = %u\n", (unsigned)c.tune_snap_hz);   // 0=off, else 250/500/1000
+    APP("rit_pill           = %s\n", yn(c.rit_pill_show));
+    APP("spur_mode          = %u\n", (unsigned)c.spur_mode);   // 0=off 1=subtract 2=interpolate
+    APP("cw_decode          = %s\n", yn(c.cw_decode_en));
+    APP("spots_mode_filter  = %s\n", yn(c.spots_mode_filter));
+    APP("drawer_expert      = %s\n", yn(c.drawer_expert));
+    APP("distance_in_miles  = %s\n", yn(c.distance_in_miles));
+    APP("freq_keypad_small  = %s\n", yn(c.freq_kp_small));
+    APP("freq_keypad_dx     = %d\n", (int)c.freq_kp_dx);
+    APP("freq_keypad_dy     = %d\n", (int)c.freq_kp_dy);
+
+    APP("ft8_mode           = %u\n", (unsigned)c.ft8_op_mode);   // 0=FT8 1=FT4
+    APP("ft8_early_decode   = %s\n", yn(c.ft8_early_decode));
+    APP("ft8_greylist       = %s\n", yn(c.greylist_en));
+    APP("pskreporter        = %s\n", yn(c.pskreporter_en));
+    APP("tx_tone_hz         = %u\n", (unsigned)c.tx_tone_hz);
+    APP("tx_tone_hold       = %s\n", yn(c.tx_tone_hold));
+    /* Exported because this file is a BACKUP, not a recommendation. Restoring
+       it ON means the red bezel is on screen and the radio is not keyed, which
+       is visible and safe; dropping it silently would mean a restored unit
+       behaves differently from the one that was saved. */
+    APP("sim_mode           = %s\n", yn(c.sim_mode_en));
+    APP("field_day          = %s\n", yn(c.field_day_en));
+    APP("fd_class           = %s\n", c.fd_class);
+    APP("fd_section         = %s\n", c.fd_section);
+    APP("activation_type    = %u\n", (unsigned)c.act_type);   // 0=none 1=POTA 2=SOTA
+    APP("activation_ref     = %s\n", c.act_ref);
+
+    APP("wspr_dial_hz       = %lu\n", (unsigned long)c.wspr_dial_hz);
+    APP("wspr_tx            = %s\n", yn(c.wspr_tx_en));
+    APP("wspr_tx_dbm        = %d\n", (int)c.wspr_tx_dbm);
+    APP("wspr_tx_cycles     = %u\n", (unsigned)c.wspr_tx_cycles);   // 0 = receive only
+    APP("wspr_rx_cycles     = %u\n", (unsigned)c.wspr_rx_cycles);
+    APP("wspr_band_hop      = %s\n", yn(c.wspr_hop_en));
+    APP("wspr_hop_mask      = %u\n", (unsigned)c.wspr_hop_mask);
+    APP("wspr_publish       = %s\n", yn(c.wspr_net_en));
+
     // LoTW callsign cert + private key, single-line base64 DER (full-backup
     // decision: the config file already carries wifi/qrz/eqsl secrets in
     // clear, and this makes a restore complete). Omitted when not imported.
@@ -130,6 +200,59 @@ char *config_io_export(size_t *out_len)
     APP("exclude_plain_cq      = %s\n", yn(c.ft8_filters.excl_plain_cq));
     APP("only_cq               = %s\n", yn(c.ft8_filters.incl_cq_only));
 
+    /* ⭐ THE POWER CALIBRATION - the reason this whole audit happened.
+     *
+     * It is MEASURED DATA: an hour at a dummy load, per band. It lived only in
+     * NVS, so losing it meant doing the measurement again, and nothing else in
+     * this file costs that much to recreate. Bruce N9JCV lost his across an
+     * update and there was no way to put it back.
+     *
+     * One line per band, and only the points actually reached: "v:w" pairs in
+     * tenths of a volt and hundredths of a watt - the units the table itself
+     * stores, so the file is exact rather than rounded through a decimal.
+     *
+     * ⛔ Written as a LIST, not a fixed-width row, and that is deliberate.
+     * PWRCAL_STEPS has already changed once (23 -> 45, inside v1.14.0), which
+     * makes the NVS blob unreadable across that change by design - see the
+     * discard in settings_load_all(). A file of v:w pairs survives it, so this
+     * export is also the migration path the blob cannot have.
+     *
+     * ⚠ cal_unix_time is deliberately NOT carried. It records when the
+     * measurement was taken on THIS radio, and a restore is not a measurement.
+     */
+    APP("\n[power_cal]\n");
+    APP("# An empty value removes that band. Names are case-insensitive.\n");
+    APP("# band = volt_x10:watts_x100, ...   (measured at a dummy load)\n");
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        const pwr_cal_band_t *r = &c.pwr_cal.bands[i];
+        if (!r->band[0]) continue;
+        bool any = false;
+        for (int k = 0; k < PWRCAL_STEPS; k++) if (r->voltage_x10[k]) { any = true; break; }
+        if (!any) continue;
+        APP("%s =", r->band);
+        bool first = true;
+        for (int k = 0; k < PWRCAL_STEPS; k++) {
+            if (!r->voltage_x10[k]) continue;
+            APP("%s%u:%u", first ? " " : ", ",
+                (unsigned)r->voltage_x10[k], (unsigned)r->watts_x100[k]);
+            first = false;
+        }
+        APP("\n");
+    }
+
+    /* The operator's own "I want N watts on this band" - a PREFERENCE, kept
+       separate from the measurement above on purpose (see the type's comment
+       in settings.h: it survives a recalibration or a different radio). */
+    APP("\n[power_target]\n");
+    APP("# An empty value removes that band. Names are case-insensitive.\n");
+    APP("# band = watts   (what you asked for, not what was measured)\n");
+    for (int i = 0; i < PWRCAL_MAX_BANDS; i++) {
+        const pwr_target_band_t *t = &c.pwr_target.bands[i];
+        if (!t->band[0] || !t->target_w_x100) continue;
+        APP("%s = %u.%02u\n", t->band,
+            (unsigned)(t->target_w_x100 / 100), (unsigned)(t->target_w_x100 % 100));
+    }
+
     APP("\n[memories]\n");
     APP("# slot = freq_hz, mode, label   (mode e.g. USB/LSB/CW/DiGi)\n");
     for (int i = 0; i < MEM_SLOTS; i++) {
@@ -141,7 +264,11 @@ char *config_io_export(size_t *out_len)
     }
     #undef APP
 
-    if (n >= cap) n = cap - 1;
+    if (n >= cap) {
+        ESP_LOGE(TAG, "config export TRUNCATED at %d bytes - raise CFG_BUF_BYTES. "
+                      "This file is incomplete; do not keep it as a backup.", cap);
+        n = cap - 1;
+    }
     buf[n] = '\0';
     if (out_len) *out_len = (size_t)n;
     ESP_LOGI(TAG, "exported config (%d bytes)", n);
@@ -163,7 +290,8 @@ static bool to_bool(const char *v)
            strcasecmp(v, "yes") == 0  || strcasecmp(v, "on") == 0;
 }
 
-typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_FILTERS, SEC_MEM, SEC_WIFI_KNOWN } section_t;
+typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_FILTERS, SEC_MEM, SEC_WIFI_KNOWN,
+               SEC_PWR_CAL, SEC_PWR_TARGET } section_t;
 
 int config_io_import(char *text)
 {
@@ -194,6 +322,15 @@ int config_io_import(char *text)
     memset(known, 0, sizeof(known));
     int  known_n = 0;
     bool known_touched = false;
+    /* Buffered pairs: both of these are set through a single call that takes
+       every component at once, so a file carrying only one of them must not
+       zero the other. Same shape as the static-IP quartet above. */
+    int16_t kp_dx = cur.freq_kp_dx, kp_dy = cur.freq_kp_dy;
+    bool    kp_touched = false;
+    uint8_t act_type = cur.act_type;
+    char    act_ref[16];
+    bool    act_touched = false;
+    snprintf(act_ref, sizeof act_ref, "%s", cur.act_ref);
 
     section_t sec = SEC_NONE;
     int applied = 0;
@@ -212,6 +349,8 @@ int config_io_import(char *text)
             else if (strcasecmp(name, "ft8_filters") == 0) sec = SEC_FILTERS;
             else if (strcasecmp(name, "memories") == 0)    sec = SEC_MEM;
             else if (strcasecmp(name, "wifi_known") == 0)  sec = SEC_WIFI_KNOWN;
+            else if (strcasecmp(name, "power_cal") == 0)    sec = SEC_PWR_CAL;
+            else if (strcasecmp(name, "power_target") == 0) sec = SEC_PWR_TARGET;
             else sec = SEC_NONE;
             continue;
         }
@@ -242,8 +381,14 @@ int config_io_import(char *text)
                                                               settings_set_still_notice_done(true); }
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
+            else if (!strcasecmp(key, "spot_map"))          settings_set_spotmap_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
             else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
+            /* ⛔ DEAD KEY, kept only so an old config file still imports without
+               a surprise. The quiet auto-download was removed in v1.14.4 and
+               settings_set_ota_autodl() now changes nothing that runs. It has
+               no APP() on purpose - do NOT "fix" the asymmetry by adding one,
+               which would write a removed feature back into every backup. */
             else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));
@@ -255,6 +400,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_contrast_db"))    settings_set_wf_contrast_db((float)atof(val));
             else if (!strcasecmp(key, "wf_floor_blend"))    settings_set_wf_floor_blend((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "wf_speed_mult"))     settings_set_wf_speed_mult((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
@@ -268,10 +414,26 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "tx_tone_hz"))        settings_set_tx_tone_hz((uint16_t)atoi(val));
             else if (!strcasecmp(key, "tx_tone_hold"))      settings_set_tx_tone_hold(to_bool(val));
             else if (!strcasecmp(key, "display_sleep_min")) settings_set_display_sleep_min((uint8_t)atoi(val));
+            // The relay's three fields share one setter (they share a dirty
+            // bit), but an INI is read a line at a time and the keys may
+            // arrive in any order or singly - so each one re-reads the other
+            // two and writes the trio back.
+            else if (!strcasecmp(key, "relay_pin") || !strcasecmp(key, "relay_active_high") ||
+                     !strcasecmp(key, "relay_ms")) {
+                uint8_t rp; bool rl; uint16_t rms;
+                settings_get_gpio_relay(&rp, &rl, &rms);
+                if (!strcasecmp(key, "relay_pin"))              rp  = (uint8_t)atoi(val);
+                else if (!strcasecmp(key, "relay_active_high")) rl  = to_bool(val);
+                else                                            rms = (uint16_t)atoi(val);
+                settings_set_gpio_relay(rp, rl, rms);
+            }
+            else if (!strcasecmp(key, "freq_sep_style"))    settings_set_freq_sep_style((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));
             else if (!strcasecmp(key, "qrz_key"))           settings_set_qrz_api_key(val);
+            else if (!strcasecmp(key, "qrz_lookup_user"))   settings_set_qrz_lookup_user(val);
+            else if (!strcasecmp(key, "qrz_lookup_pass"))   settings_set_qrz_lookup_pass(val);
             else if (!strcasecmp(key, "eqsl_user"))         settings_set_eqsl_user(val);
             else if (!strcasecmp(key, "eqsl_pass"))         settings_set_eqsl_pswd(val);
             else if (!strcasecmp(key, "cloudlog_url"))      settings_set_cloudlog_url(val);
@@ -284,6 +446,41 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "lotw_county"))       settings_set_lotw_county(val);
             else if (!strcasecmp(key, "lotw_cert"))         lotw_store_cert_b64(val);
             else if (!strcasecmp(key, "lotw_key"))          lotw_store_key_b64(val);
+            /* The 2026-09-18 audit. Every one of these has a matching APP() in
+               the export - keep it that way; see the note beside them there. */
+            else if (!strcasecmp(key, "bandplan_region"))   settings_set_bandplan_region((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "tune_snap_hz"))      settings_set_tune_snap_hz((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "rit_pill"))          settings_set_rit_pill_show(to_bool(val));
+            else if (!strcasecmp(key, "spur_mode"))         settings_set_spur_mode((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "cw_decode"))         settings_set_cw_decode_en(to_bool(val));
+            else if (!strcasecmp(key, "spots_mode_filter")) settings_set_spots_mode_filter(to_bool(val));
+            else if (!strcasecmp(key, "drawer_expert"))     settings_set_drawer_expert(to_bool(val));
+            else if (!strcasecmp(key, "distance_in_miles")) settings_set_distance_in_miles(to_bool(val));
+            else if (!strcasecmp(key, "freq_keypad_small")) settings_set_freq_kp_small(to_bool(val));
+            /* dx/dy are one call, so the pair is buffered and applied at the
+               end - the same shape the static-IP quartet already uses. */
+            else if (!strcasecmp(key, "freq_keypad_dx"))  { kp_dx = (int16_t)atoi(val); kp_touched = true; }
+            else if (!strcasecmp(key, "freq_keypad_dy"))  { kp_dy = (int16_t)atoi(val); kp_touched = true; }
+            else if (!strcasecmp(key, "ft8_mode"))          settings_set_ft8_op_mode((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "ft8_early_decode"))  settings_set_ft8_early_decode(to_bool(val));
+            else if (!strcasecmp(key, "ft8_greylist"))      settings_set_greylist_en(to_bool(val));
+            else if (!strcasecmp(key, "pskreporter"))       settings_set_pskreporter_en(to_bool(val));
+            else if (!strcasecmp(key, "sim_mode"))          settings_set_sim_mode_en(to_bool(val));
+            else if (!strcasecmp(key, "field_day"))         settings_set_field_day_en(to_bool(val));
+            else if (!strcasecmp(key, "fd_class"))          settings_set_fd_class(val);
+            else if (!strcasecmp(key, "fd_section"))        settings_set_fd_section(val);
+            /* type and ref are one call too, and a type with no ref is
+               meaningless - buffered and applied together at the end. */
+            else if (!strcasecmp(key, "activation_type"))  { act_type = (uint8_t)atoi(val); act_touched = true; }
+            else if (!strcasecmp(key, "activation_ref"))   { snprintf(act_ref, sizeof act_ref, "%s", val); act_touched = true; }
+            else if (!strcasecmp(key, "wspr_dial_hz"))      settings_set_wspr_dial_hz((uint32_t)strtoul(val, NULL, 10));
+            else if (!strcasecmp(key, "wspr_tx"))           settings_set_wspr_tx_en(to_bool(val));
+            else if (!strcasecmp(key, "wspr_tx_dbm"))       settings_set_wspr_tx_dbm((int8_t)atoi(val));
+            else if (!strcasecmp(key, "wspr_tx_cycles"))    settings_set_wspr_tx_cycles((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "wspr_rx_cycles"))    settings_set_wspr_rx_cycles((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "wspr_band_hop"))     settings_set_wspr_hop_en(to_bool(val));
+            else if (!strcasecmp(key, "wspr_hop_mask"))     settings_set_wspr_hop_mask((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "wspr_publish"))      settings_set_wspr_net_en(to_bool(val));
             else break;   // unknown key: ignore, don't count
             applied++;
             break;
@@ -369,6 +566,49 @@ int config_io_import(char *text)
             break;
         }
 
+        case SEC_PWR_CAL: {
+            /* "band = v:w, v:w, ..." - see the export for why it is a list.
+               Points arrive in whatever order the file has them and land in
+               the row's own step order, so a file written by a firmware with a
+               different PWRCAL_STEPS still restores every point that fits. */
+            uint8_t  volts[PWRCAL_STEPS] = {0};
+            uint16_t watts[PWRCAL_STEPS] = {0};
+            int      k = 0;
+            for (char *tok = strtok(val, ","); tok && k < PWRCAL_STEPS; tok = strtok(NULL, ",")) {
+                char *t = trim(tok);
+                char *colon = strchr(t, ':');
+                if (!colon) continue;
+                *colon = '\0';
+                int v = atoi(trim(t));
+                int w = atoi(trim(colon + 1));
+                /* A voltage of 0 is the "unset" marker in the row itself, so a
+                   zero here is not a measurement - drop it rather than store a
+                   point that reads as absent. Same "never fabricate" rule the
+                   blob discard follows. */
+                if (v <= 0 || v > 255 || w < 0 || w > 65535) continue;
+                volts[k] = (uint8_t)v;
+                watts[k] = (uint16_t)w;
+                k++;
+            }
+            /* Called even with k == 0: an empty value ("20m =") is how a band
+               is REMOVED from the file, and the setter reads an all-zero sweep
+               as exactly that. */
+            settings_set_pwr_cal_band(key, volts, watts);
+            applied++;
+            break;
+        }
+
+        case SEC_PWR_TARGET: {
+            /* "band = 1.50" watts. Parsed as hundredths so the stored unit and
+               the printed one round-trip exactly. */
+            double w = atof(val);
+            if (w >= 0.0 && w < 655.0) {
+                settings_set_pwr_target_watts(key, (uint16_t)(w * 100.0 + 0.5));
+                applied++;
+            }
+            break;
+        }
+
         default: break;
         }
     }
@@ -377,6 +617,8 @@ int config_io_import(char *text)
     if (sip_touched)  settings_set_wifi_static(sip, smask, sgw, sdns);
     // Applied wholesale, in file order: see the buffer's declaration.
     if (known_touched) settings_wifi_known_set_all(known, known_n);
+    if (kp_touched)  settings_set_freq_kp_pos(kp_dx, kp_dy);
+    if (act_touched) settings_set_activation(act_type, act_ref);
     settings_flush();
     ESP_LOGI(TAG, "imported config: %d keys/slots applied", applied);
     return applied;

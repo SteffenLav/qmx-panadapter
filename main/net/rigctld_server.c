@@ -208,7 +208,15 @@ static void handle_line(int fd, char *line)
             int n = sscanf(args, "%15s %lu", mode, &pb);
             esp_err_t err = ESP_ERR_INVALID_ARG;
             if (n >= 1) {
-                err = cat_set_mode(mode);
+                /* Deferred through the poll task for the same reason as the
+                 * web path: cat_set_mode() shares the 200 ms rate limit with
+                 * cat_set_frequency(), so a client that sets frequency and mode
+                 * together - which is what WSJT-X and fldigi do - loses the
+                 * mode. cat_request_mode() cannot report failure, so keep
+                 * reporting success: rigctld's RPRT is about whether the
+                 * command was understood. */
+                cat_request_mode(mode);
+                err = ESP_OK;
                 if (err == ESP_OK && n == 2 && pb > 0) {
                     /* Best-effort passband set; ignore failure */
                     (void)cat_set_passband_hz((uint32_t)pb);

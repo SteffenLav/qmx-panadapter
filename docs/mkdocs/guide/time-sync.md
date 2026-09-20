@@ -16,7 +16,7 @@ GPS and SNTP are the two accurate sources and are used whenever present; if you'
 
 If you're operating **without WiFi** (POTA, portable, SOTA):
 
-1. **Set the Tab5 RTC before you leave home** (settings → Time)
+1. **Set the Tab5 RTC before you leave home** (settings -> Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
 4. **Turn the QMX on whenever you like — you do not have to do anything about its
@@ -39,7 +39,25 @@ No internet needed — FT8 timing works offline.
     If you have no accurate time at all — the RTC was never set, or it has been
     unpowered for more than a day or two — then a QMX reading *is* used, because
     something is better than nothing. Failing that, set the clock by hand
-    (**FT8 → Options → Sync Time**), which also accepts seconds.
+    (**FT8 -> Options -> Sync Time**), which also accepts seconds.
+
+!!! warning "The date is checked separately from the time"
+
+    The QMX, its GPS and the hours/minutes/seconds boxes all give only a
+    **time of day**. If the Tab5 has been off longer than its clock lasts and
+    there is no internet, the date it has is simply the last day it was used —
+    so a perfectly set time can still be logged under the wrong day.
+    Reported by Don WB0LQW, whose POTA log came out two days behind.
+
+    So when the date cannot be checked, the Tab5 asks about a minute after it
+    starts: **"Is today's date right?"** Step it with **- day / + day** if
+    needed and tap **This date is right**. If WiFi comes up while the question
+    is on screen, it closes by itself. QSOs are still logged if you do not
+    answer — nothing is ever held back.
+
+    The **Set and Sync the Clock** window also shows the date on its second
+    line, marked *(unverified)* when it has not been checked. Tap that line to
+    change it.
 
 ### 3. WiFi + SNTP
 
@@ -170,9 +188,9 @@ FT8 operates on **15-second slot boundaries** aligned to UTC. The panadapter:
 
 This alignment is **automatic** — you don't configure slots. But **time accuracy is critical**:
 
-- ±500 ms error → can miss decodes or transmit off-slot
-- ±1 s error → very few decodes, transmit often off-time
-- ±2 s error or worse → FT8 doesn't work
+- ±500 ms error -> can miss decodes or transmit off-slot
+- ±1 s error -> very few decodes, transmit often off-time
+- ±2 s error or worse -> FT8 doesn't work
 
 ### 9. Time Sources Summary
 

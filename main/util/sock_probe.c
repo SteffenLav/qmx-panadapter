@@ -1,4 +1,7 @@
 #include "sock_probe.h"
+#include "sock_owners.h"
+
+#include "esp_timer.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -39,6 +42,11 @@ int sock_probe_free(int cap)
 void sock_probe_report(void)
 {
     static bool s_was_exhausted = false;
+
+    /* The leak is visible long before the wedge - see sock_owners.h for the
+     * fd-creep evidence - so look every tick and speak only on a new high. */
+    sock_owners_highwater_check();
+
     bool now = sock_probe_exhausted();
 
     if (now == s_was_exhausted) return;   // change-detected: silence when healthy
@@ -53,7 +61,28 @@ void sock_probe_report(void)
                       "allocated. Every listener (web server on 80, rigctld on "
                       "4532) has stopped accepting; ping and the radio are "
                       "unaffected. This is #313.");
+        /* ⭐ And say WHO has them. The 2026-09-06 reproduction proved this line
+         * alone is not enough: it fired four times over the night and the log
+         * still could not name a single holder, so the leak stayed a guess.
+         * The dump costs no socket, which is the one thing a probe here may
+         * not do. */
+        sock_owners_report("exhausted");
     } else {
         ESP_LOGW(TAG, "LWIP socket table recovered - sockets available again");
     }
+}
+
+/* See the header: the point is the RATE, not the probe. */
+int sock_probe_free_cached(int cap, int max_age_ms)
+{
+    static int64_t last_us;
+    static int     last_val = -1;
+
+    int64_t now = esp_timer_get_time();
+    if (last_val >= 0 && (now - last_us) < (int64_t)max_age_ms * 1000)
+        return last_val;
+
+    last_val = sock_probe_free(cap);
+    last_us  = now;
+    return last_val;
 }

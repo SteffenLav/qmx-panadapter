@@ -66,6 +66,14 @@ When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum strea
 
 The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
+**A finished QSO waits for you.** When an exchange completes, the browser shows
+`<callsign>  QSO complete` in green and **leaves it there** until you do
+something else — every other message in that line clears itself after twenty
+seconds, this one does not. The radio does not wait: it returns to idle and
+carries on. The message is a record that the contact finished, kept for whoever
+walks back into the room *(Randy N4OPI)*. The Tab5's own label is unchanged; it
+is only the browser that has to cope with nobody watching.
+
 ### Live spots on the browser spectrum
 
 The **POTA** and **RBN** spots the Tab5 draws on its own
@@ -131,7 +139,7 @@ another room.
 
 If you left the Tab5 in FT8/FT4 and want the spectrum
 back, use the **Radio** menu in the bottom bar — it carries the
-Panadapter ↔ FT8 switch.
+Panadapter <-> FT8 switch.
 
 Next to **Call CQ** is **TXCQ ANY / EVEN / ODD**, which chooses the 15-second
 slot your CQ transmits in — the same three states as the button on the Tab5,
@@ -200,12 +208,24 @@ it: a channel you cannot legally tune is worse than no channel.
 ## Antenna Tune from the browser (QMX 1.04+)
 
 With a QMX on firmware 1.04+, an **Antenna Tune** button
-appears in the bottom bar. It **keys the radio with a steady carrier**, so it
-confirms first - and while running, the button itself becomes the readout:
-**live power and SWR**, click again to stop. Both ends carry a **60-second
-safety stop**: the device's own timer fires even if the browser tab dies, and
-the radio's prior mode is restored, never left keyed. Stopping Tune from the
-QMX's own front panel is honoured too.
+appears in the bottom bar. It **keys the radio with a steady carrier** the
+moment you click it - there is no confirmation step, because tuning into a load
+is an ordinary part of operating and the 60-second stop is the real safety net.
+
+While it runs, a **panel appears in the middle of the page** with the live
+**SWR**, the **power** in watts, and the **seconds left** before the tune stops
+itself, plus a **STOP Tune** button. The panel stays up whatever else you click,
+so you can keep both hands on an ATU and still read the SWR; the rest of the
+page carries on working underneath it. The SWR figure is also colour-coded -
+green below 1.5, amber below 2.5, red above - and the number itself is always
+shown, so the colour is never the only thing telling you.
+
+The bottom-bar button doubles as the same readout and the same stop, for when
+the menu happens to be open.
+
+Both ends carry a **60-second safety stop**: the device's own timer fires even
+if the browser tab dies, and the radio's prior mode is restored, never left
+keyed. Stopping Tune from the QMX's own front panel is honoured too.
 
 ## Settings, with a real keyboard
 
@@ -267,10 +287,10 @@ never navigates for you.
 The **CAT** section lets you send raw Kenwood-style commands directly to the QMX:
 
 ```
-FA;        → reads current frequency
-FA14074000;  → sets frequency to 14.074 MHz
-MD;        → reads current mode
-MD2;       → sets USB mode
+FA;        -> reads current frequency
+FA14074000;  -> sets frequency to 14.074 MHz
+MD;        -> reads current mode
+MD2;       -> sets USB mode
 ```
 
 This is for advanced troubleshooting — most users don't need it.
@@ -283,7 +303,8 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **Today only, dated file ↓** — just today's contacts, named `qso-YYYY-MM-DD.adi`. For anyone who files each day's log separately, the date is already in the filename rather than something to add by hand afterwards *(Gyula HA3HZ)*
-- **ADIF restore ↑** — merges a previously downloaded (or any logger's) ADIF file back into the log, skipping any contact already there (matched on callsign, date and time). For after an erase-and-reinstall: **Config upload** never touches the QSO log on purpose, so this is the only way to get worked-station history back *(Randy N4OPI)*. A prompt lets you say whether the restored contacts should be marked as already uploaded to QRZ/eQSL/LoTW (the usual answer is yes, since "restore" almost always means a log that was already sent) or as not-yet-uploaded, so the next upload sends them
+- **ADIF restore ↑** — merges a previously downloaded (or any logger's) ADIF file back into the log, skipping any contact already there (matched on callsign, date and time). For after an erase-and-reinstall: **Config upload** never touches the QSO log on purpose, so this is the only way to get worked-station history back *(Randy N4OPI)*. A prompt lets you say whether the restored contacts should be marked as already uploaded to QRZ/eQSL/LoTW (the usual answer is yes, since "restore" almost always means a log that was already sent) or as not-yet-uploaded, so the next upload sends them. **From v1.11.3 the first prompt asks whether the file contains *corrections*.** Say yes and a contact already logged with the same callsign, date and time is **replaced** by the version in the file, instead of being skipped as a duplicate — which is what a merge otherwise has to do, since a correction keeps the very fields it is matched on. This is the way to repair records in another logger and put them back *(Gyula HA3HZ: "the corrected file cannot be installed, the previous incorrect version remains")*. Corrected contacts are sent to QRZ/eQSL/LoTW again afterwards, because the copy held there is the one carrying the error, and all three ignore a repeat. Callsign, date and time still cannot be changed this way — a contact with a wrong date is a different contact
+- **↳ Restore from SD card** — the same merge, but read straight off the microSD card the Tab5 already backs up to, with no file to find and nothing to choose. Contacts already logged are skipped, so pressing it twice does nothing. The card mirrors the *present*, so a deletion that survives a restart is on the card too — which is why the copy from just before the log last got smaller is kept beside it as `qso.prev.adi` (download it from **Files ▲ -> SD Files** and feed it to **ADIF restore ↑** if you need it) *(Gyula HA3HZ)*
 - **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
 - **↳ Change QRZ API key** — appears once a key is stored, and replaces it. New in v1.8.3: before that the prompt only ever appeared when *nothing* was stored, so a key typed wrongly or later reissued could not be changed from the page at all (reported by Brian WA6JFK)
 - **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
@@ -291,7 +312,8 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **LoTW setup** / **LoTW ↑** — upload ADIF to ARRL's Logbook of The World (see [LoTW Upload](#lotw-upload) below)
 - **Cloudlog upload ↑** — upload to your own Cloudlog or Wavelog. Asks for the server address, your API key and the station profile ID on first use. Plain `http://` is accepted for a server on the same network as the Tab5, given as a numeric address such as `http://192.168.1.20`; anything else needs `https://`. The check is repeated at every upload, so away from home the upload refuses instead of sending your key across someone else's network. If the server is on your own LAN this is the only upload that needs no internet at all *(Mark G4MEM)*
 - **↳ Change Cloudlog server** — appears once a server is stored, and replaces the address, key and station profile
-- **View / edit log** — opens the QSO log right in the browser (call, mode, band, frequency, date/time, reports, grid — newest first). **Click any column header to sort** by it (click again to reverse) — sorting by Date groups an activation's QSOs together. Each row has a ✕ to delete that one record, and a **Delete all** button clears the whole log (no undo, so it asks you to type `DELETE` to confirm — download the ADIF first if you want a copy). Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit. **Three columns are editable** — the two reports and **Their ref**. Click one and type the corrected value, or leave it empty (for a report, that records that none was exchanged). **Their ref** is the park or summit the *other* station was activating: while you are operating, that reference is on the POTA spots page on your phone and in nothing the radio sends you, so you write it down and enter it when you get home *(Don Adams WB0LQW)*. It fills itself in when the contact came from a spot, whether or not you were activating yourself — that is what the ADIF `SIG`/`SIG_INFO` fields mean, and a hunter's log should say which park they worked. It is only *Park-to-Park* when you were in a park too, which is why the column is not called that. **An empty cell is not a fault**: the reference comes from the POTA spot feed matched on the exact callsign, and not everyone activating in a digital mode registers the activation — some simply start calling `CQ POTA` — so an unregistered activator produces no reference at all rather than a wrong one *(Don Adams WB0LQW)*. Type it in by hand if you have it. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go with it. Nothing else can be changed: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so those stay read-only and a wrong one is a delete-and-re-log. If the QSO has already been uploaded, an edit corrects the Tab5's log only — the copy the logbook holds is unchanged *(Gyula HA3HZ)*
+- **Check log** — looks through the log for records that are missing something a programme will want: a callsign, a date that is not in the right form, no station callsign, a reference that does not look like a reference, or — if you say you were activating — no reference of your own. It asks which of those two you mean when you press it. It can only tell you a record is not *obviously* incomplete: the Tab5 cannot see POTA's or SOTA's rules or their databases, so it never tells you a file will be accepted. Born from *"I wish POTA and SOTA had a feature allowing you to test your file for syntax and completeness without submitting it for credit"* — two trips to a park to get contacts to test with *(Don Adams WB0LQW)*. The Tab5's own Activation panel shows the same count under the contact total, so you can read it without a laptop.
+- **View / edit log** — opens the QSO log right in the browser (call, mode, band, frequency, date/time, reports, grid — newest first). **Click any column header to sort** by it (click again to reverse) — sorting by Date groups an activation's QSOs together. **Search** filters the list as you type, matching any part of a callsign, band, mode, date, grid or reference; several words must all match, so `ea 20m` narrows to Spanish contacts on 20 m. A search that finds nothing says so — *"so this one has not been worked"* — which is the question worth asking of a log *(Gyula HA3HZ)*. **Tick the box on any row** and **Export selected** saves just those contacts as an ADIF file on your computer; the box in the header ticks everything **currently shown**, so a search and one tick gives you a single day, band or park as its own file. The export carries each record exactly as the Tab5 wrote it, so fields the table does not display are preserved. Each row has a ✕ to delete that one record, and a **Delete all** button clears the whole log (no undo, so it asks you to type `DELETE` to confirm — download the ADIF first if you want a copy). Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit. **Every field is editable** *(Gyula HA3HZ)* — the two reports, **Grid**, **Their ref**, and from v1.12.0 also the callsign, band, mode, frequency, date and time. Which record a logbook matches is a decision for the logbook, not one the Tab5 should make on its behalf. **Be aware of what that means**: callsign, band, mode, date and time are exactly what QRZ, eQSL and LoTW match a contact on, so changing one of those turns the record into a different contact as far as they are concerned. If the QSO has already been uploaded, the copy the logbook holds is unchanged. Click one and type the corrected value, or leave it empty (for a report, that records that none was exchanged). **Their ref** is the park or summit the *other* station was activating: while you are operating, that reference is on the POTA spots page on your phone and in nothing the radio sends you, so you write it down and enter it when you get home *(Don Adams WB0LQW)*. It fills itself in when the contact came from a spot, whether or not you were activating yourself — that is what the ADIF `SIG`/`SIG_INFO` fields mean, and a hunter's log should say which park they worked. It is only *Park-to-Park* when you were in a park too, which is why the column is not called that. **An empty cell is not a fault**: the reference comes from the POTA spot feed matched on the exact callsign, and not everyone activating in a digital mode registers the activation — some simply start calling `CQ POTA` — so an unregistered activator produces no reference at all rather than a wrong one *(Don Adams WB0LQW)*. Type it in by hand if you have it. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go with it. **Grid** is the other station's locator, correctable because it is the field most likely to be wrong through no fault of yours — a partner's grid arrives once, in their first message, and a marginal contact can complete without it ever being heard cleanly *(Gyula HA3HZ, who was correcting them in ADIFMaster)*. It is checked as a real Maidenhead locator, four or six characters, and refused otherwise: it drives distance and bearing on both screens and goes to three logbooks, so a typo would be a wrong measurement presented as a real one. Clearing it removes the field, which is the honest state when no grid was ever exchanged. Malformed values are refused rather than stored: a date must be eight digits, a time four or six, and a grid a real Maidenhead locator — those fields drive distance, bearing and three logbook uploads, so a typo would become a wrong measurement presented as a real one.
 
 **Files ▲**:
 
@@ -314,9 +336,89 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
+
+    !!! warning "Experimenter feature — you fit the connector yourself"
+        **The QMX does not have a PWR_ON/GND jack.** Those signals have to be
+        extended from the main board out to a connector you add yourself. Do not
+        go looking for an existing socket, and do not connect them to some other
+        connector that looks plausible *(Randy N4OPI)*. Randy has documented the
+        whole modification, including a schematic — see
+        [Power-cycle relay: building the interface](#power-cycle-relay-building-the-interface)
+        below.
+
+        Both pins are held as **driven outputs** from boot — they never float.
+        From v1.11.3 they rest on the **inactive side of the active level you
+        have chosen**, so a relay wired to them cannot be closed by the Tab5
+        booting, crashing or being reflashed. Before v1.11.3 they always rested
+        LOW, which for an active-Low setting meant the relay was held **closed**
+        from power-on until the first pulse released it *(Randy N4OPI)*.
+        Changing the active level re-applies the resting level immediately.
 - **Keyboard shortcuts** — assign what the Tab5's snap-on keyboard does (see below)
 - **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
 - **Reset WiFi** — clear just the WiFi/network state
+
+### Power-cycle relay: building the interface
+
+*Designed, built and documented by **Randy N4OPI**, and published here with his
+permission. The Tab5 side of this — the pin, the level and the pulse length —
+is all the firmware does; everything below is the hardware that turns a pulse
+into a QMX that switches itself on.*
+
+**Why bother.** A Tab5 firmware upgrade is a warm reset, and a warm reset with
+the radio attached always leaves the QMX needing a manual power cycle. That one
+step is what otherwise keeps a remote station from being upgradeable from
+another room — or another country.
+
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
+
+#### Parts
+
+| Ref | Part | Notes |
+|-----|------|-------|
+| P1 | 4-pin Grove plug (HY2.0-4P) | Into the Tab5's side EXT socket. Its four pins are `EXT 5V`, `G53`, `G54`, `GND` |
+| R1 | 100 Ω, ¼ W, 5 % | In series with the optoisolator's LED |
+| U1 | PC817C optoisolator | Keeps the Tab5 and the radio electrically apart — the reason this is safe |
+| J1 | 3.5 mm stereo audio jack | The output side, mounted on the module — **not** the jack that goes in the radio |
+| — | 3.5 mm to 2.5 mm TRS patch cable | Joins the module's 3.5 mm jack to the 2.5 mm jack in the radio. Tip to tip, sleeve to sleeve |
+
+#### Wiring
+
+1. **In the radio.** Fit a **2.5 mm TRS jack** somewhere accessible on the case
+   and wire it internally: **tip to `PWR_ON`, sleeve to `GND`**. This is the
+   only irreversible part of the job, and the only part that involves opening
+   the QMX. Randy brought his out on the rear panel beside the ATU RF input.
+2. **The interface.** The Tab5 pin you choose — **G53 or G54** — goes through
+   **R1** into the PC817C's LED, with the Grove plug's `GND` completing that
+   side. The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
+   a pulse from the Tab5 briefly connects `PWR_ON` to `GND`. **The
+   phototransistor side is polarity-sensitive — follow the schematic**, and note
+   that the `EXT 5V` pin is not used at all.
+3. **Assembly.** In Randy's words: *"I built it onto a small chunk of
+   breadboard, but with just 2 components it could just as easily be connected
+   point to point and sealed up inside a piece of heatshrink tubing. Make sure
+   you insulate your wires so the heatshrink doesn't squeeze them together and
+   create a short."*
+
+#### Settings that work
+
+In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53** or
+**G54**), active level **High**, and **2000 ms** — *"I've found 2000ms to be
+sufficient"*. The firmware's own default is 1000 ms, so this is one to set and
+save; it is remembered from v1.10.9 on.
+
+!!! note "Why the bottom-edge Dupont pins are not offered"
+    A neater cable run would leave the Tab5's bottom edge rather than the side,
+    and Randy asked about exposing `G0`, `G1`, `G49` and `G50` for it — then
+    talked himself out of it in the same message: *"The Dupont connector isn't
+    keyed, so a person could make a disastrous mistake if they are also trying
+    to power the Tab5 using the 12V IN pin."*
+
+    There is a second reason he could not have known: **`G0` and `G1` are the
+    I2C bus for the snap-on keyboard**, so a relay pulse there would fight a
+    keyboard on any Tab5 that has one. `G53` and `G54` are on a keyed connector
+    and are held as driven outputs from boot, which is what makes them safe to
+    hand to people — so those two are the only pins the firmware will pulse.
 
 ### Keyboard shortcuts
 
@@ -342,9 +444,9 @@ on the very keyboard you are configuring.
 
 Uploading to ARRL's **Logbook of The World** requires an existing LoTW account and a callsign certificate (made with ARRL's TQSL program).
 
-**One-time setup:** open the **QSO Logs** menu → **LoTW setup**. A guided two-page window walks you through it:
+**One-time setup:** open the **QSO Logs** menu -> **LoTW setup**. A guided two-page window walks you through it:
 
-1. **Page 1** explains how to export your callsign certificate from the TQSL program on your PC (**Callsign Certificate → Save the Callsign Certificate**, which produces a `.p12` file), with a button that opens ARRL's own instructions.
+1. **Page 1** explains how to export your callsign certificate from the TQSL program on your PC (**Callsign Certificate -> Save the Callsign Certificate**, which produces a `.p12` file), with a button that opens ARRL's own instructions.
 2. **Page 2** imports the `.p12` file, its passphrase, and your DXCC entity (plus optional CQ/ITU zones, and **US state and county** — see below). The `.p12` is parsed **in the browser** — the passphrase never reaches the device.
 
 After setup the button reads **LoTW ↑**. Each click signs all not-yet-uploaded QSOs on the device with your certificate and uploads them to lotw.arrl.org.

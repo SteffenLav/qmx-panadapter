@@ -45,11 +45,61 @@ echo.
 pause
 
 echo.
+rem !! VALIDATE BEFORE ERASING. These checks used to sit in STEP 2,
+rem AFTER the full chip erase in STEP 1 - so a missing file meant the
+rem Tab5 was wiped and then left with nothing written to it. The erase
+rem takes the WiFi credentials, the callsign, the memory channels, the
+rem QSO log and the LoTW private key, and none of that comes back.
+rem Nothing is destroyed now until every file needed to rebuild it is
+rem confirmed present.
+
+rem Check if we have the recovery files locally
+set "BOOTLOADER=%~dp0bootloader.bin"
+set "APP_BIN=%~dp0qmx_panadapter.bin"
+set "OTADATA=%~dp0ota_data_initial.bin"
+set "PARTITION=%~dp0partition-table.bin"
+
+rem !! CHECK EVERY FILE. This used to test bootloader.bin alone while APP_BIN
+rem named a merged v0.18.5 image that is NOT in this folder - so the guard
+rem passed, STEP 1 erased the whole chip, and STEP 2 then failed on a missing
+rem file. That is a wiped AND bricked Tab5: the erase takes the WiFi
+rem credentials, the callsign, the memory channels, the QSO log and the LoTW
+rem private key with it.
+if not exist "%APP_BIN%" (
+    echo ERROR: qmx_panadapter.bin not found in flasher directory
+    pause
+    goto :end
+)
+if not exist "%PARTITION%" (
+    echo ERROR: partition-table.bin not found in flasher directory
+    pause
+    goto :end
+)
+if not exist "%OTADATA%" (
+    echo ERROR: ota_data_initial.bin not found in flasher directory
+    pause
+    goto :end
+)
+if not exist "%BOOTLOADER%" (
+    echo ERROR: bootloader.bin not found in flasher directory
+    echo.
+    echo To recover, you need the v0.18.5-hotfix release files:
+    echo - Download from: https://github.com/SteffenLav/qmx-panadapter/releases/tag/v0.18.5-hotfix
+    echo - Extract QMX-Panadapter-v0.18.5-hotfix-flasher.zip
+    echo - Run flash-recovery.bat from that folder
+    pause
+    goto :end
+)
+
+
 echo ============================================================
 echo  STEP 1: FULL CHIP ERASE
 echo ============================================================
 echo.
-"%ESPTOOL%" --chip esp32p4 -p COM3 -b 460800 erase_flash
+rem No -p: esptool finds the port itself. This said "-p COM3", which is this
+rem bench's port and almost nobody else's - on any other machine the recovery
+rem flasher simply could not reach the Tab5.
+"%ESPTOOL%" --chip esp32p4 -b 460800 erase_flash
 if errorlevel 1 (
     echo ERROR: Erase failed. Check USB connection.
     pause
@@ -62,30 +112,15 @@ echo  STEP 2: FLASHING BOOTLOADER + PARTITION TABLE + APP
 echo ============================================================
 echo.
 
-rem Check if we have the recovery files locally
-set "BOOTLOADER=%~dp0bootloader.bin"
-set "APP_BIN=%~dp0qmx_panadapter_merged_v0.18.5-hotfix.bin"
-set "PARTITION=%~dp0partition-table.bin"
-
-if not exist "%BOOTLOADER%" (
-    echo ERROR: bootloader.bin not found in flasher directory
-    echo.
-    echo To recover, you need the v0.18.5-hotfix release files:
-    echo - Download from: https://github.com/SteffenLav/qmx-panadapter/releases/tag/v0.18.5-hotfix
-    echo - Extract QMX-Panadapter-v0.18.5-hotfix-flasher.zip
-    echo - Run flash-recovery.bat from that folder
-    pause
-    goto :end
-)
-
 echo Flashing with correct bootloader layout...
 echo.
 
-"%ESPTOOL%" --chip esp32p4 -p COM3 -b 460800 ^
+"%ESPTOOL%" --chip esp32p4 -b 460800 ^
   write_flash ^
   0x2000 "%BOOTLOADER%" ^
+  0x8000 "%PARTITION%" ^
   0x10000 "%APP_BIN%" ^
-  0x8000 "%PARTITION%"
+  0x920000 "%OTADATA%"
 
 if errorlevel 1 (
     echo ERROR: Flash failed

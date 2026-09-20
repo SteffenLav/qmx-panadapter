@@ -37,3 +37,25 @@ void rbn_selftest(void);
 // self-test - there is no other way to check a parser against a live socket.
 bool rbn_parse_line(const char *line, char *call_out, size_t call_cap,
                     uint32_t *freq_hz_out, int *snr_out);
+
+// Self-spotting (ui/spot_map_view.c): the SAME feed as above also spots our
+// own CQ, exactly like any other station's, whenever a skimmer copies it -
+// this is that half of it, kept separate from the CQ-activity table because
+// it answers a different question ("who hears me", not "who is on the air").
+// Position is resolved once at capture time via net/qrz_coords.h, falling
+// back to util/geo_coords.h's country centroid.
+typedef struct {
+    char     skimmer[16];   // the station that heard us
+    uint32_t freq_hz;
+    int      snr_db;
+    int64_t  heard_unix;
+    float    lat, lon;
+    bool     has_pos;
+} rbn_self_spot_t;
+
+// Copies up to max entries, in no particular order. Returns the count copied.
+int rbn_self_spots_get(rbn_self_spot_t *out, int max);
+
+// Manual Flush - empties the ring buffer immediately (ui/spot_map_view.c's
+// sidebar button). New self-spots keep arriving afterward as normal.
+void rbn_self_spots_clear(void);

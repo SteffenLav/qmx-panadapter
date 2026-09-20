@@ -35,16 +35,16 @@
 
 | Command | Query | Set | Notes |
 |---|---|---|---|
-| **FA** | `FA;` → `FA14074000;` | `FA14074000;` | Frequency (Hz) |
-| **MD** | `MD;` → `MD2;` | `MD2;` | Mode (1=LSB, 2=USB, 3=CW, 5=DiGi) |
-| **FW** | `FW;` → `FW2500;` | `FW2500;` | Filter width (Hz, SSB only) |
+| **FA** | `FA;` -> `FA14074000;` | `FA14074000;` | Frequency (Hz) |
+| **MD** | `MD;` -> `MD2;` | `MD2;` | Mode (1=LSB, 2=USB, 3=CW, 5=DiGi) |
+| **FW** | `FW;` -> `FW2500;` | `FW2500;` | Filter width (Hz, SSB only) |
 | **TX** | — | `TX;` | Key transmitter |
 | **RX** | — | `RX;` | Release transmitter |
 | **TA** | — | `TA14074000;` | Tune and key (FT8 burst) |
-| **PC** | `PC;` → `PC05.0;` | `PC05.0;` | Power (watts, query only) |
-| **SW** | `SW;` → `SW1.25;` | — | SWR (query while keyed) |
-| **TM** | `TM;` → `TM123000;` | — | Time (hhmmss, query only) |
-| **VN** | `VN;` → `VN1_03_002QMX;` | — | Firmware version (query only) |
+| **PC** | `PC;` -> `PC05.0;` | `PC05.0;` | Power (watts, query only) |
+| **SW** | `SW;` -> `SW1.25;` | — | SWR (query while keyed) |
+| **TM** | `TM;` -> `TM123000;` | — | Time (hhmmss, query only) |
+| **VN** | `VN;` -> `VN1_03_002QMX;` | — | Firmware version (query only) |
 
 ### SSB Filter Control (Special)
 
@@ -58,14 +58,14 @@ See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md
 
 ## Cables
 
-### Tab5 ← QMX (USB Audio + CAT)
+### Tab5 <- QMX (USB Audio + CAT)
 
-- **Type**: USB-A (Tab5 host) → USB-C (QMX)
+- **Type**: USB-A (Tab5 host) -> USB-C (QMX)
 - **Data lines**: Required (not charge-only)
 - **Power**: Carries 5 V to QMX (optional; QMX can be separately powered)
 - **Cable quality**: 3 m or less recommended (signal integrity)
 
-### Tab5 ← Power
+### Tab5 <- Power
 
 - **Type**: USB-C, 5 V DC
 - **Current**: 2 A minimum (Tab5 draws ~2.5 A at full brightness + FT8 TX)

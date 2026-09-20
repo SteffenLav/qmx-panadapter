@@ -566,6 +566,19 @@ static bool build_monitor_pool(ftx_protocol_t proto)
             return false;
         }
         monitor_init(s_mon_pool[i], &cfg);   // allocates the waterfall in PSRAM
+        /* ⛔ monitor_init() does not check its own allocations, and a NULL
+         * waterfall is only found by the first capture writing through it.
+         * Serial-captured 2026-09-11 on the dev bench: WSPR -> FT8 with WSPR
+         * still holding 11.25 MB left ~900 KB of PSRAM, the capture scratch
+         * fitted, one 163 KB waterfall did not - and `ft8` took a Store access
+         * fault at MTVAL 0 (monitor.c:181) seven seconds later, on the first
+         * slot. The pool was logged as "built" the whole time. */
+        if (!monitor_alloc_ok(s_mon_pool[i])) {
+            ESP_LOGE(TAG, "monitor %d/%d: buffers not allocated (%u KB PSRAM free)",
+                     i, FT8_NUM_BUFFERS,
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            return false;
+        }
         // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
         // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
         // threshold) - across the pool that starves internal heap (main runs at
@@ -699,6 +712,10 @@ typedef struct {
     int   n_attempted;
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
     int   n_timing;
+    /* Set when this range advanced the QSO early - see the early-advance note
+       in the decode loop. decode_slot() skips its own end-of-slot advance when
+       it is set, so advance() runs exactly ONCE per slot either way. */
+    bool  early_advanced;
 } decode_result_t;
 
 typedef struct {
@@ -1004,8 +1021,10 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    int n_cand, int start, int step,
                                    float noise_db, int64_t slot_sec,
                                    int64_t t_start_us, int start_off_ms,
+                                   bool may_early_advance,
                                    decode_result_t *out)
 {
+    out->early_advanced = false;
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
@@ -1111,6 +1130,48 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             if (!sim_suppresses_real) {
                 ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
                                          (int)lroundf(cand_dt_ms));
+
+                /* ⭐ ADVANCE THE QSO THE MOMENT OUR PARTNER'S MESSAGE ARRIVES,
+                 * not after all 140 candidates (Gyula HA3HZ, 2026-09-08: "the
+                 * acknowledgement response does not go immediately, but 15
+                 * seconds later").
+                 *
+                 * The arithmetic that makes this necessary: an FT8 burst is
+                 * 12 640 ms inside a 15 000 ms slot, so the whole reply window
+                 * is 2 260 ms and the hold-for-decode backstop sits at 1 960 ms
+                 * (ft8_slot_gate.c derives both). ft8_qso_advance() used to run
+                 * only after the ENTIRE candidate list, and on a saturated band
+                 * that is 4-6 s. His log shows it exactly: the report he needed
+                 * was decoded at +81 ms, first in the list; the backstop fired
+                 * at +1972 ms and sent the previous message; the advance landed
+                 * at +3087 ms. Every exchange step then cost an extra 30 s
+                 * cycle, and his partners re-sent their reports two and three
+                 * times.
+                 *
+                 * ⛔ NOT A REGRESSION, and it must not be described as one: the
+                 * ordering has always been this way. What changed is the band -
+                 * his median decode is 64 ms and his p90 is 4762 ms, so on a
+                 * quiet band the advance wins the race and on a busy one it
+                 * never can.
+                 *
+                 * EXACTLY ONCE per slot: the flag makes the end-of-slot call
+                 * skip. Running advance() twice would re-scan the same message
+                 * and could step the state machine twice.
+                 *
+                 * ⚠ The cost, stated: advance() also captures the pileup and
+                 * scans for CQ callers, and running early shows it a PARTIAL
+                 * decode table. That is why the gate is ft8_qso_msg_is_for_us()
+                 * - it is only taken when a QSO is already running, which is
+                 * exactly when the pileup matters least and a prompt reply
+                 * matters most. An idle receiver still advances at the end of
+                 * the slot with the full picture, as before. */
+                if (may_early_advance && !out->early_advanced &&
+                    ft8_qso_msg_is_for_us(text)) {
+                    out->early_advanced = true;
+                    ESP_LOGI(TAG, "early advance: '%s' is for us - advancing now "
+                                  "instead of after all %d candidates", text, n_cand);
+                    ft8_qso_advance(slot_sec);
+                }
             }
             // PSK Reporter spot (REAL decodes only - this path never runs on
             // simulator injections, which bypass the audio pipeline entirely;
@@ -1218,9 +1279,16 @@ static void ft8_decode_worker_task(void *arg)
         worker_job_t *job = NULL;
         if (xQueueReceive(ctx->jobs, &job, portMAX_DELAY) != pdTRUE) continue;
         if (!job) break;   // termination sentinel
+        /* false: the worker is a DIFFERENT TASK from the one that has always
+           called ft8_qso_advance(), and this is not the evening to add a second
+           caller into the QSO state machine. It costs almost nothing - the
+           decode task takes the EVEN candidates, which are the strongest, and a
+           partner replying to us is the loudest thing in the slot. If it lands
+           on an odd candidate we simply fall back to the end-of-slot advance,
+           i.e. today's behaviour. */
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
-                               job->start_off_ms, job->result);
+                               job->start_off_ms, false, job->result);
         xSemaphoreGive(ctx->done);
     }
     ESP_LOGI(TAG, "decode worker exiting");
@@ -1333,14 +1401,16 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     // Our half (even indices).
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
-                           t_start, start_off_ms, &r_main);
+                           t_start, start_off_ms, true, &r_main);
 
     if (dispatched) {
         xSemaphoreTake(wctx->done, portMAX_DELAY);
     } else {
         // No helper (or <=1 candidate): decode the odd half inline too.
+        /* Inline fallback: this is still the DECODE TASK, so it may early-advance
+           on the same terms as the even half above. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, &r_worker);
+                               t_start, start_off_ms, true, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
@@ -1488,7 +1558,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         }
     }
 
-    ft8_qso_advance(slot_sec);
+    /* EXACTLY ONCE per slot. If a message addressed to us turned up mid-list,
+       the early-advance above has already run this and running it again would
+       re-scan the same message and could step the state machine twice. */
+    if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-
@@ -1676,25 +1749,31 @@ static void ft8_task(void *arg)
      *
      * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
      * fixing one direction and not asking about the other is what let this
-     * through. The memory genuinely arrives - wait for it. */
-    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
-        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
-        if (s_cap_scratch) break;
+     * through. The memory genuinely arrives - wait for it.
+     *
+     * ⛔ AND WAIT FOR ALL OF IT, NOT JUST THE FIRST ALLOCATION. This loop used
+     * to retry only the scratch, on the reasoning that it is the biggest single
+     * block. It is - but it is not the whole bill. On 2026-09-11 the scratch
+     * (720 KB) fitted into ~900 KB while WSPR was still releasing, the monitor
+     * pool then could not, and the unchecked waterfall crashed the device (see
+     * build_monitor_pool). So the WHOLE set is retried: a partial pool is freed
+     * and the attempt repeated once the previous page has let go. */
+    bool pool_ok = false;
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
+        if (!s_cap_scratch)
+            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
+        free_monitor_objects();                    /* partial pool; scratch kept */
         if (attempt == 0)
-            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+            ESP_LOGW(TAG, "capture buffers not available yet (%u KB PSRAM free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
         vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
     }
-    if (!s_cap_scratch) {
-        ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
-        s_ft8_task_alive = false;
-        task_park_and_reap();
-        return;
-    }
-    if (!build_monitor_pool(proto_for_mode())) {
-        ESP_LOGE(TAG, "initial monitor pool build failed");
+    if (!pool_ok) {
+        ESP_LOGE(TAG, "PSRAM alloc for the capture pool failed (%u KB free)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         free_capture_pool();
         s_ft8_task_alive = false;
         task_park_and_reap();
@@ -2331,6 +2410,14 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
         return;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor buffers)");
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        task_park_and_reap();
+        return;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;
@@ -2466,6 +2553,12 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
         return false;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        return false;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;

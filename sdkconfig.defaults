@@ -28,7 +28,7 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # Stacks
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Cache
 # 256 KB - the hardware default for pre-V3 P4 silicon, and RESTORED here after
@@ -303,3 +303,52 @@ CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y
 # MALLOC_CAP_DMA pool, which the I2S channel needs.
 CONFIG_ESP_HOSTED_RPC_TASK_STACK=4096
 CONFIG_ESP_HOSTED_DFLT_TASK_STACK=4096
+
+#
+# #329: trap a stack overflow AT THE WRITE, with the culprit task's name.
+#
+# CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY only inspects a few bytes at a
+# CONTEXT SWITCH, so a task that overruns its stack, corrupts whatever is
+# adjacent and returns before the next switch is COMPLETELY UNDETECTED. That is
+# the shape of the ADIF-viewer crash: LVGL's event chain read a link that was
+# not a pointer (0x6a9d5caa, then 0x0000ffff), i.e. someone else's data landed
+# in it, with nothing anywhere reporting a fault. Measured the same day:
+# settings_flush had 232 B of stack left, dxcluster 260 B and FALLING, ws_push
+# 364 B - three tasks one deep call from doing exactly that.
+#
+# This puts a hardware watchpoint on the running task's stack limit, so the
+# overflowing write traps immediately and the panic names the task instead of
+# some innocent subsystem faulting on the corruption minutes later.
+#
+# Costs one debug watchpoint register and a little context-switch time. If a
+# future session needs that register for gdb, turn it off then - not casually.
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# Chrome's own header set plus a revalidating reload's If-None-Match overruns
+# the 512-byte default, and esp_http_server answers "Header fields are too
+# long" instead of the page - reproduced on the bench 2026-09-07 by pressing
+# the stale-page banner's own Reload button. HTTPD_SCRATCH_BUF is ONE buffer in
+# the server struct (esp_httpd_priv.h), not one per connection, so this costs
+# 512 bytes once.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# The Reader needs a fourth heading size: body is 24 and h3 is gold 24,
+# so a h4 had to be either smaller than its own prose or identical to h3.
+CONFIG_LV_FONT_MONTSERRAT_26=y
+
+# SelfSpotter's PSK Reporter client (net/pskr_self.c) is the only MQTT user
+# here, and esp-mqtt spawns its own task. Left alone that task is
+# tskNO_AFFINITY, so it can float onto CORE 0 and preempt taskLVGL (priority
+# 4, pinned to core 0) on every incoming publish - for the whole session,
+# since the feed connects at boot whether or not the SelfSpotter screen is
+# ever opened. Randy N4OPI reported exactly that on v1.13.0, the first
+# release to ship SelfSpotter: 1-3 s to register an FT8 row tap, a generally
+# sluggish panadapter, "if I go back to 1.12.4, life is good".
+#
+# Core 1 for the same reason every other new background task in this project
+# goes there (see CLAUDE.md's core-0 accounting: taskLVGL alone is ~74% of
+# core 0, while core 1 idles ~90%). The other half is .task.priority = 3 in
+# pskr_self.c's own client config - priority and affinity are set in two
+# different places because esp-mqtt exposes them that way.
+CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
+CONFIG_MQTT_USE_CORE_1=y

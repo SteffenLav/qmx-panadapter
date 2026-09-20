@@ -4,10 +4,14 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>   // isxdigit - validating the UI; unique id
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/stream_buffer.h"
 #include "esp_log.h"
+#include "esp_attr.h"      // EXT_RAM_BSS_ATTR - the CAT RX queue's storage
+#include "util/psram_task.h"
 #include "esp_timer.h"
 #include "esp_err.h"
 
@@ -18,6 +22,7 @@
 #include "wspr_rx.h"   // wspr_pa_guard_release_pending - see the VN; handler
 #include "ui.h"
 #include "diag_log.h"
+#include "cw_decode.h"   // TB; - the QMX decodes CW itself, we just read it
 #include "settings.h"     // cw_tx_offset_hz - the CW split maintainer reads it live
 
 static const char *TAG = "cat";
@@ -30,6 +35,10 @@ static const char *TAG = "cat";
 
 #define EVT_DEV_CONNECTED  BIT0
 #define EVT_DEV_GONE       BIT1
+/* How long the radio may say nothing while we are polling it every 50 ms
+ * before the link is treated as dead. Generous by a factor of a hundred: the
+ * failure this catches lasted ten minutes and counting. */
+#define CAT_RX_DEAD_US     (5 * 1000000)
 
 // USB Audio Class descriptor sub-types we care about
 #define USB_CLASS_AUDIO              0x01
@@ -54,6 +63,9 @@ static bool s_audio_dumped = false;
 
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
+// Decoded-CW poll pacing - see the TB phase in poll_task().
+#define TB_POLL_MIN_US 500000
+static int64_t s_last_tb_us = 0;
 static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_message
 static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
@@ -64,6 +76,11 @@ static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
 static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
+/* UI; - the STM32's 96-bit unique ID as 24 hex chars, i.e. WHICH RADIO this is.
+ * 1_04_003 and later only; stays empty on anything older, and an empty string
+ * means "unknown", never "a radio with no id". See settings.h's per-radio
+ * calibration note for what it is for. */
+static char   s_qmx_uid[28] = {0};
 // Last AF gain read back from the radio via AG;, in the radio's own 0.25 dB
 // steps. -1 = never read. The QMX shows this value on its LCD IN DECIBELS
 // (operation manual: "the new volume is displayed ... The volume is shown in
@@ -85,6 +102,7 @@ static char   s_q3_resp[16] = {0};  // last Q3 (VOX enable) response, e.g. "Q30;
 static size_t s_q3_resp_len = 0;
 static volatile bool s_vox_disabled = false;  // true once Q3; readback confirms VOX OFF
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
+static uint64_t s_wspr_pa_check_us = 0; // last non-blocking WSPR PA-guard check
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -119,6 +137,11 @@ static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for F
 static volatile char s_pending_mode_digit = 0;
 static char hamlib_mode_to_digit(const char *mode);  // forward declaration
 
+// Pending frequency (Hz) requested while a TX burst owned the pipe. Drained by
+// the poll task once the burst releases it. 0 = nothing pending. See the long
+// note in cat_set_frequency() - Randy N4OPI's band change that never took.
+static volatile uint32_t s_pending_freq_hz = 0;
+
 // Pending SSB filter bandwidth (Hz) requested from the LVGL thread. The poll
 // task drains it on its next cycle so the write happens on the one thread that
 // owns the CDC pipe - writing MMSSB|Bandwidth= directly from the UI thread
@@ -132,6 +155,11 @@ static volatile uint32_t s_pending_ssb_bw = 0;
  * mode, so it gets none of that protection unless we apply it ourselves. */
 static volatile uint16_t s_pending_pa_mv10 = 0;      /* set request, 0 = none */
 static volatile bool     s_pa_query_pending = false; /* read it back          */
+/* Ask the radio whether IT is in split, for callers that are about to transmit
+ * and need the answer to be the RADIO's rather than ours. s_split_engaged says
+ * only whether WE put it there; a split the operator (or a menu visit) left on
+ * is invisible to it. See cat_request_split_read(). */
+static volatile bool     s_split_query_pending = false;
 /* Set when OUR query goes out, cleared by the reply that answers it.
  * ⛔ WITHOUT THIS THE PARSER STEALS OTHER PEOPLE'S MM REPLIES. s_mm_resp is
  * shared by every MM user in this file, so an unrelated MM Get that happens
@@ -157,6 +185,12 @@ static volatile bool s_force_rx_pending = false;
 static volatile uint32_t s_pending_af_gain_p1 = 0;
 // Set when someone wants the radio's current AF gain read back (drawer open).
 static volatile bool s_af_gain_query_pending = false;
+/* Pending CW profile (#359), drained by the poll task. centre_hz 0 = nothing
+ * queued. One slot: a second request before the first is applied simply
+ * replaces it, which is what a picker's double-tap should do anyway. */
+static volatile uint16_t s_pending_prof_centre = 0;
+static volatile uint8_t  s_pending_prof_mask   = 0;
+
 // CW filter width pending write, drained by the poll task as "MMCW|CW passband=".
 // Same poll-task ownership as SSB: a direct cross-thread write (e.g. from the
 // web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
@@ -268,6 +302,30 @@ void cat_query_pa_voltage(void)
     s_pa_query_pending = true;
 }
 
+/* ⭐ WHY THIS EXISTS: a WSPR beacon in split transmits on VFO B while FA; still
+ * reports A, so the Tab5, wsprnet and everyone who copies the spot are told a
+ * frequency the signal was never on. John W5JSS, 2026-09-18: his WSPR was not
+ * being spotted, and it started working the moment he "cleared the B VFO
+ * display" - the QMX's dual-VFO state, which this file already records as not
+ * clearable over CAT (only MU; or a power cycle).
+ *
+ * Deliberately a QUERY and nothing more. Standing someone's split down for them
+ * is what cw_split_maintain() explicitly refuses to do - "an operator running
+ * their own split has not asked us to interfere" - and that rule does not stop
+ * applying because the mode changed. The caller refuses to key instead. */
+void cat_request_split_read(void)
+{
+    s_split_query_pending = true;
+}
+
+/* -1 unknown / not answered yet, 0 simplex, 1 split. NEVER treat -1 as split:
+ * refusing to transmit on "don't know" would ground the beacon on any radio
+ * that is slow to answer. */
+int cat_get_split_state(void)
+{
+    return s_split_readback;
+}
+
 int16_t cat_get_pa_voltage_x10(void)
 {
     return s_pa_voltage_x10;
@@ -337,6 +395,7 @@ void cat_user_pause_set(bool paused)
         // operator has since changed by hand in the very menu they paused us
         // to use.
         s_pending_mode_digit    = 0;
+        s_pending_freq_hz       = 0;
         s_pending_ssb_bw        = 0;
         s_pending_cw_passband   = 0;
         s_pending_af_gain_p1    = 0;
@@ -367,6 +426,7 @@ void cat_query_af_gain(void)
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
+const char *cat_get_qmx_uid(void) { return s_qmx_uid; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
 bool cat_get_vox_disabled(void) { return s_vox_disabled; }
 
@@ -483,6 +543,9 @@ void cat_poll_set_paused(bool paused)
 static void link_task(void *arg);
 static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
+static void cat_rx_task(void *arg);
+static void cat_rx_queue_init(void);
+static bool cat_rx_queue_ready(void);
 static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx);
 static esp_err_t try_open_qmx(void);
 static void process_cat_message(const char *msg, size_t len);
@@ -503,6 +566,25 @@ err = cdc_acm_host_install(NULL);
     }
     ESP_LOGI(TAG, "CDC-ACM host driver installed");
 
+    /* CAT RX processing, off the USB task - see handle_rx(). Created BEFORE the
+     * link task, so the first byte the radio sends has somewhere to go. */
+    cat_rx_queue_init();
+    if (!cat_rx_queue_ready()) return ESP_ERR_NO_MEM;
+    /* 4096 -> 9216, 2026-09-15: crashed on hardware within seconds of the QMX
+     * enumerating - "Stack protection fault", task cat_rx, core 1, ~6.5 s of
+     * uptime. The old 4096 figure was "proven" against the CDC driver's own
+     * stack before this session's two qmx_settings_t growths (Calibrate
+     * Power's table, then its 23 -> 45-step sweep - see
+     * [[feedback_generous_not_incremental_stack_fix]]); whatever
+     * process_cat_message() reaches on a band/frequency change apparently
+     * touches it too. Bumped generously rather than root-caused further,
+     * same as every other task in this sweep - PSRAM-backed, costs nothing
+     * but PSRAM. */
+    if (!psram_task_create(cat_rx_task, "cat_rx", 9216, NULL, 4, 1)) {
+        ESP_LOGE(TAG, "could not start cat_rx");
+        return ESP_FAIL;
+    }
+
     BaseType_t ok = xTaskCreatePinnedToCore(
         // 5120, not 8192: measured peak use 2,696 B (hwm 6,008 B free of an
         // 8,704 B block, 2026-08-28, util/dma_owners #284). Leaves ~2.4 KB
@@ -520,7 +602,20 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
 {
     switch (event->type) {
     case CDC_ACM_HOST_ERROR:
-        ESP_LOGE(TAG, "CDC-ACM error: %d", event->data.error);
+        /* Logged and otherwise IGNORED, until 2026-09-07. Caught live on the
+         * bench: one of these arrived and CAT RECEIVE NEVER CAME BACK - ID;,
+         * VN; and every MM Get went unanswered for the following ten minutes,
+         * while the poll heartbeat kept printing "FA/MD/FW cycling" and
+         * /api/status kept serving a frozen frequency and mode as though they
+         * were live. Audio was unaffected throughout, because UAC is a separate
+         * interface, so nothing on either screen suggested a fault.
+         *
+         * A DISCONNECTED event below runs the whole reconnect path. An error
+         * did nothing at all, which is the gap. It is not fixed HERE, though -
+         * one transient error is not proof of a dead link, and this callback
+         * cannot know. The watchdog in poll_task decides, on the only evidence
+         * that settles it: whether bytes are still arriving. */
+        ESP_LOGE(TAG, "CDC-ACM error: %d - watching for RX to stop", event->data.error);
         break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
         ESP_LOGW(TAG, "QMX disconnected");
@@ -533,23 +628,89 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
     }
 }
 
+/* Last time ANY byte arrived from the radio. The CAT link is polled at 50 ms,
+ * so on a healthy link this is never more than a few tens of ms old - which is
+ * what makes a multi-second silence unambiguous rather than a judgement call. */
+static volatile int64_t s_last_rx_us = 0;
+
+int64_t cat_last_rx_us(void) { return s_last_rx_us; }
+
+/* ⛔ THE USB TASK MUST NEVER WAIT ON THE DISPLAY - SO THIS ONLY QUEUES BYTES.
+ *
+ * handle_rx() is the CDC-ACM data callback: it runs on the driver's "USB-CDC"
+ * task, PRIORITY 10, core 0. It used to parse and act on every message right
+ * here, and process_cat_message() updates the UI - ui_refresh_bandplan_strip()
+ * alone waits up to 100 ms for display_lock() on EVERY FA reply, ~7 times a
+ * second. While LVGL was busy drawing, the USB-CDC task blocked on the LVGL
+ * mutex and PRIORITY INHERITANCE lifted taskLVGL from 4 to 10 - above
+ * audio_task (6) and the UAC driver task (5) on the same core. So every heavy
+ * redraw starved the isochronous audio pump and the radio's audio was lost at
+ * the wire, and the CDC task itself stalled, which is the "TX transfer
+ * timeout" once a second.
+ *
+ * Measured 2026-09-11 on a WSPR page with the spot map open (it redraws
+ * ~1,300 line segments plus a great circle per report): 11-13 % of each
+ * cycle's audio lost and 0 decodes, against 0.3-0.6 % and 4-8 decodes with it
+ * closed. cpu_owners caught taskLVGL at CURRENT priority 10 in every sample -
+ * its base is 4 - which is what pointed here. The drawer's "gaps" have the
+ * same shape.
+ *
+ * Now the bytes go into a stream buffer and cat_rx_task does the rest, at
+ * priority 4 on core 1: equal to LVGL's base, so waiting for the display there
+ * can never raise LVGL above anything. Every CAT wait loop yields with
+ * vTaskDelay, so a lower-priority processor still gets the answer in time. */
+#define CAT_RX_SB_BYTES 1024
+static EXT_RAM_BSS_ATTR uint8_t s_rx_sb_storage[CAT_RX_SB_BYTES + 1];
+static StaticStreamBuffer_t     s_rx_sb_struct;
+static StreamBufferHandle_t     s_rx_sb;
+static volatile uint32_t        s_rx_sb_dropped;
+
+static void cat_rx_queue_init(void)
+{
+    if (!s_rx_sb)
+        s_rx_sb = xStreamBufferCreateStatic(CAT_RX_SB_BYTES, 1, s_rx_sb_storage, &s_rx_sb_struct);
+}
+static bool cat_rx_queue_ready(void) { return s_rx_sb != NULL; }
+
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
 {
-    for (size_t i = 0; i < data_len; i++) {
-        char c = (char)data[i];
-        if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
-            ESP_LOGW(TAG, "RX buffer overflow, dropping accumulated data");
+    if (!data_len) return true;
+    s_last_rx_us = esp_timer_get_time();
+    size_t sent = s_rx_sb ? xStreamBufferSend(s_rx_sb, data, data_len, 0) : 0;
+    if (sent < data_len) s_rx_sb_dropped += (uint32_t)(data_len - sent);
+    return true;
+}
+
+static void cat_rx_task(void *arg)
+{
+    (void)arg;
+    uint8_t  chunk[64];
+    uint32_t dropped_seen = 0;
+    for (;;) {
+        size_t n = xStreamBufferReceive(s_rx_sb, chunk, sizeof(chunk), portMAX_DELAY);
+        if (s_rx_sb_dropped != dropped_seen) {
+            /* Counted, never silent - and the half-assembled message is
+             * discarded, because bytes are missing from the middle of it. */
+            ESP_LOGW(TAG, "CAT RX queue full - %u byte(s) dropped",
+                     (unsigned)(s_rx_sb_dropped - dropped_seen));
+            dropped_seen = s_rx_sb_dropped;
             s_rx_len = 0;
         }
-        s_rx_buf[s_rx_len++] = c;
-        if (c == ';') {
-            s_rx_buf[s_rx_len] = '\0';
-            diag_log_rx(s_rx_buf, s_rx_len);
-            process_cat_message(s_rx_buf, s_rx_len);
-            s_rx_len = 0;
+        for (size_t i = 0; i < n; i++) {
+            char c = (char)chunk[i];
+            if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
+                ESP_LOGW(TAG, "RX buffer overflow, dropping accumulated data");
+                s_rx_len = 0;
+            }
+            s_rx_buf[s_rx_len++] = c;
+            if (c == ';') {
+                s_rx_buf[s_rx_len] = '\0';
+                diag_log_rx(s_rx_buf, s_rx_len);
+                process_cat_message(s_rx_buf, s_rx_len);
+                s_rx_len = 0;
+            }
         }
     }
-    return true;
 }
 
 // Diagnostic RX logging with poll de-duplication. The FA/MD/FW poll responses
@@ -566,6 +727,20 @@ static void diag_log_rx(const char *msg, size_t len)
     static char last_fa[16], last_md[8], last_fw[12];
     char  *slot    = NULL;
     size_t slot_sz = 0;
+    // TB is polled several times a second in CW and is EMPTY most of the time.
+    // Logging every one put ~2.3 lines/s into the ring for as long as the
+    // operator stays in CW - measured at 60 in 26 s on the bench - which buries
+    // a diagnostic download and rotates the 256 KB flash log far faster. An
+    // empty buffer is not an event; decoded TEXT always is, and is never
+    // dropped, because it is the whole point of the feature.
+    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B' &&
+        msg[3] == '0' && msg[4] == '0') return;   // TBt00; - nothing decoded
+    /* TM: the GPS second-tick sync polls TM; every few ms for up to 1.3 s and
+     * logged all ~200 replies every 5 minutes (log audit 2026-09-13). The one
+     * reading that matters is logged by cat_gps_tick_sync() and time_sync. */
+    if (len >= 2 && msg[0] == 'T' && msg[1] == 'M') return;
+    /* RG: the read-back is already logged as "RF gain read back: N dB". */
+    if (len >= 2 && msg[0] == 'R' && msg[1] == 'G') return;
     if      (len >= 2 && msg[0] == 'F' && msg[1] == 'A') { slot = last_fa; slot_sz = sizeof(last_fa); }
     else if (len >= 2 && msg[0] == 'M' && msg[1] == 'D') { slot = last_md; slot_sz = sizeof(last_md); }
     else if (len >= 2 && msg[0] == 'F' && msg[1] == 'W') { slot = last_fw; slot_sz = sizeof(last_fw); }
@@ -578,6 +753,16 @@ static void diag_log_rx(const char *msg, size_t len)
 
 static void process_cat_message(const char *msg, size_t len)
 {
+    // TB: decoded CW from the radio's own decoder. First, because it is the
+    // only response whose payload is arbitrary text - it can legitimately
+    // contain the punctuation the QMX decodes (? . , " ` ( ) + - : @ $ < ! >),
+    // so it must not fall through to any parser that pattern-matches on
+    // characters. cw_decode_feed() re-validates the whole frame and drops
+    // anything malformed rather than letting it into the text.
+    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B') {
+        cw_decode_feed(msg);
+        return;
+    }
     if (len == 14 && msg[0] == 'F' && msg[1] == 'A') {
         uint32_t freq_hz = 0;
         for (size_t i = 2; i < 13; i++) {
@@ -629,9 +814,25 @@ static void process_cat_message(const char *msg, size_t len)
         };
         const char *mode_str = kw_modes[d - '0'];
         if (d != s_last_mode_digit) {
+            const bool was_cw = (s_last_mode_digit == '3' || s_last_mode_digit == '7');
+            const bool is_cw  = (d == '3' || d == '7');
             s_last_mode_digit = d;
             ESP_LOGI(TAG, "Mode = %s (raw %c)", mode_str, d);
             ui_update_mode(mode_str);
+
+            // Leaving CW throws the decoded line away (Gyula HA3HZ, 2026-09-08).
+            // The pane hides itself outside CW/CW-R, so nothing was visibly
+            // wrong at the time - but the text survived, and coming back to CW
+            // minutes later it was still sitting there, reading as freshly
+            // decoded. There is no way to tell it from live text: the radio
+            // hands over finished characters with no timing, so the pane cannot
+            // age them. What it CAN do is not show a line it has no reason to
+            // believe in. Fires on the transition only, so a CW session is
+            // untouched.
+            if (was_cw && !is_cw) {
+                cw_decode_clear();
+                ESP_LOGI(TAG, "left CW - cleared the decoded line");
+            }
 
             // #214 (Samuel W7STF): coming back INTO SSB with a filter pinned,
             // repaint the width from the pin - nothing else ever will.
@@ -791,6 +992,29 @@ static void process_cat_message(const char *msg, size_t len)
         // that the version is known - the drawer may already have been built
         // (lazy, first-open) before VN; answered.
         ui_notify_qmx_fw_known();
+        return;
+    }
+    /* UI response: "UI<24 hex>;" - the processor's unique id, i.e. which radio
+     * is on the other end of the cable. Handing it to settings is what makes
+     * the power calibration per-RADIO instead of per-band-name; see
+     * settings_radio_identity_changed(). Only 1_04_003 and later answer at
+     * all, and an unrecognisable answer is left as "unknown" rather than
+     * stored - a WRONG identity would swap a calibration for no reason. */
+    if (len >= 4 && msg[0] == 'U' && msg[1] == 'I' && msg[2] != ';') {
+        size_t ulen = len - 3;
+        if (ulen >= sizeof(s_qmx_uid)) ulen = sizeof(s_qmx_uid) - 1;
+        memcpy(s_qmx_uid, msg + 2, ulen);
+        s_qmx_uid[ulen] = ' ';
+        bool hex = ulen >= 16;
+        for (size_t i = 0; i < ulen && hex; i++)
+            if (!isxdigit((unsigned char)s_qmx_uid[i])) hex = false;
+        if (!hex) {
+            ESP_LOGW(TAG, "QMX unique id not recognised ('%s') - ignoring", s_qmx_uid);
+            s_qmx_uid[0] = ' ';
+        } else {
+            ESP_LOGI(TAG, "QMX unique id: %s", s_qmx_uid);
+            settings_radio_identity_changed(s_qmx_uid);
+        }
         return;
     }
     // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the
@@ -1074,6 +1298,215 @@ static int64_t s_cw_off_last_us = 0;
 // FW;-style re-assert side effect, which is what makes polling it safe at all.
 //
 // Returns true if it used the pipe this cycle.
+/* Which CW filter widths the radio itself offers, as a bitmask over
+ * CW_FILTER_WIDTHS. 0 means "not known, or the radio says none" - see below.
+ *
+ * Uwe DL8UG: the Tab5 lists all eight widths in CW while his QMX has only a few
+ * enabled, and he "keeps mis-tapping them with my fat fingers". He configures
+ * the set once, in CW > Choose filters, and asked us to read it on first
+ * connect.
+ *
+ * ⭐ VERIFIED ON HARDWARE 2026-09-07, including the case that matters. The rows
+ * are a Mask menu (type 7, list type 6 = DISABLED/ENABLED) and are read one at a
+ * time by INDEX:
+ *
+ *     MMCW|Choose filters|0;   ->   MMENABLED;  /  MMDISABLED;
+ *
+ * ⛔ By index and never by name: the row names ARE the numbers, so
+ * "MMCW|Choose filters|50;" is parsed as a path index and returns ?; - the CAT
+ * manual states this explicitly. Index order is 50 100 150 200 250 300 400 500,
+ * confirmed by discovery (MMCW|Choose filters|N?; -> MM7|6|<width>;) and then by
+ * disabling exactly 50 and 400 on the radio and reading back exactly those two.
+ *
+ * ⛔⛔ AND THE ALL-ZERO CASE IS REAL, NOT DEFENSIVE. On this bench, before the
+ * menu had ever been opened, all eight read DISABLED while the radio was quite
+ * happily running a 200 Hz filter - the mask appears not to be written until
+ * something visits that menu. Hiding the disabled ones there would leave the
+ * operator with NO CW bandwidth at all. So zero means "show everything", which
+ * is also exactly right for older firmware, a radio that does not answer, and a
+ * link that dies mid-read. */
+static const uint16_t s_cw_filter_width[CW_FILTER_COUNT] = {
+    50, 100, 150, 200, 250, 300, 400, 500
+};
+uint16_t cat_cw_filter_width(int idx)
+{
+    if (idx < 0 || idx >= CW_FILTER_COUNT) return 0;
+    return s_cw_filter_width[idx];
+}
+
+static uint8_t s_cw_filter_mask = 0;
+
+uint8_t cat_cw_filter_mask(void) { return s_cw_filter_mask; }
+
+/* Read all eight rows. Called once from link_task, deliberately not polled:
+ * Uwe asked for "the first initial connect", it is eight round trips, and the
+ * CAT link is the one thing on this board that must not be given extra work.
+ * Changing the set on the radio therefore needs a reconnect to be picked up,
+ * which is the same bargain the radio's own menus make. */
+static void cw_filters_read(void)
+{
+    uint8_t mask = 0;
+    for (int i = 0; i < CW_FILTER_COUNT; i++) {
+        char q[40];
+        int  n = snprintf(q, sizeof(q), "MMCW|Choose filters|%d;", i);
+        s_mm_resp_len = 0;
+        if (n <= 0 || cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                                    (size_t)n, 200) != ESP_OK) {
+            ESP_LOGW(TAG, "CW filters: write failed at index %d - offering all widths", i);
+            s_cw_filter_mask = 0;
+            return;
+        }
+        for (int wi = 0; wi < 20 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+        if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) {
+            /* No answer, or ?; - older firmware, or a radio that does not have
+             * this menu. Not an error worth alarming about: fall back. */
+            ESP_LOGI(TAG, "CW filters: no answer at index %d - offering all widths", i);
+            s_cw_filter_mask = 0;
+            return;
+        }
+        if (strncmp(s_mm_resp + 2, "ENABLED", 7) == 0) mask |= (uint8_t)(1u << i);
+    }
+
+    if (mask == 0) {
+        ESP_LOGI(TAG, "CW filters: the radio reports none enabled - offering all widths "
+                      "(its CW > Choose filters menu has probably never been opened)");
+    } else {
+        char list[64] = "";
+        size_t o = 0;
+        for (int i = 0; i < CW_FILTER_COUNT; i++)
+            if (mask & (1u << i))
+                o += (size_t)snprintf(list + o, sizeof(list) - o, "%s%u",
+                                      o ? " " : "", (unsigned)cat_cw_filter_width(i));
+        ESP_LOGI(TAG, "CW filters enabled on the radio: %s Hz (mask 0x%02X)", list, mask);
+    }
+    s_cw_filter_mask = mask;
+}
+
+/* Defined further down, beside the link-up sequence that also uses it. */
+static bool iq_mode_handshake(int max_attempts);
+
+bool cat_apply_cw_profile(uint16_t centre_hz, uint8_t mask)
+{
+    if (!s_cdc_dev || !centre_hz) return false;
+    s_pending_prof_mask   = mask;
+    s_pending_prof_centre = centre_hz;   /* set LAST - it is the "go" flag */
+    return true;
+}
+
+/* Drain of the above, on the poll task. Returns true if it used the pipe.
+ *
+ * Order matters: the mask rows first, the centre last, then ONE reload. The
+ * centre is what visibly changes for the operator, so it is the write closest
+ * to the reload and least likely to be lost if anything goes wrong earlier. */
+/* Write MMCW|CW center= and CONFIRM it, retrying.
+ *
+ * ⛔ THE WRITE IS NOT THE POINT - THE READ-BACK IS. Caught on the bench
+ * 2026-09-07: inside the profile burst this write was refused (the radio
+ * answered ?;) while the eight mask rows before it all landed, and the apply
+ * still logged success because it had only ever checked that it SENT the bytes.
+ * That is the WSPR PA-guard trap exactly - four indicators agreeing about
+ * STORED state while the radio did something else.
+ *
+ * The cause is spacing, not syntax: the same command sent on its own answers
+ * MM700; first time. An MM write makes the radio redraw its menu and spray ANSI
+ * cursor codes back down the CAT port (measured - "[1;253H[2;253H[0;0H"), and a
+ * command arriving into that redraw is rejected. So each attempt gets real
+ * quiet time, and each is checked rather than hoped for. */
+static bool cw_center_write_confirmed(uint16_t centre_hz)
+{
+    for (int attempt = 1; attempt <= 4; attempt++) {
+        char cmd[40];
+        int n = snprintf(cmd, sizeof(cmd), "MMCW|CW center=%u;", (unsigned)centre_hz);
+        if (n > 0)
+            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(200));      /* let the menu redraw finish */
+
+        s_mm_resp_len = 0;
+        const char *q = "MMCW|CW center;";
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                          strlen(q), 200) != ESP_OK) continue;
+        for (int wi = 0; wi < 30 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+        if (s_mm_resp_len >= 4 && strncmp(s_mm_resp, "MM", 2) == 0 &&
+            atoi(s_mm_resp + 2) == (int)centre_hz) {
+            if (attempt > 1)
+                ESP_LOGI(TAG, "CW profile: centre %u Hz confirmed on attempt %d",
+                         (unsigned)centre_hz, attempt);
+            return true;
+        }
+        ESP_LOGW(TAG, "CW profile: centre %u Hz not confirmed (attempt %d/4, radio said '%s')",
+                 (unsigned)centre_hz, attempt, s_mm_resp_len ? s_mm_resp : "nothing");
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+    return false;
+}
+
+/* Drain of cat_apply_cw_profile(), on the poll task. Returns true if it used
+ * the pipe.
+ *
+ * Order matters: the mask rows first, the centre last, then ONE reload. And
+ * NOTHING here is taken on trust - the centre is read back per attempt, and the
+ * mask is re-read from the radio at the end rather than assumed, so a partial
+ * apply is visible instead of silent. */
+static bool cw_profile_apply_pending(void)
+{
+    uint16_t centre = s_pending_prof_centre;
+    if (!centre) return false;
+    uint8_t mask = s_pending_prof_mask;
+    s_pending_prof_centre = 0;           /* claim it before the slow part */
+
+    ESP_LOGI(TAG, "CW profile: centre %u Hz, filters mask 0x%02X - applying",
+             (unsigned)centre, mask);
+
+    char cmd[48];
+    for (int i = 0; i < CW_FILTER_COUNT; i++) {
+        /* By INDEX, never by name: the row names ARE the numbers, so
+         * "MMCW|Choose filters|50=..." is read as a path index (#350).
+         * ENABLED/DISABLED is the radio's own wording, confirmed by reading a
+         * row back (it answers MMENABLED;). */
+        int n = snprintf(cmd, sizeof(cmd), "MMCW|Choose filters|%d=%s;",
+                         i, (mask & (1u << i)) ? "ENABLED" : "DISABLED");
+        if (n > 0)
+            cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+        /* 120 ms, not 40: an MM write sprays a menu redraw back at us and the
+         * next command must not arrive into it. 40 ms was measured refusing the
+         * write that followed the eighth row. */
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    bool centre_ok = cw_center_write_confirmed(centre);
+
+    /* ⛔ WITHOUT THIS THE RADIO HAS STORED EVERYTHING AND APPLIED NOTHING.
+     * "MM Effect" defaults to on-demand, so an MM Set does not take effect until
+     * a menu is entered or the host reloads - which is what cost a bench session
+     * on the WSPR PA guard, where the read-back agreed and the radio still ran
+     * at full power. */
+    const char *mu = "MU;";
+    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mu, 3, 200);
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    /* ⛔ AND MU; DROPS IQ MODE. Q9 is session state, so the reload leaves the
+     * radio streaming ordinary audio and the spectrum goes flat - measured, and
+     * documented in CLAUDE.md against exactly this command. */
+    iq_mode_handshake(4);
+
+    /* Ask the RADIO what its filters are now, rather than storing what we asked
+     * for. Costs eight MM reads, which are clean (only writes spray), and it is
+     * the difference between the BW list describing the radio and describing an
+     * intention. */
+    cw_filters_read();
+
+    if (centre_ok && s_cw_filter_mask == mask) {
+        ESP_LOGI(TAG, "CW profile applied: centre %u Hz, filters 0x%02X, IQ mode re-asserted",
+                 (unsigned)centre, s_cw_filter_mask);
+    } else {
+        ESP_LOGW(TAG, "CW profile only PARTLY applied - centre %s, filters asked 0x%02X "
+                      "but radio reports 0x%02X. Try again; if it repeats, apply it on "
+                      "the radio's own CW menu.",
+                 centre_ok ? "ok" : "REFUSED", mask, s_cw_filter_mask);
+    }
+    return true;
+}
+
 static bool cw_offset_refresh(void)
 {
     if (s_last_mode_digit != '3' && s_last_mode_digit != '7') return false;
@@ -1325,15 +1758,50 @@ static void poll_task(void *arg)
      * when something is actually owed, which is almost never. */
     wspr_pa_guard_reclaim_on_link();
 
+    /* ⛔ CAT RX WATCHDOG. The link is polled every 50 ms, so a healthy radio
+     * cannot be silent for seconds; silence that long means the receive path is
+     * gone even though the writes still appear to succeed.
+     *
+     * Observed on the bench 2026-09-07 after a single "CDC-ACM error: 1": ten
+     * minutes of no reply to anything, with the poll heartbeat still announcing
+     * that it was cycling and /api/status still serving a frozen frequency. The
+     * frozen values are the dangerous part - a dead link that reads as a live
+     * one is worse than one that reads as dead, and it would explain a "the
+     * radio stopped responding to the browser" report perfectly.
+     *
+     * EVT_DEV_GONE is what a real disconnect raises, so this reuses the entire
+     * existing teardown-and-reopen path rather than inventing a second one. */
+    int64_t last_wd_check = esp_timer_get_time();
+
     int phase = 0;
     int poll_fail = 0;   // consecutive poll-TX failures; one transient timeout must not kill the poll
     while (s_cdc_dev != NULL) {
+        /* RX watchdog - see the note above the declaration. Checked once a
+         * second so the arithmetic costs nothing at the 50 ms poll rate, and
+         * only while we are actually polling: a paused link (FT8 burst, the
+         * operator pause, a terminal session) is legitimately silent and the
+         * timer is re-armed on each of those paths below. */
+        int64_t now_wd = esp_timer_get_time();
+        if (now_wd - last_wd_check > 1000000) {
+            last_wd_check = now_wd;
+            if (s_last_rx_us && (now_wd - s_last_rx_us) > (int64_t)CAT_RX_DEAD_US) {
+                ESP_LOGE(TAG, "CAT RX silent for %lld s while polling - the link is "
+                              "gone even though writes still report success. Tearing "
+                              "it down so the normal reconnect can run.",
+                         (long long)((now_wd - s_last_rx_us) / 1000000));
+                s_last_rx_us = now_wd;          /* do not fire again while it reconnects */
+                xEventGroupSetBits(s_evt_group, EVT_DEV_GONE);
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;
+            }
+        }
         // v0.12.0: an FT8 TX burst owns the CDC-ACM link exclusively for its
         // ~12.7s duration (precise 160ms-cadence TA<freq>; sequence) - an
         // interleaved poll here would desync its timing or garble the
         // stream. Cooperative check only (never vTaskSuspend - that risks
         // deadlocking on the driver's internal mutex mid-transfer).
         if (s_poll_paused) {
+            s_last_rx_us = esp_timer_get_time();   /* a TX burst owns the link; silence is expected */
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -1342,8 +1810,23 @@ static void poll_task(void *arg)
         // poll landing in the middle of the QMX's menu is exactly what this
         // control exists to prevent. Poll slowly here; nothing is waiting on us.
         if (s_user_paused) {
+            s_last_rx_us = esp_timer_get_time();   /* radio handed to its own panel; silence is expected */
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
+        }
+        // Non-blocking WSPR PA-guard check, every ~15 s: catches a "leave WSPR
+        // mode" restore whose single queued write was never confirmed and
+        // silently failed to reach the radio - the gap the link-up reclaim
+        // (above, at task start) cannot cover, since the CAT link never
+        // dropped in that case. wspr_pa_guard_periodic_check() never blocks -
+        // it only reads the cached answer to a query already in flight and
+        // re-issues one if needed - so it is safe on this rotation.
+        {
+            uint64_t now = esp_timer_get_time();
+            if (now - s_wspr_pa_check_us > 15000000ULL) {
+                s_wspr_pa_check_us = now;
+                wspr_pa_guard_periodic_check();
+            }
         }
         // Re-assert IQ mode: queued on resume-from-pause and by the dead-stream
         // watchdog. Runs here because this task owns the pipe; it blocks for up
@@ -1359,6 +1842,18 @@ static void poll_task(void *arg)
         // Target the committed "Filter RX" menu item - that's what FW; reads
         // and what shows in the QMX SSB menu (the "Bandwidth" token is a live
         // value that the QMX reverts). FW; will read the new width back.
+        // A frequency the operator asked for while a TX burst held the pipe.
+        // Drained FIRST: a band change also implies a mode change on its way,
+        // and the QMX should land on the new frequency before anything else.
+        uint32_t pf = s_pending_freq_hz;
+        if (pf != 0) {
+            s_pending_freq_hz = 0;
+            s_last_tx_us = 0;            // it already waited; don't rate-limit it away
+            ESP_LOGI(TAG, "sending deferred freq %lu Hz", (unsigned long)pf);
+            cat_set_frequency(pf);       // s_poll_paused is false here, so it writes
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         char md = s_pending_mode_digit;
         if (md != 0) {
             s_pending_mode_digit = 0;
@@ -1455,6 +1950,19 @@ static void poll_task(void *arg)
         /* Read Max. PA voltage. Served BEFORE the write below so a
          * request-then-confirm sequence cannot read the stale value - the
          * same ordering the RF-gain path documents. */
+        /* Plain "SP;" - one short query, answered into s_split_readback by the
+         * RX parser. Skipped while WE hold the radio in split for the CW
+         * transmit offset: there the answer is known, and cw_split_maintain()
+         * is already using the same readback for its own verification. */
+        if (s_split_query_pending) {
+            s_split_query_pending = false;
+            if (!s_split_engaged) {
+                s_split_readback = -1;
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP;", 3, 200);
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;
+            }
+        }
         if (s_pa_query_pending) {
             s_pa_query_pending = false;
             const char *q = "MMProtection|Max. PA voltage;";
@@ -1544,6 +2052,14 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
+        /* An operator-requested CW profile (#359). Ahead of the routine
+         * maintainers because it is a deliberate action that was asked for and
+         * is waiting, and it ends with MU; + the IQ handshake - so nothing else
+         * should be half-done around it. */
+        if (cw_profile_apply_pending()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         // Keep the CW transmit offset in step with wherever we are listening.
         // Cheap when there is nothing to do: it only writes when the frequency
         // moved, the mode changed, or the 30 s re-assert is due.
@@ -1570,14 +2086,41 @@ static void poll_task(void *arg)
         bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');
         bool skip_fw = (s_ssb_bw_pinned != 0 && in_ssb);
         bool tune_poll = s_tune_poll_active;
-        int n_phases = tune_poll ? 4 : 3;
+        // TB; - decoded CW straight out of the radio's own decoder (Uwe DL8UG).
+        //
+        // CW/CW-R only, so it costs nothing in any other mode, and NOT while
+        // Tune is running (that rotation is already carrying PC;SW; against a
+        // transmitting radio, and there is no CW to decode mid-tune).
+        //
+        // ⛔ This has to keep a STEADY cadence, not be read on demand: the
+        // radio's decode buffer is 40 characters and is NOT circular - the CAT
+        // manual says it "simply discards any new incoming characters" once
+        // full. At 20 WPM that is about 24 seconds, and anything lost there is
+        // lost silently. A 4th phase at CAT_POLL_INTERVAL_MS reads it several
+        // times a second, which is far inside that.
+        //
+        // No firmware gate: TB is in the 1_03 CAT manual as well as 1_04.
+        bool in_cw = (s_last_mode_digit == '3' || s_last_mode_digit == '7');
+        bool cw_poll = (in_cw && !tune_poll);
+        int n_phases = tune_poll ? 4 : (cw_poll ? 4 : 3);
         const char *cmd;
         size_t cmd_len;
         switch (phase) {
             case 0:  cmd = "FA;"; cmd_len = 3; break;
             case 1:  cmd = "MD;"; cmd_len = 3; break;
             case 2:  cmd = skip_fw ? NULL : "FW;"; cmd_len = 3; break;
-            default: cmd = "PC;SW;"; cmd_len = 6; break;  // only reached when tune_poll
+            default: if (tune_poll) { cmd = "PC;SW;"; cmd_len = 6; }
+                     else {
+                         // Rate-limited to TB_POLL_MIN_US rather than running at
+                         // the phase rate. The radio's 40-character buffer takes
+                         // about 24 s to fill at 20 WPM, so twice a second has a
+                         // ~48x margin - asking five times a second bought
+                         // nothing and put needless traffic on the CAT link.
+                         int64_t now_tb = esp_timer_get_time();
+                         if (now_tb - s_last_tb_us < TB_POLL_MIN_US) { cmd = NULL; }
+                         else { s_last_tb_us = now_tb; cmd = "TB;"; cmd_len = 3; }
+                     }
+                     break;
         }
         if (cmd != NULL) {
             // Diagnostic: don't log every poll TX (FA/MD/FW every ~50ms swamps
@@ -1586,7 +2129,7 @@ static void poll_task(void *arg)
             // changes, and one-off writes (Sent:/SSB filter->/raw cmd) log fully.
             if (diag_log_enabled()) {
                 uint64_t hb = esp_timer_get_time();
-                if (hb - s_diag_poll_hb_us > 10000000ULL) {
+                if (hb - s_diag_poll_hb_us > 60000000ULL) {   // 60 s, was 10 s (log audit 2026-09-13)
                     s_diag_poll_hb_us = hb;
                     ESP_LOGI(TAG, "poll heartbeat: FA/MD/FW cycling @ %dms (freq=%luHz mode=%s)",
                              CAT_POLL_INTERVAL_MS, (unsigned long)s_last_freq_hz, cat_get_mode_str());
@@ -1688,18 +2231,38 @@ static void link_task(void *arg)
             // false and ui_set_iq_mode_warning() raises a persistent on-screen
             // banner so the user isn't left guessing why the spectrum looks
             // wrong.
-            /* A radio that has just appeared has ALREADY restored its own
-             * Max. PA voltage: an MM Set does not survive a QMX power cycle
-             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0, and
-             * the radio's own Protection menu agrees with CAT throughout).
+            /* ⛔ USED TO DROP THE OWED PA-VOLTAGE RECORD HERE, UNCONFIRMED, on
+             * the theory that "an MM Set does not survive a QMX power cycle
+             * (measured 2026-08-29 - set 11.5, power cycle, reads 15.0)" - so
+             * the radio must have already restored itself and the record was
+             * stale. That measurement is now directly contradicted:
+             * hardware-confirmed 2026-09-14 (Steffen OZ1LAV), three separate
+             * times in one session, a value set over raw CAT (12.0 V) SURVIVED
+             * a genuine QMX power cycle every time, confirmed by CAT read-back
+             * afterwards. Whatever the 2026-08-29 test actually measured, this
+             * blanket assumption does not hold now, on this firmware.
              *
-             * So any value the WSPR PA guard was holding to restore is now
-             * STALE, and writing it back would push the operator's ceiling to
-             * a number they never chose. Drop it: the radio has already done
-             * the restore for us. */
+             * And even if it sometimes does hold, guessing here was never
+             * necessary - wspr_pa_guard_reclaim_on_link() (poll_task, moments
+             * after this runs) already does the verified version: it asks the
+             * radio what it currently reads and only acts on the answer,
+             * never assumes one. This line ran FIRST (link_task starts before
+             * poll_task exists) and cleared the record before that verified
+             * check ever got a chance to see it - silently defeating it every
+             * single time, which is why an earlier fix to
+             * wspr_pa_guard_reclaim_on_link() alone could never have been
+             * enough on its own. Dropped rather than fixed in place: there is
+             * nothing this line needs to decide that the reclaim function
+             * does not already decide correctly a few lines of execution
+             * later. */
             s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
-            settings_set_wspr_pa_saved_x10(0);
             iq_mode_handshake(4);
+            /* The radio's own CW filter set, once, here (Uwe DL8UG - #350).
+             * Link-up rather than polled: eight round trips is a lot to repeat,
+             * and the CAT link is the last thing on this board that wants extra
+             * work. It runs on link_task, which owns the pipe before the poll
+             * task starts, so it cannot interleave with FA/MD/FW. */
+            cw_filters_read();
             // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
             // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
             // VOX serves no purpose here. It is disabled defensively: with VOX on
@@ -1796,6 +2359,27 @@ static void link_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "Failed to query firmware version (VN): 0x%x", verr);
                 }
+            }
+
+            /* WHICH radio is this? UI; (1_04_003+) returns the STM32's unique
+             * id, and settings_radio_identity_changed() uses it to park this
+             * radio's power calibration and check out the attached one's - see
+             * settings.h. Sent right after VN; because the gate depends on the
+             * version that reply just established.
+             *
+             * ⚠ Gated, not merely attempted: on 1_03 an unknown command is
+             * answered "?;" and this file already records that a stray reply
+             * can be read as another command's. Nothing is lost by not asking
+             * - an unidentifiable radio keeps today's behaviour. */
+            if (cat_qmx_fw_at_least(1, 4, 3)) {
+                const char *ui_q = "UI;";
+                esp_err_t uerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)ui_q, strlen(ui_q), 200);
+                if (uerr == ESP_OK) vTaskDelay(pdMS_TO_TICKS(100));  /* handled in process_cat_message */
+                else ESP_LOGW(TAG, "Failed to query unique id (UI): 0x%x", uerr);
+            } else {
+                ESP_LOGI(TAG, "QMX firmware predates UI; - cannot tell one radio "
+                              "from another, power calibration stays per-band only");
             }
 
             // Read CW offset from QMX menu (session value, EEPROM-persisted on QMX side)
@@ -2103,6 +2687,48 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     if (s_cdc_dev == NULL) {
         return ESP_ERR_INVALID_STATE;  // QMX not connected
     }
+
+    /* ⛔ SOMETHING ELSE MAY OWN THE PIPE, AND THIS USED TO WRITE ANYWAY.
+     *
+     * Randy N4OPI, 2026-09-08: "I use the pull-down to change bands and the
+     * pull down box changes, but the actual operating frequency doesn't" - with
+     * a screenshot showing 7.074.000 Hz on the readout, "20 m 14.074" in the
+     * dropdown, and a QSO in progress reading TX IN ~29s.
+     *
+     * That is the whole explanation. An FT8 burst owns the CDC link for its
+     * ~12.7 s, sending 79 TA<freq>; commands on a 160 ms cadence, and
+     * s_poll_paused exists to keep everything else off the pipe for exactly
+     * that reason. This function never checked it, so a band change landed in
+     * the middle of the tone sequence: the radio got a garble, answered ?;, and
+     * the frequency write was simply lost. The UI had already moved
+     * optimistically, so the two disagreed until the next poll.
+     *
+     * It is now DEFERRED rather than dropped, which is the pattern this file
+     * already uses for mode (s_pending_mode_digit) and the SSB filter. The poll
+     * task sends it the moment it owns the pipe again - a second or so later at
+     * worst, and the operator's band change is not silently thrown away.
+     *
+     * ⚠ LAST ONE WINS on purpose: a single slot, not a queue. Someone spinning
+     * a band dropdown during a burst means the last choice, not a stack of
+     * retunes to replay afterwards. */
+    if (s_poll_paused) {
+        s_pending_freq_hz = freq_hz;
+        ESP_LOGI(TAG, "freq %lu Hz deferred - a TX burst owns the pipe; the "
+                      "poll task will send it when the burst ends",
+                 (unsigned long)freq_hz);
+        return ESP_OK;
+    }
+    /* The operator pause is NOT deferred, it is refused. That one is unbounded
+     * - it lasts until they press Resume - and a retune arriving minutes later,
+     * into a radio whose band they have since changed by hand in the very menu
+     * they paused us to use, is the exact hazard cat_user_pause_set() drops its
+     * other queued writes for. Refusing also fixes a smaller bug in passing:
+     * this used to write anyway, straight into the QMX's own menu. */
+    if (s_user_paused) {
+        ESP_LOGW(TAG, "freq %lu Hz refused - the radio is released to the operator",
+                 (unsigned long)freq_hz);
+        return ESP_ERR_INVALID_STATE;
+    }
     // Rate-limit: drop calls that arrive within 200 ms of previous TX
     uint64_t now = esp_timer_get_time();
     if (now - s_last_tx_us < 200000) {
@@ -2148,6 +2774,23 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     // an offset instead of tuning.
     ui_rit_notify_retune();
     return ESP_OK;
+}
+
+bool cat_poll_is_paused(void)
+{
+    return s_poll_paused;
+}
+
+/* Withdraw a parked frequency write, but ONLY if it is still the one the
+ * caller asked for - see the note in cat.h. Anything else in that slot belongs
+ * to someone else and must go out. */
+bool cat_cancel_pending_freq_if(uint32_t freq_hz)
+{
+    if (s_pending_freq_hz != freq_hz) return false;
+    s_pending_freq_hz = 0;
+    ESP_LOGW(TAG, "deferred freq %lu Hz withdrawn by its caller - it never went out",
+             (unsigned long)freq_hz);
+    return true;
 }
 
 esp_err_t cat_set_frequency_forced(uint32_t freq_hz)
@@ -2222,6 +2865,21 @@ esp_err_t cat_set_mode(const char *mode)
         return ESP_ERR_INVALID_ARG;
     }
     if (s_cdc_dev == NULL) return ESP_ERR_INVALID_STATE;
+    // ⛔ WAS THE ONE BLOCKING CDC WRITER IN THIS FILE WITH NO s_poll_paused
+    // GUARD (found 2026-09-16, chasing Randy N4OPI's "web Apply hangs and
+    // loses the QMX, only during an active QSO/CQ exchange, needs a power
+    // cycle" report). Every other blocking write here refuses cleanly while
+    // a burst owns the pipe (cat_gps_tick_sync() just above is the model this
+    // copies) - this one did not, and it is called from ft8_tx_arm()'s Digi
+    // pre-flight (ft8_tx.c) and wspr_tx.c's own pre-TX mode set, both of
+    // which run OUTSIDE ft8_tx's internal lock and can therefore race a
+    // DIFFERENT burst that is already ACTIVE and already owns the pipe -
+    // exactly the shape "only happens mid-exchange, ~50% of the time" points
+    // at. The caller already has a clean-refusal path for a failed pre-flight
+    // (see ft8_tx.c's own comment on aborting before TX; rather than sending
+    // a corrective cat_set_mode() mid-burst); this makes that path reachable
+    // instead of two tasks writing the CDC pipe at once.
+    if (s_poll_paused) return ESP_ERR_INVALID_STATE;  // FT8/WSPR TX owns the pipe
 
     uint64_t now = esp_timer_get_time();
     if (now - s_last_tx_us < 200000) return ESP_ERR_TIMEOUT;

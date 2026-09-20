@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 /* ⭐ IS THE WSPR PAGE REACHABLE AT ALL?
  *
@@ -68,9 +70,37 @@ bool wspr_rx_running(void);
  * spacing - so each transmission reads as a clean vertical trace.
  */
 #define WSPR_WF_ROWS   176            /* symbol periods in a 120 s window */
-#define WSPR_WF_LO_HZ  1350.0f
+/* ⛔ 1350-1650, AND IT WENT TO 1380-1600 FOR ABOUT AN HOUR BEFORE COMING BACK.
+ *
+ * The narrowing looked well-founded: 484 decodes from one evening on this bench
+ * ran 1389.58 to 1611.35, with 76 in 1375-1400 and exactly ONE above 1600, so
+ * the outer 80 Hz appeared to be carrying nothing. It spreads the pane nicely -
+ * 4.29 px/Hz against 3.15, so a 4.4 Hz signal is 19 px wide instead of 14.
+ *
+ * ⚠ AND IT WAS STILL WRONG, because a night's decodes measure WHAT WE DECODED,
+ * not what is on the band. The operator watched the wider carpet and saw
+ * signals out at both edges - traces we were never going to decode and now
+ * would not even draw. A display that only shows what already worked cannot
+ * show you what is being missed, which on a page whose whole job is showing the
+ * band is the wrong way round.
+ *
+ * Generalise it: do not size a DISPLAY window from the distribution of
+ * SUCCESSES. That is the same trap as a change-detected repaint keyed on only
+ * part of what the render reads.
+ *
+ * 1360-1650 since 2026-09-11 (operator). It went to 1330-1630 for an hour
+ * first, on a left-edge trace he took for a WSPR station and then recognised as
+ * a wild CW transmitter - the same lesson as above from the other side: check
+ * what a trace IS before moving the window to include it. The search window in
+ * wspr_rx.c and the decoder's stage-1 centre in wspr_decode.c follow this -
+ * see both.
+ *
+ * ⚠ WSPR_WF_COLS must be (HI - LO) / 1.4648, rounded: the view maps columns to
+ * pixels and the axis maps Hz to pixels, and they only agree if the columns
+ * span exactly this window. A literal because it sizes static arrays. */
+#define WSPR_WF_LO_HZ  1360.0f
 #define WSPR_WF_HI_HZ  1650.0f
-#define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
+#define WSPR_WF_COLS   198            /* (1650-1360) / 1.4648 = 197.98 */
 
 /* ---- THE CARPET FLOWS, IT DOES NOT REDRAW ------------------------------
  *
@@ -105,11 +135,24 @@ bool wspr_rx_running(void);
  * and the pane is full after a single 120 s capture. History lives in the
  * decode list, which is the right place for it: the list says WHAT was heard,
  * the carpet shows the band NOW. */
-#define WSPR_WF_CYCLES 1
-#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 176 */
+/* ⭐ THREE MINUTES, NOT TWO (operator, 2026-09-09). With the candidate cap
+ * raised the letters were reaching the bottom of the pane before the cycle
+ * had finished decoding, so the carpet was scrolling away the very thing it
+ * had just been given.
+ *
+ * The old objection to more history was 352 rows squeezed into a 200 px pane
+ * - 0.57 px per row, a carpet crawling at 0.83 px/s and six minutes to fill
+ * from black. That was TWO cycles into the OLD pane. This is one and a half
+ * cycles into a pane that also grew 25 %, which comes out at 0.95 px/row and
+ * 1.39 px/s - slower than the 1.67 px/s of before, and nowhere near the crawl
+ * that killed the earlier attempt. */
+#define WSPR_WF_MINUTES 3
+#define WSPR_WF_HIST_ROWS ((WSPR_WF_ROWS * WSPR_WF_MINUTES) / 2)   /* 264 */
 
-/* Value written across a whole row to mark a cycle boundary, dashed so it
- * cannot be read as signal - nothing real is uniform across 205 bins. It
+/* Value written across a whole row to mark a cycle boundary. It was dashed so
+ * it could not be read as signal; it is a continuous line now, and the colour
+ * carries that instead - the view renders it as a dim grey no level in the
+ * signal ramp can produce (operator, 2026-09-09, wanting it quieter). It
  * also marks the ~68 s the receiver is genuinely DEAF while decoding (see
  * the every-other-cycle note in wspr_rx.c): without it the carpet simply
  * stops, which looks identical to a hung display. */
@@ -139,9 +182,78 @@ bool wspr_rx_get_waterfall(uint8_t *out);
  * instead of every tick. */
 uint32_t wspr_rx_waterfall_seq(void);
 
+/* ---- Waterfall letter markers (#360) ----------------------------------
+ *
+ * ⭐ THE POINT IS THE SIGNALS THAT DID *NOT* DECODE. The sync search finds
+ * every candidate on the band and the decoder then succeeds on some of them;
+ * until now only the successes were visible anywhere, so "is there something
+ * there we are missing?" could only be answered by eye (Samuel W7STF). One
+ * mark per candidate answers it by machine: a letter where a station decoded,
+ * a '?' where one did not. A '?' returning to the same tone cycle after cycle
+ * is a real station just under the threshold.
+ *
+ * Letters run A, B, C... LEFT TO RIGHT BY TONE, so A is always the leftmost
+ * and no legend is needed. The same letter goes in the decode list's `S`
+ * column, which is what joins a trace to a callsign - and it is assigned HERE,
+ * on the device, so the Tab5 and the browser cannot number a cycle differently.
+ *
+ * Only the most recently completed cycle is published: WSPR_WF_CYCLES is 1, so
+ * that is all the carpet can show. */
+/* Must equal WSPR_MAX_CANDS, which is private to wspr_rx.c - a _Static_assert
+ * there ties the two together, so a change to one fails the build. */
+#define WSPR_MARKS_MAX 20
+
+typedef struct {
+    float freq_hz;   /* audio tone, same scale as a spot's freq */
+    char  ch;        /* 'A'..'Z' if it decoded, '?' if it did not */
+} wspr_mark_t;
+
+/* Copy the marks for the last completed cycle. Returns the count; 0 before the
+ * first cycle finishes. `cycle_utc_out` may be NULL. */
+int wspr_rx_get_marks(wspr_mark_t *out, int max, int64_t *cycle_utc_out);
+
+/* Bumped each time a cycle publishes a new set, so a view can rebuild only on
+ * change. */
+uint32_t wspr_rx_marks_seq(void);
+
+/* How many cycles of marks are remembered. The carpet shows three minutes, so
+ * more than one boundary line is visible and each needs its own letters. */
+#define WSPR_MARKS_CYCLES 2
+
+/* Marks for a SPECIFIC cycle, or 0 if that cycle is no longer remembered. */
+int wspr_rx_get_marks_for_cycle(int64_t cycle_utc, wspr_mark_t *out, int max);
+
+/* The cycle the newest boundary line CLOSES - the one whose waterfall
+ * rows lie beneath it. 0 before the first boundary of a session.
+ *
+ * ⛔ The marks are NOT necessarily for this cycle. A window is decoded while
+ * the next one is already recording, so for most of a cycle the newest line
+ * belongs to a later cycle than the marks in hand. Compare this against
+ * wspr_rx_get_marks()'s cycle_utc before drawing them under it. */
+int64_t wspr_rx_boundary_cycle(void);
+
+/* The letter for a spot: 0 unless the spot is FROM THE CYCLE ON THE CARPET and
+ * its tone matches a mark in it. Kept here rather than in the view so both
+ * screens ask the same question.
+ *
+ * ⛔ THE CYCLE IS NOT OPTIONAL. WSPR stations keep the same tone from cycle to
+ * cycle, so matching on frequency alone hands an older row the letter of
+ * whoever is on that tone NOW. Caught on the bench 2026-09-08: G7SYO, decoded
+ * at 20:42 on 1556.1 Hz, was labelled D - and D was G3JKF, decoded at 20:46 on
+ * the same tone. The letter pointed at a trace belonging to somebody else,
+ * which is precisely what a blank is for. */
+char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc);
+
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);
+
+/* Seconds until the next cycle boundary while the receiver is WAITING for one,
+ * or -1 when it is capturing, decoding or stopped. A WSPR capture can only
+ * start on an even UTC minute, so entering the page part-way through a cycle
+ * means up to ~110 s of nothing - which looks exactly like a dead page unless
+ * the page says so. */
+int wspr_rx_waiting_secs(void);
 /* Flip guard ENFORCEMENT at runtime (dev action "wspr_guards"). Both guards
  * are measured either way; this only changes which one acts. Deliberately not
  * an NVS setting: it is an experiment knob for choosing between the two on
@@ -228,12 +340,57 @@ void wspr_pa_guard_release_pending(const char *why);
  * context where CAT queries actually go out. */
 void wspr_pa_guard_reclaim_on_link(void);
 
+/* Non-blocking twin of the above - call periodically (every ~15 s is plenty)
+ * from any task that already owns the CAT pipe, e.g. cat.c's poll_task. Where
+ * the link-up version blocks briefly waiting for one answer, this one only
+ * ever checks a query already in flight and re-issues one if needed, so it is
+ * safe to call from a tight polling loop. Covers the gap the link-up version
+ * cannot: a plain "leave WSPR mode" restore whose single queued write was
+ * never confirmed and silently failed to reach the radio. */
+void wspr_pa_guard_periodic_check(void);
+
+/* Apply the Max. PA voltage a PAST Calibrate Power sweep measured as
+ * producing `dbm` on the CURRENT band (adif_log_band_for_freq() of
+ * cat_get_frequency()), so "Declared power" is something the radio was
+ * actually asked to produce rather than a number typed into wsprnet.
+ *
+ * ⛔ REFUSES while the PA-voltage guard is CURRENTLY reducing
+ * (settings_get_wspr_pa_saved_x10() != 0) - that state IS the radio
+ * deliberately turned down to protect the finals over WSPR's ~110 s
+ * key-down, and writing a calibrated-for-full-power voltage over it would
+ * silently undo that protection. The guard's own restore-on-disengage
+ * already puts back whatever was here before it engaged, calibrated or
+ * not, so nothing is lost by waiting - the next call (drawer reopen, a
+ * dropdown change, a band change) tries again once the guard lets go.
+ *
+ * Call this: whenever the dropdown selection changes, whenever the WSPR
+ * drawer is opened/refreshed, and after the WSPR page pushes a new dial
+ * frequency to the radio (the same declared dBm can map to a different
+ * voltage - or become uncalibrated - on a different band).
+ *
+ * Fire-and-forget: like the guard's own writes, this is a CAT command, not
+ * a query, so success is not returned here - wspr_pa_calibrated_status()
+ * below is what a UI polls to know what happened. Safe to call from the
+ * LVGL/UI thread; the actual write goes to poll_task like every other CAT
+ * command (cat_request_pa_voltage_x10()). */
+void wspr_pa_apply_declared_dbm(int8_t dbm);
+
+/* What the last wspr_pa_apply_declared_dbm() call actually did, for a UI
+ * hint under the dropdown - same idea as wspr_tx_advised_dbm()'s "what the
+ * radio measured", but for what was ASKED rather than what came back.
+ * Writes a short human-readable line into `out` (band, applied voltage or
+ * why not) and returns true if a voltage was applied, false otherwise
+ * (uncalibrated band, no match within tolerance, or the guard is holding
+ * the line - `out` says which). Safe from the UI thread; touches no CAT
+ * state itself, only the small static this file already keeps. */
+bool wspr_pa_calibrated_status(char *out, size_t out_sz);
+
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
- * wspr_duty_pct, or the countdown keeps describing the previous setting until
+ * the tx/rx cycle counts, or the countdown keeps describing the previous setting until
  * the next cycle boundary.
  *
  * ⚠ Takes the two values rather than reading the settings, because both callers
  * are UI tasks and settings_load_all() is a multi-kilobyte stack allocation -
  * the bug class that has boot-looped this board four times. */
-void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct);
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles);

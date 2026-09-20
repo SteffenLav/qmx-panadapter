@@ -71,6 +71,12 @@ typedef struct {
  * meant to hand a short list of real candidates to wspr_decode_candidate(),
  * not a final answer. Writes up to max_out candidates into `out`, ordered
  * strongest-first. Returns the count written. */
+/* Returned instead of a count when the search cannot get its ~2.3 MB of FFT
+ * scratch. NEVER 0 for that case: a zero count means "this capture holds no
+ * WSPR", and the two are indistinguishable to the eye - five strong traces
+ * decoded nothing for most of a day because they were the same number. */
+#define WSPR_CANDS_NOMEM (-1)
+
 int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
                           double f_hi_hz, wspr_freq_candidate_t *out,
                           int max_out);
@@ -241,6 +247,19 @@ typedef enum {
 } wspr_guard_verdict_t;
 
 /* Sensible defaults: NEAR enforced (agreed low-risk), SLOW measured only. */
+/* Call once per capture, before the candidate loop. Resets the per-cycle
+ * ration of expensive deep searches - see WSPR_DEEP_MAX_PER_CYCLE in
+ * wspr_decode.c for why the deep path has to be rationed at all. */
+void wspr_decode_begin_cycle(void);
+
+/* The per-cycle ration of expensive deep searches (#367), at runtime. 0 is the
+ * shipping default and means the deep pass is off; see WSPR_DEEP_MAX_PER_CYCLE
+ * in wspr_decode.c for why it is off and what has to be fixed first (#376).
+ * Set from {"action":"wspr_guards","deep":N} so the on/off comparison can be
+ * made on one band in one hour without a reflash. */
+void wspr_decode_set_deep_max(int n);
+int  wspr_decode_get_deep_max(void);
+
 void wspr_guards_defaults(wspr_guards_t *g);
 
 /* Distance in Hz to the nearest already-accepted decode, or -1.0 if none.

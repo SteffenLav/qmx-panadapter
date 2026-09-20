@@ -54,6 +54,38 @@ soon as the radio replies. It writes when you let go of the slider, not
 while you drag, because this is stored configuration rather than a session setting.
 Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
 
+**Show decoded CW** — the line along the bottom of the panadapter carrying the Morse the radio is decoding, in CW/CW-R. On by default. The QMX does the decoding itself, so switching this off frees no processing — only the screen space; see the Decoded CW section of the [Panadapter](panadapter.md) guide for what the line shows and how the noise is filtered. The same setting is in the browser under **Radio & display**.
+
+**CW profiles** — a CW centre frequency together with the filter widths to offer
+with it, so a setup you use often is one tap rather than two menus on the radio
+(suggested by Uwe DL8UG: *"setting this on the QMX is always a bit of a chore,
+and half the time you do not have the right values in your head anyway"*).
+
+There are four slots. Edit them in the **browser's Settings window**, under
+**CW profiles**: a name, a centre frequency, and a tick for each width you want
+the bandwidth list to offer. Apply one from the button beside it, or from
+**CW profiles** in the Tab5's settings drawer, where the four slots appear as
+four buttons.
+
+- The centre must be **500–950 Hz in steps of 25**, which is what the radio
+  accepts. Anything else is corrected as you leave the box, so what you see is
+  what will be stored.
+- Names are cut to nine characters — that is what fits on the Tab5's buttons.
+- Leave the centre empty to clear a slot.
+
+!!! warning "Applying a profile changes your radio's stored configuration"
+
+    It writes the CW centre and all eight filter rows, then asks the radio to
+    reload — which takes about a second, and briefly interrupts reception. It is
+    a deliberate, once-a-session action rather than something to tap while
+    operating. Every write is read back and retried, and the bandwidth list is
+    re-read from the radio afterwards, so what the Tab5 offers is what the radio
+    really has.
+
+    Note that setting the CW centre also moves the radio's CW offset and
+    sidetone with it, which is the QMX's own behaviour and not something the
+    panadapter chooses.
+
 **CW transmit offset** — transmit a little away from the station you are listening to,
 so a QRP call is not buried in the pile of everyone zero-beating the DX (suggested by
 Roy KI0ER). The centre of the slider is off, and the sign chooses whether you transmit
@@ -102,8 +134,8 @@ Tune are both refused rather than keying a radio you are holding.
 **Radio menus** — the QMX's own menu system on the Tab5's screen, so you do not have to
 reach the radio at all. Unlike the button above it, this does **not** stop the panadapter:
 it uses the radio's *second* USB serial port, so CAT keeps running while you are in the
-menus. You have to switch that port on once, on the radio — System config → GPS & Ser.
-ports → USB serial ports → 2. For a QMX+ with no control panel this is the only way into
+menus. You have to switch that port on once, on the radio — System config -> GPS & Ser.
+ports -> USB serial ports -> 2. For a QMX+ with no control panel this is the only way into
 its menus. See [Radio Menus](radio-menus.md).
 
 ## Operator Info
@@ -151,7 +183,7 @@ address the unit actually has.
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
 
 **Setting the time by hand** — there is no control for this in the drawer, despite what
-earlier versions of this guide said. The clock is set from the FT8 screen: **Options →
+earlier versions of this guide said. The clock is set from the FT8 screen: **Options ->
 Sync Time**. See [Setting the time by hand](time-sync.md#5-setting-the-time-by-hand),
 which also covers setting the seconds — the part that matters with no WiFi and no GPS.
 
@@ -172,6 +204,18 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 **Display sleep** — Dropdown (Off / 1 / 2 / 5 / 10 / 30 min). After the chosen idle time the backlight turns off; FT8, the radio link, and the web UI keep running. Tap the screen to wake — the wake tap is swallowed, so it can't tune or press anything. A **two-finger double-tap** blanks the display immediately.
 
 **Brightness** — Screen brightness (0–100%).
+
+**Frequency format** — How a frequency is punctuated, everywhere it is shown: the readout in the top bar, the FT8/FT4
+preset button and its band lists, the WSPR band picker, the frequency keypad and the scale under the spectrum.
+
+The default, `14.074.000`, is what the Tab5 has always shown and what the QMX shows on its own LCD. It is not a
+national convention — Icom, Yaesu and Kenwood group a frequency the same way, using the periods as visual anchors
+between MHz, kHz and Hz rather than as a decimal point. Matching the radio sitting next to the Tab5 is why it is the
+default.
+
+The alternative, `14,074,000`, is US written grammar: a comma every three digits *(Don N2VGU, who reads and writes
+frequencies that way and whose instruments offer the choice)*. It changes as soon as you pick it — there is nothing
+to restart.
 
 **Spectrum Mode** — 
 - **Normal** — absolute dBm scale
@@ -195,6 +239,10 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 - **Blackman-Harris** (default) — best frequency resolution
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
+
+**Waterfall scroll speed** — 1× to 4× (default 1×). How many rows the waterfall
+advances per render, independent of the spectrum and S-meter update rate, which
+stay unchanged either way.
 
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.
@@ -230,9 +278,23 @@ you tune towards it. Switch it off and the display re-centres on the dial at eve
 with the marker in the middle. Applies from **×2 zoom up**; at ×1 the view is already the
 whole 48 kHz the radio sends, so there is no room to hold it still. The full behaviour,
 including when the view re-frames, is in
-[Panadapter → Still Spectrum](panadapter.md#9-still-spectrum).
+[Panadapter -> Still Spectrum](panadapter.md#9-still-spectrum).
 
-**Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
+**Tune snap** *(Advanced)* — the grid a tap on the spectrum lands on, in SSB and
+the digital modes: **Off**, 250 Hz, 500 Hz or 1 kHz. The default is 500 Hz, which
+is what earlier versions always did.
+
+Choose **Off** to tune exactly where you tap (asked for by Samuel W7STF). The
+grid exists because SSB stations sit on whole kilohertz and the ones that stray
+are usually at the half, so landing on a round number is normally what you want —
+but it is a preference, and now it is one you can set. CW keeps its own 10 Hz
+grid, AM and FM their 1 kHz, and tap-to-RIT overrides all of them, because an
+offset onto one caller's tone needs resolution rather than tidiness.
+
+**Distance in Miles** — show distances in miles instead of kilometres, in the FT8
+decode list **and on the WSPR page** (off by default). Until v1.12.0 the WSPR
+list and its Best DX panel always printed kilometres regardless of this setting,
+and the control was not reachable from the WSPR page at all.
 
 **Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
@@ -264,7 +326,7 @@ button and drawer control becomes a click instead of a precise tap on glass.
 
 **Setting it up**
 
-1. Tick **Bluetooth mouse → Enable** in the settings drawer.
+1. Tick **Bluetooth mouse -> Enable** in the settings drawer.
 2. **Restart the Tab5.** Bluetooth can only start once the radio link to the
    wireless co-processor is up, so the switch takes effect on the next boot —
    the toast says so at the time.
@@ -295,7 +357,7 @@ and the manual all scroll.
 ### A Bluetooth keyboard
 
 A Bluetooth keyboard works the same way and needs no separate setting — the same
-**Bluetooth → Enable** switch covers both. Pair it and it types into every text
+**Bluetooth -> Enable** switch covers both. Pair it and it types into every text
 field, exactly as the snap-on keyboard does: **Enter** presses Save in any
 window, **Esc** presses Cancel, **Tab** moves to the next field, and the arrow
 keys move the cursor.
@@ -324,18 +386,37 @@ a large part of the display, and with a real keyboard you get that space back.
 
 ## Firmware updates
 
-**Download updates automatically** *(Network — on by default, v1.9.3)* — when a
-newer release appears, the Tab5 fetches it quietly in the background so that
-the only thing left for you is one decision: restart now, or later. The
-spectrum, waterfall and FT8 decoding keep running while it downloads.
+!!! warning "The next update after v1.14.4 needs a USB-C cable, once"
 
-Switch it off if you are on a metered connection — a phone hotspot in a field,
-for example — as each update is about 3.3 MB. With it off nothing is fetched
-until you ask: the bottom bar still offers the update, and the window's button
-reads **Download now**.
+    v1.14.4 is the last release that installs over the air for a while. The one
+    after it claims 2.81 MB of flash that no partition has ever used, which
+    means rewriting the partition table — and an over-the-air update can only
+    ever write the app, never the map of the flash. That is deliberate: it is
+    what stops a failed download taking the layout with it.
 
-⚠ Turning this on never installs anything by itself. Applying an update
-restarts the Tab5, and only you can ask for that — see
+    So the next firmware arrives as a **flasher download** — the same USB-C data
+    cable and the same `flash.bat` / `flash.command` you used the first time.
+    One time, and everything after it is over the air again.
+
+    **Your settings and your log are kept.** Press **Enter** at the flash-type
+    prompt. Do *not* press **E** — that erases the whole chip, including your
+    QSO log and your LoTW private key, and it is not needed here.
+
+    The Tab5 will tell you when the time comes: the update window says so
+    instead of offering a download, and it refuses to fetch an image it cannot
+    install.
+
+**Updating is one route, and you are always asked** *(v1.14.4)* — when a newer
+release appears, the version at the bottom of the screen changes to show it.
+Tap it, and a window opens with **Download now**. The download runs in the
+background, and when it finishes the same window offers **Restart now**.
+
+Nothing is fetched and nothing is installed until you press something. The
+earlier "download updates in the background" option is gone: it had been
+suppressed by a memory guard for months and never actually ran, so removing it
+made the behaviour match what it had always been in practice.
+
+⚠ Applying an update
 [Keeping It Up To Date](../quick-start.md#step-10-keeping-it-up-to-date).
 
 ---
@@ -369,6 +450,18 @@ Whatever you switch on, **one station is one entry**: the same callsign within
 duplicate folds back in as corroboration — drawn brighter, meaning a receiver
 copied them just now rather than someone having typed it an hour ago.
 
+## Spot Map
+
+There is no setting here any more — the full-screen map of stations that have
+reported *your* signal runs its feeds from boot, always, and opens from the
+**SelfSpotter** button in the drawer (below **Need guidance?**), not a
+setting or a switch. Full details in [Spot Map](spot-map.md), including what
+running the feeds all the time costs.
+
+Wants **your grid square** (the map draws lines from it) and **your callsign**
+(it is what the feeds are asked about). QRZ callbook credentials are optional and
+only place RBN skimmers more precisely.
+
 ## FT8 Settings
 
 
@@ -398,7 +491,7 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 ## WSPR
 
 The **WSPR** group appears only while the WSPR page is up, and holds **Allow
-transmitting**, **Declared power**, **Duty cycle**, **Band hopping** and **Publish spots
+transmitting**, **Declared power**, **Transmit schedule**, **Band hopping** and **Publish spots
 to wsprnet**. They are described where they make sense — see [WSPR](wspr.md).
 
 ## The snap-on keyboard
@@ -465,17 +558,31 @@ Useful for troubleshooting rare issues.
 
 ## microSD Auto-Archive — Station Backup
 
-Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) **before switching the Tab5 on** and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
+Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
 
 | File | Contents |
 |------|----------|
 | `qso.adi` | ADIF QSO log — after each new entry with WiFi off, otherwise at the next start-up |
+| `qso.prev.adi` | The QSO log as it was just before it last got **smaller** — see below |
 | `qmx-config.txt` | All settings + memory channels, as INI text (restore via **Config** upload) |
 | `lotw_cert.b64`, `lotw_key.b64` | Your LoTW signing certificate + private key, so a restored device can sign for LoTW |
 | `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
 | `README.txt` | A plain-text description of every file, written on each mount |
 
-**Insert the card before switching the Tab5 on.** A card pushed in later is not picked up until the next start-up — the Tab5 can only claim the card during a short window early in boot.
+**After inserting the SD card your Tab5 needs a restart.** The Tab5 can only claim the card during a short window early in boot, so a card pushed in while it is running is not used until you restart.
+
+### Benefits of a microSD card
+
+The Tab5 works perfectly well without one. With a card in, you also get:
+
+- **A full diagnostic history instead of the last few minutes.** Without a card, the log that survives a restart is held in a small area of internal flash and is overwritten roughly every 11 minutes of busy operating. On the card it is kept whole — so if something goes wrong overnight, or an hour ago, the evidence is still there when you come to report it.
+- **A grab-and-go station backup.** Your QSO log, every setting, your WiFi details and your LoTW certificate and key, mirrored automatically. Move the card to another Tab5 and your station comes with it, with no computer involved.
+- **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
+- **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
+
+A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
+
+**After inserting the SD card your Tab5 needs a restart.**
 
 ### When the mirror runs
 
@@ -484,15 +591,47 @@ The microSD card and the WiFi co-processor share a bus on this hardware and cann
 | | What happens | SD dot |
 |---|---|---|
 | **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in | **Green** |
-| **WiFi on** | One complete backup within a few seconds of switching on, then mirroring stops | **Yellow** |
+| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds | **Yellow** |
 
 Either way your QSO log, config, and LoTW certificate and key are backed up. With WiFi on, QSOs made later in that session reach the card at the **next start-up** — so if you have been operating with WiFi up and want them on the card now, restart the Tab5.
 
 If no card is inserted the dot is absent, which is not an error.
 
+**While a browser is watching the spectrum, those 30-second writes wait.** The
+card and the WiFi co-processor share a bus, and writing the card holds the
+spectrum stream for several seconds — long enough to look like the web page has
+frozen. The writes go through regardless after three minutes, so a crash still
+reaches the card; close the browser tab if you want the card fully current
+sooner.
+
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
+
+### Restoring the log from the card
+
+The card copy used to be one-way: the Tab5 wrote `qso.adi` to it and could never
+read it back, so a log lost to an erase-and-reinstall needed a computer, a
+browser, and knowing the file was on the card at all. It now restores from the
+device itself.
+
+- **On the Tab5:** open the log window (**ADIF Log**) and press **Restore from
+  SD**.
+- **In the browser:** **QSO Logs ▲ -> ↳ Restore from SD card**.
+
+Both merge: contacts already in the log are skipped, nothing is duplicated, and
+nothing already logged is lost — so it is safe to press twice. You are told what
+happened, including how many were already there and how many could not be read.
+
+**`qso.prev.adi` — the copy from before.** The card mirrors the *present*, so a
+QSO deleted before a restart is gone from the card at the next start-up too.
+Whenever the log about to be written is **smaller** than the one already on the
+card, the older copy is kept as `qso.prev.adi` first. Normal logging grows the
+file and never disturbs it, so it holds the last larger version for as long as
+it takes you to notice.
+
+To use it, copy `qso.prev.adi` off the card (**Files ▲ -> SD Files** in the
+browser, or a card reader) and restore it with **ADIF restore ↑**.
 
 ## Activation (POTA / SOTA)
 
@@ -560,7 +699,7 @@ slot.
 
 ---
 
-## Propagation feedback — who is hearing me
+## Who has heard me (last 24 h)
 
 This asks PSK Reporter which receivers have copied **your** callsign recently.
 It is the reverse of the reports the panadapter *sends*, and the two are
@@ -574,8 +713,8 @@ receiving side alone it looks exactly like a dead band.
 **This one lives in the browser, not on the Tab5.** There is no drawer control
 for it — the answer is a list of stations with distances and bearings, which
 wants a screen you are already sitting in front of. In the web UI open
-**Settings → Spots & reporting** and tick **Propagation feedback (who is hearing
-me)**, then **Miscellaneous → Who is hearing me** for the list: receiver,
+**Settings -> Spots & reporting** and tick **Who has heard me (last 24 h)**,
+then **Miscellaneous -> Who has heard me (24 h)** for the list: receiver,
 country, distance, bearing and the signal report they gave you, sorted by
 distance.
 
@@ -595,6 +734,7 @@ Reporter requests.
 | Column | Content |
 |--------|---------|
 | Call | Callsign |
+| Grid | Their Maidenhead grid square, when they sent one |
 | Country | DXCC entity (looked up from the callsign prefix) |
 | Mode | FT8 or FT4 |
 | Band | Band (20m, 40m, …) |
@@ -602,8 +742,26 @@ Reporter requests.
 | Time | UTC time |
 | Sent | Your signal report (SNR) |
 | Rcvd | Their signal report (SNR) |
+| Ref | The park or summit *they* were activating, when the contact came from a spot |
 
 A sticky header row stays pinned while you scroll. Even-numbered rows are lightly shaded so long logs stay easy to scan.
+
+**Search** — the field under the title filters the list as you type. It matches
+**callsign, country, mode, band, date, grid and the park/summit reference**, on
+any part of a word, and several words must all match: `ha3 20m` finds HA3-prefix
+contacts on 20 m only. Country is searchable even though the ADIF file does not
+store it — it comes from the same prefix lookup the Country column shows, so the
+two can never disagree.
+
+If nothing matches, the list says so in as many words: *"Nothing matches X — so
+this one has not been worked."* That is the question the search exists to
+answer. The decode list already greys out a station you have worked, but only
+while that station happens to be on the air; this asks the same question
+whenever you like *(Gyula HA3HZ)*.
+
+Tapping the field brings up the keyboard, and the window moves up and shortens
+so the matches stay visible while you type. Clear the field to see the whole log
+again; the search also clears itself each time you open the window.
 
 **Today/All filter** — the viewer opens on **Today** (falling back to All when nothing was logged today). The toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts.
 
@@ -611,9 +769,19 @@ A sticky header row stays pinned while you scroll. Even-numbered rows are lightl
 
 **Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 
+**Restore from SD** — the middle button reads the QSO log back off the microSD
+card. See [Restoring the log from the card](#restoring-the-log-from-the-card)
+below; there is nothing to choose, and contacts already logged are skipped, so
+pressing it twice does nothing.
+
 **Delete all** — the red-bordered button at the bottom-left erases the **whole** log. Two-tap confirm: the first tap arms it (the label changes to "ALL *N*?"), a second tap within 5 seconds deletes; wait and it disarms itself. There is no undo — download the ADIF from the web UI first if you want a copy. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit.
 
-Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs → View / edit log**).
+Anything this window does — a restore, a delete — reports back in a small panel
+with an **OK** button rather than a message that fades on its own. The result of
+something you asked for is worth reading, and dismissing it is how you say you
+did.
+
+Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs -> View / edit log**).
 
 **Exclude Worked Before** — When FT8 filtering, skip stations you've already logged QSOs with (requires you to import your own prior ADIF log first).
 

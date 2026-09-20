@@ -12,7 +12,12 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04 betas** work with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Everything from **v1.03.002** up to and including **v1.04.010** works with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+
+!!! warning "Stay on v1.04.010 for now"
+
+    **v1.04.011** (19-Sep-2026) is not recommended with the panadapter yet. One operator reports the radio producing **no transmit output** when keyed over CAT from the Tab5, and others report the radio's own Tune SWR and Hardware Test screens freezing until it is power-cycled — all of which go away on v1.04.010. These are being reported to QRP Labs. If you are already on v1.04.011 and see either, roll back to v1.04.010.
+
 
 ## Step 2: Flash the Tab5
 
@@ -49,8 +54,8 @@ You need **two USB connections**:
 
 | Connection | Tab5 Port | Cable | Carries |
 |---|---|---|---|
-| Tab5 ← QMX | USB-A (host) | USB-A to USB-C, **data cable** | I/Q audio + CAT control |
-| Tab5 ← Power | USB-C | Any USB-C power cable | 5V power |
+| Tab5 <- QMX | USB-A (host) | USB-A to USB-C, **data cable** | I/Q audio + CAT control |
+| Tab5 <- Power | USB-C | Any USB-C power cable | 5V power |
 
 ⚠️ **Cable gotcha:** Many USB-C cables are charge-only. If the spectrum stays flat and the top bar shows `Band: ---`, you have a charge-only cable. Swap it for one you know does data (USB stick, phone sync, etc.).
 
@@ -72,7 +77,7 @@ You can change these anytime by swiping right from the screen edge to open the s
 
 ## Step 5b: Optional — microSD Card (station backup)
 
-Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's slot **before switching it on**, and it automatically mirrors your whole station to `/qmx-panadapter/` on the card — a **grab-and-go backup** you can pull into a PC or another Tab5, no computer needed in the field:
+Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's slot and it automatically mirrors your whole station to `/qmx-panadapter/` on the card — a **grab-and-go backup** you can pull into a PC or another Tab5, no computer needed in the field:
 
 - **ADIF QSO log** — mirrored after each new QSO
 - **Config export** — all settings + memory channels (restore via the web **Config** upload)
@@ -85,7 +90,7 @@ The **SD** dot in the bottom status bar shows what is happening (absent = no car
 - **Green** — mirroring continuously. This is the case with **WiFi off**, i.e. normal POTA/SOTA operating.
 - **Yellow** — your start-up backup is written and mirroring has stopped. This is the case with **WiFi on**: the card and the WiFi co-processor share a bus and can't both use it reliably, so the Tab5 takes the full backup within a few seconds of switching on and then leaves the card alone. QSOs made later in that session are written at the next start-up.
 
-> **Insert the card before switching on.** A card pushed in later isn't picked up until you restart.
+> **After inserting the SD card your Tab5 needs a restart.** The card is claimed during a short window early in boot, so one pushed in while the Tab5 is running isn't used until you restart it.
 
 > ⚠️ The backup contains credentials (WiFi password, QRZ/eQSL logins, LoTW private key) — keep the card physically secure. Skipping this step is fine; your logs and settings always live in the device's own storage too.
 
@@ -95,7 +100,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
+| Swipe → from **left edge** | Cycle Panadapter -> FT8/FT4 -> WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
@@ -135,49 +140,60 @@ If you set up WiFi:
 ## Step 10: Keeping It Up To Date
 
 From v1.8.9 the Tab5 can update itself over WiFi. You do not need the cable
-again unless something goes badly wrong. **From v1.9.3 it also fetches the
-update quietly in the background**, so by the time it says anything, the work
-is already done and only one decision is left.
+again unless something goes badly wrong. The version on the bottom bar turns
+amber when a newer one exists; tap it, choose **Download now**, and then
+**Restart now** when it suits you — nothing is fetched or installed until you
+ask for it.
 
-When a newer release has been downloaded and is waiting for you, the version at
-the bottom of the screen changes to show it, in light green, and breathes
-gently so you notice it:
+!!! warning "v1.15.0 needs a USB-C cable, once"
+
+    v1.15.0 reclaims 2.81 MB of flash that had never been used, and that means
+    rewriting the partition table — something an over-the-air update cannot do,
+    by design. It is the only release that needs the cable, and afterwards
+    over-the-air updates work as before, with more than twice the room.
+
+    So v1.15.0 comes as a **flasher download**: the same USB-C data cable and
+    the same script you used to install the firmware the first time.
+
+    If you tap the update notice instead, it will simply fail — there is no
+    over-the-air image to fetch, on purpose.
+
+    **Your settings, memories, QSO log and LoTW certificate are kept.** Press
+    **Enter** at the flash-type prompt — not **E**, which erases everything
+    including your LoTW private key.
+
+    You will not have to remember this. When that release appears, the update
+    window tells you instead of offering a download.
+
+When a newer release is available, the version at the bottom of the screen
+changes to show it, in light green, and breathes gently so you notice it:
 
 ```
-v1.9.2 -> v1.9.3 ?
+v1.14.3 -> v1.14.4 ?
 ```
 
 Tap the bar — anywhere along it — and a window opens in the middle of the
-screen with the version, what will happen, and two buttons:
+screen with the version and two buttons:
 
-- **Restart now** — the screen goes dark and the Tab5 comes back on the new
-  firmware, about 20 seconds.
-- **Later** — the window closes and the bar stops breathing. The line stays,
-  quietly, and tapping it opens the window again whenever you are ready.
+- **Download now** — the download runs in the background while the spectrum,
+  waterfall and FT8 decoding keep working. Expect a slight stutter and one brief
+  pause right at the end while the new firmware is verified.
+- **Dismiss** — the window closes. The line stays, quietly, and tapping it opens
+  the window again whenever you are ready.
 
-Nothing restarts on its own. You choose when, so it can never interrupt a
-contact.
-
-While a download is running the line is amber and counts up, and the spectrum,
-waterfall and FT8 decoding all keep working — expect a slight stutter and one
-brief pause right at the end while the new firmware is verified:
+While the download runs the window shows the percentage:
 
 ```
-v1.9.2 -> v1.9.3  42%
+Downloading  42%
 ```
+
+When it finishes, the same window offers **Restart now** — the screen goes dark
+and the Tab5 comes back on the new firmware, about 20 seconds.
+
+Nothing is fetched until you press **Download now**, and nothing restarts until
+you press **Restart now**. It can never interrupt a contact.
 
 The same window is available from the web page, in the same words.
-
-### If you would rather it did not download by itself
-
-The background download is **on by default** and can be switched off in
-**Settings → Network → Download updates automatically**. Turn it off if you
-are on a metered connection — a phone hotspot in a field, for instance — since
-each update is about 3.3 MB. With it off, the bar offers the update and the
-window's button reads **Download now** instead.
-
-Downloading never applies anything on its own. Only the restart does that, and
-only you can ask for it.
 
 ### Checking straight away
 
@@ -204,7 +220,7 @@ off and on again afterwards — the screen will tell you if so.
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04 betas also work)
+- Check QMX firmware version (Step 1 above) — v1.03.002 up to v1.04.010 (not v1.04.011 yet — see Step 1)
 - Try a different USB cable
 
 **Flashing keeps failing, but the COM port is there?**

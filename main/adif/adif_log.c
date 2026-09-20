@@ -10,6 +10,7 @@
 // s_lock during I/O.
 
 #include "adif_log.h"
+#include "adif_check.h"
 
 #include "esp_log.h"
 #include "esp_spiffs.h"
@@ -485,10 +486,21 @@ void adif_log_record(const adif_qso_t *qso)
         return;                      // do NOT count it, do NOT mirror it
     }
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count++;
     cache_add(qso->their_call, freq_to_band(qso->freq_hz));
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 
     ESP_LOGI(TAG, "Logged QSO #%d: %s @ %.4f MHz (%s/%s)",
              s_count, qso->their_call,
@@ -501,9 +513,9 @@ void adif_log_record(const adif_qso_t *qso)
 
 int adif_log_count(void)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     int n = s_count;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return n;
 }
 
@@ -515,12 +527,12 @@ const char *adif_log_file_path(void)
 bool adif_log_contains_call(const char *call)
 {
     if (!call || !call[0]) return false;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
         if (strcmp(s_worked[i].call, call) == 0) found = true;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return found;
 }
 
@@ -536,13 +548,13 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
     // any band is the conservative direction for a filter whose job is
     // avoiding duplicates.
     bool any_band = (band[0] == '\0');
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
         if (strcmp(s_worked[i].call, call) == 0 &&
             (any_band || strcmp(s_worked[i].band, band) == 0)) found = true;
     }
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     return found;
 }
 
@@ -592,6 +604,62 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz)
                                    // still counted, just not re-checked -
                                    // a >512-unique-station activation isn't
                                    // a realistic field session
+
+/* #263 - the ONE completeness walk. See adif_log.h for why it is not two.
+ *
+ * Runs on whichever task asked (httpd for the endpoint, taskLVGL for the
+ * Activation modal): one buffered read of a file measured at ~6 ms for a few
+ * hundred records, no allocation, and the caller owns the problem array. */
+void adif_log_check(bool activating, adif_log_check_t *out,
+                    adif_log_problem_t *problems, int max_problems)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->total = adif_log_count();
+    if (!s_mounted) return;
+
+    FILE *f = fopen(FILE_PATH, "r");
+    if (!f) return;
+
+    char line[1024];
+    int  rec = -1;
+    bool header_done = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (!header_done) { header_done = true; continue; }
+        if (!line[0] || line[0] == '\n') continue;
+        rec++;
+        out->checked++;
+
+        char call[24] = "", date[16] = "", tm[12] = "", band[12] = "",
+             mode[12] = "", stn[24] = "", mysig[24] = "", sig[24] = "";
+        adif_log_extract_field(line, "CALL",             call,  sizeof(call));
+        adif_log_extract_field(line, "QSO_DATE",         date,  sizeof(date));
+        adif_log_extract_field(line, "TIME_ON",          tm,    sizeof(tm));
+        adif_log_extract_field(line, "BAND",             band,  sizeof(band));
+        adif_log_extract_field(line, "MODE",             mode,  sizeof(mode));
+        adif_log_extract_field(line, "STATION_CALLSIGN", stn,   sizeof(stn));
+        adif_log_extract_field(line, "MY_SIG_INFO",      mysig, sizeof(mysig));
+        adif_log_extract_field(line, "SIG_INFO",         sig,   sizeof(sig));
+
+        adif_check_fields_t fl = {
+            .call = call, .qso_date = date, .time_on = tm, .band = band,
+            .mode = mode, .station_call = stn,
+            .my_sig_info = mysig, .sig_info = sig,
+        };
+        uint32_t bad = adif_check_record(&fl, activating);
+        if (!bad) continue;
+
+        out->all_flags |= bad;
+        out->with_problems++;
+        if (problems && out->listed < max_problems) {
+            adif_log_problem_t *e = &problems[out->listed++];
+            e->idx   = rec;
+            e->flags = bad;
+            snprintf(e->call, sizeof(e->call), "%s", call[0] ? call : "(none)");
+        }
+    }
+    fclose(f);
+}
 
 int adif_log_count_activation(const char *sig_info)
 {
@@ -783,6 +851,108 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
     return true;
 }
 
+// Delete MANY records in ONE rewrite (#325).
+//
+// ⛔ Do not implement a multi-delete as a loop over adif_log_delete_record().
+// That was the original shape and it is O(N²): each call rewrites the whole
+// file, so removing 500 of 525 records measured **0.25 deletions/second** on
+// the dev bench - about half an hour, and ~46 MB of SPIFFS writes on the
+// partition that also holds the LoTW private key. The caller ran it on
+// taskLVGL too, so the UI was dead throughout and the operator saw a device
+// that looked crashed ("I pressed Sure? then nothing happens.... for like
+// 2min?"). This does one pass instead, and the cost is the same as deleting
+// one record.
+//
+// `want_gone(idx, raw, ctx)` decides per record. Returns how many were removed,
+// or -1 on failure with the log left untouched.
+//
+// ⚠ Still not for taskLVGL: one rewrite of a large log is hundreds of ms.
+int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *ctx),
+                             void *ctx)
+{
+    if (!s_mounted || !want_gone) return -1;
+
+    const char *TMP_PATH = "/spiffs/qso.tmp";
+    FILE *in = fopen(FILE_PATH, "r");
+    if (!in) { ESP_LOGE(TAG, "batch delete: could not open %s (errno %d)", FILE_PATH, errno); return -1; }
+    FILE *out = fopen(TMP_PATH, "w");
+    if (!out && errno == ENOSPC) {
+        // Same live self-heal as the single-record path above.
+        esp_spiffs_check("storage");
+        esp_spiffs_gc("storage", 65536);
+        out = fopen(TMP_PATH, "w");
+    }
+    if (!out) {
+        ESP_LOGE(TAG, "batch delete: could not open %s for write (errno %d)", TMP_PATH, errno);
+        fclose(in);
+        return -1;
+    }
+
+    char line[1024];
+    int  rec = -1;
+    int  removed = 0;
+    // Cursors must follow every deletion that sits BELOW them - same rule as
+    // the single delete, counted as we go rather than applied per record.
+    int  removed_below_qrz = 0, removed_below_eqsl = 0, removed_below_lotw = 0;
+    // ⛔ NOT settings_load_all() - that is a multi-kilobyte struct on the
+    // stack and this runs on a small worker task. Doing it the obvious way
+    // crashed adif_delt with a Stack protection fault (2026-09-06); see the
+    // task-stack section in CLAUDE.md, which this is now another instance of.
+    uint32_t cur_qrz = 0, cur_eqsl = 0, cur_lotw = 0;
+    settings_get_upload_cursors(&cur_qrz, &cur_eqsl, &cur_lotw);
+
+    while (fgets(line, sizeof(line), in)) {
+        if (rec < 0) { fputs(line, out); rec = 0; continue; }   // keep header
+        if (want_gone(rec, line, ctx)) {
+            removed++;
+            if ((uint32_t)rec < cur_qrz)  removed_below_qrz++;
+            if ((uint32_t)rec < cur_eqsl) removed_below_eqsl++;
+            if ((uint32_t)rec < cur_lotw) removed_below_lotw++;
+        } else {
+            fputs(line, out);
+        }
+        rec++;
+    }
+    fclose(in);
+
+    bool write_ok = (ferror(out) == 0);
+    if (write_ok) {
+        fflush(out);
+        fsync(fileno(out));
+        write_ok = (ferror(out) == 0);
+    }
+    if (fclose(out) != 0) write_ok = false;
+
+    if (!write_ok) {
+        remove(TMP_PATH);
+        ESP_LOGE(TAG, "batch delete: rewrite failed (storage full?) - log left untouched");
+        ui_toast("Delete failed - storage full? Log unchanged");
+        return -1;
+    }
+    if (removed == 0) { remove(TMP_PATH); return 0; }   // nothing matched
+
+    remove(FILE_PATH);
+    if (rename(TMP_PATH, FILE_PATH) != 0) {
+        ESP_LOGE(TAG, "batch delete: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        ui_toast("Delete failed - could not replace the log file");
+        return -1;
+    }
+
+    if (removed_below_qrz)  settings_set_qrz_uploaded_n(cur_qrz   - removed_below_qrz);
+    if (removed_below_eqsl) settings_set_eqsl_uploaded_n(cur_eqsl - removed_below_eqsl);
+    if (removed_below_lotw) settings_set_lotw_uploaded_n(cur_lotw - removed_below_lotw);
+
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_count        = 0;
+    s_worked_count = 0;
+    if (s_lock) xSemaphoreGive(s_lock);
+    load_from_file();
+
+    ESP_LOGI(TAG, "batch delete: removed %d record(s) in one rewrite (%d remain)", removed, s_count);
+    sd_archive_mark_adif_dirty();
+    return removed;
+}
+
 bool adif_log_delete_record(int idx)
 {
     // Every early return here used to be silent - the caller (adif_view_modal)
@@ -886,10 +1056,10 @@ bool adif_log_delete_record(int idx)
 
     // Rebuild count + worked cache from the rewritten file (the deleted
     // record may have been the only QSO with that call/band).
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
     s_worked_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
     load_from_file();
 
     ESP_LOGI(TAG, "Deleted QSO record #%d (%d remain)", idx, s_count);
@@ -899,10 +1069,10 @@ bool adif_log_delete_record(int idx)
 
 void adif_log_clear(void)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count       = 0;
     s_worked_count = 0;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 
     remove(FILE_PATH);
     FILE *f = fopen(FILE_PATH, "w");
@@ -952,6 +1122,16 @@ static const char *find_ci(const char *hay, const char *hay_end, const char *nee
 // the overlapping records rather than a second copy of them.
 int adif_log_import(const char *adif_text)
 {
+    adif_import_result_t discard;
+    return adif_log_import_ex(adif_text, &discard);
+}
+
+int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+
     if (!s_mounted || !adif_text) return -1;
 
     size_t total_len = strlen(adif_text);
@@ -1011,7 +1191,15 @@ int adif_log_import(const char *adif_text)
         const char *p = cursor;
         while (p < eor && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
         size_t blen = (size_t)(eor - p);
-        if (blen == 0 || blen >= sizeof(norm) - 8) { cursor = eor + 5; continue; }
+        res->found++;
+        if (blen == 0 || blen >= sizeof(norm) - 8) {
+            // Too long to hold as one record. Counted, never silently dropped:
+            // a skipped record reported as "already in the log" is a false
+            // statement about someone's log.
+            if (blen) res->unreadable++;
+            cursor = eor + 5;
+            continue;
+        }
         size_t w = 0;
         for (size_t i = 0; i < blen; i++) {
             char c = p[i];
@@ -1020,10 +1208,10 @@ int adif_log_import(const char *adif_text)
         norm[w] = '\0';
         cursor = eor + 5;   // past "<eor>"
 
-        if (!strchr(norm, '<')) continue;   // not a real record - nothing tagged
+        if (!strchr(norm, '<')) { res->unreadable++; continue; }   // nothing tagged
 
         char call[ADIF_CALL_MAX], date[9], time_on[7], band[ADIF_BAND_MAX], freq_str[16];
-        if (!adif_log_extract_field(norm, "CALL", call, sizeof(call))) continue;  // no call, nothing to key on
+        if (!adif_log_extract_field(norm, "CALL", call, sizeof(call))) { res->unreadable++; continue; }  // no call to key on
         if (!adif_log_extract_field(norm, "QSO_DATE", date, sizeof(date))) date[0] = '\0';
         if (!adif_log_extract_field(norm, "TIME_ON", time_on, sizeof(time_on))) time_on[0] = '\0';
 
@@ -1033,7 +1221,7 @@ int adif_log_import(const char *adif_text)
                 strcmp(existing[i].date, date) == 0 &&
                 strcmp(existing[i].time, time_on) == 0) { dup = true; break; }
         }
-        if (dup) continue;
+        if (dup) { res->duplicate++; continue; }
 
         fprintf(f, "%s<EOR>\n", norm);
 
@@ -1046,6 +1234,7 @@ int adif_log_import(const char *adif_text)
         }
         cache_add(call, band);
         added++;
+        res->added++;
 
         // Also guard against a duplicate appearing TWICE within this same
         // import (a file concatenated from two exports, say), not just
@@ -1073,13 +1262,170 @@ int adif_log_import(const char *adif_text)
     }
 
     if (added > 0) {
-        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
         s_count += added;
-        xSemaphoreGive(s_lock);
+        if (s_lock) xSemaphoreGive(s_lock);
         sd_archive_mark_adif_dirty();
     }
-    ESP_LOGI(TAG, "ADIF import: %d record(s) added, log now has %d", added, s_count);
+    ESP_LOGI(TAG, "ADIF import: %d found, %d added, %d duplicate, %d unreadable; log now has %d",
+             res->found, res->added, res->duplicate, res->unreadable, s_count);
     return added;
+}
+
+/* ---- update mode: let an import carry a CORRECTION ------------------------
+ *
+ * See adif_log.h for why. The keys of every readable record in the incoming
+ * text are collected once, the stale versions are removed in ONE rewrite, and
+ * then the ordinary add-only import runs - by which point nothing matches, so
+ * every corrected record lands as a normal append. */
+
+typedef struct { char call[ADIF_CALL_MAX]; char date[9]; char time[7]; } imp_key_t;
+typedef struct { imp_key_t *k; int n; } imp_keyset_t;
+
+static bool key_in_set(const imp_keyset_t *ks, const char *call, const char *date, const char *time_on)
+{
+    for (int i = 0; i < ks->n; i++)
+        if (strcmp(ks->k[i].call, call) == 0 &&
+            strcmp(ks->k[i].date, date) == 0 &&
+            strcmp(ks->k[i].time, time_on) == 0) return true;
+    return false;
+}
+
+static bool want_gone_if_incoming(int idx, const char *raw, void *ctx)
+{
+    (void)idx;
+    const imp_keyset_t *ks = (const imp_keyset_t *)ctx;
+    char call[ADIF_CALL_MAX], date[9], time_on[7];
+    if (!adif_log_extract_field(raw, "CALL", call, sizeof(call))) return false;
+    if (!adif_log_extract_field(raw, "QSO_DATE", date, sizeof(date))) date[0] = '\0';
+    if (!adif_log_extract_field(raw, "TIME_ON", time_on, sizeof(time_on))) time_on[0] = '\0';
+    return key_in_set(ks, call, date, time_on);
+}
+
+int adif_log_import_update(const char *adif_text, adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+    if (!adif_text) return -1;
+
+    /* COUNTED WITH find_ci, THE SAME SCANNER THE KEY LOOP USES. A first version
+     * counted "<EOR>" and "<eor>" as two literal sweeps: a mixed-case "<Eor>"
+     * would then be found by the loop but not by the count, the key array would
+     * fill, and the records past it would silently keep their stale versions -
+     * a partial correction reported as a complete one. The bound and the scan
+     * must come from one function. */
+    const char *end = adif_text + strlen(adif_text);
+    int n_eor = 0;
+    for (const char *q = adif_text; q < end; ) {
+        const char *e = find_ci(q, end, "<eor>");
+        if (!e) break;
+        n_eor++;
+        q = e + 5;
+    }
+    if (n_eor <= 0) return adif_log_import_ex(adif_text, res);
+
+    imp_keyset_t ks = { .k = heap_caps_malloc(sizeof(imp_key_t) * (size_t)n_eor,
+                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), .n = 0 };
+    if (!ks.k) {
+        /* No memory for the key set: fall back to an add-only import rather
+         * than deleting on a partial list, which would lose records. */
+        ESP_LOGW(TAG, "ADIF update: out of memory for %d keys - importing add-only", n_eor);
+        return adif_log_import_ex(adif_text, res);
+    }
+
+    const char *cursor = adif_text;
+    const char *eoh = find_ci(adif_text, end, "<eoh>");
+    if (eoh) cursor = eoh + 5;
+
+    char norm[512];
+    while (cursor < end && ks.n < n_eor) {
+        const char *eor = find_ci(cursor, end, "<eor>");
+        if (!eor) break;
+        const char *p = cursor;
+        while (p < eor && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        size_t blen = (size_t)(eor - p);
+        cursor = eor + 5;
+        if (blen == 0 || blen >= sizeof(norm) - 8) continue;
+        size_t w = 0;
+        for (size_t i = 0; i < blen; i++) {
+            char c = p[i];
+            norm[w++] = (c == '\r' || c == '\n') ? ' ' : c;
+        }
+        norm[w] = '\0';
+
+        imp_key_t *k = &ks.k[ks.n];
+        if (!adif_log_extract_field(norm, "CALL", k->call, sizeof(k->call))) continue;
+        if (!adif_log_extract_field(norm, "QSO_DATE", k->date, sizeof(k->date))) k->date[0] = '\0';
+        if (!adif_log_extract_field(norm, "TIME_ON", k->time, sizeof(k->time))) k->time[0] = '\0';
+        ks.n++;
+    }
+
+    int removed = 0;
+    if (ks.n > 0) {
+        removed = adif_log_delete_matching(want_gone_if_incoming, &ks);
+        if (removed < 0) {
+            /* The rewrite failed and left the log untouched, which is the safe
+             * outcome - but importing now would append second copies alongside
+             * the stale ones. Refuse instead. */
+            free(ks.k);
+            ESP_LOGE(TAG, "ADIF update: could not remove the stale records - log untouched, nothing imported");
+            return -1;
+        }
+    }
+    free(ks.k);
+
+    int added = adif_log_import_ex(adif_text, res);
+    res->replaced = (removed > 0) ? removed : 0;
+    ESP_LOGI(TAG, "ADIF update: %d found, %d added (%d of them replacing an existing record), %d unreadable",
+             res->found, res->added, res->replaced, res->unreadable);
+    return added;
+}
+
+// Restore from the card's own mirror. All the ADIF work is the existing
+// import; the only new part is getting the bytes off the card, which
+// sd_archive owns (it holds the mount, the paths and the lock).
+int adif_log_import_from_sd(adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+
+    // BOTH files on the card, not just qso.adi.
+    //
+    // Gyula HA3HZ renamed his own saved backups to qso.prev.adi, put them on the
+    // card, pressed this button and was told "nothing to restore" - because it
+    // only ever read qso.adi, which was simply the device's current log. He did
+    // nothing wrong: qso.prev.adi is the name the firmware itself writes, the
+    // docs called it recoverable, and the only route offered was a file upload
+    // from a PC. "Restore from the card" should mean everything the card knows.
+    //
+    // Safe to merge blind: both are our own files, the import already skips a
+    // contact that is present, and reading them oldest-last means the newer copy
+    // wins any tie. Neither present is the only real failure.
+    int total_added = 0;
+    bool read_any = false;
+
+    for (int pass = 0; pass < 2; pass++) {
+        size_t len = 0;
+        char *text = sd_archive_read_adif_file(pass == 1, &len);
+        if (!text) continue;
+        read_any = true;
+
+        adif_import_result_t r;
+        int added = adif_log_import_ex(text, &r);
+        free(text);
+
+        res->found      += r.found;
+        res->added      += r.added;
+        res->duplicate  += r.duplicate;
+        res->unreadable += r.unreadable;
+        if (added > 0) total_added += added;
+        else if (added < 0) return -1;   // the log could not be written - stop
+    }
+
+    if (!read_any) return -1;   // no card, or neither file on it
+    return total_added;
 }
 
 const char *adif_log_band_for_freq(uint32_t hz)

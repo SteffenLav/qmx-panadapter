@@ -6,8 +6,10 @@
 // and surfaced via ft8_pileup_modal.c so the operator can go back and work
 // someone who called during a busy CQ-run, even after they've stopped
 // transmitting and aged out of the live decode list (ft8_screen.c ages rows
-// out after FT8_ROW_STALE_SEC=120s; this list has no such expiry — an entry
-// only leaves when worked or manually dismissed, or gets evicted for space).
+// out after FT8_ROW_STALE_SEC=120s; this list survives far longer than that,
+// swept only past PILEUP_MAX_AGE_S in ft8_pileup.c — an entry otherwise
+// leaves when worked, manually dismissed, evicted for space, or a band
+// change makes it moot (see ft8_band_change_stand_down()).
 //
 // Deliberately NOT automatic: nothing in this module ever arms a TX. Tapping
 // an entry in the UI goes through the exact same ft8_tx_modal_show()

@@ -8,6 +8,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bsp/esp-bsp.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "display/display.h"
 #include "ui.h"
 
 static const char *TAG = "SCREENSHOT";
@@ -85,7 +87,20 @@ esp_err_t screenshot_capture_rgb565(uint8_t **out_buf, size_t *out_size,
 
     void *buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
-        ESP_LOGE(TAG, "heap_caps_malloc failed for %u bytes", (unsigned)buf_size);
+        /* ⚠ SAY WHICH OF THE TWO IT IS. A full frame is 1280x720x2 = 1.8 MB and
+         * it has to be CONTIGUOUS, so this fails either because PSRAM is
+         * genuinely low or because it is merely fragmented - and those want
+         * completely different fixes. Reported on the bench 2026-09-08 as
+         * "Server has encountered an unexpected error" from /ss.bmp while the
+         * WSPR page was running, with psram free down at 1.4-2.6 MB against
+         * 16 MB at boot: WSPR's ping-pong capture windows are megabytes each,
+         * so a full-screen snapshot is the first thing to be squeezed out.
+         * Without the largest-block figure there was no way to tell. */
+        ESP_LOGE(TAG, "heap_caps_malloc failed for %u bytes - PSRAM free=%u "
+                      "largest block=%u (a screenshot needs it CONTIGUOUS)",
+                 (unsigned)buf_size,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         return ESP_ERR_NO_MEM;
     }
 
@@ -123,4 +138,64 @@ esp_err_t screenshot_capture_rgb565(uint8_t **out_buf, size_t *out_size,
     *out_w = dsc.header.w;
     *out_h = dsc.header.h;
     return ESP_OK;
+}
+
+// ---- the frame-buffer path -------------------------------------------------
+// See screenshot.h for why this exists. In short: the snapshot path needs
+// 1.8 MB contiguous and the WSPR page does not have it, while the panel's own
+// frame buffer is already there and is already exactly what is on the glass.
+
+static uint16_t *s_fb;          // panel frame buffer, 720 x 1280 RGB565
+static bool      s_fb_flipped;  // LV_DISPLAY_ROTATION_270 rather than _90
+
+esp_err_t screenshot_fb_begin(uint32_t *out_w, uint32_t *out_h)
+{
+    esp_lcd_panel_handle_t panel = bsp_display_get_panel_handle();
+    if (!panel) return ESP_ERR_NOT_SUPPORTED;
+
+    void *fb = NULL;
+    if (esp_lcd_dpi_panel_get_frame_buffer(panel, 1, &fb) != ESP_OK || !fb)
+        return ESP_ERR_NOT_SUPPORTED;
+
+    s_fb         = (uint16_t *)fb;
+    s_fb_flipped = display_is_flipped();
+    if (out_w) *out_w = DISPLAY_H_RES;   // 1280, the LOGICAL landscape width
+    if (out_h) *out_h = DISPLAY_V_RES;   // 720
+    return ESP_OK;
+}
+
+void screenshot_fb_row(uint32_t y, uint32_t x, uint32_t count, uint16_t *dst)
+{
+    if (!s_fb || !dst) return;
+
+    /* The panel is 720 wide x 1280 tall and LVGL draws through
+     * LV_DISPLAY_ROTATION_90, so logical (lx, ly) lands at panel
+     * (719 - ly, lx): a logical ROW is a panel COLUMN, read with a
+     * 720-pixel stride. _270 (the "Flip 180" setting, display.c) is the
+     * same mapping turned the other way, so both are handled here rather
+     * than leaving an upside-down screenshot for whoever flips the screen.
+     *
+     * ⚠ THE DIRECTION OF BOTH AXES WAS SETTLED BY LOOKING AT THE IMAGE,
+     * not by reasoning about it. Derived from first principles it came out
+     * exactly 180 degrees wrong - the transpose was right and both axes were
+     * inverted - which a pixel count or a byte total could never have caught,
+     * because a 180-degree-rotated frame is the correct size, the correct
+     * format and entirely wrong. If this is ever touched, fetch /ss.bmp and
+     * LOOK at it. */
+    const size_t stride = BSP_LCD_H_RES;             // 720 pixels per panel row
+
+    if (!s_fb_flipped) {
+        const uint16_t *col = s_fb + y;
+        for (uint32_t i = 0; i < count; i++)
+            dst[i] = col[(size_t)((DISPLAY_H_RES - 1) - (x + i)) * stride];
+    } else {
+        const uint16_t *col = s_fb + ((DISPLAY_V_RES - 1) - y);
+        for (uint32_t i = 0; i < count; i++)
+            dst[i] = col[(size_t)(x + i) * stride];
+    }
+}
+
+void screenshot_fb_end(void)
+{
+    s_fb = NULL;
 }

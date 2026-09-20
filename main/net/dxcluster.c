@@ -19,6 +19,7 @@
 
 #include "dxcluster.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "spots.h"
 #include "storage/settings.h"
 #include "wifi/wifi.h"
@@ -306,6 +307,12 @@ static void publish(int64_t now)
         o->mode       = (spot_mode_t)s->tab[i].mode;
         o->source     = SPOT_SRC_CLUSTER;
         o->heard_unix = s->tab[i].last_unix;
+        // Deliberately no position resolution here (has_pos stays false) -
+        // nothing currently displays a DX-cluster spot's coordinates (the
+        // spot lane is text-only), and resolving one via QRZ for every
+        // cluster spot would compete with net/rbn.c's self-spot lookups for
+        // the same small pending queue (net/qrz_coords.c) for no payoff. If a
+        // future feature wants cluster spots on the map, add it back here.
     }
     spots_publish(SPOT_SRC_CLUSTER, s->pub, n);
     s_pub_count = n;
@@ -443,7 +450,12 @@ static void session(int fd, const char *mycall)
             refresh_band();
             publish(now);
             last_pub = now;
-            ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            /* Only when the count changes (log audit 2026-09-13: every 10 s). */
+            static int s_logged_count = -1;
+            if (s_pub_count != s_logged_count) {
+                s_logged_count = s_pub_count;
+                ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            }
         }
         qmx_settings_t cfg;
         settings_load_all(&cfg);
@@ -458,7 +470,7 @@ static void dxc_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
         qmx_settings_t cfg;
         settings_load_all(&cfg);
-        if (net_quiet_active()) continue;   // see net_quiet.h - no new sessions during an OTA
+        if (net_quiet_active() || bg_feed_gate_active()) continue;   // no new sessions during an OTA or a full-screen overlay
         if (!cfg.cluster_en || !cfg.my_callsign[0] || !wifi_is_connected()) {
             if (s->n) { s->n = 0; spots_publish(SPOT_SRC_CLUSTER, NULL, 0); s_pub_count = 0; }
             continue;
@@ -477,7 +489,14 @@ void dxcluster_init(void)
     if (s) return;
     s = heap_caps_calloc(1, sizeof(dxc_state_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s) { ESP_LOGE(TAG, "no PSRAM for state"); return; }
-    psram_task_create(dxc_task, "dxcluster", 5120, NULL, 2, tskNO_AFFINITY);
+    /* 5120 -> 7168: measured 2026-09-06 at 388 B of headroom, then 260 B after
+       a session of use - the only task observed still FALLING, which means the
+       deep path had not finished running when the first reading was taken (the
+       tab5_kb lesson in CLAUDE.md: a high-water mark only describes the paths
+       that actually ran). PSRAM stack, so no internal RAM cost. */
+    // 7168 -> 10240: three qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(dxc_task, "dxcluster", 12288, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));
 }

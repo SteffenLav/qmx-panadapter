@@ -158,6 +158,19 @@ void webserver_ws_set_paused(bool paused)
 
 bool webserver_ws_is_paused(void) { return s_ws_paused; }
 
+/* Is a browser actually watching the spectrum right now? Not the same question
+ * as "is the stream paused": the pause is a shared boolean with ~29 callers,
+ * so a background feed holding it says nothing about whether anyone is looking.
+ *
+ * sd_archive.c asks this before its 30 s background card writes, because those
+ * writes take SECONDS on this board (measured 2026-09-10: the diag mirror held
+ * the stream 3.1, 9.8 and 14.8 s for 4 KB) and the browser is frozen for every
+ * one of them. Nobody watching, nothing to freeze. */
+bool webserver_ws_client_streaming(void)
+{
+    return s_session_active && s_ws_fd >= 0 && !s_ws_paused;
+}
+
 // ---------------------------------------------------------------------------
 // Sending a WS frame WITHOUT the partial-write bug in IDF's own helper.
 //
@@ -571,7 +584,9 @@ static void ws_push_task(void *arg)
 
         sent++;
         TickType_t now = xTaskGetTickCount();
-        if ((now - fps_at) >= pdMS_TO_TICKS(5000)) {
+        /* 60 s window, was 5 s (log audit 2026-09-13): 12 lines a minute for as
+         * long as a browser watched. A teardown is logged where it happens. */
+        if ((now - fps_at) >= pdMS_TO_TICKS(60000)) {
             float fps = (float)sent * 1000.0f / (float)pdTICKS_TO_MS(now - fps_at);
             // `partial` counts frames that needed more than one send() to go out.
             // Every one of those was, before this fix, a silently corrupted stream
@@ -618,7 +633,13 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
         // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
         // names ws_push_task as latency-critical.
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 3072, NULL, 3, &s_push_task);
+        /* 3072 -> 4096: measured 2026-09-06 with 364 B of headroom left. This
+           stack stays INTERNAL deliberately - CLAUDE.md lists ws_push_task
+           among the latency-critical tasks that must not take a PSRAM stack -
+           so the extra 1 KB is paid out of the scarce pool on purpose, because
+           an overflow here corrupts a neighbour and, with canary-only checking,
+           says nothing when it does. */
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;

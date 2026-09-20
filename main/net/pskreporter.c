@@ -54,7 +54,12 @@ typedef struct {
     uint32_t utc_sec;
 } spot_t;
 
-static spot_t            s_batch[BATCH_MAX];
+/* PSRAM (2026-09-17): 2,304 bytes of internal DIRAM for a buffer that is
+ * appended to a few times per slot and drained once every 5+ minutes - cold by
+ * any measure, and mutex-protected below, so no ISR reaches it. Part of the
+ * DIRAM reclamation that took the internal-free watermark off 0 KB; see
+ * ft8_screen.c's s_table for the measurements and the reason it matters. */
+static EXT_RAM_BSS_ATTR spot_t s_batch[BATCH_MAX];
 static int               s_batch_n = 0;
 static SemaphoreHandle_t s_lock;
 static bool              s_running = false;
@@ -246,14 +251,25 @@ void pskreporter_spot(const char *call, const char *grid,
     if (snr_db < -128) snr_db = -128;
     if (snr_db > 127)  snr_db = 127;
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+/* A mutex that does not exist yet is not a reason to kill the device.
+ * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
+ * abort() - and it fires from the HTTP task, because a browser that is already
+ * open starts polling the moment the server binds, which can be before some
+ * subsystem's init has run. Observed 7 times in this bench's capture history,
+ * most recently 2026-09-06 about 100 ms after "HTTP server started".
+ *
+ * Failing safe is not merely tolerable here, it is CORRECT: if the mutex has
+ * not been created then no other task can be inside the critical section
+ * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
+ * update_check.c and ft8_status.c already guard this way; these did not. */
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     // One report per callsign per batch (spec) - refresh in place if re-heard.
     int i;
     for (i = 0; i < s_batch_n; i++) {
         if (strcmp(s_batch[i].call, call) == 0) break;
     }
     if (i == s_batch_n) {
-        if (s_batch_n >= BATCH_MAX) { xSemaphoreGive(s_lock); return; }
+        if (s_batch_n >= BATCH_MAX) { if (s_lock) xSemaphoreGive(s_lock); return; }
         s_batch_n++;
         memset(&s_batch[i], 0, sizeof(s_batch[i]));
         strncpy(s_batch[i].call, call, sizeof(s_batch[i].call) - 1);
@@ -266,7 +282,7 @@ void pskreporter_spot(const char *call, const char *grid,
     s_batch[i].snr_db  = (int8_t)snr_db;
     strncpy(s_batch[i].mode, mode ? mode : "FT8", sizeof(s_batch[i].mode) - 1);
     s_batch[i].utc_sec = (uint32_t)utc_sec;
-    xSemaphoreGive(s_lock);
+    if (s_lock) xSemaphoreGive(s_lock);
 }
 
 static void psk_task(void *arg)
@@ -288,11 +304,11 @@ static void psk_task(void *arg)
         // Snapshot + clear the batch.
         spot_t local[BATCH_MAX];
         int n;
-        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
         n = s_batch_n;
         memcpy(local, s_batch, sizeof(spot_t) * n);
         s_batch_n = 0;
-        xSemaphoreGive(s_lock);
+        if (s_lock) xSemaphoreGive(s_lock);
         if (n == 0) continue;
 
         char sw[48];
@@ -371,7 +387,9 @@ void pskreporter_init(void)
     s_lock = xSemaphoreCreateMutex();
     if (!s_lock) return;
     s_rand_id = esp_random();
-    if (psram_task_create(psk_task, "pskrep", 6144, NULL, 2, tskNO_AFFINITY)) {
+    // 6144 -> 9216: four qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    if (psram_task_create(psk_task, "pskrep", 11264, NULL, 2, tskNO_AFFINITY)) {
         s_running = true;
         // Report the effective state at boot: it is the quickest way to tell,
         // from a user's diagnostic log, whether spotting is actually enabled

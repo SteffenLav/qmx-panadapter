@@ -91,19 +91,85 @@ $fixLinks = {
 $userGuidePart = & $fixLinks $userGuidePart
 $appendixPart  = & $fixLinks $appendixPart
 
+# --- admonitions -> blockquotes (TODO #364) ----
+#
+# The guide pages are written in Material for MkDocs' admonition syntax:
+#
+#     !!! warning "Use this button, not the top bar"
+#         On the WSPR page the top bar's Band, Mode and BW are greyed out...
+#
+# Pandoc is handed the raw markdown with -f gfm, which has never heard of that
+# syntax, so the marker, the quoted title AND any **bold** inside the indented
+# block all survived verbatim into the printed page. The shipped v1.12.1 guide
+# had 35 of them, reading like an editing mistake - and they land on exactly
+# the sentences that matter most, because most of them are warnings.
+#
+# ⛔ The fix belongs HERE and not in the source. Those blocks render correctly
+# as coloured boxes on the website and in the on-device Reader, and they are
+# the house style there; rewriting them to plain paragraphs would break two
+# outputs to fix a third.
+#
+# A blockquote is the honest equivalent in a printed document, and the CSS
+# below already styles one. The type becomes the start of a bold first line
+# ("Warning - Use this button..."), so a reader can still tell a caution from
+# an aside.
+#
+# ⚠ The leading indent is PRESERVED, because an admonition can sit inside a
+# list item (web-ui.md's relay warning does). Stripping it would silently pull
+# the block out of its bullet.
+function Convert-Admonitions([string]$md) {
+    $lines = $md -split "`n"
+    $out   = New-Object System.Collections.Generic.List[string]
+    $i = 0
+    while ($i -lt $lines.Count) {
+        $m = [regex]::Match($lines[$i],
+            '^(?<ind>[ \t]*)(?:!!!|\?\?\?\+?)\s+(?<type>[A-Za-z][\w-]*)(?:\s+"(?<title>[^"]*)")?\s*$')
+        if (-not $m.Success) { $out.Add($lines[$i]); $i++; continue }
+
+        $ind  = $m.Groups['ind'].Value
+        $type = (Get-Culture).TextInfo.ToTitleCase($m.Groups['type'].Value.ToLower())
+
+        # Body = every following line that is blank, or indented at least four
+        # spaces deeper than the marker. The first line that is neither ends it.
+        $body = New-Object System.Collections.Generic.List[string]
+        $j = $i + 1
+        while ($j -lt $lines.Count) {
+            $bl = $lines[$j]
+            if ($bl.Trim() -eq '')                 { $body.Add(''); $j++; continue }
+            if ($bl.StartsWith($ind + '    '))     { $body.Add($bl.Substring($ind.Length + 4)); $j++; continue }
+            break
+        }
+        while ($body.Count -gt 0 -and $body[$body.Count - 1] -eq '') { $body.RemoveAt($body.Count - 1) }
+
+        $head = if ($m.Groups['title'].Success -and $m.Groups['title'].Value.Trim() -ne '') {
+            "$type - $($m.Groups['title'].Value)"
+        } else { $type }
+
+        $out.Add("$ind> **$head**")
+        if ($body.Count -gt 0) { $out.Add("$ind>") }
+        foreach ($b in $body) {
+            if ($b -eq '') { $out.Add("$ind>") } else { $out.Add("$ind> $b") }
+        }
+        $out.Add('')
+        $i = $j
+    }
+    return ($out -join "`n")
+}
+
 # --- define chapters and their guide files ----
 $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
     @{ Id = "panadapter";    Title = "Panadapter";     Num = 2; GuideFile = (Join-Path $guideDir "panadapter.md");    Desc = "spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels" },
     @{ Id = "spots";         Title = "Live spots";     Num = 3; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
-    @{ Id = "web-ui";        Title = "Web UI";         Num = 4; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
-    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 5; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
-    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 6; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 7; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "settings";      Title = "Settings";       Num = 8; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "wspr";          Title = "WSPR";           Num = 9; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 10; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 11; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "spot-map";      Title = "Spot map";       Num = 4; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
+    @{ Id = "web-ui";        Title = "Web UI";         Num = 5; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
+    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 6; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
+    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 7; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 8; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 9; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "wspr";          Title = "WSPR";           Num = 10; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 11; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "reference";     Title = "Reference";      Num = 12; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(
@@ -128,6 +194,10 @@ foreach ($c in $chapters) {
     # Inject guide file content if available
     if ($c.GuideFile -and (Test-Path $c.GuideFile)) {
         $guideContent = (Get-Content -Raw -Encoding UTF8 $c.GuideFile) -replace "`r`n", "`n"
+
+        # Before anything else, so the heading passes below never see an
+        # admonition's indented body (TODO #364).
+        $guideContent = Convert-Admonitions $guideContent
 
         # Remove the top-level heading (# Title)
         $guideContent = $guideContent -replace '(?m)^# [^\n]+\n+', ''

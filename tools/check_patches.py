@@ -52,6 +52,22 @@ PATCHES = [
      "WiFi transport buffers stay in scarce internal DRAM; the device reboots "
      "under QMX+FT8 load when WiFi TX bursts"),
 
+    ("apply_lvgl_port_tick_no_mutex.ps1", "repo",
+     "managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port.c",
+     "PATCHED (qmx-panadapter, 2026-09-13) tick without mutex",
+     "the 2 ms LVGL tick takes a mutex on the esp_timer task (priority 22); "
+     "when it collides with a touch read taskLVGL inherits 22 for a whole "
+     "redraw and starves USB-CDC, audio and the UAC driver - CAT timeouts and "
+     "lost audio whenever the manual or an overlay opens"),
+
+    ("apply_lv_event_chain_guard.ps1", "repo",
+     "managed_components/lvgl__lvgl/src/misc/lv_event.c",
+     "qmx_lv_event_chain_bad",
+     "LVGL walks its in-flight event chain on EVERY object destruction; a "
+     "corrupt link takes a Load access fault and reboots the device, and the "
+     "marker is the COUNTER symbol because a silent tolerant patch is "
+     "indistinguishable from a missing one (#189/#329)"),
+
     ("apply_esp_hosted_sdio_recovery.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "SDIO RX oversize",
@@ -59,14 +75,51 @@ PATCHES = [
      "minutes and every RPC times out forever (reboot is the only way out)"),
 
     # Same FILE as the row above, different marker. sdio_drv.c now carries
-    # three of our fixes and one apply script restores all three, so a row per
-    # marker is the only way a partially-restored copy shows up as missing.
+    # several of our fixes and one apply script restores all of them, so a row
+    # per marker is the only way a partially-restored copy shows up as missing.
     ("apply_esp_hosted_sdio_recovery.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "QMX_SDIO_INIT_FAIL_TOLERANT",
      "a failed SDIO card init RETURNS from a FreeRTOS task function, executing "
      "a ret to address 0 - the device reboots (MEPC=0, RA=0) instead of simply "
      "losing WiFi, and that warm reset also wedges the attached QMX (#74)"),
+
+    ("apply_esp_hosted_sdio_rxbuf_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_PANADAPTER_SDIO_RXBUF_TOLERANT",
+     "sdio_read_task() abort()s the device when its RX buffer pool is "
+     "momentarily exhausted under load - observed at ~97 minutes of uptime "
+     "with WiFi + MQTT self-spotting running"),
+
+    ("apply_esp_hosted_sdio_write_avail_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_WRITE_AVAIL_TOLERANT",
+     "sdio_is_write_buffer_available() gave the slave two back-to-back chances "
+     "and then REBOOTED the device - a deliberate restart, so no crash record, "
+     "and a warm reset with the radio attached wedges the QMX (#74)"),
+
+    ("apply_esp_hosted_rpc_orphan_resp.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/rpc/core/rpc_core.c",
+     "QMX_RPC_DROP_UNCLAIMED_RESP",
+     "an RPC response whose waiter has timed out is queued with nothing left "
+     "to dequeue it; rpc_rx_q holds THREE, and the third orphan makes the RX "
+     "thread block on itself for ever - the permanent 0x126-times-out wedge"),
+
+    # Layered on the assert-tolerant patch below, which replaces os_wrapper.c
+    # wholesale - the script refuses to run before it.
+    ("apply_esp_hosted_task_stacks.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
+     "QMX_HOSTED_TASK_STACKS",
+     "esp_hosted hardcodes six 5 KB task stacks in internal DMA-capable RAM; "
+     "sized to measured use and the RPC pair moved to PSRAM, ~15 KB back to "
+     "the pool whose exhaustion crashed the device 2026-09-11"),
+
+    ("apply_esp_hosted_sdio_sendbuf_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_SDIO_SENDBUF_TOLERANT",
+     "sdio_write_task() abort()s the device when a send buffer cannot be "
+     "allocated, with the drop path one line below - captured 2026-09-11 at "
+     "24 min, after a boot that started with the DMA pool at 99 bytes"),
 
     ("apply_esp_hosted_assert_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/port/src/os_wrapper.c",
@@ -125,6 +178,15 @@ PATCHES = [
      "components/fatfs/src/ffconf.h",
      "#define FF_FS_EXFAT\t1",
      "microSD cards larger than 32 GB (exFAT) will not mount"),
+
+    ("apply_mqtt_client_psram_task.ps1", "idf",
+     "components/mqtt/esp-mqtt/mqtt_client.c",
+     "PATCHED (qmx-panadapter, 2026-09-10)",
+     "esp_mqtt_client_start() always allocated its task stack from internal "
+     "RAM with no PSRAM option; on this board that RAM is chronically tight "
+     "after WiFi bring-up and the allocation failed outright, silently "
+     "killing live PSK Reporter self-spotting (net/pskr_self.c) for the "
+     "whole session"),
 ]
 
 

@@ -12,19 +12,42 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.10.8.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> ## ⚠ v1.15.0 needs a USB-C cable, once
 >
-> **New in v1.10.8 — a crash introduced and fixed in the same release cycle, plus more groups.io reports.** **A settings-drawer scroll could crash the device.** The previous cycle's "while the drawer is scrolling, nothing else in it acts" fix forced the touch driver to treat a finger as already lifted the moment a scroll began, and that collided with LVGL's own built-in momentum-scroll animation on the same object — every reproduction crashed the display task at the identical point. Root-caused with a diagnostic build that confirmed it before the fix, rather than guessed at; the offending call is gone, and the drawer's scroll-vs-tap protection stands on what was already there.
+> **v1.15.0 reclaims 2.81 MB of flash that no partition has ever used, and that
+> means rewriting the partition table** — which an over-the-air update cannot do,
+> by design: it can only ever write the app, never the map of the flash. That
+> limit is what stops a failed download taking the layout with it.
 >
-> **Restore your worked-station history from a downloaded ADIF file.** A clean erase-and-reinstall used to leave no way back to it — the existing config restore deliberately never touches the QSO log — so **ADIF restore** in the web UI's QSO Logs menu now merges a previously downloaded (or any logger's) file in, skipping anything already logged *(Randy N4OPI)*. **The web decode list no longer jumps up and down during an exchange** — the status box above it now holds a fixed height instead of growing and shrinking with the message text *(Randy N4OPI)*.
+> So this one arrives as a **flasher download**, using the same USB-C data cable
+> and the same `flash.bat` / `flash.command` you used to install it the first
+> time. It is the only release that needs it, and everything after it is over the
+> air again — with more than twice the room.
 >
-> **Also fixed:** the web spectrum could go on drawing against a **stale frequency axis** after a band change or mode switch if the once-a-second status poll missed a beat — spectrum bins and the axis that says what frequency they are arrive on two different channels, so a lost poll left the picture looking normal while every signal sat at the wrong frequency; it now blanks itself and says why rather than showing a plausible lie *(Samuel W7STF)*. A **WSPR spot hopped to a new band could be labelled — and published to wsprnet.org — under the wrong band**, because the upload read the dial at send time rather than the dial the spot was actually heard on *(Kevin KQ4DTX)*. Neither fix has been confirmed on the air yet.
+> **There is no over-the-air image attached to this release, on purpose.** If you
+> tap the update notice it will say the download could not be reached. That is
+> the release refusing to be installed the wrong way, not a fault.
 >
-> The **"QMX cannot display this" caption is gone** from the hatched dead-band on both screens — the hatching alone says what it needs to.
+> **Your settings, memory channels, QSO log and LoTW certificate are kept.** Press
+> **Enter** at the flash-type prompt. Do *not* press **E** — that erases the whole
+> chip, including your log and your LoTW private key, and it is not needed here.
+>
+> **Brand-new users are unaffected** — a first install already uses the flasher,
+> so it lands on the new layout directly.
+
+> **Release — v1.15.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.15.0 makes the band-plan slider a window you drag rather than a dial you scrub** — grab the framed block and the picture, the frequency marker and the filter passband all travel together and stay where you let go, with the radio following. The **Config download was missing 31 settings, including the measured power calibration** — an hour at a dummy load per band, and the one thing in the file nobody could recreate from memory (found from a question by Bruce N9JCV). **WSPR now refuses to beacon while the radio is in split**, where every spot would name a frequency your signal was never on (John W5JSS), and the WSPR transmit block is legible again after being red-on-orange at a contrast ratio of 1.15 to 1 (John W5JSS). The **on-screen keyboard comes back on a second tap** (Samuel W7STF), a **missing SD card says so and explains what a card is for**, and the **WSPR transmit schedule is two plain counts** instead of a ratio nobody could agree on.
+>
+> **v1.14.2 fixed general sluggishness some users saw starting with v1.13.0** (thanks to Randy N4OPI for tracking it down with me) — SelfSpotter's background PSK Reporter connection could hold up the display, whether or not the map was ever opened. Also fixed a web UI "find open slot" tool that could hang and lose contact with the radio mid-QSO, output power reading near-zero right after Calibrate Power (thanks Gyula HA3HZ), and a SelfSpotter map bug that drew some countries as boxes.
+>
+> **New in v1.14.0 — Calibrate Power.** Sweeps the QMX's *Max. PA voltage* through 45 points on a dummy load and measures the real RF output at each with the radio's own `PC;` readback, per band. **WSPR's Declared power** dropdown now only offers the standard dBm steps your calibration actually reaches — each one classified from the real measured wattage (the same rounding rule the WSPR wire format itself is limited to), not the textbook figure a step's name implies, so what you declare and what actually goes out can no longer disagree. The old fixed "turn the PA down to 6 V for the whole beacon" guard is gone — protecting the finals is now a matter of picking a low declared level, same as any other choice on that dropdown, and a plain warning appears above 1 W. A separate **Output power** slider does the equivalent job for every other mode (FT8, CW, SSB, ...) and stays off the WSPR page entirely, since Declared power always owns the radio there. Both grow a **Recalibrate this band** button once calibrated.
+>
+> **SelfSpotter's callsign-to-country table rebuilt from an authoritative source** *(Uwe DL8UG)* — roughly 580 hand-curated prefixes replaced by ~4,100 generated from a cty.dat-style file, plus a new **ISO** column on the map's LIST tab naming each spotting station's country.
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.8.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.15.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -93,7 +116,10 @@ signed on the device itself with your own callsign certificate. A signal report 
 park/summit reference can be corrected after the fact from the browser's log table. The
 browser's **ADIF restore** merges a previously downloaded (or any logger's) ADIF file
 back in — contacts already logged are skipped — so an erase-and-reinstall does not cost
-you your worked-station history.
+you your worked-station history. Or **restore straight from the microSD card**, on the
+Tab5 itself with no computer at all. **Search the log** on either screen — by callsign,
+country, band, mode, date or park — and in the browser **tick rows and export just
+those** as their own ADIF file.
 
 **Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
 **RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
@@ -115,16 +141,18 @@ carrying only your callsign, grid and power, which stations worldwide report hea
 over an evening you get a picture of where your antenna and your band actually reach at
 levels where nothing else would be heard at all. Nobody replies and nothing goes in your
 log. The page lists what was heard each two-minute cycle with the band, distance and
-bearing, the furthest of the session, and a per-cycle history, so an opening band looks
-different from a closing one. Receiving is the default; transmitting is opt-in, refuses to
-key without your callsign and grid, and has a duty cycle and optional band hopping.
-**Protect finals** is on by default and turns the QMX's PA voltage down for as long as
-WSPR transmit is enabled — a WSPR transmission keys the radio for about 110 seconds in
-every 120, and measured on a QMX at 12 V that setting takes 5.4 W down to 1.6 W and 76% of
-the heat out of the finals. What you hear can be published to wsprnet.org *(needs WiFi)*.
-⚠ Declared power is a claim rather than a measurement and is published worldwide, so set
-it to what your transmitter really produces; the Tab5 asks the radio what it actually
-delivered and shows the answer under the setting.
+bearing, and the furthest of the session. Receiving is the default; transmitting is opt-in, refuses to
+key without your callsign and grid, and has a transmit schedule and optional band hopping.
+**Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output
+at each step, per band. **Declared power** then only offers the standard WSPR dBm steps
+your calibration actually reaches — each one labelled with its real measured wattage, not
+a textbook figure — so what you declare (published worldwide with every spot) matches
+what actually goes out. A WSPR transmission keys the radio for about 110 seconds in every
+120, so picking a low declared level for long beacon runs is how you protect the finals
+now, rather than a fixed voltage cut applied underneath you. **Output power**, a separate
+slider for every other mode (FT8, CW, SSB, ...), shares the same calibration but stays out
+of WSPR's way entirely — Declared power always owns the radio there. What you hear can be
+published to wsprnet.org *(needs WiFi)*.
 
 **Radio menus** — The QMX's own 80×24 menu system, on the Tab5 and in the browser, over
 the radio's *second* USB serial port so the panadapter keeps decoding while you are in
@@ -179,13 +207,32 @@ supercap-backed RTC across power-off, the QMX's clock as an offline fallback, GP
 detected and phase-locked automatically if your QMX has one, and a manual set-and-sync
 panel. FT8/FT4 timing also self-corrects from the decoded band consensus when offline.
 
-**microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) **before
-switching on** and your whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
+**Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
+panadapter shows the Morse the radio is decoding, with an estimate of the sending
+speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
+the panadapter no processing at all and does not touch the spectrum or FT8. Works on
+QMX firmware 1.03 and later, on the Tab5 and in the browser, and switches off in the
+settings drawer under Radio *(suggested by Uwe DL8UG)*. With a card in the slot it is
+also written to `qmx-panadapter/cw-decode.txt` with timestamps, so a half-caught
+callsign can be resolved afterwards *(Michael K Johnson KZ4LY)*.
+
+**Frequency format** — The frequency readout, preset buttons, WSPR band picker, keypad
+and spectrum scale can be punctuated `14.074.000` (the default, and what the QMX shows
+on its own LCD) or `14,074,000` *(Don N2VGU)*. Settings drawer, under Advanced.
+
+**microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) and your
+whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
 full config export, your LoTW certificate and key, the diagnostic log and a
 self-describing `README.txt`. Continuous with WiFi off (green **SD** dot); one complete
 backup per start-up with WiFi on (yellow dot), because the card and the WiFi
-co-processor share a bus. *(The card holds credentials — WiFi password, QRZ/eQSL logins,
-LoTW private key — so keep it physically secure.)*
+co-processor share a bus. It restores too, which is the half that was missing: **Restore
+from SD** in the Tab5's own log window, or from the browser. And because the card mirrors
+the *present*, the copy from just before the log last got **smaller** is kept beside it as
+`qso.prev.adi` — so a deletion you notice two restarts later is still recoverable.
+**After inserting the SD card your Tab5 needs a restart** — the card is claimed during a
+short window early in boot, so one pushed in while it is running is not used until then.
+*(The card holds credentials — WiFi password, QRZ/eQSL logins, LoTW private key — so keep
+it physically secure.)*
 
 **Diagnostics** — An always-on diagnostic log, nothing to enable: 5 MB in RAM, a rolling
 copy in flash that survives a power cut, and a full mirror to microSD if a card is in.
@@ -230,6 +277,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
+- [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
@@ -249,7 +297,9 @@ restore as a text file; and a settings reset that does not need a reflash.
 
 ### Step 0 — Check your QMX firmware first
 
-Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. Both **1.03.002** and the **1.04 betas** work with the panadapter (1.04.004 is what this is developed against day to day); on 1.04 the Tab5 additionally offers **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout) — both stay hidden on 1.03.002, so there's no downside either way.
+Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. Everything from **1.03.002** up to and including **1.04.010** works with the panadapter; on 1.04 the Tab5 additionally offers **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout) — both stay hidden on 1.03.002, so there's no downside either way.
+
+**Do not use 1.04.011 (19-Sep-2026) yet.** One operator reports no transmit output when the radio is keyed over CAT from the Tab5, and others report the radio's own Tune SWR and Hardware Test screens freezing until power-cycled. All of it clears on 1.04.010. Reported to QRP Labs; this note will go when there is a fix.
 
 ### Step 1 — Flash the Tab5 firmware
 
@@ -466,6 +516,35 @@ spots**.
 
 ---
 
+## Spot map
+
+Live spots answer "who can I work?". The spot map answers the other question:
+**who is hearing me?** A full-screen map of the stations that reported *your*
+signal — the CW skimmer that copied your CQ, the FT8 station whose decode of you
+reached PSK Reporter, the WSPR receiver that logged your beacon — each a line
+from your grid square to theirs. Contributed by **Uwe DL8UG**.
+
+**Tap SelfSpotter in the settings drawer** (right below "Need guidance?") to
+open it, from any page. Tabs for the map, a table of the same data, and HF band
+conditions. Drag to pan, pinch to zoom around your own QTH. The LIST tab's
+table is sortable: **RECEIVER, GRID, COUNTRY, MODE, BAND, FREQUENCY, SNR, KM**
+and **AGE**. **GRID** is the locator the receiving station itself sent, so it
+is blank for CW skimmers, which report a callsign and not a location.
+**COUNTRY** comes from Uwe DL8UG's 18,365-prefix table and names the *country*
+a spotting station belongs to, which can differ from the DXCC entity its own
+marker uses on the map (Hawaii plots at its own coordinates but reads United
+States in this column).
+
+**Always running, no setting to find.** The feeds (RBN, PSK Reporter, wsprnet)
+connect from the moment the Tab5 boots and stay connected the whole session —
+there used to be an opt-in switch for this, dropped once it became clear the
+map was worth having populated the moment you looked. Needs your callsign and
+grid square.
+
+📖 Full chapter: [tab5.lav.dk/guide/spot-map](https://tab5.lav.dk/guide/spot-map/)
+
+---
+
 ## Web UI
 
 With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is shown in the bottom status bar on the Tab5.
@@ -473,6 +552,16 @@ With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is 
 The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Files ▲ → Diagnostic download ↓** for the diagnostic logs, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
+
+**Remote QMX power-cycle relay (v1.10.9, sequenced in this release).** **Miscellaneous ▲ → Remote relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header). Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. **Pulse** fires a single pulse for the chosen duration and level — since PWR_ON is a toggle, this turns the QMX off *or* back on with no way to tell which from the LAN. **Power-cycle QMX** runs the whole sequence instead: off-pulse, wait, on-pulse, wait, then checks over CAT and tells you "QMX responded" or "no response from QMX". Scriptable as `POST /api/cmd {"action":"gpio_pulse", ...}` (single pulse) or `{"action":"gpio_power_cycle", "pin":53, "level":1, "ms":1000}` (the full sequence).
+
+**Building the interface — Randy N4OPI's design**, published here with his permission. Two components and a connector, plus one modification inside the radio.
+
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](docs/mkdocs/img/relay-schematic-n4opi.png)
+
+The QMX has **no PWR_ON/GND jack from the factory** — fitting one is the job. Wire a **2.5 mm TRS jack** into the case with **tip to PWR_ON and sleeve to GND** (Randy brought his out on the rear panel beside the ATU RF input). Then build the interface: a **4-pin Grove plug** into the Tab5's EXT socket, the chosen pin (**G53** or **G54**) through **R1, 100 Ω ¼ W** into a **PC817C optoisolator**, and the optoisolator's phototransistor across **J1, a 3.5 mm stereo audio jack** on the module, which reaches the radio's 2.5 mm jack through a **3.5 mm to 2.5 mm TRS patch lead** — so a pulse briefly connects PWR_ON to GND. The `EXT 5V` pin is unused, and the phototransistor side is polarity-sensitive — follow the schematic. Randy: *"with just 2 components it could just as easily be connected point to point and sealed up inside a piece of heatshrink tubing. Make sure you insulate your wires so the heatshrink doesn't squeeze them together and create a short."* Settings that work: the pin you wired, active level **High**, **2000 ms**.
+
+The optoisolator is what keeps the Tab5 and the radio electrically apart, and it is why only **G53/G54** are offered: they sit on a *keyed* connector and are held as driven outputs from boot. The bottom-edge Dupont pins would give a neater cable run, but that connector is unkeyed and sits beside 12 V IN — Randy's own reason for dropping the idea — and `G0`/`G1` are the snap-on keyboard's I2C bus.
 
 **Whole-band plan strip & adjustable split (new in v0.20.0).** Along the bottom of the browser view (above the status bar), a colour-coded CW/Digi/Phone strip spans the entire band with a draggable "visible window" (drag or tap to retune) and a VFO marker, mirroring the Tab5's own strip. Drag the divider between the spectrum and the waterfall to give either more room — the split is remembered in the browser. **Tab5Shot** now captures any open pop-up (band/mode dropdown) too, and the frequency keypad is draggable with a standard 10-key layout.
 
@@ -488,7 +577,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **Zoom sync.** The browser renders the same zoomed window as the Tab5.
 
-**QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). The menu is only shown when the log contains data.
+**QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). **Search** (v1.11.0) filters as you type across callsign, band, mode, date, grid and reference, and says plainly when nothing matches — the answer to "have I worked this one". **Tick rows and press Export selected** to save just those contacts as their own ADIF file; the header tick box takes everything currently shown, so a search plus one tick gives you a single day, band or park. The menu is only shown when the log contains data.
 
 Three columns can be corrected by clicking them: the two **reports**, and **Their ref** — the park or summit the *other* station was activating. That last one is how a Park-to-Park contact gets into the log at all: while you are operating, the other activator's park number is on the POTA spots page on your phone and not in anything the radio sends, so you note it down and enter it when you get home *(Don Adams WB0LQW)*. It also fills itself in when the contact came from a spot, and it does that whether or not you were activating — the ADIF field records *their* activity, and a hunter's log should say which park they worked. It is Park-to-Park only when you were in a park as well, which is why the column is not called that. **An empty cell is not a fault**: the reference is matched from the POTA spot feed on the exact callsign, and not every digital-mode activator registers the activation — some just start calling `CQ POTA` — so where there is no spot there is no reference, which is better than a wrong one *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme (POTA, SOTA or WWFF) from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go again. Nothing else is editable: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so a wrong one is a delete-and-re-log.
 
@@ -613,12 +702,11 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15
 | SL | Slot parity: **E** (blue, :00/:30) or **O** (amber, :15/:45) |
 | CALL | Extracted callsign |
 | MESSAGE | Full decoded FT8 message text |
-| CTY | DXCC entity as a 3-letter code (ISO alpha-3 where it exists; ~190 entities) |
+| COUNTRY | Country, spelled out where it fits and shortened where it does not - never a 3-letter code. 227 DXCC entities, with 18,365 further prefixes resolved at country level |
 | SNR | FFT-based estimate, colour-banded: green ≥0 / white −5..−1 / orange −15..−6 / grey <−15 |
 | DT | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 |
 | HZ | The station's audio tone (its offset within the FT8 passband) |
-| KM | Great-circle distance from your grid |
-| BRG | Bearing from your grid |
+| KM | Great-circle distance from your grid. A leading `~` means the station sent no grid and the distance comes from its country — approximate, and marked as such |
 | HRD | Times decoded since last appearance |
 
 CQ calls always appear at the top sorted strongest-SNR first; all other rows follow by SNR descending.
@@ -856,19 +944,29 @@ carrying only your callsign, grid and declared power, reported by stations
 worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4 → WSPR**.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
-**Protect finals is on by default, and WSPR is why.** A WSPR transmission keys
-the radio for about **110 seconds out of every 120** — an FT8 burst is about 12.
-The Tab5 turns the radio down for as long as WSPR transmit is enabled (it sets
-the QMX's own *Max. PA voltage* to around 6 V and restores your setting
-afterwards), which is the same precaution the QMX takes with its own built-in
-WSPR beacon. Measured on a QMX at 12 V: **5.4 W → 1.6 W out, and 76% less heat
-in the PA transistors.**
+**Calibrate Power measures what your QMX actually does, on your antenna
+system, at every setting — instead of guessing from a rule of thumb.** From
+the drawer (**Radio → Antenna Tune → Calibrate Power**, or "Calibrate this
+band" the first time you open Declared power / Output power on an
+uncalibrated band), it sweeps *Max. PA voltage* through 45 points on a
+**dummy load** and records the real RF output at each with the QMX's own
+`PC;` readback. Takes a few minutes per band; results are saved per band and
+used from then on.
 
-⚠ **That reduces the heat in the finals; it does not remove it from the radio.**
-The excess is dropped inside the QMX instead, so total heat falls far less than
-the finals' share does. **If you plan to beacon for hours, feed the radio from a
-lower supply** — the QMX accepts 6.0–12.0 V, and around 9 V leaves much less to
-throw away as heat. That is the one thing no firmware setting can do for you.
+**Declared power** (the WSPR drawer) then only offers the standard dBm steps
+your calibration actually reaches on the current band — no more picking
+"37 dBm" and transmitting something else entirely. Each step's wattage is the
+*real measured* figure, not the textbook one, so what you see is what goes
+out and what gets published to wsprnet with every spot. A WSPR transmission
+keys the radio for about **110 seconds out of every 120**, so this is also
+where you protect the finals now: pick a low declared level for long beacon
+runs, rather than relying on a fixed halving the firmware used to apply
+underneath you. Anything above 1 W gets a plain warning instead.
+
+**Output power**, a separate slider filed with Calibrate Power, does the same
+job for every *other* mode (FT8, CW, SSB, ...) — it has nothing to do with
+WSPR's own declared level and doesn't appear on the WSPR page, since Declared
+power always owns the radio there.
 
 📖 The full chapter:
 [tab5.lav.dk/guide/wspr](https://tab5.lav.dk/guide/wspr/)
@@ -916,7 +1014,7 @@ The QMX's +12 kHz IF injection varies slightly between units. If signals appear 
 ### Hardware
 
 - **M5Stack Tab5** — ESP32-P4 v1.3 (ECO2), ST7121 or ST7123 5" 720×1280 MIPI-DSI touch display, 32 MB PSRAM, ESP32-C6 co-processor for WiFi
-- **QRP Labs QMX or QMX+** — firmware 1.03.002 or newer (the 1.04 betas also work, and unlock AM mode + Antenna Tune)
+- **QRP Labs QMX or QMX+** — firmware 1.03.002 up to 1.04.010 (1.04 unlocks AM mode + Antenna Tune; 1.04.011 is not recommended yet)
 - **USB-A → USB-C data cable** between Tab5 USB-A host port and QMX (full data, not charge-only)
 - **USB-C power supply** for the Tab5 (5 V / 2 A or better, or internal battery)
 
@@ -1076,11 +1174,13 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.10.8 is here.** Next on the bench:
+**v1.15.0 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 - **Binaural CW audio.** Asked for by Roy KI0ER, and shaped by Don N2VGU and Michael KZ4LY: a stereo sound stage so two stations a few tens of hertz apart land in different places in your head, with the **stage width a setting** rather than a fixed angle. The DSP is small — the Tab5 already receives I and Q separately — but it needs the Tab5's own audio output path, which is the same rework the CW page waits on.
+
+  Uwe DL8UG pointed at the KX2's "AFX MD Delay" — Elecraft's own quasi-stereo mode, a fixed delay on one channel applied to the whole receive audio, sold on *reducing operating fatigue* rather than separating signals. It's a genuinely different, much cheaper technique (no I/Q phase math, just a delay line) that solves comfort, not the "which station is where" separation the stage-width idea above targets. Worth keeping as a candidate first step or a companion to the real thing, not a replacement for it.
 - **Tab5 audio output rework.** The blocker under both of the above: the output task must not run at all in FT8/FT4 (Michael KZ4LY's suggestion), since merely existing at a higher priority than the FFT consumer cost decode yield.
 
 ### Longer term
@@ -1098,6 +1198,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ## Related projects
 
+- **[Video demo](https://youtu.be/UXWdl0Dd7ME)** by Bruce N9JCV — a hands-on walkthrough of the software, filmed on his phone
 - [DX-FT8](https://github.com/WB2CBA/DX-FT8-FT8-MULTIBAND-TABLET-TRANSCEIVER) by Barb (WB2CBA) — open-hardware FT8 tablet transceiver; an inspiring reference for a similar use-case
 - [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN) — Tab5 companion for QMX with audio + CAT; source of the polling audio task pattern and battery readout approach
 - [`ft8_lib`](https://github.com/kgoba/ft8_lib) by Karlis Goba — FT8 encoder/decoder vendored as `components/ft8_lib`
@@ -1110,29 +1211,56 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 | Term | Meaning |
 |------|---------|
+| **ADIF** | Amateur Data Interchange Format — the standard log-file format for QSO records (exported by the panadapter, uploaded to QRZ/eQSL) |
+| **AM** | Amplitude Modulation — a voice mode. Receive only on the QMX+, and only on firmware 1_04 and later |
+| **ARRL** | American Radio Relay League — the US national amateur radio society, which runs Logbook of The World |
 | **CAT** | Computer-Aided Transceiver — radio control protocol (Kenwood-style commands via serial/USB) |
 | **CDC-ACM** | Communications Device Class / Abstract Control Model — USB standard for serial ports |
 | **CQ** | General call to any station (not directed at anyone specific) |
 | **CW** | Continuous Wave — Morse code mode |
+| **dBm** | Decibel-milliwatts — absolute signal power (0 dBm = 1 mW); used on the spectrum scale and S-meter |
 | **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
-| **FFT** | Fast Fourier Transform — algorithm to convert time-domain audio into frequency spectrum |
+| **DX** | A distant station, or distance worked. **BEST DX** on the WSPR page is the furthest station that heard you, or that you heard, this session |
+| **DXCC** | DX Century Club — the ARRL award programme, and by extension its list of ~340 "entities" (countries plus separately-counted islands and territories) |
+| **eQSL** | Electronic QSL — online service for confirming and exchanging QSO records |
+| **FFT** | Fast Fourier Transform — algorithm that converts time-domain audio into a frequency spectrum |
 | **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). Both fully supported (FT4 re-enabled in v0.21.0). |
+| **GFSK** | Gaussian Frequency-Shift Keying — the modulation scheme FT8 and FT4 use |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
+| **IF** | Intermediate Frequency — the QMX presents the VFO signal at a +12 kHz offset in baseband |
 | **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |
+| **LDPC** | Low-Density Parity-Check — the error-correcting code used in FT8/FT4 decoding |
+| **LoTW** | Logbook of The World — ARRL's online QSO-confirmation service |
+| **LSB / USB (mode)** | Lower / Upper Sideband — the two SSB voice modes (note: "USB" also means Universal Serial Bus, below) |
 | **LVGL** | Light and Versatile Graphics Library — open-source embedded UI toolkit used for the display |
+| **Maidenhead / grid** | The locator system amateurs use for position, e.g. `JO65`. Four characters is a ~100 km square, six is finer. FT8 and WSPR both carry one |
 | **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
+| **PA** | Power Amplifier — the radio's final transmit stage. **Max. PA voltage** sets how hard it is driven, and so how much power comes out; see [WSPR](docs/mkdocs/guide/wspr.md) and Calibrate Power |
+| **POTA** | Parks on the Air — portable operating activity from designated parks |
+| **PSK Reporter** | A worldwide database of who heard whom. The panadapter can send it your decodes, and reads it back to show who has heard **you** |
 | **PSRAM** | Pseudo-SRAM — extra RAM on the Tab5 (used for large buffers like waterfall history) |
 | **QMX / QMX+** | QRP Labs HF transceiver — the radio this panadapter controls and receives audio from |
+| **QRP** | Low-power operating, conventionally 5 W or less. QRP Labs, who make the QMX, are named for it |
+| **QRZ** | QRZ.com Logbook — online logbook and callsign service for uploading QSOs |
 | **QSO** | Radio contact / conversation between two stations |
+| **RBN** | Reverse Beacon Network — automated receivers ("skimmers") that continuously report the CW and digital signals they hear. One of SelfSpotter's three sources |
+| **RIT** | Receiver Incremental Tuning — shifts what you *hear* without moving what you would *transmit* on. The QMX has RIT but no XIT |
 | **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
-| **SNTP** | Simple Network Time Protocol — synchronizes system clock via WiFi/internet |
+| **SNR** | Signal-to-Noise Ratio — signal strength relative to the noise floor; the FT8/FT4 signal report |
+| **SNTP** | Simple Network Time Protocol — synchronizes the system clock via WiFi/internet |
+| **SOTA** | Summits on the Air — portable operating activity from mountain summits |
+| **SSB** | Single Sideband — the voice-mode family (USB / LSB) |
+| **SSID** | The name of a WiFi network |
+| **STFT** | Short-Time Fourier Transform — sliding-window FFT used to build the waterfall |
 | **SWR** | Standing Wave Ratio — antenna impedance matching metric (1.0 = perfect) |
 | **TX / RX** | Transmit / Receive — keying the radio and listening |
 | **UAC** | USB Audio Class — standard for streaming audio over USB |
-| **USB** | Universal Serial Bus — physical connector and protocol (carries both audio and CAT commands) |
+| **USB** | Universal Serial Bus — physical connector and protocol (carries both audio and CAT commands). In a radio context, "USB" can also mean Upper Sideband — see SSB. |
 | **UTC** | Coordinated Universal Time — timezone-independent time standard for FT8 slot alignment |
 | **VFO** | Variable Frequency Oscillator — the radio's tuning dial / frequency setting |
+| **WSJT-X** | The desktop program most FT8 and WSPR operators use. The panadapter does the same job without a PC, and its decodes and reports are meant to be comparable |
+| **WSPR** | Weak Signal Propagation Reporter, said "whisper" — a beacon mode carrying only callsign, grid and power. Nobody replies; stations worldwide report hearing you, so you learn where your signal actually goes. See [WSPR](docs/mkdocs/guide/wspr.md) |
 
 ---
 

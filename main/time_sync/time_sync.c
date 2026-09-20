@@ -62,6 +62,21 @@ static const char *TAG = "time_sync";
 // reference), so this leash only applies offline.
 #define FT8_LEASH_MS      500
 
+/* ⭐ IS THE DATE ITSELF TRUSTWORTHY? (Don WB0LQW, 2026-09-13)
+ *
+ * Every offline time source here gives only a TIME OF DAY - the QMX's TM;, the
+ * QMX-GPS tick, and the manual HH:MM:SS set - and each pastes it onto
+ * get_date_anchor(), which with no RTC and no internet is last_unix_time: the
+ * last moment this unit had a good clock. The supercap RTC holds 30-40 h, so a
+ * Tab5 left off "a couple of days" boots with the date it was last used and
+ * logs every QSO under it. Don found his POTA log two days behind; his time of
+ * day was perfect.
+ *
+ * So the date is verified only by something that actually knows it: SNTP, an
+ * RTC that survived, or the operator (time_sync_set_date / confirm_date).
+ * ui/date_confirm_modal.c asks while this is false. Logging is never blocked. */
+static bool              s_date_verified     = false;
+
 // Timestamps of the last accepted sync from each source; 0 = never.
 static int64_t           s_last_qmx_sync_ms  = 0;
 static int64_t           s_last_sntp_sync_ms = 0;
@@ -280,7 +295,58 @@ void time_sync_notify_sntp(time_t utc)
     apply_and_persist(utc, "SNTP");
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
+    s_date_verified = true;
     push_to_qmx(utc);
+}
+
+/* Dev only: a bench with WiFi always has a verified date, so without this the
+ * question could never be seen before it reaches a park. Cleared by the
+ * operator answering, exactly like the real case. */
+static bool s_dev_force_unverified = false;
+
+void time_sync_dev_force_date_unverified(void)
+{
+    s_dev_force_unverified = true;
+    s_date_verified = false;
+    ESP_LOGW(TAG, "DEV: date forced to unverified (ignores SNTP until answered)");
+}
+
+bool time_sync_date_verified(void)
+{
+    if (s_dev_force_unverified) return s_date_verified;
+    return s_date_verified || (wifi_is_connected() && wifi_time_is_valid());
+}
+
+void time_sync_confirm_date(void)
+{
+    if (!s_date_verified) ESP_LOGI(TAG, "date confirmed by the operator");
+    s_date_verified = true;
+    s_dev_force_unverified = false;
+}
+
+// Replace the DATE, keeping the current time of day to the microsecond - the
+// operator is correcting the day, and the seconds they may have just set by
+// hold-and-release must not move.
+bool time_sync_set_date(int year, int mon, int mday)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t tod = (int64_t)tv.tv_sec % 86400;
+    if (tod < 0) tod += 86400;
+    struct tm tm_d = { .tm_year = year - 1900, .tm_mon = mon - 1, .tm_mday = mday, .tm_isdst = 0 };
+    time_t day = mktime(&tm_d);   // ESP-IDF runs in UTC, so mktime == timegm
+    time_t utc = day + (time_t)tod;
+    if (day == (time_t)-1 || !epoch_is_sane((int64_t)utc)) {
+        ESP_LOGW(TAG, "date %04d-%02d-%02d rejected", year, mon, mday);
+        return false;
+    }
+    tv.tv_sec = utc;
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(utc, "date");
+    s_date_verified = true;
+    s_dev_force_unverified = false;
+    ESP_LOGI(TAG, "date set by the operator: %04d-%02d-%02d (time of day kept)", year, mon, mday);
+    return true;
 }
 
 // Priority 3: QMX TM; time-of-day — offline fallback only.
@@ -634,6 +700,7 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     } else if (rtc_is_valid()) {
         if (rtc_apply_to_system()) {
             s_source = TIME_SOURCE_RTC;
+            s_date_verified = true;   // the supercap held, so the date is the one it kept
         } else {
             ESP_LOGW(TAG, "RTC read failed despite valid flag");
         }
@@ -673,5 +740,9 @@ void time_sync_init(i2c_master_bus_handle_t bus)
         set_qmx_time_pushed(true);
     }
 
-    psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
+    // 3072 -> 6144: a qmx_settings_t local (icfg) on the tightest stack in
+    // this file. qmx_settings_t grew ~1350 B total this session (#pwrcal) -
+    // generous this time, not incremental, after a +1024 bump undershot on
+    // the same bug class elsewhere (sd_archive).
+    psram_task_create(time_sync_task, "time_sync", 8192, NULL, 4, tskNO_AFFINITY);
 }

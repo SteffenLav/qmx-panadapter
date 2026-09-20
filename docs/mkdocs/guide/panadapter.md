@@ -100,7 +100,7 @@ passes back to the stations who are on frequency, and pick it up again without
 re-dialling anything (suggested by Roy KI0ER). A parked offset is discarded when you
 retune — it belonged to that one station.
 
-If you never use RIT, the button can be hidden: **Settings → Radio → Show RIT button**
+If you never use RIT, the button can be hidden: **Settings -> Radio -> Show RIT button**
 (also in the web settings). It is shown by default. If an offset is actually engaged the
 button appears regardless of that setting — the radio listening away from your dial is not
 something to leave unsaid on screen.
@@ -150,10 +150,22 @@ The **visible-span block** inside the strip shows the exact portion of the band 
 
 A **passband sub-block** inside the visible-span block mirrors the current filter width at band scale (grey tint), so you can see how your passband sits within the CW/Digi/Phone zones.
 
-**Tune directly from the strip:**
+**Tap and drag do different things, on purpose:**
 
-- **Tap** anywhere on the strip to jump to that frequency
-- **Drag** to scrub along the band — the frequency label updates live and the QMX retunes on release
+- **Tap** anywhere on the strip to jump to that frequency. Tapping says *go there*.
+- **Drag the visible-span block** to move the window along the band. Dragging says
+  *look there*. The block, the VFO marker and the passband all travel together as
+  one piece, keeping the dial exactly where it sits inside the window, and the
+  radio follows. Let go and it stays where you put it.
+
+The filter passband and the CW/Digi/Phone labels hide while you drag and fade back
+in when you let go, so you can see the VFO marker arrive at its new home.
+
+**The grab area is taller than the strip looks.** The strip itself is only a few
+millimetres, which is not a finger, so touches are accepted for about 8 mm of the
+waterfall directly above it as well. Tap-to-tune gives up that last centimetre of
+the waterfall — nothing interesting lives there, and it is the difference between
+catching the handle first time and getting a tune cursor instead.
 
 **Drag from the bottom bar too.** The visible-span block acts as a slider handle that reaches *below* the thin strip: touch on or just under it — anywhere along the bottom status bar — and **drag sideways** to scrub the band, exactly like dragging the strip itself. This gives you a much taller grab target. It coexists with the memory-picker gesture on the same row: a **sideways** drag retunes the band-plan, while a **vertical up-swipe** still opens the memory picker.
 
@@ -224,7 +236,7 @@ so any range other than the default was described by labels that did not belong 
 
 The **frequency axis** shows absolute MHz labels across whatever span is on screen, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision. With **Still Spectrum** on — the default above ×1 — the axis stays put as you tune and the VFO marker moves along it; with it off, the axis is centred on the QMX VFO.
 
-The **waterfall** runs newest row at the top, in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
+The **waterfall** runs newest row at the top, in a thermal SDR palette (black -> dark blue -> teal -> green -> yellow -> red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
 
 **The waterfall floor tracks the band automatically.** Its black level follows a running median sampled only from bins *inside the passband*, EMA-smoothed, so the background colour follows conditions instead of sitting at a fixed anchor. Bins outside the passband are drawn darker and excluded from that calculation, so they cannot wash out dim in-band signals.
 
@@ -329,7 +341,7 @@ Pinching sets any value in between; double-tap returns to ×1 and re-centres.
 | Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
 | Two-finger drag | Pan the zoomed window |
 | Double-tap | Reset zoom and pan to ×1.0, centred |
-| Top-bar **Zoom** → tap | Pick a preset |
+| Top-bar **Zoom** -> tap | Pick a preset |
 
 **One-finger pan (stroll).** A fast horizontal swipe — more than about 70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
 
@@ -357,7 +369,7 @@ The display holds completely still right up to the page — it is never dragged 
 
 Changing mode, filter width or zoom re-centres the view on the passband, as before.
 
-Switch it off under **Settings → Radio & display → Still spectrum**, and the display returns to re-centring on the dial at every step with the marker in the middle.
+Switch it off under **Settings -> Radio & display -> Still spectrum**, and the display returns to re-centring on the dial at every step with the marker in the middle.
 
 !!! warning "×1 is always dial-centred"
     Holding a view still needs somewhere for it to stay while the capture window slides underneath it. At ×1 the view is already the whole 48 kHz the radio sends, so there is no room and the setting has nothing to work with. Zoom to **×2 or beyond** for the still display.
@@ -372,7 +384,75 @@ Before v1.10.5 the display filled that quarter of the ×1 view by wrapping the b
 
 If a signal you want falls into the hatching, tune down or zoom in. The radio cannot hear above dial+12 kHz, and no display setting can change that.
 
-### 11. S-Meter
+### 11. Decoded CW
+
+In **CW or CW-R**, a single line along the bottom of the waterfall shows the
+Morse the radio is decoding — on the Tab5 and in the browser alike.
+
+The decoding is not done by the Tab5. **The QMX has its own CW decoder** and
+hands the text over the CAT link, so this costs the panadapter nothing: no
+audio processing, no effect on the spectrum, no effect on FT8. It works on QMX
+firmware 1.03 and later — there is nothing to enable on the radio for most
+people, since its own **Decoder -> Enable Rx** setting is on by default
+*(suggested by Uwe DL8UG)*.
+
+The line reads:
+
+```
+CW ~18wpm:  CQ CQ DE OZ1LAV OZ1LAV K
+```
+
+- The **green header** carries the estimated sending speed and never moves. The
+  number is zero-padded, so the text after it does not shift as the estimate
+  crosses ten.
+- The **cyan text** is what the radio decoded, in a fixed grid of 72 characters.
+- When the line fills, it **wraps and writes over the oldest end** rather than
+  scrolling. Nothing slides sideways, so a callsign you are half-way through
+  reading stays where it is. Two blank spaces travel ahead of the writing
+  position — after the first wrap, that gap is what tells new text from old.
+
+**It is written to the microSD card too**, if one is in the slot: everything decoded
+goes to `qmx-panadapter/cw-decode.txt` with a timestamp on each line, so a callsign
+you only half-caught can be resolved afterwards *(Michael K Johnson KZ4LY)*. The
+line on screen holds one screenful; the card holds the session.
+
+With WiFi on, the card is written every 30 seconds rather than continuously, so
+the last few characters of a session may still be in memory when you pull the
+card. Switch the radio off and give it half a minute if you want the very end of
+an over.
+
+While the web page is open the card writes wait, because writing the card stalls
+the spectrum stream for several seconds on this hardware. They go through anyway
+after three minutes, so nothing is lost — but if you want the transcript fully
+up to date, close the browser tab and give it half a minute.
+
+**About the speed.** It is a *throughput* figure: characters per unit time,
+counting the gaps between words and between overs. During a real exchange it
+therefore reads **lower** than the other operator is actually sending, and only
+approaches their true speed during continuous sending. The radio hands over
+finished characters, so the element timing a true speed measurement needs is
+already gone. That is why it is shown with a `~`, and why it reads `??` rather
+than guessing when there is not enough to go on.
+
+**About the noise.** With no signal the decoder chews on noise. Two kinds of
+rubbish are filtered out before anything reaches the screen:
+
+- `*` — the decoder's marker for a symbol it could not resolve. Measured on a
+  live band it was the single most common thing arriving, and it is never part
+  of real text, so it is dropped outright.
+- Long runs of **E** and **T** — the two shortest Morse symbols, so noise lands
+  on them more often than on anything longer, and worst just after switching to
+  CW while the decoder settles. A long run is dropped; a short one is kept,
+  because those are real letters and words like TEST and BETTER must survive.
+
+A dropped run leaves one space behind, so words either side of it are not welded
+together.
+
+**Turning it off.** Settings drawer -> **Radio** -> **Show decoded CW**, beside CW
+centre and the transmit offset. It is on by default and the setting is shared
+with the browser.
+
+### 12. S-Meter
 
 The **Signal** field in the top bar is a tick-scale bar labelled S1, S3, S5, S7, S9, +10, +20, with a moving green bar beneath it.
 
@@ -385,11 +465,11 @@ The reading is the peak level in a ±64-bin window centred on the **IF-shifted V
 
 It is a readout, not a control: there is nothing to tap, and there is no peak-hold mode.
 
-### 12. Settings Drawer
+### 13. Settings Drawer
 
 Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
 
-It is grouped — **Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a **BASIC / ADVANCED** button at the top. Basic shows what an operating session needs; Advanced holds everything, including the tuning and calibration controls you set once. Which sections sit in which view is yours to change, from the web UI's **Settings → Tab5 config**.
+It is grouped — **Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a **BASIC / ADVANCED** button at the top. Basic shows what an operating session needs; Advanced holds everything, including the tuning and calibration controls you set once. Which sections sit in which view is yours to change, from the web UI's **Settings -> Tab5 config**.
 
 **Every control, group by group, is documented once in [Settings](settings.md)** — deliberately in one place rather than summarised here as well.
 

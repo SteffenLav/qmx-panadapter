@@ -3,6 +3,7 @@
 // TA; "Transmit Audio" technique as ft8_tx.c).
 
 #include "wspr_tx.h"
+#include "ui/power_cal_modal.h"   // power_cal_dbm_for_watts - the ONE watts->dBm rule
 #include "wspr_proto.h"
 #include "wspr_fano.h"
 
@@ -13,6 +14,8 @@
 #include <sys/time.h>
 
 #include "esp_log.h"
+#include "esp_random.h"
+#include "settings.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,6 +24,12 @@
 #include "cat/cat.h"
 #include "storage/settings.h"
 #include "util/psram_task.h"
+#include "adif/adif_log.h"   /* adif_log_band_for_freq() - for the burst-start log's watts figure */
+
+/* Same re-declaration approach as wspr_rx.c: power_cal_modal.h also pulls in
+ * lvgl.h for its UI declarations, which this (non-UI) file has no other
+ * reason to need. Definition in power_cal_modal.c. */
+extern bool power_cal_watts_for_voltage(const char *band, uint16_t v_x10, uint16_t *out_w_x100);
 
 static const char *TAG = "wspr_tx";
 
@@ -278,6 +287,24 @@ bool wspr_tx_get_last_power_swr(float *power_w, float *swr)
     return true;
 }
 
+int wspr_tx_pick_tone_hz(void)
+{
+    /* ⭐ A PINNED TONE WINS. The operator can tap the WSPR waterfall to place
+     * the transmission in a gap they can actually see - which is what WSJT-X
+     * users do, and what this page's own 1360-1650 Hz display was already
+     * showing without offering. 0 means nothing is pinned, which is the
+     * default and the one that randomises. */
+    uint16_t pinned = settings_get_wspr_tx_tone_hz();
+    if (pinned) return (int)pinned;
+
+    /* esp_random() is the hardware RNG and needs no seeding - important here,
+     * because a PRNG seeded from the clock would give every Tab5 that booted in
+     * the same second the same sequence, which is the collision this exists to
+     * prevent wearing a disguise. */
+    uint32_t r = esp_random() % (uint32_t)(2 * WSPR_TX_RANDOM_SPAN_HZ + 1);
+    return WSPR_TX_DEFAULT_FREQ_HZ - WSPR_TX_RANDOM_SPAN_HZ + (int)r;
+}
+
 static void run_burst(const wspr_tx_request_t *req)
 {
     s_abort_requested = false;
@@ -289,10 +316,100 @@ static void run_burst(const wspr_tx_request_t *req)
      * one. A measurement that cannot be attributed with certainty is not a
      * measurement. -1 means the radio has not told us yet. */
     int16_t pa_x10 = cat_get_pa_voltage_x10();
-    ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz, "
-                  "PA=%d.%d V%s",
+    /* "PA=3.8 V" alone does not say what that voltage actually produces -
+     * operator, 2026-09-16: "PA 3.8 V = 500 mW". Reverse-looked-up from
+     * Calibrate Power's own table by the EXACT voltage in force; empty when
+     * unknown (-1) or this voltage was never in the sweep (a value the
+     * operator set by hand, or a band never calibrated). */
+    char wbuf[20] = "";
+    int8_t pa_dbm = -1;
+    if (pa_x10 > 0) {
+        const char *band = adif_log_band_for_freq(cat_get_frequency());
+        uint16_t w_x100;
+        if (band && band[0] && power_cal_watts_for_voltage(band, (uint16_t)pa_x10, &w_x100)) {
+            if (w_x100 < 100) snprintf(wbuf, sizeof(wbuf), " = %u mW", (unsigned)w_x100 * 10);
+            else              snprintf(wbuf, sizeof(wbuf), " = %u.%u W", w_x100 / 100, (w_x100 / 10) % 10);
+            pa_dbm = power_cal_dbm_for_watts(w_x100);
+        }
+    }
+
+    /* ⛔ REFUSE A BURST THAT WOULD PUBLISH A FALSE POWER.
+     *
+     * Everything needed to know this is already in hand a line above: the
+     * voltage the radio is actually at, and the wattage Calibrate Power
+     * measured at that voltage on this band. Until now it was only CHECKED
+     * AFTER the fact, from the PC; measurement taken ~11 s into the burst - by
+     * which point the wrong figure is already going out.
+     *
+     * 2026-09-19, measured on the operator's own bench: a burst went out at
+     * 12.0 V = 3.8 W while declaring 30 dBm (1 W). Two separate harms, and the
+     * second is the one that makes this a refusal rather than a warning:
+     *
+     *   - the finals key for ~110 s at nearly four times the intended power,
+     *     which is how this very radio lost its BS170s once already;
+     *   - wsprnet publishes the DECLARED figure worldwide, so every propagation
+     *     conclusion drawn from that spot is drawn from a number we knew was
+     *     wrong. That is the "never fabricate a measurement" rule, and it does
+     *     not bend just because the radio would have transmitted happily.
+     *
+     * ⚠ NOT the same class as the "FULL PWR" warning, which this project
+     * deliberately leaves as a warning - that one only risks the operator's own
+     * finals, and it is his radio. This one puts bad data in other people's
+     * hands, which is not his to spend.
+     *
+     * ⛔⛔ "DO NOT KNOW" IS ALSO A REFUSAL NOW (operator, 2026-09-19).
+     *
+     * This used to let pa_dbm == -1 through, on the grounds that refusing on
+     * ignorance "would ground every beacon that never ran Calibrate Power".
+     * That reasoning protected the wrong party. The declared power is not a
+     * note in a database - it is INSIDE THE TRANSMITTED MESSAGE, so a burst on
+     * an uncalibrated band tells every receiver in the world a power figure
+     * this firmware knows it cannot back. Measured on this bench the same day:
+     * 40 m uncalibrated, radio at 12.0 V = about 3.8 W, message declaring
+     * 30 dBm = 1 W.
+     *
+     * Operator, choosing between refusing and warning: "then we need to write
+     * that you are trying to TX on a uncalibrated band - please calibrate
+     * first". Same rule as never fabricating a signal report, and the wider
+     * blast radius decides it - a wrong number in other people's propagation
+     * data is not ours to spend.
+     *
+     * ⚠ pa_x10 < 0 is NOT this case. That is "the radio has not answered yet",
+     * which is a timing gap and clears itself; grounding a beacon for it would
+     * be the fault this paragraph replaced. Only a KNOWN voltage we cannot
+     * price refuses. */
+    if (pa_x10 > 0 && pa_dbm < 0) {
+        ESP_LOGE(TAG, "WSPR TX REFUSED: this band is not calibrated, so the radio's "
+                      "%d.%d V cannot be turned into watts - and the message would "
+                      "still declare %d dBm to the world. Run Calibrate Power on "
+                      "this band first.",
+                 pa_x10 / 10, pa_x10 % 10, req->power_dbm);
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
+    if (pa_dbm >= 0 && pa_dbm > req->power_dbm) {
+        ESP_LOGE(TAG, "WSPR TX REFUSED: the radio is set to put out %s (%d dBm) but "
+                      "the declared power is %d dBm. wsprnet publishes the DECLARED "
+                      "figure, so this burst would tell the world a number we know is "
+                      "wrong - and key the finals for ~110 s at more than declared. "
+                      "Set Declared power to match, or recalibrate this band.",
+                 wbuf[0] ? wbuf + 3 : "?", pa_dbm, req->power_dbm);
+        /* run_burst() returns void and owns the state machine, so the refusal
+         * looks exactly like a burst that ended: back to IDLE, nothing keyed,
+         * and the slot loop schedules the next cycle as usual. */
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
+    /* The ABSOLUTE frequency the signal appears on, not just the audio tone -
+     * dial + tone is what wsprnet reports back and what the operator compares
+     * against, and doing that sum by hand from two log lines is exactly the
+     * kind of attribution this file already refuses to rely on elsewhere. */
+    uint32_t rf_hz = cat_get_frequency() + (uint32_t)req->audio_freq_hz;
+    ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz "
+                  "(RF %lu.%06lu MHz), PA=%d.%d V%s%s",
              req->callsign, req->grid, req->power_dbm, req->audio_freq_hz,
-             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
+             (unsigned long)(rf_hz / 1000000u), (unsigned long)(rf_hz % 1000000u),
+             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0, wbuf,
              s_burst_sim      ? "  [SIMULATION - radio not keyed]"
              : WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
     if (pa_x10 <= 0) ESP_LOGW(TAG, "  ...PA voltage UNKNOWN - this burst cannot be attributed");
@@ -551,7 +668,9 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
      * for another (#279). Small - 4 KB - but it is once per transmission, and
      * WSPR transmits all day. */
     psram_task_reap();
-    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 4096, NULL,
+    // 4096 -> 7168: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 9216, NULL,
                                         5, tskNO_AFFINITY);
     if (!h) {
         lock();

@@ -1,7 +1,8 @@
 # Name,    Type, SubType, Offset,    Size,     Flags
 #
-# 16 MB flash. #218: three app slots so firmware can be updated from the device
-# itself, while the existing flasher keeps working exactly as before.
+# 16 MB flash. TWO app slots so firmware can be updated from the device itself,
+# while the existing flasher keeps working exactly as before. It was three until
+# v1.15.0 - see the `factory` note below for why the third one went.
 #
 # ⛔ user_nvs (0x810000) and storage (0x820000) MUST NOT MOVE. They hold the
 # settings, the QSO log, and the LoTW certificate AND PRIVATE KEY. The flasher
@@ -9,19 +10,60 @@
 # touches them - moving either offset would destroy user data on every unit in
 # the field. Everything below is arranged around keeping those two fixed.
 #
-# factory stays the flasher's target at 0x10000, so flash.bat/.command are
-# unchanged, and it survives as a permanent known-good image: erasing otadata
-# returns the device to whatever was last flashed by cable, even if both OTA
-# images are bad. That escape hatch is why factory is kept rather than going
-# ota-only.
+# ⛔ `factory` IS GONE AS OF THIS LAYOUT, AND THAT WAS A DELIBERATE TRADE.
+# It used to hold 4 MB at 0x10000 as a permanent known-good image - erase
+# otadata and the device returns to whatever was last cable-flashed, even with
+# both OTA images bad. Measured against how it can actually be REACHED, that
+# was worth very little: there is no on-device way to invoke it (nothing erases
+# otadata, and a user cannot without esptool), so it needs a cable - and with a
+# cable the flasher rewrites everything anyway. CONFIG_BOOTLOADER_APP_ROLLBACK
+# _ENABLE already covers the case it was really guarding, an image that fails
+# to confirm itself. Two slots that FIT beat a third that cannot be reached.
 #
-# App slots are 4 MB against a ~3.3 MB binary (~20% headroom). An overflow is a
-# BUILD failure, not a field failure.
+# ⭐ 0x10000 IS STILL THE FLASHER'S TARGET - it is just ota_0 now, so
+# flash.bat/.command are unchanged. Verified in the IDF bootloader source
+# (bootloader_utility.c, the !CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK branch):
+# with no factory and both otadata entries blank it logs "No factory image,
+# trying OTA 0", boots index 0 and writes a correct ota_seq. The flasher
+# already writes ota_data_initial.bin at 0x920000 for its own reasons, so that
+# pair is exactly what this layout needs.
+#
+# ⚠ user_nvs and storage KEEP THEIR OFFSETS, which is the whole reason the
+# slots are sized the way they are: ota_0 fills the 8 MB below user_nvs and
+# ota_1 takes everything above otadata to the end of the 16 MB flash
+# (0x930000 -> 0x1000000 = 6.81 MB). Nothing else could grow without moving
+# the QSO log and the LoTW private key.
+#
+# ota_0 is 8 MB and ota_1 is 6.81 MB; the BUILD is bounded by the smaller of the
+# two, so 6.81 MB is the real ceiling. An overflow is a BUILD failure, not a
+# field failure.
+#
+# ⚠ THIS LAYOUT EXISTS BECAUSE HEADROOM RAN OUT. Measured 2026-09-18 on the
+# OLD three-slot layout: 4,146,720 B against a 4,194,304 B slot, i.e. 47 KB or
+# 1.1% free, against the "~20%" an older version of this comment claimed while
+# the binary was ~3.3 MB. The embedded manual alone grew 8,280 B in v1.14.4.
+# The smallest app partition is now ota_1 at 6.81 MB, so the build has ~2.7 MB
+# of room again.
+#
+# ⛔ THE FREE TAIL IS FIRMWARE HEADROOM. DECIDED 2026-09-18 by the operator:
+# "my first priority is kept - fw expendabilities and stack maintenance comes
+# first". ota_1 ends at 0xD30000, leaving 2.81 MB unallocated to the end of the
+# 16 MB flash, and TODO #192 wanted it for a diag-log partition. It does not get
+# it. The app slots have the prior claim and the claim is not close: 47 KB of
+# headroom is one feature from a build failure, while the diag log has a working
+# answer today (a microSD card) and a partial one without (the 256 KB SPIFFS
+# window).
+#
+# ⚠ GROWING A SLOT IS CONSTRAINED, NOT FREE, AND THIS LAYOUT HAS ALREADY SPENT
+# THE ROOM. user_nvs (0x810000) and storage (0x820000) cannot move, so ota_0 is
+# boxed into the 8 MB below them and ota_1 takes everything above otadata to the
+# end of flash. Giving the third slot up is what bought both their sizes; there
+# is no second time to do that. The next increase would have to move user data,
+# which is the one thing this file exists to prevent.
 nvs,       data, nvs,     0x9000,    0x6000,
 phy_init,  data, phy,     0xf000,    0x1000,
-factory,   app,  factory, 0x10000,   0x400000,
-ota_0,     app,  ota_0,   0x410000,  0x400000,
+ota_0,     app,  ota_0,   0x10000,   0x800000,
 user_nvs,  data, nvs,     0x810000,  0x6000,
 storage,   data, spiffs,  0x820000,  0x100000,
 otadata,   data, ota,     0x920000,  0x2000,
-ota_1,     app,  ota_1,   0x930000,  0x400000,
+ota_1,     app,  ota_1,   0x930000,  0x6D0000,

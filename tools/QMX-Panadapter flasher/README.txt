@@ -2,14 +2,34 @@
  QMX Panadapter - flashing the firmware onto an M5Stack Tab5
 ============================================================
 
-This is a one-click flasher/updater. On Windows it downloads
-everything it needs - the flashing tool (esptool) AND the latest
-firmware - straight from GitHub, then flashes it. Nothing to
-install, no developer tools, no Python. You just need internet
-the first time.
+This is a one-click flasher/updater. THE FIRMWARE IS ALREADY IN
+THIS FOLDER - the four .bin files next to these scripts are what
+gets flashed, and nothing is fetched to get them. On Windows the
+only thing downloaded is the flashing tool itself (esptool), once,
+straight from Espressif's GitHub. Nothing to install, no developer
+tools, no Python.
 
-(Offline? It still works if esptool and a firmware .bin are
-already in this folder from a previous run - see "If it fails".)
+(Offline? It works with no internet at all once esptool is in the
+"esptool" subfolder from a previous run - see "If it fails".)
+
+------------------------------------------------------------
+ v1.15.0 - this is the release that needs the cable
+------------------------------------------------------------
+
+ v1.15.0 rewrites the partition table to give the firmware room
+ to grow, and an over-the-air update cannot do that - it can only
+ ever write the app, never the map of the flash. So this one
+ arrives as a flasher download. It is the only release that needs
+ it; everything after it updates over WiFi again as before.
+
+ If you tapped the update notice on the Tab5 and it said the
+ download could not be reached, that was not a fault - there is
+ deliberately no over-the-air image for this release.
+
+ YOUR SETTINGS, MEMORY CHANNELS, QSO LOG AND LoTW CERTIFICATE ARE
+ KEPT. Press ENTER at the flash-type prompt. Do NOT press E -
+ that erases the whole chip, including your log and your LoTW
+ private key, and it is not needed here.
 
 ------------------------------------------------------------
  WINDOWS - the easy way

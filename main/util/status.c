@@ -576,5 +576,7 @@ void status_bar_start(void)
     // in PSRAM (28 MB spare) while the TCB stays internal. On a board whose task
     // stacks are documented as "TINY", being generous with a background task is
     // the cheap side of the trade.
-    psram_task_create(status_task, "status", 8192, NULL, 2, tskNO_AFFINITY);
+    // 8192 -> 11264: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(status_task, "status", 13312, NULL, 2, tskNO_AFFINITY);
 }

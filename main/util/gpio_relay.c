@@ -1,0 +1,228 @@
+#include "gpio_relay.h"
+
+#include "driver/gpio.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+
+#include <string.h>
+
+#include "storage/settings.h"
+#include "cat.h"       // cat_is_ready() - the power-cycle sequence's own success test
+#include <stdio.h>
+
+static const char *TAG = "gpio_relay";
+
+#define RELAY_PIN_A GPIO_NUM_53
+#define RELAY_PIN_B GPIO_NUM_54
+
+static esp_timer_handle_t s_release_timer;
+static esp_timer_handle_t s_pc_timer;         /* power-cycle sequence's own timer - see further down */
+static void pc_step_cb(void *arg);   /* forward decl - used by gpio_relay_init() below, defined near the power-cycle sequence further down */
+static volatile bool      s_busy = false;
+static bool               s_inited = false;   /* settings can be set before init() runs */
+static uint8_t            s_active_pin;
+static bool                s_rest_level;   /* level to return to when the timer fires */
+
+static gpio_num_t pin_to_gpio(uint8_t pin)
+{
+    if (pin == 53) return RELAY_PIN_A;
+    if (pin == 54) return RELAY_PIN_B;
+    return GPIO_NUM_NC;
+}
+
+static void release_cb(void *arg)
+{
+    (void)arg;
+    gpio_set_level((gpio_num_t)pin_to_gpio(s_active_pin), s_rest_level ? 1 : 0);
+    ESP_LOGI(TAG, "GPIO%u released -> %d", s_active_pin, (int)s_rest_level);
+    s_busy = false;
+}
+
+void gpio_relay_init(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B),
+        /* INPUT_OUTPUT, not OUTPUT: the input buffer is what makes
+         * gpio_get_level() report the level actually on the pin. Driving is
+         * unaffected, and a resting level that is only asserted in a log line
+         * is exactly the kind of claim #189 says must be measured instead. */
+        .mode         = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    esp_err_t e = gpio_config(&cfg);
+
+    /* ⛔ RESTING LEVEL IS THE STORED POLARITY'S INACTIVE SIDE, NOT A FIXED LOW.
+     * This drove both pins LOW unconditionally, under a comment reasoning that
+     * "a contact closure should require a deliberate pulse". That reasoning is
+     * right and the code did the opposite of it for anyone who had chosen
+     * active LOW: LOW IS THE ASSERTED STATE for them, so the relay was held
+     * CLOSED from boot until the first pulse happened to release it - on a line
+     * wired to a QMX's PWR_ON. Randy N4OPI found it and put it mildly ("doesn't
+     * really matter much except if you have chosen an active setting of Low").
+     *
+     * Both pins are set, not just the configured one: the polarity the operator
+     * declared is a fact about their wiring, so a later pin change must not
+     * leave the other pin resting on the wrong side. */
+    uint8_t  st_pin = 53;
+    bool     st_level = true;
+    uint16_t st_ms = 1000;
+    settings_get_gpio_relay(&st_pin, &st_level, &st_ms);   /* narrow accessor - never settings_load_all() here */
+    s_rest_level = !st_level;
+    gpio_set_level(RELAY_PIN_A, s_rest_level ? 1 : 0);
+    gpio_set_level(RELAY_PIN_B, s_rest_level ? 1 : 0);
+
+    const esp_timer_create_args_t targs = {
+        .callback = release_cb,
+        .name     = "gpio_relay_release",
+    };
+    esp_timer_create(&targs, &s_release_timer);
+
+    const esp_timer_create_args_t pc_targs = {
+        .callback = pc_step_cb,
+        .name     = "gpio_relay_pc",
+    };
+    esp_timer_create(&pc_targs, &s_pc_timer);
+
+    s_inited = true;
+    ESP_LOGI(TAG, "GPIO53/54: active %s so resting %s - pins READ BACK %d/%d (%s)",
+             st_level ? "HIGH" : "LOW", s_rest_level ? "HIGH" : "LOW",
+             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B),
+             e == ESP_OK ? "ok" : "gpio_config FAILED");
+}
+
+bool gpio_relay_pulse(uint8_t pin, bool level, uint16_t ms, char *err, size_t errlen)
+{
+    gpio_num_t g = pin_to_gpio(pin);
+    if (g == GPIO_NUM_NC) {
+        if (err) snprintf(err, errlen, "pin must be 53 or 54");
+        return false;
+    }
+    if (ms < GPIO_RELAY_MIN_MS || ms > GPIO_RELAY_MAX_MS) {
+        if (err) snprintf(err, errlen, "duration must be %u-%u ms",
+                           (unsigned)GPIO_RELAY_MIN_MS, (unsigned)GPIO_RELAY_MAX_MS);
+        return false;
+    }
+    if (s_busy) {
+        if (err) snprintf(err, errlen, "a pulse is already in progress");
+        return false;
+    }
+
+    s_busy        = true;
+    s_active_pin  = pin;
+    s_rest_level  = !level;
+    gpio_set_level(g, level ? 1 : 0);
+    esp_timer_start_once(s_release_timer, (uint64_t)ms * 1000ULL);
+
+    ESP_LOGW(TAG, "GPIO%u -> %d for %u ms (relay pulse)", pin, (int)level, (unsigned)ms);
+    return true;
+}
+
+bool gpio_relay_busy(void) { return s_busy; }
+
+// ---- Deterministic power-cycle sequence (Randy N4OPI, 2026-09-13) ---------
+//
+// Chained one-shot timers rather than a single long delay, for the same
+// reason gpio_relay_pulse() itself is async: this runs from an HTTP handler
+// and must return immediately. Each stage schedules the next.
+typedef enum { PC_STAGE_ON_PULSE, PC_STAGE_CHECK } pc_stage_t;
+
+#define PC_WAIT_AFTER_OFF_MS      1000
+#define PC_ON_PULSE_MS             500
+#define PC_WAIT_BEFORE_CHECK_MS   2000
+#define PC_CHECK_INTERVAL_MS       500
+#define PC_CHECK_MAX_TRIES           16   /* +8 s of polling past the 2 s wait */
+
+static volatile gpio_pc_status_t  s_pc_status = GPIO_PC_IDLE;
+static pc_stage_t                 s_pc_stage;
+static uint8_t                    s_pc_pin;
+static bool                       s_pc_level;
+static int                        s_pc_check_tries;
+
+static void pc_step_cb(void *arg)
+{
+    (void)arg;
+    switch (s_pc_stage) {
+    case PC_STAGE_ON_PULSE: {
+        char err[64];
+        if (!gpio_relay_pulse(s_pc_pin, s_pc_level, PC_ON_PULSE_MS, err, sizeof(err))) {
+            // Only cause: something else grabbed the relay in the 1 s window
+            // between the off-pulse releasing and this firing - a stray
+            // concurrent gpio_pulse call, since power-cycle already checked
+            // "busy" before starting. Rare enough that failing outright,
+            // rather than retrying blind, is the honest answer.
+            ESP_LOGW(TAG, "power-cycle: on-pulse refused (%s) - reporting failed", err);
+            s_pc_status = GPIO_PC_FAILED;
+            return;
+        }
+        ESP_LOGW(TAG, "power-cycle: GPIO%u on-pulsed, watching for CAT", s_pc_pin);
+        s_pc_stage = PC_STAGE_CHECK;
+        s_pc_check_tries = 0;
+        esp_timer_start_once(s_pc_timer, (uint64_t)(PC_ON_PULSE_MS + PC_WAIT_BEFORE_CHECK_MS) * 1000ULL);
+        break;
+    }
+    case PC_STAGE_CHECK:
+        if (cat_is_ready()) {
+            ESP_LOGW(TAG, "power-cycle: QMX answered CAT - done, %d check(s)", s_pc_check_tries);
+            s_pc_status = GPIO_PC_OK;
+            return;
+        }
+        if (++s_pc_check_tries >= PC_CHECK_MAX_TRIES) {
+            ESP_LOGW(TAG, "power-cycle: no CAT response after %d ms - reporting failed",
+                     PC_WAIT_BEFORE_CHECK_MS + PC_CHECK_MAX_TRIES * PC_CHECK_INTERVAL_MS);
+            s_pc_status = GPIO_PC_FAILED;
+            return;
+        }
+        esp_timer_start_once(s_pc_timer, (uint64_t)PC_CHECK_INTERVAL_MS * 1000ULL);
+        break;
+    }
+}
+
+bool gpio_relay_power_cycle_start(uint8_t pin, bool level, uint16_t off_ms,
+                                   char *err, size_t errlen)
+{
+    if (s_pc_status == GPIO_PC_RUNNING) {
+        if (err) snprintf(err, errlen, "a power-cycle is already running");
+        return false;
+    }
+    // gpio_relay_pulse() does the pin/ms validation and the "already busy"
+    // check that matters here (a plain Pulse mid-flight) - not repeated.
+    if (!gpio_relay_pulse(pin, level, off_ms, err, errlen)) return false;
+
+    s_pc_pin   = pin;
+    s_pc_level = level;
+    s_pc_stage = PC_STAGE_ON_PULSE;
+    s_pc_status = GPIO_PC_RUNNING;
+    esp_timer_start_once(s_pc_timer, (uint64_t)((uint32_t)off_ms + PC_WAIT_AFTER_OFF_MS) * 1000ULL);
+    ESP_LOGW(TAG, "power-cycle: GPIO%u off-pulsed %u ms, on-pulse and CAT check to follow",
+             pin, off_ms);
+    return true;
+}
+
+gpio_pc_status_t gpio_relay_power_cycle_status(void) { return s_pc_status; }
+
+void gpio_relay_set_polarity(bool active_level)
+{
+    bool rest = !active_level;
+
+    /* Mid-pulse, only the destination changes: driving the pin now would cut
+     * the pulse short, and the pulse is a real contact closure on someone's
+     * radio. release_cb lands on the new resting level when the timer fires. */
+    s_rest_level = rest;
+    /* A setting can be written before init() has configured the pins (config
+     * import, say). The stored resting level above is what init() will read,
+     * so there is nothing to drive yet. */
+    if (!s_inited) return;
+    if (s_busy) {
+        ESP_LOGI(TAG, "polarity now active %s - resting level applies when the pulse ends",
+                 active_level ? "HIGH" : "LOW");
+        return;
+    }
+
+    gpio_set_level(RELAY_PIN_A, rest ? 1 : 0);
+    gpio_set_level(RELAY_PIN_B, rest ? 1 : 0);
+    ESP_LOGI(TAG, "polarity now active %s - both pins resting %s, READ BACK %d/%d",
+             active_level ? "HIGH" : "LOW", rest ? "HIGH" : "LOW",
+             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B));
+}

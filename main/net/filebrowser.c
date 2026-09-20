@@ -229,7 +229,18 @@ static esp_err_t download_handler(httpd_req_t *req)
         while ((n = fread(buf, 1, sizeof buf, f)) > 0 && err == ESP_OK)
             err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
         fclose(f);
-        httpd_resp_send_chunk(req, NULL, 0);
+        /* Only terminate the chunked body if it actually completed. The
+         * terminator on a failed transfer hands the browser a short file that
+         * looks whole - and the files reached through here include the ADIF log
+         * and its backups, so that is a backup which restores fewer QSOs than
+         * it should with nothing anywhere saying so. See the long note on
+         * /api/adif in webserver.c. */
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "download %s: send failed mid-file (err 0x%x) - aborting the "
+                          "connection rather than serving a truncated file", name, err);
+        } else {
+            httpd_resp_send_chunk(req, NULL, 0);
+        }
     }
 
     dsp_set_transfer_quiet(false);

@@ -126,6 +126,18 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
 int       dsp_ft8_capture_progress(void);
 esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms);
 
+/* Time-base repair for the FT8/WSPR capture feed - see time_base_check() in
+ * dsp.c. Audio that never arrived over USB is filled with silence so the
+ * capture window stays on the wall clock. ON by default; the switch exists for
+ * an A/B. The counters are for diagnostics (/api/status, the arm line). */
+void     dsp_gapfill_set_enabled(bool on);
+bool     dsp_gapfill_enabled(void);
+uint32_t dsp_gapfill_total_samples(void);   /* 12 kHz samples filled since boot */
+uint32_t dsp_gapfill_events(void);
+/* Dev-only: drop `ms` of audio every `every_s` seconds before the pre-ring,
+ * to exercise the repair. every_s = 0 stops it. */
+void     dsp_sim_audio_drop(uint32_t ms, uint32_t every_s);
+
 // ---- RX audio out: forward raw I/Q to the RX demodulator -------------------
 // The RX demodulator needs EVERY I/Q sample in real time. fft_task is a
 // snapshot consumer (~15 windows/s, lets the rest overflow) so it is NOT a

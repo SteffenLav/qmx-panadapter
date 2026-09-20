@@ -13,10 +13,19 @@ void ui_init(lv_display_t *disp);
 // hidden until a mouse is actually present. Safe to call even with no mouse.
 void ui_mouse_init(void);
 
+/* Where the mouse pointer is, in SCREEN coordinates, or false when no mouse is
+ * present. For hover readouts - a touchscreen has no hover, so anything built
+ * on this must be an extra rather than the only way to learn something. */
+bool ui_mouse_pointer(lv_point_t *out);
+
 // Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
 // Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // and audio/cat init have completed.
-void ui_apply_saved_mode(void);
+/* Split in two - see the comment above ui_apply_saved_mode_view() in ui.c.
+ * The view goes up before the backlight; the engines start later, when audio,
+ * dsp and cat exist. */
+void ui_apply_saved_mode_view(void);
+void ui_apply_saved_mode_start(void);
 
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
@@ -84,6 +93,22 @@ void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to N
  * leaving it at a screen edge (Roy KI0ER). Call it BEFORE the tune; it is
  * consumed by the next frequency update, whatever that turns out to be. */
 void ui_note_frequency_jump(void);
+/* Stronger: the VIEW was dragged, so it re-frames on the new dial
+ * unconditionally - no fits-test, no push/land. See ui.c. */
+void ui_note_view_reframe(void);
+
+/* Put the visible window's CENTRE at view_center_hz. Pans without touching the
+ * radio while the requested window is inside what it can hear, and retunes by
+ * exactly the shortfall when it is not - so the window always lands where it
+ * was asked for. This is what dragging the band-plan knob does, on the Tab5 and
+ * from the web page, and the long rationale is at bp_solve_view() in ui.c.
+ * Returns the dial it settled on.
+ *
+ * ⛔ LVGL-THREAD ONLY. Anything off taskLVGL - the web server above all - must
+ * call ui_request_bandplan_view() instead, which queues it for the LVGL thread.
+ * See the comment above that function in ui.c. */
+uint32_t ui_bandplan_move_view(int64_t view_center_hz);
+void ui_request_bandplan_view(int64_t view_center_hz);
 
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);
@@ -98,6 +123,14 @@ int64_t ui_get_pan_offset_hz(void);
  * Returns false when the zoom FFT is active and pan_view does not apply. */
 bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
 
+/* The on-screen viewport in absolute Hz, valid on BOTH FFT paths - unlike
+ * ui_pan_view_current(), which describes the BIN mapping and so declines while
+ * the zoom FFT is driving. Ask this when you need to know what frequencies are
+ * on screen; ask that when you need to know which bin a frequency is in.
+ * See ui.c for the four separate bug reports that came from the browser having
+ * no viewport at all above zoom x1. */
+void ui_screen_view_hz(int64_t *lo_out, int32_t *span_out);
+
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:
@@ -109,6 +142,18 @@ int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the di
 
 // Passband edges in Hz, relative to VFO/dial (mode + CAT-width dependent).
 void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);
+
+/* The dB scale the spectrum is drawn against, and the round gridline values
+ * derived from it (util/db_gridlines.c). Exposed so the browser can draw the
+ * SAME scale instead of the hardcoded -40..-120 it carried, which stopped being
+ * true the moment anyone moved the dB-range sliders - the fault db_gridlines.c
+ * was written to fix on the Tab5 (Samuel W7STF, v1.8.3). */
+void ui_get_db_range(float *out_min, float *out_max);
+
+/* The zoom steps the Tab5 offers. The page had its own list and it was already
+ * one short - {1,2,4,8,16} against {1,2,4,8,16,24} - so x24 could not be reached
+ * from the browser at all. Returns the count; pass NULL to just ask how many. */
+int ui_zoom_presets(const float **out_list);
 
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);
@@ -222,6 +267,17 @@ void ui_power_off_safely(void);
 // what made the Reader's own Back/Exit buttons untappable.
 void ui_help_overlay_changed(void);
 
+// True while any full-screen overlay (Reader, "Need guidance?", the radio
+// terminal, SelfSpotter) is covering the whole display. Exported so render.c
+// can skip drawing the spectrum/waterfall canvases underneath one, the same
+// way it already skips them in FT8 mode - see render.c's pan_visible.
+bool ui_any_overlay_active(void);
+
+// Opens the on-device docs Reader at its top level. Exported 2026-09-13 so
+// ui/spot_map_view.c's own settings drawer can offer the same "User Manual"
+// button the main drawer has, rather than duplicating reader_view.c's API.
+void ui_open_user_manual(void);
+
 // Called from cat.c's VN; response handler once the QMX firmware version is
 // known, so the drawer can reveal 1_04+-gated sections (AM mode, Tune button)
 // even if it was already built (lazy, first-open) before VN; answered. No-op
@@ -275,6 +331,10 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
+/* Flat mode from the web (#357). ui_set_flat_mode() moves LVGL objects and so
+ * may only be called on the display thread; this leaves a request that the
+ * 500 ms reconcile applies. Safe from httpd. */
+void ui_request_flat_mode(bool on);
 void ui_flat_mode_reset(void);  // re-seed flat-spectrum floor on first audio after QMX (re)connect
 
 // Phase 5.4: update dB label text (called by autoscale)

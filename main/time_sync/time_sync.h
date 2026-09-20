@@ -70,6 +70,18 @@ void time_sync_notify_sntp(time_t utc);
 // changed.
 bool time_sync_notify_qmx(int h, int m, int s);
 
+// Is the DATE trustworthy? True after SNTP, a surviving Tab5 RTC, or the
+// operator confirming/setting it. False when the date was pasted from the
+// last-known timestamp because the RTC ran down offline (Don WB0LQW's POTA log
+// two days behind). ui/date_confirm_modal.c asks while this is false.
+bool time_sync_date_verified(void);
+// The operator says the date shown is right.
+void time_sync_confirm_date(void);
+// Set the DATE only, keeping the time of day. Returns false if out of range.
+bool time_sync_set_date(int year, int mon, int mday);
+// Dev only: treat the date as unverified even with SNTP, until answered.
+void time_sync_dev_force_date_unverified(void);
+
 // Priority 5: manual override — full UTC date+time. For rare POTA sessions where
 // QMX has no GPS and WiFi is unavailable.
 void time_sync_set_manual(int year, int mon, int mday, int h, int m, int s);

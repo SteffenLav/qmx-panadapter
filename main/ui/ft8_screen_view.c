@@ -1,5 +1,6 @@
 #include <stddef.h>   // offsetof - the layout assert below
 #include "ft8_screen_view.h"
+#include "util/format_freq.h"   // #302
 #include "ui_theme.h"
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
@@ -23,6 +24,7 @@
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 
 // v0.12.0: Manual FT8 TX (Reply + Call CQ) - tap a heard-station row, or
 // the "Call CQ" button below, to open the confirmation modal; a small
@@ -56,35 +58,58 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | AGE
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | AGE
 // SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
-// the pre-v1.3.1 layout; the country column shrank from full entity names
-// (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
-// tighter SNR (no " dB" suffix) - freed the width for two new columns
-// (Roy KI0ER request): DT (slot-timing offset, seconds, band-consensus-
-// relative so on-time stations read ~0.0) and HZ (the station's audio tone).
+// the pre-v1.3.1 layout.
+//
+// The country column was cut to 3-letter codes in v1.3.1 to pay for DT and HZ
+// (Roy KI0ER). It is back to spelled-out names at 126 px / ~10 characters,
+// paid for by DROPPING BRG (62 px) and by AGE losing its "s" suffix (~12 px) -
+// the operator's call, 2026-09-17: a bearing is derivable from the distance
+// and the map, and the country is read far more often.
+//
+// 10 IS A COLUMN WIDTH. country_display() spells the name out when it fits and
+// SHORTENS it when it does not - "Netherlan." with the full stop that marks an
+// abbreviation, never a bare "Netherlan" and never the 3-letter code.
+//
+// ⛔ It DID return the code until 2026-09-19, on the reasoning that a clipped
+// name reads as a bug while NLD is the shorter true answer. Reversed by the
+// operator, who was looking at a column of mixed names and codes: "apples and
+// pears". See country_shorten.c, and CLAUDE.md for the width table - at 10
+// chars 28 of 340 names need shortening, at 18 none do.
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
 #define COL_CALL_X      46
 #define COL_TEXT_X      184
 #define COL_COUNTRY_X   479
-#define COL_SNR_X       537
-#define COL_DT_X        599
-#define COL_HZ_X        669
-#define COL_KM_X        739
-#define COL_BRG_X       817
-#define COL_AGE_X       885
+#define COL_SNR_X       611
+/* ⭐ TONE BEFORE DT (operator, 2026-09-19), so all three list screens read in
+ * the same order: ... SNR TONE DT KM ... A straight swap of the two x
+ * positions, because both columns are 64 px wide. */
+#define COL_HZ_X        673
+/* One character (montserrat_24 advances ~12.1 px) closer to KM - operator,
+ * 2026-09-19. KM's own box moves with it by half that, so DT's box still ENDS
+ * exactly where KM's begins and the two can never overlap even on the widest
+ * value KM can print ("~12.345"). */
+#define COL_DT_X        755
+#define COL_KM_X        819
+#define COL_AGE_X       903
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
 #define COL_CALL_W      (COL_TEXT_X    - COL_CALL_X    - 8)
 #define COL_MSG_W       272
-#define COL_COUNTRY_W   52
+// 126 px is ~10 characters of montserrat_24, which spells out 195 of the 227
+// entities in dxcc.c whole; the rest fall back to their 3-letter code.
+#define COL_COUNTRY_W   126
 #define COL_SNR_W       56
 #define COL_DT_W        64
 #define COL_HZ_W        64
-#define COL_KM_W        72
-#define COL_BRG_W       62
+// KM carries a leading "~" when the distance came from a country centroid
+// instead of a decoded grid, so it is a character wider than the digits need.
+#define COL_KM_W        84
+// What COL_COUNTRY_W is worth in characters of montserrat_24 (~12.1 px each).
+#define COL_COUNTRY_CHARS 10
 #define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
@@ -120,7 +145,6 @@ static lv_style_t s_style_col_snr;      // SNR base (font/pos/align), colour set
 static lv_style_t s_style_col_dt;       // DT (dim, right)
 static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
-static lv_style_t s_style_col_brg;      // BRG (dim, right)
 static lv_style_t s_style_col_age;      // AGE (dim, right)
 static lv_style_t s_style_header;       // column header row
 static lv_style_t s_style_header_label; // column header text
@@ -136,7 +160,6 @@ typedef struct {
     lv_obj_t *l_dt;
     lv_obj_t *l_hz;
     lv_obj_t *l_km;
-    lv_obj_t *l_brg;
     lv_obj_t *l_age;
     // Dirty-tracking cache: skip lv_label_set_text when unchanged.
     char prev_call[16];
@@ -146,7 +169,6 @@ typedef struct {
     char prev_dt[12];
     char prev_hz[12];
     char prev_km[12];
-    char prev_brg[12];
     char prev_age[12];
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
@@ -357,11 +379,10 @@ static void styles_init(void)
     lv_style_set_y         (&s_style_col_snr, 6);
 
     INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    // HZ/KM/BRG values sit +10 px right of their (unchanged) header labels so
+    // HZ/KM values sit +10 px right of their (unchanged) header labels so
     // the numbers center under the right-aligned headings (operator request).
     INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
@@ -853,7 +874,6 @@ static void build_row(int i)
     r->l_dt      = make_label_styled(r->row, &s_style_col_dt);
     r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
-    r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
     r->l_age     = make_label_styled(r->row, &s_style_col_age);
 
     // SNR colour starts white; per-row local override on update.
@@ -866,7 +886,6 @@ static void build_row(int i)
     r->prev_country[0] = '\0';
     r->prev_snr[0]     = '\0';
     r->prev_km[0]      = '\0';
-    r->prev_brg[0]     = '\0';
     r->prev_age[0]     = '\0';
     r->prev_snr_db       = -127;
     r->prev_color        = -1;
@@ -879,11 +898,15 @@ static void update_row(int i, const ft8_call_t *src)
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
-    const char *country = dxcc_lookup_alpha3(src->call);
+    /* Width, not truncation - see the layout note at the top of this file.
+     * country_display() also falls back to Uwe's geo_coords table for the ~130
+     * entities dxcc.c has never known, so Monaco, Malta, Andorra and the rest
+     * stop printing nothing. */
+    const char *country = country_display(src->call, COL_COUNTRY_CHARS);
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_age[12];
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_age[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
     // Seconds since last heard, not heard_count - the browser's decode list
     // already shows this (Randy N4OPI asked for parity between the two, and
@@ -893,7 +916,9 @@ static void update_row(int i, const ft8_call_t *src)
     {
         int64_t age = (int64_t)time(NULL) - src->last_utc;
         if (age < 0) age = 0;
-        snprintf(b_age, sizeof(b_age), "%us", (unsigned)age);
+        // No "s" suffix: the heading says AGE and every value is seconds, so
+        // the letter was 12 px of the width the country column now uses.
+        snprintf(b_age, sizeof(b_age), "%u", (unsigned)age);
     }
 
     // DT: the station's slot-timing offset in seconds, relative to the band
@@ -909,25 +934,39 @@ static void update_row(int i, const ft8_call_t *src)
     }
     snprintf(b_hz, sizeof(b_hz), "%d", (int)src->last_freq);
 
+    /* Distance. THE GRID IS THE SOURCE AND THE CENTROID IS ONLY THE BACKSTOP,
+     * never the other way round: a 4-character Maidenhead square places a
+     * station to ~70-150 km, while geo_coords collapses a whole country to one
+     * point - ~2,000 km from either US coast. Using the centroid where a grid
+     * exists would replace a real measurement with a worse one.
+     *
+     * The column is blank so often because most FT8 messages carry no grid at
+     * all: only a CQ and the opening exchange do, so a station heard sending a
+     * report or an RR73 has never told us where it is. Those are the rows the
+     * fallback fills.
+     *
+     * A centroid distance is PREFIXED WITH "~". It is an estimate, and an
+     * unmarked estimate is a measurement we did not make - the same rule that
+     * keeps a fabricated 599 out of the log. */
+    bool km_ok = false, km_approx = false;
+    double km_val = 0.0;
     if (s_user_loc_valid && src->last_grid[0]) {
         double rlat = 0.0, rlon = 0.0;
         if (maidenhead_to_latlon(src->last_grid, &rlat, &rlon)) {
-            double km  = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
-            double brg = bearing_deg (s_user_lat, s_user_lon, rlat, rlon);
-            if (s_distance_in_miles) {
-                double miles = km * 0.621371;
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(miles + 0.5));
-            } else {
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
-            }
-            snprintf(b_brg, sizeof(b_brg), "%d°", (int)(brg + 0.5));
-        } else {
-            snprintf(b_km,  sizeof(b_km),  "--");
-            snprintf(b_brg, sizeof(b_brg), "--");
+            km_val = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
+            km_ok  = true;
         }
+    }
+    if (!km_ok && s_user_loc_valid) {
+        km_ok = km_approx = country_centroid_km(src->call, s_user_lat,
+                                                s_user_lon, &km_val);
+    }
+    if (km_ok) {
+        double shown = s_distance_in_miles ? km_val * 0.621371 : km_val;
+        snprintf(b_km, sizeof(b_km), "%s%d", km_approx ? "~" : "",
+                 (int)(shown + 0.5));
     } else {
-        snprintf(b_km,  sizeof(b_km),  "--");
-        snprintf(b_brg, sizeof(b_brg), "--");
+        snprintf(b_km, sizeof(b_km), "--");
     }
 
     /* E (blue) / O (amber) slot parity indicator, on the ACTIVE protocol's
@@ -957,7 +996,6 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_dt,      r->prev_dt,      sizeof(r->prev_dt),      b_dt);
     set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
-    set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     b_age);
 
     /* Colour scheme: AMBER=actively working now, RED=own call heard,
@@ -1237,6 +1275,9 @@ static volatile bool     s_web_preset_ft4 = false;
 #define WEB_RESULT_TTL_MS 20000
 static char          s_web_reply_result[64];
 static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
+static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
+static bool          s_web_done_said;            // DONE reported once per QSO
+static bool          s_web_timeout_said;          // TIMEOUT reported once per QSO - see web_result_set_sticky's TIMEOUT call below
 
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
@@ -1249,6 +1290,45 @@ static void web_result_set(const char *fmt, ...)
     vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
     va_end(ap);
     s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = false;   // an answer to a click expires with the click
+}
+
+// A completed QSO is the one result here that nobody clicked for, so nothing
+// will come along to replace it and a 20 s timer is the wrong owner (Randy
+// N4OPI: he steps away, comes back, and wants to see that the contact
+// finished). It stands until the operator's NEXT action writes over it.
+//
+// ⭐ Why this is in web_r and not in the live status: the two obvious
+// implementations were both rejected, and this is the third. Holding the engine
+// in DONE longer blocks the next QSO - exactly what forced the 20 s expiry onto
+// the sticky TIMEOUT notice, which stops the automatic pickers while it stands.
+// Freezing the display shows DONE while the machine has moved on, which is a
+// lie about live state. web_r is neither: it is a record of something that
+// HAPPENED, it holds nothing, and this file's own comment already draws that
+// line - a live condition has its own field, an event does not.
+static void web_result_set_sticky(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void web_result_set_sticky(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
+    va_end(ap);
+    s_web_reply_result_us = esp_timer_get_time();
+    s_web_result_sticky   = true;
+}
+
+// Cancel is the one browser action that should leave NOTHING behind - the
+// operator asked for it to "just cancel and never show Cancelling... go back
+// to the initial view", not a confirmation that fades after WEB_RESULT_TTL_MS
+// (20 s). Setting s_web_reply_result_us to 0 makes the getter's own "nothing
+// has been said yet" check (`!s_web_reply_result_us`) true immediately,
+// rather than waiting for the TTL - same field, same getter, just skipping
+// straight to the state it would reach on its own in 20 s.
+static void web_result_clear(void)
+{
+    s_web_reply_result[0] = '\0';
+    s_web_reply_result_us = 0;
+    s_web_result_sticky   = false;
 }
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1282,7 +1362,8 @@ const char *ft8_screen_view_get_web_reply_result(void)
     // the LVGL task owns the buffer, and a reader must not write into another
     // task's string.
     if (!s_web_reply_result[0] || !s_web_reply_result_us) return "";
-    if (esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
+    if (!s_web_result_sticky &&
+        esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
         return "";
     return s_web_reply_result;
 }
@@ -1484,9 +1565,30 @@ static void t_clock_cb(lv_timer_t *t)
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
             // "mid-QSO over-ride/cancel button".
+            //
+            // ⛔ THIS USED TO STOP ONLY AT THE NEXT SLOT BOUNDARY, NOT
+            // IMMEDIATELY - Randy again, 2026-09-16, wanting it to work like the
+            // Tab5's own tap "in case the operator has turned off the SWR
+            // protection and needs to cancel quickly". ft8_tx_disarm() is a
+            // no-op while a burst is ACTIVE (see its own comment) - it only
+            // clears an ARMED request - so an in-progress transmission ran to
+            // the end of the slot regardless of this handler firing. The Tab5's
+            // own tap (tx_indicator_tap_cb, above) also calls
+            // ft8_tx_request_abort(), which is what actually breaks the live
+            // symbol-send loop mid-burst; the web path never did. Added here,
+            // same as the Tab5 tap - safe to call whether or not a burst is
+            // actually running (it is a plain flag ft8_tx_run() checks between
+            // symbols, and is silently ignored if nothing is transmitting).
+            ft8_robot_stand_down("you cancelled a transmission");
             ft8_tx_disarm();
             ft8_qso_abort();
-            web_result_set("QSO cancelled");
+            ft8_tx_request_abort();
+            // No confirmation text - operator, 2026-09-05: "do not show
+            // anything - just go back to the initial view". Every other
+            // override outcome is worth reading (Armed/Busy/refused); Cancel
+            // is the one action whose whole point is to stop, immediately,
+            // with nothing left to look at afterward.
+            web_result_clear();
             ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
         } else {
             ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
@@ -1629,10 +1731,15 @@ static void t_clock_cb(lv_timer_t *t)
     if (s_btn_freq) {
         uint32_t hz = cat_get_frequency();
         char b[40];
-        uint32_t mhz = hz / 1000000;
-        uint32_t khz_frac = (hz / 1000) % 1000;
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)mhz, (unsigned long)khz_frac);
+        /* #302: the SAME grouped form as the top bar and the preset list.
+           This used to print "14.074 MHz", where the dot is a decimal point
+           and so is correct in either convention - which meant it did not
+           change when the operator picked the other one, and sat next to a
+           top bar that had. Consistency across the screen is the point of
+           the setting, so it follows the style like everything else. */
+        char fs[20];
+        format_freq_hz((uint32_t)hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -1688,6 +1795,10 @@ static void t_clock_cb(lv_timer_t *t)
         int  secs_until = 0;
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
+        // Re-armed for the next contact the moment this one stops being DONE,
+        // so every completed QSO announces itself exactly once.
+        if (qso_st != FT8_QSO_DONE)    s_web_done_said    = false;
+        if (qso_st != FT8_QSO_TIMEOUT) s_web_timeout_said = false;
         char b[128];
 
         // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
@@ -1848,6 +1959,15 @@ static void t_clock_cb(lv_timer_t *t)
             // Bright green: QSO complete
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
+            // Tell the browser ONCE, on the edge. DONE is transient - the
+            // machine returns to IDLE and takes the message with it, which is
+            // fine on the Tab5 (you are sitting in front of it) and useless
+            // from another room. The sticky copy survives that transition
+            // because it is a record, not a mirror of the state.
+            if (!s_web_done_said) {
+                s_web_done_said = true;
+                web_result_set_sticky("%s  QSO complete", target);
+            }
             snprintf(b, sizeof(b), "QSO %s: complete!", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);
@@ -1872,6 +1992,21 @@ static void t_clock_cb(lv_timer_t *t)
                 snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
+
+            // Randy N4OPI, 2026-09-16: wants a browser watching from another
+            // room to keep seeing the timeout, "like the 'QSO Completed'
+            // notification behaviour" - which already solves exactly this via
+            // web_r (see web_result_set_sticky's own comment above: the state
+            // machine is not the right owner of a message that stands until
+            // the operator reacts, because the same "it blocks new processes"
+            // problem THAT quoted comment names is why this sticky state
+            // auto-clears after 20s in the first place). Same treatment,
+            // reported once per timeout the same way DONE is reported once
+            // per QSO, right above.
+            if (!s_web_timeout_said) {
+                s_web_timeout_said = true;
+                web_result_set_sticky("%s  QSO timeout", target);
+            }
 
         } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
                    qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
@@ -2219,6 +2354,22 @@ static void adif_long_press_cb(lv_event_t *e)
 
 // Update the Call CQ button label to show the currently-selected CQ message.
 // Public so the preset modal can call it after a save.
+/* #302: relabel the Preset button after the frequency punctuation changes.
+   The label is otherwise only rewritten on the 1 Hz tick and on a preset
+   change, so without this the operator sees the top bar switch and this
+   button lag behind until something else happens. */
+void ft8_screen_view_refresh_preset(void)
+{
+    if (!s_btn_freq) return;
+    uint32_t hz = cat_get_frequency();
+    if (!hz) return;
+    char fs[20], b[40];
+    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
+    snprintf(b, sizeof(b), "Preset: %s", fs);
+    lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+    if (lbl) lv_label_set_text(lbl, b);
+}
+
 void ft8_screen_view_refresh_cq_label(void)
 {
     if (!s_cq_lbl) return;
@@ -2457,9 +2608,9 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     ui_update_frequency(freq_hz);               // top-bar "Freq:" label
     if (s_btn_freq) {
         char b[40];
-        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                 (unsigned long)(freq_hz / 1000000),
-                 (unsigned long)((freq_hz / 1000) % 1000));
+        char fs[20];
+        format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        snprintf(b, sizeof(b), "Preset: %s", fs);   /* #302 - see above */
         lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
         if (lbl) lv_label_set_text(lbl, b);
     }
@@ -2606,10 +2757,9 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
                             (void *)(uintptr_t)dial_hz);
 
         char bstr[24];
-        snprintf(bstr, sizeof(bstr), "%sm  %lu.%03lu",
-                 bands[i].name,
-                 (unsigned long)(dial_hz / 1000000),
-                 (unsigned long)((dial_hz / 1000) % 1000));
+        char fstr[16];
+        format_freq_mhz_khz((uint32_t)dial_hz, g_freq_style, fstr, sizeof(fstr));
+        snprintf(bstr, sizeof(bstr), "%sm  %s", bands[i].name, fstr);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, bstr);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
@@ -2750,7 +2900,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_btn_freq, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *freq_lbl = lv_label_create(s_btn_freq);
-    lv_label_set_text(freq_lbl, "Preset: --.--- MHz");
+    lv_label_set_text(freq_lbl, "Preset: ---.---.---");
     lv_obj_set_style_text_color(freq_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(freq_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(freq_lbl);
@@ -3061,12 +3211,11 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "SL",      COL_SLOT_X,    COL_SLOT_W,    LV_TEXT_ALIGN_LEFT  },
         { "CALL",    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT  },
         { "MESSAGE", COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT  },
-        { "CTY",     COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
+        { "COUNTRY", COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
         { "SNR",     COL_SNR_X,     COL_SNR_W,     LV_TEXT_ALIGN_RIGHT },
+        { "TONE",    COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "DT",      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT },
-        { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
-        { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
         { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };
     for (int i = 0; i < 10; i++) {

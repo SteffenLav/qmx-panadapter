@@ -5,7 +5,7 @@ The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectr
 
 ### 1. FT8 & FT4 View
 
-Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter → FT8/FT4 → WSPR). The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
+Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter -> FT8/FT4 -> WSPR). The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
 
 **FT4 notes:**
 - Decodes refresh roughly twice as fast as FT8 because slots are 7.5 seconds
@@ -30,13 +30,19 @@ The list shows every decoded FT8 message:
 | **SL** | Slot parity: **E** (blue) or **O** (amber) |
 | **CALL** | Their callsign |
 | **MESSAGE** | The full decoded message text |
-| **CTY** | Country as a 3-letter code (from the callsign prefix) |
+| **COUNTRY** | Country, spelled out where it fits and shortened where it does not - never a 3-letter code (v1.15.0) |
 | **SNR** | Signal-to-noise estimate, colour-banded by strength |
+| **TONE** | The station's audio tone within the FT8 passband (v1.3.1) |
 | **DT** | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 (v1.3.1) |
-| **HZ** | The station's audio tone within the FT8 passband (v1.3.1) |
-| **KM / MI** | Great-circle distance from your grid |
-| **BRG** | Bearing from your grid |
+| **KM / MI** | Great-circle distance from your grid. A `~` means the station never sent a grid, so the distance is worked out from its country and is approximate (v1.14.4) |
 | **HRD** | Times decoded since last appearance |
+
+The **BRG** column was removed in v1.14.4 to make room for spelled-out country
+names; a bearing is derivable from the distance and the map.
+
+All three lists — this one, the SelfSpotter LIST tab and WSPR — use the same
+column order and capitalised headings since v1.15.1, so the same kind of
+information sits in the same place whichever screen you are on.
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 
@@ -119,7 +125,7 @@ The reply always follows FT8 protocol (correct parity, proper message sequence) 
 
 ⚠️ **Experimental** — enabled via a checkbox in the Options modal.
 
-When robot mode is on, the Tab5 **automatically replies to CQ** without waiting for you to tap. It scans each FT8 slot for CQ callers matching your filters, picks the highest-priority station, and sends a full QSO exchange (TX1 → wait for report → TX2 → wait for RR73 → TX3). Everything is logged to ADIF.
+When robot mode is on, the Tab5 **automatically replies to CQ** without waiting for you to tap. It scans each FT8 slot for CQ callers matching your filters, picks the highest-priority station, and sends a full QSO exchange (TX1 -> wait for report -> TX2 -> wait for RR73 -> TX3). Everything is logged to ADIF.
 
 **Important:** Robot mode **keys the QMX for real** — your signal goes on the air. Never leave it unattended unless you're confident in your filters and your station is in a safe state.
 

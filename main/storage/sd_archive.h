@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>   // size_t (sd_archive_read_adif)
 
 #ifdef __cplusplus
 extern "C" {
@@ -90,6 +91,14 @@ void sd_archive_mark_lotw_dirty(void);
 // mounted). The web server reads this under sd_archive_lock()/_unlock() so its
 // read never races the archive task's writes (FatFs has no internal locking).
 const char *sd_archive_log_path(void);
+
+// Read one of the card's two QSO logs into a PSRAM buffer, which the CALLER
+// frees: qso.adi, or with previous=true the qso.prev.adi safety copy. Returns
+// NULL if there is no card, no such file, or no memory; *out_len is only
+// written on success. Pauses the spectrum stream for the duration, like every
+// other bulk SD read here. See adif_log_import_from_sd().
+char *sd_archive_read_adif_file(bool previous, size_t *out_len);
+
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);
 

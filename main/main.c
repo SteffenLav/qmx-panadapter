@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
+#include "util/format_freq.h"   // #302
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "ft8_test.h"
@@ -14,7 +15,9 @@
 #include "status.h"
 #include "battery.h"
 #include "bsp_info.h"
+#include "gpio_relay.h"
 #include "cat.h"
+#include "cw_decode.h"
 #include "audio.h"
 #include "rx_audio.h"
 #include "dsp.h"
@@ -45,6 +48,10 @@
 #include "ft8_sim.h"
 #include "net/pskreporter.h"
 #include "net/spots.h"
+#include "net/qrz_coords.h"
+#include "net/pskr_self.h"
+#include "net/wspr_self.h"
+#include "net/band_conditions.h"
 #include "net/psk_rx.h"
 #include "bt_hid_mouse.h"
 #include "net/rbn.h"
@@ -71,6 +78,14 @@ void app_main(void)
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+
+    // Library INFO chatter that says nothing about OUR state (2026-09-13 log
+    // audit): NimBLE prints 5-6 lines every time a scan window starts (every
+    // 60 s + 15 s, for ever, on a unit with no mouse), and the cert bundle
+    // prints one per TLS handshake. Warnings and errors still come through;
+    // btmouse logs the BLE events that matter under its own tag.
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
     // #117: if the last boot crashed, report it NOW - immediately after the log
     // hook is installed, so the record is captured, and before anything else can
@@ -196,9 +211,31 @@ void app_main(void)
     // its question - usb_host_install() takes 47 KB, dsp_init 37 KB, and the pool is
     // spent before WiFi is reached - so it no longer runs on every boot. Re-enable the
     // call (and CONFIG_HEAP_TASK_TRACKING in sdkconfig) to ask again.
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
+
+    /* Heap, not stack: this struct grew again (#pwrcal) and "main" is an 8 KB
+     * task that still has everything below to do - see CLAUDE.md, "Task
+     * stacks on this board are TINY". Used across a wide span of app_main()
+     * (down to dsp_set_window() below), so it lives until its last read,
+     * freed right after. 28 MB of PSRAM is free at this point in boot; a
+     * failed allocation here means something is badly wrong, so fall back to
+     * a zeroed on-stack instance rather than dereference NULL for the next
+     * couple hundred lines. */
+    /* ...and in PSRAM, not internal DIRAM (2026-09-17): this is 3,596 bytes of
+     * the scarcest memory on the board, held for the entire session, insuring
+     * a path that by the comment above only runs when "something is badly
+     * wrong". Safe despite insuring a PSRAM allocation - .ext_ram.bss is
+     * mapped at LINK time, so it does not depend on the heap that failed.
+     * Part of the DIRAM reclamation that took the internal-free watermark off
+     * 0 KB; see ft8_screen.c's s_table for the measurements. */
+    static EXT_RAM_BSS_ATTR qmx_settings_t s_cfg_fallback;  // static, NOT stack - see above
+    qmx_settings_t *cfg = heap_caps_malloc(sizeof(*cfg), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (cfg) {
+        settings_load_all(cfg);
+    } else {
+        ESP_LOGE(TAG, "boot config: PSRAM allocation failed - using defaults");
+        cfg = &s_cfg_fallback;
+    }
+    iq_balance_init(cfg->iq_enabled);  /* Restore IQ balance state from NVS */
     diag_log_write_session_header();  /* always-on capture; stamp the session */
 
     lv_display_t *disp = NULL;
@@ -219,9 +256,35 @@ void app_main(void)
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());
 
+    /* ⛔ THE DATA LAYERS COME BEFORE THE UI, so the saved page can be restored
+     * before the screen is revealed. These are mutexes and PSRAM buffers -
+     * nothing here touches audio, dsp, cat or the network - and they used to
+     * sit ~180 lines further down purely by accident of when they were added.
+     * Leaving them there is what forced the mode restore to happen late. */
+    ft8_screen_init();
+    ft8_status_init();
+    ft8_tx_init();
+    wspr_tx_init();
+    wspr_spots_init();
+
     ui_init(disp);
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
-    display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
+
+    /* ⭐ RESTORE THE PAGE BEFORE THE BACKLIGHT, so the Tab5 is ON the page it
+     * was left on from the first frame anybody sees, rather than switching to
+     * it once the rest of boot has crawled past. The engines follow later, in
+     * ui_apply_saved_mode_start(), where audio/dsp/cat exist.
+     *
+     * ⛔ Under display_lock: this moves LVGL widgets and shows whole views, and
+     * we are the main task, not taskLVGL. */
+    if (display_lock(2000)) {
+        ui_apply_saved_mode_view();
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - the saved page will not be restored");
+    }
+
+    display_fade_in_backlight(cfg->brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // === BENCH HOOK - MUST be 0 in shipping builds =======================
     // Opens the Reader at boot so the built-in manual can be screenshotted via
@@ -251,10 +314,10 @@ void app_main(void)
     }
 
     // Apply persisted settings to UI / render pipeline.
-    ui_set_db_range(cfg.db_min, cfg.db_max);
-    ui_set_db_labels(cfg.db_min, cfg.db_max);
-    render_set_ema_alpha(cfg.ema_alpha);
-    display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
+    ui_set_db_range(cfg->db_min, cfg->db_max);
+    ui_set_db_labels(cfg->db_min, cfg->db_max);
+    render_set_ema_alpha(cfg->ema_alpha);
+    display_set_flipped(cfg->display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
     // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
@@ -280,28 +343,44 @@ void app_main(void)
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
-    iq_balance_set_enabled(cfg.iq_enabled);
-    ui_set_flat_mode(cfg.flat_mode);
+    iq_balance_set_enabled(cfg->iq_enabled);
+    ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
     // ~13 s from now), so the MMCW write this used to make went nowhere on every
     // single boot. The radio tells us its own centre at link-up instead, and that is
     // the value that wins; this is just what to show until it does.
-    ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
-    ui_set_cw_cal_hz(cfg.cw_cal_hz);
-    ui_set_rit_pill_show(cfg.rit_pill_show);   // before the drawer is ever opened
+    ui_seed_cw_pitch_hz(cfg->cw_pitch_hz);
+    ui_set_cw_cal_hz(cfg->cw_cal_hz);
+    ui_set_rit_pill_show(cfg->rit_pill_show);   // before the drawer is ever opened
     /* #298: before the first frame, so nobody sees the wrong one and then a jump.
      * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
-    ui_set_still_view(cfg.still_view);
-    ui_still_notice_arm(!cfg.still_notice_done);
-    render_waterfall_set_colormap(cfg.colormap_idx);
+    ui_set_still_view(cfg->still_view);
+    ui_still_notice_arm(!cfg->still_notice_done);
+    render_waterfall_set_colormap(cfg->colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
-    if (cfg.last_vfo_hz != 0) {
-        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg.last_vfo_hz);
-        ui_update_frequency(cfg.last_vfo_hz);
+    if (cfg->last_vfo_hz != 0) {
+        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg->last_vfo_hz);
+        ui_update_frequency(cfg->last_vfo_hz);
     } else {
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
+    // Before cat_init(): the poll task starts inside it and can deliver a TB
+    // response immediately, and cw_decode_feed() drops everything until the
+    // ring exists.
+    /* #302: the stored frequency punctuation, applied before any UI is built.
+       Every caller reads g_freq_style at format time, so this is the only
+       place it has to be set. */
+    {
+        /* Heap, not stack - same reasoning as the cfg block above. */
+        qmx_settings_t *fs = heap_caps_malloc(sizeof(*fs), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fs) {
+            settings_load_all(fs);
+            g_freq_style = (fs->freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+            heap_caps_free(fs);
+        }
+    }
+    cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
@@ -394,13 +473,16 @@ void app_main(void)
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
     // exist, and ui_set_drawer_expert() is a no-op when the value matches.
-    ui_set_drawer_expert(cfg.drawer_expert);
+    ui_set_drawer_expert(cfg->drawer_expert);
 
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
-    render_waterfall_set_black_level(cfg.wf_black_db);
-    render_waterfall_set_contrast_db(cfg.wf_contrast_db);
-    render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
-    dsp_set_window(cfg.wf_window);
+    render_waterfall_set_black_level(cfg->wf_black_db);
+    render_waterfall_set_contrast_db(cfg->wf_contrast_db);
+    render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
+    dsp_set_window(cfg->wf_window);
+    render_set_waterfall_speed_mult(cfg->wf_speed_mult);
+    if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
+    cfg = NULL;
 
     // Spawns rx_audio_task, pinned strictly below fft_task's priority and
     // fully blocked (no wakeups at all) whenever RX audio is disabled - see
@@ -414,6 +496,7 @@ void app_main(void)
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
+    gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
@@ -422,11 +505,10 @@ void app_main(void)
     // Step 4b v0.10: boot directly into FT8 mode so the existing
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
-    ft8_screen_init();
-    ft8_status_init();
-    ft8_tx_init();
-    wspr_tx_init();
-    wspr_spots_init();
+    /* ⬆ ft8_screen_init / ft8_status_init / ft8_tx_init / wspr_tx_init /
+     * wspr_spots_init MOVED ABOVE ui_init() - see the block there. They are
+     * mutexes and buffers with no dependency on anything between here and
+     * there, and the mode restore needs them before it can show a page. */
     wsprnet_init();          /* OFF unless the operator enabled it */
     ft8_qso_init();
     ft8_pileup_init();
@@ -436,15 +518,44 @@ void app_main(void)
     psk_rx_selftest();     // attribute names still match the collector's output
     psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
     bt_hid_mouse_init();   // BLE mouse over the C6 (opt-in; Stage 1 = scan only)
+    qrz_coords_start();    // real-station lookup for RBN self-spot skimmers on the spot map (opt-in via credentials)
+    pskr_self_init();      // live PSK Reporter self-spotting (MQTT) for the spot map's Digi side
+    wspr_self_init();      // wsprnet.org self-spotting query for the spot map's WSPR side
+    band_conditions_start(); // HF band conditions for the spot map's CONDITIONS tab
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
+    /* ⛔ RESTORE THE MODE BEFORE THE SELF-TESTS, NOT AFTER THEM.
+     *
+     * It used to sit below the four calls that follow, and two of those
+     * synthesise GFSK audio and run it through the real decoder. That is a few
+     * seconds on an idle board and far longer once the radio is streaming and
+     * the FT8/WSPR tasks are competing for core 1 - measured across three
+     * boots on 2026-09-09 at 7.9 s, 46.3 s and 91.7 s.
+     *
+     * The operator is using the Tab5 long before that, so the restore was
+     * arriving into a UI somebody was already navigating: on one of those boots
+     * it read WSPR from NVS, set the mode, and 2 ms later the swipe handler on
+     * taskLVGL saw WSPR and cycled it to Panadapter - which wrote Panadapter to
+     * NVS. The screen showed WSPR, the stored value said Panadapter, and every
+     * boot after that came up on the panadapter. Reported as "why is the Tab5
+     * always waking up in Panadapter Mode".
+     *
+     * Nothing below is a dependency: these are verification, not
+     * initialisation. What the restore actually needs is the FT8/spots
+     * subsystems above, which have all run. */
+    // Restore last UI mode (Panadapter/FT8/WSPR), persisted across reboots.
+    // ⛔ Under display_lock: it moves LVGL widgets and shows whole views, and
+    // this is the main task, not taskLVGL.
+    /* The page itself went up before the backlight; this starts what needs
+     * audio, dsp and cat. Late is fine - the page is already correct and fills
+     * as data arrives. */
+    ui_apply_saved_mode_start();
+
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
     ft8_arrl_fd_e2e_selftest();
-    // Restore last UI mode (Panadapter/FT8), persisted across reboots.
-    ui_apply_saved_mode();
 
     // Background firmware-update poller for the docs Reader page. Self-throttles
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is

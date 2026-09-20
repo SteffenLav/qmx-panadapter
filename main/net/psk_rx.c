@@ -15,6 +15,7 @@
 
 #include "psk_rx.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "wifi/wifi.h"
@@ -334,7 +335,7 @@ static void psk_rx_task(void *arg)
         // net_quiet: this query's response cap is 64 KB and it comes over TLS -
         // by far the largest periodic allocation on the device. Not during an
         // update, where internal free has been measured at 5 KB. See net_quiet.h.
-        if (net_quiet_active()) continue;
+        if (net_quiet_active() || bg_feed_gate_active()) continue;
 
         // One floor for both paths. An operator hammering a refresh button must
         // not be able to breach the collector's stated rate limit.
@@ -363,7 +364,9 @@ void psk_rx_init(void)
     // SHA-256 round constants sitting in the register dump. spots.c does the
     // same HTTPS work on 6144; this task also carries a qmx_settings_t, so it
     // gets more. Do not trim it back.
-    psram_task_create(psk_rx_task, "psk_rx", 8192, NULL, 2, tskNO_AFFINITY);
+    // 8192 -> 11264: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(psk_rx_task, "psk_rx", 13312, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "propagation feedback ready (query every %d s when enabled)",
              PSK_RX_MIN_INTERVAL_S);
 }

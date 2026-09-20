@@ -18,6 +18,11 @@ void      wspr_screen_view_init(lv_obj_t *parent);
 void      wspr_screen_view_show(void);
 void      wspr_screen_view_hide(void);
 lv_obj_t *wspr_screen_view_get_container(void);
+/* Centre of the WSPR waterfall in SCREEN coordinates, and its width - so the
+ * "turn on your QMX" prompt can sit on the waterfall rather than over the
+ * left pane. Derived from the page's own layout constants, not from
+ * lv_obj_get_coords(), so it is right even while the page is hidden. */
+void      wspr_screen_view_wf_geometry(int *cx, int *cy, int *w);
 
 // Called from the 1 Hz UI tick while the page is up: refreshes the countdown,
 // the status line and (only when it has changed) the spot list.
@@ -37,11 +42,20 @@ void      wspr_screen_view_tick(void);
  */
 typedef struct {
     const char *name;      /* "20" - matches what the QMX reports over CAT */
-    const char *label;     /* "20 m  14.095600" - what the picker shows */
     uint32_t    dial_hz;
 } wspr_band_t;
+/* ⛔ There is deliberately NO label field. It used to hold "20 m  14.095600" -
+   a hardcoded SECOND copy of the dial frequency, which could drift from
+   dial_hz beside it, and which no setting could ever reformat. The picker had
+   no thousands grouping at all as a result, while every other frequency on the
+   device followed the operator's chosen punctuation (#302). Build the text
+   from name + dial_hz where it is shown. */
 
 const wspr_band_t *wspr_bands(int *out_count);
+
+/* #302: re-compose the band picker's options after the frequency format
+   changes. Safe before the view exists. */
+void wspr_screen_view_freq_style_changed(void);
 
 /* "20", "30"... for a dial frequency, or NULL if it matches no WSPR band.
  * NULL rather than a guess: a spot recorded before dial_hz existed has 0 here,
@@ -63,5 +77,3 @@ void wspr_screen_view_open_hop_picker(void);
 /* The legal WSPR duty-cycle values, shared with the settings drawer so the two
  * places that offer them cannot drift apart. WSPR asks "what fraction of cycles
  * may I transmit", and these are the answers - see docs/wspr-ui-design.md. */
-extern const uint8_t kDuty[];
-#define WSPR_N_DUTY 5

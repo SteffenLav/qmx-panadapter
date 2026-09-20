@@ -52,6 +52,7 @@ if not exist "%BL%" (
     echo     - bootloader.bin
     echo     - partition-table.bin
     echo     - qmx_panadapter.bin
+    echo     - ota_data_initial.bin
     goto :end
 )
 if not exist "%PT%" (
@@ -62,11 +63,25 @@ if not exist "%APP%" (
     echo ERROR: qmx_panadapter.bin not found.
     goto :end
 )
+rem ota_data_initial.bin was written by this script but never CHECKED FOR and
+rem never listed - so an archive missing it reported three files "found", began
+rem flashing, and failed only at the fourth write, with the app already on the
+rem chip and the boot record stale. That is precisely the wrong-slot boot the
+rem comment above describes: the device comes back running the OLD firmware and
+rem the flasher looks broken. Four files are written; all four are checked and
+rem all four are listed.
+if not exist "%OTAD%" (
+    echo ERROR: ota_data_initial.bin not found.
+    echo   Without it the Tab5 can restart on the PREVIOUS firmware even
+    echo   though this flash succeeded. Re-download the flasher zip.
+    goto :end
+)
 
 echo Firmware components found:
 echo   - bootloader.bin
 echo   - partition-table.bin
 echo   - qmx_panadapter.bin
+echo   - ota_data_initial.bin
 echo(
 echo Before you continue:
 echo   1. Plug the Tab5 into this PC with a USB-C DATA cable

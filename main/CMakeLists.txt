@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.c"
+        "cw_decode.c"
         "display/display.c"
         "ui/ui.c"
         "ui/ui_clock.c"
@@ -9,8 +10,10 @@ idf_component_register(
         "ui/help_triage.c"
         "ui/wifi_config.c"
         "ui/tune_modal.c"
+        "ui/power_cal_modal.c"
         "ui/ota_modal.c"
         "net/net_quiet.c"
+        "net/bg_feed_gate.c"
         "ui/activation_modal.c"
         "ui/identity_config.c"
         "ui/onboarding.c"
@@ -23,10 +26,12 @@ idf_component_register(
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
         "ui/ft8_time_modal.c"
+        "ui/date_confirm_modal.c"
         "ui/ft8_tone_modal.c"
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
         "ui/reader_view.c"
+        "ui/spot_map_view.c"
         "ui/qmx_term_view.c"
         "ui/font_qmx_mono_25.c"
         "ui/reader_diagram.c"
@@ -42,9 +47,12 @@ idf_component_register(
     "util/net_guard.c"
     "util/ip_guard.c"
     "util/sock_probe.c"
+    "util/sock_owners.c"
     "util/ansi_term.c"
         "util/bandplan.c"
         "util/dxcc.c"
+        "util/country.c"
+        "util/country_shorten.c"
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"
@@ -56,7 +64,11 @@ idf_component_register(
         "util/factory_reset.c"
 "util/usb_replug.c"
         "util/cpu_stats.c"
+        "util/gpio_relay.c"
         "util/dma_owners.c"   # TEMP INSTRUMENT #283 - delete with the diagnosis
+        "util/task_stacks.c"  # on-demand stack headroom - /api/cmd {"action":"stacks"}
+        "adif/adif_check.c"   # #263 "check my log" - portable, host-tested
+        "util/format_freq.c"  # #302 one frequency format, portable
         "cat/cat.c"
         "audio/audio.c"
         "audio/rx_audio.c"
@@ -104,6 +116,12 @@ idf_component_register(
         "hid_keycode.c"
         "net/rbn.c"
         "net/dxcluster.c"
+        "net/qrz_coords.c"
+        "net/pskr_self.c"
+        "net/wspr_self.c"
+        "net/band_conditions.c"
+        "util/geo_coords.c"
+        "util/world_map_data.c"
         "ft8_robot.c"
         "ft8_sim.c"
         "wspr_proto.c"
@@ -169,6 +187,7 @@ idf_component_register(
         spiffs
         bt            # NimBLE host for the BLE mouse (controller is on the C6)
         esp_hid
+        mqtt          # net/pskr_self.c - live PSK Reporter self-spotting
     PRIV_REQUIRES
         esp_app_format
         fatfs

@@ -292,6 +292,48 @@ static void ota_task(void *arg)
     // added to solve. 1 tick (1 ms @ CONFIG_FREERTOS_HZ=1000) is enough to hand
     // the scheduler a real gap without measurably slowing a background download.
     int total = esp_https_ota_get_image_size(h);
+
+    /* ⛔ REFUSE AN IMAGE THAT CANNOT FIT, BEFORE WRITING A BYTE.
+     *
+     * The Tab5's app slots are 4 MB. A release built against the larger
+     * partition layout - the one that claims the 2.81 MB at the end of the
+     * flash, which needs a partition table rewrite and therefore a USB cable -
+     * is bigger than that and can never install here. Without this check the
+     * operator watches a multi-megabyte download run to the end and fail on
+     * the verify, with no way to tell why, and the same thing happens again
+     * the next time they press the button.
+     *
+     * esp_https_ota_begin() has already read the Content-Length, so this costs
+     * no extra request and no extra connection. The size is known here and
+     * nowhere earlier.
+     *
+     * The message is what the operator sees in ota_modal.c's body, so it says
+     * what to DO, not what went wrong. */
+    const esp_partition_t *slot = esp_ota_get_next_update_partition(NULL);
+    if (slot && total > 0 && (size_t)total > slot->size) {
+        ESP_LOGW(TAG, "image is %d B but this slot is %u B - needs a cable update",
+                 total, (unsigned)slot->size);
+        esp_https_ota_abort(h);
+        /* s_msg is 128 bytes and ota_modal's body is 192 - short enough that
+         * neither truncates, and it says what to DO, not what broke. */
+        set_failed("Needs a USB-C cable, once - it is bigger than this Tab5's "
+                   "app slot. Your settings and log are kept.");
+        /* ⛔ goto out, NEVER a bare return. This is a TASK FUNCTION, and the
+         * only legal way out of one is vTaskDelete(NULL) at `out:`. A plain
+         * return runs off the end of the entry point into whatever the return
+         * address happens to be - which on this board is 0.
+         *
+         * That is not theory. This line WAS `return;` and it crashed the
+         * device the FIRST TIME the guard ever fired, 2026-09-18:
+         *     Guru Meditation Error: Core 1 panic'ed (Instruction access fault)
+         *     MEPC=0x00000000  RA=0x00000000  task: ota
+         * printed immediately after this very message. Every other exit in
+         * this function already used `goto out`; this one was written later
+         * and did not. The comment at `out:` even anticipated "a future
+         * early-return" - for the quiet flags, not for the task's lifetime. */
+        goto out;
+    }
+
     int64_t t0 = esp_timer_get_time();
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int done = esp_https_ota_get_image_len_read(h);

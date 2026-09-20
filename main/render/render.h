@@ -8,8 +8,12 @@ esp_err_t render_init(void);
 // Phase 5.10D Stage 2: runtime EMA smoothing setter
 void render_set_ema_alpha(float alpha);
 
-// Diagnostic "FT8 sync lines" drawer toggle: when on, the waterfall ticks
-// twice per render period (2x scroll speed) so the FT8-sync-vs-SNTP slot
-// marker lines (drawn in ui.c's ui_push_waterfall_row) separate out and
-// scroll past faster, easier to watch in real time. Off = normal 1x.
-void render_set_waterfall_2x(bool on);
+// Waterfall scroll speed, in whole multiples of the normal 10 rows/s (the
+// spectrum/S-meter cadence in render_task is untouched either way - this
+// only changes how many EXTRA rows the waterfall gets pushed per render
+// period, all from the same frame, since a faster FFT rate is not what
+// "speed" means here). 1 = normal. Clamped to [1,4]; 4x was the old
+// FT8-sync-lines diagnostic's own ceiling (called it "2x"/"3x speed" - it
+// pushed one extra tick beyond the diagnostic's own reasoning, this is the
+// same mechanism generalised into an operator-facing drawer setting).
+void render_set_waterfall_speed_mult(uint8_t mult);

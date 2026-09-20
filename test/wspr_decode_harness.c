@@ -192,9 +192,21 @@ int main(void)
             would_near_total += wn;
             would_slow_total += ws;
             {
+                /* A SECOND decode of a callsign already matched is a
+                 * DUPLICATE, not a known-good decode the guards must preserve
+                 * - the device drops it on the callsign anyway (`seen[]` in
+                 * wspr_rx.c), so a guard rejecting it costs nothing.
+                 *
+                 * ⛔ This check used to ignore that, and the deep search made
+                 * it matter: resolving neighbours 1-3 Hz apart also surfaces
+                 * more repeats of a station already found. It then read as
+                 * "NEAR costs a known-good decode" on ND6P, whose second copy
+                 * was 1.9 Hz from its first - which is exactly the duplicate
+                 * NEAR exists to catch. */
                 int is_known = 0;
                 for (int e = 0; e < N_EXPECTED; e++) {
-                    if (strcmp(r.callsign, kExpected[e].call) == 0
+                    if (!matched[e]
+                        && strcmp(r.callsign, kExpected[e].call) == 0
                         && strcmp(r.grid, kExpected[e].grid) == 0
                         && r.power_dbm == kExpected[e].dbm) is_known = 1;
                 }
