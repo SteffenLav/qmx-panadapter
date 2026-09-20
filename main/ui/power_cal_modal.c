@@ -80,24 +80,37 @@ static const char *TAG = "power_cal";
 // it physically cannot reach, and it writes 12.0 V to a radio whose operator
 // deliberately set a lower ceiling. Two independent limits now stop it.
 //
-// 1. THE OPERATOR'S OWN CEILING. Never sweep past the radio's Max. PA voltage.
-//    It is shown on the modal before Start, because the value is whatever the
-//    radio currently holds and that is not always what the operator intends -
-//    a WSPR session legitimately drives it down to 2.3 V, and a bench session
-//    once left it at 7.5 V. Capping silently at a leftover would produce a
-//    near-empty calibration and say nothing. Showing the number lets them see
-//    it first.
+// 1. ⛔ THE CEILING IS GONE - THE SWEEP ALWAYS RUNS THE FULL 1.0-12.0 V TABLE.
+//    It used to stop at the radio's current Max. PA voltage, called "the
+//    operator's own ceiling". That WAS true once. It stopped being true when
+//    WSPR's declared power and the Output power slider both started writing
+//    that same setting: the value on the radio is then OURS, not a statement
+//    of intent, and capping at it calibrates a fraction of the radio.
+//
+//    Two field cases, one day apart, both this: Rick W5NR found his QMX+ at
+//    6.0 V (a WSPR session's leftover), swept a 600 mW ceiling, and every
+//    reconnect re-applied 600 mW to a radio that does 3.7 W. Steffen OZ1LAV
+//    aborted a sweep mid-way, the close resumed WSPR which applied declared
+//    power (5.5 V), and the next sweep capped itself at 19 of 45 steps - "it
+//    just continue where it left last time".
+//
+//    ⚠ The first fix was a WARNING on the modal when the ceiling looked low.
+//    That treats a wrong number as a communication problem. Operator,
+//    2026-09-20: *"The only correct answer is to always use the full range.
+//    Remember that the calibration is general - and the user might never use
+//    the wspr page"*. The curve is a property of the RADIO; nothing transient
+//    may truncate it.
+//
+//    ⚠ What protects a 9 V build is reason 2 below, which is MEASURED. The
+//    original worry - minutes of keying at settings it cannot reach - is the
+//    plateau's job, and always was. The pre-sweep voltage is still read, and
+//    still restored on the way out.
 //
 // 2. A MEASURED PLATEAU. Above the supply the output stops rising, so further
 //    steps re-measure the same watts. Detected rather than modelled - the same
 //    reason the classifier reads PC; instead of assuming watts from volts, and
 //    the reason this works on a 9 V build whose PA transformer is wound
 //    differently (RWTST vs WTST) without knowing which radio it is talking to.
-/* Below this, the pre-Start line warns instead of stating the range - see
- * idle_status_refresh(). 10.0 V is chosen to sit above a 9 V QMX's legitimate
- * ceiling and well below the 12.0 V a full-power 12 V build calibrates to, so
- * it catches "left turned down" without nagging a correctly-set 9 V radio. */
-#define PWRCAL_LOW_CEILING_X10      100
 
 #define PWRCAL_PLATEAU_SAMPLES        3   // consecutive steps that fail to rise
 #define PWRCAL_PLATEAU_ARM_W_X100    30   // only look once 0.30 W has been seen
@@ -157,6 +170,9 @@ static bool             s_wspr_was_running = false;
 static uint32_t        s_state_enter_ms = 0;
 static uint32_t        s_sweep_start_ms = 0;
 static int              s_step           = 0;
+/* Set by every abort path (Cancel, total timeout) and cleared at Start.
+ * finish_done() refuses to persist an aborted sweep - see its own comment. */
+static bool             s_aborted        = false;
 static uint16_t         s_measured_w_x100[PWRCAL_STEPS];
 static float             s_last_pw        = -1.0f;  // most recent valid PC; reading this step
 static float              s_prev_pw       = -1.0f;  // the sample before that, for the settle check
@@ -431,16 +447,6 @@ static void begin_step(int step)
 }
 
 // Highest table index at or below the operator's ceiling. Always returns a
-// valid index: a ceiling below the first step still sweeps one point, which is
-// visible in the "of N" count rather than silently doing nothing.
-static int step_index_for_ceiling(uint16_t ceiling_x10)
-{
-    int last = 0;
-    for (int i = 0; i < PWRCAL_STEPS; i++) {
-        if (s_test_voltage_x10[i] <= ceiling_x10) last = i;
-    }
-    return last;
-}
 
 // Called once per completed step. A step with NO reading (w == 0) is not
 // evidence either way and leaves the run untouched - a single failed settle
@@ -485,9 +491,30 @@ static void enter_restore(void)
 
 static void finish_done(void)
 {
-    // Persist whatever was measured, even a partial run (a cancelled sweep
-    // still leaves useful, clearly-marked-partial data - "--" rows are
-    // honest, not a reason to throw the good ones away).
+    /* ⛔ AN ABORTED SWEEP IS NOT SAVED. This used to persist "whatever was
+     * measured, even a partial run", arguing that "--" rows are honest.
+     * Measured 2026-09-20, and that argument is wrong: the partial row is not
+     * marked partial to anything that READS it. Steffen OZ1LAV stopped a sweep
+     * at 6.5 V because the antenna was still connected; closing the window
+     * resumed WSPR, which resolved 30 dBm against that half-row and set the
+     * radio to 5.5 V - a number derived entirely from a run he had cancelled.
+     * The next sweep then read 5.5 V off the radio and capped itself there.
+     *
+     * A cancelled measurement is not data. The previous calibration for this
+     * band is left exactly as it was, which is also what makes a sudden power
+     * cut safe: nothing is written until a sweep finishes. */
+    if (s_aborted) {
+        ESP_LOGW(TAG, "sweep aborted at step %d - NOT saved, %s keeps its "
+                      "previous calibration", s_step + 1, s_band);
+        render_results();
+        enter_state(PC_DONE);
+        status_set_text("Stopped - nothing saved.");
+        if (s_action_lbl) lv_label_set_text(s_action_lbl, "Start Calibration");
+        if (s_action_btn) lv_obj_set_style_bg_color(s_action_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        if (s_cancel_btn) lv_obj_clear_state(s_cancel_btn, LV_STATE_DISABLED);
+        if (s_cancel_lbl) lv_label_set_text(s_cancel_lbl, "Done");
+        return;
+    }
     settings_set_pwr_cal_band(s_band, s_test_voltage_x10, s_measured_w_x100);
     render_results();
     enter_state(PC_DONE);
@@ -497,11 +524,6 @@ static void finish_done(void)
         char buf[80];
         snprintf(buf, sizeof(buf), "Done - power stopped rising at %u.%uV.",
                  s_test_voltage_x10[s_step] / 10, s_test_voltage_x10[s_step] % 10);
-        status_set_text(buf);
-    } else if (s_last_step < PWRCAL_STEPS - 1) {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "Done - swept to your %u.%uV limit.",
-                 s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);
         status_set_text(buf);
     } else {
         status_set_text("Done.");
@@ -524,6 +546,7 @@ static void finish_done(void)
 // out from under a radio we have not put back the way we found it.
 static void abort_to_restore(const char *toast)
 {
+    s_aborted = true;
     if (s_state == PC_MEASURE) {
         // Actually keyed (PC_ENTER_DIGI hasn't sent TX; yet) - drop the tone
         // and unkey FIRST, then change mode away from DiGi. Wrong order
@@ -715,16 +738,17 @@ static void start_btn_cb(lv_event_t *e)
         ui_toast("Could not read the current PA voltage - will restore to 12.0V when done");
     }
 
-    // Never sweep past the operator's own Max. PA voltage. See the
-    // PWRCAL_PLATEAU_* block for why it is capped here rather than trusted
-    // blindly, and why the figure is on the modal before Start.
+    // ALWAYS THE WHOLE TABLE - see reason 1 in this file's header for why the
+    // radio's current Max. PA voltage is no longer a statement of intent. The
+    // plateau detector below is what stops a radio that cannot reach the top.
     if (s_idle_timer) { lv_timer_del(s_idle_timer); s_idle_timer = NULL; }
-    s_last_step     = step_index_for_ceiling(s_orig_pa_x10);
+    s_last_step     = PWRCAL_STEPS - 1;
     s_max_w_x100    = 0;
     s_plateau_run   = 0;
     s_stopped_early = false;
-    ESP_LOGI(TAG, "sweep capped at %u.%uV (radio's Max. PA voltage) - %d of %d steps",
-             s_orig_pa_x10 / 10, s_orig_pa_x10 % 10, s_last_step + 1, PWRCAL_STEPS);
+    s_aborted       = false;
+    ESP_LOGI(TAG, "sweep %d of %d steps (full range) - pre-sweep PA %u.%uV will be restored",
+             s_last_step + 1, PWRCAL_STEPS, s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);
 
     strncpy(s_band, adif_log_band_for_freq(cat_get_frequency()), sizeof(s_band) - 1);
     s_band[sizeof(s_band) - 1] = '\0';
@@ -936,35 +960,15 @@ static void idle_status_refresh(void)
     // box and cannot grow one (see its LONG_DOT note), so the longest form
     // here - "Calibrated. Sweeps 1.0-12.0V (radio max)." - is 41 characters.
     if (pa >= 0) {
-        /* ⛔ A LOW CEILING IS A WARNING, NOT A FOOTNOTE (Rick W5NR, 2026-09-19).
-         *
-         * His QMX+ was at 6.00 V when he pressed Start - which is exactly
-         * WSPR_PA_TARGET_X10, the old fixed WSPR guard's figure, so a WSPR
-         * session had almost certainly left it there. The sweep dutifully
-         * capped at 6.0 V, measured a 600 mW ceiling, and the declared-power
-         * slider has offered him 100-600 mW ever since. Every reconnect then
-         * re-applies a voltage from that table: "if I disconnect my Tab5 ...
-         * I can run my QMX+ at 3.7 watts ... But when I reconnect my Tab5 back
-         * to the QMX+ the power will drop back to 600mW."
-         *
-         * The line already SAID "Sweeps 1.0-6.0V (radio max)". In neutral grey
-         * that does not read as "you are about to calibrate half your radio",
-         * and he had no reason to think it mattered. Our failure, not his.
-         *
-         * So below PWRCAL_LOW_CEILING_X10 it says what the sweep will actually
-         * reach and what to do first, in the warning colour. No threshold can
-         * know the operator's supply - a 9 V build legitimately tops out near
-         * 9 V - so this INFORMS and never blocks. */
-        if (pa < PWRCAL_LOW_CEILING_X10) {
-            snprintf(buf, sizeof(buf), "Radio max is only %d.%dV - raise it first!",
-                     pa / 10, pa % 10);
-            status_set_warn(true);
-            status_set_text(buf);
-            return;
-        }
+        /* ⛔ NO LONGER REPORTS A CEILING, because there is not one - the sweep
+         * runs the whole table (see reason 1 in this file's header). This used
+         * to print "Sweeps 1.0-6.0V (radio max)" and, below 10.0 V, a warning
+         * to raise it first. Both described a cap that has been removed; the
+         * warning in particular would now be telling the operator to fix a
+         * problem that no longer exists. */
         status_set_warn(false);
-        snprintf(buf, sizeof(buf), "%s. Sweeps 1.0-%d.%dV (radio max).",
-                 have ? "Calibrated" : "Ready", pa / 10, pa % 10);
+        snprintf(buf, sizeof(buf), "%s. Sweeps the full 1.0-12.0V.",
+                 have ? "Calibrated" : "Ready");
     } else {
         status_set_warn(false);
         snprintf(buf, sizeof(buf), "%s", have ? "Calibrated. Start to re-measure." : "Ready.");
