@@ -206,11 +206,18 @@ void app_main(void)
     // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
 
-    // TEMP INSTRUMENT, ANSWERED AND STOOD DOWN 2026-09-06. dma_owners_boot_trace_start()
-    // reports which task holds MALLOC_CAP_DMA at ~8/18/60 s over serial. It answered
-    // its question - usb_host_install() takes 47 KB, dsp_init 37 KB, and the pool is
-    // spent before WiFi is reached - so it no longer runs on every boot. Re-enable the
-    // call (and CONFIG_HEAP_TASK_TRACKING in sdkconfig) to ask again.
+    // TEMP INSTRUMENT, ANSWERED AND STOOD DOWN AGAIN 2026-09-20. Re-armed at
+    // 180/420/600 s to find who holds MALLOC_CAP_DMA once it settles (~8-12 KB
+    // free, confirmed FLAT across the whole 10-minute trace - not a leak, a
+    // fixed ceiling: 180,616 B under one dead app_main handle - WiFi/esp_hosted/
+    // LVGL bring-up, legitimately long-lived - plus 96,000 B across 26 task
+    // stacks still internal, taskLVGL's 17,408 B the single biggest of those.
+    // See apply_lvgl_port_task_psram.ps1, the fix taken from this reading.
+    // Re-enable the call (and CONFIG_HEAP_TASK_TRACKING in sdkconfig) to ask
+    // again.
+    //
+    // Prior run 2026-09-06 (8/18/60 s): usb_host_install() takes 47 KB, dsp_init
+    // 37 KB, pool spent before WiFi is reached.
 
     /* Heap, not stack: this struct grew again (#pwrcal) and "main" is an 8 KB
      * task that still has everything below to do - see CLAUDE.md, "Task

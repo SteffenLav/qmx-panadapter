@@ -215,6 +215,14 @@ PATCHES = [
      "never fully fixed) - reproduced TWICE MORE 2026-09-20 on two "
      "different, unremarkable tasks (diag_persist, spots) in the same "
      "boot-time memory trough"),
+
+    ("apply_lvgl_port_task_psram.ps1", "repo",
+     "managed_components/espressif__esp_lvgl_port/src/lvgl9/esp_lvgl_port.c",
+     "QMX_LVGL_PORT_TASK_PSRAM",
+     "taskLVGL's 17,408 B stack was the single biggest task stack still in "
+     "internal RAM (dma_owners.c, 2026-09-20 rx-audio session) against a "
+     "MALLOC_CAP_DMA pool confirmed flat at ~8-12 KB free for the whole of a "
+     "10-minute session - not a leak, a fixed ceiling"),
 ]
 
 

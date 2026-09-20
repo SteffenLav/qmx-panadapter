@@ -537,9 +537,13 @@ static const char *TAG_TRACE = "dmatrace";
 static void dma_boot_trace_task(void *arg)
 {
     (void)arg;
-    // Chosen to bracket the loss: 8 s is just after the pool was last healthy,
-    // 18 s just after it had collapsed, 60 s once everything has settled.
-    static const int at_s[] = { 8, 18, 60 };
+    // Re-targeted 2026-09-20 for the rx-audio-session finding: this time the
+    // pool is healthy at boot and goes tight over MINUTES, not seconds (int
+    // free ~18KB at t=17s -> 7-11KB by t=167-180s, esp_dma_capable_malloc
+    // failures observed by t=419s and again at t=545s on the prior boot).
+    // Bracket the settle (180s), the point failures were seen (420s), and a
+    // later steady-state read (600s).
+    static const int at_s[] = { 180, 420, 600 };
     int prev = 0;
     for (unsigned i = 0; i < sizeof(at_s) / sizeof(at_s[0]); i++) {
         vTaskDelay(pdMS_TO_TICKS((at_s[i] - prev) * 1000));
