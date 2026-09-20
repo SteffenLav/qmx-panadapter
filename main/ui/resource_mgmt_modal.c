@@ -3,11 +3,8 @@
 #include "resource_mgmt_modal.h"
 #include "ui_theme.h"
 #include "ui.h"
-#include "ui_mode.h"
 #include "settings.h"
 #include "audio/rx_audio.h"
-#include "net/net_quiet.h"
-#include "wspr_rx.h"
 #include "lvgl.h"
 #include "esp_log.h"
 #include <string.h>
@@ -18,7 +15,12 @@ static lv_obj_t *s_modal = NULL;
 static lv_obj_t *s_panel = NULL;
 
 // Row 0 is RX audio - never gated, always the one doing the gating. Rows
-// 1..N are the background feeds it holds off. Order matches the panel.
+// 1..N are the background feeds it CAN hold off - but only the ones with a
+// standing task/connection actually do (see ROW_DEFS' gated flag below).
+// WSPR was dropped from this panel entirely (2026-09-20, operator's call):
+// it is a whole separate mode already exclusive with CW/SSB by RADIO MODE,
+// not a quiet background feed competing for the same memory, so it never
+// belonged in the same list as these.
 typedef struct {
     lv_obj_t   *cb;
     lv_obj_t   *lbl;      // the row's own label, dimmed to show "held off"
@@ -31,8 +33,7 @@ typedef struct {
 #define ROW_SPOTS    4
 #define ROW_PSKRX    5
 #define ROW_PSKTX    6
-#define ROW_WSPR     7
-#define ROW_COUNT    8
+#define ROW_COUNT    7
 
 static resmgmt_row_t s_rows[ROW_COUNT];
 static lv_obj_t *s_cb_audio  = NULL;   // row 0's checkbox - kept separately,
@@ -72,14 +73,31 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent)
     return cb;
 }
 
-// Rows 1..N: greyed + un-clickable while RX audio is on, since net_quiet
-// already stops them running in that state - a checkbox the operator could
-// tick with no effect would be worse than one they can't reach.
+// Only the rows with a standing task/connection are gated: SelfSpotter's
+// MQTT client, RBN and DX cluster's telnet sessions, PSK Reporter's "who's
+// hearing me" query (its own comment calls it "by far the largest periodic
+// allocation on the device"). POTA/SOTA and PSK Reporter's TX reports are
+// periodic/batched with nothing standing between fetches, and the operator
+// asked to keep those running - see rx_audio.h's 2026-09-20 note. Greyed +
+// un-clickable, not just informational: a checkbox the operator could tick
+// with no effect would be worse than one they can't reach.
+static const bool ROW_GATED[ROW_COUNT] = {
+    [ROW_AUDIO]   = false,
+    [ROW_SPOTMAP] = true,
+    [ROW_RBN]     = true,
+    [ROW_CLUSTER] = true,
+    [ROW_SPOTS]   = false,
+    [ROW_PSKRX]   = true,
+    [ROW_PSKTX]   = false,
+};
+
 static void refresh_gating(void)
 {
     bool audio_on = rx_audio_is_enabled();
+    bool any_gated_shown = false;
     for (int i = ROW_SPOTMAP; i < ROW_COUNT; i++) {
-        if (!s_rows[i].cb) continue;
+        if (!s_rows[i].cb || !ROW_GATED[i]) continue;
+        any_gated_shown = true;
         if (audio_on) {
             lv_obj_add_state(s_rows[i].cb, LV_STATE_DISABLED);
             if (s_rows[i].lbl) lv_obj_set_style_text_opa(s_rows[i].lbl, LV_OPA_50, 0);
@@ -89,8 +107,8 @@ static void refresh_gating(void)
         }
     }
     if (s_gate_note) {
-        if (audio_on) lv_obj_clear_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
-        else           lv_obj_add_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
+        if (audio_on && any_gated_shown) lv_obj_clear_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
+        else                             lv_obj_add_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -138,20 +156,6 @@ static void psktx_cb(lv_event_t *e)
     settings_set_pskreporter_en(on);
 }
 
-// WSPR is a whole page/mode, not a quiet background feed, so turning it off
-// here follows the SAME exit-cleanly path as the drawer's own seven-tap
-// unlock (ota_modal.c): stop a live RX session and leave the WSPR screen if
-// it was the one open, rather than leaving a stopped feature's page showing.
-static void wspr_cb(lv_event_t *e)
-{
-    bool on = lv_obj_has_state((lv_obj_t *)lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_set_wspr_en(on);
-    if (!on && ui_mode_get() == UI_MODE_WSPR) {
-        wspr_rx_stop();
-        ui_request_base_mode_m(UI_MODE_PANADAPTER);
-    }
-}
-
 // Tapping the label toggles its row's checkbox - same reasoning as every
 // other modal in this app: a 31 px box next to 200 px of dead label space
 // is the single biggest reason these rows feel hard to hit.
@@ -178,7 +182,6 @@ static const row_def_t ROW_DEFS[ROW_COUNT] = {
     { ROW_SPOTS,   "POTA / SOTA spots",                   spots_cb },
     { ROW_PSKRX,   "PSK Reporter - who's hearing me",     pskrx_cb },
     { ROW_PSKTX,   "PSK Reporter - report my decodes",    psktx_cb },
-    { ROW_WSPR,    "WSPR",                                wspr_cb },
 };
 
 static void close_btn_cb(lv_event_t *e)
@@ -204,7 +207,12 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 760, 560);
+    // 660: 7 rows + the row-0 separator end at content-y=496 (see the row
+    // loop below), and the Close button needs its own 64 px + gap below
+    // that. The original 8-row/560 version had the last two rows sitting
+    // UNDER the button - measured on hardware 2026-09-20 (screenshot from
+    // the operator) - so this is sized with margin, not just enough.
+    lv_obj_set_size(s_panel, 760, 660);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -309,7 +317,6 @@ static void rows_refresh_from_settings(void)
         { ROW_SPOTS,   s.spots_en },
         { ROW_PSKRX,   s.psk_rx_en },
         { ROW_PSKTX,   s.pskreporter_en },
-        { ROW_WSPR,    wspr_feature_enabled() },
     };
     if (s_cb_audio) {
         if (rx_audio_is_enabled()) lv_obj_add_state(s_cb_audio, LV_STATE_CHECKED);

@@ -20,7 +20,6 @@
 #include "cat.h"          // cat_get_mode_str(), cat_get_cw_offset_hz()
 #include "settings.h"
 #include "ui.h"           // ui_get_passband_width_hz() - the QMX's actual selected filter width
-#include "net/net_quiet.h" // hold this while RX audio is on - see net_quiet.h's 2026-09-20 note
 
 static const char *TAG = "rx_audio";
 
@@ -939,10 +938,13 @@ void rx_audio_init(void)
     settings_load_all(&cfg);
     s_enabled = cfg.rx_audio_en;
     s_volume  = cfg.rx_audio_vol;
-    // Claim the room from the background feeds for the whole time RX audio is
-    // persisted-on, not just from the moment it starts producing frames - see
-    // net_quiet.h. Matches rx_audio_set_enabled()'s own hold/release pairing.
-    if (s_enabled) net_quiet_hold();
+    // NOT net_quiet - that stays OTA-only (see net_quiet.h). Standing
+    // feeds that should hold off while RX audio is on (SelfSpotter, RBN,
+    // DX cluster, PSK Reporter RX) check rx_audio_is_enabled() directly
+    // instead, added 2026-09-20 - net_quiet was too blunt: it held off
+    // POTA/SOTA and PSK Reporter TX too, which are periodic/batched, own no
+    // standing task, and the operator specifically asked to keep running
+    // alongside audio once the panel made the blanket rule visible.
 
     // Work buffers in PSRAM (core-1 only). Putting all of these in internal
     // RAM starved the internal heap and destabilised boot, so only the
@@ -966,7 +968,6 @@ void rx_audio_init(void)
         !s_dec_coeff || !s_dec_delay_re || !s_dec_delay_im ||
         !s_coeff || !s_delay_re || !s_delay_im) {
         ESP_LOGE(TAG, "buffer alloc failed; RX audio disabled");
-        if (s_enabled) net_quiet_release();   // the hold above has nothing left to guard
         return;
     }
     retune(CW_DEF_OFFSET);
@@ -995,7 +996,6 @@ void rx_audio_init(void)
     if (created != pdPASS) {
         ESP_LOGE(TAG, "rx_audio task create failed after 5 attempts - RX audio dead this session");
         s_task = NULL;
-        if (s_enabled) net_quiet_release();
         return;
     }
     ESP_LOGI(TAG, "init (enabled=%d vol=%d codec_ready=%d priority=%d)",
@@ -1111,13 +1111,8 @@ void rx_audio_preopen(void)
 
 void rx_audio_set_enabled(bool en)
 {
-    bool was = s_enabled;
     s_enabled = en;
     settings_set_rx_audio_en(en);
-    // Mirrors rx_audio_init()'s own hold on a transition, never on a
-    // same-value call (the UI can call this repeatedly with the same state).
-    if (en && !was) net_quiet_hold();
-    else if (!en && was) net_quiet_release();
     if (!en) return;
     if (!s_codec_ready) {
         // Codec is only opened at boot (before the USB host takes the DMA

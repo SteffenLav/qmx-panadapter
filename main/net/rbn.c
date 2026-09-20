@@ -2,6 +2,7 @@
 
 #include "rbn.h"
 #include "net/net_quiet.h"
+#include "audio/rx_audio.h"
 #include "spots.h"
 #include "wifi.h"
 #include "cat.h"
@@ -416,7 +417,7 @@ static void session(int fd, const char *mycall)
         // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
         // exactly the internal-heap churn the verify cannot afford. (Left as it
         // was - the OTA fix was verified with this read loop pausing.)
-        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        if (net_quiet_active() || rx_audio_is_enabled()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
         /* ⛔ NO bg_feed_gate HERE - this is the READ loop of a live session.
          * Gating it stopped recv() whenever any overlay was up, so while the
          * SelfSpotter was open RBN delivered NOTHING, including the CW
@@ -501,7 +502,7 @@ static void rbn_task(void *arg)
         // connection is left running; this only gates starting a new one.
         // NOT bg_feed_gate: RBN carries the SelfSpotter's CW self-spots, so
         // holding its reconnect while an overlay is up starves that very screen.
-        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        if (net_quiet_active() || rx_audio_is_enabled()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) {
             // Drop anything we were showing: stale RBN spots are worse than none.

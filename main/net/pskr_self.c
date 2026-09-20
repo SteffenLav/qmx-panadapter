@@ -10,6 +10,7 @@
 #include "pskr_self.h"
 #include "wifi.h"
 #include "net/net_quiet.h"
+#include "audio/rx_audio.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/psram_task.h"
@@ -320,11 +321,14 @@ static void watchdog_task(void *arg)
     int  backoff_ms = 2000;
 
     for (;;) {
-        // net_quiet ALSO tears down an already-running session here, not just
-        // the initial wait before the loop - this is the standing MQTT client
-        // task (esp-mqtt's own xTaskCreate() has no PSRAM option), so it is
+        // Tears down an already-running session too, not just the initial
+        // wait before the loop - this is the standing MQTT client task
+        // (esp-mqtt's own xTaskCreate() has no PSRAM option), so it is
         // exactly the feed RX audio needs the room back from (2026-09-20).
-        bool want = settings_get_spotmap_en() && !net_quiet_active();
+        // rx_audio_is_enabled(), not net_quiet: that flag is OTA-only again,
+        // see net_quiet.h's 2026-09-20 note - this is a direct check because
+        // this feed's standing task is heavy enough to matter on its own.
+        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_is_enabled();
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }

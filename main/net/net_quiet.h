@@ -17,21 +17,20 @@
 // the operator their spot lane and buy back memory that was already allocated.
 // Feeds check it where they would otherwise begin a fetch or a reconnect.
 //
-// ⭐ Second holder, 2026-09-20: rx_audio. The operator's own call - CW/SSB
-// audio out of the Tab5's speaker is a field feature, and the background
-// feeds (RBN, DX cluster, POTA/SOTA, PSK Reporter RX/self-spotting, WSPR
-// self, QRZ coords, band conditions, the update-check fallback) are not part
-// of that scenario, so they stand down for as long as RX audio is enabled
-// and the room is theirs. Same 9 KB/1 KB-largest-block collapse this comment
-// already measured for OTA turns out to be the STEADY-STATE with everything
-// running at once - not just a download-time spike.
-//
-// REFCOUNTED, not a bare bool, because it now has two INDEPENDENT holders
-// that must not be able to clobber each other: OTA holding it across a
-// verify and the operator toggling RX audio off partway through must not
-// silently let go of OTA's own hold (or vice versa, if RX audio is toggled
-// while an OTA also happens to be running). Every net_quiet_hold() must be
-// paired with exactly one net_quiet_release().
+// ⚠ 2026-09-20: RX audio was briefly wired to hold this too, then backed
+// out the SAME session. Reason: this flag is a blunt "nothing new starts",
+// and RX audio's actual requirement is narrower - only the feeds with a
+// STANDING task/connection (SelfSpotter's MQTT client, RBN, DX cluster, PSK
+// Reporter's "who's hearing me" query) meaningfully compete with it.
+// POTA/SOTA and PSK Reporter's TX reports are periodic/batched with no
+// standing cost between fetches, and the operator asked to keep those
+// running once the Resource Management panel made the blanket rule
+// visible. Those feeds now check rx_audio_is_enabled() directly instead
+// (see audio/rx_audio.h) - this file went back to OTA-only, a single
+// holder, bare bool in spirit even though the refcount plumbing below is
+// left in place (harmless, and cheap insurance against a future second
+// legitimate holder needing the same "don't clobber each other's hold"
+// guarantee this briefly needed).
 //
 // ⚠ Advisory, not enforced. A feed that ignores it still works; it just keeps
 // its share of the heap. Adding a new periodic network task? Check
