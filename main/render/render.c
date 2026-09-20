@@ -210,17 +210,21 @@ esp_err_t render_init(void)
         ESP_LOGE(TAG, "Failed to alloc render scratch buffer");
         return ESP_ERR_NO_MEM;
     }
-    // Phase 5.4: smoothing buffer (internal RAM for fast access)
-    s_smoothed = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
-                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    // Moved to PSRAM 2026-09-20 (was MALLOC_CAP_INTERNAL "for fast access" -
+    // no measurement behind that claim, unlike dsp_init's FFT buffers, which
+    // stayed internal only after a real 10x-slowdown test). Both are touched
+    // in exactly the same sequential per-bin loop as s_scratch above, which
+    // has always been PSRAM - a simple EMA over 1024 floats at 10 Hz is
+    // nowhere near PSRAM's bandwidth limit. Found chasing the boot-time
+    // MALLOC_CAP_DMA trough (8,192 B of it back to the pool).
+    s_smoothed = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!s_smoothed) {
         ESP_LOGE(TAG, "Failed to alloc smoothing buffer");
         return ESP_ERR_NO_MEM;
     }
     s_smoothed_init = false;
 
-    s_wf_smoothed = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
-                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_wf_smoothed = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!s_wf_smoothed) {
         ESP_LOGE(TAG, "Failed to alloc waterfall smoothing buffer");
         return ESP_ERR_NO_MEM;
