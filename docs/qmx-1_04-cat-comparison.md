@@ -80,21 +80,63 @@ Operator's call, on the strength of the QRP Labs group thread the morning after
 > **Gyula HA3HZ:** *"I'm having a transmission issue with the Tab5 using CAT control - there is no output power. I reverted to version 1.4.10, and it works fine there."*
 
 That is our `TX;` / `TA<freq>;` / `RX;` burst path, i.e. every FT8, FT4 and WSPR
-transmission the panadapter makes. Not reproduced here and **no diagnostic log
-exists** - he had already reverted - so the mechanism is unknown and we are not
-guessing at one.
+transmission the panadapter makes.
 
-Two other reporters, both radio-side and independent of us, both cured by
-reverting to 1_04_010: **Sam KJ4VWG** and **Zak VE7ZAX** - Tune SWR, Image
-Sweep and Test ADC I/Q freeze the radio until it is power-cycled, on QMX and
-QMX+ alike, and a factory reset does not help.
+### ⭐ REPRODUCED AND NARROWED ON THE BENCH, same morning
 
-⚠ **And one report that was WITHDRAWN, which is why it is written down.** Ralph
-DL1HR first reported CAT through the Tab5's feedthrough going intermittent on
-1_04_011 and cured by 1_04_010 - the same shape as Gyula's - then retested the
-next morning and found it was his own computer: *"both radios work fine in my
-setup using 1.04.11 - so I want to prevent you to catch this ghost"*. Do not
-count it as corroboration. Gyula's report stands alone and unretracted.
+Dev QMX, 20 m, dummy load, `Max. PA voltage` 11.8 V, **both sweeps in the same
+Tab5 boot six minutes apart** with nothing but the radio firmware changed.
+Instrument: Calibrate Power, which keys with exactly those primitives at 44 PA
+voltages and reads `PC;` back at each.
+
+| | 1_04_010 | 1_04_011 |
+|---|---|---|
+| 1.3 V | 0.10 W | 0.00 W |
+| 5.8 V | 1.00 W | 0.00 W |
+| 11.8 V | **3.50 W** | **0.00 W** |
+| SWR into the dummy load | steady **1.06-1.08** | wandering **1.32-2.24** |
+
+⭐ **The SWR figure is what makes this "no RF" rather than "a mis-reported
+`PC;`"**: a bridge with real forward power reads a steady 1.06 into a dummy
+load, and noise without it. Reading `PC00;` alone could not have told the two
+apart.
+
+⭐ **And the radio still transmits on 011 - it is the DiGi CAT path only.**
+`MD3;` then `KD1;` answers `PC35;` at `SW105;`, the same 3.5 W the sweep could
+not produce one minute earlier. So the PA, the LPF, the load and the PA voltage
+are all fine.
+
+**Ruled out by measuring, each one:**
+
+| Candidate | Test | Answer |
+|---|---|---|
+| SWR protection latched | `SR;` | `SR0;` |
+| CW Practice mode (011 changed it - "no RF emitted" is exactly this symptom) | `LC;` | no `P`, no `G` |
+| PA voltage left low | `MMProtection\|Max. PA voltage;` | `MM11.8;` |
+| `TA` argument form | `TA1500.0;` vs `TA1500;` | `PC00;` either way |
+| Commands refused | every `TX;` / `TA...;` | no `?;` |
+| Config reset by the update | band table at both CAT link-ups | **identical**, Band[0..8] |
+
+That last row is what makes the A/B one variable, and it was checked rather
+than assumed. ⚠ `KD1;` in DiGi answers `?;` - key state is CW-only - so the
+"is it the keying or the tone" half cannot be tested directly from CAT.
+
+⭐ **Ralph DL1HR's retraction does not contradict Gyula.** He was checking
+FREQUENCY CONTROL through flrig, which never sends a Digi tone burst. Two
+different paths; both reports can be true. Worth remembering before letting a
+withdrawal talk you out of a measurement.
+
+Reported to the QRP Labs group with the numbers on 2026-09-20. Evidence in
+`scratchpad/qmx-011-test.md` (gitignored - the numbers that matter are above).
+
+### Separate, NOT part of this fault
+
+`MMSystem config|GPS & Ser. ports|USB serial ports;` reads **`MM1;`** on the dev
+radio, so interface 5 does not exist and **Radio Menus cannot open**
+(`qmx_term: port 2 (interface 5) would not open (0x105)`). It wants 2. Untested
+on 010, so it is NOT filed against 011 - but it means **1_04_011's
+multi-terminal locking clean-up is still untested**, which was the other reason
+for loading 011 at all.
 
 Docs changed the same day: quick-start, troubleshooting and README now say
 1.03.002 **up to 1.04.010**, with a warning naming the symptom. ⛔ **No firmware
