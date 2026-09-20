@@ -966,6 +966,7 @@ void rx_audio_init(void)
         !s_dec_coeff || !s_dec_delay_re || !s_dec_delay_im ||
         !s_coeff || !s_delay_re || !s_delay_im) {
         ESP_LOGE(TAG, "buffer alloc failed; RX audio disabled");
+        if (s_enabled) net_quiet_release();   // the hold above has nothing left to guard
         return;
     }
     retune(CW_DEF_OFFSET);
@@ -973,8 +974,30 @@ void rx_audio_init(void)
     build_smoothing_biquad();         // post-upsample smoothing - fixed, built once
     build_lpf(CW_DEF_WIDTH_HZ / 2);   // stage 2 placeholder - rebuilt on first active loop iteration
 
-    xTaskCreatePinnedToCore(rx_audio_task, "rx_audio", 4096, NULL,
+    // ⛔ FOUND 2026-09-20: this return value was never checked, and the task
+    // never got created - SILENTLY, every boot, for the whole session. No
+    // "RX audio on" line, no 10 s diag line, ever, in a 2.2M-line capture
+    // spanning many boots including ones confirmed in CW with the codec
+    // ready. rx_audio_init() runs AFTER panadapter_wifi_start() (main.c), so
+    // this 4096 B internal-RAM stack is requested right in the same boot
+    // window that starves everything else here - the exact class of bug
+    // this board has hit repeatedly (BLE's assert, OTA's silently-failed
+    // task). A few retries a few seconds apart is cheap: internal free
+    // measured recovering to 42 KB by ~17.5 s on this same boot sequence.
+    BaseType_t created = xTaskCreatePinnedToCore(rx_audio_task, "rx_audio", 4096, NULL,
                              RX_AUDIO_TASK_PRIORITY, &s_task, 1);
+    for (int attempt = 1; created != pdPASS && attempt <= 5; attempt++) {
+        ESP_LOGW(TAG, "rx_audio task create failed (%d/5) - retrying in 2 s", attempt);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        created = xTaskCreatePinnedToCore(rx_audio_task, "rx_audio", 4096, NULL,
+                             RX_AUDIO_TASK_PRIORITY, &s_task, 1);
+    }
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "rx_audio task create failed after 5 attempts - RX audio dead this session");
+        s_task = NULL;
+        if (s_enabled) net_quiet_release();
+        return;
+    }
     ESP_LOGI(TAG, "init (enabled=%d vol=%d codec_ready=%d priority=%d)",
              (int)s_enabled, (int)s_volume, (int)s_codec_ready, RX_AUDIO_TASK_PRIORITY);
 }
