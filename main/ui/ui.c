@@ -2625,6 +2625,8 @@ static void outpwr_update_warning(uint16_t w_x100)
  * change (called from topbar_reconcile_cb below) puts the radio back
  * where the operator last left it on that band without having to reopen
  * the drawer. */
+static void outpwr_relayout(void);   /* defined with its twin, wspr_dbm_relayout() */
+
 static void output_power_area_refresh(void)
 {
     if (!s_outpwr_nc_lbl || !lv_obj_is_valid(s_outpwr_nc_lbl)) return;   // section not built yet
@@ -2643,6 +2645,7 @@ static void output_power_area_refresh(void)
         if (s_outpwr_slider && lv_obj_is_valid(s_outpwr_slider)) lv_obj_add_flag(s_outpwr_slider, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_val_lbl) lv_obj_add_flag(s_outpwr_val_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_warn_lbl) lv_obj_add_flag(s_outpwr_warn_lbl, LV_OBJ_FLAG_HIDDEN);
+        outpwr_relayout();
         return;
     }
 
@@ -2715,6 +2718,7 @@ static void output_power_area_refresh(void)
     // wspr_pa_guard_periodic_check()'s own "running, not visible" test.
     settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
     if (!outpwr_tx_busy() && !wspr_rx_running()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+    outpwr_relayout();
 }
 
 // Live label/warning only while dragging - no CAT write until release, same
@@ -11216,6 +11220,8 @@ static lv_obj_t *s_wspr_dbm_recal_btn = NULL;
  * is what actually stops a NEW reduction from ever starting; this label is
  * purely informational. */
 static lv_obj_t *s_wspr_dbm_warn_lbl = NULL;
+static lv_obj_t *s_wspr_dbm_adv_hint = NULL;   /* "radio measured N W last burst" - kept so
+                                                * wspr_dbm_relayout() can stack and measure it */
 /* Result of the LAST wspr_pa_apply_declared_dbm() attempt, under the
  * dropdown - "→ X.XV applied", "not calibrated for this band", or "PA guard
  * is protecting". Rebuilt with the section like s_wspr_dbm_dd above, so
@@ -11286,6 +11292,85 @@ static void wspr_pa_cal_apply_and_show(int8_t dbm)
     }
 }
 
+/* ⛔ STACK WHAT IS VISIBLE - do not lay this section out at fixed y's.
+ *
+ * Operator, 2026-09-20, on an uncalibrated 60 m: "please clean up these lines
+ * around the button in this case where there is no Declared power dropdown.....
+ * also there is a lot of free space below it in both Basic and Advanced".
+ *
+ * Both complaints are the same cause. The section was built with every widget
+ * at a hardcoded y and a height big enough for the WORST case (dropdown + two
+ * wrapped labels + button), so the uncalibrated state - which shows two of
+ * those five - left ~130 px of nothing, and the calibration-status line sat
+ * under the button repeating what the orange prompt above it had just said.
+ *
+ * One pass now positions only the visible children, each under the last, and
+ * sizes the section to what it actually used. The precedent is the Bluetooth
+ * section, which already resizes itself and re-runs the section walk; the walk
+ * reads s_drawer_section_h[], so everything below moves with it.
+ *
+ * ⚠ lv_obj_update_layout() FIRST, or a wrapped label still reports its
+ * pre-wrap height and every object below it is placed on top of the next. */
+static void wspr_dbm_stack(lv_obj_t *o, int *y, int pad)
+{
+    if (!o || !lv_obj_is_valid(o) || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
+    lv_obj_align(o, LV_ALIGN_TOP_LEFT, 0, *y);
+    *y += lv_obj_get_height(o) + pad;
+}
+
+static void wspr_dbm_relayout(void)
+{
+    lv_obj_t *sec = s_drawer_sections[DRAWER_SEC_WSPRTX];
+    if (!sec || !lv_obj_is_valid(sec)) return;
+
+    lv_obj_update_layout(sec);
+
+    int y = 86;   /* under the section header and the "Declared power" label */
+    wspr_dbm_stack(s_wspr_dbm_nc_lbl,    &y, 8);
+    wspr_dbm_stack(s_wspr_dbm_dd,        &y, 8);
+    wspr_dbm_stack(s_wspr_dbm_cal_btn,   &y, 10);
+    wspr_dbm_stack(s_wspr_dbm_adv_hint,  &y, 6);
+    wspr_dbm_stack(s_wspr_pa_cal_hint,   &y, 8);
+    wspr_dbm_stack(s_wspr_dbm_warn_lbl,  &y, 10);
+    wspr_dbm_stack(s_wspr_dbm_recal_btn, &y, 0);
+
+    const int h = y + 8;
+    if (s_drawer_section_h[DRAWER_SEC_WSPRTX] == h) return;   /* layout unchanged */
+    lv_obj_set_height(sec, h);
+    s_drawer_section_h[DRAWER_SEC_WSPRTX] = h;
+    /* Everything below has to move with it - re-run the one walk that knows
+     * where each section goes, exactly as drawer_bt_restart_refresh() does.
+     * The height test above is also what stops this recursing. */
+    drawer_set_mode(ui_mode_get());
+}
+
+/* Same pass as wspr_dbm_relayout(), for the general Output power section -
+ * see that function's header for why fixed y's and a worst-case height are
+ * wrong here. This section shows either (prompt + Calibrate) or (slider +
+ * value + optional warning + Recalibrate), so the unused half was dead space
+ * either way. */
+static void outpwr_relayout(void)
+{
+    lv_obj_t *sec = s_drawer_sections[DRAWER_SEC_OUTPWR];
+    if (!sec || !lv_obj_is_valid(sec)) return;
+
+    lv_obj_update_layout(sec);
+
+    int y = 40;   /* under the "Output power" header */
+    wspr_dbm_stack(s_outpwr_nc_lbl,    &y, 8);
+    wspr_dbm_stack(s_outpwr_slider,    &y, 8);
+    wspr_dbm_stack(s_outpwr_val_lbl,   &y, 8);
+    wspr_dbm_stack(s_outpwr_cal_btn,   &y, 0);
+    wspr_dbm_stack(s_outpwr_warn_lbl,  &y, 10);
+    wspr_dbm_stack(s_outpwr_recal_btn, &y, 0);
+
+    const int h = y + 8;
+    if (s_drawer_section_h[DRAWER_SEC_OUTPWR] == h) return;
+    lv_obj_set_height(sec, h);
+    s_drawer_section_h[DRAWER_SEC_OUTPWR] = h;
+    drawer_set_mode(ui_mode_get());
+}
+
 /* Decide whether the CURRENT band has anything real to declare, and show
  * the right widget for it - the dropdown, or the "not calibrated" prompt.
  *
@@ -11335,10 +11420,20 @@ static void wspr_dbm_area_refresh(void)
         if (s_wspr_dbm_cal_btn) lv_obj_clear_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_recal_btn) lv_obj_add_flag(s_wspr_dbm_recal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) lv_obj_add_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
+        /* ⛔ AND HIDE THE CALIBRATION-STATUS LINE, which in this state reads
+         * "not calibrated for 60M - Max. PA voltage unchanged" directly under
+         * an orange "Not calibrated for 60M". Saying it twice, the second time
+         * in grey under the button that fixes it, is noise - and it was what
+         * the operator saw as clutter around the button. It comes back the
+         * moment there is a real voltage to report. */
+        if (s_wspr_pa_cal_hint) lv_obj_add_flag(s_wspr_pa_cal_hint, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_adv_hint) lv_obj_add_flag(s_wspr_dbm_adv_hint, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_cal_btn) lv_obj_add_flag(s_wspr_dbm_cal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_recal_btn) lv_obj_clear_flag(s_wspr_dbm_recal_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_pa_cal_hint) lv_obj_clear_flag(s_wspr_pa_cal_hint, LV_OBJ_FLAG_HIDDEN);
+        if (s_wspr_dbm_adv_hint) lv_obj_clear_flag(s_wspr_dbm_adv_hint, LV_OBJ_FLAG_HIDDEN);
         if (s_wspr_dbm_dd && lv_obj_is_valid(s_wspr_dbm_dd)) {
             lv_obj_clear_flag(s_wspr_dbm_dd, LV_OBJ_FLAG_HIDDEN);
             lv_dropdown_set_options(s_wspr_dbm_dd, dbm_opts);
@@ -11388,6 +11483,7 @@ static void wspr_dbm_area_refresh(void)
     }
 
     wspr_pa_cal_apply_and_show(ws.wspr_tx_dbm);
+    wspr_dbm_relayout();   /* AFTER every text and hidden-flag above is final */
 }
 
 /* Re-read the declared power from settings on every drawer open (#291).
@@ -12331,7 +12427,11 @@ static void drawer_build(void)
          * button next to Antenna Tune is gone. Height and the `y +=` at the
          * end of this block must move together - see DRAWER_SEC_WSPRTX's
          * own comment for what happens when they don't. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_OUTPWR, y, 192);
+        /* 192 -> 216: the two calibration buttons went from 40/36 px to the
+         * drawer's standard 56, and the ">1 W" warning above them now wraps
+         * instead of being clipped. SECTION HEIGHT AND THE `y +=` AT THE END
+         * OF THIS BLOCK MUST MOVE TOGETHER. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_OUTPWR, y, 216);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Output power");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
@@ -12346,12 +12446,14 @@ static void drawer_build(void)
 
         lv_obj_t *cal_btn = lv_button_create(sec);
         s_outpwr_cal_btn = cal_btn;
-        lv_obj_set_size(cal_btn, DRAWER_W - 32, 40);
+        lv_obj_set_size(cal_btn, DRAWER_W - 32, 56);
         lv_obj_align(cal_btn, LV_ALIGN_TOP_LEFT, 0, 76);
         lv_obj_add_event_cb(cal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *cal_lbl = lv_label_create(cal_btn);
         lv_label_set_text(cal_lbl, "Calibrate this band");
-        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_28, 0);  /* 24 -> 28: matches every other
+                                                                       * 56 px drawer button (Antenna Tune,
+                                                                       * Radio menus, Release radio) */
         lv_obj_center(cal_lbl);
 
         lv_obj_t *sl = lv_slider_create(sec);
@@ -12371,24 +12473,31 @@ static void drawer_build(void)
         s_outpwr_warn_lbl = warn;
         lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
         lv_obj_set_style_text_font(warn, &lv_font_montserrat_20, 0);
-        lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 120);
+        /* WIDTH + WRAP, never a content-sized label - see the twin in the
+         * WSPR transmit section for the reasoning. Two lines are reserved
+         * below it. */
+        lv_obj_set_width(warn, DRAWER_W - 32);
+        lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+        lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 118);
         lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
 
         // "Recalibrate this band" - mirror of cal_btn, see
         // s_outpwr_recal_btn's own header for why this exists.
         lv_obj_t *recal_btn = lv_button_create(sec);
         s_outpwr_recal_btn = recal_btn;
-        lv_obj_set_size(recal_btn, DRAWER_W - 32, 36);
-        lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 146);
+        lv_obj_set_size(recal_btn, DRAWER_W - 32, 56);
+        lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 152);
         lv_obj_add_event_cb(recal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_add_flag(recal_btn, LV_OBJ_FLAG_HIDDEN);   // output_power_area_refresh() decides
         lv_obj_t *recal_lbl = lv_label_create(recal_btn);
         lv_label_set_text(recal_lbl, "Recalibrate this band");
-        lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_28, 0);  /* 24 -> 28: matches every other
+                                                                       * 56 px drawer button (Antenna Tune,
+                                                                       * Radio menus, Release radio) */
         lv_obj_center(recal_lbl);
 
         output_power_area_refresh();   // sets initial visibility/range/value for everything above
-        y += 192;
+        y += 216;
     }
 
     // "Prepare for flashing" REMOVED 2026-08-08. The orderly-teardown
@@ -13491,7 +13600,13 @@ static void drawer_build(void)
          * The height and the `y +=` at the bottom of this block must move
          * together - this file has repeatedly had a section overlap the
          * next one by changing only one of them. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 296);
+        /* 296 -> 356: the calibration status line and the ">1 W" warning both
+         * WRAP now instead of being clipped (two lines each), and the two
+         * calibration buttons went from 44/40 px to the drawer's standard 56.
+         * SECTION HEIGHT AND THE `y +=` AT THE END OF THIS BLOCK MUST MOVE
+         * TOGETHER - this file records a release where they did not and the
+         * next section drew on top of this one. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 356);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "WSPR transmit");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -13538,12 +13653,14 @@ static void drawer_build(void)
 
         lv_obj_t *cal_btn = lv_button_create(sec);
         s_wspr_dbm_cal_btn = cal_btn;
-        lv_obj_set_size(cal_btn, DRAWER_W - 32, 44);
+        lv_obj_set_size(cal_btn, DRAWER_W - 32, 56);
         lv_obj_align(cal_btn, LV_ALIGN_TOP_LEFT, 0, 118);
         lv_obj_add_event_cb(cal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *cal_lbl = lv_label_create(cal_btn);
         lv_label_set_text(cal_lbl, "Calibrate this band");
-        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(cal_lbl, &lv_font_montserrat_28, 0);  /* 24 -> 28: matches every other
+                                                                       * 56 px drawer button (Antenna Tune,
+                                                                       * Radio menus, Release radio) */
         lv_obj_center(cal_lbl);
 
         lv_obj_t *dd = lv_dropdown_create(sec);
@@ -13578,6 +13695,7 @@ static void drawer_build(void)
                 static char hint_txt[72];
                 snprintf(hint_txt, sizeof(hint_txt),
                          "radio measured %.1f W last burst = %d dBm", (double)mw, adv);
+                s_wspr_dbm_adv_hint = hint;
                 lv_label_set_text(hint, hint_txt);
                 lv_obj_set_style_text_color(hint, lv_color_hex(0x9AA6B2), 0);
                 lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
@@ -13597,6 +13715,19 @@ static void drawer_build(void)
             s_wspr_pa_cal_hint = hint2;
             lv_obj_set_style_text_color(hint2, lv_color_hex(0x9AA6B2), 0);
             lv_obj_set_style_text_font(hint2, &lv_font_montserrat_20, 0);
+            /* ⛔ WIDTH + WRAP, never a content-sized label. Operator,
+             * 2026-09-20, with a screenshot: this read "20M: Max. PA voltage
+             * set to 5.5V = 900 mW for 30" - clipped at the drawer's edge,
+             * losing the "dBm" that says what the number IS. A centred or
+             * content-sized label sizes to its own text and the section clips
+             * whatever hangs over.
+             *
+             * ⚠ Every string this shows is about 50 characters and the drawer
+             * gives it 488 px, so TWO LINES are reserved below it (the warning
+             * moved 214 -> 228, the button 242 -> 286, the section 296 -> 356).
+             * A third line would draw into the warning. */
+            lv_obj_set_width(hint2, DRAWER_W - 32);
+            lv_label_set_long_mode(hint2, LV_LABEL_LONG_WRAP);
             lv_obj_align(hint2, LV_ALIGN_TOP_LEFT, 0, 172);
         }
         {
@@ -13606,7 +13737,11 @@ static void drawer_build(void)
             s_wspr_dbm_warn_lbl = warn;
             lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
             lv_obj_set_style_text_font(warn, &lv_font_montserrat_20, 0);
-            lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 214);
+            /* Same rule as hint2 above - " Above 1 W - extended key-down
+             * risks the finals" is 47 characters and was clipping too. */
+            lv_obj_set_width(warn, DRAWER_W - 32);
+            lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+            lv_obj_align(warn, LV_ALIGN_TOP_LEFT, 0, 228);
             lv_obj_add_flag(warn, LV_OBJ_FLAG_HIDDEN);
         }
         {
@@ -13617,13 +13752,15 @@ static void drawer_build(void)
             // without a collision.
             lv_obj_t *recal_btn = lv_button_create(sec);
             s_wspr_dbm_recal_btn = recal_btn;
-            lv_obj_set_size(recal_btn, DRAWER_W - 32, 40);
-            lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 242);
+            lv_obj_set_size(recal_btn, DRAWER_W - 32, 56);
+            lv_obj_align(recal_btn, LV_ALIGN_TOP_LEFT, 0, 286);
             lv_obj_add_event_cb(recal_btn, drawer_pwrcal_entry_btn_cb, LV_EVENT_CLICKED, NULL);
             lv_obj_add_flag(recal_btn, LV_OBJ_FLAG_HIDDEN);   // wspr_dbm_area_refresh() decides
             lv_obj_t *recal_lbl = lv_label_create(recal_btn);
             lv_label_set_text(recal_lbl, "Recalibrate this band");
-            lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(recal_lbl, &lv_font_montserrat_28, 0);  /* 24 -> 28: matches every other
+                                                                       * 56 px drawer button (Antenna Tune,
+                                                                       * Radio menus, Release radio) */
             lv_obj_center(recal_lbl);
         }
         // Now that the dropdown, the "not calibrated" prompt, the hint, the
@@ -13644,10 +13781,11 @@ static void drawer_build(void)
 
         /* Section height and this advance must move TOGETHER - CLAUDE.md
          * records a release where they did not and the next section overlapped.
-         * 296, not 270: the "Recalibrate this band" button added at the
-         * bottom needs the extra room - see drawer_section()'s own 296
-         * above, which must match this exactly. */
-        y += 296;
+         * 356, not 296: the status line and the warning above the button both
+         * wrap to two lines now, and the buttons are the drawer's standard 56
+         * px - see drawer_section()'s own 356 above, which must match this
+         * exactly. */
+        y += 356;
     }
     {
         qmx_settings_t ws;
