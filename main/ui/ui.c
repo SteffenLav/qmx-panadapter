@@ -1364,6 +1364,16 @@ static void zoom_label_clicked_cb(lv_event_t *e)
     zoom_popup_open();
 }
 
+// Long-press on ANY top-bar hit zone (Band/Mode/BW/Freq/Zoom) opens Resource
+// Management, in place of whatever short-tap dropdown that spot normally
+// opens - see the hit_zones[] loop for why SHORT_CLICKED is paired with this
+// rather than plain CLICKED.
+static void topbar_long_press_resmgmt_cb(lv_event_t *e)
+{
+    (void)e;
+    resource_mgmt_modal_open();
+}
+
 static void zoom_popup_open(void)
 {
     if (s_zoom_popup) { zoom_popup_close(); return; }  // toggle
@@ -6835,7 +6845,18 @@ void ui_init(lv_display_t *disp)
             lv_obj_set_style_border_width(hit, 0, 0);
             lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_CLICKED, NULL);
+            // SHORT_CLICKED, not CLICKED: LVGL delivers CLICKED on release
+            // even after a long press, so pairing CLICKED with the
+            // long-press handler below would open the zone's own dropdown
+            // (Band/Mode/BW/...) AND Resource Management on the same press.
+            // Same pairing as the RIT pill and the Call CQ/ADIF buttons.
+            lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_SHORT_CLICKED, NULL);
+            // Long-press anywhere on the top bar opens Resource Management,
+            // regardless of which specific dropdown that spot would
+            // otherwise open (operator's ask, 2026-09-20) - off the
+            // spectrum's tune surface entirely, so a mistimed press here
+            // can never retune the radio the way it could on the spectrum.
+            lv_obj_add_event_cb(hit, topbar_long_press_resmgmt_cb, LV_EVENT_LONG_PRESSED, NULL);
             lv_obj_move_foreground(hit);
             if (i < N_TOPBAR_HIT_ZONES) s_topbar_hit_zones[i] = hit;
         }
@@ -10162,17 +10183,25 @@ static void touch_event_cb(lv_event_t *e)
             }
             return;
         }
-        // Double-tap: open Resource Management. Repurposed 2026-09-20 from
-        // "reset zoom+pan to 1.0/0" - operator's own call: that reset is
-        // still reachable from the top-bar Zoom menu, so nothing was lost,
-        // and this gesture "does not do anything and in reality never
-        // needed to" otherwise.
+        // Double-tap: reset zoom+pan to 1.0/0.
+        //
+        // 2026-09-20: briefly repurposed for Resource Management, then
+        // reverted the same session - a mistimed first tap of an attempted
+        // double-tap can be held long enough (>= TUNE_HOLD_MS) to retune the
+        // radio before a second tap could ever be compared against it, and
+        // there is no way to catch that after the fact without delaying
+        // EVERY tune-tap to see if a second one follows. Not an acceptable
+        // trade against the far more common single-tap-to-tune gesture on
+        // this same surface. Resource Management now opens from a
+        // long-press on the top-bar hit zones instead (see hit_zones[]
+        // below) - off the tune surface entirely, zero risk.
         uint64_t now_us = esp_timer_get_time();
         if (s_last_tap_x >= 0 &&
             (now_us - s_last_tap_us) < (uint64_t)DOUBLE_TAP_MS * 1000 &&
             abs((int)p.x - s_last_tap_x) < DOUBLE_TAP_PX) {
-            ESP_LOGI("ui_touch", "Double-tap: open Resource Management");
-            resource_mgmt_modal_open();
+            ESP_LOGI("ui_touch", "Double-tap: reset zoom+pan");
+            ui_set_zoom(1.0f, 0);
+            update_bandplan_strip(s_last_qmx_freq_hz);
             s_last_tap_x = -1;
             return;
         }
