@@ -198,6 +198,23 @@ PATCHES = [
      "client with event_loop_handle left NULL, and the first "
      "esp_mqtt_client_register_event() call asserts - crash-reboot-crash loop, "
      "captured 2026-09-20 task pskr_self at 22.6 s of uptime"),
+
+    ("apply_lwip_thread_sem_retry.ps1", "idf",
+     "components/lwip/port/freertos/sys_arch.c",
+     "QMX_LWIP_THREAD_SEM_RETRY",
+     "sys_thread_sem_init() gave up after one allocation attempt and lwIP's "
+     "own netconn API dereferences its NULL return with no check - a "
+     "transient boot-time allocation failure becomes a Load access fault, "
+     "captured 2026-09-20 task tiT at 15.9 s of uptime"),
+
+    ("apply_newlib_lock_init_retry.ps1", "idf",
+     "components/newlib/locks.c",
+     "QMX_NEWLIB_LOCK_INIT_RETRY",
+     "lock_init_generic() made one attempt at a task's first lock-needing "
+     "C-library call and abort()ed on failure (#317's general diagnosis, "
+     "never fully fixed) - reproduced TWICE MORE 2026-09-20 on two "
+     "different, unremarkable tasks (diag_persist, spots) in the same "
+     "boot-time memory trough"),
 ]
 
 
