@@ -68,6 +68,21 @@ hear it, and drawing something there would be inventing signal.
 tap the caller, and a marker shows where you are listening while the gold line goes on
 meaning the dial. A long press parks the offset and restores it.
 
+**Audio, and binaural CW** *(beta)* — The I/Q the radio already sends is turned into sound
+on the device. The **panoramic CW split** places two stations on different frequencies to
+the left and right of the stereo image instead of letting them land on top of each other,
+with **pan width**, **pan blend** and **overlap** adjustable live while you listen. This
+plays to something your ears do far better than any decoder: separating two sources by
+where they are coming from. A single-channel reader has to pull both signals out of one
+waveform; binaural CW hands the job to the part of your hearing that evolved for it, and
+two stations calling together stop being a jumble. Best at **300 Hz bandwidth and up** —
+**below 200 Hz there is little separation to be had**, because the signals then share too
+much of the audio passband for any amount of panning to pull them apart. Audio competes
+for resources, so **long-press the top bar on the Panadapter page** to open **Resource
+Management**, where it is switched on and off. This is a first implementation and is
+**beta**, with the same features planned for the web interface — sending only the I/Q to
+the PC and doing the work there. See [Audio](docs/mkdocs/guide/audio.md).
+
 **QMX CAT control** — Live frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware
 1.04+), SSB filter bandwidth, CW passband, passband overlay, TX power and SWR readout,
 QMX volume in decibels matching the radio's own display, and an Antenna Tune button on

@@ -22,6 +22,17 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **Touch tuning** — tap or drag to tune with mode-aware snapping, pinch-zoom (a real
   zoom-FFT, not a stretch), one-finger pan-and-retune, edge-swipe navigation between
   screens, and a frequency keypad.
+- **Audio, and binaural CW** *(beta)* — the I/Q the radio already sends becomes sound on
+  the device. The **panoramic CW split** places two stations on different frequencies to
+  the left and right of the stereo image rather than on top of each other, with **pan
+  width**, **pan blend** and **overlap** adjustable live while you listen. It plays to
+  something your ears do far better than any decoder — separating two sources by where
+  they come from. A single-channel reader must pull both signals out of one waveform;
+  binaural CW gives the job to the part of your hearing built for it, and two stations
+  calling together stop being a jumble. Best at **300 Hz bandwidth and up**; **below
+  200 Hz there is little separation**, because the signals then share too much of the
+  audio passband. Long-press the top bar on the Panadapter page for **Resource
+  Management**, where audio is switched on and off. See [Audio](guide/audio.md).
 - **QMX control** — frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware 1.04+),
   SSB filter width, CW passband, TX power and SWR, and QMX volume in decibels matching
   the radio's own display. Band presets with per-band frequency recall, 32 memory
