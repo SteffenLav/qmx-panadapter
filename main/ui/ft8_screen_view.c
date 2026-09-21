@@ -2049,21 +2049,23 @@ static void t_clock_cb(lv_timer_t *t)
                 if (s_lbl_resend) {
                     char extra[16] = {0};
                     ft8_qso_get_cur_extra(extra, sizeof(extra));
-                    // Font stays 18 either way - the button is 76 px and 20
-                    // overflows it. See the button row's comment.
-                    if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Resend\n%s", extra);
-                    else          lv_label_set_text(s_lbl_resend, "Resend");
+                    // Font and width are set once at build time and must NOT be
+                    // changed here - that is what shrank the other three
+                    // buttons. See the button row's comment.
+                    if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Again\n%s", extra);
+                    else          lv_label_set_text(s_lbl_resend, "Again");
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
             } else {
-                // Reset to plain "Re-send" so if no extra is available on next show it
-                // doesn't display stale content from the previous exchange.
+                // Reset to the bare label so a stale report from the previous
+                // exchange is not shown on the next open. Deliberately does NOT
+                // touch the font: setting it to 24 here was how the old
+                // too-wide label came back after every hide.
                 if (s_lbl_resend) {
-                    lv_label_set_text(s_lbl_resend, "Re-send");
-                    lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
+                    lv_label_set_text(s_lbl_resend, "Again");
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
@@ -3203,13 +3205,27 @@ void ft8_screen_view_init(lv_obj_t *parent)
         // applies. Height 64 ends at 612, inside MID_H(624) with room to spare,
         // where the old row ran 4 px past the pane's content box.
         //
-        // 76*4 + 4*3 = 316, exactly. "Resend" not "Re-send", and font 18 not 20:
-        // at 20 even the unhyphenated word overflowed 76 px and was clipped by
-        // the screen edge. All four share the one size so the row reads evenly.
+        // 76*4 + 4*3 = 316, exactly.
+        //
+        // ⛔ THE LABEL, NOT THE FONT, IS WHAT HAD TO GIVE. "Re-send" did not fit
+        // 76 px, so I shortened it to "Resend" - still too wide - then dropped
+        // the font to 18, which shrank the OTHER THREE for a problem only the
+        // first button had, and "Resend" was clipped anyway. Two wrong fixes in
+        // a row because I kept adjusting size instead of the word.
+        //
+        // All four are font 20. The first button says "Again", which fits with
+        // room to spare and still reads correctly whatever the message is - it
+        // re-sends the CURRENT one, which may be a grid rather than a report, so
+        // "RPT" would have been wrong in WAIT_RPT.
+        //
+        // Every label is also width-constrained to the button, so a future label
+        // that is too wide wraps inside its own button instead of centring
+        // itself over the edge of the screen - which is what made this visible
+        // only on the leftmost button.
         const int bh = 64, gap = 4, bw = 76, by = 548;
         int x = 0;
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
-            { "Resend", 0x604010, override_resend_cb, &s_btn_override_resend },
+            { "Again",  0x604010, override_resend_cb, &s_btn_override_resend },
             { "RR73",   0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
             { "73",     0x1e6028, override_73_cb,     &s_btn_override_73     },
             { "Pause",  0x8b6914, override_pause_cb,  &s_btn_override_pause  },
@@ -3227,12 +3243,13 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            // Font 18, the same on all four. At 20 "Resend" is wider than the
-            // 76 px button, so the centred label overflowed it and the screen
-            // clipped the R - seen on the bench 2026-09-21.
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
-            // Centre BOTH lines: a multi-line label defaults to left-aligned,
-            // which left "-13" hanging under the R rather than under the word.
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            // Bound the label to the button and centre the TEXT inside it. Both
+            // are needed: lv_obj_center() only centres the label BLOCK, so a
+            // block wider than the button straddles its edges, and a multi-line
+            // label defaults to left-aligned, which left the report hanging
+            // under the first letter instead of under the word.
+            lv_obj_set_width(l, bw);
             lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
