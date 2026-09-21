@@ -124,21 +124,46 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
 // that is now the shipped default instead of something pushed by hand over
 // /api/cmd after every reflash.
 //
-// ⚠ attack/release ARE 8x too slow relative to the AGC loop's real rate
-// (it now runs on the DECIMATED stream, 6 kHz, since the two-stage filter
-// refactor - these coefficients were never rescaled for that). That analysis
-// still stands - see git history 2026-09-04 for the full writeup - but the
-// rescaled values were flashed and tested and made NO confirmed difference
-// to the reported on-air artifact, so they are reverted here along with two
-// other unconfirmed changes from the same session (silence-gap fade, doubled
-// DMA buffer) to get back to the last build that was known-good: the
-// two-stage filter fix + linear-interp upsample, both independently
-// confirmed (offline numbers + on-air "the build is narrower"). Revisit the
-// AGC rate fix on its own, separately tested, if it turns out to matter.
+// ⭐ The "revisit it if it turns out to matter" note that used to sit here is
+// RESOLVED - it turned out to matter, and the rescale is applied at
+// DEF_AGC_ATTACK / DEF_AGC_RELEASE below with the full reasoning. Kept in
+// summary because the shape of the mistake is worth remembering: the rescale
+// was correct arithmetic, was reverted after being tested against CW clicking,
+// and CW is the one signal whose steady envelope never exercises an AGC's rate.
+// The other two changes reverted in that same 2026-09-04 session (silence-gap
+// fade, doubled DMA buffer) remain out and are still unconfirmed.
 #define DEF_OUT_CLAMP      32000.0f  // hard clip before int16 cast (headroom)
 #define DEF_AGC_TARGET     30000.0f
-#define DEF_AGC_ATTACK     0.007f    // ~3 ms attack (pre-existing figure, not rescaled)
-#define DEF_AGC_RELEASE    0.00014f  // ~150 ms release (pre-existing figure, not rescaled)
+/* ⭐ RESCALED FOR THE DECIMATED LOOP - and this time the symptom that judges it
+ * is SSB intelligibility, not CW clicking.
+ *
+ * These are per-sample coefficients and the AGC runs on the fs/RX_DECIM_D
+ * stream (6 kHz), not 48 kHz. tau ~= 1/(alpha*fs), so at 6 kHz the bare figures
+ * gave 1/(0.007*6000) = 24 ms attack and 1/(0.00014*6000) = 1.2 s release -
+ * eight times slower than the 3 ms / 150 ms they were written for, exactly the
+ * RX_DECIM_D factor.
+ *
+ * ⛔ WHY THIS WAS REVERTED ONCE AND IS BACK. The rescale was tried before and
+ * dropped because it "made no confirmed difference to the reported on-air
+ * artifact" - but that artifact was CW CLICKING, and CW is the one case these
+ * constants cannot hurt: a steady tone settles the AGC once and never tests its
+ * rate. The change was judged against a symptom it could not have fixed.
+ *
+ * Gyula HA3HZ, 2026-09-21, is the symptom it CAN fix: "LSB/USB signals appear
+ * very distorted ... unintelligible", while CW the same afternoon was clear.
+ * Speech is what a 24 ms attack and a 1.2 s release destroy - every syllable
+ * onset overshoots into out_clamp before the gain moves, then the gain stays
+ * ducked through the syllables that follow.
+ *
+ * Multiplying by RX_DECIM_D restores the intended 3 ms / 150 ms and, because it
+ * is written as the scaling rather than a new literal, it follows RX_DECIM_D if
+ * the decimation ever changes again - which is how it drifted in the first
+ * place.
+ *
+ * ⚠ NOT VERIFIED ON AIR. Both are live-tunable over /api/cmd "rxaudio", so if
+ * this does bring back a CW artifact it can be put back without a reflash. */
+#define DEF_AGC_ATTACK     (0.007f   * (float)RX_DECIM_D)  // ~3 ms at the 6 kHz loop rate
+#define DEF_AGC_RELEASE    (0.00014f * (float)RX_DECIM_D)  // ~150 ms at the 6 kHz loop rate
 #define DEF_AGC_GAIN_MAX   200.0f    // allow weak signals up
 #define AGC_NOISE_TC   0.00010f  // noise-floor tracker (diag/squelch)
 
