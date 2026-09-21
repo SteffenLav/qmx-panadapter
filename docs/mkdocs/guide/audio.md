@@ -74,11 +74,37 @@ The window shows:
 - **Audio ON, Waterfall ON, Decode ON, Web streaming ON** → Tight; any spike can cause temporary frame drops
 - **Audio ON, full WiFi + web load** → Audio is the first to suffer if the load spikes; consider disabling audio or the waterfall if you need reliable web streaming
 
+## Which modes produce audio
+
+Audio and the panoramic split are not the same thing, and it is worth being clear about which you get where.
+
+| Mode | Audio | Panoramic / binaural split |
+|------|-------|----------------------------|
+| CW, CW-R | Yes | **Yes** |
+| USB, LSB | **Yes** | No — single channel, both ears the same |
+| DiGi | No | No |
+| AM, FM | No | No |
+
+So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi, AM and FM there is no audio at all yet — nothing is broken if you hear silence in those.
+
 ## Known Limitations
 
 - **Stereo rendering requires a headset or speaker with stereo output.** Mono output collapses both channels; panning does not work.
-- **Binaural separation only works in CW mode.** SSB and other modes are not yet implemented.
+- **The split is CW-only** (see the table above). On SSB you hear the signal, but it is not placed left or right.
 - **Limited to the audio passband.** If the audio filter is 300 Hz wide, the maximum usable separation is about 300 Hz. A wider filter in the radio settings increases the available range.
+- **Level depends on an AGC that is still being tuned.** If a signal is quieter than you expect even at full volume, that is the AGC's gain ceiling rather than your volume control. It is adjustable live — see below.
+
+## If the level is too low
+
+The gain ceiling, target and clip point can all be changed while listening, with no reflash, from the browser:
+
+```
+POST /api/cmd   {"action":"rxaudio","agc_gain_max":400}
+```
+
+Send `{"action":"rxaudio"}` with no other fields to read the current values back. That reply also carries the diagnostics that say whether audio is arriving at all — in particular **`read_timeouts`**, which is what to look at first: anything above zero means the audio feed is being starved, and no AGC setting can compensate for samples that are not there.
+
+This is the part of the beta I most want reports on.
 
 ## Future Work — Web Audio (IQ Streaming)
 
