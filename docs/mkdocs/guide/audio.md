@@ -96,13 +96,26 @@ So you **do** get audio on SSB; what you do not get there is the left/right spli
 
 ## If the level is too low
 
-The gain ceiling, target and clip point can all be changed while listening, with no reflash, from the browser:
+The gain ceiling, target and clip point can all be changed while listening, with no reflash. **There is no control for this on any page yet** — it is reachable only by sending the command by hand, which is awkward and is on the list to fix.
 
-```
-POST /api/cmd   {"action":"rxaudio","agc_gain_max":400}
+Open the Tab5's web page in a browser, press ++f12++ for the developer tools, choose the Console tab, and paste one line:
+
+```javascript
+fetch('/api/cmd',{method:'POST',body:'{"action":"rxaudio"}'}).then(r=>r.text()).then(t=>console.log(t))
 ```
 
-Send `{"action":"rxaudio"}` with no other fields to read the current values back. That reply also carries the diagnostics that say whether audio is arriving at all — in particular **`read_timeouts`**, which is what to look at first: anything above zero means the audio feed is being starved, and no AGC setting can compensate for samples that are not there.
+That reads the current values back. To raise the gain ceiling from its default of 200:
+
+```javascript
+fetch('/api/cmd',{method:'POST',body:'{"action":"rxaudio","agc_gain_max":400}'}).then(r=>r.text()).then(t=>console.log(t))
+```
+
+!!! warning "`/api/cmd` is POST-only"
+
+    Typing the address into the browser's address bar will not work — that sends a GET
+    and the command needs a POST. The console line above is the simplest way to send one.
+
+The reply also carries the diagnostics that say whether audio is arriving at all — in particular **`read_timeouts`**. Look at that first: anything above zero means the audio feed is being starved, and no gain setting can compensate for samples that are not there. That is a different fault from audio that is merely quiet.
 
 This is the part of the beta I most want reports on.
 
