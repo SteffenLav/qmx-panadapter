@@ -133,6 +133,7 @@ idf_component_register(
         "wspr_selftest.c"
         "wspr_spots.c"
         "wspr_rx.c"
+        "wspr_sched.c"
         "wspr_wav.c"
         "wspr_sim.c"
         "adif/adif_log.c"

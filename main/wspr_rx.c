@@ -2188,6 +2188,26 @@ static void wspr_rx_task(void *arg)
              * becomes the first transmit of a fresh group, which keeps the
              * behaviour that a burst can happen in the very first cycle after
              * transmitting is switched on. */
+
+            /* ⭐ SAY SO. This re-anchor moves every future transmission by
+             * however far the schedule slipped, permanently, and it used to
+             * happen in complete silence - so a beacon that quietly changed
+             * which minutes it transmitted on left nothing in the diagnostic
+             * log to explain it. John W5JSS watched his 20-minute schedule move
+             * from the 0 and 2 minute marks to 2 and 4 after several hours and
+             * there was no way to tell from the log that it had re-anchored, or
+             * why. Reported as a WARNING because it is not routine: in steady
+             * running this should never fire. */
+            const bool sched_changed =
+                (s_sched_duty != (uint8_t)(sched_tx * 32u + sched_rx));
+            ESP_LOGW(TAG,
+                     "TX schedule re-anchored to cycle %lld (%s) - the transmit "
+                     "minutes move from here on",
+                     (long long)last_cycle_idx,
+                     sched_changed          ? "tx/rx counts changed"
+                     : (s_next_tx_cycle < 0) ? "no schedule yet"
+                                             : "a cycle was missed or the clock stepped");
+
             s_next_tx_cycle = last_cycle_idx;
             /* Both counts fold into one comparison value so a change to either
              * re-rolls. rx is 1-20 and tx is 0-4, so tx*32+rx cannot collide. */
