@@ -114,6 +114,13 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 // can never leak into the next contact.
 bool ft8_qso_pause_next_tx(char *err, size_t err_len);
 
+// True while a pause is armed and has not yet been spent, i.e. the next
+// transmission will be skipped. Goes false the moment it is consumed. The FT8
+// screen lights the Pause button from this - without it the button looks
+// identical whether it worked or not, which is how it first read as doing
+// nothing at all.
+bool ft8_qso_pause_pending(void);
+
 ft8_qso_state_t ft8_qso_get_state(void);
 
 // True while the running contact is being worked as a HOUND (Fox/Hound

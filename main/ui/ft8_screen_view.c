@@ -2084,6 +2084,16 @@ static void t_clock_cb(lv_timer_t *t)
                     lv_obj_clear_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
                 else
                     lv_obj_add_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
+
+                /* Light it while the pause is armed, dark once it has been
+                 * spent. A pause is invisible by nature - it is the ABSENCE of
+                 * a transmission a slot or two later - so with no feedback the
+                 * button looked identical whether it had worked or not, and
+                 * read as doing nothing. This is the only confirmation the
+                 * operator gets before the skipped slot arrives. */
+                lv_obj_set_style_bg_color(s_btn_override_pause,
+                                          lv_color_hex(ft8_qso_pause_pending() ? 0xffc02a : 0x8b6914),
+                                          0);
             }
         }
     }
@@ -2255,8 +2265,13 @@ static void override_pause_cb(lv_event_t *e)
 {
     (void)e;
     char err[64];
-    if (!ft8_qso_pause_next_tx(err, sizeof(err)))
+    if (!ft8_qso_pause_next_tx(err, sizeof(err))) {
+        // Put the reason where the operator is already looking. A button that
+        // refuses silently is indistinguishable from one that does nothing,
+        // which is how this feature was first reported.
+        ft8_status_set("%s", err);
         ESP_LOGW(TAG, "Pause override failed: %s", err);
+    }
 }
 
 // Start a fresh CQ run. Shared by the Call CQ button and the web interface's

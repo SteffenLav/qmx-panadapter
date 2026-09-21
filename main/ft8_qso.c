@@ -3152,17 +3152,57 @@ bool ft8_qso_pause_next_tx(char *err, size_t err_len)
         return false;
     }
 
+    /* ⛔ SETTING THE FLAG ALONE DID NOTHING, AND THE OPERATOR SAW THAT.
+     *
+     * on_tx_complete() calls rearm_current() the moment a burst ends, so the
+     * NEXT transmission is already ARMED for the whole listening window - which
+     * is exactly when somebody reaches for Pause. The flag is only read inside
+     * rearm_current(), which will not run again until after that armed burst has
+     * gone out. Seven presses on the bench produced one "pausing one TX" line
+     * and six transmissions.
+     *
+     * So the armed request has to be cancelled as well. Both are needed:
+     *   - disarm kills the burst that was about to fire;
+     *   - the flag stops advance()'s arm_current_if_idle() safety net from
+     *     simply re-arming it later in the same slot.
+     * Together that is exactly ONE skipped transmission - the flag is consumed
+     * by the first rearm_current() that runs, and the slot after re-arms
+     * normally.
+     *
+     * A burst already ACTIVE cannot be recalled - but that is NOT a reason to
+     * refuse, it just waits. Pressing Pause while transmitting plainly means
+     * "skip the next one", and the flag already does exactly that: the burst
+     * finishes, on_tx_complete() calls rearm_current(), the flag is consumed and
+     * nothing is armed. One skipped transmission, same as every other case.
+     *
+     * So the flag is set unconditionally and the disarm is the only conditional
+     * part. All three states give exactly one skip:
+     *   ACTIVE - on air; flag consumed by on_tx_complete()'s re-arm afterwards
+     *   ARMED  - disarmed here, flag stops the same slot's fallback re-arming it
+     *   IDLE   - flag consumed by whichever re-arm comes next */
+    const bool was_armed = (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED);
+
     lock();
     s_pause_next_tx = true;
     unlock();
+    if (was_armed) ft8_tx_disarm();
+
     if (target[0]) {
-        ft8_status_set("QSO %s: pausing next TX to check the slot", target);
-        ESP_LOGI(TAG, "QSO pause: skipping next TX for %s", target);
+        ft8_status_set("QSO %s: skipping one TX - listening", target);
+        ESP_LOGI(TAG, "QSO pause: skipping one TX for %s (was_armed=%d)", target, (int)was_armed);
     } else {
-        ft8_status_set("pausing next CQ to check the slot");
-        ESP_LOGI(TAG, "QSO pause: skipping next CQ call");
+        ft8_status_set("skipping one CQ call - listening");
+        ESP_LOGI(TAG, "QSO pause: skipping one CQ call (was_armed=%d)", (int)was_armed);
     }
     return true;
+}
+
+bool ft8_qso_pause_pending(void)
+{
+    lock();
+    bool p = s_pause_next_tx;
+    unlock();
+    return p;
 }
 
 void ft8_qso_note_manual_target(const char *target_call)
