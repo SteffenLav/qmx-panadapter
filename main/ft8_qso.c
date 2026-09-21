@@ -3140,16 +3140,28 @@ bool ft8_qso_pause_next_tx(char *err, size_t err_len)
     target[sizeof(target) - 1] = '\0';
     unlock();
 
-    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73) {
-        if (err) snprintf(err, err_len, "No active QSO exchange");
+    /* CQ counts as well as the WAIT_* exchange states. Randy N4OPI asked for
+     * this to check whether his transmit slot was still clear, and looked for it
+     * "while calling CQ and while waiting for an initial response" - skipping one
+     * call to listen is exactly as useful there as mid-exchange, and
+     * rearm_current() already honours the flag in CQ (that is how the automatic
+     * cq_listen_every slot works). Refusing in CQ was an arbitrary limit. */
+    if (st != FT8_QSO_CQ && st != FT8_QSO_WAIT_RPT &&
+        st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73) {
+        if (err) snprintf(err, err_len, "Nothing is transmitting to pause");
         return false;
     }
 
     lock();
     s_pause_next_tx = true;
     unlock();
-    ft8_status_set("QSO %s: pausing next TX to check slot", target);
-    ESP_LOGI(TAG, "QSO pause: skipping next TX for %s", target);
+    if (target[0]) {
+        ft8_status_set("QSO %s: pausing next TX to check the slot", target);
+        ESP_LOGI(TAG, "QSO pause: skipping next TX for %s", target);
+    } else {
+        ft8_status_set("pausing next CQ to check the slot");
+        ESP_LOGI(TAG, "QSO pause: skipping next CQ call");
+    }
     return true;
 }
 

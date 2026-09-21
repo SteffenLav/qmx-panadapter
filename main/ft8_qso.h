@@ -102,10 +102,16 @@ void ft8_qso_mark_robot_started(void);
 // if there is no active exchange or the arm is refused.
 bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
-// Pause the next transmission (skip one TX slot) to check if the QSO slot is
-// still open. After skipping, the same message re-arms for the following slot.
-// Only valid during WAIT_RPT / WAIT_ROGER / WAIT_RR73. Returns false + err
-// if there is no active exchange.
+// Skip the NEXT transmission - one only - so the operator can hear whether their
+// transmit slot is still clear, then carry on with the same message. Unlike
+// ft8_qso_abort() this does not break the exchange (Randy N4OPI).
+//
+// Valid while calling CQ as well as during WAIT_RPT / WAIT_ROGER / WAIT_RR73:
+// skipping one CQ call to listen is the manual form of the automatic
+// cq_listen_every slot. Returns false + err when nothing is transmitting.
+//
+// The flag is consumed by rearm_current() and cleared by ft8_qso_abort(), so it
+// can never leak into the next contact.
 bool ft8_qso_pause_next_tx(char *err, size_t err_len);
 
 ft8_qso_state_t ft8_qso_get_state(void);

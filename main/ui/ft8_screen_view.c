@@ -2061,8 +2061,6 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
-                if (s_btn_override_pause)
-                    lv_obj_clear_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
             } else {
                 // Reset to plain "Re-send" so if no extra is available on next show it
                 // doesn't display stale content from the previous exchange.
@@ -2074,7 +2072,18 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
-                if (s_btn_override_pause)
+            }
+
+            /* Pause has a WIDER condition than the other three, which is why it
+             * is not in the block above: Re-send/RR73/73 only mean something
+             * once there is a partner, but skipping one transmission to listen
+             * is just as useful while calling CQ - and that is where Randy
+             * N4OPI looked for it first. Matches
+             * ft8_qso_pause_next_tx()'s own guard. */
+            if (s_btn_override_pause) {
+                if (show || qso_st == FT8_QSO_CQ)
+                    lv_obj_clear_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
+                else
                     lv_obj_add_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
             }
         }
@@ -3170,19 +3179,30 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // and given more height - the original 91x44 buttons were cramped for
     // big-finger field use.
     {
-        // Re-send carries more text ("Re-send" + a second line like "JO45"/"-07")
-        // than RR73/73, so it gets 20% more width (110px vs the uniform 92px) and
-        // the other two shrink to 83px each - still sums to the full 288px pane
-        // width with the same 6px gaps: 110 + 6 + 83 + 6 + 83 = 288.
+        // FOUR buttons on ONE row. Re-send carries two lines ("Re-send" plus
+        // "JO45"/"-07") so it keeps the most width; the other three are sized to
+        // their own text at font 20.
+        //
+        // ⛔ DO NOT put a second row under this one. The pane's content height is
+        // MID_H(624) - pad_top(8) - pad_bottom(16) = 600, and this row already
+        // occupies 540..604. Pause originally went in at y=610 and was therefore
+        // OFF THE PANE ENTIRELY - shipped in v1.16.0, announced, and Randy N4OPI
+        // reported it missing because it was never drawn. Anything else added here
+        // has to come out of this row's 288 px, not out of space below it.
+        //
+        // Widths sum exactly: 104 + 58 + 44 + 64 = 270, plus 3 gaps of 6 = 288.
         const int bh = 64, gap = 6, by = 540;
-        const int bw_resend = 110, bw_other = 83;
         int x = 0;
-        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; int w; } btns[] = {
-            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend, bw_resend },
-            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73,   bw_other  },
-            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73,     bw_other  },
+        struct {
+            const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr;
+            int w; const lv_font_t *font;
+        } btns[] = {
+            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend, 104, &lv_font_montserrat_24 },
+            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73,    58, &lv_font_montserrat_20 },
+            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73,      44, &lv_font_montserrat_20 },
+            { "Pause",   0x8b6914, override_pause_cb,  &s_btn_override_pause,   64, &lv_font_montserrat_20 },
         };
-        for (int j = 0; j < 3; j++) {
+        for (int j = 0; j < 4; j++) {
             lv_obj_t *b = lv_btn_create(s_left_pane);
             lv_obj_set_size(b, btns[j].w, bh);
             lv_obj_set_pos(b, x, by);
@@ -3195,34 +3215,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(l, btns[j].font, 0);
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
             if (j == 0) s_lbl_resend = l;
         }
-    }
-
-    // Pause button — skip one transmission to check if the QSO slot is still open.
-    // Below the main override buttons, takes up half the width.
-    {
-        const int bh = 48, gap = 6, by = 540 + 64 + gap;
-        const int bw = 140;  // half width plus half gap
-        lv_obj_t *b = lv_btn_create(s_left_pane);
-        lv_obj_set_size(b, bw, bh);
-        lv_obj_set_pos(b, 0, by);
-        lv_obj_set_style_bg_color(b, lv_color_hex(0x8b6914), 0);
-        lv_obj_set_style_radius(b, 4, 0);
-        lv_obj_set_style_border_width(b, 0, 0);
-        lv_obj_set_style_pad_all(b, 0, 0);
-        lv_obj_add_event_cb(b, override_pause_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, "Pause");
-        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
-        lv_obj_center(l);
-        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
-        s_btn_override_pause = b;
     }
 
     // Right pane
