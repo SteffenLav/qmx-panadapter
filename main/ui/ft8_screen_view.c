@@ -2049,8 +2049,8 @@ static void t_clock_cb(lv_timer_t *t)
                 if (s_lbl_resend) {
                     char extra[16] = {0};
                     ft8_qso_get_cur_extra(extra, sizeof(extra));
-                    // Font stays 20 either way - the button is 76 px and a
-                    // larger font overflows it. See the button row's comment.
+                    // Font stays 18 either way - the button is 76 px and 20
+                    // overflows it. See the button row's comment.
                     if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Resend\n%s", extra);
                     else          lv_label_set_text(s_lbl_resend, "Resend");
                     lv_obj_center(s_lbl_resend);
@@ -3203,8 +3203,9 @@ void ft8_screen_view_init(lv_obj_t *parent)
         // applies. Height 64 ends at 612, inside MID_H(624) with room to spare,
         // where the old row ran 4 px past the pane's content box.
         //
-        // 76*4 + 4*3 = 316, exactly. "Resend" not "Re-send": the hyphenated form
-        // is ~72 px at font 20 and leaves 2 px of margin, which is not a margin.
+        // 76*4 + 4*3 = 316, exactly. "Resend" not "Re-send", and font 18 not 20:
+        // at 20 even the unhyphenated word overflowed 76 px and was clipped by
+        // the screen edge. All four share the one size so the row reads evenly.
         const int bh = 64, gap = 4, bw = 76, by = 548;
         int x = 0;
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
@@ -3226,7 +3227,13 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            // Font 18, the same on all four. At 20 "Resend" is wider than the
+            // 76 px button, so the centred label overflowed it and the screen
+            // clipped the R - seen on the bench 2026-09-21.
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+            // Centre BOTH lines: a multi-line label defaults to left-aligned,
+            // which left "-13" hanging under the R rather than under the word.
+            lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
