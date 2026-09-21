@@ -1073,7 +1073,7 @@ static void rx_audio_task(void *arg)
             const float PAN_WIDTH_REF_HALF_BW_HZ = 250.0f;   // half of the 500 Hz test filter
             float scale = PAN_WIDTH_REF_HALF_BW_HZ / (float)s_half_bw_hz;
             if (scale < 1.0f) scale = 1.0f;   // never REDUCE width for a wider-than-reference filter
-            if (scale > 4.0f) scale = 4.0f;
+            if (scale > 8.0f) scale = 8.0f;   // allow up to 8x for very narrow filters
             eff_pan_width = s_pan_width * scale;
         }
 
