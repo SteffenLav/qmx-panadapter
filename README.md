@@ -12,28 +12,15 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> ## ⚠ v1.15.0 needs a USB-C cable, once
+> ## v1.16.0 — Tab5 Audio Decoding (Beta)
 >
-> **v1.15.0 reclaims 2.81 MB of flash that no partition has ever used, and that
-> means rewriting the partition table** — which an over-the-air update cannot do,
-> by design: it can only ever write the app, never the map of the flash. That
-> limit is what stops a failed download taking the layout with it.
+> **Real-time audio processing on the Tab5**: Panoramic CW split with live pan controls (pan width, blend, overlap), tuned live during the QSO. Binaural CW separation by frequency — works best with bandwidths 300 Hz and above.
 >
-> So this one arrives as a **flasher download**, using the same USB-C data cable
-> and the same `flash.bat` / `flash.command` you used to install it the first
-> time. It is the only release that needs it, and everything after it is over the
-> air again — with more than twice the room.
+> Audio requires finite resources, so a **Resource Management window** (tap and hold the top bar) lets you balance load between spectrum, waterfall, decode, and audio. Not all features run simultaneously.
 >
-> **There is no over-the-air image attached to this release, on purpose.** If you
-> tap the update notice it will say the download could not be reached. That is
-> the release refusing to be installed the wrong way, not a fault.
+> **Pause button** for mid-QSO: skip one transmission to check if the slot is still open, then resume with the same message.
 >
-> **Your settings, memory channels, QSO log and LoTW certificate are kept.** Press
-> **Enter** at the flash-type prompt. Do *not* press **E** — that erases the whole
-> chip, including your log and your LoTW private key, and it is not needed here.
->
-> **Brand-new users are unaffected** — a first install already uses the flasher,
-> so it lands on the new layout directly.
+> **Audio is BETA.** First-generation implementation; feedback from the field shapes the next phase. See [Audio Features](docs/mkdocs/guide/audio.md) for details, limitations, and future work (web I/Q streaming to your PC).
 
 > **Release — v1.15.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
