@@ -84,6 +84,11 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out);
 // RAM-only, not persisted - same class of live tuning as the AGC params
 // above, takes effect on the next retune (same loop that already tracks
 // mode/center-frequency changes).
+/* Re-read the stored gain/pan settings and apply them to the live DSP. Called
+ * by rx_audio_init(), and by config import - which otherwise writes settings
+ * the audio path never hears until the next reboot. */
+void rx_audio_apply_settings(void);
+
 void rx_audio_set_binaural_enabled(bool en);
 bool rx_audio_get_binaural_enabled(void);
 

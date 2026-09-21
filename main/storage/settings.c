@@ -88,6 +88,10 @@ static const char *TAG = "settings";
 #define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_CQ_LISTEN    "cq_listen"
 #define KEY_SWR_LIMIT    "swr_lim"
+#define KEY_RXA_GAIN     "rxa_gain"
+#define KEY_RXA_PWIDTH   "rxa_pw"
+#define KEY_RXA_PBLEND   "rxa_pb"
+#define KEY_RXA_POVLP    "rxa_po"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
@@ -207,7 +211,12 @@ static const char *TAG = "settings";
 // Adding a setting: give it the next free index, bump DIRTY_WORDS if you cross a
 // 32-bit boundary past the end, and add the bit to s_config_export_bits[] if
 // config_io_export() actually writes the field.
-#define DIRTY_WORDS      4                        /* 128 bits; 62 spare today */
+/* ⚠ The "62 spare" this line used to claim was stale: bits ran to 123 of 128,
+ * so four were left, and the four RX-audio settings added 2026-09-21 would have
+ * taken every one of them while the comment still said 62. Bumped to 5 words
+ * rather than land the next person on a full bitmap behind a wrong number.
+ * Cost is 4 bytes. Recount before trusting this figure again. */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 127, 32 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -386,6 +395,10 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WF_SPEED       121
 #define DIRTY_WSPR_BURST     122  /* consecutive cycles per scheduled WSPR transmission */
 #define DIRTY_WSPR_TONE      123  /* pinned WSPR TX tone, 0 = random per burst */
+#define DIRTY_RXA_GAIN       124  /* RX audio AGC ceiling - the Gain slider */
+#define DIRTY_RXA_PWIDTH     125  /* panoramic split: stereo width */
+#define DIRTY_RXA_PBLEND     126  /* panoramic split: cross-feed */
+#define DIRTY_RXA_POVLP      127  /* panoramic split: filter overlap */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -417,6 +430,10 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
     DIRTY_STILL_VIEW,   /* #298 - config_io_export() carries still_spectrum */
+    /* RX audio: a level the operator set by ear belongs in a config backup for
+     * the same reason the power calibration does - nobody can recreate it from
+     * memory. config_io_export() prints all four. */
+    DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -564,6 +581,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_RXA_GAIN))     nvs_set_u8(s_nvs, KEY_RXA_GAIN,   snap.rxaud_gain_d10);
+        if (dirty_test(&dirty_local, DIRTY_RXA_PWIDTH))   nvs_set_u8(s_nvs, KEY_RXA_PWIDTH, snap.rxaud_pan_width_x10);
+        if (dirty_test(&dirty_local, DIRTY_RXA_PBLEND))   nvs_set_u8(s_nvs, KEY_RXA_PBLEND, snap.rxaud_pan_blend_x100);
+        if (dirty_test(&dirty_local, DIRTY_RXA_POVLP))    nvs_set_u8(s_nvs, KEY_RXA_POVLP,  snap.rxaud_pan_ovlp_x100);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
             nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
@@ -848,6 +869,12 @@ static void load_from_nvs(qmx_settings_t *out)
     // normal way this goes wrong in the field. 3.0 is high enough not to trip
     // on a merely mediocre match; the drawer can raise it or turn it off.
     out->swr_limit_x10 = 30;
+    /* Defaults mirror rx_audio.h's documented ones (200 / 1.8 / 0.15 / 0.30),
+     * which are the values tuned on the air 2026-09-20. */
+    out->rxaud_gain_d10       = 20;
+    out->rxaud_pan_width_x10  = 18;
+    out->rxaud_pan_blend_x100 = 15;
+    out->rxaud_pan_ovlp_x100  = 30;
     out->act_type   = 0;          // not activating anything
     out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
@@ -944,6 +971,10 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
+    nvs_get_u8(s_nvs, KEY_RXA_GAIN,   &out->rxaud_gain_d10);
+    nvs_get_u8(s_nvs, KEY_RXA_PWIDTH, &out->rxaud_pan_width_x10);
+    nvs_get_u8(s_nvs, KEY_RXA_PBLEND, &out->rxaud_pan_blend_x100);
+    nvs_get_u8(s_nvs, KEY_RXA_POVLP,  &out->rxaud_pan_ovlp_x100);
     nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
     out->act_ref[0] = '\0';
     sz = sizeof(out->act_ref);
@@ -2262,6 +2293,39 @@ uint8_t settings_get_swr_limit_x10(void)
     xSemaphoreGive(s_mutex);
     return v;
 }
+
+/* ---- RX audio -------------------------------------------------------------
+ *
+ * Clamps are the ranges rx_audio.h documents, applied HERE rather than trusting
+ * the slider: NVS and an imported config file are both writers this module
+ * cannot see, and a stored value outside the range would put the DSP somewhere
+ * it does not expect. Storing only - the caller applies the live value, because
+ * settings.c must not depend on rx_audio. */
+#define RXA_SET_U8(field, dirty_bit, lo, hi)          \
+    if (!s_ready) return;                             \
+    if (v < (lo)) v = (lo);                           \
+    if (v > (hi)) v = (hi);                           \
+    xSemaphoreTake(s_mutex, portMAX_DELAY);           \
+    if (s_pending.field == v) { xSemaphoreGive(s_mutex); return; } \
+    s_pending.field = v;                              \
+    xSemaphoreGive(s_mutex);                          \
+    mark_dirty(dirty_bit)
+
+#define RXA_GET_U8(field, dflt)                       \
+    if (!s_ready) return (dflt);                      \
+    xSemaphoreTake(s_mutex, portMAX_DELAY);           \
+    uint8_t v = s_pending.field;                      \
+    xSemaphoreGive(s_mutex);                          \
+    return v
+
+void settings_set_rxaud_gain_d10(uint8_t v)      { RXA_SET_U8(rxaud_gain_d10,       DIRTY_RXA_GAIN,   5, 80); }
+uint8_t settings_get_rxaud_gain_d10(void)        { RXA_GET_U8(rxaud_gain_d10,       20); }
+void settings_set_rxaud_pan_width_x10(uint8_t v) { RXA_SET_U8(rxaud_pan_width_x10,  DIRTY_RXA_PWIDTH, 0, 30); }
+uint8_t settings_get_rxaud_pan_width_x10(void)   { RXA_GET_U8(rxaud_pan_width_x10,  18); }
+void settings_set_rxaud_pan_blend_x100(uint8_t v){ RXA_SET_U8(rxaud_pan_blend_x100, DIRTY_RXA_PBLEND, 0, 50); }
+uint8_t settings_get_rxaud_pan_blend_x100(void)  { RXA_GET_U8(rxaud_pan_blend_x100, 15); }
+void settings_set_rxaud_pan_ovlp_x100(uint8_t v) { RXA_SET_U8(rxaud_pan_ovlp_x100,  DIRTY_RXA_POVLP,  0, 100); }
+uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x100,  30); }
 
 int16_t settings_get_cw_tx_offset_hz(void)
 {

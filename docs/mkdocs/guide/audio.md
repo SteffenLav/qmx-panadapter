@@ -96,28 +96,11 @@ So you **do** get audio on SSB; what you do not get there is the left/right spli
 
 ## If the level is too low
 
-The gain ceiling, target and clip point can all be changed while listening, with no reflash. **There is no control for this on any page yet** — it is reachable only by sending the command by hand, which is awkward and is on the list to fix.
+Audio level is set by an automatic gain control that is still being tuned, and on some signals it does not bring the level up far enough — turning the volume up does not help, because the volume control is not what is holding it back.
 
-Open the Tab5's web page in a browser, press ++f12++ for the developer tools, choose the Console tab, and paste one line:
+**A Gain control sits with the other audio controls** so you can raise the ceiling while listening. Turn it up if a signal is quieter than it should be.
 
-```javascript
-fetch('/api/cmd',{method:'POST',body:'{"action":"rxaudio"}'}).then(r=>r.text()).then(t=>console.log(t))
-```
-
-That reads the current values back. To raise the gain ceiling from its default of 200:
-
-```javascript
-fetch('/api/cmd',{method:'POST',body:'{"action":"rxaudio","agc_gain_max":400}'}).then(r=>r.text()).then(t=>console.log(t))
-```
-
-!!! warning "`/api/cmd` is POST-only"
-
-    Typing the address into the browser's address bar will not work — that sends a GET
-    and the command needs a POST. The console line above is the simplest way to send one.
-
-The reply also carries the diagnostics that say whether audio is arriving at all — in particular **`read_timeouts`**. Look at that first: anything above zero means the audio feed is being starved, and no gain setting can compensate for samples that are not there. That is a different fault from audio that is merely quiet.
-
-This is the part of the beta I most want reports on.
+This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more gain fixed it.
 
 ## Future Work — Web Audio (IQ Streaming)
 

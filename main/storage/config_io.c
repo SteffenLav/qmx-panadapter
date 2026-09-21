@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "settings.h"
 #include "mem_channels.h"
+#include "audio/rx_audio.h"     // rx_audio_apply_settings() - an import must be audible
 #include "adif/lotw_upload.h"   // lotw_read/store_cert/key_b64 for full backup
 
 static const char *TAG = "config_io";
@@ -87,6 +88,10 @@ char *config_io_export(size_t *out_len)
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    APP("rxaud_gain_d10     = %u\n", (unsigned)c.rxaud_gain_d10);       // AGC ceiling / 10 (20 = 200)
+    APP("rxaud_pan_width    = %u\n", (unsigned)c.rxaud_pan_width_x10);  // stereo width x10 (18 = 1.8)
+    APP("rxaud_pan_blend    = %u\n", (unsigned)c.rxaud_pan_blend_x100); // cross-feed x100  (15 = 0.15)
+    APP("rxaud_pan_overlap  = %u\n", (unsigned)c.rxaud_pan_ovlp_x100);  // filter overlap x100 (30 = 0.30)
     APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
     APP("bt_mouse_en        = %d\n", c.bt_mouse_en ? 1 : 0);     // BLE mouse
     APP("cluster_en         = %d\n", c.cluster_en ? 1 : 0);      // DX cluster feed (phone spots)
@@ -405,6 +410,10 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_gain_d10"))    settings_set_rxaud_gain_d10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_pan_width"))   settings_set_rxaud_pan_width_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_pan_blend"))   settings_set_rxaud_pan_blend_x100((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_pan_overlap")) settings_set_rxaud_pan_ovlp_x100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
             else if (!strcasecmp(key, "bt_mouse_en"))       settings_set_bt_mouse_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cluster_en"))        settings_set_cluster_en(atoi(val) != 0);
@@ -620,6 +629,10 @@ int config_io_import(char *text)
     if (kp_touched)  settings_set_freq_kp_pos(kp_dx, kp_dy);
     if (act_touched) settings_set_activation(act_type, act_ref);
     settings_flush();
+    /* The RX-audio keys above are STORED by their setters but not heard: the
+     * DSP holds its own live copies. Without this a restored backup shows the
+     * right numbers on the sliders and sounds like the old ones until reboot. */
+    rx_audio_apply_settings();
     ESP_LOGI(TAG, "imported config: %d keys/slots applied", applied);
     return applied;
 }

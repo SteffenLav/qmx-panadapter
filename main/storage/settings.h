@@ -254,6 +254,14 @@ typedef struct {
     // short and latched off rather than driving a mismatched load for the
     // whole 12.7 s. The QMX's finals are the thing being protected here.
     uint8_t  swr_limit_x10;
+    /* RX audio, persisted so a level set by ear is not lost at the next boot -
+     * these were live RAM-only values tuned over /api/cmd during development,
+     * which is not something a user can reach. Scaled integers, same idiom as
+     * swr_limit_x10 above. */
+    uint8_t  rxaud_gain_d10;      /* AGC gain ceiling / 10  (20 = 200) */
+    uint8_t  rxaud_pan_width_x10; /* mid/side width x10     (18 = 1.8) */
+    uint8_t  rxaud_pan_blend_x100;/* cross-feed x100        (15 = 0.15) */
+    uint8_t  rxaud_pan_ovlp_x100; /* filter overlap x100    (30 = 0.30) */
     // Propagation feedback: query PSK Reporter for who has heard US. Separate
     // from pskreporter_en (which is about SENDING reports) - they are opposite
     // directions and an operator may reasonably want one without the other.
@@ -683,6 +691,19 @@ bool    settings_get_cluster_en(void);           // narrow: spots_any_source_ena
 void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
+
+/* RX audio level and panoramic-split shape. Stored scaled; the Resource
+ * Management sliders are the only writers. Ranges are clamped to what
+ * rx_audio.h documents, so a bad stored value cannot put the DSP somewhere
+ * it does not expect. */
+void    settings_set_rxaud_gain_d10(uint8_t v);      // AGC ceiling / 10, 5..80 (default 20 = 200)
+uint8_t settings_get_rxaud_gain_d10(void);
+void    settings_set_rxaud_pan_width_x10(uint8_t v); // 0..30  (default 18 = 1.8)
+uint8_t settings_get_rxaud_pan_width_x10(void);
+void    settings_set_rxaud_pan_blend_x100(uint8_t v);// 0..50  (default 15 = 0.15)
+uint8_t settings_get_rxaud_pan_blend_x100(void);
+void    settings_set_rxaud_pan_ovlp_x100(uint8_t v); // 0..100 (default 30 = 0.30)
+uint8_t settings_get_rxaud_pan_ovlp_x100(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

@@ -1263,6 +1263,23 @@ static void rx_audio_task(void *arg)
 }
 
 // ---- Public API --------------------------------------------------------
+/* Push the stored gain and pan values into the live DSP.
+ *
+ * Two callers, and the second is the reason this is public rather than folded
+ * into rx_audio_init(): a config IMPORT writes the settings but has no way to
+ * make them audible, so without this a restored backup would read correctly on
+ * the sliders and sound like the old values until the next reboot.
+ *
+ * settings.c clamps on the way in, so the values arriving here are already
+ * inside the ranges rx_audio.h documents. */
+void rx_audio_apply_settings(void)
+{
+    rx_audio_set_agc_gain_max((float)settings_get_rxaud_gain_d10()       * 10.0f);
+    rx_audio_set_pan_width   ((float)settings_get_rxaud_pan_width_x10()  / 10.0f);
+    rx_audio_set_pan_blend   ((float)settings_get_rxaud_pan_blend_x100() / 100.0f);
+    rx_audio_set_pan_overlap ((float)settings_get_rxaud_pan_ovlp_x100()  / 100.0f);
+}
+
 void rx_audio_init(void)
 {
     if (s_task) return;  // already initialised
@@ -1271,6 +1288,7 @@ void rx_audio_init(void)
     settings_load_all(&cfg);
     s_enabled = cfg.rx_audio_en;
     s_volume  = cfg.rx_audio_vol;
+    rx_audio_apply_settings();   // gain ceiling + the three pan controls
     // NOT net_quiet - that stays OTA-only (see net_quiet.h). Standing
     // feeds that should hold off while RX audio is on (SelfSpotter, RBN,
     // DX cluster, PSK Reporter RX) check rx_audio_is_enabled() directly
