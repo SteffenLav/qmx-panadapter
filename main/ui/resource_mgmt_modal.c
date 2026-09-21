@@ -160,25 +160,36 @@ static void refresh_gating(void)
         }
     }
 
+    /* LV_STATE_DISABLED blocks input but does NOT dim a slider - there is no
+     * style bound to that state on these - so a disabled slider still drew in
+     * full blue and read as live. Seen on the bench 2026-09-21 with Binaural
+     * unchecked and all three pan sliders looking usable. Set the opacity
+     * explicitly on every part, alongside the state. */
+    #define SLD_SET_ENABLED(s, on)                                              \
+        do {                                                                    \
+            if (!(s)) break;                                                    \
+            if (on) lv_obj_clear_state((s), LV_STATE_DISABLED);                 \
+            else    lv_obj_add_state((s), LV_STATE_DISABLED);                   \
+            const lv_opa_t _o = (on) ? LV_OPA_COVER : LV_OPA_40;                \
+            lv_obj_set_style_opa((s), _o, LV_PART_MAIN);                        \
+            lv_obj_set_style_opa((s), _o, LV_PART_INDICATOR);                   \
+            lv_obj_set_style_opa((s), _o, LV_PART_KNOB);                        \
+        } while (0)
+
     /* Gain is live whenever audio is - it sets the level in every supported
      * mode, not just CW. */
-    if (s_sld_gain) {
-        if (audio_on) lv_obj_clear_state(s_sld_gain, LV_STATE_DISABLED);
-        else          lv_obj_add_state(s_sld_gain, LV_STATE_DISABLED);
-        if (s_lbl_gain_val)
-            lv_obj_set_style_text_opa(s_lbl_gain_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
-    }
+    SLD_SET_ENABLED(s_sld_gain, audio_on);
+    if (s_lbl_gain_val)
+        lv_obj_set_style_text_opa(s_lbl_gain_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
 
     /* The pan sliders need audio AND binaural: they shape a split that is not
      * being produced otherwise, so leaving them live would offer three controls
      * that audibly do nothing - the exact complaint this panel is fixing. */
     const bool pan_live = audio_on && rx_audio_get_binaural_enabled();
     lv_obj_t *const pan_w[] = { s_sld_width, s_sld_blend, s_sld_ovlp };
-    for (unsigned i = 0; i < sizeof pan_w / sizeof pan_w[0]; i++) {
-        if (!pan_w[i]) continue;
-        if (pan_live) lv_obj_clear_state(pan_w[i], LV_STATE_DISABLED);
-        else          lv_obj_add_state(pan_w[i], LV_STATE_DISABLED);
-    }
+    for (unsigned i = 0; i < sizeof pan_w / sizeof pan_w[0]; i++)
+        SLD_SET_ENABLED(pan_w[i], pan_live);
+    #undef SLD_SET_ENABLED
     lv_obj_t *const pan_l[] = { s_lbl_width_val, s_lbl_blend_val, s_lbl_ovlp_val, s_pan_hdr };
     for (unsigned i = 0; i < sizeof pan_l / sizeof pan_l[0]; i++)
         if (pan_l[i]) lv_obj_set_style_text_opa(pan_l[i], pan_live ? LV_OPA_COVER : LV_OPA_50, 0);
@@ -409,9 +420,13 @@ static void modal_build(void)
         // modes, not a property of the stereo split, so it belongs with the
         // switch that turns audio on rather than with the pan controls.
         if (d->row == ROW_AUDIO) {
+            /* x positions: "RX Audio (speaker/headphone)" at font 24 runs to
+             * about x=367, so Gain started at 370 and touched it. Pushed right
+             * to 430, which leaves the row label clear air and still ends well
+             * before the checkbox (~900). 430 label, 490..760 slider, 780 value. */
             s_sld_gain = lv_slider_create(s_panel);
-            lv_obj_set_size(s_sld_gain, 300, 14);
-            lv_obj_align(s_sld_gain, LV_ALIGN_TOP_LEFT, 430, y + 10);
+            lv_obj_set_size(s_sld_gain, 270, 14);
+            lv_obj_align(s_sld_gain, LV_ALIGN_TOP_LEFT, 490, y + 10);
             lv_slider_set_range(s_sld_gain, 5, 80);          // 50..800, settings.c clamps the same
             lv_slider_set_value(s_sld_gain, settings_get_rxaud_gain_d10(), LV_ANIM_OFF);
             lv_obj_add_event_cb(s_sld_gain, gain_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -420,26 +435,17 @@ static void modal_build(void)
             lv_label_set_text(gl, "Gain");
             lv_obj_set_style_text_color(gl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
             lv_obj_set_style_text_font(gl, &lv_font_montserrat_20, 0);
-            lv_obj_align(gl, LV_ALIGN_TOP_LEFT, 370, y + 4);
+            lv_obj_align(gl, LV_ALIGN_TOP_LEFT, 430, y + 4);
 
             s_lbl_gain_val = lv_label_create(s_panel);
             lv_label_set_text_fmt(s_lbl_gain_val, "%d", settings_get_rxaud_gain_d10() * 10);
             lv_obj_set_style_text_color(s_lbl_gain_val, lv_color_hex(UI_COLOR_TEXT), 0);
             lv_obj_set_style_text_font(s_lbl_gain_val, &lv_font_montserrat_20, 0);
-            lv_obj_align(s_lbl_gain_val, LV_ALIGN_TOP_LEFT, 746, y + 4);
+            lv_obj_align(s_lbl_gain_val, LV_ALIGN_TOP_LEFT, 780, y + 4);
         }
 
         if (d->row == ROW_AUDIO) {
-            // A thin separator under the priority row, so the "this one
-            // decides the rest" relationship reads visually, not just in
-            // the sub-label above.
             y += ROW_H;
-            lv_obj_t *sep = lv_obj_create(s_panel);
-            lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD, 2);
-            lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
-            lv_obj_set_style_border_width(sep, 0, 0);
-            lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 0, y);
-            y += 16;
         } else if (d->row == ROW_BINAURAL) {
             // The three pan controls, side by side directly under the switch
             // that makes them do anything.
@@ -498,6 +504,19 @@ static void modal_build(void)
             lv_label_set_text_fmt(s_lbl_ovlp_val,  "0.%02d", settings_get_rxaud_pan_ovlp_x100());
 
             y += 62;
+
+            /* The separator belongs HERE, under the whole audio block, not
+             * under the RX Audio row alone. It divides "audio and the controls
+             * that shape it" from "background feeds that audio holds off" -
+             * which is the division the panel is actually about. Sitting
+             * directly beneath RX Audio it cut the audio group in half and
+             * implied Binaural belonged with the network feeds. */
+            lv_obj_t *sep = lv_obj_create(s_panel);
+            lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD, 2);
+            lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
+            lv_obj_set_style_border_width(sep, 0, 0);
+            lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 0, y);
+            y += 16;
         } else {
             y += ROW_H;
         }
