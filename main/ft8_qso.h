@@ -102,6 +102,12 @@ void ft8_qso_mark_robot_started(void);
 // if there is no active exchange or the arm is refused.
 bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
+// Pause the next transmission (skip one TX slot) to check if the QSO slot is
+// still open. After skipping, the same message re-arms for the following slot.
+// Only valid during WAIT_RPT / WAIT_ROGER / WAIT_RR73. Returns false + err
+// if there is no active exchange.
+bool ft8_qso_pause_next_tx(char *err, size_t err_len);
+
 ft8_qso_state_t ft8_qso_get_state(void);
 
 // True while the running contact is being worked as a HOUND (Fox/Hound

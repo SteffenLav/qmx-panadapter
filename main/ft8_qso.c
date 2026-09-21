@@ -174,6 +174,9 @@ static int                s_cq_calls_sent;
 // fires once per multiple of cq_listen_every instead of latching there.
 static int                s_cq_listen_done_at = -1;
 static bool               s_cq_exhausted;
+// Pause next TX: operator skips one transmission to check if the QSO slot is
+// still open. Cleared after the skip.
+static bool               s_pause_next_tx;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
 // partner as a waiting caller mid-exchange, and (b) the decode list can show
@@ -952,6 +955,19 @@ static void rearm_current(void)
             lock(); s_cq_listen_done_at = cq_sent; unlock();
             ft8_status_set("listening (after %d CQ calls)", cq_sent);
             ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);
+            return;
+        }
+    }
+
+    // Operator-initiated pause: skip one transmission to check if the QSO slot is still open.
+    {
+        lock();
+        bool pause = s_pause_next_tx;
+        if (pause) s_pause_next_tx = false;   // clear after check
+        unlock();
+
+        if (pause) {
+            ESP_LOGI(TAG, "pausing one TX to check QSO slot");
             return;
         }
     }
@@ -3115,6 +3131,28 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len)
     return true;
 }
 
+bool ft8_qso_pause_next_tx(char *err, size_t err_len)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_target, sizeof(target) - 1);
+    target[sizeof(target) - 1] = '\0';
+    unlock();
+
+    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73) {
+        if (err) snprintf(err, err_len, "No active QSO exchange");
+        return false;
+    }
+
+    lock();
+    s_pause_next_tx = true;
+    unlock();
+    ft8_status_set("QSO %s: pausing next TX to check slot", target);
+    ESP_LOGI(TAG, "QSO pause: skipping next TX for %s", target);
+    return true;
+}
+
 void ft8_qso_note_manual_target(const char *target_call)
 {
     if (!target_call || !target_call[0]) return;
@@ -3309,6 +3347,7 @@ void ft8_qso_abort(void)
     s_pending_tone_hz = 0;   // never carry a queued tone into the next contact
     s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
+    s_pause_next_tx = false;   // clear any pending pause
     s_pileup_active = false;   // an abort ends any pileup drain
     // An aborted hound contact must not leave us parked on the Fox's frequency
     // (we may have QSY'd down for the R-report), and the next contact decides

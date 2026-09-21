@@ -222,6 +222,7 @@ static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send 
 static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_resend (updated per-state)
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
 static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
+static lv_obj_t *s_btn_override_pause  = NULL;  // manual QSO override: pause next TX
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
 // ONE button cycling ANY -> EVEN -> ODD -> ANY, colour-coded to match the slot
 // countdown (grey = any, steel blue = EVEN, warm orange = ODD). It was two
@@ -2060,6 +2061,8 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+                if (s_btn_override_pause)
+                    lv_obj_clear_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
             } else {
                 // Reset to plain "Re-send" so if no extra is available on next show it
                 // doesn't display stale content from the previous exchange.
@@ -2071,6 +2074,8 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+                if (s_btn_override_pause)
+                    lv_obj_add_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
             }
         }
     }
@@ -2236,6 +2241,14 @@ static void override_73_cb(lv_event_t *e)
     char err[64];
     if (!ft8_qso_override_next(FT8_TX_KIND_73, err, sizeof(err)))
         ESP_LOGW(TAG, "73 override failed: %s", err);
+}
+
+static void override_pause_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64];
+    if (!ft8_qso_pause_next_tx(err, sizeof(err)))
+        ESP_LOGW(TAG, "Pause override failed: %s", err);
 }
 
 // Start a fresh CQ run. Shared by the Call CQ button and the web interface's
@@ -3151,7 +3164,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 
-    // Manual QSO override buttons — Re-send / RR73 / 73.
+    // Manual QSO override buttons — Re-send / RR73 / 73 / Pause.
     // Hidden when IDLE/CQ/DONE; shown during active exchange (WAIT_RPT/ROGER/RR73).
     // Sized to fill the left pane's full usable width (288px after padding)
     // and given more height - the original 91x44 buttons were cramped for
@@ -3188,6 +3201,28 @@ void ft8_screen_view_init(lv_obj_t *parent)
             *btns[j].ptr = b;
             if (j == 0) s_lbl_resend = l;
         }
+    }
+
+    // Pause button — skip one transmission to check if the QSO slot is still open.
+    // Below the main override buttons, takes up half the width.
+    {
+        const int bh = 48, gap = 6, by = 540 + 64 + gap;
+        const int bw = 140;  // half width plus half gap
+        lv_obj_t *b = lv_btn_create(s_left_pane);
+        lv_obj_set_size(b, bw, bh);
+        lv_obj_set_pos(b, 0, by);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x8b6914), 0);
+        lv_obj_set_style_radius(b, 4, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_add_event_cb(b, override_pause_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, "Pause");
+        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_center(l);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+        s_btn_override_pause = b;
     }
 
     // Right pane
