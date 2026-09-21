@@ -2049,13 +2049,10 @@ static void t_clock_cb(lv_timer_t *t)
                 if (s_lbl_resend) {
                     char extra[16] = {0};
                     ft8_qso_get_cur_extra(extra, sizeof(extra));
-                    if (extra[0]) {
-                        lv_label_set_text_fmt(s_lbl_resend, "Re-send\n%s", extra);
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
-                    } else {
-                        lv_label_set_text(s_lbl_resend, "Re-send");
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
-                    }
+                    // Font stays 20 either way - the button is 76 px and a
+                    // larger font overflows it. See the button row's comment.
+                    if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Resend\n%s", extra);
+                    else          lv_label_set_text(s_lbl_resend, "Resend");
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
@@ -3190,23 +3187,37 @@ void ft8_screen_view_init(lv_obj_t *parent)
         // reported it missing because it was never drawn. Anything else added here
         // has to come out of this row's 288 px, not out of space below it.
         //
-        // Widths sum exactly: 104 + 58 + 44 + 64 = 270, plus 3 gaps of 6 = 288.
-        const int bh = 64, gap = 6, by = 540;
+        // ⭐ ALL FOUR EXACTLY THE SAME SIZE, AND PARENTED TO s_container, NOT
+        // THE LEFT PANE.
+        //
+        // Two problems fixed together. Sizing each button to its own text
+        // (104/58/44/64) made them unequal and small - "73" was 44 px - and the
+        // operator could not reliably hit them. And the pane's 16 px side
+        // padding wasted 32 px of a 320 px column on a row that wants every
+        // pixel.
+        //
+        // s_container has pad_all 0 and sits at the screen's left edge, so
+        // hanging the row off it gives the full width: x = 0 is the edge of the
+        // glass, and 316 stops 4 px short of the decode list at LEFT_W(320), as
+        // asked for. y shifts 540 -> 548 because the PANE's pad_top(8) no longer
+        // applies. Height 64 ends at 612, inside MID_H(624) with room to spare,
+        // where the old row ran 4 px past the pane's content box.
+        //
+        // 76*4 + 4*3 = 316, exactly. "Resend" not "Re-send": the hyphenated form
+        // is ~72 px at font 20 and leaves 2 px of margin, which is not a margin.
+        const int bh = 64, gap = 4, bw = 76, by = 548;
         int x = 0;
-        struct {
-            const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr;
-            int w; const lv_font_t *font;
-        } btns[] = {
-            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend, 104, &lv_font_montserrat_24 },
-            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73,    58, &lv_font_montserrat_20 },
-            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73,      44, &lv_font_montserrat_20 },
-            { "Pause",   0x8b6914, override_pause_cb,  &s_btn_override_pause,   64, &lv_font_montserrat_20 },
+        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
+            { "Resend", 0x604010, override_resend_cb, &s_btn_override_resend },
+            { "RR73",   0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
+            { "73",     0x1e6028, override_73_cb,     &s_btn_override_73     },
+            { "Pause",  0x8b6914, override_pause_cb,  &s_btn_override_pause  },
         };
         for (int j = 0; j < 4; j++) {
-            lv_obj_t *b = lv_btn_create(s_left_pane);
-            lv_obj_set_size(b, btns[j].w, bh);
+            lv_obj_t *b = lv_btn_create(s_container);
+            lv_obj_set_size(b, bw, bh);
             lv_obj_set_pos(b, x, by);
-            x += btns[j].w + gap;
+            x += bw + gap;
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[j].col), 0);
             lv_obj_set_style_radius(b, 4, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -3215,7 +3226,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_font(l, btns[j].font, 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
