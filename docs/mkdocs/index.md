@@ -111,11 +111,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.15.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -127,6 +127,8 @@ and in daily use.
     twice the room. **Your settings, QSO log and LoTW certificate are kept** —
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
+
+**v1.16.0 brings audio to the Tab5, as a beta.** The I/Q the radio already sends becomes sound on the device, and the first thing built on it is a **panoramic CW split** — two stations on different frequencies placed left and right across the stereo image rather than on top of each other, with **pan width**, **pan blend** and **overlap** adjustable live while you listen. **Binaural CW is a first implementation: use 300 Hz bandwidth and up, and do not expect much separation below 200 Hz.** Audio costs resources, so **long-press the top bar on the Panadapter page** to open **Resource Management**, where it is switched on and off and where you can see what it competes with. The whole audio part is **beta and subject to further development** — the next step is the same features in the web interface, with only the I/Q sent to the PC and processed there. Full detail in the [Audio guide](guide/audio.md). A **Pause button** also arrives for QSOs *(Randy N4OPI)*: skip one transmission to check your slot is still clear, then carry on with the same message.
 
 **v1.15.1 gives WSPR more working memory.** The routine that picks signals out of a cycle needs a large block of it, and on a busy page it could be left with only just enough — so a cycle could come back empty with traces plainly visible on the waterfall, most often after moving between pages. Freeing 2.8 MB removes the squeeze. The **Diagnostic download** is now a single zip file you can attach to an email, and it no longer clears the log when a transfer fails. **FT8, the SelfSpotter list and WSPR share one column order** so the same information sits in the same place on every screen.
 
@@ -271,7 +273,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.15.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

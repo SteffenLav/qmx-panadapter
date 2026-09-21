@@ -74,8 +74,6 @@ if ($content -match "PATCHED \(qmx-panadapter, 2026-08-16\)") {
 
 $original = @'
     // Cancel polling of BULK IN and INTERRUPT IN
-    cdc_dev->data.in_polling = false;
-    cdc_dev->notif.xfer_polling = false;
     if (cdc_dev->data.in_xfer) {
         ESP_ERROR_CHECK(cdc_acm_reset_transfer_endpoint(cdc_dev->dev_hdl, cdc_dev->data.in_xfer));
     }
@@ -98,8 +96,13 @@ $patched = @'
     // into ESP_ERROR_CHECK turns a transient into a device reboot. Retry first
     // (that is the real fix - the window is simply too short), then log and
     // carry on so the device object is always freed.
-    cdc_dev->data.in_polling = false;
-    cdc_dev->notif.xfer_polling = false;
+    //
+    // 2026-09-21: upstream deleted cdc_dev->data.in_polling and
+    // notif.xfer_polling from the struct - polling is now cancelled by
+    // cdc_acm_reset_transfer_endpoint() alone, and the in_cb/notif.cb nulling
+    // above covers callback suppression. Assigning them here no longer
+    // compiles, so both blocks dropped them. The patch's own purpose is
+    // unchanged.
     if (cdc_dev->data.in_xfer) {
         esp_err_t e = cdc_acm_reset_transfer_endpoint(cdc_dev->dev_hdl, cdc_dev->data.in_xfer);
         if (e != ESP_OK) {

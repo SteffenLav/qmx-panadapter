@@ -4,6 +4,18 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.0** — 2026-09-21
+
+**Audio on the Tab5, as a beta — and a Pause button during a QSO.**
+
+- **You can listen to the radio through the Tab5.** The I/Q the QMX already sends is turned into sound on the device. This is new ground, and the whole audio part is a **beta**: it is there to be tried and reported on, not to be relied on yet.
+- **Panoramic CW split.** Two stations on different frequencies are placed left and right across the stereo image instead of landing on top of each other. Three controls are live while you listen — **pan width** (how far apart they sit), **pan blend** (how much of the effect is mixed in) and **overlap** (how wide a slice each side takes). You adjust them by ear, mid-QSO, not in a menu.
+- **Binaural CW is a first implementation.** Use it at **300 Hz bandwidth and up**. **Below 200 Hz do not expect much separation** — at that point the two signals share too much of the audio passband for any amount of panning to pull them apart. That is a limit of the bandwidth, not of the setting.
+- **Audio costs resources, so not everything can be on at once.** **Long-press the top bar on the Panadapter page** to open **Resource Management** — that is where audio is switched on and off, and where you can see what it is competing with. Expect to turn something else down to make room.
+- **What is planned next:** the same audio features in the **web interface**, with only the I/Q channels sent to the PC and the processing done there — so your computer does the work instead of the Tab5. Full detail, limits and the reasoning are in the [Audio guide](guide/audio.md).
+- **I am looking forward to the feedback.** What works, what does not, which bandwidth you actually use, and where you hit the resource limits.
+- **A Pause button during a QSO** *(Randy N4OPI)*. Skip a single transmission to check whether your slot is still clear, then carry on with the same message. Cancel breaks the exchange; Pause does not. It sits alongside Re-send / RR73 / 73 and appears only while an exchange is running.
+
 **v1.15.1** — 2026-09-19
 
 **More working memory for WSPR, one file for the diagnostic download, and the same column order on every list.**
@@ -815,7 +827,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.15.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

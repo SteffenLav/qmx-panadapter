@@ -24,6 +24,7 @@ nav:
   - Getting Help: getting-help.md
   - User Guide:
     - Panadapter: guide/panadapter.md
+    - Audio (beta): guide/audio.md
     - Live Spots: guide/spots.md
     - Spot Map: guide/spot-map.md
     - Web UI: guide/web-ui.md

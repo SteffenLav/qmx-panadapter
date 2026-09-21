@@ -12,19 +12,15 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> ## v1.16.0 — Tab5 Audio Decoding (Beta)
+> **Release — v1.16.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **Real-time audio processing on the Tab5**: Panoramic CW split with live pan controls (pan width, blend, overlap), tuned live during the QSO. Binaural CW separation by frequency — works best with bandwidths 300 Hz and above.
+> **New in v1.16.0 — audio on the Tab5, as a beta.** The radio's I/Q now becomes sound you can listen to, and the first thing built on it is a **panoramic CW split**: two stations on different frequencies are placed left and right across the stereo image instead of sitting on top of each other. Three controls — **pan width**, **pan blend** and **overlap** — are live, so you adjust them while listening rather than in a menu. **Binaural CW is a first implementation and is best used at 300 Hz bandwidth and up; do not expect much separation below 200 Hz.**
 >
-> Audio requires finite resources, so a **Resource Management window** (tap and hold the top bar) lets you balance load between spectrum, waterfall, decode, and audio. Not all features run simultaneously.
+> **Audio costs resources, so not every feature can be on at once.** A **Resource Management** window — long-press the top bar on the Panadapter page — is where you turn audio on and off and see what it is competing with. The whole audio part is **beta and subject to further development**: it is there to be tried and reported on, not to be relied on. I am looking forward to the feedback. Details, limits and what is planned next (the same audio features in the web interface, with only the I/Q channels sent to the PC and processed there) are in **[docs/mkdocs/guide/audio.md](docs/mkdocs/guide/audio.md)**.
 >
-> **Pause button** for mid-QSO: skip one transmission to check if the slot is still open, then resume with the same message.
+> **A Pause button during a QSO** (Randy N4OPI) — skip a single transmission to check whether your slot is still clear, then carry on with the same message. It sits with Re-send / RR73 / 73 and does not break the exchange the way Cancel does.
 >
-> **Audio is BETA.** First-generation implementation; feedback from the field shapes the next phase. See [Audio Features](docs/mkdocs/guide/audio.md) for details, limitations, and future work (web I/Q streaming to your PC).
-
-> **Release — v1.15.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
->
-> **v1.15.0 makes the band-plan slider a window you drag rather than a dial you scrub** — grab the framed block and the picture, the frequency marker and the filter passband all travel together and stay where you let go, with the radio following. The **Config download was missing 31 settings, including the measured power calibration** — an hour at a dummy load per band, and the one thing in the file nobody could recreate from memory (found from a question by Bruce N9JCV). **WSPR now refuses to beacon while the radio is in split**, where every spot would name a frequency your signal was never on (John W5JSS), and the WSPR transmit block is legible again after being red-on-orange at a contrast ratio of 1.15 to 1 (John W5JSS). The **on-screen keyboard comes back on a second tap** (Samuel W7STF), a **missing SD card says so and explains what a card is for**, and the **WSPR transmit schedule is two plain counts** instead of a ratio nobody could agree on.
+> **v1.15.1 and v1.15.0.** A complete FT8/FT4 station as above; v1.15.0 makes the band-plan slider a window you drag rather than a dial you scrub — grab the framed block and the picture, the frequency marker and the filter passband all travel together and stay where you let go, with the radio following. The **Config download was missing 31 settings, including the measured power calibration** — an hour at a dummy load per band, and the one thing in the file nobody could recreate from memory (found from a question by Bruce N9JCV). **WSPR now refuses to beacon while the radio is in split**, where every spot would name a frequency your signal was never on (John W5JSS), and the WSPR transmit block is legible again after being red-on-orange at a contrast ratio of 1.15 to 1 (John W5JSS). The **on-screen keyboard comes back on a second tap** (Samuel W7STF), a **missing SD card says so and explains what a card is for**, and the **WSPR transmit schedule is two plain counts** instead of a ratio nobody could agree on.
 >
 > **v1.14.2 fixed general sluggishness some users saw starting with v1.13.0** (thanks to Randy N4OPI for tracking it down with me) — SelfSpotter's background PSK Reporter connection could hold up the display, whether or not the map was ever opened. Also fixed a web UI "find open slot" tool that could hang and lose contact with the radio mid-QSO, output power reading near-zero right after Calibrate Power (thanks Gyula HA3HZ), and a SelfSpotter map bug that drew some countries as boxes.
 >
@@ -34,7 +30,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.15.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.0.pdf).
 
 <!-- USERGUIDE:START -->
 
