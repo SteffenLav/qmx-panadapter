@@ -30,18 +30,24 @@ Use `bench flash <name>`, `bench capture <name>`, `bench antenna <name>`. See [b
 
 ## Standing patches (MUST be applied before build)
 
-11 patches in `tools/patches/apply_*.ps1`:
-- `apply_esp_hosted_psram.ps1` — esp_hosted transport to PSRAM
-- `apply_esp_hosted_sdio_recovery.ps1` — SDIO oversize RX recovery
-- `apply_esp_hosted_rpc_orphan_resp.ps1` — RPC queue orphan deadlock
-- `apply_fatfs_exfat.ps1` — exFAT support for large SD cards
-- `apply_hcd_bulk_error_recovery.ps1` — USB bulk error tolerant
-- `apply_hub_recover_tolerant.ps1` — USB hub recover tolerant
-- `apply_cdc_acm_close_tolerant.ps1` — CDC-ACM close tolerant
-- `apply_usb_dwc_hal_chan_error_tolerant.ps1` — USB DWC chan error tolerant
-- `apply_hcd_buffer_parse_error_tolerant.ps1` — USB buffer parse error tolerant
-- `apply_hcd_buffer_parse_no_urb_tolerant.ps1` — USB buffer parse no URB tolerant
-- `apply_lvgl_port_task_psram.ps1` — taskLVGL stack to PSRAM
+⛔ **NEVER enumerate them here — run the checker.** This section said "11 patches"
+while 23 `apply_*.ps1` scripts existed (24 patched sites). The same rot was recorded
+at v1.10.1, when it said three and there were four. A count in prose cannot keep up.
+
+```powershell
+Get-ChildItem tools/patches/apply_*.ps1 | ForEach-Object { powershell -File $_.FullName }
+python tools/check_patches.py     # the authority - refuses the build if any is missing
+```
+
+They live in git-ignored `managed_components/`, so `idf.py fullclean`, a dependency
+refresh, or the release's `rm -r managed_components/` wipes them. All are idempotent.
+
+⚠ **A release is the first time a component upgrade can break a patch**, because only
+the release re-fetches. At v1.16.0 `apply_cdc_acm_close_tolerant.ps1` stopped matching
+upstream and the build was correctly refused — see
+[patch went stale](../../../memory/project_standing_patch_went_stale_cdc_acm.md).
+When a clean build fails, **read `build/log/idf_py_stdout_output_*`**, not idf.py's
+summary: it prints an unrelated `PRI` format-specifier HINT that reads like the cause.
 
 See [patches detail](../../../memory/project_standing_patches.md).
 
