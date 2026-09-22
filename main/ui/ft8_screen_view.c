@@ -223,6 +223,7 @@ static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_r
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
 static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 static lv_obj_t *s_btn_override_pause  = NULL;  // manual QSO override: pause next TX
+static lv_obj_t *s_lbl_pause           = NULL;  // its label - text changes Pause/Paused
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
 // ONE button cycling ANY -> EVEN -> ODD -> ANY, colour-coded to match the slot
 // countdown (grey = any, steel blue = EVEN, warm orange = ODD). It was two
@@ -2085,15 +2086,26 @@ static void t_clock_cb(lv_timer_t *t)
                 else
                     lv_obj_add_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
 
-                /* Light it while the pause is armed, dark once it has been
-                 * spent. A pause is invisible by nature - it is the ABSENCE of
-                 * a transmission a slot or two later - so with no feedback the
-                 * button looked identical whether it had worked or not, and
-                 * read as doing nothing. This is the only confirmation the
-                 * operator gets before the skipped slot arrives. */
+                /* The WORD changes, not just the colour.
+                 *
+                 * A pause is invisible by nature - it is the ABSENCE of a
+                 * transmission a slot or two later - so the button is the only
+                 * confirmation before the skipped slot arrives. Colour alone was
+                 * not enough: dark gold against bright gold on a 76 px button is
+                 * easy to miss, and the operator could not tell when it had gone
+                 * back to normal either.
+                 *
+                 * Text also goes BLACK while armed. White on that yellow was
+                 * unreadable - it is a light background, and the label is the
+                 * thing that has to be legible precisely when it matters. */
+                const bool pause_armed = ft8_qso_pause_pending();
                 lv_obj_set_style_bg_color(s_btn_override_pause,
-                                          lv_color_hex(ft8_qso_pause_pending() ? 0xffc02a : 0x8b6914),
-                                          0);
+                                          lv_color_hex(pause_armed ? 0xffc02a : 0x8b6914), 0);
+                if (s_lbl_pause) {
+                    lv_label_set_text(s_lbl_pause, pause_armed ? "Paused" : "Pause");
+                    lv_obj_set_style_text_color(s_lbl_pause,
+                                                lv_color_hex(pause_armed ? 0x000000 : 0xffffff), 0);
+                }
             }
         }
     }
@@ -3267,9 +3279,15 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_set_width(l, bw);
             lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(l);
+            // "Paused" is a character longer than "Pause" and this button is
+            // only 76 px. CLIP rather than wrap: if it does not quite fit, a
+            // clipped word inside its own button is recoverable and obvious,
+            // where a wrapped one silently becomes two lines and looks broken.
+            lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
             if (j == 0) s_lbl_resend = l;
+            if (btns[j].ptr == &s_btn_override_pause) s_lbl_pause = l;
         }
     }
 

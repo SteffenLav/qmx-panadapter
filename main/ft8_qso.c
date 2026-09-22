@@ -916,6 +916,31 @@ static void rearm_current(void)
 
     if (!have || (!one_shot && !repeating)) return;
 
+    /* ⛔ THE PAUSE IS CONSUMED HERE, ABOVE EVERY OTHER GUARD, AND THAT POSITION
+     * IS THE POINT.
+     *
+     * It used to sit further down, below four separate early returns - the CQ
+     * final-hold, the CQ auto-stop, the listening slot, and the busy-partner
+     * hold. Any of those firing meant the flag was never read, so it stayed set:
+     * the Pause button stayed lit for the rest of the session and the skip was
+     * still owed, landing on some later slot the operator had not asked to skip.
+     *
+     * Consuming it here means one rearm opportunity is skipped whatever else
+     * would have happened. If another guard was going to suppress this
+     * transmission anyway, the operator still got the silent slot they asked
+     * for, and the flag does not survive to take a second one. Exactly one
+     * skip, always, and the button can never stick. */
+    {
+        lock();
+        bool pause = s_pause_next_tx;
+        if (pause) s_pause_next_tx = false;
+        unlock();
+        if (pause) {
+            ESP_LOGI(TAG, "pause: skipping this transmission");
+            return;
+        }
+    }
+
     // CQ auto-stop: past the limit, stop re-arming but stay in CQ state so
     // the RX slot after the final call is still scanned for an answer;
     // advance()'s no-answer path sees s_cq_exhausted and ends the session.
@@ -955,19 +980,6 @@ static void rearm_current(void)
             lock(); s_cq_listen_done_at = cq_sent; unlock();
             ft8_status_set("listening (after %d CQ calls)", cq_sent);
             ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);
-            return;
-        }
-    }
-
-    // Operator-initiated pause: skip one transmission to check if the QSO slot is still open.
-    {
-        lock();
-        bool pause = s_pause_next_tx;
-        if (pause) s_pause_next_tx = false;   // clear after check
-        unlock();
-
-        if (pause) {
-            ESP_LOGI(TAG, "pausing one TX to check QSO slot");
             return;
         }
     }
