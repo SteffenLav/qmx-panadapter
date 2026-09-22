@@ -1382,7 +1382,7 @@ void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
 
 void ft8_screen_view_request_override(int what)
 {
-    if (what < 1 || what > 4) return;
+    if (what < 1 || what > 5) return;
     s_web_override_pending = what;
 }
 
@@ -1591,6 +1591,17 @@ static void t_clock_cb(lv_timer_t *t)
         char err[64] = "";
         if (!up) {
             web_result_set("Not in FT8 mode");
+        } else if (what == 5) {
+            /* Pause the next transmission from the browser (Randy N4OPI,
+               2026-09-22: "I did not make it clear that I was referring to the
+               Web UI... I almost never use the Tab5 interface directly. One of
+               the greatest features I see in this app is the remote
+               capability."). Same call the Tab5's own Pause button makes, so
+               the two cannot drift apart. */
+            if (ft8_qso_pause_next_tx(err, sizeof(err)))
+                web_result_set("Next transmission paused");
+            else
+                web_result_set("%s", err[0] ? err : "Cannot pause now");
         } else if (what == 4) {
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were

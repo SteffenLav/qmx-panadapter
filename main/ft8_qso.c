@@ -179,7 +179,14 @@ static bool               s_cq_exhausted;
 static bool               s_pause_next_tx;
 /* One forgiven miss, armed when a pause is actually SPENT (not when the button
  * is pressed - a press that never gets used must not forgive anything). */
-static bool               s_pause_grace;
+/* ⛔ A COUNTER, NOT A BOOL (Gyula HA3HZ, 2026-09-22: "it pauses the broadcast
+ * but does not stop the countdown, meaning the time spent paused is deducted
+ * from the 6-cycle duration"). He is right and the first cut was half a fix:
+ * one forgiven slot per pause only balances a SINGLE press. Press Pause twice,
+ * or press it while one is still pending, and the extra quiet slots were
+ * charged to QSO_TIMEOUT_SLOTS - which is the operator being punished for a
+ * control we gave them, the very thing the grace exists to prevent. */
+static uint8_t            s_pause_grace;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
 // partner as a waiting caller mid-exchange, and (b) the decode list can show
@@ -939,7 +946,7 @@ static void rearm_current(void)
         if (pause) s_pause_next_tx = false;
         unlock();
         if (pause) {
-            lock(); s_pause_grace = true; unlock();   /* forgive the quiet slot this causes */
+            lock(); if (s_pause_grace < 250) s_pause_grace++; unlock();  /* forgive the quiet slot this causes */
             ESP_LOGI(TAG, "pause: skipping this transmission");
             return;
         }
@@ -1365,8 +1372,11 @@ static void register_miss(const char *waiting_for)
      * a miss" for the same reason. One forgiven slot per pause, cleared as it
      * is used, so a pause cannot buy unlimited patience. */
     lock();
-    if (s_pause_grace) {
-        s_pause_grace = false;
+    /* Also forgive while a pause is still PENDING: the operator has asked for
+       the next transmission to be skipped, so the quiet slot it produces is
+       theirs, not the partner ignoring us. */
+    if (s_pause_grace || s_pause_next_tx) {
+        if (s_pause_grace) s_pause_grace--;
         unlock();
         ESP_LOGI(TAG, "%s - slot skipped by Pause, not counting a miss",
                  waiting_for ? waiting_for : "");

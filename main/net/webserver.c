@@ -1487,11 +1487,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             else if (!strcmp(w, "rr73"))   what = 2;
             else if (!strcmp(w, "73"))     what = 3;
             else if (!strcmp(w, "cancel")) what = 4;
+            else if (!strcmp(w, "pause"))  what = 5;   /* Randy N4OPI: he works remote */
         }
         if (!what) {
             cJSON_Delete(root);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                "what must be resend, rr73, 73 or cancel");
+                "what must be resend, rr73, 73, cancel or pause");
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
@@ -1691,6 +1692,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, body);
         }
         return ESP_OK;
+    } else if (action && strcmp(action, "reboot") == 0) {
+        /* Randy N4OPI, 2026-09-22: "is there a way to reboot the Tab5 from the
+         * Web UI? The only means I see is when the next version comes out."
+         * Exactly ota_reboot's body, without needing an update to be pending -
+         * he runs the station from another room and had no way to do this. */
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"rebooting\"}");
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
     } else if (action && strcmp(action, "ota_reboot") == 0) {
         // Separate from ota_install on purpose: the operator decides WHEN the
         // radio gets interrupted, and the page warns about the QMX first.
