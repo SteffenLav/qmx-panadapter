@@ -2141,7 +2141,19 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_set_style_bg_color(s_btn_override_pause,
                                           lv_color_hex(pause_armed ? 0xffc02a : 0x8b6914), 0);
                 if (s_lbl_pause) {
-                    lv_label_set_text(s_lbl_pause, pause_armed ? "Paused" : "Pause");
+                    /* ⭐ TRANSPORT ICONS (operator, 2026-09-22: "why don't we
+                     * use the Play/Pause icons we all know from recorders and
+                     * players?"). They say what the NEXT press does, which is
+                     * the convention every player already taught everyone:
+                     *   not paused -> a PAUSE glyph, pressing it pauses
+                     *   paused     -> a PLAY glyph, pressing it resumes
+                     * The word stays alongside because this button also has to
+                     * read as a state, not only as an action - a pause is the
+                     * ABSENCE of a transmission a slot later, so the button is
+                     * the only confirmation before the skipped slot arrives. */
+                    lv_label_set_text(s_lbl_pause, pause_armed
+                                      ? LV_SYMBOL_PLAY  " Paused"
+                                      : LV_SYMBOL_PAUSE " Pause");
                     lv_obj_set_style_text_color(s_lbl_pause,
                                                 lv_color_hex(pause_armed ? 0x000000 : 0xffffff), 0);
                 }

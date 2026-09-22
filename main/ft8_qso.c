@@ -3226,6 +3226,27 @@ bool ft8_qso_pause_next_tx(char *err, size_t err_len)
      *   ACTIVE - on air; flag consumed by on_tx_complete()'s re-arm afterwards
      *   ARMED  - disarmed here, flag stops the same slot's fallback re-arming it
      *   IDLE   - flag consumed by whichever re-arm comes next */
+    /* ⭐ IT IS A TOGGLE (operator, 2026-09-22: "I need the Paused button to
+     * switch to Pause as soon as it is clicked again"). Pressing it a second
+     * time takes the pause back, and the transmission it was going to skip is
+     * re-armed for the same slot if there is still time - arm_current_if_idle()
+     * is the same safety net advance() uses, so this cannot arm anything the
+     * state machine would not have armed itself. Without this the only way out
+     * of a pause was to let it spend itself on the next slot, which is not what
+     * a pause button means to anyone. */
+    {
+        lock();
+        bool already = s_pause_next_tx;
+        if (already) s_pause_next_tx = false;
+        unlock();
+        if (already) {
+            arm_current_if_idle();
+            ft8_status_set(target[0] ? "QSO %s: resumed" : "resumed", target);
+            ESP_LOGI(TAG, "QSO pause: cancelled by a second press");
+            return true;
+        }
+    }
+
     const bool was_armed = (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED);
 
     lock();

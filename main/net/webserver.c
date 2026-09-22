@@ -231,6 +231,13 @@ static void add_ft8_tx_status(cJSON *root)
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
 
+    /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same
+     * argument as cq_parity above, and I shipped the web Pause button without
+     * it (operator, 2026-09-22: "clicking the web Pause does what it should do
+     * if you check the Tab5, but stays the same and still says Pause"). A
+     * control that cannot read its own state is a second source of truth. */
+    cJSON_AddBoolToObject(f, "pause", ft8_qso_pause_pending());
+
     /* ⭐ FT8 or FT4, from the engine rather than inferred. The browser used to
      * work this out by looking for "FT4" in the TX status TEXT, which is a
      * guess dressed as a fact: it reads FT8 whenever nothing is transmitting.

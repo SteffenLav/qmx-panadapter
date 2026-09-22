@@ -6311,6 +6311,19 @@ async function tick() {
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
+
+    /* The Pause button has to SHOW the pause, not just set it - it shipped
+       without this and the operator caught it immediately ("clicking the web
+       Pause does what it should do if you check the Tab5, but stays the same").
+       Transport icons say what the next press does, same as the Tab5's. */
+    { const pb = document.getElementById("ovr-pause");
+      if (pb && s.ft8) {
+        const on = !!s.ft8.pause;
+        pb.textContent = on ? "▶ Paused" : "⏸ Pause";
+        pb.style.background = on ? "#ffc02a" : "";
+        pb.style.color      = on ? "#000"    : "";
+        pb.style.borderColor= on ? "#ffc02a" : "";
+      } }
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
