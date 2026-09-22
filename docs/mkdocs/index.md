@@ -122,11 +122,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.1** fixes the controls that v1.16.0 described but never showed.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.2** fixes the audio itself: a peak limiter for strong signals, and the break-ups are gone.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -139,7 +139,7 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
 
-**v1.16.1 delivers the controls v1.16.0 promised.** The **Pause button** was written up and then drawn off the edge of its panel, so nobody could find it *(Randy N4OPI)* — it is now in the mid-QSO row, works while calling CQ, and reads **Paused** while armed. The **three panoramic CW controls** had no control anywhere on the device; they are real sliders in Resource Management now, alongside a **Gain** control for the very quiet audio several people reported *(Samuel W7STF, Bruce N9JCV)*. **SSB is intelligible again** — the automatic gain reacted about eight times too slowly for speech, which is why Morse sounded fine *(Gyula HA3HZ)*. And the **WSPR schedule no longer walks off its minutes** *(John W5JSS)*: it is anchored to the clock. ⚠ **Switch the QMX on only after the Tab5 has settled** — see [Quick Start](quick-start.md).
+**v1.16.2 makes the audio usable.** A **peak limiter** stops a strong signal arriving at full scale and taking your ears off, without making quiet stations any quieter. The **break-ups are gone** — the QMX sends about 47,885 samples a second and the Tab5 plays exactly 48,000, and nothing reconciled the two, so a fragment of silence was played roughly every three seconds. **LSB is fixed** *(Gyula HA3HZ)*: the audio came from the wrong side of the dial. A **working microSD card is no longer thrown away** *(Dennis WN4FLA)*. **Pause is on the web page** with play/pause symbols and no longer costs you the contact *(Randy N4OPI, Gyula HA3HZ)*, and you can **reboot the Tab5 from the browser**. ⚠ Audio still stutters while a browser has the panadapter open — close the page while you listen.
 
 **v1.16.0 brings audio to the Tab5, as a beta.** The I/Q the radio already sends becomes sound on the device, and the first thing built on it is a **panoramic CW split** — two stations on different frequencies placed left and right across the stereo image rather than on top of each other, with **pan width**, **pan blend** and **overlap** adjustable live while you listen. **Binaural CW is a first implementation: use 300 Hz bandwidth and up, and do not expect much separation below 200 Hz.** Audio costs resources, so **long-press the top bar on the Panadapter page** to open **Resource Management**, where it is switched on and off and where you can see what it competes with. The whole audio part is **beta and subject to further development** — the next step is the same features in the web interface, with only the I/Q sent to the PC and processed there. Full detail in the [Audio guide](guide/audio.md). A **Pause button** also arrives for QSOs *(Randy N4OPI)*: skip one transmission to check your slot is still clear, then carry on with the same message.
 
@@ -286,7 +286,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

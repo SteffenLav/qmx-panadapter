@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.2.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **v1.16.1 fixes what v1.16.0's own release notes promised but did not deliver.** The **Pause button** was written up and then drawn off the edge of its panel, so it was never visible — it is now the fourth button in the mid-QSO row, it works while calling CQ as well as mid-exchange, it says **Paused** while armed, and a slot you deliberately skip no longer counts against giving up on the contact *(Randy N4OPI)*. The **three pan controls** were described as adjustable while listening and had no control anywhere — they are now real sliders in **Resource Management**, along with a **Gain** control that answers the very low audio level several of you reported *(Samuel W7STF, Bruce N9JCV)*. All four are remembered and travel in a config backup. **SSB audio was unintelligible** because the automatic gain reacted eight times too slowly for speech, which is why CW sounded fine — corrected *(Gyula HA3HZ)*. And the **WSPR transmit schedule no longer walks off its minutes**: it is anchored to the clock, so "2 transmits in every 20 minutes" stays on the same minutes instead of drifting after a few hours *(John W5JSS)*.
+> **v1.16.2 makes the audio usable, and stops a good microSD card being thrown away.** A **peak limiter** means a strong signal can no longer arrive at full scale and take your ears off, and it does not make quiet stations any quieter. The **break-ups are gone**: your QMX sends about 47,885 samples a second, the Tab5 plays exactly 48,000, and nothing reconciled the two — so a fragment of silence was played roughly every three seconds, with no error recorded anywhere. **LSB was taken from the wrong side of the dial** and is fixed *(Gyula HA3HZ)*. A **card that mounted fine was declared removed** after one failed write and ignored for the rest of the session *(Dennis WN4FLA)*. **Pause is on the web page** now, with play/pause symbols, and a pause no longer counts against giving up on a contact *(Randy N4OPI, Gyula HA3HZ)*. You can also **reboot the Tab5 from the browser**.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
@@ -34,7 +34,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.2.pdf).
 
 <!-- USERGUIDE:START -->
 

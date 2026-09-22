@@ -142,6 +142,27 @@ When robot mode is on and you're idle, the panadapter scans every FT8 decode for
 5. **TX3** — send 73 or RR73 (exchange complete)
 6. **Log** — ADIF entry created, move to next CQ
 
+## Pause — skip one transmission
+
+Sometimes you want to *listen* on your own slot: to check the frequency is still
+clear, or to hear whether the station you are working is actually answering you
+rather than someone else.
+
+**Pause** sits with Re-send, RR73 and 73 in the mid-QSO row, and it is on the
+browser page as well as the Tab5 (v1.16.2). It skips exactly one transmission
+and leaves the exchange intact — unlike **Cancel**, which ends it.
+
+- It shows a **pause** symbol normally and a **play** symbol on yellow while a
+  transmission is being skipped, so you can see the state at a glance.
+- Press it again and the pause is taken straight back, re-arming the
+  transmission if the slot still has room.
+- It works while **calling CQ** as well as mid-exchange.
+- A slot you skip on purpose **does not count** against the six cycles before
+  the Tab5 gives up on a contact. Pausing can never cost you the QSO.
+
+*Asked for by Randy N4OPI, who works his station from another room; the
+countdown behaviour was caught by Gyula HA3HZ.*
+
 **An experienced caller who skips a step is followed** (v1.8.5): if someone answers
 your CQ with a **report** instead of a grid — common from operators who already know
 they have you — the reply acknowledges it with `R` plus your report and waits for

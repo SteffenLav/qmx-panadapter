@@ -98,7 +98,21 @@ So you **do** get audio on SSB; what you do not get there is the left/right spli
 
 Audio level is set by an automatic gain control that is still being tuned, and on some signals it does not bring the level up far enough — turning the volume up does not help, because the volume control is not what is holding it back.
 
-**A Gain control sits with the other audio controls** so you can raise the ceiling while listening. Turn it up if a signal is quieter than it should be.
+**Check which control you are actually on first.** The sliders marked **Volume** — in Resource Management and in the Advanced pane — stop at 100, and turning them to 100 is *not* the same as turning the gain up. They are two different things, and reaching the end of the volume slider does not mean you have run out of level.
+
+The control that decides how hard weak signals are lifted is **Gain**:
+
+| | |
+|---|---|
+| **Where** | Long-press the top bar on the Panadapter page to open **Resource Management**, then the **RX Audio** line |
+| **Range** | 50 to 800 |
+| **Default** | 200 |
+
+Turn it up if a signal is quieter than it should be. Several operators run it around 380. It is remembered across restarts and travels in a config backup.
+
+## Strong signals
+
+A peak limiter sits after the automatic gain, so a loud station cannot arrive at full scale and startle you in headphones. It holds the peaks down and leaves the average level alone, which means turning **Gain** up to hear weak stations does not make the strong ones painful.
 
 This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more gain fixed it.
 

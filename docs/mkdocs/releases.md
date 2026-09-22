@@ -4,6 +4,23 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.2** — 2026-09-22
+
+**Audio you can listen to for an hour, and a microSD card that stops being thrown away.**
+
+- **A strong signal can no longer take your ears off.** The automatic gain lifted everything to within a hair of full scale, so a loud station arrived at maximum and anything faster than the gain could follow ran into a hard clip — loud *and* harsh at once. A proper peak limiter now holds the peaks and leaves the average level alone, so quiet stations are as loud as they were.
+- **The break-ups in the audio are gone, and they were never the CPU.** Your QMX sends about 47,885 samples a second; the Tab5's codec plays exactly 48,000, from its own crystal. Nothing reconciled the two, so the buffer emptied a little every second and a fragment of silence was played instead — roughly every three seconds, with no error recorded anywhere. The output is now locked to the clock.
+- **LSB is fixed** *(Gyula HA3HZ)*. The audio was taken from the wrong side of the dial, so you heard whatever was mirrored there instead of the station on screen. The spectrum had always been right; only the audio was wrong.
+- **If your audio is too quiet, check which control you are on** *(Samuel W7STF)*. The sliders marked **Volume** stop at 100. **Gain** — the one that lifts weak signals — is on the **RX Audio** line in Resource Management and runs 50 to 800.
+- **A working microSD card is no longer discarded** *(Dennis WN4FLA)*. The card mounted, the first diagnostic-log write failed, and after five tries the Tab5 decided the card had been pulled — green dot, then yellow, then grey, for the rest of the session. The card was never gone; every other file on it wrote perfectly at the same moment. The log also never rotated at its 5 MB limit on any unit with WiFi on, and the Tab5 now tells you how full the card is when a write fails.
+- **Pause is on the web page** *(Randy N4OPI)*, with play/pause symbols, and pressing it again takes the pause back. **Pausing no longer costs you the contact** *(Gyula HA3HZ)* — the quiet slot it creates was being counted against the six cycles before giving up.
+- **Reboot the Tab5 from the browser** *(Randy N4OPI)* — Miscellaneous menu.
+- **KM and AGE no longer collide** on the decode list *(Gyula HA3HZ)*.
+
+> Audio and binaural CW remain a **beta**. Audio still stutters while a browser has the panadapter open — that is the Tab5's first processor running out of room, it is measured, and it is next. Close the web page while you listen.
+
+## Previous Releases
+
 **v1.16.1** — 2026-09-22
 
 **The fixes you asked for after v1.16.0 — and one thing v1.16.0's notes promised but never actually shipped.**
@@ -847,7 +864,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

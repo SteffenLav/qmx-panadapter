@@ -160,6 +160,28 @@ Asked for by Dennis WN4FLA. A CQ run that has timed out, or that has reached its
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
 
+## Mid-QSO controls
+
+While an exchange is running, a **Mid-QSO** row appears under the FT8 controls:
+
+- **Re-send** — send the current message again
+- **RR73** / **73** — jump straight to either
+- **Pause** — skip exactly one transmission and keep the exchange (new in v1.16.2)
+- **Cancel** — stop transmitting and end the exchange
+
+**Pause** is the one to reach for when you want to listen on your own slot: to
+check the frequency is still clear, or to hear whether the station is really
+answering *you*. It shows a **pause** symbol normally and a **play** symbol on
+yellow while a transmission is being skipped, and pressing it again takes the
+pause back. A slot you skip on purpose never counts against giving up on the
+contact.
+
+The Tab5's own button does exactly the same thing, so the two screens always
+agree about whether you are paused.
+
+*Randy N4OPI asked for this on the web page specifically — he runs his station
+from another room and rarely touches the Tab5 itself.*
+
 ## Choosing your TX tone
 
 **TX tone** on the FT8 panel opens the same picker the
@@ -336,6 +358,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Reboot the Tab5** (new in v1.16.2) — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
 - **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 
     !!! warning "Experimenter feature — you fit the connector yourself"
