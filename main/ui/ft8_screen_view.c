@@ -2151,9 +2151,20 @@ static void t_clock_cb(lv_timer_t *t)
                      * read as a state, not only as an action - a pause is the
                      * ABSENCE of a transmission a slot later, so the button is
                      * the only confirmation before the skipped slot arrives. */
+                    /* ⭐ ICON ONLY, AND BIG (operator, 2026-09-22: "should
+                     * ONLY have the play/pause icon - no text - and enlarge the
+                     * icon so it is very visible"). The glyph says what the
+                     * NEXT press does, the convention every player already
+                     * taught everyone:
+                     *   not paused -> PAUSE glyph, pressing it pauses
+                     *   paused     -> PLAY glyph on bright gold, it resumes
+                     * ⚠ This is the ONE button in the row with a different font
+                     * - deliberate, asked for, and not to be "made consistent"
+                     * with its three neighbours later. Shrinking the other
+                     * three to match one button has already been a mistake on
+                     * this row once (the Re-send -13 episode, 2026-09-21). */
                     lv_label_set_text(s_lbl_pause, pause_armed
-                                      ? LV_SYMBOL_PLAY  " Paused"
-                                      : LV_SYMBOL_PAUSE " Pause");
+                                      ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
                     lv_obj_set_style_text_color(s_lbl_pause,
                                                 lv_color_hex(pause_armed ? 0x000000 : 0xffffff), 0);
                 }
@@ -3338,7 +3349,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
             if (j == 0) s_lbl_resend = l;
-            if (btns[j].ptr == &s_btn_override_pause) s_lbl_pause = l;
+            if (btns[j].ptr == &s_btn_override_pause) {
+                s_lbl_pause = l;
+                /* Icon-only and oversized - see the paint in the tick handler.
+                   Set here so it survives every later set_text(). */
+                lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
+            }
         }
     }
 
