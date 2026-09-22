@@ -62,8 +62,22 @@ You need **two USB connections**:
 ## Step 4: Power On
 
 1. **Tab5 first** — turn it on. The screen fades up gently from black as it loads.
-2. **QMX second** — turn on the QMX. Until the radio is connected, the Tab5 shows a full-screen **"turn on / reboot your QMX"** prompt — that's normal, not a fault, and it clears automatically once the QMX is talking.
-3. Within a few seconds the top bar should show Band / Mode / BW, and the spectrum should come alive
+2. **Wait for the Tab5 to settle before switching the radio on.** Give it until the spectrum is running and the WiFi indicator in the bottom bar shows a network — usually a few seconds after the screen appears.
+3. **QMX last** — now turn on the QMX. Until the radio is connected, the Tab5 shows a full-screen **"turn on / reboot your QMX"** prompt — that's normal, not a fault, and it clears automatically once the QMX is talking.
+4. Within a few seconds the top bar should show Band / Mode / BW, and the spectrum should come alive
+
+!!! warning "Don't switch the QMX on while the Tab5 is still starting up"
+
+    It is tempting to power everything from one switch, or to turn the radio on straight
+    after the Tab5 so it is ready sooner. Avoid it for now.
+
+    The Tab5 sets up WiFi, the web server and the decoders in its first few seconds, and a
+    radio appearing over USB in the middle of that competes for the same small pool of
+    internal memory. The result is a Tab5 that comes up short of memory for the rest of the
+    session — the web interface may be unreachable, and it makes a crash more likely.
+
+    Waiting a few seconds avoids it completely. This is a limitation of the current
+    firmware rather than something you are doing wrong, and it is on the list to fix.
 
 ## Step 5: Fill in Your Settings
 

@@ -176,6 +176,23 @@ For POTA/portable operation without WiFi:
 - Set the RTC **before you leave home** (Settings -> Time Sync -> Set Manual Time)
 - The RTC holds time for 30–40 hours without power
 
+### Web UI stops responding, or the Tab5 restarts, after switching the QMX on during start-up
+
+**Symptoms:** The web interface is unreachable even though the Tab5 is clearly running and
+on WiFi, and the unit may be more prone to restarting. Often after powering the Tab5 and
+the QMX together, or switching the radio on immediately after the Tab5.
+
+**Cause:** In its first few seconds the Tab5 brings up WiFi, the web server and the
+decoders, all of which need a small pool of internal memory. A radio appearing over USB in
+the middle of that competes for the same pool, and the Tab5 can end up short of memory for
+the rest of the session. The web server is usually the first thing to suffer, because it
+needs memory to accept each new connection.
+
+**Fix:** Restart the Tab5, wait until the spectrum is running and WiFi shows a network,
+and only then switch the QMX on. See [Quick Start](../quick-start.md#step-4-power-on).
+
+This is a firmware limitation, not a fault in your setup, and it is being worked on.
+
 ### Web UI won't load
 
 **Symptoms:** Browser says "Connection refused" or "Can't reach this page".
