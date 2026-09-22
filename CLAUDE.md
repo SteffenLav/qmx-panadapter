@@ -15,6 +15,21 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+## ⛔⛔ NEVER START A RELEASE UNLESS HE SAYS "WRAP-UP"
+
+**The release process begins on the word "wrap-up" and on nothing else.** Not on
+"I am eager to release", not on "the replies are sent", not on a list of fixes
+looking finished, and not because it seems obviously next.
+
+Touching README's version banner, creating a tag, building the PDF or the site —
+any of it — IS starting a release. Do not.
+
+⚠ 2026-09-22: he said he was eager to ship a "resolving" release and I began
+editing the README banner on my own. Wrong: eagerness is context, not the
+instruction. Ask, or wait for the word.
+
+**What to do instead:** say what is ready and what is unverified, and stop.
+
 ## ⛔⛔ CRITICAL: THE QMX NEVER SURVIVES A FLASH
 
 **Every flash with the radio attached wedges the QMX** (#74). It ALWAYS needs a manual power cycle by the operator afterwards. No exceptions. See [full rule](../../../memory/project_qmx_flash_wedge.md).
