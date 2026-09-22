@@ -26,6 +26,16 @@
 // reverted to 10 fps so the browser view isn't needlessly choppy. The core-0
 // saturation (with core 1 ~94% idle) is the thing to fix — by rebalancing to
 // core 1 / cutting the rotation cost — not here.
+//
+// ⚠ "NOT with a browser connecting" IS STALE, AND RX AUDIO IS WHY (2026-09-22).
+// That was measured 2026-07-14, before Tab5-native RX audio existed, when core 0
+// still had ~12% idle to give. With the radio streaming it now runs at 0.0-0.2%
+// idle, so the browser is no longer a minor contributor - it is the last straw,
+// and a page left open AUDIBLY BREAKS THE AUDIO. The operator A/B'd it on the
+// bench (closing the browser: idle0 0.1% -> 2.9%, fps and invalidation
+// unchanged), and Gyula HA3HZ had already told the groups.io list to close the
+// page to get working audio. Do not re-derive "the browser doesn't matter" from
+// the paragraph above without re-measuring WITH audio enabled.
 #define WS_PUSH_PERIOD_MS       100        // ~10 fps
 // ⛔ AN ADAPTIVE FRAME RATE WAS TRIED HERE AND REMOVED (#232, 2026-08-21). It
 // raised the period when a frame needed more than one socket write and lowered

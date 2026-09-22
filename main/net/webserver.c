@@ -1832,6 +1832,23 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"1 s sample - see the serial log\"}");
         cpu_owners_report();
         return ESP_OK;
+    } else if (action && strcmp(action, "canvas_hide") == 0) {
+        /* TEMP INSTRUMENT (#285) - dev only, and the reason it is being added
+         * on 2026-09-22 is that ui_dev_canvas_hide() was written in August with
+         * the whole decomposition argued out in its header comment, and then
+         * NEVER WIRED TO A CALLER. It has sat unreachable ever since, which is
+         * the same fault the v1.16.1 release had to fix three times over.
+         *
+         * {"action":"canvas_hide","mask":N} - bit0 hides the spectrum, bit1 the
+         * waterfall, 0 restores both. Pair it with cpu_owners to read taskLVGL's
+         * drawing cost per canvas. Delete with the #284/#285 instruments. */
+        cJSON *m = cJSON_GetObjectItem(root, "mask");
+        unsigned mask = m ? (unsigned)m->valueint : 0u;
+        cJSON_Delete(root);
+        ui_dev_canvas_hide(mask);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"canvas mask applied\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "date_check") == 0) {
         // Dev only - {"action":"date_check"}: make the "Is today's date right?"
         // question appear on a bench that has WiFi (and so a verified date).

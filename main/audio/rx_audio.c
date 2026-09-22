@@ -39,6 +39,12 @@ static const char *TAG = "rx_audio";
 // preemptive scheduler cannot hand it the CPU while fft_task is ready - not
 // "usually doesn't," structurally cannot. See rx_audio.h for the rest of the
 // design (blocked-not-polling while disabled, mode-aware filtering).
+// Stack for the short-lived core-1 task that opens the I2S channel + codec
+// (see rx_audio_preopen). 4096 overflowed on the first boot it was tried;
+// 16 KB is deliberately far more than the measured need, which the task logs
+// as a high water mark - this runs once at boot and is freed immediately.
+#define RXAUD_PREOPEN_STACK    16384
+
 #define RX_AUDIO_TASK_PRIORITY (DSP_FFT_TASK_PRIORITY - 1)
 _Static_assert(RX_AUDIO_TASK_PRIORITY < DSP_FFT_TASK_PRIORITY,
                "rx_audio_task must never be able to preempt fft_task");
@@ -298,6 +304,24 @@ static volatile uint32_t s_gap_iv_n      = 0;
 // BOTH dsp_rxaudio_read()'s own wait and the blocking I2S write. Timing both
 // separately settles which one actually owns the missing time.
 static volatile uint32_t s_read_us_max = 0, s_write_us_max = 0;
+/* Per-10-s-window counters - see the diag line. Reset every window on purpose:
+   a running maximum cannot distinguish one stall from a thousand. */
+static volatile uint32_t s_write_late_win = 0;   /* writes over 25 ms */
+static volatile uint32_t s_frames_win     = 0;   /* frames in this window */
+static volatile uint32_t s_pairs_win      = 0;   /* sample-pairs written this window */
+/* Clock-drift corrector state - see the rate-match block in the task loop. */
+static int64_t  s_rate_t0_us   = 0;   /* wall clock when the accounting began */
+static int64_t  s_rate_written = 0;   /* pairs written since s_rate_t0_us */
+static volatile uint32_t s_rate_ins  = 0;  /* pairs duplicated (source slow) */
+static volatile uint32_t s_rate_drop = 0;  /* pairs dropped    (source fast) */
+static volatile int64_t  s_win_start_us   = 0;   /* when this window began */
+/* ⛔ THE SILENT FAILURE MODE. The TX channel is created with auto_clear = true,
+   so when the DMA ring runs dry it plays ZEROS and says nothing - no counter,
+   no log line, and it sounds exactly like the break-ups being chased. This is
+   fed by the I2S on_send_q_ovf callback, which is the only notification the
+   driver offers that data was lost. If it stays 0 while the operator hears
+   break-ups, the artifact is NOT an underrun and the search moves elsewhere. */
+static volatile uint32_t s_i2s_ovf = 0;
 static volatile uint64_t s_read_us_sum = 0, s_write_us_sum = 0;
 static volatile uint32_t s_loop_count = 0;   // every iteration, success or timeout - denominator for both sums above
 // Squelch DISABLED for now (floor = 1.0 => always fully open) - carried over
@@ -860,6 +884,8 @@ static void rx_audio_task(void *arg)
             s_last_up_v_l = 0.0f;
             s_last_up_v_r = 0.0f;
             ever_got_data = false;
+            s_rate_t0_us = 0;          /* restart the drift accounting, not a deficit */
+            s_rate_written = 0;
             dsp_rxaudio_forward_enable(true);
             active_prev = true;
             ESP_LOGI(TAG, "RX audio on (mode=%s vol=%d)",
@@ -1275,12 +1301,83 @@ static void rx_audio_task(void *arg)
 
         // Blocking write paces the task to real time (~21 ms per frame).
         int64_t write_start_us = esp_timer_get_time();
+        /* ⭐⭐ CLOCK-DRIFT CORRECTION - THE QMX AND THE CODEC DO NOT SHARE A CLOCK.
+         *
+         * Measured 2026-09-22, and this is the actual cause of the audio
+         * break-ups, not CPU load:
+         *
+         *     QMX delivers over USB :  47,885 pairs/s
+         *     ES8388 I2S plays at   :  48,000 samples/s, exactly, from the
+         *                              Tab5's own oscillator
+         *
+         * A 0.24% shortfall. We can only write what the radio sends, so the DMA
+         * ring loses ~115 samples every second. A descriptor is 320 frames
+         * (~6.7 ms), so one comes up empty roughly every 2.8 s and auto_clear
+         * fills it with ZEROS - silently. That is why every counter reads clean
+         * (I2Sovf flat, read to=0, clips=0, gap n=0) while the operator plainly
+         * hears it. It is also, almost certainly, the "chirp every 4-5 s on a
+         * silent band" recorded at the top of this file over a year ago.
+         *
+         * The fix is to stop letting the source dictate the output rate. This
+         * holds the OUTPUT at exactly DSP_SAMPLE_RATE_HZ against the wall clock
+         * by duplicating or dropping ONE sample pair per frame when the running
+         * total drifts by a whole pair. At 0.24% that is one pair in ~420 -
+         * about 21 µs of correction per second, inaudible - and it self-tracks
+         * if the radio's rate changes with temperature or between units.
+         *
+         * ⛔ Bounded to +/-1 pair per frame on purpose. That is up to ~0.1% per
+         * frame, over four times the drift being corrected, so it always
+         * catches up - but it can never run away and resample the audio if the
+         * accounting is ever wrong.
+         *
+         * ⚠ The accumulator resets whenever audio restarts (see !active_prev),
+         * or a mode change would be charged as a vast deficit and the corrector
+         * would insert a burst. */
+        if (pairs > 0) {
+            int64_t now_rm = esp_timer_get_time();
+            if (s_rate_t0_us == 0) { s_rate_t0_us = now_rm; s_rate_written = 0; }
+            int64_t elapsed  = now_rm - s_rate_t0_us;
+            int64_t expected = elapsed * DSP_SAMPLE_RATE_HZ / 1000000;
+            int64_t written  = s_rate_written + pairs;
+            if (expected - written >= 1 && pairs < DSP_FFT_SIZE + 1) {
+                /* Behind the clock: repeat the last pair once. */
+                s_out[2 * pairs]     = s_out[2 * (pairs - 1)];
+                s_out[2 * pairs + 1] = s_out[2 * (pairs - 1) + 1];
+                pairs++;
+                s_rate_ins++;
+            } else if (written - expected >= 1 && pairs > 1) {
+                /* Ahead of the clock: drop the last pair. */
+                pairs--;
+                s_rate_drop++;
+            }
+            s_rate_written += pairs;
+        }
+
         rxcap_push(s_out, pairs);   /* record exactly what is played */
         rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
         esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
         s_write_us_sum += write_us;
+        /* ⭐ EVENT RATE, NOT A RUNNING MAXIMUM (2026-09-22).
+         *
+         * "write max" is cumulative and never resets, so it cannot tell a
+         * single 185 ms stall at start-up from one every second - and that is
+         * exactly the question the operator's "break-ups less than a second
+         * apart" asks. These two counters are per-window and printed alongside,
+         * and they are what decides whether the write path is the artifact at
+         * all. A frame is 21.3 ms of audio, so a write over 25 ms means the
+         * task was late for that frame. */
+        if (write_us > 25000) s_write_late_win++;
+        s_frames_win++;
+        /* ⭐ THE NUMBER THAT DECIDES IT: are we feeding the codec at exactly
+         * 48 kHz? The I2S plays at precisely DSP_SAMPLE_RATE_HZ no matter what
+         * we do. Feed it less and the DMA ring drains and you hear gaps; feed
+         * it more and the write simply blocks (which is the intended pacing,
+         * see the comment above - so "write took a long time" proves nothing).
+         * pairs is VARIABLE per frame, so this cannot be derived from the frame
+         * count, which is why the LATE counter above could not answer it. */
+        s_pairs_win += (uint32_t)pairs;
 
         // Periodic SERIAL diagnostics, added 2026-09-04 while WiFi was down
         // for the whole session and the /api/cmd rxaudio endpoint (and the
@@ -1297,13 +1394,25 @@ static void rx_audio_task(void *arg)
                 uint32_t favg = fc ? (uint32_t)(s_frame_us_sum / fc) : 0;
                 uint32_t gn = s_gap_iv_n;
                 ESP_LOGI(TAG, "diag: frame %lu/%luus (n=%lu)  write max=%luus  "
+                         "LATE %lu/%lu  OUT %lu smp/s  drift +%lu/-%lu  I2Sovf %lu  "
                          "read to=%lu  clips=%lu  gap iv %lu/%lu/%lums (n=%lu)",
                          (unsigned long)favg, (unsigned long)s_frame_us_max, (unsigned long)fc,
                          (unsigned long)s_write_us_max,
+                         (unsigned long)s_write_late_win, (unsigned long)s_frames_win,
+                         (unsigned long)(s_win_start_us
+                             ? (uint32_t)((uint64_t)s_pairs_win * 1000000ULL
+                                          / (uint64_t)(now_us - s_win_start_us))
+                             : 0),
+                         (unsigned long)s_rate_ins, (unsigned long)s_rate_drop,
+                         (unsigned long)s_i2s_ovf,
                          (unsigned long)s_read_timeout_count, (unsigned long)s_clip_count,
                          (unsigned long)(gn ? s_gap_iv_min_ms : 0),
                          (unsigned long)(gn ? s_gap_iv_sum_ms / gn : 0),
                          (unsigned long)s_gap_iv_max_ms, (unsigned long)gn);
+                s_write_late_win = 0;
+                s_frames_win     = 0;
+                s_pairs_win      = 0;
+                s_win_start_us   = now_us;
             }
         }
     }
@@ -1354,7 +1463,9 @@ void rx_audio_init(void)
     s_filt_im   = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
     s_narrow_re = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
     s_narrow_im = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
-    s_out       = heap_caps_malloc(DSP_FFT_SIZE * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    // +1 pair of headroom: the clock-drift corrector below may append one
+    // duplicated sample pair to a full frame. See the rate-match block.
+    s_out       = heap_caps_malloc((DSP_FFT_SIZE + 1) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     s_dec_coeff    = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_re = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_im = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
@@ -1435,7 +1546,70 @@ void rx_audio_init(void)
              (int)s_enabled, (int)s_volume, (int)s_codec_ready, RX_AUDIO_TASK_PRIORITY);
 }
 
+/* ⛔ THE I2S TX INTERRUPT MUST BE REGISTERED FROM CORE 1, NOT CORE 0.
+ *
+ * ESP-IDF allocates a peripheral interrupt on whichever core calls
+ * esp_intr_alloc, and i2s_new_channel() does that inside preopen(). preopen()
+ * is called from main.c's app_main, which runs on CORE 0 - so the I2S TX ISR
+ * landed on core 0, at dma_frame_num 320 / 48 kHz = one interrupt every 6.7 ms,
+ * 150 per second, for the whole session whenever RX audio is enabled.
+ *
+ * ⛔ CORE 0 IS THE WALL ON THIS BOARD and has been for a year - see display.c's
+ * note by .task_affinity, where moving taskLVGL off it was FALSIFIED on
+ * hardware. Measured 2026-09-22 with the radio streaming: idle0 0.0-0.2%, core
+ * 1 at 53% idle. webserver_ws.c's note recording idle0 ~12% with this pipeline
+ * running, and that a browser was NOT the driver, predates RX audio
+ * (2026-07-14) - audio consumed the remaining headroom, which is why a browser
+ * left open now BREAKS THE AUDIO (operator A/B: closing it returned idle0
+ * 0.1% -> 2.9%, and Gyula HA3HZ had already told the list to close the page).
+ *
+ * ⚠ THE FIRST ATTEMPT AT THIS CRASHED THE BOOT, and the reason is recorded
+ * because it is the same mistake CLAUDE.md already names: the task was given
+ * 4096 bytes. esp_codec_dev_open + i2s_channel_init_std_mode need far more,
+ * and it died with SP and MTVAL eight bytes apart - a stack overflow - on the
+ * first boot. "Generous, not incremental" exists for exactly this. The high
+ * water mark is logged below so the real figure is a measurement, not another
+ * guess.
+ *
+ * ⚠ HYPOTHESIS UNTIL MEASURED: that moving the ISR returns a useful slice of
+ * core 0. The handler is short; what it costs on a core with no headroom is
+ * what is being tested. The revert is this wrapper and nothing else. */
+// ISR context: touch nothing but the counter.
+static IRAM_ATTR bool rx_audio_i2s_ovf_cb(i2s_chan_handle_t h, i2s_event_data_t *e, void *u)
+{
+    (void)h; (void)e; (void)u;
+    s_i2s_ovf++;
+    return false;
+}
+
+static void preopen_body(void);
+
+static void preopen_task(void *arg)
+{
+    preopen_body();
+    ESP_LOGW(TAG, "preopen: core-1 open done, stack high water %u B of %u",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
+             (unsigned)RXAUD_PREOPEN_STACK);
+    xTaskNotifyGive((TaskHandle_t)arg);
+    vTaskDelete(NULL);
+}
+
 void rx_audio_preopen(void)
+{
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    if (xTaskCreatePinnedToCore(preopen_task, "rxaud_pre", RXAUD_PREOPEN_STACK,
+                                self, 5, NULL, 1) != pdPASS) {
+        ESP_LOGW(TAG, "preopen: core-1 task create failed - opening on this core "
+                      "instead (the I2S ISR will stay on core 0)");
+        preopen_body();
+        return;
+    }
+    // Bounded: a hang here must not take the boot with it.
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(15000)) == 0)
+        ESP_LOGE(TAG, "preopen: core-1 open did not finish in 15 s");
+}
+
+static void preopen_body(void)
 {
     // Open the ES8388 / I2S output path NOW, before the USB host starts and
     // claims the DMA-capable internal RAM. I2S allocates its DMA descriptors
@@ -1492,6 +1666,13 @@ void rx_audio_preopen(void)
     if (i2s_channel_init_std_mode(s_tx_chan, &std_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "preopen: i2s_channel_init_std_mode failed");
         return;
+    }
+    // The only notification the driver gives that TX data was lost. See
+    // s_i2s_ovf: auto_clear makes an underrun silent otherwise.
+    {
+        i2s_event_callbacks_t cbs = { .on_send_q_ovf = rx_audio_i2s_ovf_cb };
+        if (i2s_channel_register_event_callback(s_tx_chan, &cbs, NULL) != ESP_OK)
+            ESP_LOGW(TAG, "preopen: could not register the I2S overflow callback");
     }
     // Leave the channel in READY state (not enabled) - esp_codec_dev_open
     // reconfigures + enables it.

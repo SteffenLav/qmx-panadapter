@@ -235,8 +235,36 @@ esp_err_t render_init(void)
     if (wferr != ESP_OK) {
         return wferr;
     }
+    /* ⭐ CORE 1, NOT CORE 0 - AND THIS ONE IS SAFE WHERE taskLVGL WAS NOT.
+     *
+     * Measured 2026-09-22 with cpu_owners while the radio streamed and RX audio
+     * played, decomposing the panadapter with ui_dev_canvas_hide():
+     *
+     *   canvases shown :  taskLVGL 66.7%  render 13.5%  idle0 0.0%  fps 11.5
+     *   canvases hidden:  taskLVGL 33.9%  render 44.3%  idle0 0.1%  fps 19.4
+     *
+     * render TAKES 13.5% and WANTS 44.3% - it is starved by taskLVGL at
+     * priority 5 above it. Adding up what core 0 is actually asked for:
+     * taskLVGL 67 + render 44 + audio_task 13 + UAC 5 + misc 5 = ~134% of one
+     * core. ⛔ CORE 0 IS OVERSUBSCRIBED BY A THIRD, which is why a year of
+     * trying to shave it has failed - there is no 30% saving inside any single
+     * task. Core 1 idles at 81% in the same sample.
+     *
+     * ⛔ WHY THIS IS NOT THE FALSIFIED taskLVGL MOVE. display.c's note by
+     * .task_affinity records moving taskLVGL to core 1 killing the audio ring
+     * within seconds: taskLVGL is priority 5, ABOVE fft_task's 4, so it
+     * preempted the ring's only consumer. render is priority 3, BELOW
+     * fft_task - FreeRTOS cannot schedule it while fft_task is ready, the same
+     * structural argument rx_audio.c makes for its own task. And render never
+     * touches LVGL or display_lock (grep: zero matches in render.c and
+     * render_waterfall.c), so there is no lock to carry across the cores.
+     *
+     * ⚠ It now shares priority 3 with rx_audio on core 1. rx_audio spends
+     * nearly all its time blocked in the I2S write (it does not even appear in
+     * the cpu_owners table, i.e. under 0.2%), so they should not contend - but
+     * that is the thing to watch if audio gets worse rather than better. */
     BaseType_t ok = xTaskCreatePinnedToCore(
-        render_task, "render", 4096, NULL, 3, &s_render_task, 0);
+        render_task, "render", 4096, NULL, 3, &s_render_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create render task");
         return ESP_FAIL;
