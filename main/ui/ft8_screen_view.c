@@ -92,8 +92,33 @@ static const char *TAG = "ft8_view";
  * exactly where KM's begins and the two can never overlap even on the widest
  * value KM can print ("~12.345"). */
 #define COL_DT_X        755
-#define COL_KM_X        819
-#define COL_AGE_X       903
+/* ⛔ KM's VALUES OVERLAPPED AGE's BOX BY 10 px (Gyula HA3HZ, re-reported
+ * 2026-09-22 - "those two columns are almost growing together").
+ *
+ * Measured from the constants, not eyeballed. The KM values are drawn at
+ * COL_KM_X + COL_KM_VAL_DX (the offset below), so before this change:
+ *
+ *     KM  values  829 .. 913   (829 + COL_KM_W 84)
+ *     AGE values  903 .. 944   (903 + COL_AGE_W 41)
+ *                 ^^^^^^^^^^   10 px of shared box
+ *
+ * Both columns are right-aligned, so the boxes overlapping is not itself
+ * visible - what IS visible is that a 5-digit KM right-aligns at 913 while a
+ * 3-digit AGE starts near 907, and the two numbers touch. The +10 offset
+ * added on 2026-09-19 pushed KM right without AGE moving out of the way.
+ *
+ * Fixed by moving BOTH columns left/right into the 16 px of unused right
+ * margin rather than by narrowing KM, which still has to print "~20000":
+ *
+ *     KM  values  819 .. 903   (COL_KM_W unchanged at 84)
+ *     AGE values  913 .. 954   (COL_AGE_W unchanged at 41, margin 16 -> 6)
+ *                 10 px clear gutter
+ *
+ * DT's box still ends exactly where KM's VALUE box begins (819), which is
+ * what the 2026-09-19 note above asked for. */
+#define COL_KM_X        809
+#define COL_KM_VAL_DX   10    // KM/HZ values sit this far right of their header box
+#define COL_AGE_X       913
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
@@ -110,7 +135,10 @@ static const char *TAG = "ft8_view";
 #define COL_KM_W        84
 // What COL_COUNTRY_W is worth in characters of montserrat_24 (~12.1 px each).
 #define COL_COUNTRY_CHARS 10
-#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
+// Right margin cut 16 -> 6 to pay for the 10 px gutter in front of AGE (see
+// the block above COL_KM_X). AGE never prints more than 3 digits - rows age
+// out of the table at the max-age setting - so 41 px still has slack.
+#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 6)
 
 // Pool size: pre-allocated row container/label objects.
 // Combined with shared lv_style_t (below), per-row local styles drop
@@ -383,8 +411,8 @@ static void styles_init(void)
     INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     // HZ/KM values sit +10 px right of their (unchanged) header labels so
     // the numbers center under the right-aligned headings (operator request).
-    INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_hz,      COL_HZ_X + COL_KM_VAL_DX, COL_HZ_W, LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_km,      COL_KM_X + COL_KM_VAL_DX, COL_KM_W, LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 

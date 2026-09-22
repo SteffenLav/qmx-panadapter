@@ -47,14 +47,30 @@ _Static_assert(RX_AUDIO_TASK_PRIORITY < DSP_FFT_TASK_PRIORITY,
 typedef enum {
     RXAUD_MODE_NONE = 0,   // unsupported CAT mode - path stays idle
     RXAUD_MODE_CW,
-    RXAUD_MODE_SSB,
+    RXAUD_MODE_SSB,        // USB: wanted audio sits ABOVE the dial
+    RXAUD_MODE_SSB_L,      // LSB: wanted audio sits BELOW the dial
 } rxaud_mode_t;
 
+/* ⛔ LSB AND USB ARE NOT THE SAME PASSBAND, AND THEY WERE TREATED AS ONE UNTIL
+ * v1.16.1 (Gyula HA3HZ: "please listen to the LSB, something isn't right").
+ *
+ * The QMX's LO sits 12 kHz below the dial, so baseband DC is the dial and the
+ * SIGN of a baseband offset says which side of the dial you are on. USB audio
+ * occupies dial+200 .. dial+200+w, i.e. POSITIVE offsets; LSB occupies
+ * dial-200 .. dial-(200+w), i.e. NEGATIVE ones. Collapsing both to one mode
+ * left filter_params_for_mode() with only the positive case, so on LSB the
+ * demodulator tuned the wrong side of the dial entirely - it played whatever
+ * was mirrored there rather than the station on the display.
+ *
+ * ⭐ ui.c's compute_passband_edges_hz() has had this right all along, and its
+ * LSB branch is the authority this now agrees with - that is where to look
+ * first if a third mode ever needs adding, rather than deriving it again. */
 static rxaud_mode_t mode_from_cat_str(const char *m)
 {
     if (!m) return RXAUD_MODE_NONE;
     if (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0) return RXAUD_MODE_CW;
-    if (strcmp(m, "USB") == 0 || strcmp(m, "LSB") == 0) return RXAUD_MODE_SSB;
+    if (strcmp(m, "USB") == 0) return RXAUD_MODE_SSB;
+    if (strcmp(m, "LSB") == 0) return RXAUD_MODE_SSB_L;
     return RXAUD_MODE_NONE;
 }
 
@@ -764,12 +780,17 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
         if (w == 0) w = CW_DEF_WIDTH_HZ;
         *center_hz = off;
         *half_bw_hz = (int)w / 2;
-    } else {   // RXAUD_MODE_SSB
+    } else {   // RXAUD_MODE_SSB / RXAUD_MODE_SSB_L
         if (w == 0) w = SSB_DEF_WIDTH_HZ;
         int low  = SSB_LOW_HZ;
         int high = SSB_LOW_HZ + (int)w;
         *center_hz = (low + high) / 2;
         *half_bw_hz = (high - low) / 2;
+        // LSB is the mirror of USB about the dial: same width, negative
+        // centre. Mirrors ui.c's compute_passband_edges_hz(), which computes
+        // the LSB edges as -(SSB_LOW + w) .. -SSB_LOW. half_bw is unsigned
+        // and identical for both - only the centre carries the side.
+        if (mode == RXAUD_MODE_SSB_L) *center_hz = -*center_hz;
     }
 }
 
@@ -842,7 +863,8 @@ static void rx_audio_task(void *arg)
             dsp_rxaudio_forward_enable(true);
             active_prev = true;
             ESP_LOGI(TAG, "RX audio on (mode=%s vol=%d)",
-                     mode == RXAUD_MODE_CW ? "CW" : "SSB", (int)s_volume);
+                     mode == RXAUD_MODE_CW    ? "CW"  :
+                     mode == RXAUD_MODE_SSB_L ? "LSB" : "USB", (int)s_volume);
         }
 
         // Track the live filter target (CW offset moves; SSB is fixed but the

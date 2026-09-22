@@ -290,6 +290,10 @@ static int s_consec_write_fail = 0;
 #define SD_DMA_STARVED_BYTES     4096
 #define SD_MEM_RETRY_MAX         40
 static int s_consec_mem_fail = 0;
+// One rotate-and-retry per mount before concluding the card is gone - see the
+// write-failure branch in sd_archive_task(). Cleared on every successful mount
+// so a later session gets its own attempt, never re-armed within one.
+static bool s_log_rotate_tried = false;
 
 // Quick mount retries inside the boot window, while DMA memory is still plentiful.
 // Forward declaration: the temp instrument in mirror_diag() reports it.
@@ -508,6 +512,46 @@ static void mirror_cw(void)
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
 // Returns false on a write error (possible card removal).
+/* ⛔ THE 5 MB ROTATION WAS UNREACHABLE ON EVERY WiFi UNIT, AND THAT IS HOW THE
+ * CARD FILLS UP (2026-09-22, chasing Dennis WN4FLA's "SD not mounted").
+ *
+ * The rotate used to live in ONE place: inside mirror_diag()'s write loop,
+ * after a chunk had already been written. Two consequences, and the second is
+ * the one that bites:
+ *
+ *  - mirror_diag() is the CONTINUOUS burst path, and on a WiFi unit it stops
+ *    running within seconds of boot (park_snapshot()). From then on the only
+ *    writer is mirror_diag_slow(), which had NO rotate at all. So qmx-log.txt
+ *    grows without limit for the entire life of the card. The bench's own copy,
+ *    pulled 2026-09-20, is 5,368,581 B - already past SD_LOG_MAX_BYTES.
+ *
+ *  - ⭐ The rotate is what FREES space (remove() of the previous
+ *    qmx-log.1.txt), and it was gated behind a SUCCESSFUL write. On a card with
+ *    no room left, the write is exactly the thing that cannot happen, so the
+ *    one action that would recover the card was unreachable by construction.
+ *
+ * Both write paths and the mount now go through this, and the size is checked
+ * BEFORE writing as well as after. See sd_archive_task()'s unmount path for
+ * what the unrecoverable version looked like from the outside: mount OK,
+ * README written OK, first append fails, five retries, "card removed". */
+static void rotate_diag_log(void)
+{
+    const bool was_open = (s_log_file != NULL);
+    if (s_log_file) { fflush(s_log_file); fclose(s_log_file); s_log_file = NULL; }
+    // remove() FIRST - this is the call that actually returns space to the
+    // volume. rename() alone frees nothing.
+    remove(SD_LOG_PATH_1);
+    if (rename(SD_LOG_PATH, SD_LOG_PATH_1) != 0)
+        ESP_LOGW(TAG, "rotate: rename %s failed: %s", SD_LOG_PATH, strerror(errno));
+    s_log_bytes = 0;
+    if (was_open) {
+        s_log_file = fopen(SD_LOG_PATH, "ab");
+        if (!s_log_file)
+            ESP_LOGW(TAG, "rotate: reopen %s failed: %s", SD_LOG_PATH, strerror(errno));
+    }
+    ESP_LOGW(TAG, "rotated diag log on SD - previous qmx-log.1.txt deleted");
+}
+
 static bool mirror_diag(void)
 {
     // === TEMP INSTRUMENT (2026-08-28, #282) - remove once the contradiction is
@@ -592,19 +636,8 @@ static bool mirror_diag(void)
         s_log_bytes  += got;
 
         if (s_log_bytes >= SD_LOG_MAX_BYTES) {
-            // Rotate: qmx-log.txt -> qmx-log.1.txt, start fresh.
-            fclose(s_log_file);
-            s_log_file = NULL;
-            remove(SD_LOG_PATH_1);
-            rename(SD_LOG_PATH, SD_LOG_PATH_1);
-            s_log_file = fopen(SD_LOG_PATH, "ab");
-            s_log_bytes = 0;
-            if (!s_log_file) {
-                ESP_LOGW(TAG, "reopen %s after rotate failed: %s",
-                         SD_LOG_PATH, strerror(errno));
-                return false;
-            }
-            ESP_LOGI(TAG, "rotated diag log on SD");
+            rotate_diag_log();
+            if (!s_log_file) return false;   // reopen failed, rotate_diag_log() logged it
         }
     }
     // fflush pushes the stdio buffer into FatFs, but FatFs only writes the
@@ -740,6 +773,12 @@ static bool mirror_diag_slow(void)
 #endif
     const bool was_paused = webserver_ws_is_paused();
     if (exp_pause && !was_paused) webserver_ws_set_paused(true);
+
+    // Rotate BEFORE opening, not after a successful write - on a full card the
+    // write is the thing that cannot happen, and this is the path that frees
+    // the space. s_log_file is NULL here (parked), so rotate_diag_log() just
+    // removes/renames and leaves nothing open, which is what this path wants.
+    if (s_log_bytes >= SD_LOG_MAX_BYTES) rotate_diag_log();
 
     FILE *f = fopen(SD_LOG_PATH, "ab");
     bool ok;
@@ -899,11 +938,43 @@ static bool try_mount(void)
     }
     long pos = ftell(s_log_file);
     s_log_bytes = (pos > 0) ? (size_t)pos : 0;
+
+    /* ⭐ SAY HOW FULL THE CARD IS, EVERY MOUNT. Dennis WN4FLA reported "SD not
+     * mounted" and the only thing the device could tell him was a grey dot -
+     * while the firmware knew the error code, the heap AND this. A full card
+     * and a broken card look identical from the outside and are nothing alike.
+     * Two numbers in the boot log turn that report into a diagnosis. */
+    {
+        uint64_t total = 0, freeb = 0;
+        if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &freeb) == ESP_OK) {
+            ESP_LOGI(TAG, "SD space: %llu KB free of %llu KB; qmx-log.txt %u KB "
+                          "(rotates at %u KB)",
+                     (unsigned long long)(freeb / 1024),
+                     (unsigned long long)(total / 1024),
+                     (unsigned)(s_log_bytes / 1024),
+                     (unsigned)(SD_LOG_MAX_BYTES / 1024));
+            if (freeb < (uint64_t)SD_LOG_MAX_BYTES)
+                ESP_LOGW(TAG, "SD is nearly full (%llu KB free) - appends will "
+                              "fail until the diag log rotates",
+                         (unsigned long long)(freeb / 1024));
+        }
+    }
+
+    // Rotate at mount if the log is already at the limit. The old code could
+    // only reach the rotate after a successful write, so an oversized log on a
+    // full card stayed oversized for ever - see rotate_diag_log()'s header.
+    if (s_log_bytes >= SD_LOG_MAX_BYTES) rotate_diag_log();
+    if (!s_log_file) {
+        ESP_LOGW(TAG, "diag log unavailable after rotate - unmounting");
+        bsp_sdcard_deinit(SD_MOUNT_POINT);
+        return false;
+    }
     // The handle now EXISTS while s_mounted is still false. If anything below
     // fails or blocks, that is the state the capture appears to have caught.
     ESP_LOGW(TAG, "INSTR mount() opened log handle %p, s_mounted still %d",
              (void *)s_log_file, (int)s_mounted);
 
+    s_log_rotate_tried = false;    // each mount gets one rotate-and-retry
     s_adif_dirty = true;           // force a full mirror right after mounting
     s_config_dirty = true;
     s_lotw_dirty = true;
@@ -1369,6 +1440,41 @@ static void sd_archive_task(void *arg)
             if (s_consec_write_fail < SD_WRITE_FAIL_UNMOUNT) {
                 ESP_LOGW(TAG, "SD write failed (%d/%d) - retrying on live handle",
                          s_consec_write_fail, SD_WRITE_FAIL_UNMOUNT);
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+                vTaskDelay(pdMS_TO_TICKS(WORK_MS));
+                continue;
+            }
+            /* ⭐ BEFORE DECLARING THE CARD GONE, TRY A DIFFERENT FILE - ONCE.
+             *
+             * Measured across 547 boots (capture-dev.txt, 2026-09-22): in the
+             * failing sessions, every file opened "wb" is written successfully
+             * on the same mount - README.txt 265 for 265 - while every append
+             * to qmx-log.txt fails with EIO. The card remounted 267 times and
+             * the first append failed again every time, hours into the session
+             * with 100 KB of DMA free. A card that is genuinely gone cannot
+             * write README.txt; a card whose qmx-log.txt has a damaged cluster
+             * chain behaves exactly like this, because "wb" discards the old
+             * chain and "ab" has to walk and extend it.
+             *
+             * Rotating renames the suspect file to qmx-log.1.txt and starts a
+             * new one, which is the cheapest thing that can distinguish the two
+             * and is also the repair if it is the file. If the next burst still
+             * fails, the card really is unhappy and the unmount below stands.
+             *
+             * ⚠ The cause of the corruption is NOT established - holding the
+             * log open across unmount() and unclean power-downs is the obvious
+             * suspect, and the unreachable rotation (see rotate_diag_log()) is
+             * why the file was allowed past 5 MB in the first place. Do not
+             * record this comment as the diagnosis. */
+            if (!s_log_rotate_tried) {
+                s_log_rotate_tried = true;
+                ESP_LOGW(TAG, "SD write failed %d times - the card writes OTHER "
+                              "files fine, so rotating qmx-log.txt out of the way "
+                              "and trying once more before calling it removed",
+                         s_consec_write_fail);
+                rotate_diag_log();
+                s_consec_write_fail = 0;
+                s_consec_mem_fail = 0;
                 if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
                 vTaskDelay(pdMS_TO_TICKS(WORK_MS));
                 continue;
