@@ -887,10 +887,38 @@ static void unmount(const char *why)
 // heap with interrupts off, which is what caused the FT4 cyan flash, and
 // try_mount() retries every 10 s. Never let this run unbounded on that path.
 #define SD_FAIL_DIAG_MAX 8
+/* ⭐ SAY HOW FULL THE CARD IS - ONCE, AND ONLY WHEN A WRITE HAS FAILED.
+ *
+ * Dennis WN4FLA reported "SD not mounted" and the only thing the device could
+ * tell him was a grey dot, while the firmware knew the error code, the heap
+ * AND this. A full card and a broken card look identical from the outside and
+ * are nothing alike.
+ *
+ * ⚠ NOT at mount. esp_vfs_fat_info() walks the FAT, and on the 31 GB bench
+ * card that measured TEN SECONDS (9.1 s -> 19.3 s in the 2026-09-22 boot),
+ * which delayed the mount, the first write and app_main's
+ * sd_archive_wait_mounted() behind it. Lazy and one-shot costs nothing on a
+ * healthy unit and still answers the only question it was added for. */
+static void sd_space_report_once(void)
+{
+    static bool done = false;
+    if (done) return;
+    done = true;
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &freeb) != ESP_OK) return;
+    ESP_LOGW(TAG, "SD space: %llu KB free of %llu KB; qmx-log.txt %u KB "
+                  "(rotates at %u KB)",
+             (unsigned long long)(freeb / 1024), (unsigned long long)(total / 1024),
+             (unsigned)(s_log_bytes / 1024), (unsigned)(SD_LOG_MAX_BYTES / 1024));
+    if (freeb < (uint64_t)SD_LOG_MAX_BYTES)
+        ESP_LOGW(TAG, "SD is nearly full - appends will fail until the log rotates");
+}
+
 static void sd_fail_diag(const char *where, int err)
 {
     static int n = 0;
     if (n++ >= SD_FAIL_DIAG_MAX) return;
+    sd_space_report_once();
     ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
              where, err,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -939,27 +967,6 @@ static bool try_mount(void)
     long pos = ftell(s_log_file);
     s_log_bytes = (pos > 0) ? (size_t)pos : 0;
 
-    /* ⭐ SAY HOW FULL THE CARD IS, EVERY MOUNT. Dennis WN4FLA reported "SD not
-     * mounted" and the only thing the device could tell him was a grey dot -
-     * while the firmware knew the error code, the heap AND this. A full card
-     * and a broken card look identical from the outside and are nothing alike.
-     * Two numbers in the boot log turn that report into a diagnosis. */
-    {
-        uint64_t total = 0, freeb = 0;
-        if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &freeb) == ESP_OK) {
-            ESP_LOGI(TAG, "SD space: %llu KB free of %llu KB; qmx-log.txt %u KB "
-                          "(rotates at %u KB)",
-                     (unsigned long long)(freeb / 1024),
-                     (unsigned long long)(total / 1024),
-                     (unsigned)(s_log_bytes / 1024),
-                     (unsigned)(SD_LOG_MAX_BYTES / 1024));
-            if (freeb < (uint64_t)SD_LOG_MAX_BYTES)
-                ESP_LOGW(TAG, "SD is nearly full (%llu KB free) - appends will "
-                              "fail until the diag log rotates",
-                         (unsigned long long)(freeb / 1024));
-        }
-    }
-
     // Rotate at mount if the log is already at the limit. The old code could
     // only reach the rotate after a successful write, so an oversized log on a
     // full card stayed oversized for ever - see rotate_diag_log()'s header.
@@ -979,6 +986,54 @@ static bool try_mount(void)
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
+
+    /* ⛔⛔ OPEN THE LONG-LIVED LOG HANDLE **LAST**, AFTER EVERY OTHER FILE THIS
+     * MOUNT TOUCHES. THIS IS THE FIX FOR "SD MOUNTS THEN GOES GREY".
+     *
+     * Symptom, on this bench every boot from ~v1.15.1 to v1.16.1: the card
+     * mounts, README.txt is written to it successfully, and 10-30 ms later the
+     * FIRST append to qmx-log.txt returns EIO. Five retries over 15 s, then
+     * unmount("write failures"), and because WiFi is up by then the no-card
+     * branch latches s_parked for the rest of the session. The card was never
+     * gone - 267 remounts across the capture each failed the same way, hours
+     * in, with 100 KB of DMA free.
+     *
+     * ⭐ MEASURED, at the moment of failure, with a one-shot probe:
+     *     512 B to THIS handle ("ab", opened above)  -> 0, EIO
+     *     4096 B to a fresh "wb" file                -> 4096, OK
+     *     4096 B to a fresh "ab" file                -> 4096, OK
+     *     4096 B to qmx-log.txt reopened "wb"        -> 4096, OK
+     * So the card, the volume, the file and append are all healthy. The only
+     * thing wrong is the HANDLE, and the only thing that distinguishes it from
+     * the three that work is that it was opened EARLIER in try_mount() - before
+     * ensure_dir()'s sibling work and before write_readme() opened and closed
+     * another file on the same volume.
+     *
+     * ⚠ WHAT INSIDE FatFs INVALIDATES IT IS NOT ESTABLISHED. The suspicion is
+     * the exFAT path: FF_USE_LFN is 3 here (CONFIG_FATFS_LFN_HEAP), so
+     * INIT_NAMBUF/FREE_NAMBUF put fs->dirbuf in a heap block that is freed when
+     * the call returns, and exFAT keeps per-file directory-entry state there.
+     * f_sync() reloads it under its own NAMBUF, so that one is safe; the write
+     * path was not traced to the end. DO NOT record the exFAT theory as the
+     * diagnosis. What IS established is the before/after above.
+     *
+     * It also fits Gyula HA3HZ's advice to Dennis WN4FLA - "format it to FAT
+     * and it will be recognised" - which would sidestep the exFAT path
+     * entirely, and which nobody could explain at the time.
+     *
+     * The early open exists only so ftell() can size the log for the rotate
+     * check above. That is done by now, so close it and open the handle we
+     * actually keep, last. Anything added to this function later must go
+     * ABOVE this block. */
+    if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
+    s_log_file = fopen(SD_LOG_PATH, "ab");
+    if (!s_log_file) {
+        ESP_LOGW(TAG, "reopen %s after mount failed: %s - unmounting",
+                 SD_LOG_PATH, strerror(errno));
+        bsp_sdcard_deinit(SD_MOUNT_POINT);
+        return false;
+    }
+
     s_mounted = true;
     s_instr.mount_ok++;
     ui_set_sd_active(true);

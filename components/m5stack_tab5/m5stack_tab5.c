@@ -634,7 +634,21 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
         .sclk_io_num     = GPIO_SDMMC_CLK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = 4000,
+        /* ⛔ THIS WAS 4000, AND THE DIAG LOG WRITES 4096 (2026-09-22).
+         *
+         * A 4096-byte f_write is 8 sectors, which sdmmc_write_sectors issues as
+         * ONE SPI transaction of 4096 data bytes - larger than the DMA
+         * descriptor pool sized by max_transfer_sz, so the transfer fails and
+         * FatFs returns FR_DISK_ERR, which esp_vfs_fat maps to EIO. That is
+         * exactly the symptom: mount fine, README.txt (a few hundred bytes, one
+         * sector) fine, every 4 KB append to qmx-log.txt EIO, on a 31 GB card
+         * with 99.95% free and a zero-length log file.
+         *
+         * 32 KB, not 4096+1: the descriptor pool costs ~12 bytes per 4092-byte
+         * span, so the whole increase is under 100 bytes, and a value this
+         * close to the writes it has to carry is what made a one-sector change
+         * anywhere else in the tree turn into a dead SD card. */
+        .max_transfer_sz = 32768,
     };
     ret_val = spi_bus_initialize(BSP_SD_SPI_HOST, &bus_cfg, SDSPI_DEFAULT_DMA);
     if (ret_val != ESP_OK) {
