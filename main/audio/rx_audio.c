@@ -462,6 +462,15 @@ static volatile float s_pan_overlap = 0.3f;
 static volatile float s_pan_width = 1.8f;
 
 static float s_agc_env = 1.0f;
+/* Peak limiter (see the block in the per-sample loop). 26000 of 32767 leaves
+   about 2 dB of headroom under the hard clamp, so the clamp stops being part
+   of normal operation. The release is rescaled for the decimated loop exactly
+   like the AGC's - it is a per-sample coefficient and this runs at
+   DSP_SAMPLE_RATE_HZ/RX_DECIM_D, the same trap that made SSB unintelligible
+   until it was found. ~250 ms at the 6 kHz rate. */
+#define LIM_THRESH   26000.0f
+#define LIM_RELEASE  (0.00008f * (float)RX_DECIM_D)
+static float s_lim_gain = 1.0f;
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -880,6 +889,7 @@ static void rx_audio_task(void *arg)
 
         if (!active_prev) {
             s_agc_env = 1.0f;
+            s_lim_gain = 1.0f;
             s_noise   = 1.0f;
             s_last_up_v_l = 0.0f;
             s_last_up_v_r = 0.0f;
@@ -1236,6 +1246,43 @@ static void rx_audio_task(void *arg)
                 v_l = mid + eff_pan_width * side;
                 v_r = mid - eff_pan_width * side;
             }
+            /* ⭐⭐ PEAK LIMITER - "extremely strong signals almost blew my
+             * ears" (operator, 2026-09-22).
+             *
+             * The AGC alone could never prevent this. It normalises to
+             * agc_target, which is 30000 of 32767 - 92% of full scale - so
+             * EVERY signal arrives near maximum, and anything faster than its
+             * ~3 ms attack goes straight through to the hard clamp below as
+             * clipping. That clamp is not protection, it is distortion: it
+             * squares off the waveform and the result is both loud AND harsh,
+             * which is exactly what a strong CW signal in headphones sounds
+             * like. It is also where the 17,692 clips measured this evening
+             * were coming from.
+             *
+             * ⛔ THE FIX IS NOT A LOWER agc_target. Samuel W7STF is on the same
+             * firmware asking for MORE volume, and turning the target down
+             * would quieten everybody to solve one operator's peaks. A limiter
+             * is the control that does only what is asked: it holds the peaks
+             * down and leaves the average level alone.
+             *
+             * Instantaneous attack, slow release - the standard shape. The gain
+             * can only ever fall immediately (so nothing escapes) and recovers
+             * gently, so there is no pumping on CW. One gain for both ears, or
+             * the binaural image would shift sideways whenever one channel
+             * limited on its own. */
+            {
+                float peak = fmaxf(fabsf(v_l), fabsf(v_r));
+                float need = (peak > LIM_THRESH) ? (LIM_THRESH / peak) : 1.0f;
+                if (need < s_lim_gain) s_lim_gain = need;              /* catch it now */
+                else s_lim_gain += (1.0f - s_lim_gain) * LIM_RELEASE;  /* let go slowly */
+                v_l *= s_lim_gain;
+                v_r *= s_lim_gain;
+            }
+
+            /* Still clamped afterwards, but it should now be unreachable - the
+               limiter holds peaks below LIM_THRESH, which is under out_clamp.
+               s_clip_count becoming non-zero again means the limiter is not
+               doing its job, so this stays as the instrument that would say so. */
             if (v_l >  out_clamp) { v_l =  out_clamp; s_clip_count++; }
             if (v_l < -out_clamp) { v_l = -out_clamp; s_clip_count++; }
             if (v_r >  out_clamp) { v_r =  out_clamp; s_clip_count++; }
