@@ -177,6 +177,9 @@ static bool               s_cq_exhausted;
 // Pause next TX: operator skips one transmission to check if the QSO slot is
 // still open. Cleared after the skip.
 static bool               s_pause_next_tx;
+/* One forgiven miss, armed when a pause is actually SPENT (not when the button
+ * is pressed - a press that never gets used must not forgive anything). */
+static bool               s_pause_grace;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
 // partner as a waiting caller mid-exchange, and (b) the decode list can show
@@ -936,6 +939,7 @@ static void rearm_current(void)
         if (pause) s_pause_next_tx = false;
         unlock();
         if (pause) {
+            lock(); s_pause_grace = true; unlock();   /* forgive the quiet slot this causes */
             ESP_LOGI(TAG, "pause: skipping this transmission");
             return;
         }
@@ -1347,7 +1351,27 @@ static bool resume_comeback_heard(int64_t slot_sec)
 // resume CQ if we were running CQ, else go to sticky TIMEOUT.
 static void register_miss(const char *waiting_for)
 {
+    /* ⛔ A SLOT THE OPERATOR DELIBERATELY SKIPPED IS NOT THE PARTNER IGNORING
+     * US, so it must not count toward giving up on them.
+     *
+     * Pause suppresses one of our transmissions; the partner then has nothing
+     * to answer, and the quiet slot that follows looked exactly like being
+     * ignored. Using Pause therefore pushed the contact toward
+     * QSO_TIMEOUT_SLOTS - punishing the operator for a control we gave them.
+     * Seen on the bench 2026-09-22: paused at 273437, RA5AD timed out at
+     * 304583, and RA5AD was still there calling CQ afterwards.
+     *
+     * The busy-partner hold already sets this precedent - it logs "not counting
+     * a miss" for the same reason. One forgiven slot per pause, cleared as it
+     * is used, so a pause cannot buy unlimited patience. */
     lock();
+    if (s_pause_grace) {
+        s_pause_grace = false;
+        unlock();
+        ESP_LOGI(TAG, "%s - slot skipped by Pause, not counting a miss",
+                 waiting_for ? waiting_for : "");
+        return;
+    }
     s_missed_slots++;
     int  m       = s_missed_slots;
     bool from_cq = s_from_cq;
@@ -3412,6 +3436,7 @@ void ft8_qso_abort(void)
     s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
     s_pause_next_tx = false;   // clear any pending pause
+    s_pause_grace   = false;
     s_pileup_active = false;   // an abort ends any pileup drain
     // An aborted hound contact must not leave us parked on the Fox's frequency
     // (we may have QSY'd down for the R-report), and the next contact decides
