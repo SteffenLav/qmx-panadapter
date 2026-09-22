@@ -46,6 +46,7 @@
 extern bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10,
                                        uint16_t *out_w_x100);
 #include "wspr_rx.h"
+#include "wspr_sched.h"   // UTC-anchored TX schedule - see that header for why
 #include "wspr_wav.h"
 #include "storage/sd_archive.h"
 #include "net/webserver_ws.h"
@@ -435,11 +436,17 @@ static uint8_t s_burst_done    = 0;    /* bursts already sent in this group */
  * one. The group is tx_cycles of transmit followed by rx_cycles of receive, so
  * the next group starts one cycle after the last transmit plus the listening
  * time - and the period is simply tx + rx, with nothing to infer. */
-static int64_t roll_next_group_cycle(int64_t last_tx_cycle, uint8_t rx_cycles)
-{
-    if (rx_cycles < 1) rx_cycles = 1;   /* 0 would key the radio continuously */
-    return last_tx_cycle + 1 + (int64_t)rx_cycles;
-}
+/* roll_next_group_cycle() lived here and is DELETED, not just unused.
+ *
+ * It was the relative scheduler: next group = last transmit + 1 + rx_cycles.
+ * The arithmetic was correct - it really did give group-start to group-start of
+ * exactly the advertised period - but the model was wrong, because it made the
+ * schedule depend on WHERE THE LAST GROUP ENDED. Anything that disturbed that
+ * moved every future transmission with it and never moved it back.
+ *
+ * Left in place as dead code it would be the obvious thing to call next time
+ * someone touches this, which is how a fixed bug comes back. The replacement is
+ * wspr_sched_next_tx_cycle() in wspr_sched.h. */
 
 /* ⛔ THE TX-ENABLE ENGAGE BELOW IS ONE SYNCHRONOUS CHECK, AND THE CACHE IS
  * OFTEN COLD AT THAT EXACT MILLISECOND - entering the WSPR page also pushes
@@ -723,7 +730,7 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles)
         /* Nothing has just transmitted here - this is transmitting being
          * switched on, or the duty being changed mid-session - so the very
          * next cycle is allowed. */
-        s_next_tx_cycle = roll_next_group_cycle(cycle_now, rx_cycles);
+        s_next_tx_cycle = wspr_sched_next_tx_cycle(cycle_now + 1, tx_cycles, rx_cycles);
     }
     s_sched_duty    = (uint8_t)((tx_cycles ? tx_cycles : 1) * 32u +
                                 (rx_cycles ? rx_cycles : 1));
@@ -2178,65 +2185,67 @@ static void wspr_rx_task(void *arg)
         const uint8_t sched_tx = ws.wspr_tx_cycles;
         const uint8_t sched_rx = ws.wspr_rx_cycles ? ws.wspr_rx_cycles : 1;
         const bool tx_possible = ws.wspr_tx_en && sched_tx > 0;
+        /* ⛔ THE RE-ANCHOR BRANCH THAT USED TO LIVE HERE IS GONE, AND THAT IS
+         * THE FIX. It re-based the schedule on the CURRENT cycle whenever the
+         * previous one had been overtaken - a stalled cycle, a clock step, a
+         * settings change - which moved every future transmission by however
+         * far things had slipped, permanently and silently. That is precisely
+         * how John W5JSS's beacon walked from the 0 and 2 minute marks to 2
+         * and 4 over a few hours.
+         *
+         * A UTC-anchored schedule has nothing to re-anchor: a missed cycle is
+         * simply a cycle that did not transmit, and the next one is back on the
+         * grid. The failure mode cannot occur, so the warning I added to report
+         * it has no meaning either and has gone with it.
+         *
+         * s_sched_duty is still tracked, but only to notice a settings change
+         * for the log - it no longer steers anything. */
         if (!tx_possible) {
             s_next_tx_cycle = -1;
             s_sched_duty    = 0;
-        } else if (s_next_tx_cycle < last_cycle_idx ||
-                   s_sched_duty != (uint8_t)(sched_tx * 32u + sched_rx)) {
-            /* Nothing scheduled, the schedule was overtaken (a stalled cycle,
-             * a clock step), or the operator changed either count. THIS cycle
-             * becomes the first transmit of a fresh group, which keeps the
-             * behaviour that a burst can happen in the very first cycle after
-             * transmitting is switched on. */
-
-            /* ⭐ SAY SO. This re-anchor moves every future transmission by
-             * however far the schedule slipped, permanently, and it used to
-             * happen in complete silence - so a beacon that quietly changed
-             * which minutes it transmitted on left nothing in the diagnostic
-             * log to explain it. John W5JSS watched his 20-minute schedule move
-             * from the 0 and 2 minute marks to 2 and 4 after several hours and
-             * there was no way to tell from the log that it had re-anchored, or
-             * why. Reported as a WARNING because it is not routine: in steady
-             * running this should never fire. */
-            const bool sched_changed =
-                (s_sched_duty != (uint8_t)(sched_tx * 32u + sched_rx));
-            ESP_LOGW(TAG,
-                     "TX schedule re-anchored to cycle %lld (%s) - the transmit "
-                     "minutes move from here on",
-                     (long long)last_cycle_idx,
-                     sched_changed          ? "tx/rx counts changed"
-                     : (s_next_tx_cycle < 0) ? "no schedule yet"
-                                             : "a cycle was missed or the clock stepped");
-
-            s_next_tx_cycle = last_cycle_idx;
-            /* Both counts fold into one comparison value so a change to either
-             * re-rolls. rx is 1-20 and tx is 0-4, so tx*32+rx cannot collide. */
-            s_sched_duty    = (uint8_t)(sched_tx * 32u + sched_rx);
-            /* A re-roll abandons any group in progress: the schedule it was
-             * part of no longer exists. */
-            s_burst_done    = 0;
-        }
-        const bool tx_this_cycle = tx_possible && s_next_tx_cycle == last_cycle_idx;
-        if (tx_this_cycle) {
-            /* Roll the next one now, before anything below can fail.
-             *
-             * With burst_n == 1 this is exactly what it always was: the next
-             * cycle is N from here. With burst_n > 1 the group continues on the
-             * VERY NEXT cycle until it is used up, and only then does the next
-             * group get rolled - from the group's FIRST cycle, so the period is
-             * group-start to group-start and the groups do not drift. */
-            uint8_t tx_n = sched_tx ? sched_tx : 1;
-            s_burst_done++;
-            if (s_burst_done < tx_n) {
-                s_next_tx_cycle = last_cycle_idx + 1;   /* back to back */
-                ESP_LOGI(TAG, "transmit %u of %u in this group - next cycle too",
-                         (unsigned)s_burst_done, (unsigned)tx_n);
-            } else {
-                /* Group finished: rx_cycles of listening follow. */
-                s_next_tx_cycle = roll_next_group_cycle(last_cycle_idx, sched_rx);
-                s_burst_done    = 0;
+        } else {
+            const uint8_t duty_now = (uint8_t)(sched_tx * 32u + sched_rx);
+            if (s_sched_duty != duty_now) {
+                ESP_LOGI(TAG, "TX schedule now %u tx + %u rx = %u min, anchored to UTC",
+                         (unsigned)sched_tx, (unsigned)sched_rx,
+                         (unsigned)((sched_tx + sched_rx) * 2));
+                s_sched_duty = duty_now;
             }
         }
+        /* ⭐ THE SCHEDULE IS ANCHORED TO UTC, not rolled from the last group.
+         *
+         * wspr_sched_is_tx_cycle() answers from the cycle index and the two
+         * counts alone, so it cannot drift, cannot accumulate error across a
+         * missed cycle or a clock step, and reads the same after a reboot as
+         * before it. John W5JSS's 2 tx + 8 rx now means minutes 0 and 2 of every
+         * twenty, permanently, which is what "2 tx + 8 rx = 20 min" always
+         * claimed. See wspr_sched.h for why the relative version drifted, and
+         * test/wspr_sched_harness.c for the properties that are actually
+         * checked - including that no setting can key the radio continuously.
+         *
+         * s_first_tx_forced is kept and is the ONE exception: switching
+         * transmitting on still gives a burst on the next cycle rather than
+         * making the operator wait for the grid, which could otherwise be most
+         * of a period away. It is a single shot and clears itself. */
+        const bool forced_now  = s_first_tx_forced && s_next_tx_cycle == last_cycle_idx;
+        const bool tx_this_cycle = tx_possible &&
+            (forced_now || wspr_sched_is_tx_cycle(last_cycle_idx, sched_tx, sched_rx));
+
+        if (tx_this_cycle) {
+            /* Both derived, not counted. A running counter was what could
+             * disagree with the air after a missed cycle; the grid cannot. */
+            const uint8_t tx_n = sched_tx ? sched_tx : 1;
+            const uint8_t idx  = wspr_sched_burst_index(last_cycle_idx, sched_tx, sched_rx);
+            s_burst_done = idx;                 /* kept for the UI only */
+            if (idx > 0 && idx < tx_n)
+                ESP_LOGI(TAG, "transmit %u of %u in this group - next cycle too",
+                         (unsigned)idx, (unsigned)tx_n);
+        }
+        /* Point the countdown at the next real burst, every cycle, transmitted
+         * or not - so a held or refused burst moves it on instead of leaving it
+         * at zero promising something that is not coming. */
+        if (tx_possible)
+            s_next_tx_cycle = wspr_sched_next_tx_cycle(last_cycle_idx + 1, sched_tx, sched_rx);
 
         /* Ask the radio about split every cycle while transmit is enabled. The
          * answer lands a poll or two later and is judged at the NEXT burst, so
