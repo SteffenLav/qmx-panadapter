@@ -889,8 +889,26 @@ static void zoom_process(const int16_t *samples)
     int n_out_i = dsps_fird_f32(&s_zoom_fir_i, s_zoom_mix_i, s_zoom_dec_i, n_out_target);
     int n_out_q = dsps_fird_f32(&s_zoom_fir_q, s_zoom_mix_q, s_zoom_dec_q, n_out_target);
     s_zoomfir_us += (uint32_t)(esp_timer_get_time() - t0);
+    /* ⛔ ESP_LOGD, NOT LOGI - THIS RUNS ON fft_task, ONCE PER SECOND, WHILE ZOOMED.
+     *
+     * The comment above says "silent unless zoomed (D > 1), i.e. never in normal
+     * use". That is wrong about how the radio is actually operated: the operator
+     * sits at x2 for ordinary listening, so this fired 1/s for the whole session
+     * - 254 lines in one 4-minute window of the 2026-09-22 capture.
+     *
+     * fft_task is the audio ring's SOLE consumer and #51 is the standing record
+     * of what starving it costs. A console write from it is the one thing this
+     * task must not do on a cadence; the console is USB Serial/JTAG, which can
+     * block on the host, and every line also goes through the diag ring.
+     *
+     * ⚠ NOT ESTABLISHED as the cause of the audio break-ups the operator
+     * reported the same day - core 0 was also at 1% idle with the display
+     * invalidating ~21 screens/s, and the two were not separated. Demoted
+     * because periodic debug output on this task is wrong regardless of which
+     * one it turns out to be. LOGD is compiled out at the default log level;
+     * raise the level if the measurement is wanted again. */
     if (++s_zoomfir_n >= 47) {   // ~1 s of windows at 46.9 Hz
-        ESP_LOGI(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
+        ESP_LOGD(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
                  (unsigned)ZOOM_FIR_LEN, D,
                  (double)s_zoomfir_us / (double)s_zoomfir_n / 1000.0);
         s_zoomfir_us = 0;
