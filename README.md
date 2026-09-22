@@ -12,7 +12,11 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.16.1 fixes what v1.16.0's own release notes promised but did not deliver.** The **Pause button** was written up and then drawn off the edge of its panel, so it was never visible — it is now the fourth button in the mid-QSO row, it works while calling CQ as well as mid-exchange, it says **Paused** while armed, and a slot you deliberately skip no longer counts against giving up on the contact *(Randy N4OPI)*. The **three pan controls** were described as adjustable while listening and had no control anywhere — they are now real sliders in **Resource Management**, along with a **Gain** control that answers the very low audio level several of you reported *(Samuel W7STF, Bruce N9JCV)*. All four are remembered and travel in a config backup. **SSB audio was unintelligible** because the automatic gain reacted eight times too slowly for speech, which is why CW sounded fine — corrected *(Gyula HA3HZ)*. And the **WSPR transmit schedule no longer walks off its minutes**: it is anchored to the clock, so "2 transmits in every 20 minutes" stays on the same minutes instead of drifting after a few hours *(John W5JSS)*.
+>
+> ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **New in v1.16.0 — audio on the Tab5, as a beta.** The radio's I/Q now becomes sound you can listen to, and the first thing built on it is a **panoramic CW split**: two stations on different frequencies are placed left and right across the stereo image instead of sitting on top of each other. Three controls — **pan width**, **pan blend** and **overlap** — are live, so you adjust them while listening rather than in a menu. **Binaural CW is a first implementation and is best used at 300 Hz bandwidth and up; do not expect much separation below 200 Hz.**
 >
@@ -30,7 +34,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.1.pdf).
 
 <!-- USERGUIDE:START -->
 

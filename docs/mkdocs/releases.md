@@ -4,6 +4,26 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.1** — 2026-09-22
+
+**The fixes you asked for after v1.16.0 — and one thing v1.16.0's notes promised but never actually shipped.**
+
+- **The Pause button is there now.** It was written up in the v1.16.0 notes and then drawn just off the edge of its panel, so nobody could find it — Randy N4OPI reported it missing and he was right. It is the fourth button in the mid-QSO row, it works **while calling CQ** as well as mid-exchange, and it reads **Paused** while armed so you can see it is doing something. Skipping a slot on purpose also no longer counts against giving up on the contact.
+- **A Gain control for the audio.** Several of you said the audio was very quiet even at full volume *(Samuel W7STF, Bruce N9JCV)* — that was the automatic gain's ceiling, not your volume control, and there was no way to reach it. It is now a slider on the **RX Audio** line in Resource Management.
+- **The three panoramic CW controls are real controls.** Pan **Width**, **Blend** and **Overlap** were described as adjustable while you listen, and had no control anywhere on the device. They sit under Binaural CW now. All four settings are remembered across a restart and are carried in a config backup.
+- **SSB is intelligible again.** *(Gyula HA3HZ)* The automatic gain was reacting about eight times too slowly for speech, clipping the start of every syllable and then staying ducked through the ones after. Morse never showed it, because a steady tone never tests how fast the control moves.
+- **WSPR keeps to its minutes.** *(John W5JSS)* A 20-minute schedule could walk off the minutes it started on after a few hours. The schedule is now anchored to the clock, so "2 transmits in every 20 minutes" means the same minutes every time, and a missed cycle or a restart no longer shifts it.
+- **Resource Management is easier to read** — Binaural CW sits with RX Audio, the network feeds are grouped together, and controls that cannot do anything yet are greyed out properly instead of looking live.
+
+!!! warning "Switch the QMX on *after* the Tab5 has settled"
+
+    Wait until the spectrum is running and WiFi shows a network, then power the radio.
+    Switching it on while the Tab5 is still starting up leaves the Tab5 short of memory
+    for the rest of the session — most visibly, the web interface may stop responding.
+    This is a firmware limitation and it is being worked on.
+
+**Audio remains a beta.** It is there to be tried and reported on. Binaural CW works best at **300 Hz bandwidth and up**; below 200 Hz there is little separation to be had.
+
 **v1.16.0** — 2026-09-21
 
 **Audio on the Tab5, as a beta — and a Pause button during a QSO.**
@@ -827,7 +847,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
