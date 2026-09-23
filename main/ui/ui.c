@@ -2810,7 +2810,9 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
 #define DRAWER_SEC_RESMON     11  // resource-monitor floating overlay toggle (slot was unused)
-#define DRAWER_SEC_RXAUDIO    12
+/* 12 retired 2026-09-23: the RX audio section moved to Resource Management.
+ * The number is left unused rather than reassigned, so nothing silently
+ * inherits a section id that used to mean something else. */
 #define DRAWER_SEC_WATERFALL  13
 #define DRAWER_SEC_FLIP       14
 #define DRAWER_SEC_CHARGE     15  // battery care: stop-charging-at-% (was DRAWER_SEC_SNAP,
@@ -2979,7 +2981,6 @@ static const drawer_item_t GRP_STATION[] = {
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
     { DRAWER_SEC_QMXRF, "RF gain", true },
-    { DRAWER_SEC_RXAUDIO, "RX audio (speaker/headphone)", false },
     /* Above CW centre (operator, 2026-09-07). It was filed under Spectrum with
      * the drawing controls, but it is not one: it trims the 12 kHz IF offset so
      * a signal lands where the dial says it is, which is the same conversation
@@ -3316,10 +3317,11 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
     /* CW profiles too (operator, 2026-09-11): a profile sets the CW centre and
      * filters, which is CW/CW-R business for the same reason as the line's
      * other two - and it was never named here at all, so it fell through to
-     * the `return true` below and appeared on every page. RX audio joins for
-     * the same reason as CW centre - nothing to demodulate once DiGi is forced. */
+     * the `return true` below and appeared on every page. (RX audio used to be
+     * named here too; its whole drawer section moved to Resource Management on
+     * 2026-09-23, so there is nothing left to hide.) */
     if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW ||
-        id == DRAWER_SEC_CWPROF || id == DRAWER_SEC_RXAUDIO) return !ft8 && !wspr;
+        id == DRAWER_SEC_CWPROF) return !ft8 && !wspr;
     /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
@@ -3402,9 +3404,6 @@ static lv_obj_t *s_check_wspr_test = NULL;       // the same setting, WSPR page 
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
 static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
                                                   // simulator (ft8_sim.c) is FT8-only for now
-static lv_obj_t *s_check_rxaudio = NULL;
-static lv_obj_t *s_slider_rxaudio_vol = NULL;
-static lv_obj_t *s_lbl_rxaudio_vol = NULL;
 
 static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
@@ -3539,8 +3538,6 @@ static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_pwrcal_entry_btn_cb(lv_event_t *e);
 static void drawer_activation_btn_cb(lv_event_t *e);
 static void drawer_refresh_activation(void);
-static void drawer_check_rxaudio_cb(lv_event_t *e);
-static void drawer_slider_rxaudio_vol_cb(lv_event_t *e);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
@@ -13220,45 +13217,12 @@ static void drawer_build(void)
         y += SEC_H;
     }
 
-    // RX audio section: play demodulated audio (CW/CW-R/USB/LSB - see
-    // rx_audio.h) on the Tab5 speaker/headphone. Header row carries the
-    // on/off checkbox; a volume slider sits below. Panadapter-page only
-    // (drawer_sec_visible) - FT8/WSPR force DiGi mode, nothing to demodulate.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_RXAUDIO, y, 130);
-        lv_obj_t *ca_hdr = lv_label_create(sec);
-        lv_label_set_text(ca_hdr, "RX Audio");
-        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(ca_hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(ca_hdr, LV_ALIGN_TOP_LEFT, 0, 4);
-
-        // Initial state from NVS, not rx_audio_is_enabled()/get_volume():
-        // the drawer is built during ui_init, BEFORE rx_audio_init() loads
-        // those module statics, so the accessors would read stale defaults.
-        qmx_settings_t cacfg;
-        settings_load_all(&cacfg);
-
-        s_check_rxaudio = make_drawer_checkbox(sec, cacfg.rx_audio_en,
-                                               drawer_check_rxaudio_cb, NULL);
-        lv_obj_align(s_check_rxaudio, LV_ALIGN_TOP_RIGHT, 0, 0);
-
-        s_lbl_rxaudio_vol = lv_label_create(sec);
-        char cavbuf[24];
-        snprintf(cavbuf, sizeof(cavbuf), "Volume: %u", (unsigned)cacfg.rx_audio_vol);
-        lv_label_set_text(s_lbl_rxaudio_vol, cavbuf);
-        lv_obj_set_style_text_color(s_lbl_rxaudio_vol, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_rxaudio_vol, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_rxaudio_vol, LV_ALIGN_TOP_LEFT, 0, 44);
-
-        s_slider_rxaudio_vol = lv_slider_create(sec);
-        lv_obj_set_size(s_slider_rxaudio_vol, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_rxaudio_vol, 0, 100);
-        lv_slider_set_value(s_slider_rxaudio_vol, (int)cacfg.rx_audio_vol, LV_ANIM_OFF);
-        lv_obj_align(s_slider_rxaudio_vol, LV_ALIGN_TOP_LEFT, 0, 74);
-        lv_obj_add_event_cb(s_slider_rxaudio_vol, drawer_slider_rxaudio_vol_cb,
-                            LV_EVENT_VALUE_CHANGED, NULL);
-        y += 130;
-    }
+    /* ⛔ THE RX AUDIO SECTION IS GONE FROM THE DRAWER (2026-09-23).
+     * It used to sit here: an on/off check box in the header row and a volume
+     * slider below it. Both moved to Resource Management, where the AGC
+     * Ceiling/Attack/Release controls already were. Operator: "it is confusing
+     * to have it two places". RX audio is now configured in exactly one
+     * window, long-press the top bar to reach it. */
 
     // IF calibration section (per-unit QMX oscillator trim)
     {
@@ -14011,7 +13975,7 @@ static void drawer_build(void)
 
     lv_obj_t *drawer_sliders[] = {
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
-        s_slider_rxaudio_vol, s_slider_ifcal, s_slider_brightness,
+        s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast,
         s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
         s_slider_cwtxoff, s_outpwr_slider,
@@ -14481,28 +14445,6 @@ static void drawer_activation_btn_cb(lv_event_t *e)
     drawer_close();
     activation_modal_show();
 }
-
-static void drawer_check_rxaudio_cb(lv_event_t *e)
-{
-    bool en = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    rx_audio_set_enabled(en);
-    // The codec only opens at boot (see rx_audio_preopen()'s comment) - turning
-    // this on from OFF mid-session can't take effect until a restart.
-    if (en) ui_toast("RX audio: takes effect after a restart");
-}
-
-static void drawer_slider_rxaudio_vol_cb(lv_event_t *e)
-{
-    if (!s_slider_rxaudio_vol) return;
-    int v = lv_slider_get_value(s_slider_rxaudio_vol);
-    rx_audio_set_volume((uint8_t)v);
-    if (s_lbl_rxaudio_vol) {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "Volume: %d", v);
-        lv_label_set_text(s_lbl_rxaudio_vol, buf);
-    }
-}
-
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }

@@ -54,8 +54,15 @@ static lv_obj_t *s_gate_note = NULL;
 
 /* Panel width, and the separator that has to match it. Was a bare 760 in two
  * places; the separator silently kept the old width when the panel grew. */
-#define PANEL_W      1000
+/* 1000 -> 1100 (2026-09-23): the scroll strip's scrollbar runs down the right
+ * edge and was touching the row check boxes, which align to that same edge.
+ * The extra width plus SCROLL_PAD_R below gives the bar its own lane. The
+ * screen is 1280, so a 1100-wide panel still centres with 90 px either side. */
+#define PANEL_W      1100
 #define PANEL_PAD    24
+/* Right inset inside the scrolling strip, reserved for the scrollbar so no
+ * right-aligned child (the check boxes) ever sits under it. */
+#define SCROLL_PAD_R 20
 
 /* Gain sits on the RX Audio line and follows that checkbox; the three pan
  * sliders sit under Binaural CW and follow THAT one, because they shape the
@@ -77,6 +84,13 @@ static lv_obj_t *s_sld_attack     = NULL;
 static lv_obj_t *s_sld_release    = NULL;
 static lv_obj_t *s_lbl_attack_val = NULL;
 static lv_obj_t *s_lbl_release_val = NULL;
+
+/* RX output volume, 0..100. Moved here 2026-09-23 (operator): it was only in
+ * the settings drawer, one screen away from the AGC controls it interacts
+ * with, and "it is confusing to have it two places" - the level you hear is
+ * decided by the ceiling AND this together, so they belong on one page. */
+static lv_obj_t *s_sld_vol     = NULL;
+static lv_obj_t *s_lbl_vol_val = NULL;
 
 // Plain checkbox, themed square indicator, generous touch target - same
 // idiom as ft8_filter_modal.c's make_checkbox(), copied rather than shared
@@ -189,8 +203,11 @@ static void refresh_gating(void)
     SLD_SET_ENABLED(s_sld_gain, audio_on);
     if (s_lbl_gain_val)
         lv_obj_set_style_text_opa(s_lbl_gain_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    SLD_SET_ENABLED(s_sld_vol, audio_on);
     SLD_SET_ENABLED(s_sld_attack, audio_on);
     SLD_SET_ENABLED(s_sld_release, audio_on);
+    if (s_lbl_vol_val)
+        lv_obj_set_style_text_opa(s_lbl_vol_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
     if (s_lbl_attack_val)
         lv_obj_set_style_text_opa(s_lbl_attack_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
     if (s_lbl_release_val)
@@ -275,6 +292,16 @@ static void gain_cb(lv_event_t *e)
     settings_set_rxaud_gain_d10((uint8_t)v);
     rx_audio_set_agc_gain_max((float)v * 10.0f);
     if (s_lbl_gain_val) lv_label_set_text_fmt(s_lbl_gain_val, "%d", v * 10);
+}
+
+/* rx_audio_set_volume() persists to settings itself, so unlike the sliders
+ * below there is no separate settings_set_* call here - adding one would just
+ * write the same key twice. */
+static void rx_vol_cb(lv_event_t *e)
+{
+    int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
+    rx_audio_set_volume((uint8_t)v);
+    if (s_lbl_vol_val) lv_label_set_text_fmt(s_lbl_vol_val, "%d", v);
 }
 
 static void agc_attack_cb(lv_event_t *e)
@@ -421,6 +448,9 @@ static void modal_build(void)
     lv_obj_set_style_bg_opa(s_scroll, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_scroll, 0, 0);
     lv_obj_set_style_pad_all(s_scroll, 0, 0);
+    // Keep right-aligned children (the check boxes) out from under the
+    // scrollbar - see SCROLL_PAD_R.
+    lv_obj_set_style_pad_right(s_scroll, SCROLL_PAD_R, 0);
     lv_obj_set_scroll_dir(s_scroll, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_scroll, LV_SCROLLBAR_MODE_AUTO);
 
@@ -453,7 +483,7 @@ static void modal_build(void)
         if (d->row == ROW_AUDIO) {
             y += ROW_H;
 
-            /* AGC Ceiling, Attack, Release - each its OWN full row, same
+            /* RX Volume, then AGC Ceiling, Attack, Release - each its OWN full row, same
              * label/slider/value shape as every other row (0 label, 490
              * slider, 780 value). Ceiling used to ride on the RX Audio row's
              * own line at x=430, sharing it with that row's checkbox label -
@@ -469,12 +499,23 @@ static void modal_build(void)
                     int           min, max, cur;
                     lv_event_cb_t cb;
                     const char   *fmt;
-                } agcs[3] = {
+                } agcs[4] = {
+                    { "RX Volume",   &s_sld_vol,     &s_lbl_vol_val,     0, 100,  rx_audio_get_volume(),                rx_vol_cb,      "%d" },
                     { "AGC Ceiling", &s_sld_gain,    &s_lbl_gain_val,    5, 150,  settings_get_rxaud_gain_d10(),        gain_cb,        "%d" },
                     { "AGC Attack",  &s_sld_attack,  &s_lbl_attack_val,  1, 50,   settings_get_rxaud_agc_attack_ms(),  agc_attack_cb,  "%d ms" },
                     { "AGC Release", &s_sld_release, &s_lbl_release_val, 10, 500, settings_get_rxaud_agc_release_ms(), agc_release_cb, "%d ms" },
                 };
-                for (int p = 0; p < 3; p++) {
+                /* ⭐ THESE ROWS HAVE NO CHECK BOX, so unlike the feed rows they
+                 * can use nearly the whole width - and they SHOULD. At 270 px
+                 * the operator could not set them accurately: "they are too
+                 * short now - there is plenty of space on each side ... it is
+                 * very difficult to adjust precisely when so short". A ceiling
+                 * of 50..1500 across 270 px is about 5 units per pixel; across
+                 * 700 px it is under 2. Content width is 1028 (panel 1100 less
+                 * 2x24 pad, 2x2 border and SCROLL_PAD_R), so 210 + 700 + value
+                 * at 930 leaves the value text clear to the right edge. */
+                const int SLD_X = 210, SLD_W = 700, SLD_VAL_X = 930;
+                for (int p = 0; p < 4; p++) {
                     lv_obj_t *cap = lv_label_create(s_scroll);
                     lv_label_set_text(cap, agcs[p].cap);
                     lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
@@ -482,8 +523,8 @@ static void modal_build(void)
                     lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y);
 
                     lv_obj_t *sld = lv_slider_create(s_scroll);
-                    lv_obj_set_size(sld, 270, 14);
-                    lv_obj_align(sld, LV_ALIGN_TOP_LEFT, 490, y + 10);
+                    lv_obj_set_size(sld, SLD_W, 14);
+                    lv_obj_align(sld, LV_ALIGN_TOP_LEFT, SLD_X, y + 10);
                     lv_slider_set_range(sld, agcs[p].min, agcs[p].max);
                     lv_slider_set_value(sld, agcs[p].cur, LV_ANIM_OFF);
                     lv_obj_add_event_cb(sld, agcs[p].cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -493,7 +534,7 @@ static void modal_build(void)
                     lv_label_set_text_fmt(val, agcs[p].fmt, agcs[p].cur);
                     lv_obj_set_style_text_color(val, lv_color_hex(UI_COLOR_TEXT), 0);
                     lv_obj_set_style_text_font(val, &lv_font_montserrat_20, 0);
-                    lv_obj_align(val, LV_ALIGN_TOP_LEFT, 780, y + 4);
+                    lv_obj_align(val, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
                     *agcs[p].val = val;
 
                     y += ROW_H;
@@ -511,7 +552,12 @@ static void modal_build(void)
             lv_obj_align(s_pan_hdr, LV_ALIGN_TOP_LEFT, 16, y);
             y += 30;
 
-            const int SW = 292, SGAP = 20;
+            /* 292 -> 320: the panel went 1000 -> 1100 wide, and the trio was
+             * still laid out for the old width, leaving ~96 px dead on the
+             * right. Same reason the four audio sliders above grew - a wider
+             * slider is a more precise one. 16 + 2*340 + 320 = 1016, inside
+             * the 1028 content width. */
+            const int SW = 320, SGAP = 20;
             struct {
                 const char   *cap;
                 lv_obj_t    **sld;
@@ -565,7 +611,10 @@ static void modal_build(void)
              * directly beneath RX Audio it cut the audio group in half and
              * implied Binaural belonged with the network feeds. */
             lv_obj_t *sep = lv_obj_create(s_scroll);
-            lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD, 2);
+            /* LV_PCT, not PANEL_W - 2*PANEL_PAD: the strip now also reserves
+             * SCROLL_PAD_R on the right, so a width computed from the panel
+             * overflows the content box and would arm a horizontal scroll. */
+            lv_obj_set_size(sep, LV_PCT(100), 2);
             lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
             lv_obj_set_style_border_width(sep, 0, 0);
             lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 0, y);
@@ -629,6 +678,11 @@ static void rows_refresh_from_settings(void)
         const uint8_t g = settings_get_rxaud_gain_d10();
         lv_slider_set_value(s_sld_gain, g, LV_ANIM_OFF);
         if (s_lbl_gain_val) lv_label_set_text_fmt(s_lbl_gain_val, "%d", g * 10);
+    }
+    if (s_sld_vol) {
+        const uint8_t v = rx_audio_get_volume();
+        lv_slider_set_value(s_sld_vol, v, LV_ANIM_OFF);
+        if (s_lbl_vol_val) lv_label_set_text_fmt(s_lbl_vol_val, "%d", v);
     }
     if (s_sld_attack) {
         const uint8_t a = settings_get_rxaud_agc_attack_ms();
