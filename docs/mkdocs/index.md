@@ -100,7 +100,8 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   band consensus.
 - **microSD backup** — insert a card (restart afterwards) and your ADIF log, full config,
   LoTW certificate and key, and diagnostic log are mirrored automatically. Continuous with
-  WiFi off (green SD dot); one complete backup per start-up with WiFi on (yellow dot).
+  WiFi off; one complete backup per start-up with WiFi on. The SD dot is green while writes
+  are reaching the card and yellow when nothing has landed lately.
 - **Diagnostics** — an always-on log with nothing to enable: 5 MB in RAM, a rolling copy
   in flash that survives a power cut, and a full mirror to microSD. A crash survives the
   reboot and is reported on the next boot, so a diagnostic download is enough to answer
@@ -122,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.2** fixes the audio itself: a peak limiter for strong signals, and the break-ups are gone.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.3** finishes the audio fix v1.16.2 started and puts all four audio controls in one window.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -139,7 +140,7 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
 
-**v1.16.2 makes the audio usable.** A **peak limiter** stops a strong signal arriving at full scale and taking your ears off, without making quiet stations any quieter. The **break-ups are gone** — the QMX sends about 47,885 samples a second and the Tab5 plays exactly 48,000, and nothing reconciled the two, so a fragment of silence was played roughly every three seconds. **LSB is fixed** *(Gyula HA3HZ)*: the audio came from the wrong side of the dial. A **working microSD card is no longer thrown away** *(Dennis WN4FLA)*. **Pause is on the web page** with play/pause symbols and no longer costs you the contact *(Randy N4OPI, Gyula HA3HZ)*, and you can **reboot the Tab5 from the browser**. ⚠ Audio still stutters while a browser has the panadapter open — close the page while you listen.
+**v1.16.3 finishes the audio fix and gathers the controls.** The **crackle is actually gone** — v1.16.2 shipped the first of five attempts at the clock correction and you could still hear it working. **All four level controls are in one window**: RX Volume moved into Resource Management, "Gain" is renamed **AGC Ceiling** and reaches 1500, and **Attack** and **Release** are adjustable for the first time. ⚠ The settings drawer's RX Audio section is gone, including its on/off box — long-press the top bar instead. **A GPS that locks late is no longer missed** *(John W5JSS)*: detection ran once 45 seconds after boot and never again; a QMX+ here locked 25 minutes in. **WSPR gives the radio back its mode** instead of leaving it in Digi. **Preferred network** decides which remembered WiFi wins *(Randy N4OPI)*. The **SD dot** is green only while writes are actually landing. ⚠ Audio still breaks up while a browser has the panadapter open — close the page while you listen.
 
 **v1.16.0 brings audio to the Tab5, as a beta.** The I/Q the radio already sends becomes sound on the device, and the first thing built on it is a **panoramic CW split** — two stations on different frequencies placed left and right across the stereo image rather than on top of each other, with **pan width**, **pan blend** and **overlap** adjustable live while you listen. **Binaural CW is a first implementation: use 300 Hz bandwidth and up, and do not expect much separation below 200 Hz.** Audio costs resources, so **long-press the top bar on the Panadapter page** to open **Resource Management**, where it is switched on and off and where you can see what it competes with. The whole audio part is **beta and subject to further development** — the next step is the same features in the web interface, with only the I/Q sent to the PC and processed there. Full detail in the [Audio guide](guide/audio.md). A **Pause button** also arrives for QSOs *(Randy N4OPI)*: skip one transmission to check your slot is still clear, then carry on with the same message.
 
@@ -286,7 +287,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

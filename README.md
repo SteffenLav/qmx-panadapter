@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.2.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **v1.16.2 makes the audio usable, and stops a good microSD card being thrown away.** A **peak limiter** means a strong signal can no longer arrive at full scale and take your ears off, and it does not make quiet stations any quieter. The **break-ups are gone**: your QMX sends about 47,885 samples a second, the Tab5 plays exactly 48,000, and nothing reconciled the two — so a fragment of silence was played roughly every three seconds, with no error recorded anywhere. **LSB was taken from the wrong side of the dial** and is fixed *(Gyula HA3HZ)*. A **card that mounted fine was declared removed** after one failed write and ignored for the rest of the session *(Dennis WN4FLA)*. **Pause is on the web page** now, with play/pause symbols, and a pause no longer counts against giving up on a contact *(Randy N4OPI, Gyula HA3HZ)*. You can also **reboot the Tab5 from the browser**.
+> **v1.16.3 finishes the audio fix and puts every audio control in one place.** The **crackle is actually gone** — v1.16.2's clock corrector was still splicing a sample every frame and you could hear it; the real fault was a buffer that had room for one extra sample when the resampler needed dozens, and a phase counter that ran backwards when it hit that wall. **All four level controls now sit together** in Resource Management: RX Volume moved in from the settings drawer, "Gain" is renamed **AGC Ceiling** (it never was a plain gain) and reaches 1500, and **Attack** and **Release** are adjustable for the first time. **A GPS that takes its time is no longer missed** — detection ran once, 45 seconds after boot, and never looked again; a QMX+ here locked 25 minutes in and is now picked up *(John W5JSS)*. **WSPR gives the radio back its mode** instead of leaving it in DiGi for ever. A **Preferred network** field decides which remembered WiFi wins, instead of the loudest *(Randy N4OPI)*. And the **SD dot tells the truth** — green when writes are actually landing, not merely because a card mounted.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
@@ -34,7 +34,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.3.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -225,9 +225,9 @@ on its own LCD) or `14,074,000` *(Don N2VGU)*. Settings drawer, under Advanced.
 **microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) and your
 whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
 full config export, your LoTW certificate and key, the diagnostic log and a
-self-describing `README.txt`. Continuous with WiFi off (green **SD** dot); one complete
-backup per start-up with WiFi on (yellow dot), because the card and the WiFi
-co-processor share a bus. It restores too, which is the half that was missing: **Restore
+self-describing `README.txt`. Continuous with WiFi off; one complete backup per start-up
+with WiFi on, because the card and the WiFi co-processor share a bus. The **SD** dot is
+green while writes are reaching the card and yellow when nothing has landed lately. It restores too, which is the half that was missing: **Restore
 from SD** in the Tab5's own log window, or from the browser. And because the card mirrors
 the *present*, the copy from just before the log last got **smaller** is kept beside it as
 `qso.prev.adi` — so a deletion you notice two restarts later is still recoverable.

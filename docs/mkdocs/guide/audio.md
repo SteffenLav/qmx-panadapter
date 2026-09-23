@@ -13,19 +13,19 @@ The RF passband is split into two channels:
 - **Right**: Upper-frequency station (panned fully right)
 - **Center blend**: Dry/wet mix between the two
 
-Three live controls tune the effect mid-QSO without leaving the exchange:
+Three live controls tune the effect mid-QSO without leaving the exchange, grouped under **Panoramic split — adjust while listening**:
 
-- **Pan Width** — Frequency spread between the two stations. Wider = greater separation.
-- **Pan Blend** — Dry/wet audio mix. Left is pure lower channel; right is pure upper channel.
+- **Width** — Frequency spread between the two stations. Wider = greater separation.
+- **Blend** — Dry/wet audio mix. Left is pure lower channel; right is pure upper channel.
 - **Overlap** — Frequency range for each station. Wider ranges allow more signal capture.
 
 ### Enabling Panoramic CW
 
-1. Tap and hold the **top bar** in the Panadapter view
-2. Open **Resource Management**
-3. Enable **CW Audio**
+1. Long-press the **top bar** in the Panadapter view (any of Band, Mode, BW, Freq or Zoom)
+2. Resource Management opens
+3. Tick **RX Audio (speaker/headphone)**, then **Binaural CW (stereo separation)**
 
-The three pan controls appear in the Panadapter view once enabled.
+The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
 ### On the Air
 
@@ -58,13 +58,16 @@ Audio decoding shares the Tab5's compute and memory budget with the spectrum, wa
 
 ### Opening Resource Management
 
-**Tap and hold the top bar in the Panadapter view**, then select **Resource Management**. 
+**Long-press the top bar in the Panadapter view** — any of the Band, Mode, BW, Freq or Zoom areas.
 
-The window shows:
-- Current resource usage by each component
-- Available headroom
-- Which features can be toggled on/off
-- Warnings if enabling a feature would exceed capacity
+The window lists RX audio and the background network feeds that compete with it for the same scarce memory, each with a tick box:
+
+- **RX Audio (speaker/headphone)** — with RX Volume and the three AGC controls described below
+- **Binaural CW (stereo separation)** — with the three panoramic-split controls
+- **SelfSpotter**, **RBN**, **DX cluster**, **PSK Reporter — who's hearing me** — these grey out and are held off while RX audio is on
+- **POTA / SOTA spots**, **PSK Reporter — report my decodes** — these keep running
+
+The list scrolls; the **Close** button stays put at the bottom.
 
 **Toggle audio on and off as needed** — the resource footprint is immediate, and disabling a feature instantly frees that headroom.
 
@@ -89,32 +92,38 @@ So you **do** get audio on SSB; what you do not get there is the left/right spli
 
 ## Known Limitations
 
+- **Audio breaks up while a web page is open.** Known and unfixed as of v1.16.3. With a browser connected to the panadapter page the audio task misses some of its deadlines and you hear a regular crackle; closing the page clears it. Measured, but the cause is not yet found — if you need clean audio, close the web page.
 - **Stereo rendering requires a headset or speaker with stereo output.** Mono output collapses both channels; panning does not work.
 - **The split is CW-only** (see the table above). On SSB you hear the signal, but it is not placed left or right.
 - **Limited to the audio passband.** If the audio filter is 300 Hz wide, the maximum usable separation is about 300 Hz. A wider filter in the radio settings increases the available range.
-- **Level depends on an AGC that is still being tuned.** If a signal is quieter than you expect even at full volume, that is the AGC's gain ceiling rather than your volume control. It is adjustable live — see below.
+- **Level is set by an automatic gain control, not by the volume slider.** If a signal is quieter than you expect even at full volume, the AGC's ceiling is what is holding it back. All three AGC controls are adjustable live — see below.
 
-## If the level is too low
+## The AGC controls
 
-Audio level is set by an automatic gain control that is still being tuned, and on some signals it does not bring the level up far enough — turning the volume up does not help, because the volume control is not what is holding it back.
+All four audio level controls live in **Resource Management** (long-press the top bar), on their own rows under **RX Audio**:
 
-**Check which control you are actually on first.** The sliders marked **Volume** — in Resource Management and in the Advanced pane — stop at 100, and turning them to 100 is *not* the same as turning the gain up. They are two different things, and reaching the end of the volume slider does not mean you have run out of level.
+| Control | Range | Default | What it does |
+|---|---|---|---|
+| **RX Volume** | 0 – 100 | 60 | Output level to the speaker or headphones. |
+| **AGC Ceiling** | 50 – 1500 | 200 | How far the AGC may lift a *weak* signal. Raise it if quiet stations stay quiet. |
+| **AGC Attack** | 1 – 50 ms | 3 ms | How fast the gain comes *down* when a signal arrives. Shorter catches sharp CW edges; too short can sound clipped. |
+| **AGC Release** | 10 – 500 ms | 150 ms | How fast the gain comes back *up* afterwards. Longer is steadier on CW; shorter follows speech better. |
 
-The control that decides how hard weak signals are lifted is **Gain**:
+All four are remembered across restarts and travel in a config backup.
 
-| | |
-|---|---|
-| **Where** | Long-press the top bar on the Panadapter page to open **Resource Management**, then the **RX Audio** line |
-| **Range** | 50 to 800 |
-| **Default** | 200 |
+**Volume and Ceiling are not the same thing.** Volume sets how loud the output is; Ceiling decides how hard a weak signal is lifted before it gets there. Running Volume to 100 does not mean you have run out of level — if it is still too quiet, raise **AGC Ceiling**.
 
-Turn it up if a signal is quieter than it should be. Several operators run it around 380. It is remembered across restarts and travels in a config backup.
+### What changed in v1.16.3
+
+- **AGC Ceiling was called "Gain".** The name was wrong: it never was a plain gain, it is the ceiling on the AGC's own weak-signal boost, and calling it Gain led people to look for an AGC that was already there. Its range also went up from 800 to 1500, because the Tab5's internal speaker wants more headroom than the old ceiling allowed.
+- **Attack and Release are new** — the AGC's timing was fixed before, and is now yours to set.
+- **RX Volume moved here from the settings drawer**, and the drawer's RX Audio section is gone entirely. That includes its on/off box: **Resource Management is now the only place to switch RX audio on or off.**
 
 ## Strong signals
 
-A peak limiter sits after the automatic gain, so a loud station cannot arrive at full scale and startle you in headphones. It holds the peaks down and leaves the average level alone, which means turning **Gain** up to hear weak stations does not make the strong ones painful.
+A peak limiter sits after the automatic gain, so a loud station cannot arrive at full scale and startle you in headphones. It holds the peaks down and leaves the average level alone, which means raising **AGC Ceiling** to hear weak stations does not make the strong ones painful.
 
-This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more gain fixed it.
+This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more ceiling fixed it.
 
 ## Future Work — Web Audio (IQ Streaming)
 
@@ -125,7 +134,7 @@ The next phase will stream **I/Q channels only** from the Tab5 to a PC browser, 
 - **Allows richer audio features** — filtering, EQ, advanced separation, and recording
 - **Works with any audio software** — your browser runs the decoder
 
-Timeline: **After v1.16.0**, pending real-world feedback on the current implementation.
+Timeline: pending real-world feedback on the current implementation.
 
 ## Feedback
 

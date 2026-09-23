@@ -4,6 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.3** — 2026-09-23
+
+**The audio fix v1.16.2 was meant to be, all four audio controls on one page, and three things that were quietly misreporting their own state.**
+
+- **The crackle really is gone this time.** v1.16.2 said the break-ups were fixed, and they were — but what shipped was the first of five attempts at the correction, and you could still hear it working. The real fault was a buffer with room for one extra sample where the corrector needed dozens, and a counter that ran backwards when it hit that wall and started inventing waveform. That is why it crackled even on an empty band with no signal at all.
+- **Every audio control is now in one window.** **RX Volume** has moved out of the settings drawer and into **Resource Management**, next to the gain controls that decide the same thing your ears hear. ⚠ The drawer's RX Audio section is gone completely, including its on/off tick box — long-press the top bar to reach it now.
+- **"Gain" is now called AGC Ceiling, and goes up to 1500.** It was never a plain gain: it sets how hard the automatic gain is allowed to lift a *weak* signal. The old name had people hunting for an AGC that was already there. The extra range is for the Tab5's own speaker, which needs more than the old ceiling of 800 allowed.
+- **Attack and Release are yours to set now** — 1–50 ms and 10–500 ms. Shorter attack catches sharp CW edges; longer release is steadier on CW, shorter follows speech better. Both are remembered and travel in a config backup.
+- **A GPS that takes a while to lock is no longer missed** *(John W5JSS)*. Detection ran once, about 45 seconds after switching on, and whatever it decided then stuck for the rest of the session — so a receiver still hunting for satellites was written off as "no GPS" until you rebooted. A QMX+ here locked **25 minutes** after boot and is now picked up automatically. If yours still says NTP, check the radio's own GPS viewer: the panadapter only accepts a fix that genuinely agrees with network time.
+- **WSPR hands the radio back.** WSPR has to transmit in Digi, and it was leaving the radio there afterwards — every cycle, for ever. Since the QMX remembers its mode, it then powered up in Digi too, which looked like the mode failing to save. It now puts back whatever mode it interrupted. ⚠ Built and reasoned through, but **not yet watched through a live WSPR cycle**.
+- **Preferred network** *(Randy N4OPI)*. The Tab5 remembers up to six networks, but when it fell back it always took the **loudest** — wrong if you have a DMZ next to a house network. Name the one you want in the web page's WiFi settings and it wins whenever it is in range. Leave it blank and nothing changes.
+- **The SD dot tells the truth.** It turned yellow about ten seconds into any WiFi session and stayed yellow regardless — the same colour on a perfectly healthy card and on one where every single write was failing. Green now means a write actually reached the card in the last 90 seconds.
+
+> Audio and binaural CW remain a **beta**, and audio still breaks up while a web page is open — close it while you listen. That one was measured again this cycle and the most likely cause was tested and ruled out, so it is still open.
+
+> ⚠ **With WiFi on, writes to the microSD card stop about 30 seconds after start-up** on at least one bench unit — the memory the card driver needs is taken by WiFi and never comes back. Your start-up backup always lands; nothing after it does. Known, measured, not yet fixed.
+
+## Previous Releases
+
 **v1.16.2** — 2026-09-22
 
 **Audio you can listen to for an hour, and a microSD card that stops being thrown away.**

@@ -99,10 +99,13 @@ Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's sl
 - **Diagnostic log** — rolling copy
 - **README.txt** — describes every file on the card
 
-The **SD** dot in the bottom status bar shows what is happening (absent = no card, which is not an error):
+The **SD** dot in the bottom status bar shows what is happening:
 
-- **Green** — mirroring continuously. This is the case with **WiFi off**, i.e. normal POTA/SOTA operating.
-- **Yellow** — your start-up backup is written and mirroring has stopped. This is the case with **WiFi on**: the card and the WiFi co-processor share a bus and can't both use it reliably, so the Tab5 takes the full backup within a few seconds of switching on and then leaves the card alone. QSOs made later in that session are written at the next start-up.
+- **Green** — writes are reaching the card (something landed in the last 90 seconds).
+- **Yellow** — a card is mounted, but nothing has been written lately. On a quiet session that can simply mean there was nothing to write; if it stays yellow while the Tab5 is busy, writes are failing — see [Troubleshooting](reference/troubleshooting.md).
+- **Grey, struck through** — no card in the slot. Not an error.
+
+With **WiFi off** (normal POTA/SOTA operating) everything is mirrored continuously. With **WiFi on** the card and the WiFi co-processor share a bus and can't both use it reliably, so the Tab5 takes the full backup within a few seconds of switching on and then only keeps the diagnostic log and CW transcript going every 30 seconds. QSOs made later in that session are written at the next start-up.
 
 > **After inserting the SD card your Tab5 needs a restart.** The card is claimed during a short window early in boot, so one pushed in while the Tab5 is running isn't used until you restart it.
 

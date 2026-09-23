@@ -588,14 +588,26 @@ A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive on
 
 The microSD card and the WiFi co-processor share a bus on this hardware and cannot both use it reliably. Rather than fail at an unpredictable moment, the Tab5 picks the behaviour that works:
 
-| | What happens | SD dot |
-|---|---|---|
-| **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in | **Green** |
-| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds | **Yellow** |
+| | What happens |
+|---|---|
+| **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in |
+| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds |
 
 Either way your QSO log, config, and LoTW certificate and key are backed up. With WiFi on, QSOs made later in that session reach the card at the **next start-up** — so if you have been operating with WiFi up and want them on the card now, restart the Tab5.
 
-If no card is inserted the dot is absent, which is not an error.
+### What the SD dot means (changed in v1.16.3)
+
+The dot reports whether writes are actually **landing**, not merely whether a card mounted:
+
+| Dot | Meaning |
+|---|---|
+| **Green** | A write succeeded in the last 90 seconds |
+| **Yellow** | A card is mounted, but nothing has been written lately |
+| **Grey, struck through** | No card in the slot — not an error |
+
+Before v1.16.3 the dot went yellow about ten seconds into any WiFi session and stayed yellow for the rest of it, whatever the card was doing — so it read the same on a perfectly healthy unit and on one where every write was failing. It now distinguishes those.
+
+A short spell of yellow is not a fault: on a quiet session there may be nothing to write. Yellow that persists while the Tab5 is clearly busy means writes are failing — see [Troubleshooting](../reference/troubleshooting.md).
 
 **While a browser is watching the spectrum, those 30-second writes wait.** The
 card and the WiFi co-processor share a bus, and writing the card holds the

@@ -260,7 +260,9 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **The FT8 include/exclude filter terms** (both pairs) and the filter toggles.
 - **Everyday switches**: POTA and RBN spots, PSK Reporter, grey-listing, distance
   units, I/Q balance, band-plan region, and the QMX volume in dB.
-- **WiFi**: add another network from a laptop. The Tab5 remembers up to six.
+- **WiFi**: add another network from a laptop. The Tab5 remembers up to six, and
+  a **Preferred network** field (under network name and password) decides which
+  one wins — see below.
 - **Show RIT button**, matching the Tab5 setting — hide the RIT button on the panadapter
   if you never use it.
 - **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
@@ -269,6 +271,26 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
+
+### Preferred network (v1.16.3)
+
+The Tab5 remembers up to six networks and falls back to one of them if the one
+you typed in cannot be reached. Until v1.16.3 that fallback always took
+whichever remembered network was **loudest**, which is the wrong answer on a
+site with more than one — a DMZ and a house network, say, where the loud one is
+not the one you want the panadapter on.
+
+Set **Preferred network** to the SSID you want and, whenever that network is
+reachable, the Tab5 takes it over any stronger alternative. Leave it empty and
+the fallback behaves exactly as before, so nobody who does not need this is
+affected.
+
+It is checked every time the Tab5 looks for a fallback, not once, so the
+preferred network wins again the moment it comes back — there is nothing to
+reset and no need to reboot.
+
+> Not carried in a config backup. A restored config does not bring the
+> preferred network with it; set it again on each unit.
 
 Also here: the **Display & waterfall** group -
 brightness, waterfall black level, contrast, FFT window, colour map, display

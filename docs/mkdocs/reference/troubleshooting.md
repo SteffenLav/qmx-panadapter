@@ -212,6 +212,26 @@ This is a firmware limitation, not a fault in your setup, and it is being worked
 4. If still failing, try `http://192.168.1.50:80` explicitly
 5. Restart the Tab5
 
+### The SD dot stays yellow (v1.16.3)
+
+**Symptoms:** A card is in the slot and the **SD** dot is yellow rather than green, and stays that way while the Tab5 is clearly busy.
+
+**What the colours mean.** From v1.16.3 the dot reports whether writes are actually reaching the card: **green** = something landed within the last 90 seconds, **yellow** = a card is mounted but nothing has lately, **grey with a stroke** = no card.
+
+**Causes:**
+
+1. **Nothing to write.** On a very quiet session there may genuinely be nothing due, and yellow is then correct and harmless. The diagnostic log normally writes every 30 seconds, so this is uncommon.
+2. **WiFi has taken the memory the card driver needs.** This is the common one. With WiFi on, the DMA-capable memory pool collapses shortly after start-up — measured on a bench unit at 58 KB free / 31 KB largest block when the card mounted, and 83 B / 20 B seventy seconds later — and every attempt to open a file on the card then fails. Your start-up backup still lands; nothing after it does.
+3. **A genuinely failing card or slot.** Rarer. The log will show mount-level errors (CRC, invalid response) rather than write failures.
+
+**Fix:**
+
+1. **If you need the card written reliably, run with WiFi off** (which is the normal POTA/SOTA case anyway) — mirroring is continuous and flawless there.
+2. With WiFi on, **restart the Tab5 when you want the session's QSOs on the card**. The start-up backup is complete and always succeeds.
+3. To tell cause 2 from cause 3, download the diagnostic log and look for `SDFAIL[slowopen] err=0x5` with a low `DMA free=` figure (cause 2) versus mount-time errors (cause 3).
+
+> Cause 2 is known, measured and **not yet fixed**. It is not your card.
+
 ### Settings disappear after restart
 
 **Symptoms:** You set your callsign/grid/WiFi password, but after power cycle they're gone.
