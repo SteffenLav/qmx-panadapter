@@ -306,6 +306,46 @@ static void roam_to_known_if_present(const wifi_ap_record_t *recs, uint16_t num)
     int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
     if (kn <= 1) return;                 // nothing to roam between
 
+    /* ⭐ A DESIGNATED-PREFERRED NETWORK WINS OUTRIGHT, IGNORING SIGNAL STRENGTH.
+     *
+     * Randy N4OPI, 2026-09-23: he runs several sites with overlapping
+     * remembered SSIDs (one is a DMZ network for remote access), and "if a
+     * Tab5 has been connected to more than one, it is beyond my control as to
+     * which network it will connect to on a reboot" - because the code below,
+     * unmodified, always hands the roam to whichever remembered network is
+     * LOUDEST, which has nothing to do with which one he actually wants.
+     *
+     * Checked FIRST, before the RSSI comparison, and only short-circuits it
+     * when the preferred network is actually present in THIS scan - if it is
+     * not on the air right now, this falls straight through to the existing
+     * strongest-signal logic below, so a temporarily-unreachable preference
+     * degrades gracefully instead of stalling. Roam scans repeat on their own
+     * interval (try_start_roam_scan/ROAM_RESCAN_INTERVAL_US), so the
+     * preferred network is re-tried and re-promoted automatically the next
+     * time it is in range - no separate "give up after N attempts" state, and
+     * none of the failure modes a give-up timer would have (never returning
+     * to a preference that comes back mid-session).
+     *
+     * Empty string (the default - nobody has set one) skips this block
+     * entirely, so a unit that never uses the feature sees byte-identical
+     * behaviour to before. */
+    char pref[33];
+    settings_get_wifi_preferred_ssid(pref);
+    if (pref[0]) {
+        for (uint16_t i = 0; i < num; i++) {
+            if (strcmp((const char *)recs[i].ssid, pref) != 0) continue;
+            if (strcmp(pref, s_ssid) == 0) break;   // already trying it, just not answering
+            const char *pass = "";                   // scan records carry no password
+            for (int k = 0; k < kn; k++)
+                if (strcmp(known[k].ssid, pref) == 0) { pass = known[k].pass; break; }
+            ESP_LOGW(TAG, "roam: preferred network '%s' is on the air - taking it "
+                          "over '%s' regardless of signal strength", pref, s_ssid);
+            apply_creds_live(pref, pass);
+            s_retry_count = 0;
+            return;
+        }
+    }
+
     int best_k = -1, best_rssi = -127;
     for (uint16_t i = 0; i < num; i++) {
         if (recs[i].ssid[0] == '\0') continue;

@@ -505,6 +505,14 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(wifi_obj, "ssid", wifi_get_ssid());
     cJSON_AddNumberToObject(wifi_obj, "rssi", wifi_get_rssi_dbm());
     cJSON_AddStringToObject(wifi_obj, "ip",   wifi_get_ip());
+    // The setter (wifi_prefer) must be readable back, or it is a second
+    // source of truth waiting to drift - the same argument as ft8.pause
+    // above. Empty string = no preference set.
+    {
+        char pref[33];
+        settings_get_wifi_preferred_ssid(pref);
+        cJSON_AddStringToObject(wifi_obj, "preferred_ssid", pref);
+    }
 
     cJSON_AddNumberToObject(root, "freq_hz",     (double)cat_get_frequency());
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
@@ -2185,6 +2193,21 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wifi_prefer") == 0) {
+        /* {"action":"wifi_prefer","ssid":"HomeNet"} - designate a WLAN that
+         * wifi.c's roam-on-failure path takes over strongest-signal whenever
+         * it is reachable. {"ssid":""} or omitting ssid clears it. Randy
+         * N4OPI, 2026-09-23: several sites with overlapping remembered SSIDs
+         * (one his DMZ for remote access), and no way to say which one should
+         * win a reboot - "beyond my control as to which network it will
+         * connect to". No Tab5 UI for this yet, deliberately: he manages his
+         * station remotely, over the web, which is exactly this endpoint. */
+        const char *ssid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "ssid"));
+        settings_set_wifi_preferred_ssid(ssid ? ssid : "");
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_enable") == 0) {
         /* The master switch. Deliberately an /api/cmd action and NOT a drawer
          * control: WSPR ships on the main track before it is finished so that

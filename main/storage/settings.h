@@ -789,6 +789,15 @@ void settings_wifi_known_set_all(const wifi_known_t *list, int n);
 void settings_wifi_known_forget(const char *ssid);
 void settings_wifi_known_clear(void);
 
+// Designated-preferred network among the remembered list (Randy N4OPI,
+// 2026-09-23): when set and reachable, wifi.c's roam-on-failure path picks it
+// outright instead of whichever remembered network is loudest. Empty = no
+// preference (default, today's exact behaviour). Not required to already be
+// in the known list - it is just an SSID string compared against scan
+// results, same as everything else in the roam path.
+void settings_get_wifi_preferred_ssid(char out[33]);
+void settings_set_wifi_preferred_ssid(const char *ssid);
+
 // FT8/FT4 TX tone preference and hold (debounced flush) - see ft8_tx.h for what
 // "hold" means to the TX paths. Both are written by the TX tone picker's Apply.
 void settings_set_tx_tone_hz(uint16_t v);
