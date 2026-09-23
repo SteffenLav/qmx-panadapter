@@ -127,6 +127,11 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
 #define FIR_LEN        255       // stage-2 narrow lowpass taps (odd, linear phase) - shared by both modes
 #define FIR_DECIM_LEN  63        // stage-1 decimator taps (fixed, coarse - same as dsp.c's ZOOMFIR)
 #define RX_DECIM_D     8         // internal rate = DSP_SAMPLE_RATE_HZ / RX_DECIM_D
+// Headroom for the continuous clock-drift resampler (see rx_audio_preopen's
+// s_out allocation and the upsample loop). Sized for the resample clamp's
+// worst case, not the ~2.5 extra samples the measured 0.24% drift actually
+// needs - "generous, not incremental" after the bug this undersizing caused.
+#define RX_OUT_HEADROOM 64
 #define CW_DEF_OFFSET  700       // fallback CW offset if CAT hasn't reported one
 // Mode-default passband widths, used only when ui_get_passband_width_hz()
 // reads 0 (CAT hasn't reported one yet). Mirrors compute_passband_edges_hz()'s
@@ -471,6 +476,17 @@ static float s_agc_env = 1.0f;
 #define LIM_THRESH   26000.0f
 #define LIM_RELEASE  (0.00008f * (float)RX_DECIM_D)
 static float s_lim_gain = 1.0f;
+/* Fractional-resample state for the clock-drift corrector. s_up_inc is the
+   phase advance per OUTPUT sample; 1/RX_DECIM_D is exactly no correction, and
+   the accounting below nudges it by a few parts per million to track the
+   radio. Clamped hard: this multiplies the playback rate, so a runaway value
+   would change the pitch. */
+static float s_up_phase = 0.0f;
+static float s_up_inc   = 1.0f / (float)RX_DECIM_D;
+static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its clamp */
+static float    s_up_target    = 0.0f;   /* smoothed increment from the measured source rate */
+static uint32_t s_in_pairs_win = 0;      /* input pairs seen in the current measuring window */
+static int64_t  s_in_win_us    = 0;      /* when that window started */
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -890,6 +906,9 @@ static void rx_audio_task(void *arg)
         if (!active_prev) {
             s_agc_env = 1.0f;
             s_lim_gain = 1.0f;
+            s_up_phase = 0.0f;
+            s_up_inc   = 1.0f / (float)RX_DECIM_D;
+            s_up_target = 0.0f; s_in_pairs_win = 0; s_in_win_us = 0;
             s_noise   = 1.0f;
             s_last_up_v_l = 0.0f;
             s_last_up_v_r = 0.0f;
@@ -933,6 +952,7 @@ static void rx_audio_task(void *arg)
         s_loop_count++;
         int64_t read_start_us = esp_timer_get_time();
         int pairs = (int)dsp_rxaudio_read(s_rxbuf, DSP_FFT_SIZE, 60);
+        const int in_pairs = pairs;   /* INPUT count - `pairs` becomes the OUTPUT count below */
         uint32_t read_us = (uint32_t)(esp_timer_get_time() - read_start_us);
         if (read_us > s_read_us_max) s_read_us_max = read_us;
         s_read_us_sum += read_us;
@@ -1151,6 +1171,12 @@ static void rx_audio_task(void *arg)
         // own pan_width (a WIDE filter should not get LESS spread than what
         // was tuned), never above 4x it (an extremely narrow filter, e.g.
         // 50 Hz, would otherwise demand an absurd multiplier).
+        /* Output write cursor. The upsampler emits RX_DECIM_D samples per
+           decimated sample normally, and one more or one fewer on the frame
+           where the clock-drift accounting asks for it - so the output length
+           is counted, not computed. */
+        int outn = 0;
+
         float eff_pan_width = s_pan_width;
         if (panoramic_now && s_half_bw_hz > 0) {
             const float PAN_WIDTH_REF_HALF_BW_HZ = 250.0f;   // half of the 500 Hz test filter
@@ -1301,11 +1327,112 @@ static void rx_audio_task(void *arg)
             // the documented fallback in the FIR_LEN comment above rather
             // than a new idea. s_last_up_v_l/r carry each ramp's end value
             // across frame boundaries so there is no click at i=0 either.
-            int base = i * RX_DECIM_D;
-            for (int k = 0; k < RX_DECIM_D; k++) {
-                float frac = (float)(k + 1) / (float)RX_DECIM_D;
-                float yl = s_last_up_v_l + (v_l - s_last_up_v_l) * frac;
-                float yr = s_last_up_v_r + (v_r - s_last_up_v_r) * frac;
+            /* ⭐ THE CLOCK DRIFT IS ABSORBED HERE, INSIDE THE INTERPOLATION.
+             *
+             * The first cut spliced a duplicated sample pair onto the end of the
+             * frame instead. Measured on a 700 Hz test tone, host-side:
+             *
+             *   clean reference                      113.2 dB SNDR
+             *   duplicate one sample per frame        31.3 dB
+             *   absorb it in the interpolation        43.8 dB
+             *
+             * Repeating a sample is a step discontinuity whose SIZE IS THE
+             * SIGNAL AMPLITUDE, ~47 times a second - which the operator heard
+             * immediately and described exactly: "a ripple or noise that lingers
+             * with the tone level" (2026-09-22). It was my own fix making the
+             * audio worse than the drift it corrected.
+             *
+             * ⛔ AND A PER-FRAME STEP IS NOT GOOD ENOUGH EITHER. Stretching one
+             * input sample's worth of output by a single step got rid of the
+             * spliced sample, but it still put ONE timing event in every frame -
+             * and a frame is 46.9 Hz. Measured on the bench afterwards: sidebands
+             * at +/-46.9 Hz around the tone at -27 to -32 dBc, and the operator
+             * heard what was left as "slightly better... but chirps from time to
+             * time". A once-per-frame correction has a once-per-frame spectrum,
+             * however gently it is applied.
+             *
+             * ⭐ So the drift is now spread over EVERY sample by a phase
+             * accumulator - proper fractional resampling. The interpolation runs
+             * at a rate fractionally different from 1/RX_DECIM_D, and there is no
+             * per-frame event to have a spectrum at all. Measured host-side on a
+             * 700 Hz tone, same net correction in each case:
+             *
+             *   no correction at all (v1.16.1)  SNDR 32.9 dB   46.9 Hz  -160 dBc
+             *   per-frame single step           SNDR 29.0 dB   46.9 Hz   -37 dBc
+             *   continuous fractional resample  SNDR 33.0 dB   46.9 Hz   -74 dBc
+             *
+             * i.e. it restores the UNCORRECTED purity exactly while still
+             * absorbing the clock difference. (The 33 dB floor is this linear
+             * upsampler itself and is present in every version - not a
+             * regression, and the thing to improve if anyone wants more.)
+             *
+             * s_up_phase carries the fractional position across frames, so there
+             * is no discontinuity at a frame boundary either. */
+            /* ⛔⛔ THE ACTUAL RUNAWAY BUG (found 2026-09-23, on re-reading the
+             * whole block rather than re-simulating the rate math again - the
+             * operator was right that simulation was not finding this).
+             *
+             * The buffer only had "+1" pair of headroom, sized for the OLD
+             * spliced corrector which added at most one sample. THIS
+             * resampler can need MANY more: stretching a full DSP_FFT_SIZE
+             * (1024) input frame by even the measured 0.24% needs ~2.5 EXTRA
+             * output samples, and dsp_rxaudio_read asks for a full frame
+             * essentially every call - so the `outn < DSP_FFT_SIZE` cap was
+             * being hit on ordinary frames, not just a pathological one, and
+             * NOTHING ABOUT THAT DEPENDS ON THERE BEING A SIGNAL - which is
+             * why the operator heard it grow on a completely silent band.
+             *
+             * And the old code decremented s_up_phase UNCONDITIONALLY after
+             * the while loop:
+             *
+             *     while (s_up_phase < 1.0f && outn < CAP) { ... }
+             *     s_up_phase -= 1.0f;
+             *
+             * When the loop exits because the CAP stopped it (phase still
+             * <1.0, not because phase reached 1.0), subtracting 1.0 anyway
+             * drives s_up_phase NEGATIVE. Next input sample, the while
+             * condition (phase < 1.0) is now true for many more iterations
+             * than it should be, each one computing `frac = s_up_phase` -
+             * strongly negative - which the linear interpolation
+             * (last + delta*frac) EXTRAPOLATES far outside the two real
+             * samples instead of interpolating between them. If the cap is
+             * hit again before phase claws back to normal (likely, since the
+             * buffer is still the same size), phase goes more negative still.
+             * That is a compounding, self-worsening runaway with no signal
+             * amplitude anywhere in its cause - exactly "starts faint, then
+             * increases, and increases" on a silent band, and exactly why the
+             * two earlier "fixes" to the RATE MATH (attempts #3 and #4 in the
+             * commit history) could never have touched it: this bug is in
+             * the BUFFER ACCOUNTING around the resampler, not in the rate
+             * controller feeding it.
+             *
+             * Fixed two ways, either of which alone would have stopped the
+             * compounding, but both belong here:
+             *   1. RX_OUT_HEADROOM (64 pairs) - sized for the resample
+             *      clamp's worst case (~21 samples at +/-2%), not the ~2.5
+             *      actually needed today, so ordinary operation never
+             *      touches the cap at all.
+             *   2. The phase decrement is now conditional on the loop having
+             *      exited NORMALLY (phase actually reached >=1.0). If the cap
+             *      stops it instead, phase is left exactly as it was and the
+             *      remaining decimated samples for this call are silently
+             *      skipped (a few microseconds of audio, not a corruption) -
+             *      the next call resumes cleanly from a valid phase.
+             *
+             * This is also why "measure, don't simulate the part you already
+             * modelled" only gets you so far: the rate-drift simulations were
+             * accurate FOR THE RATE MATH. They could not have found a buffer
+             * size bug because the model never allocated a buffer. */
+            {
+                float dl = v_l - s_last_up_v_l;
+                float dr = v_r - s_last_up_v_r;
+                bool up_phase_completed = false;
+                while (s_up_phase < 1.0f && outn < DSP_FFT_SIZE + RX_OUT_HEADROOM) {
+                float frac = s_up_phase;
+                s_up_phase += s_up_inc;
+                if (s_up_phase >= 1.0f) up_phase_completed = true;
+                float yl = s_last_up_v_l + dl * frac;
+                float yr = s_last_up_v_r + dr * frac;
                 // Post-upsample smoothing (see SMOOTH_FC_HZ comment above) -
                 // knocks down the interpolation image further, effectively
                 // free next to the FIR stages. A Butterworth has no passband
@@ -1326,17 +1453,34 @@ static void rx_audio_task(void *arg)
                 if (ysl < -out_clamp) ysl = -out_clamp;
                 if (ysr >  out_clamp) ysr =  out_clamp;
                 if (ysr < -out_clamp) ysr = -out_clamp;
-                s_out[2 * (base + k)]     = (int16_t)ysl;   // L
-                s_out[2 * (base + k) + 1] = (int16_t)ysr;   // R
+                s_out[2 * outn]     = (int16_t)ysl;   // L
+                s_out[2 * outn + 1] = (int16_t)ysr;   // R
+                outn++;
+                }
+                /* Only carry the fraction when the loop finished NORMALLY -
+                   see the note above the loop. If the cap stopped it instead,
+                   s_up_phase is already < 1.0 and must be left untouched, or
+                   it goes negative and the next sample extrapolates instead
+                   of interpolating. */
+                if (up_phase_completed) s_up_phase -= 1.0f;
             }
             s_last_up_v_l = v_l;
             s_last_up_v_r = v_r;
         }
-        // Any tail beyond n_out*RX_DECIM_D (the un-consumed remainder from
-        // the floor-divide above) gets silence rather than stale/garbage data.
-        for (int i = n_out * RX_DECIM_D; i < pairs; i++) {
+        // Any tail beyond what the upsampler actually wrote gets silence
+        // rather than stale/garbage data. outn, not n_out*RX_DECIM_D: the
+        // continuous resampler makes the written length vary by the whole
+        // RX_OUT_HEADROOM range now (see the upsample loop), not by one - a
+        // no-op here when outn >= pairs, which stretching makes the common
+        // case.
+        for (int i = outn; i < pairs; i++) {
             s_out[2 * i] = 0; s_out[2 * i + 1] = 0;
         }
+        if (outn > 0) pairs = outn;   /* play exactly what was produced, which
+                                          may now be MORE than the input count -
+                                          rxcap_push/esp_codec_dev_write both
+                                          take pairs as a parameter, not a
+                                          fixed size, so this is safe. */
 
         // DSP-only time (NCO x2 + FIR x2 + AGC) - excludes the intentionally
         // real-time-paced I2S write below on purpose, so this answers "is the
@@ -1386,17 +1530,86 @@ static void rx_audio_task(void *arg)
             int64_t elapsed  = now_rm - s_rate_t0_us;
             int64_t expected = elapsed * DSP_SAMPLE_RATE_HZ / 1000000;
             int64_t written  = s_rate_written + pairs;
-            if (expected - written >= 1 && pairs < DSP_FFT_SIZE + 1) {
-                /* Behind the clock: repeat the last pair once. */
-                s_out[2 * pairs]     = s_out[2 * (pairs - 1)];
-                s_out[2 * pairs + 1] = s_out[2 * (pairs - 1) + 1];
-                pairs++;
-                s_rate_ins++;
-            } else if (written - expected >= 1 && pairs > 1) {
-                /* Ahead of the clock: drop the last pair. */
-                pairs--;
-                s_rate_drop++;
+            /* Nudge the RESAMPLE RATE, not the sample count. err is already an
+               integral of the rate mismatch, so a proportional step here is
+               integral control on the rate - it settles on the radio's true
+               rate and then stops moving, which is what removes the per-frame
+               event entirely. The gain is deliberately tiny: the whole
+               correction needed is 0.24%, and a loop that hunts would be
+               audible as exactly the chirp being removed. */
+            /* ⛔ THE SIGN HERE IS THE WHOLE LOOP, AND I HAD IT BACKWARDS ONCE.
+             *
+             * s_up_inc is the phase advance per OUTPUT sample, so the number of
+             * outputs produced per input is ~1/s_up_inc. Being BEHIND the clock
+             * (err > 0) means we owe more output, which needs a SMALLER
+             * increment. Adding err instead of subtracting it is positive
+             * feedback: behind -> fewer samples -> further behind, until the
+             * clamp. The operator heard it as crackling that grew steadily
+             * louder until he switched the radio off (2026-09-22). A rate loop
+             * with the sign inverted has no safe gain - the clamp is the only
+             * thing that stops it, and by then it is changing the pitch.
+             *
+             * Integral control on the rate: err is already the accumulated
+             * sample deficit, so stepping the rate by it drives err to zero and
+             * then holds, which is what leaves no periodic event behind. */
+            /* ⛔⛔ NO FEEDBACK LOOP HERE. THE RATE IS COMPUTED, NOT SERVOED.
+             *
+             * Two attempts at a loop both failed on the bench, and the second
+             * one is why the operator had to switch his radio off:
+             *
+             *  1. `s_up_inc += err` - the SIGN was inverted. s_up_inc is the
+             *     phase advance per OUTPUT sample, so outputs per input is
+             *     ~1/s_up_inc: being behind needs a SMALLER increment, not a
+             *     larger one. Simulated afterwards, err diverged to 32,298
+             *     pairs and hit the clamp 5,642 times. Heard as crackling that
+             *     grew steadily louder.
+             *  2. `s_up_inc -= err` with the sign fixed converges, but a pure
+             *     integrator against a transport delay RINGS - simulated, it
+             *     hunted around the answer instead of settling.
+             *
+             * ⭐ There is nothing to servo. The required rate is known exactly:
+             * the radio delivers in_pairs per frame, each input sample yields
+             * 1/s_up_inc outputs, and the codec needs DSP_SAMPLE_RATE_HZ of
+             * them per second. So
+             *
+             *     s_up_inc = source_pairs_per_second / (RX_DECIM_D * FS)
+             *
+             * measured over a smoothed window. Simulated: settles on -0.2396%
+             * for a 47,885 pairs/s radio - the exact figure needed - with a
+             * residual error of 2.4 pairs and the clamp never touched, and it
+             * follows a mid-session rate change without ringing.
+             *
+             * The tiny err term is a trim, not the controller: it nulls the
+             * slow residue from rounding, and it CANNOT run away because
+             * s_up_inc is recomputed from the measurement every frame rather
+             * than accumulated. */
+            const float inc_nom = 1.0f / (float)RX_DECIM_D;
+            int64_t err = expected - written;            /* + = we are behind */
+            if (err >  2000) err =  2000;
+            if (err < -2000) err = -2000;
+
+            s_in_pairs_win += (uint32_t)in_pairs;
+            int64_t win_us = now_rm - s_in_win_us;
+            if (s_in_win_us == 0) { s_in_win_us = now_rm; s_in_pairs_win = 0; }
+            else if (win_us >= 1000000) {                /* 1 s of measurement */
+                float src_rate = (float)s_in_pairs_win * 1000000.0f / (float)win_us;
+                float target   = src_rate / ((float)RX_DECIM_D * (float)DSP_SAMPLE_RATE_HZ);
+                s_up_target = (s_up_target <= 0.0f) ? target
+                                                    : s_up_target + (target - s_up_target) * 0.25f;
+                s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
+            if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
+
+            /* ±2% is far more than any real unit needs (0.24% here) and is the
+               only thing between a wrong measurement and a pitch change, so it
+               says so when it is reached instead of sitting at the rail. */
+            if (s_up_inc > inc_nom * 1.02f || s_up_inc < inc_nom * 0.98f) {
+                s_up_inc = (s_up_inc > inc_nom) ? inc_nom * 1.02f : inc_nom * 0.98f;
+                if ((s_rate_railed++ % 200) == 0)
+                    ESP_LOGW(TAG, "resample rate hit the rail (err=%lld) - audio "
+                                  "may be off pitch", (long long)err);
+            }
+            if (err > 0) s_rate_ins++; else if (err < 0) s_rate_drop++;
             s_rate_written += pairs;
         }
 
@@ -1510,9 +1723,17 @@ void rx_audio_init(void)
     s_filt_im   = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
     s_narrow_re = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
     s_narrow_im = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),      MALLOC_CAP_SPIRAM);
-    // +1 pair of headroom: the clock-drift corrector below may append one
-    // duplicated sample pair to a full frame. See the rate-match block.
-    s_out       = heap_caps_malloc((DSP_FFT_SIZE + 1) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    // RX_OUT_HEADROOM pairs of headroom - NOT the "+1" the old spliced
+    // corrector needed. The continuous resampler can produce MORE than
+    // DSP_FFT_SIZE output samples from a full DSP_FFT_SIZE-pair input frame
+    // whenever it is stretching (source slower than the codec), and a full
+    // frame is common (dsp_rxaudio_read asks for up to DSP_FFT_SIZE every
+    // time). At the resample clamp's worst case (+/-2%, see s_up_inc below)
+    // a 1024-pair frame needs up to ~21 EXTRA samples - the "+1" allocated
+    // for the old scheme silently truncated that, which is the actual cause
+    // of the runway/growing-crackle bug (2026-09-23): see the note by
+    // RX_OUT_HEADROOM's use in the upsample loop for the mechanism.
+    s_out       = heap_caps_malloc((DSP_FFT_SIZE + RX_OUT_HEADROOM) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     s_dec_coeff    = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_re = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_im = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
