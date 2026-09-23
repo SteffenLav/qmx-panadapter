@@ -84,6 +84,38 @@ static SemaphoreHandle_t s_lock = NULL;
 static wspr_tx_state_t   s_state = WSPR_TX_IDLE;
 static wspr_tx_request_t s_armed;
 static volatile bool     s_disarm_requested = false;
+
+/* ⭐ THE MODE WE BORROWED THE RADIO FROM, so we can give it back (2026-09-23).
+ *
+ * WSPR has to transmit in DiGi, so arm() switches the radio there. Nothing
+ * ever switched it back, and on a scheduled beacon that means the radio is
+ * pushed into DiGi every cycle and simply left there - the QMX remembers the
+ * mode in its own memory, so it then powers up in DiGi too. The operator's
+ * report: "the CW (or mode in general) is always waking up in DiGi mode".
+ * Nothing was failing to persist his mode; WSPR was actively overwriting it.
+ *
+ * Empty string = we did not switch (the radio was already in DiGi, e.g. the
+ * operator is working FT8 on purpose), so there is nothing to hand back and
+ * we must not touch the mode. One-shot: cleared as it is used, so a restore
+ * can never fire twice or fight a mode the operator chose meanwhile. */
+static char s_mode_before[12] = { 0 };
+
+/* Give the radio back. Uses cat_request_mode(), which defers the write to the
+ * poll task that owns the CDC pipe, NOT cat_set_mode() - we are called right
+ * after run_burst() has been driving TX;/TA;/RX; down that same pipe, and the
+ * deferred path is the one this project already established as safe there
+ * (see memory_modal.c's note on the direct-call race). */
+static void release_mode_after_burst(void)
+{
+    if (!s_mode_before[0]) return;
+    char want[sizeof(s_mode_before)];
+    snprintf(want, sizeof(want), "%s", s_mode_before);
+    s_mode_before[0] = '\0';
+    const char *now = cat_get_mode_str();
+    if (now && strcmp(now, want) == 0) return;   /* already back, nothing to do */
+    ESP_LOGI(TAG, "burst finished - handing the radio back to %s", want);
+    cat_request_mode(want);
+}
 static volatile bool     s_abort_requested  = false;
 /* Latched once at the top of run_burst(), not read per symbol: settings_load_all()
  * 162 times a burst would be absurd, and the answer cannot meaningfully change
@@ -513,6 +545,7 @@ static void wspr_tx_worker_task(void *arg)
             s_state = WSPR_TX_IDLE;
             s_disarm_requested = false;
             unlock();
+            release_mode_after_burst();   // nothing transmitted - give it back
             psram_task_park();
             return;
         }
@@ -567,6 +600,7 @@ static void wspr_tx_worker_task(void *arg)
     lock();
     s_state = WSPR_TX_IDLE;
     unlock();
+    release_mode_after_burst();
     psram_task_park();
 }
 
@@ -620,6 +654,13 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
         const char *mode = cat_get_mode_str();
         if (strcmp(mode, "DiGi") != 0) {
             ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
+            /* Remember what we are taking it away from, so the burst can give
+             * it back - see s_mode_before. Only recorded when we actually
+             * switch: if the radio is already in DiGi the operator put it
+             * there and it is not ours to change. cat_get_mode_str()'s output
+             * ("CW", "CW-R", "LSB", "USB", ...) feeds straight back into
+             * cat_request_mode(), which upper-cases and maps it. */
+            if (mode && mode[0]) snprintf(s_mode_before, sizeof(s_mode_before), "%s", mode);
             cat_set_mode("FT8"); // hamlib_mode_to_digit() maps this to digit '6' = DiGi
             bool confirmed = false;
             for (int i = 0; i < WSPR_TX_MODE_POLL_TRIES; i++) {
@@ -629,6 +670,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
             if (!confirmed) {
                 ESP_LOGW(TAG, "arm: QMX would not confirm Digi mode (still '%s')", cat_get_mode_str());
                 if (out_err) snprintf(out_err, out_err_len, "QMX won't switch to Digi mode - check the radio");
+                release_mode_after_burst();   // put back whatever we disturbed
                 return false;
             }
             ESP_LOGI(TAG, "arm: QMX confirmed Digi mode");
@@ -639,6 +681,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     if (s_state != WSPR_TX_IDLE) {
         unlock();
         if (out_err) snprintf(out_err, out_err_len, "A WSPR transmission is already armed/active");
+        release_mode_after_burst();   // this arm is not happening; undo its switch
         return false;
     }
     s_armed = *req;
@@ -677,6 +720,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
         s_state = WSPR_TX_IDLE;
         unlock();
         if (out_err) snprintf(out_err, out_err_len, "Failed to start WSPR TX worker task");
+        release_mode_after_burst();   // no burst will run - give the mode back
         return false;
     }
 
