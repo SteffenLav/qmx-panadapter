@@ -1694,6 +1694,8 @@ void rx_audio_apply_settings(void)
     rx_audio_set_pan_width   ((float)settings_get_rxaud_pan_width_x10()  / 10.0f);
     rx_audio_set_pan_blend   ((float)settings_get_rxaud_pan_blend_x100() / 100.0f);
     rx_audio_set_pan_overlap ((float)settings_get_rxaud_pan_ovlp_x100()  / 100.0f);
+    rx_audio_set_agc_attack_ms (settings_get_rxaud_agc_attack_ms());
+    rx_audio_set_agc_release_ms(settings_get_rxaud_agc_release_ms());
 }
 
 void rx_audio_init(void)
@@ -2029,6 +2031,26 @@ void rx_audio_set_agc_target(float v)   { if (v > 0.0f) s_agc_target   = v; }
 void rx_audio_set_agc_attack(float v)   { if (v > 0.0f && v <= 1.0f) s_agc_attack  = v; }
 void rx_audio_set_agc_release(float v)  { if (v > 0.0f && v <= 1.0f) s_agc_release = v; }
 void rx_audio_set_agc_gain_max(float v) { if (v > 0.0f) s_agc_gain_max = v; }
+
+/* Operator-facing units (ms) for the two coefficients above - same tau ~=
+ * 1/(alpha*fs_dec) relationship DEF_AGC_ATTACK/DEF_AGC_RELEASE derive from,
+ * fs_dec = DSP_SAMPLE_RATE_HZ/RX_DECIM_D (6 kHz today). Exposed as ms in the
+ * Resource Management modal because that is the unit an operator can reason
+ * about tuning against CW keying/SSB syllables; the bare coefficient is not. */
+void rx_audio_set_agc_attack_ms(uint8_t ms)
+{
+    if (ms == 0) return;
+    float fs_dec = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
+    float alpha = 1000.0f / ((float)ms * fs_dec);
+    rx_audio_set_agc_attack(alpha > 1.0f ? 1.0f : alpha);
+}
+void rx_audio_set_agc_release_ms(uint16_t ms)
+{
+    if (ms == 0) return;
+    float fs_dec = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
+    float alpha = 1000.0f / ((float)ms * fs_dec);
+    rx_audio_set_agc_release(alpha > 1.0f ? 1.0f : alpha);
+}
 
 void rx_audio_get_tuning(rx_audio_tuning_t *out)
 {

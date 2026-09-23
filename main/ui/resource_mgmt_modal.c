@@ -13,6 +13,7 @@ static const char *TAG = "resmgmt_modal";
 
 static lv_obj_t *s_modal = NULL;
 static lv_obj_t *s_panel = NULL;
+static lv_obj_t *s_scroll = NULL;   // scrolling content strip - see modal_build()
 
 // Row 0 is RX audio - never gated, always the one doing the gating. Rows
 // 1..N are the background feeds it CAN hold off - but only the ones with a
@@ -69,6 +70,13 @@ static lv_obj_t *s_lbl_width_val = NULL;
 static lv_obj_t *s_lbl_blend_val = NULL;
 static lv_obj_t *s_lbl_ovlp_val  = NULL;
 static lv_obj_t *s_pan_hdr       = NULL;   // "Panoramic split" caption
+
+// AGC attack/release, ms - sit on their own line directly under Gain,
+// gated the same way (live whenever RX audio is on).
+static lv_obj_t *s_sld_attack     = NULL;
+static lv_obj_t *s_sld_release    = NULL;
+static lv_obj_t *s_lbl_attack_val = NULL;
+static lv_obj_t *s_lbl_release_val = NULL;
 
 // Plain checkbox, themed square indicator, generous touch target - same
 // idiom as ft8_filter_modal.c's make_checkbox(), copied rather than shared
@@ -176,11 +184,17 @@ static void refresh_gating(void)
             lv_obj_set_style_opa((s), _o, LV_PART_KNOB);                        \
         } while (0)
 
-    /* Gain is live whenever audio is - it sets the level in every supported
-     * mode, not just CW. */
+    /* Gain (AGC ceiling) and the AGC timing pair are live whenever audio is -
+     * they shape the level/response in every supported mode, not just CW. */
     SLD_SET_ENABLED(s_sld_gain, audio_on);
     if (s_lbl_gain_val)
         lv_obj_set_style_text_opa(s_lbl_gain_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    SLD_SET_ENABLED(s_sld_attack, audio_on);
+    SLD_SET_ENABLED(s_sld_release, audio_on);
+    if (s_lbl_attack_val)
+        lv_obj_set_style_text_opa(s_lbl_attack_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    if (s_lbl_release_val)
+        lv_obj_set_style_text_opa(s_lbl_release_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
 
     /* The pan sliders need audio AND binaural: they shape a split that is not
      * being produced otherwise, so leaving them live would offer three controls
@@ -263,6 +277,22 @@ static void gain_cb(lv_event_t *e)
     if (s_lbl_gain_val) lv_label_set_text_fmt(s_lbl_gain_val, "%d", v * 10);
 }
 
+static void agc_attack_cb(lv_event_t *e)
+{
+    int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
+    settings_set_rxaud_agc_attack_ms((uint8_t)v);
+    rx_audio_set_agc_attack_ms((uint8_t)v);
+    if (s_lbl_attack_val) lv_label_set_text_fmt(s_lbl_attack_val, "%d ms", v);
+}
+
+static void agc_release_cb(lv_event_t *e)
+{
+    int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
+    settings_set_rxaud_agc_release_ms((uint16_t)v);
+    rx_audio_set_agc_release_ms((uint16_t)v);
+    if (s_lbl_release_val) lv_label_set_text_fmt(s_lbl_release_val, "%d ms", v);
+}
+
 static void pan_width_cb(lv_event_t *e)
 {
     int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
@@ -340,20 +370,18 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    // 700: 8 rows + the row-0 separator now end at content-y=548 (was 496
-    // for 7 rows before Binaural CW was added, 2026-09-20 - +52 for the new
-    // row); +164 margin (which the 660 figure already proved is enough for
-    // the Close button + padding) would be 712, but the screen itself is
-    // only 720 tall and centering that leaves just 4 px top/bottom - too
-    // tight to trust without a screenshot. Capped at 700 instead (still 152
-    // px of margin below the content, more than the button needs) pending
-    // an on-hardware screenshot check, same discipline as the ORIGINAL
-    // sizing bug here (a panel sized "just enough" put the Close button on
-    // top of the rows - measured wrong from arithmetic before, verify with
-    // a screenshot, don't just trust the numbers again).
+    // 700: the screen itself is only 720 tall and centering anything taller
+    // leaves too little top/bottom margin to trust without a screenshot.
+    // Content (8 rows + pan trio + AGC attack/release, 2026-09-23) no longer
+    // fits inside a fixed 700 without doing fragile per-row pixel arithmetic
+    // every time a row is added - see the growth history this comment used
+    // to track (492->548->today). Fixed that CLASS of bug instead of the
+    // instance: the row content below now lives in s_scroll, a genuinely
+    // scrollable strip between the header and the Close button, so a future
+    // addition here cannot silently collide with the button or the screen
+    // edge - it just scrolls. Close stays pinned outside the scroll area.
     /* 760 -> 1000 wide: the three pan sliders sit side by side under Binaural
-     * and need room to be draggable rather than fiddly. Height unchanged - the
-     * slider strip replaces the space the reordered rows freed. */
+     * and need room to be draggable rather than fiddly. */
     lv_obj_set_size(s_panel, PANEL_W, 700);
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
@@ -384,25 +412,31 @@ static void modal_build(void)
     lv_obj_align(s_gate_note, LV_ALIGN_TOP_LEFT, 0, 72);
     lv_obj_add_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
 
-    int y = 116;
-    /* 52 -> 46. The pan-slider strip added ~92 px and the Close button is
-     * bottom-aligned, so at 52 the last row (PSK Reporter - report my decodes)
-     * ran under it: content area is 700 - 2*24 pad - 2*2 border = 648, the row
-     * ended at ~609, and the button starts at 648 - 64 = 584. At 46 the row
-     * ends ~567 and there is 17 px of daylight. The rows do not become harder
-     * to hit - the checkbox carries ext_click_area 28 either way. */
+    // Header (title/subtitle/gate note above) ends around y=92; Close sits in
+    // the last 64 px of the panel's content box (648 = 700 - 2*24 pad -
+    // 2*2 border) plus a 16 px gap above it. Everything in between scrolls.
+    s_scroll = lv_obj_create(s_panel);
+    lv_obj_set_pos(s_scroll, 0, 100);
+    lv_obj_set_size(s_scroll, LV_PCT(100), 648 - 100 - 64 - 16);
+    lv_obj_set_style_bg_opa(s_scroll, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_scroll, 0, 0);
+    lv_obj_set_style_pad_all(s_scroll, 0, 0);
+    lv_obj_set_scroll_dir(s_scroll, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_scroll, LV_SCROLLBAR_MODE_AUTO);
+
+    int y = 16;   // relative to s_scroll now, not s_panel
     const int ROW_H = 46;
     for (int i = 0; i < ROW_COUNT; i++) {
         const row_def_t *d = &ROW_DEFS[i];
 
-        lv_obj_t *lbl = lv_label_create(s_panel);
+        lv_obj_t *lbl = lv_label_create(s_scroll);
         lv_label_set_text(lbl, d->label);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, y);
         lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 
-        lv_obj_t *cb = make_checkbox(s_panel);
+        lv_obj_t *cb = make_checkbox(s_scroll);
         lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, y - 6);
         lv_obj_add_event_cb(cb, d->cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(lbl, label_toggles_cb, LV_EVENT_CLICKED, cb);
@@ -416,42 +450,61 @@ static void modal_build(void)
             s_rows[d->row].lbl = lbl;
         }
 
-        // Gain rides on the RX Audio line: it is the level for ALL supported
-        // modes, not a property of the stereo split, so it belongs with the
-        // switch that turns audio on rather than with the pan controls.
-        if (d->row == ROW_AUDIO) {
-            /* x positions: "RX Audio (speaker/headphone)" at font 24 runs to
-             * about x=367, so Gain started at 370 and touched it. Pushed right
-             * to 430, which leaves the row label clear air and still ends well
-             * before the checkbox (~900). 430 label, 490..760 slider, 780 value. */
-            s_sld_gain = lv_slider_create(s_panel);
-            lv_obj_set_size(s_sld_gain, 270, 14);
-            lv_obj_align(s_sld_gain, LV_ALIGN_TOP_LEFT, 490, y + 10);
-            lv_slider_set_range(s_sld_gain, 5, 80);          // 50..800, settings.c clamps the same
-            lv_slider_set_value(s_sld_gain, settings_get_rxaud_gain_d10(), LV_ANIM_OFF);
-            lv_obj_add_event_cb(s_sld_gain, gain_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-            lv_obj_t *gl = lv_label_create(s_panel);
-            lv_label_set_text(gl, "Gain");
-            lv_obj_set_style_text_color(gl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-            lv_obj_set_style_text_font(gl, &lv_font_montserrat_20, 0);
-            lv_obj_align(gl, LV_ALIGN_TOP_LEFT, 430, y + 4);
-
-            s_lbl_gain_val = lv_label_create(s_panel);
-            lv_label_set_text_fmt(s_lbl_gain_val, "%d", settings_get_rxaud_gain_d10() * 10);
-            lv_obj_set_style_text_color(s_lbl_gain_val, lv_color_hex(UI_COLOR_TEXT), 0);
-            lv_obj_set_style_text_font(s_lbl_gain_val, &lv_font_montserrat_20, 0);
-            lv_obj_align(s_lbl_gain_val, LV_ALIGN_TOP_LEFT, 780, y + 4);
-        }
-
         if (d->row == ROW_AUDIO) {
             y += ROW_H;
+
+            /* AGC Ceiling, Attack, Release - each its OWN full row, same
+             * label/slider/value shape as every other row (0 label, 490
+             * slider, 780 value). Ceiling used to ride on the RX Audio row's
+             * own line at x=430, sharing it with that row's checkbox label -
+             * fine at the old "Gain" (4 chars) but "AGC Ceiling" (11 chars)
+             * ran into the slider (operator screenshot, 2026-09-23: the
+             * label text sat under the slider knob). Given its own row
+             * instead of tuning more x-offset arithmetic by eye. */
+            {
+                struct {
+                    const char   *cap;
+                    lv_obj_t    **sld;
+                    lv_obj_t    **val;
+                    int           min, max, cur;
+                    lv_event_cb_t cb;
+                    const char   *fmt;
+                } agcs[3] = {
+                    { "AGC Ceiling", &s_sld_gain,    &s_lbl_gain_val,    5, 150,  settings_get_rxaud_gain_d10(),        gain_cb,        "%d" },
+                    { "AGC Attack",  &s_sld_attack,  &s_lbl_attack_val,  1, 50,   settings_get_rxaud_agc_attack_ms(),  agc_attack_cb,  "%d ms" },
+                    { "AGC Release", &s_sld_release, &s_lbl_release_val, 10, 500, settings_get_rxaud_agc_release_ms(), agc_release_cb, "%d ms" },
+                };
+                for (int p = 0; p < 3; p++) {
+                    lv_obj_t *cap = lv_label_create(s_scroll);
+                    lv_label_set_text(cap, agcs[p].cap);
+                    lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
+                    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+                    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y);
+
+                    lv_obj_t *sld = lv_slider_create(s_scroll);
+                    lv_obj_set_size(sld, 270, 14);
+                    lv_obj_align(sld, LV_ALIGN_TOP_LEFT, 490, y + 10);
+                    lv_slider_set_range(sld, agcs[p].min, agcs[p].max);
+                    lv_slider_set_value(sld, agcs[p].cur, LV_ANIM_OFF);
+                    lv_obj_add_event_cb(sld, agcs[p].cb, LV_EVENT_VALUE_CHANGED, NULL);
+                    *agcs[p].sld = sld;
+
+                    lv_obj_t *val = lv_label_create(s_scroll);
+                    lv_label_set_text_fmt(val, agcs[p].fmt, agcs[p].cur);
+                    lv_obj_set_style_text_color(val, lv_color_hex(UI_COLOR_TEXT), 0);
+                    lv_obj_set_style_text_font(val, &lv_font_montserrat_20, 0);
+                    lv_obj_align(val, LV_ALIGN_TOP_LEFT, 780, y + 4);
+                    *agcs[p].val = val;
+
+                    y += ROW_H;
+                }
+            }
         } else if (d->row == ROW_BINAURAL) {
             // The three pan controls, side by side directly under the switch
             // that makes them do anything.
             y += ROW_H - 8;
 
-            s_pan_hdr = lv_label_create(s_panel);
+            s_pan_hdr = lv_label_create(s_scroll);
             lv_label_set_text(s_pan_hdr, "Panoramic split - adjust while listening");
             lv_obj_set_style_text_color(s_pan_hdr, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
             lv_obj_set_style_text_font(s_pan_hdr, &lv_font_montserrat_20, 0);
@@ -474,19 +527,19 @@ static void modal_build(void)
             for (int p = 0; p < 3; p++) {
                 const int x = 16 + p * (SW + SGAP);
 
-                lv_obj_t *cap = lv_label_create(s_panel);
+                lv_obj_t *cap = lv_label_create(s_scroll);
                 lv_label_set_text(cap, pans[p].cap);
                 lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
                 lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
                 lv_obj_align(cap, LV_ALIGN_TOP_LEFT, x, y);
 
-                lv_obj_t *val = lv_label_create(s_panel);
+                lv_obj_t *val = lv_label_create(s_scroll);
                 lv_obj_set_style_text_color(val, lv_color_hex(UI_COLOR_TEXT), 0);
                 lv_obj_set_style_text_font(val, &lv_font_montserrat_20, 0);
                 lv_obj_align(val, LV_ALIGN_TOP_LEFT, x + SW - 60, y);
                 *pans[p].val = val;
 
-                lv_obj_t *s = lv_slider_create(s_panel);
+                lv_obj_t *s = lv_slider_create(s_scroll);
                 lv_obj_set_size(s, SW, 14);
                 lv_obj_align(s, LV_ALIGN_TOP_LEFT, x, y + 30);
                 lv_slider_set_range(s, pans[p].min, pans[p].max);
@@ -511,7 +564,7 @@ static void modal_build(void)
              * which is the division the panel is actually about. Sitting
              * directly beneath RX Audio it cut the audio group in half and
              * implied Binaural belonged with the network feeds. */
-            lv_obj_t *sep = lv_obj_create(s_panel);
+            lv_obj_t *sep = lv_obj_create(s_scroll);
             lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD, 2);
             lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
             lv_obj_set_style_border_width(sep, 0, 0);
@@ -576,6 +629,16 @@ static void rows_refresh_from_settings(void)
         const uint8_t g = settings_get_rxaud_gain_d10();
         lv_slider_set_value(s_sld_gain, g, LV_ANIM_OFF);
         if (s_lbl_gain_val) lv_label_set_text_fmt(s_lbl_gain_val, "%d", g * 10);
+    }
+    if (s_sld_attack) {
+        const uint8_t a = settings_get_rxaud_agc_attack_ms();
+        lv_slider_set_value(s_sld_attack, a, LV_ANIM_OFF);
+        if (s_lbl_attack_val) lv_label_set_text_fmt(s_lbl_attack_val, "%d ms", a);
+    }
+    if (s_sld_release) {
+        const uint16_t r = settings_get_rxaud_agc_release_ms();
+        lv_slider_set_value(s_sld_release, r, LV_ANIM_OFF);
+        if (s_lbl_release_val) lv_label_set_text_fmt(s_lbl_release_val, "%d ms", r);
     }
     if (s_sld_width) {
         const uint8_t w = settings_get_rxaud_pan_width_x10();

@@ -262,6 +262,8 @@ typedef struct {
     uint8_t  rxaud_pan_width_x10; /* mid/side width x10     (18 = 1.8) */
     uint8_t  rxaud_pan_blend_x100;/* cross-feed x100        (15 = 0.15) */
     uint8_t  rxaud_pan_ovlp_x100; /* filter overlap x100    (30 = 0.30) */
+    uint8_t  rxaud_agc_attack_ms;  /* AGC attack time, ms  (default 3)   */
+    uint16_t rxaud_agc_release_ms; /* AGC release time, ms (default 150) */
     // Propagation feedback: query PSK Reporter for who has heard US. Separate
     // from pskreporter_en (which is about SENDING reports) - they are opposite
     // directions and an operator may reasonably want one without the other.
@@ -696,7 +698,7 @@ uint8_t settings_get_swr_limit_x10(void);
  * Management sliders are the only writers. Ranges are clamped to what
  * rx_audio.h documents, so a bad stored value cannot put the DSP somewhere
  * it does not expect. */
-void    settings_set_rxaud_gain_d10(uint8_t v);      // AGC ceiling / 10, 5..80 (default 20 = 200)
+void    settings_set_rxaud_gain_d10(uint8_t v);      // AGC ceiling / 10, 5..150 (default 20 = 200)
 uint8_t settings_get_rxaud_gain_d10(void);
 void    settings_set_rxaud_pan_width_x10(uint8_t v); // 0..30  (default 18 = 1.8)
 uint8_t settings_get_rxaud_pan_width_x10(void);
@@ -704,6 +706,10 @@ void    settings_set_rxaud_pan_blend_x100(uint8_t v);// 0..50  (default 15 = 0.1
 uint8_t settings_get_rxaud_pan_blend_x100(void);
 void    settings_set_rxaud_pan_ovlp_x100(uint8_t v); // 0..100 (default 30 = 0.30)
 uint8_t settings_get_rxaud_pan_ovlp_x100(void);
+void    settings_set_rxaud_agc_attack_ms(uint8_t v);   // 1..50   (default 3)
+uint8_t settings_get_rxaud_agc_attack_ms(void);
+void    settings_set_rxaud_agc_release_ms(uint16_t v); // 10..500 (default 150)
+uint16_t settings_get_rxaud_agc_release_ms(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

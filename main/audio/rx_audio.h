@@ -72,6 +72,11 @@ void rx_audio_set_agc_release(float v);
 void rx_audio_set_agc_gain_max(float v);
 void rx_audio_get_tuning(rx_audio_tuning_t *out);
 
+// Operator-facing units (ms) for agc_attack/agc_release above - converts via
+// tau ~= 1/(alpha*fs_dec) and calls through to the coefficient setters.
+void rx_audio_set_agc_attack_ms(uint8_t ms);    // 1..50   (default 3)
+void rx_audio_set_agc_release_ms(uint16_t ms);  // 10..500 (default 150)
+
 // ---- Panoramic CW (2026-09-20) ---------------------------------------------
 // Splits the CW filter's own selected width in half AT THE TUNED PITCH and
 // pans each half hard L/R - two different stations sitting on opposite

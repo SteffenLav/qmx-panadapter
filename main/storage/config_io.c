@@ -92,6 +92,8 @@ char *config_io_export(size_t *out_len)
     APP("rxaud_pan_width    = %u\n", (unsigned)c.rxaud_pan_width_x10);  // stereo width x10 (18 = 1.8)
     APP("rxaud_pan_blend    = %u\n", (unsigned)c.rxaud_pan_blend_x100); // cross-feed x100  (15 = 0.15)
     APP("rxaud_pan_overlap  = %u\n", (unsigned)c.rxaud_pan_ovlp_x100);  // filter overlap x100 (30 = 0.30)
+    APP("rxaud_agc_attack_ms  = %u\n", (unsigned)c.rxaud_agc_attack_ms);  // AGC attack, ms (default 3)
+    APP("rxaud_agc_release_ms = %u\n", (unsigned)c.rxaud_agc_release_ms); // AGC release, ms (default 150)
     APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
     APP("bt_mouse_en        = %d\n", c.bt_mouse_en ? 1 : 0);     // BLE mouse
     APP("cluster_en         = %d\n", c.cluster_en ? 1 : 0);      // DX cluster feed (phone spots)
@@ -414,6 +416,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "rxaud_pan_width"))   settings_set_rxaud_pan_width_x10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_blend"))   settings_set_rxaud_pan_blend_x100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_overlap")) settings_set_rxaud_pan_ovlp_x100((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_agc_attack_ms"))  settings_set_rxaud_agc_attack_ms((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_agc_release_ms")) settings_set_rxaud_agc_release_ms((uint16_t)atoi(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
             else if (!strcasecmp(key, "bt_mouse_en"))       settings_set_bt_mouse_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cluster_en"))        settings_set_cluster_en(atoi(val) != 0);
