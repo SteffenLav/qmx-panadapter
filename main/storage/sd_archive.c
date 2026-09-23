@@ -654,6 +654,35 @@ static bool mirror_diag(void)
 static bool s_parked = false;   // (forward-declared above for the temp instrument)
 static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
 static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
+
+/* ⭐ WHEN A WRITE LAST ACTUALLY SUCCEEDED - what the bottom-bar dot is driven
+ * from (esp_timer us; 0 = not once yet this session).
+ *
+ * Before this, the dot was green only from mount until park_snapshot(), which
+ * on any WiFi unit is about ten seconds, and YELLOW for the entire session
+ * afterwards - because park_snapshot() sets UI_SD_SNAPSHOT_ONLY once and
+ * nothing ever set it back. So after ten seconds the dot said the same thing
+ * for ever, no matter what the card was doing: yellow on a perfectly healthy
+ * unit writing every 30 s, and yellow on bench dev 2026-09-23 where the
+ * MALLOC_CAP_DMA pool collapsed when WiFi came up (58 KB free/31 KB largest
+ * block -> 151 B/28 B) and every open returned EIO for 53 minutes straight,
+ * slow diag mirror and CW transcript both failing with the backlog piling up
+ * in RAM. Two opposite situations, one colour. The operator's words, and the
+ * reason this changed: "I never had a green dot tonight - always yellow
+ * except just after boot up."
+ *
+ * ⚠ OUTCOME, NOT POLICY - and that is the point. The obvious fix, going yellow
+ * when the mirror backs off, was tried before and deliberately removed (see the
+ * BACK OFF block in the task loop): a backoff is not a stop, and one failed
+ * cycle followed by a good one should not flicker the dot. Keying off the last
+ * SUCCESS satisfies both - a transient failure inside the window stays green,
+ * and only a sustained one goes yellow.
+ *
+ * 90 s = three missed 30 s cycles, the same "three in a row" the backoff logic
+ * already treats as meaningful, so the dot and the backoff agree about what
+ * counts as trouble. */
+static int64_t s_last_write_ok_us = 0;
+#define SD_WRITE_FRESH_US  (90 * 1000000LL)
 /* Current slow-mirror retry interval, in ms - starts at SLOW_LOG_MS and
  * DOUBLES (capped at SLOW_LOG_MAX_MS) every time s_slow_fail reaches 3,
  * resetting back to SLOW_LOG_MS on the next success. Replaces a permanent
@@ -1036,6 +1065,11 @@ static bool try_mount(void)
 
     s_mounted = true;
     s_instr.mount_ok++;
+    /* Mounting wrote README.txt (and the snapshot is about to write qso.adi and
+     * qmx-config.txt), so this IS a demonstrated-good write - stamp it, or the
+     * dot would sit yellow for the first 30 s of every healthy boot waiting for
+     * the slow mirror's first tick. */
+    s_last_write_ok_us = esp_timer_get_time();
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
     return true;
@@ -1189,6 +1223,21 @@ static void sd_archive_task(void *arg)
         settings_load_all(&gs);
         const bool wifi_on = gs.wifi_enabled;
 
+        /* Bottom-bar dot, reconciled every pass from what the card actually
+         * did - see s_last_write_ok_us. GREEN = a write landed inside the
+         * freshness window, YELLOW = mounted but nothing has landed lately,
+         * and UI_SD_NONE (grey + stroke) is left to the unmount paths that
+         * know the card is gone. ui_set_sd_state() only stores an int8 and the
+         * UI side redraws only on a change, so calling it every WORK_MS costs
+         * nothing. This deliberately overrides park_snapshot()'s one-shot
+         * yellow: parking stops the continuous burst, it does not stop the
+         * 30 s mirror, and the dot should report the mirror. */
+        if (s_mounted) {
+            const bool fresh = s_last_write_ok_us != 0 &&
+                               (esp_timer_get_time() - s_last_write_ok_us) < SD_WRITE_FRESH_US;
+            ui_set_sd_state(fresh ? UI_SD_MIRRORING : UI_SD_SNAPSHOT_ONLY);
+        }
+
         if (s_parked) {
             // Background mirroring stays off for the rest of the session, but the
             // card remains MOUNTED and fully usable on demand (Save offline, web
@@ -1306,6 +1355,7 @@ static void sd_archive_task(void *arg)
                         // recovery branch, which would have written the same
                         // chunk to the card a second time.
                         bool ok = mirror_diag_slow();
+                        if (ok) s_last_write_ok_us = esp_timer_get_time();
                         if (!ok) {
                             if (++s_slow_fail >= 3) {
                                 // ⛔ BACK OFF - DO NOT STOP, DO NOT UNMOUNT.
