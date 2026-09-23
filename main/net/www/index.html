@@ -4399,6 +4399,15 @@ const SET_FIELDS = [
      always-deliberate press either way. */
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
+  /* Randy N4OPI, 2026-09-23: he runs a DMZ network alongside a home LAN, both
+     remembered, and the automatic fallback used to hand the roam to whichever
+     was loudest on a given reboot - not whichever he wanted, and "beyond my
+     control as to which network it will connect to." Must already be one of
+     the remembered networks above (typing an SSID here does not add it to the
+     list by itself) - empty clears the preference and returns to picking by
+     signal strength, which is what every unit does today. */
+  ["WiFi", "wifi_prefer_ssid", "text", "Preferred network",
+     "Must already be a remembered network (see above). When it is reachable the Tab5 chooses it over any other remembered network, even a louder one. Leave empty to fall back by signal strength, same as today"],
   /* Static IP (Randy N4OPI). Leave the address empty for DHCP, which is what
      every unit does today - so these appear without changing anyone's network.
      Deliberately four plain text fields and no "use static IP" checkbox: the
