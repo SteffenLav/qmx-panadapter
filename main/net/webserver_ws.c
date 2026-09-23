@@ -649,6 +649,18 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
            so the extra 1 KB is paid out of the scarce pool on purpose, because
            an overflow here corrupts a neighbour and, with canary-only checking,
            says nothing when it does. */
+        /* ⛔ TRIED core-1-vs-core-0 pinning here, 2026-09-23 - REVERTED, it made
+         * LATE writes WORSE, not better. Theory was that this task, unpinned,
+         * lands on core 1 and round-robins at equal priority (3) with
+         * rx_audio_task/render_task, matching a measured LATE-write increase
+         * with a browser attached (render.c even has a standing comment
+         * predicting this exact risk). Pinning this task to core 0 measured
+         * clean: core 1 idle rose 25%->40-47% (confirming the pin worked), but
+         * LATE writes rose too, 10-11/450 -> 20-24/450, same bench, same
+         * firmware otherwise, past boot transients. So core-1 scheduling
+         * contention with THIS task is not the mechanism - do not re-try this
+         * exact change without new evidence. The actual cause of the browser-
+         * attached breakup is still open. */
         BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
