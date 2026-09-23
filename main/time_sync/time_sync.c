@@ -609,9 +609,10 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
     return true;
 }
 
-// True once we've made a real (online) GPS/not-GPS determination for the current
-// QMX. Reset by a reboot (static init) - so a QMX swap re-detects on next boot;
-// a hot-swap keeps the prior verdict until reboot (acceptable - swaps are rare).
+// True once qmx_sync_once() has made its FIRST determination for the current
+// QMX - no longer gates whether detection retries (see the 2026-09-23 fix
+// note below), only whether push_to_qmx() has already seeded a non-GPS
+// radio's RTC once. Reset by a reboot (static init) or time_redetect().
 static bool s_qmx_detect_done = false;
 
 void time_sync_force_redetect(void)
@@ -620,10 +621,10 @@ void time_sync_force_redetect(void)
     ESP_LOGW(TAG, "GPS auto-detect re-armed - will run on the next periodic pass");
 }
 
-// One QMX time sync + one-time GPS auto-detection (replaces the manual flag).
-// Detection runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS
-// QMX's tick agrees tightly -> confirmed; a small/unset QMX is far off ->
-// rejected, and we push our time to set its RTC.
+// QMX time sync + GPS auto-detection (replaces the manual flag). Detection
+// runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS QMX's
+// tick agrees tightly (within QMX_GPS_CONFIRM_MS) -> confirmed; a small/unset
+// QMX is far off -> rejected, and we push our time to set its RTC.
 //
 // ⚠ Ordering within one boot is NOT sufficient protection, though this comment
 // used to say it was ("happens BEFORE any Tab5->QMX push, so a push cannot
@@ -633,20 +634,37 @@ void time_sync_force_redetect(void)
 // earlier session. That is a real false positive, seen on a GPS-less bench unit.
 // The durable guard is s_qmx_time_pushed, which crosses boots the same way the
 // radio's clock does.
+//
+// ⛔ WAS ONE-SHOT, NOT ANYMORE - 2026-09-23. The tight-agreement test used to
+// run exactly once (~15-45 s after boot) and latch its verdict for the rest of
+// the session: a fail was permanent until a reboot or the time_redetect escape
+// hatch. Measured on the bench: a QMX+ with a genuine GPS fix, moved/settling
+// right after boot, missed the 300 ms window by ~430 ms at the one-shot's
+// 45.8 s mark and then sat at "not GPS-disciplined" for 17+ minutes with the
+// fix long since solid - nothing ever checked again. Steffen OZ1LAV and John
+// Schindler (W5JSS) both hit this on real GPS-equipped units. Retrying is
+// safe: apply_gps_tick()'s own s_qmx_time_pushed guard already stops a Tab5-
+// pushed clock from being mistaken for GPS on any later attempt, same as the
+// first one, so nothing here can produce a false positive by trying again.
 static void qmx_sync_once(void)
 {
     int h, m, s;
     int64_t flip_us;
     bool sntp_up = wifi_is_connected() && wifi_time_is_valid();
 
-    // --- One-time auto-detect (needs SNTP to compare against) ---
-    if (!s_qmx_detect_done && sntp_up) {
+    // --- Auto-detect (needs SNTP to compare against), retried every periodic
+    // pass until confirmed. push_to_qmx() still fires only on the very first
+    // attempt - later attempts leave seeding the radio's RTC to the steady-
+    // state fallback below, which already runs every pass regardless. ---
+    if (!s_qmx_gps_confirmed && sntp_up) {
         bool gps = (cat_gps_tick_sync(&h, &m, &s, &flip_us) == ESP_OK) &&
                    apply_gps_tick(h, m, s, flip_us);   // tight-agreement test inside
         set_qmx_gps_confirmed(gps);
-        s_qmx_detect_done = true;
-        if (!gps) push_to_qmx(time(NULL));   // non-GPS: set its own RTC (once)
-        if (gps)  return;                    // GPS confirmed + applied
+        if (!s_qmx_detect_done) {
+            s_qmx_detect_done = true;
+            if (!gps) push_to_qmx(time(NULL));   // non-GPS: set its own RTC (once)
+        }
+        if (gps) return;                         // GPS confirmed + applied
     }
 
     // --- Steady state ---

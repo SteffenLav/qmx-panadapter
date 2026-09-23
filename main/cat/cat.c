@@ -2977,8 +2977,11 @@ static bool parse_tm_resp(int *h, int *m, int *s)
 // GPS second-tick sync. Rapidly polls TM; and catches the instant the seconds
 // field ticks over (N -> N+1) - that flip is the true GPS second boundary. On
 // success returns the h/m/s AT the flip (the NEW second) and *out_flip_us = the
-// esp_timer time the flipping TM response LANDED (stamped in the RX handler, so
-// it carries no wait-loop polling granularity). The caller then phase-locks the
+// best ESTIMATE of when that flip happened: the midpoint between the poll that
+// still read the old second and the poll that read the new one (see the block
+// comment at the flip below - handing back the arrival time instead biased
+// every reading late by a poll period plus a round trip). The caller then
+// phase-locks the
 // system clock to that beat instead of the naive whole-second apply, giving
 // roughly +/-(one TM round-trip) accuracy - drift-free and WiFi-independent.
 // Pauses the poll for the whole burst and blocks up to ~1.3 s (enough to span
@@ -2990,9 +2993,11 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
     if (s_poll_paused)              return ESP_ERR_INVALID_STATE;  // FT8 TX / other op owns the pipe
 
     cat_poll_set_paused(true);
-    int       prev_sec = -1;
-    esp_err_t result   = ESP_ERR_TIMEOUT;
-    int64_t   start    = esp_timer_get_time();
+    int       prev_sec      = -1;
+    int64_t   prev_resp_us  = 0;
+    int64_t   bracket_us    = 0;
+    esp_err_t result        = ESP_ERR_TIMEOUT;
+    int64_t   start         = esp_timer_get_time();
 
     while (esp_timer_get_time() - start < 1300000) {   // ~1.3 s cap: spans any 1 s boundary
         s_tm_resp_len = 0;
@@ -3003,17 +3008,46 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         int h, m, s;
         if (!parse_tm_resp(&h, &m, &s)) continue;
         if (prev_sec >= 0 && s != prev_sec) {          // the tick
+            /* ⭐ MIDPOINT, NOT THE ARRIVAL - 2026-09-23.
+             *
+             * This used to hand back s_tm_resp_us, the arrival of the reading
+             * that FIRST showed the new second, and apply_gps_tick() treats
+             * what it is given as the instant the second flipped (h:m:s.000).
+             * Those are not the same thing and the difference is one-directional:
+             * the flip happens, then we only learn about it on the NEXT poll,
+             * and only after a CAT round trip. Both terms are positive, so the
+             * reported flip was always LATE, never early - a systematic bias,
+             * not noise.
+             *
+             * Measured on bench dev with a QMX+ whose GPS was genuinely locked:
+             * a rock-steady 445-478 ms disagreement with SNTP across eight
+             * consecutive 5-minute checks, drifting only ~16 ppm (the Tab5's
+             * own crystal against GPS) - far too stable to be jitter, and it
+             * held the unit below the 300 ms confirm threshold for ever, so a
+             * good GPS never got recognised. Steffen OZ1LAV and John Schindler
+             * (W5JSS) both sat at "no GPS" on real GPS-equipped radios.
+             *
+             * What we actually know is a BRACKET: the second changed somewhere
+             * between the poll that still read s-1 and the poll that read s.
+             * Both readings carry the same round trip, so it cancels in the
+             * midpoint, which is an unbiased estimate of the true flip with an
+             * error of at most half the bracket. bracket_us is logged so the
+             * remaining uncertainty is visible rather than assumed. */
             *out_hour = h; *out_min = m; *out_sec = s;
-            *out_flip_us = s_tm_resp_us;               // exact arrival of the flipping reading
+            bracket_us   = s_tm_resp_us - prev_resp_us;
+            *out_flip_us = prev_resp_us + bracket_us / 2;
             result = ESP_OK;
             break;
         }
-        prev_sec = s;
+        prev_sec     = s;
+        prev_resp_us = s_tm_resp_us;
     }
 
     cat_poll_set_paused(false);
     if (result == ESP_OK)
-        ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught", *out_hour, *out_min, *out_sec);
+        ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
+                 *out_hour, *out_min, *out_sec,
+                 (long long)(bracket_us / 1000), (long long)(bracket_us / 2000));
     else
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
     return result;
