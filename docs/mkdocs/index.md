@@ -123,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.3** finishes the audio fix v1.16.2 started and puts all four audio controls in one window.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.4** fixes four faults operators found in their own shacks, mutes the speaker when headphones go in, and root-causes the long-running SD write problem.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -139,6 +139,8 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     twice the room. **Your settings, QSO log and LoTW certificate are kept** —
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
+
+**v1.16.4 fixes four faults operators found in their own shacks.** **A station answering your CQ is answered in the very next slot — every time** *(Gyula HA3HZ)*: decoding is split across both processors and only one half could act on a caller, so the same situation replied immediately about half the time and a cycle late the rest. **Waiting for a busy station really is capped at six minutes now** — the counter reset instead of latching, so it could wait over half an hour and never got back to calling them either. **Headphones silence the internal speaker** *(Roy KI0ER)*. **Resource Management is renamed Audio Settings**, with its own button in the settings drawer. **Preferred network actually decides which WiFi you join** *(Randy N4OPI)*. **A restart caused by a power brownout says so** *(Samuel W7STF)*. ⭐ And the recurring **SD "dot goes yellow and writes stop" is root-caused** — the card driver is refused a memory buffer, so the write never reaches a card that is mounted and healthy. ⚠ Audio still breaks up while a browser has the panadapter open.
 
 **v1.16.3 finishes the audio fix and gathers the controls.** The **crackle is actually gone** — v1.16.2 shipped the first of five attempts at the clock correction and you could still hear it working. **All four level controls are in one window**: RX Volume moved into Resource Management, "Gain" is renamed **AGC Ceiling** and reaches 1500, and **Attack** and **Release** are adjustable for the first time. ⚠ The settings drawer's RX Audio section is gone, including its on/off box — long-press the top bar instead. **A GPS that locks late is no longer missed** *(John W5JSS)*: detection ran once 45 seconds after boot and never again; a QMX+ here locked 25 minutes in. **WSPR gives the radio back its mode** instead of leaving it in Digi. **Preferred network** decides which remembered WiFi wins *(Randy N4OPI)*. The **SD dot** is green only while writes are actually landing. ⚠ Audio still breaks up while a browser has the panadapter open — close the page while you listen.
 
@@ -287,7 +289,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.3.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.4.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

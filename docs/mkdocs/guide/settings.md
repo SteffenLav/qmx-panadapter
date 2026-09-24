@@ -473,6 +473,17 @@ only place RBN skimmers more precisely.
 
 **Fast pounce (early decode)** — On by default. Decodes surface ~1.8 s *before* the slot boundary (WSJT-X style), so a fresh CQ can be answered in the very next slot and mid-QSO replies land on the beat. Trade-off: the capture window closes early, so a station transmitting late in the slot can occasionally be missed. ⚠️ *Not yet A/B-verified on a live band — if your decodes-per-slot drop with it on, turn it off and please report your numbers.*
 
+!!! tip "v1.16.4 made this actually deliver"
+
+    Starting the decode early only helps if the *decision* to transmit is taken
+    early too, and until v1.16.4 only one of the Tab5's two processors was
+    allowed to take it. Which one happened to find the station calling you was
+    chance — so the same situation answered immediately about half the time and
+    a full cycle (30 s) late the rest, which is exactly how it looked from the
+    operator's chair *(Gyula HA3HZ: "sometimes it works well, other times the
+    transmission is delayed")*. Both halves may now decide. Verified on the air
+    over three contacts, every message going out in the immediate slot.
+
 **Distance in miles** — Show the decode list's distance column in miles instead of kilometres.
 
 **Report to PSK Reporter** — **On by default.** Uploads the stations you decode to [PSK Reporter](https://pskreporter.info), the same as WSJT-X, so you appear on the map as a monitoring station and other operators can see where they were heard.

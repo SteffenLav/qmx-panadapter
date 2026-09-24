@@ -4,6 +4,24 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.4** — 2026-09-25
+
+**Four faults operators found in their own shacks, headphones behaving as everyone expected, and the measurement that finally explains the SD card.**
+
+- **A station answering your CQ is answered in the very next slot — every time, not half the time.** Decoding is shared between the Tab5's two processors, and only one of them was allowed to act the moment it spotted somebody calling you. Which one found your caller was chance, so the identical situation replied immediately about half the time and a full 30-second cycle late the rest. *"Sometimes it works well, other times the transmission is delayed"* was exactly right, and that variability **was** the fault *(Gyula HA3HZ)*. Tested on the air over three contacts.
+- **Waiting for a busy station really is capped at six minutes now.** When the station you called is working somebody else the Tab5 stands by rather than transmit over them — and the six-minute limit it claimed never worked: the counter reset instead of stopping, so it could wait **over half an hour**. Each held slot also cancelled the call it had just queued, so it never got back to calling them either. One fault, both symptoms — including "it continues to wait rather than calling again after an RR73".
+- **Headphones silence the internal speaker** *(Roy KI0ER)*. Sound used to come out of both at once, which made headphones close to useless in a quiet shack. Plug in, the speaker stops; unplug, it comes back. Nothing to set.
+- **Resource Management is now Audio Settings**, and has its own button in the settings drawer, just below SelfSpotter. It is volume, AGC, binaural and the panoramic split — the old name described the machinery rather than the purpose. The top-bar long-press still works, but it shared its area with the Band, Mode, BW and Frequency pickers, so it was easy to open the wrong thing.
+- **Preferred network actually decides which WiFi you join** *(Randy N4OPI)*. Added in v1.16.3, it was only consulted after the Tab5 had **failed to connect twice** — so it worked when your usual network was down and did nothing in the case it was written for. It also needed a reboot. Both fixed. A **Network name** typed with the password left blank is no longer silently discarded either, and both fields now list the networks your Tab5 actually remembers.
+- **A restart caused by a power brownout now says so** *(Samuel W7STF)*. His unit rebooted repeatedly while he listened, and he reasonably suspected his own hardware — his logs held **ten brownout resets**, which is the supply rail dipping, not a crash and not a fault in the Tab5. The firmware knew every time and told nobody. Now it is on screen at start-up.
+- **The FT8 transmit tone saves from the settings page.** It said *Saved*, wrote the value down, and never told the radio.
+
+> ⭐ **The SD card was never the problem.** The recurring *"SD dot goes yellow and writes stop"* is root-caused: the card driver is **refused a memory buffer**, so the write never reaches a card that is mounted and perfectly healthy. This is why reformatting, reseating and replacing cards has never helped anybody. Every diagnostic log now opens with a start-up memory ledger showing where that memory went — the audio output stage alone accounts for 46.5 KB of it. The same shortage is what silently stops **Bluetooth** starting when the symbol reads grey with the box still ticked. Diagnosed and documented; **not yet reduced**, because the remedy trades against audio quality and deserves proper testing first.
+
+> Audio and binaural CW remain a **beta**, and audio still breaks up while a web page is open — close it while you listen.
+
+## Previous Releases
+
 **v1.16.3** — 2026-09-23
 
 **The audio fix v1.16.2 was meant to be, all four audio controls on one page, and three things that were quietly misreporting their own state.**

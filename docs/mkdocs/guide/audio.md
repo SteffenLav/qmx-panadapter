@@ -21,9 +21,8 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 ### Enabling Panoramic CW
 
-1. Long-press the **top bar** in the Panadapter view (any of Band, Mode, BW, Freq or Zoom)
-2. Resource Management opens
-3. Tick **RX Audio (speaker/headphone)**, then **Binaural CW (stereo separation)**
+1. Open the settings drawer and tap **Audio Settings** (just below SelfSpotter)
+2. Tick **RX Audio (speaker/headphone)**, then **Binaural CW (stereo separation)**
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
@@ -52,13 +51,24 @@ Binaural separation works best with **bandwidths of 300 Hz and above**.
 | 200–300 Hz | Fair | Tight pileup; separation possible but marginal |
 | <200 Hz   | Poor | Not recommended; too much spectral overlap |
 
-## Resource Management
+## Audio Settings
 
 Audio decoding shares the Tab5's compute and memory budget with the spectrum, waterfall, and FT8/FT4 decode paths. Not all features can run simultaneously.
 
-### Opening Resource Management
+!!! note "Renamed in v1.16.4"
 
-**Long-press the top bar in the Panadapter view** — any of the Band, Mode, BW, Freq or Zoom areas.
+    This window used to be called **Resource Management**. It is **Audio
+    Settings** now, because that is what it is — volume, AGC, binaural and the
+    panoramic split. The old name described how it works rather than what it does.
+
+### Opening Audio Settings
+
+Open the **settings drawer** and tap **Audio Settings**, directly below SelfSpotter.
+
+You can also **long-press the top bar** in the Panadapter view — any of the Band,
+Mode, BW, Freq or Zoom areas. That still works, but those same areas open the
+Band, Mode, BW and Frequency pickers on a short tap, so it is easy to land on one
+of those instead. The drawer button cannot be mistaken for anything else.
 
 The window lists RX audio and the background network feeds that compete with it for the same scarce memory, each with a tick box:
 
@@ -76,6 +86,21 @@ The list scrolls; the **Close** button stays put at the bottom.
 - **Audio ON, Waterfall ON, Decode ON** → Some margin left; FT8/FT4 decode still runs steadily
 - **Audio ON, Waterfall ON, Decode ON, Web streaming ON** → Tight; any spike can cause temporary frame drops
 - **Audio ON, full WiFi + web load** → Audio is the first to suffer if the load spikes; consider disabling audio or the waterfall if you need reliable web streaming
+
+## Headphones
+
+Plug headphones into the Tab5's 3.5 mm jack and the **internal speaker goes
+quiet on its own**. Unplug them and it comes back. Nothing to switch.
+
+Before v1.16.4 you heard both at once, which made headphones close to useless in
+a quiet shack *(Roy KI0ER)*.
+
+!!! tip "The internal speaker is small and trebly"
+
+    Several operators have said so, and they are right — it is a tablet
+    speaker. Headphones or a powered external speaker on the jack are a large
+    improvement, and now that the internal one mutes itself either is
+    practical.
 
 ## Which modes produce audio
 
@@ -100,7 +125,7 @@ So you **do** get audio on SSB; what you do not get there is the left/right spli
 
 ## The AGC controls
 
-All four audio level controls live in **Resource Management** (long-press the top bar), on their own rows under **RX Audio**:
+All four audio level controls live in **Audio Settings** (settings drawer → Audio Settings), on their own rows under **RX Audio**:
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
@@ -117,7 +142,13 @@ All four are remembered across restarts and travel in a config backup.
 
 - **AGC Ceiling was called "Gain".** The name was wrong: it never was a plain gain, it is the ceiling on the AGC's own weak-signal boost, and calling it Gain led people to look for an AGC that was already there. Its range also went up from 800 to 1500, because the Tab5's internal speaker wants more headroom than the old ceiling allowed.
 - **Attack and Release are new** — the AGC's timing was fixed before, and is now yours to set.
-- **RX Volume moved here from the settings drawer**, and the drawer's RX Audio section is gone entirely. That includes its on/off box: **Resource Management is now the only place to switch RX audio on or off.**
+- **RX Volume moved here from the settings drawer**, and the drawer's RX Audio section is gone entirely. That includes its on/off box: **Audio Settings is now the only place to switch RX audio on or off.**
+
+### What changed in v1.16.4
+
+- **The window is called Audio Settings**, and it has a door of its own in the
+  settings drawer. The top-bar long-press still works.
+- **Headphones mute the internal speaker** automatically.
 
 ## Strong signals
 

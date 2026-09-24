@@ -405,6 +405,15 @@ On a crowded band several stations answer the same CQ and the caller works one o
 
 This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
 
+!!! warning "Fixed in v1.16.4 — the six-minute cap did not work"
+
+    Before v1.16.4 that cap never actually took effect: the counter reset
+    itself instead of stopping, so the Tab5 could wait **more than half an
+    hour** for a station working somebody else. Worse, each held slot cancelled
+    the call it had just queued, so it never got back to calling them either —
+    which is why it could look like the radio had simply given up and gone
+    quiet *(Gyula HA3HZ)*. Both are the same fault, and both are fixed.
+
 To tune to a different frequency while CQ is running:
 
 1. Tap the **Freq** label on the top bar

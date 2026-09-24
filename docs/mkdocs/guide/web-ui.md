@@ -295,8 +295,8 @@ remembers, under the field itself. Only a name from that list will work.
     until the next reboot. If you set it on v1.16.3 and saw no difference, that
     is why — and it was not something you did wrong.
 
-    Fixed after v1.16.3: the preference is read when the Tab5 connects, and
-    saving it moves the Tab5 straight away.
+    **Fixed in v1.16.4**: the preference is read when the Tab5 connects, and
+    saving it moves the Tab5 straight away *(Randy N4OPI)*.
 
 If the preferred network does not answer, the Tab5 falls back to the strongest
 remembered one after a few seconds, so an unreachable preference costs you
@@ -304,9 +304,14 @@ about ten seconds at start-up and nothing else. It is re-tried on every later
 fallback too, so it wins again the moment it comes back.
 
 **Switching to a network the Tab5 already knows** needs only the **Network
-name** — leave the password blank and the stored one is used. (In v1.16.3 a
+name** — leave the password blank and the stored one is used. (Up to v1.16.3 a
 blank password made the Tab5 discard the name silently, which read as the
-setting not saving.)
+setting not saving. Fixed in v1.16.4.)
+
+**The FT8 transmit tone saves properly too, from v1.16.4.** Setting `tx_tone_hz`
+on the settings page used to answer *Saved* and write it down without telling
+the radio, so bursts kept going out on the old tone until the next restart. The
+tone control on the FT8 page was never affected.
 
 > Not carried in a config backup. A restored config does not bring the
 > preferred network with it; set it again on each unit.
