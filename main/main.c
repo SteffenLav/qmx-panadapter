@@ -72,6 +72,36 @@
 
 static const char *TAG = "main";
 
+/* ---- Boot memory ledger -------------------------------------------------
+ *
+ * Internal RAM is THE constraint on this board and nothing measured where it
+ * goes. On 2026-09-25 the bench sat at 19 KB free / 10-12 KB largest block
+ * with audio on, which is enough to cost three separate features:
+ *   - the SD diag mirror (esp_dma_capable_malloc refused, backing off to 240 s),
+ *   - four network feeds (gated off whenever RX audio is on),
+ *   - the BLE mouse (its guard needs 24576 B and measured 21391 B).
+ *
+ * dma_owners can attribute it, but only with CONFIG_HEAP_TASK_TRACKING, which
+ * stores an owner handle in EVERY block header and so changes the very numbers
+ * being measured (documented in sdkconfig.defaults, measured 2026-08-28).
+ *
+ * This is the non-perturbing alternative: print free DMA-capable and internal
+ * bytes either side of each major init, so the consumer is named by
+ * SUBTRACTION rather than by attribution. Two heap_caps_get_free_size() calls
+ * and one log line per milestone - no tracking, no allocation, nothing that
+ * changes what it observes.
+ *
+ * Deliberately INFO and deliberately permanent: every field diagnostic then
+ * carries the same ledger, so a user reporting "no Bluetooth" or a yellow SD
+ * dot arrives with the reason already in the file. */
+#define MEM_LEDGER(stage)                                                     \
+    ESP_LOGI("memledger", "%-26s dma=%6u B (lblk %5u)  int=%6u B (lblk %5u)", \
+             (stage),                                                         \
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),               \
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+
 void app_main(void)
 {
     // Install the diagnostic log capture hook first so the whole boot
@@ -104,6 +134,7 @@ void app_main(void)
     ESP_LOGI(TAG, "HEAP boot: int=%uKB psram=%zuMB",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));
+    MEM_LEDGER("app_main entry");
     // Initialise NVS (settings persistence). If the partition is full or
     // a new version invalidated it, erase and retry - never block boot.
     esp_err_t nvs_err = nvs_flash_init();
@@ -247,6 +278,7 @@ void app_main(void)
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
+    MEM_LEDGER("display_init");
 
     bsp_info_log();
     manual_embed_log_summary();   // built-in user manual shipped intact?
@@ -275,6 +307,7 @@ void app_main(void)
     wspr_spots_init();
 
     ui_init(disp);
+    MEM_LEDGER("ui_init (LVGL)");
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
 
     /* ⭐ RESTORE THE PAGE BEFORE THE BACKLIGHT, so the Tab5 is ON the page it
@@ -308,6 +341,7 @@ void app_main(void)
     // after ui_init so the SD mount never races display bring-up and the dot
     // exists when the first mount callback fires.
     sd_archive_init();
+    MEM_LEDGER("sd_archive_init");
 
     // Belt-and-suspenders: sync the dot in case a mount completed before this.
     ui_set_sd_active(sd_archive_is_mounted());
@@ -331,8 +365,10 @@ void app_main(void)
     // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
     // costs nothing on any unit that has never turned it on.
     rx_audio_preopen();
+    MEM_LEDGER("rx_audio_preopen (I2S)");
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+    MEM_LEDGER("usb_host_start");
     ESP_LOGI(TAG, "USB host started");
     // Make every firmware-initiated reboot tear the USB link down properly, so
     // the QMX is told we are going rather than finding out (see usb_shutdown.h).
@@ -350,6 +386,7 @@ void app_main(void)
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
+    MEM_LEDGER("audio_init (UAC ring)");
     iq_balance_set_enabled(cfg->iq_enabled);
     ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
@@ -409,6 +446,7 @@ void app_main(void)
     }
     cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
+    MEM_LEDGER("cat_init (CDC)");
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
     // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
@@ -465,6 +503,7 @@ void app_main(void)
     // separate question and needs its own soak.
     #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
+    MEM_LEDGER("wifi_start (hosted/SDIO)");
     // ⭐ REVERSED 2026-09-06, and the reason is measured rather than tidy.
     //
     // This used to wait for the SD mount BEFORE starting WiFi, on the strength
@@ -487,6 +526,7 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
     ESP_ERROR_CHECK(dsp_init());
+    MEM_LEDGER("dsp_init");
     // After dsp_init: the detector arms dsp_avg_*, which needs the FFT running.
     spur_map_init();
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
@@ -496,6 +536,7 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+    MEM_LEDGER("render_init");
 
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
@@ -518,6 +559,7 @@ void app_main(void)
     // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
     // before this call was re-enabled (memory project_rx_audio_track.md).
     rx_audio_init();
+    MEM_LEDGER("rx_audio_init");
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew
