@@ -420,7 +420,13 @@ static void modal_build(void)
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
-    lv_label_set_text(title, "Resource Management");
+    /* "Audio Settings", not "Resource Management" - operator, 2026-09-24:
+     * "it is not really about resources as it is about real audio settings".
+     * Correct: five of its rows are RX audio, the panoramic trio is audio,
+     * and the feed switches are only here because they compete with audio
+     * for internal heap. The old name described the mechanism; this one
+     * describes what the operator came to do. */
+    lv_label_set_text(title, "Audio Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);

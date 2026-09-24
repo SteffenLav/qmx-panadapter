@@ -3937,6 +3937,11 @@ static void whats_wrong_cb(lv_event_t *e)    { (void)e; drawer_close(); help_tri
 // one collided with the top bar's own Band/Mode/BW/Zoom hit zones.
 static void drawer_selfspotter_cb(lv_event_t *e) { (void)e; drawer_close(); spot_map_view_show(); }
 
+/* Audio Settings, from the drawer - see the button for why the top-bar
+ * long-press alone was not enough. Closes the drawer first, same as the other
+ * three doors: the panel is modal and would otherwise open behind it. */
+static void drawer_audio_settings_cb(lv_event_t *e) { (void)e; drawer_close(); resource_mgmt_modal_open(); }
+
 bool ui_iq_mode_warning_active(void) { return s_iq_warn_active; }
 
 void ui_set_iq_mode_warning(bool active)
@@ -12225,6 +12230,41 @@ static void drawer_build(void)
         lv_obj_t *l = lv_label_create(btn);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
         lv_label_set_text(l, LV_SYMBOL_GPS "  SelfSpotter");
+        lv_obj_center(l);
+        y += 60 + 20;
+    }
+
+    /* Audio Settings - the fourth door, directly below SelfSpotter.
+     *
+     * Operator, 2026-09-24: "it is now too flimsy to open ... too many things
+     * are happening in that top bar anyway during a Panadapter session (I
+     * often start band and freq settings instead)". He is right, and the
+     * history says why: the window's opener has now collided with something
+     * twice. Double-tapping the spectrum was tried and reverted the same
+     * session (a mistimed first tap retunes the radio); the top-bar long-press
+     * that replaced it shares its hit zones with Band/Mode/BW/Freq/Zoom, whose
+     * short-tap dropdowns are the most-used controls on the page.
+     *
+     * The drawer is the one surface that does nothing else. Placed with the
+     * other three "go somewhere else" doors rather than among the settings
+     * rows, and specifically just below SelfSpotter so it needs no scrolling -
+     * his instruction.
+     *
+     * The top-bar long-press STAYS. It is documented, people have learned it,
+     * and removing a working shortcut to fix a discoverability problem would
+     * trade one complaint for another. */
+    {
+        lv_obj_t *btn = lv_button_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 60);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, drawer_audio_settings_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_label_set_text(l, LV_SYMBOL_VOLUME_MAX "  Audio Settings");
         lv_obj_center(l);
         y += 60 + 20;
     }
