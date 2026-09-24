@@ -4536,8 +4536,36 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_resmon_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "tx_tone_hold")))
         settings_set_tx_tone_hold(cJSON_IsTrue(it));
-    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tx_tone_hz")))
-        settings_set_tx_tone_hz((uint16_t)it->valuedouble);
+    /* ⛔ THE STORED TONE AND THE LIVE TONE ARE TWO DIFFERENT THINGS.
+     *
+     * Found on the bench 2026-09-24 while setting up an FT8 test: this wrote
+     * NVS, answered {"ok":true}, and the radio went on transmitting on the old
+     * tone - because ft8_tx_get_tone_pref_hz(), which every transmission
+     * actually reads, was never told. The operator sees "Saved" and no change,
+     * which is the same defect class as the WiFi preferred network in the same
+     * session: a setter that persists a value without applying it.
+     *
+     * /api/tone has always done this correctly (tone_post_handler), so the
+     * Tab5's own tone picker and the web tone control were fine - it was only
+     * this generic settings key that was half-wired.
+     *
+     * ft8_qso_set_tx_tone_hz() is the right call when a QSO is live: it QUEUES
+     * the tone so a burst already on air is never retuned mid-message. When
+     * idle there is nothing to queue behind, so the preference is set
+     * directly. Same order as tone_post_handler and the Tab5's Apply. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tx_tone_hz"))) {
+        int hz = (int)it->valuedouble;
+        if (hz < FT8_TX_TONE_MIN_HZ) hz = FT8_TX_TONE_MIN_HZ;
+        if (hz > FT8_TX_TONE_MAX_HZ) hz = FT8_TX_TONE_MAX_HZ;
+        if (ft8_qso_get_state() != FT8_QSO_IDLE) {
+            char terr[64] = { 0 };
+            if (!ft8_qso_set_tx_tone_hz(hz, terr, sizeof terr))
+                ESP_LOGW(TAG, "web: tone %d Hz refused: %s", hz, terr);
+        } else {
+            ft8_tx_set_tone_pref_hz(hz);
+        }
+        settings_set_tx_tone_hz((uint16_t)hz);
+    }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_pitch_hz")))
         settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
