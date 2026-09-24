@@ -4894,15 +4894,65 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // not "erase it". This is how a second network gets added from a laptop.
     const char *ssid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_ssid"));
     const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_pass"));
-    if (ssid && ssid[0] && pass && pass[0]) panadapter_wifi_update_credentials(ssid, pass);
+    if (ssid && ssid[0] && pass && pass[0]) {
+        panadapter_wifi_update_credentials(ssid, pass);
+    } else if (ssid && ssid[0]) {
+        /* ⛔ A BLANK PASSWORD MUST NOT SILENTLY DISCARD THE SSID.
+         *
+         * Randy N4OPI, 2026-09-24: "If I enter a different known network in the
+         * field Network Name and save ... it is not saved. Returning to the
+         * settings page shows the previous setting."
+         *
+         * The old condition required BOTH fields, while the password field's
+         * own help text says to leave it blank to keep the stored one. So
+         * switching to a network the Tab5 already knows - the exact case the
+         * remembered list exists for - did nothing at all, with no error and
+         * no log line. The page then re-read the unchanged SSID from the GET,
+         * which is the "shows the previous setting" he saw.
+         *
+         * A remembered network already has a password in NVS, so use it. An
+         * SSID nobody has a password for is still refused, but now it SAYS so
+         * rather than failing silently - a settings screen that accepts input
+         * and discards it is worse than one that rejects it.
+         *
+         * ⛔ ONLY WHEN IT ACTUALLY CHANGED. The form is built from the GET, so
+         * wifi_ssid is present and populated in EVERY settings save -
+         * brightness, a WSPR option, anything. Comparing against the stored
+         * SSID first is what stops each of those from cycling the connection
+         * and dropping the very browser doing the saving. */
+        char cur_ssid[33] = { 0 }, cur_pass[65] = { 0 };
+        settings_get_wifi_creds(cur_ssid, cur_pass, NULL);
+        if (strcmp(ssid, cur_ssid) != 0) {
+            static wifi_known_t kn[WIFI_KNOWN_MAX];
+            int n = settings_wifi_known_get(kn, WIFI_KNOWN_MAX);
+            const char *stored = NULL;
+            for (int i = 0; i < n; i++)
+                if (strcmp(kn[i].ssid, ssid) == 0) { stored = kn[i].pass; break; }
+            if (stored) {
+                ESP_LOGI(TAG, "web: switching to remembered network '%s' "
+                              "(no password typed - using the stored one)", ssid);
+                panadapter_wifi_reconnect(ssid, stored);
+            } else {
+                ESP_LOGW(TAG, "web: '%s' is not a remembered network and no "
+                              "password was typed - SSID not applied", ssid);
+            }
+        }
+    }
 
     // Preferred network. Only touched when the form carries the field at all
     // (same convention as wifi_ip below it) - an empty string IS meaningful
     // here too, and clears the preference back to today's strongest-signal
     // fallback.
+    //
+    // Applied immediately afterwards, not only at the next boot: the preference
+    // was unobservable until a reboot in v1.16.3, which is most of why it read
+    // as "the Web UI config is ignored". See panadapter_wifi_apply_preferred().
     {
         cJSON *pf = cJSON_GetObjectItem(root, "wifi_prefer_ssid");
-        if (cJSON_IsString(pf)) settings_set_wifi_preferred_ssid(pf->valuestring);
+        if (cJSON_IsString(pf)) {
+            settings_set_wifi_preferred_ssid(pf->valuestring);
+            panadapter_wifi_apply_preferred();
+        }
     }
 
     // Static IP. Only touched when the form actually carries wifi_ip, so every

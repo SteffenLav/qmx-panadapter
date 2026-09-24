@@ -1054,6 +1054,23 @@ static void freq_popup_open(void)
     freq_popup_build();
 }
 
+/* INSTRUMENT (Roy KI0ER, 2026-09-24) - the keypad opens with nobody touching
+ * the Tab5. "I had to Cancel out of the Enter freq dialog 4 separate times ...
+ * otherwise not touching the Tab5 or QMX devices", Bluetooth mouse disabled,
+ * QMX not even powered, across many releases.
+ *
+ * ⛔ DO NOT GUESS THE SOURCE. There are three ways into this callback and they
+ * need different fixes:
+ *   - a touch report the panel invented (the top-bar Freq hit zone is 280 px
+ *     wide and the full bar height, so it is a large target for a stray point),
+ *   - the Bluetooth mouse emitting a click while "disabled",
+ *   - the snap-on keyboard, which Roy has attached.
+ * Logging WHICH indev and WHERE tells them apart in one diagnostic log, and
+ * costs one line per open. Remove it once the source is named.
+ *
+ * lv_indev_active() is NULL when the click was synthesised in software rather
+ * than produced by an input device - itself a useful answer, so it is printed
+ * rather than skipped. */
 static void freq_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
@@ -1061,6 +1078,23 @@ static void freq_label_clicked_cb(lv_event_t *e)
     // is via the FT8 screen's own Preset button, same FT8-mode bail pattern
     // as band/bw/mode/zoom_label_clicked_cb above.
     if (ui_mode_get() == UI_MODE_FT8) return;
+
+    lv_indev_t *id = lv_indev_active();
+    if (id) {
+        lv_point_t p = { 0, 0 };
+        lv_indev_get_point(id, &p);
+        lv_indev_type_t t = lv_indev_get_type(id);
+        ESP_LOGW(TAG, "freq keypad opened by %s at (%d,%d)",
+                 t == LV_INDEV_TYPE_POINTER  ? "POINTER (touch or mouse)" :
+                 t == LV_INDEV_TYPE_KEYPAD   ? "KEYPAD"   :
+                 t == LV_INDEV_TYPE_ENCODER  ? "ENCODER"  :
+                 t == LV_INDEV_TYPE_BUTTON   ? "BUTTON"   : "an unknown device",
+                 (int)p.x, (int)p.y);
+    } else {
+        ESP_LOGW(TAG, "freq keypad opened with NO active input device "
+                      "(software-generated click)");
+    }
+
     freq_popup_open();
 }
 

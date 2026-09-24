@@ -35,6 +35,12 @@ void panadapter_wifi_update_credentials(const char *ssid, const char *pass);
 // (the persisted flag is then honoured at boot).
 void panadapter_wifi_set_enabled(bool enabled);
 
+// Switch to the designated-preferred network NOW, if one is set, it is one of
+// the remembered networks, and it is not the one already in use. Call after
+// settings_set_wifi_preferred_ssid() so the operator sees the preference take
+// effect instead of having to reboot. No-op in every other case.
+void panadapter_wifi_apply_preferred(void);
+
 // Returns true once the station has an IP address.
 bool wifi_is_connected(void);
 

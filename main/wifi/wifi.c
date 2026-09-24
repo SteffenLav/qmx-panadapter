@@ -725,6 +725,53 @@ static void wifi_task(void *arg)
     bool wifi_enabled_at_boot = false;
     settings_get_wifi_creds(s_ssid, s_pass, &wifi_enabled_at_boot);
 
+    /* ⛔ THE PREFERENCE MUST BE APPLIED HERE TOO, NOT ONLY IN THE ROAM PATH.
+     *
+     * Randy N4OPI, 2026-09-24: "It always connects to whichever WLAN was last
+     * selected from the Tab5, regardless of the Web UI config changes." He is
+     * right, and the reason is this function, not the web UI.
+     *
+     * As shipped in v1.16.3 the preference was read in exactly one place -
+     * roam_to_known_if_present(), which is reached ONLY from the
+     * disconnect/retry path after ROAM_AFTER_RETRIES failed connects. So the
+     * feature worked precisely when the configured network was DOWN, and did
+     * nothing at all in the case it was actually written for: both networks
+     * reachable, the configured one answers on the first try, and the operator
+     * wanted the other one. That is the normal case, so for most people the
+     * setting appeared to be ignored entirely.
+     *
+     * Applied only when the preferred SSID is one of the REMEMBERED networks,
+     * because the scan records carry no password and NVS is the only place a
+     * usable one exists. An unknown SSID falls through unchanged and is still
+     * picked up later by the roam scan if it appears.
+     *
+     * Safe against a wrong or out-of-range preference: if it does not answer,
+     * two failed connects arm try_start_roam_scan() and the existing
+     * strongest-remembered-network logic takes over, which is where the unit
+     * would have been anyway. The configured SSID in NVS is NOT overwritten -
+     * same rule as apply_creds_live(): roaming is a convenience, not a
+     * decision. */
+    {
+        char pref[33];
+        settings_get_wifi_preferred_ssid(pref);
+        if (pref[0] && strcmp(pref, s_ssid) != 0) {
+            static wifi_known_t known[WIFI_KNOWN_MAX];   /* ~590 B, 4 KB stack */
+            int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+            for (int k = 0; k < kn; k++) {
+                if (strcmp(known[k].ssid, pref) != 0) continue;
+                ESP_LOGW(TAG, "preferred network '%s' is set - connecting to it "
+                              "instead of the configured '%s'", pref, s_ssid);
+                /* Precisions, not a bare %s: the compiler cannot see that an
+                 * element of known[] is NUL-terminated, only that the array is
+                 * 588 bytes, so -Werror=format-truncation rejects the plain
+                 * form. The widths are the field sizes less the terminator. */
+                snprintf(s_ssid, sizeof(s_ssid), "%.32s", known[k].ssid);
+                snprintf(s_pass, sizeof(s_pass), "%.64s", known[k].pass);
+                break;
+            }
+        }
+    }
+
     wifi_config_t sta_cfg = { 0 };
     // s_ssid/s_pass already NUL-terminated; sta.ssid/password are zero-init via { 0 }.
     memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
@@ -921,6 +968,42 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
         esp_wifi_disconnect();
         esp_wifi_connect();
     }
+}
+
+/* Act on a freshly-saved preferred network without waiting for a reboot.
+ *
+ * Randy N4OPI, 2026-09-24. Without this the operator sets the preference, sees
+ * "Saved", and the Tab5 stays exactly where it was - which reads as the setting
+ * having been ignored, because from the outside there is no difference.
+ *
+ * Deliberately apply_creds_live() and NOT panadapter_wifi_reconnect(): the
+ * latter persists the SSID as the CONFIGURED one, and the preference is a
+ * preference, not a re-configuration. Same rule as the roam path.
+ *
+ * Does nothing unless the preference names a remembered network that is not
+ * the one already in use - clearing the preference does not drag the unit off
+ * a working connection, and neither does saving an unrelated setting. */
+void panadapter_wifi_apply_preferred(void)
+{
+    char pref[33];
+    settings_get_wifi_preferred_ssid(pref);
+    if (!pref[0] || strcmp(pref, s_ssid) == 0) return;
+    if (s_wifi_user_disabled || !s_wifi_started) return;
+
+    static wifi_known_t known[WIFI_KNOWN_MAX];
+    int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+    for (int k = 0; k < kn; k++) {
+        if (strcmp(known[k].ssid, pref) != 0) continue;
+        ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
+                 pref, s_ssid);
+        apply_creds_live(known[k].ssid, known[k].pass);
+        s_retry_count = 0;
+        esp_wifi_disconnect();
+        esp_wifi_connect();
+        return;
+    }
+    ESP_LOGW(TAG, "preferred network '%s' is not one of the %d remembered "
+                  "networks - staying on '%s'", pref, kn, s_ssid);
 }
 
 // Live WiFi on/off. Runs off the LVGL thread because ensure_sta_netif() can
