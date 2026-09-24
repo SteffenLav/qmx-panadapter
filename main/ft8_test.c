@@ -1279,16 +1279,21 @@ static void ft8_decode_worker_task(void *arg)
         worker_job_t *job = NULL;
         if (xQueueReceive(ctx->jobs, &job, portMAX_DELAY) != pdTRUE) continue;
         if (!job) break;   // termination sentinel
-        /* false: the worker is a DIFFERENT TASK from the one that has always
-           called ft8_qso_advance(), and this is not the evening to add a second
-           caller into the QSO state machine. It costs almost nothing - the
-           decode task takes the EVEN candidates, which are the strongest, and a
-           partner replying to us is the loudest thing in the slot. If it lands
-           on an odd candidate we simply fall back to the end-of-slot advance,
-           i.e. today's behaviour. */
+        /* ⭐ true, as of 2026-09-24. This was false, with the note that the
+           worker is a different task from the one that has always called
+           ft8_qso_advance() - a fair objection, but the cost was not "almost
+           nothing". Candidates are split even/odd, so whether a station
+           calling us was answered in its own slot or a full cycle (30 s)
+           later came down to which half decoded them. Gyula HA3HZ measured the
+           result from the operator's side: "it responds rather sluggishly ...
+           the unit ignores it and continues sending CQ".
+
+           ft8_qso_advance() now serialises its callers on its own mutex and
+           refuses a second advance for the same slot, so both halves may race
+           for it and exactly one wins. See its comment. */
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
-                               job->start_off_ms, false, job->result);
+                               job->start_off_ms, true, job->result);
         xSemaphoreGive(ctx->done);
     }
     ESP_LOGI(TAG, "decode worker exiting");
@@ -1560,7 +1565,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     /* EXACTLY ONCE per slot. If a message addressed to us turned up mid-list,
        the early-advance above has already run this and running it again would
-       re-scan the same message and could step the state machine twice. */
+       re-scan the same message and could step the state machine twice.
+       ft8_qso_advance() now enforces that itself (it records the slot it last
+       advanced), so this test is belt-and-braces rather than the only guard -
+       which it has to be, now that the core-0 worker can early-advance too and
+       these two flags are set from two different tasks. */
     if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.

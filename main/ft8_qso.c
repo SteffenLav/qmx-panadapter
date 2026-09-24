@@ -854,6 +854,28 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
 #define QSO_BUSY_HOLD_MAX_SLOTS 24
 static int  s_busy_holds;              // consecutive slots held; 0 = not holding
 static char s_busy_with[FT8_CALL_MAX_LEN];  // who they're working, for the status line
+/* ⛔ THE CAP ABOVE DID NOT CAP ANYTHING, AND THE COMMENT ABOVE SAID IT DID.
+ *
+ * Gyula HA3HZ, 2026-09-24: "when I call someone and they reply to another
+ * station instead of me, the system waits patiently". Measured against the
+ * code, far more patiently than six minutes.
+ *
+ * The release path below zeroed s_busy_holds and fell through WITHOUT
+ * latching, so the very next slot saw `s_busy_holds == 0 < 24` and started a
+ * fresh 24-slot hold. One register_miss() escaped per 25 slots, and
+ * QSO_TIMEOUT_SLOTS is 6 - so abandoning a target who is working someone else
+ * took ~150 slots, over half an hour, not the ~6 minutes claimed.
+ *
+ * This flag is the latch. Once the hold has been spent on a target we stop
+ * re-entering it, misses count every slot, and the ordinary 6-miss timeout
+ * applies. Cleared only when the partner is genuinely free again, or when the
+ * QSO state is reset - never by the expiry itself, which is the bug. */
+static bool s_busy_hold_expired;       // this target's hold budget is spent
+
+/* Serialises ft8_qso_advance() between the decode task and the core-0 decode
+ * worker, both of which may now early-advance. Created in ft8_qso_init(), not
+ * on first use - see the comment at ft8_qso_advance(). */
+static SemaphoreHandle_t s_adv_lock;
 
 // True if `call`'s most recent decoded message is addressed to a THIRD party.
 // Conservative: anything we can't read as "busy with someone else" returns
@@ -901,6 +923,7 @@ static void set_current(const ft8_tx_request_t *req, ft8_qso_state_t st)
     s_missed_slots = 0;
     s_busy_holds   = 0;    // progress - any hold is over
     s_busy_with[0] = '\0';
+    s_busy_hold_expired = false;
     unlock();
 }
 
@@ -1010,10 +1033,15 @@ static void rearm_current(void)
                             st == FT8_QSO_WAIT_RR73);
         char tgt[FT8_CALL_MAX_LEN];
         snprintf(tgt, sizeof tgt, "%s", s_target);
-        int holds = s_busy_holds;
+        int  holds   = s_busy_holds;
+        /* The latch has to be read here too. s_busy_holds STAYS at the cap
+         * once the budget is spent (only a genuinely free partner zeroes it),
+         * so testing the count alone would suppress TX for the rest of the
+         * session - turning the half-hour wait into a permanent one. */
+        bool expired = s_busy_hold_expired;
         unlock();
 
-        if (pounce_wait && holds > 0 && holds <= QSO_BUSY_HOLD_MAX_SLOTS) {
+        if (pounce_wait && holds > 0 && !expired) {
             ESP_LOGI(TAG, "holding TX: %s is working %s (%d/%d)",
                      tgt, s_busy_with[0] ? s_busy_with : "someone else",
                      holds, QSO_BUSY_HOLD_MAX_SLOTS);
@@ -1418,7 +1446,11 @@ static void register_miss(const char *waiting_for)
         if (gq.greylist_en && tgt[0] && !s_hound_active) ft8_greylist_note_timeout(tgt);
     }
 
-    if (from_cq && s_have_cq_saved) {
+    /* s_have_cq_saved alone, same reasoning as the DONE path: a pounce that
+     * times out while a CQ was running should return to that CQ, not strand
+     * the radio in TIMEOUT. `from_cq` is kept only for the log line below. */
+    (void)from_cq;
+    if (s_have_cq_saved) {
         // Drop the half-finished QSO and go back to calling CQ on the frequency.
         lock();
         s_cur_req      = s_cq_saved;
@@ -1445,7 +1477,8 @@ static void register_miss(const char *waiting_for)
 
 void ft8_qso_init(void)
 {
-    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_lock)     s_lock     = xSemaphoreCreateMutex();
+    if (!s_adv_lock) s_adv_lock = xSemaphoreCreateMutex();
     s_state         = FT8_QSO_IDLE;
     s_target[0]     = '\0';
     s_have_cur      = false;
@@ -1454,6 +1487,7 @@ void ft8_qso_init(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
+    s_busy_hold_expired = false;
     s_rst_sent[0]   = '\0';
     s_rst_rcvd[0]   = '\0';
     s_fd_their_exch[0] = '\0';
@@ -1697,10 +1731,17 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     s_missed_slots  = 0;
     s_busy_holds    = 0;    // a fresh pounce is never mid-hold
     s_busy_with[0]  = '\0';
+    s_busy_hold_expired = false;
     s_from_cq       = false;
     s_cur_req       = req_to_arm;   // re-send each cycle until they reply
     s_have_cur      = true;
-    s_have_cq_saved = false;
+    /* ⛔ s_have_cq_saved IS DELIBERATELY LEFT ALONE. It used to be cleared
+     * here, which threw away the only record that a CQ was running before the
+     * operator pounced - so finishing that contact dropped the radio to Idle
+     * instead of going back to calling CQ (Gyula HA3HZ, 2026-09-24). The DONE
+     * and timeout paths key off it; ft8_qso_abort() and ft8_qso_init() are
+     * what clear it, which is where "the operator stopped calling CQ" is
+     * actually expressed. */
     if (skip_applied) {
         // We sent them a numeric report directly. RST_RCVD stays EMPTY until
         // their roger "R<rpt>" arrives carrying their own measurement of us
@@ -2292,7 +2333,57 @@ bool ft8_qso_msg_is_for_us(const char *text)
     return strncasecmp(p, me, n) == 0;
 }
 
+/* The real body. Never call this directly - ft8_qso_advance() below is the
+ * entry point and it enforces the one-per-slot, one-at-a-time invariant that
+ * everything in here assumes. */
+static void ft8_qso_advance_body(int64_t slot_sec);
+
+/* ⭐ ONE ADVANCE PER SLOT, WHICHEVER TASK GETS HERE FIRST.
+ *
+ * Until now only the decode task could early-advance; the core-0 decode worker
+ * was passed allow_early_advance=false with the note "this is not the evening
+ * to add a second caller into the QSO state machine". The consequence was a
+ * coin flip: candidates are split even/odd between the two halves, so whether
+ * a station calling us was answered in the same slot or a full cycle later
+ * depended on which half happened to decode them (Gyula HA3HZ, 2026-09-24:
+ * "it responds rather sluggishly ... the unit ignores it and continues
+ * sending CQ").
+ *
+ * The objection was correct, so this makes it safe rather than ignoring it.
+ * A dedicated mutex serialises the two callers, and the slot number records
+ * what has already been advanced - so the second caller, and the end-of-slot
+ * call that follows both, return immediately instead of stepping the state
+ * machine twice on the same decodes.
+ *
+ * Deliberately a SEPARATE mutex from s_lock: the body takes and releases
+ * s_lock many times, so reusing it here would deadlock on the first one.
+ *
+ * ⚠ NOT YET EXERCISED ON AIR. The invariant it enforces is the one the old
+ * `!r_main.early_advanced && !r_worker.early_advanced` test enforced by hand;
+ * what is new is a second task reaching it. */
 void ft8_qso_advance(int64_t slot_sec)
+{
+    static int64_t s_adv_slot = INT64_MIN;
+
+    /* ⛔ NOT created lazily here. Two tasks can now reach this function, and on
+     * the very first slot both could see a NULL handle, both create a mutex,
+     * and the pair then serialise on nothing at all - the exact race this lock
+     * exists to prevent, in the one place it is hardest to reproduce. It is
+     * created in ft8_qso_init() instead, before any decode task exists.
+     * Falling through unlocked is still better than dropping the advance. */
+    if (!s_adv_lock) { ft8_qso_advance_body(slot_sec); return; }
+
+    xSemaphoreTake(s_adv_lock, portMAX_DELAY);
+    if (slot_sec == s_adv_slot) {
+        xSemaphoreGive(s_adv_lock);
+        return;                      // already advanced this slot
+    }
+    s_adv_slot = slot_sec;
+    ft8_qso_advance_body(slot_sec);
+    xSemaphoreGive(s_adv_lock);
+}
+
+static void ft8_qso_advance_body(int64_t slot_sec)
 {
     /* ⛔ THE EXPIRY CHECK IS NOT CALLED HERE ANY MORE.
      *
@@ -2478,7 +2569,21 @@ void ft8_qso_advance(int64_t slot_sec)
         // just on the success side. Saves the operator from re-tapping Call CQ
         // after every single contact during an activation.
         lock();
-        bool resume = s_from_cq && s_have_cq_saved;
+        /* ⭐ s_have_cq_saved ALONE, not `s_from_cq && ...`.
+         *
+         * Gyula HA3HZ, 2026-09-24: "even after receiving an RR73, I often see
+         * it continue to wait rather than calling again." Correct. s_from_cq
+         * is set only by ft8_qso_start_cq(), so it is false for every QSO the
+         * operator STARTED by calling someone - and that took the else branch
+         * below, leaving the state IDLE, the status "Idle" and nothing armed.
+         * The radio simply stopped after a successful contact.
+         *
+         * Keying off the saved CQ instead means: if a CQ was running before
+         * this contact, go back to it; if the operator never called CQ,
+         * s_have_cq_saved is false and we still go idle exactly as before. So
+         * this cannot start transmitting for anyone who was not already
+         * calling CQ - which is the only property that matters here. */
+        bool resume = s_have_cq_saved;
         ft8_tx_request_t cq_req = s_cq_saved;
         if (resume) {
             s_cur_req      = cq_req;
@@ -2780,7 +2885,24 @@ void ft8_qso_advance(int64_t slot_sec)
             clear_dt_follow();
             return;
         }
-        if (partner_busy_with(target, with, sizeof with) &&
+        bool busy_now = partner_busy_with(target, with, sizeof with);
+
+        /* Hold budget spent and they are STILL working someone else: stop
+         * re-entering the hold, and say so once. Falling through from here is
+         * the whole point - register_miss() now counts every slot, so the
+         * ordinary QSO_TIMEOUT_SLOTS give-up actually arrives. See the latch's
+         * declaration for what this used to do instead. */
+        if (busy_now && !s_busy_hold_expired &&
+            s_busy_holds >= QSO_BUSY_HOLD_MAX_SLOTS) {
+            lock();
+            s_busy_hold_expired = true;
+            unlock();
+            ESP_LOGW(TAG, "%s has been working %s for %d slots - hold spent, "
+                          "counting misses now so the QSO can time out",
+                     target, with[0] ? with : "someone", QSO_BUSY_HOLD_MAX_SLOTS);
+        }
+
+        if (busy_now && !s_busy_hold_expired &&
             s_busy_holds < QSO_BUSY_HOLD_MAX_SLOTS) {
             lock();
             s_busy_holds++;
@@ -2801,14 +2923,18 @@ void ft8_qso_advance(int64_t slot_sec)
                      target, with[0] ? with : "someone", holds, QSO_BUSY_HOLD_MAX_SLOTS);
             return;
         }
-        // Not busy any more (or held long enough): stop holding so the next
-        // rearm_current() transmits again and misses resume counting.
-        if (s_busy_holds) {
-            ESP_LOGI(TAG, "%s free again (or hold expired) after %d slots - resuming",
+        /* GENUINELY FREE AGAIN - and only then. This block used to run on the
+         * expiry path too, which is what reset the counter and restarted the
+         * hold for ever; `busy_now` is what keeps the two apart. Clearing the
+         * latch here is correct: they finished with the other station, so they
+         * have earned a fresh budget if they start another. */
+        if (!busy_now && (s_busy_holds || s_busy_hold_expired)) {
+            ESP_LOGI(TAG, "%s free again after %d slot(s) - resuming",
                      target, s_busy_holds);
             lock();
             s_busy_holds   = 0;
             s_busy_with[0] = '\0';
+            s_busy_hold_expired = false;
             unlock();
             arm_current_if_idle();   // we skipped re-arms while holding
         }
@@ -3463,6 +3589,7 @@ void ft8_qso_abort(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
+    s_busy_hold_expired = false;
     s_pending_tone_hz = 0;   // never carry a queued tone into the next contact
     s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
