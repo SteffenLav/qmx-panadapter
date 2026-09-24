@@ -4407,6 +4407,22 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         settings_get_wifi_preferred_ssid(pref);
         cJSON_AddStringToObject(root, "wifi_prefer_ssid", pref);
     }
+    /* The remembered SSIDs, so the operator can SEE what is valid to type into
+     * the two fields above.
+     *
+     * Randy N4OPI, 2026-09-24. Both "Network name" and "Preferred network"
+     * require a network the Tab5 already knows - the second one says so in its
+     * help text - and until now nothing anywhere showed that list. The
+     * operator had to remember which networks a Tab5 had ever connected to,
+     * and a typo produced silence. Names only, never the passwords: the same
+     * rule as wifi_ssid above, and an SSID is broadcast in clear anyway. */
+    {
+        static wifi_known_t kn[WIFI_KNOWN_MAX];
+        int n = settings_wifi_known_get(kn, WIFI_KNOWN_MAX);
+        cJSON *arr = cJSON_AddArrayToObject(root, "wifi_known");
+        for (int i = 0; arr && i < n; i++)
+            cJSON_AddItemToArray(arr, cJSON_CreateString(kn[i].ssid));
+    }
     // Static IP. Unlike the password these ARE returned: they are not secret,
     // and an operator who set a fixed address needs to see what it is in order
     // to change it.

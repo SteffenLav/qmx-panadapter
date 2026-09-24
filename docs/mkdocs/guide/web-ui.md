@@ -272,22 +272,41 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
 
-### Preferred network (v1.16.3)
+### Preferred network
 
-The Tab5 remembers up to six networks and falls back to one of them if the one
-you typed in cannot be reached. Until v1.16.3 that fallback always took
+The Tab5 remembers up to six networks. Before this field existed it always took
 whichever remembered network was **loudest**, which is the wrong answer on a
 site with more than one — a DMZ and a house network, say, where the loud one is
 not the one you want the panadapter on.
 
-Set **Preferred network** to the SSID you want and, whenever that network is
-reachable, the Tab5 takes it over any stronger alternative. Leave it empty and
-the fallback behaves exactly as before, so nobody who does not need this is
-affected.
+Set **Preferred network** to the SSID you want and the Tab5 takes it over any
+stronger alternative whenever it is reachable. Leave it empty and nothing
+changes, so nobody who does not need this is affected.
 
-It is checked every time the Tab5 looks for a fallback, not once, so the
-preferred network wins again the moment it comes back — there is nothing to
-reset and no need to reboot.
+Both this field and **Network name** list the networks your Tab5 actually
+remembers, under the field itself. Only a name from that list will work.
+
+!!! warning "v1.16.3 — the field was there but it did almost nothing"
+
+    In v1.16.3 the preference was only consulted after the Tab5 had **failed**
+    to connect twice. So it worked when your usual network was down, and did
+    nothing in the case it was written for: both networks up, the usual one
+    answers immediately, and you wanted the other. It also did not take effect
+    until the next reboot. If you set it on v1.16.3 and saw no difference, that
+    is why — and it was not something you did wrong.
+
+    Fixed after v1.16.3: the preference is read when the Tab5 connects, and
+    saving it moves the Tab5 straight away.
+
+If the preferred network does not answer, the Tab5 falls back to the strongest
+remembered one after a few seconds, so an unreachable preference costs you
+about ten seconds at start-up and nothing else. It is re-tried on every later
+fallback too, so it wins again the moment it comes back.
+
+**Switching to a network the Tab5 already knows** needs only the **Network
+name** — leave the password blank and the stored one is used. (In v1.16.3 a
+blank password made the Tab5 discard the name silently, which read as the
+setting not saving.)
 
 > Not carried in a config backup. A restored config does not bring the
 > preferred network with it; set it again on each unit.

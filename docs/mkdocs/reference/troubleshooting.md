@@ -80,6 +80,31 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 4. Restart Tab5
 5. If still failing, grab the always-on **diagnostic log** — see [Collecting Diagnostics](#collecting-diagnostics)
 
+### The web page won't change my network, or Preferred network is ignored
+
+**Symptoms (v1.16.3):** you type a different network into **Network name** and
+save, and it goes back to the old one. Or you set **Preferred network** and the
+Tab5 keeps joining whichever network it used last.
+
+**Two separate faults, both fixed after v1.16.3.**
+
+- **Network name was discarded whenever the password field was blank** — even
+  though that field tells you to leave it blank to keep the stored password. So
+  switching to a network the Tab5 already knew did nothing, with no error
+  message, and the page then showed the old name again.
+- **Preferred network was only consulted after the Tab5 had failed to connect
+  twice.** It worked when your usual network was down, and did nothing when
+  both were up and the usual one answered first — which is the normal case. It
+  also needed a reboot to take effect.
+
+**Fix:** update the firmware. Then leave the password blank when you switch to
+a network the Tab5 already knows, and pick the preferred network from the list
+of remembered names now shown under both fields. Only a name on that list
+works.
+
+**If you must stay on v1.16.3:** choose the network from the Tab5's own
+settings drawer instead of the web page.
+
 ### WiFi connects, then stops working after a few minutes
 
 **Symptoms:** WiFi (web UI, uploads) worked at first, then went dead after some minutes — while FT8 and radio control kept working normally. On older firmware the only fix was a reboot.

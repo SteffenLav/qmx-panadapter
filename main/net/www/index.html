@@ -4724,7 +4724,20 @@ function setBuildForm(cfg, ft8Opts) {
                 '" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
       }
     }
-    if (hint) html += '<span style="color:var(--dim);font-size:13px;flex:1">' + hint + "</span>";
+    /* Name the remembered networks on the two fields that require one (Randy
+       N4OPI, 2026-09-24). Both fields only accept a network the Tab5 already
+       knows, and nothing in the UI ever showed which those were - so the
+       operator had to remember, and a typo produced silence. Appended to the
+       hint rather than given a row of its own: it is the answer to "what may I
+       type here", which belongs next to the question. */
+    let hintText = hint;
+    if ((path === "wifi_prefer_ssid" || path === "wifi_ssid") &&
+        Array.isArray(cfg.wifi_known) && cfg.wifi_known.length) {
+      const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      hintText = (hint ? hint + ". " : "") + "Remembered: " +
+                 cfg.wifi_known.map(esc).join(", ");
+    }
+    if (hintText) html += '<span style="color:var(--dim);font-size:13px;flex:1">' + hintText + "</span>";
     html += "</div>";
   }
   body.innerHTML = html + "</div>";
