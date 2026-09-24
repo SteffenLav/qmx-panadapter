@@ -906,7 +906,19 @@ static bool partner_busy_with(const char *call, char *with, size_t with_sz)
         if (strcmp(tok1, s_my_call) == 0) break;   // addressed to US - engage
         // Signing off with a third party: the frequency is about to be free, so
         // don't hold on this - the next slot will show a CQ or a reply to us.
-        if (strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0) break;
+        if (strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0) {
+            /* INSTRUMENT (Gyula HA3HZ, 2026-09-24): "even after receiving an
+             * RR73, I often see it continue to wait rather than calling
+             * again." This is the branch that is supposed to end the wait, so
+             * say out loud when it fires. If the log shows this landing and we
+             * still do not transmit, the fault is downstream in the re-arm; if
+             * it never lands, their sign-off is not reaching our decode table
+             * and the row we are judging is stale. Those need different fixes
+             * and nothing so far distinguishes them. */
+            ESP_LOGI(TAG, "%s signed off with %s ('%s') - free now, releasing the hold",
+                     call, tok1, text);
+            break;
+        }
         busy = true;
         if (with && with_sz) snprintf(with, with_sz, "%s", tok1);
         break;
@@ -2929,8 +2941,14 @@ static void ft8_qso_advance_body(int64_t slot_sec)
          * latch here is correct: they finished with the other station, so they
          * have earned a fresh budget if they start another. */
         if (!busy_now && (s_busy_holds || s_busy_hold_expired)) {
-            ESP_LOGI(TAG, "%s free again after %d slot(s) - resuming",
-                     target, s_busy_holds);
+            /* Report whether the re-arm can actually take. arm_current_if_idle()
+             * below is a no-op unless TX is IDLE and s_have_cur is set, and a
+             * silent no-op here looks identical to "the radio ignored them"
+             * from the operator's chair - which is exactly the complaint. */
+            ESP_LOGI(TAG, "%s free again after %d slot(s) - resuming (tx=%s, have_cur=%s)",
+                     target, s_busy_holds,
+                     ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE ? "idle" : "BUSY",
+                     s_have_cur ? "yes" : "NO");
             lock();
             s_busy_holds   = 0;
             s_busy_with[0] = '\0';

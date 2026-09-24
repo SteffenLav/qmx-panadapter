@@ -1296,7 +1296,10 @@ static void ft8_decode_worker_task(void *arg)
                                job->start_off_ms, true, job->result);
         xSemaphoreGive(ctx->done);
     }
-    ESP_LOGI(TAG, "decode worker exiting");
+    /* MEASURE IT, so the 65536 above stops being a judgement call. This task
+     * calls ft8_qso_advance(), which is what overflowed the old 32768. */
+    ESP_LOGW(TAG, "decode worker exiting - stack high-water: %u bytes still free",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
     // Signal the join BEFORE self-deleting: after this the worker touches
     // nothing shared (context/job), so the decode task can safely free them
     // once it sees this.
@@ -1608,8 +1611,29 @@ static void ft8_decode_task(void *arg)
         wctx->done   = xSemaphoreCreateBinary();
         wctx->exited = xSemaphoreCreateBinary();
         if (wctx->jobs && wctx->done && wctx->exited) {
+            /* ⛔ 65536, NOT 32768 - AND THE REASON IS A CRASH, NOT A HUNCH.
+             *
+             * 2026-09-24, on air, mid-QSO, 22555 s of uptime:
+             *     Guru Meditation Error: Core 0 panic'ed (Stack protection fault)
+             *     task: ft8_dec0   MEPC=ft8_op_mode_set  RA=note_tx_slot
+             * The whole board rebooted while a station was answering our CQ.
+             *
+             * Cause: this task had just been allowed to call ft8_qso_advance()
+             * (see the worker's allow_early_advance argument). 32768 was sized
+             * for DECODING ONLY. ft8_qso_advance() is a large function - it
+             * puts a ~1 KB qmx_settings_t on the stack via settings_load_all()
+             * and takes decode-table snapshots - and the task that has always
+             * called it, ft8_task, is created with 65536. Giving the worker the
+             * same call on half the stack was the defect.
+             *
+             * Matched to ft8_task deliberately rather than nudged upwards: the
+             * two now run the same code, so they get the same budget. The stack
+             * is PSRAM, where 32 KB more is nothing against ~14 MB free, and
+             * the standing rule after the last stack bug is generous, not
+             * incremental. The high-water mark is logged at exit so the next
+             * person sizes this from a measurement instead of an argument. */
             BaseType_t wrc = xTaskCreatePinnedToCoreWithCaps(
-                ft8_decode_worker_task, "ft8_dec0", 32768, wctx,
+                ft8_decode_worker_task, "ft8_dec0", 65536, wctx,
                 tskIDLE_PRIORITY + 2, &worker, 0,
                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (wrc != pdPASS) {
