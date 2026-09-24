@@ -365,6 +365,26 @@ void app_main(void)
     ui_still_notice_arm(!cfg->still_notice_done);
     render_waterfall_set_colormap(cfg->colormap_idx);
 
+    /* ⛔ SAY IT ON THE SCREEN WHEN THE SUPPLY BROWNED OUT.
+     *
+     * Samuel W7STF, 2026-09-24: days lost to "the Tab5 reboots on its own"
+     * while listening to SSB, convinced his unit was faulty - "it's bothersome
+     * others are not reporting this". His logs carry TEN
+     * reset_reason=brownout. The firmware knew every time and told nobody.
+     *
+     * Brownout is the one reset the operator can actually fix, and the one
+     * that is NOT our bug, so it is the one that must not stay buried in a
+     * log file. Long toast because it arrives during boot clutter and the
+     * whole point is that it gets read. Not persisted and not a modal: a
+     * single brownout on a dodgy cable should inform, not nag. */
+    if (diag_log_booted_after_brownout()) {
+        ESP_LOGW(TAG, "previous boot ended in a SUPPLY BROWNOUT - not a crash; "
+                      "the 5 V rail dropped below the chip's threshold");
+        ui_toast_ms("Restarted by a power brownout - not a fault. "
+                    "Check the USB-C supply and cable; loud audio draws the most.",
+                    12000);
+    }
+
     // Restore last-known VFO frequency (display only; QMX is source of truth).
     if (cfg->last_vfo_hz != 0) {
         ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg->last_vfo_hz);

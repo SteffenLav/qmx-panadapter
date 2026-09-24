@@ -408,6 +408,18 @@ void bsp_generate_poweroff_signal();
 
 bool bsp_headphone_detect();
 
+/**
+ * @brief Enable or disable the internal speaker's power amplifier.
+ *
+ * The amp sits on PI4IO expander 1, pin P1 (upstream records this only in a
+ * comment inside bsp_audio_codec_speaker_init(); BSP_POWER_AMP_IO above is
+ * NOT it - GPIO 53 is the external I2C SDA line).
+ *
+ * The speaker and the 3.5 mm jack share the codec's LOUT1/ROUT1 pair, so this
+ * is the only way to silence the speaker while keeping the headphones.
+ */
+void bsp_set_speaker_amp_enable(bool en);
+
 void bsp_set_ext_antenna_enable(bool en);
 
 void bsp_set_wifi_power_enable(bool en);

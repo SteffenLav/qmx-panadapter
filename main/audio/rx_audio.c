@@ -296,6 +296,34 @@ static bool     s_cap_autodump  = false;   /* dump to serial when full */
 static int64_t  s_cap_first_us  = 0;       /* first audio frame, for the delay */
 static volatile bool s_cap_dumping = false;  /* a dump task is running */
 static void rxcap_auto_tick(void);   /* defined by the recorder block below */
+
+/* ---- Silence the internal speaker when headphones are plugged in ---------
+ *
+ * Roy KI0ER, 2026-09-24: "sound comes out of both headphones and speakers
+ * when the headphone jack is utilized."
+ *
+ * ⛔ THE CODEC CANNOT DO THIS, and the measurement that proves it is worth
+ * keeping. Reading the ES8388's per-output volumes on the bench gave
+ *     OUT1 vol L=0x1e R=0x1e     OUT2 vol L=0x00 R=0x00
+ * esp_codec_dev_set_out_vol() writes OUT1, and the operator's volume control
+ * demonstrably moves the SPEAKER, so the speaker is on OUT1; the headphones
+ * play at that same volume, so they are on OUT1 too. Both share LOUT1/ROUT1
+ * and no DACPOWER value can separate them - writing 0x30 reads back as 0x30
+ * and is audibly a no-op, which is exactly what happened.
+ *
+ * The speaker's POWER AMPLIFIER is the separable element, and its enable is
+ * PI4IOE1 P1 - recorded upstream only in the comment
+ * `.pa_pin = -1,  // PI4IOE1 P1 控制` inside bsp_audio_codec_speaker_init().
+ * ⚠ BSP_POWER_AMP_IO in the header is NOT it: that is GPIO_NUM_NC with
+ * "(GPIO_NUM_53)" beside it, and GPIO 53 is BSP_EXT_I2C_SDA - driving it
+ * breaks the external I2C bus.
+ *
+ * Two other traps found the hard way:
+ *   - esp_codec_dev_write_reg() ALWAYS fails for the ES8388; the driver never
+ *     assigns base.set_reg. Use ctrl_if->write_reg if a register is ever
+ *     genuinely needed.
+ *   - bsp_headphone_detect() itself works perfectly (PI4IO expander 1, bit 7). */
+static void rx_audio_follow_headphone_jack(void);
 static volatile uint32_t s_cap_gap_n  = 0;
 
 static volatile uint32_t s_gap_prev_us   = 0;   /* uptime of the previous gap */
@@ -309,6 +337,10 @@ static volatile uint32_t s_gap_iv_n      = 0;
 // BOTH dsp_rxaudio_read()'s own wait and the blocking I2S write. Timing both
 // separately settles which one actually owns the missing time.
 static volatile uint32_t s_read_us_max = 0, s_write_us_max = 0;
+/* Output channel energy, reset each 10 s diag window - see the accumulator
+ * in the write loop for why this exists. */
+static uint64_t s_out_sq_l = 0, s_out_sq_r = 0;
+static uint32_t s_out_sq_n = 0;
 /* Per-10-s-window counters - see the diag line. Reset every window on purpose:
    a running maximum cannot distinguish one stall from a thousand. */
 static volatile uint32_t s_write_late_win = 0;   /* writes over 25 ms */
@@ -1613,8 +1645,25 @@ static void rx_audio_task(void *arg)
             s_rate_written += pairs;
         }
 
+        /* ⛔ OUTPUT CHANNEL LEVELS - the one thing nothing else measures.
+         *
+         * audio.c's "peak L= R=" is the USB INPUT from the QMX, and rxcap is
+         * MONO by construction (s_cap), so when the operator reported "only
+         * the right ear" there was no instrument anywhere that could say
+         * whether the firmware was actually feeding both channels. Arguing
+         * about headphone plugs instead of measuring is exactly the wrong
+         * move. Sum of squares per channel, reported with the 10 s diag line
+         * below; two multiply-accumulates per sample. */
+        for (int i = 0; i < pairs; i++) {
+            int32_t l = s_out[2 * i], r = s_out[2 * i + 1];
+            s_out_sq_l += (uint64_t)(l * l);
+            s_out_sq_r += (uint64_t)(r * r);
+        }
+        s_out_sq_n += (uint32_t)pairs;
+
         rxcap_push(s_out, pairs);   /* record exactly what is played */
         rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
+        rx_audio_follow_headphone_jack();   /* 1 Hz inside; speaker amp vs jack */
         esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
@@ -1669,6 +1718,20 @@ static void rx_audio_task(void *arg)
                          (unsigned long)(gn ? s_gap_iv_min_ms : 0),
                          (unsigned long)(gn ? s_gap_iv_sum_ms / gn : 0),
                          (unsigned long)s_gap_iv_max_ms, (unsigned long)gn);
+                /* What actually reached the codec, per channel. Balanced
+                 * numbers mean any one-sided audio is downstream of us - jack,
+                 * cable or headphones - and lopsided numbers mean it is ours.
+                 * Nothing else in the system can tell those two apart. */
+                if (s_out_sq_n) {
+                    uint32_t rl = (uint32_t)sqrt((double)s_out_sq_l / s_out_sq_n);
+                    uint32_t rr = (uint32_t)sqrt((double)s_out_sq_r / s_out_sq_n);
+                    ESP_LOGI(TAG, "diag: OUT level L=%lu R=%lu rms (n=%lu)%s",
+                             (unsigned long)rl, (unsigned long)rr,
+                             (unsigned long)s_out_sq_n,
+                             (rl > 4 * (rr + 1) || rr > 4 * (rl + 1))
+                                 ? "  <-- CHANNELS LOPSIDED" : "");
+                }
+                s_out_sq_l = s_out_sq_r = 0; s_out_sq_n = 0;
                 s_write_late_win = 0;
                 s_frames_win     = 0;
                 s_pairs_win      = 0;
@@ -2220,6 +2283,33 @@ static void rxcap_dump_task(void *arg)
 /* Called once per audio frame. Arms the one-shot capture RXCAP_AUTO_DELAY_MS
  * after audio first flows, and dumps it when it fills - both without any
  * host involvement, which is the whole point (see the note above). */
+/* Poll the jack and gate the speaker amp. Called from the audio write loop
+ * because that is the one place guaranteed to run whenever there is sound to
+ * route - no extra task, no extra timer.
+ *
+ * Rate-limited to 1 Hz: both the detect and the amp control are I2C
+ * transactions to the PI4IO expander on a bus shared with the touch
+ * controller and the battery monitor, and this loop runs every ~21 ms. A jack
+ * is not moved faster than that. Writes only on a CHANGE, so a settled jack
+ * costs one I2C read per second and nothing else. */
+static void rx_audio_follow_headphone_jack(void)
+{
+    static int64_t s_next_us;
+    static int     s_last = -1;          /* -1 = unknown, forces the first decision */
+
+    int64_t now = esp_timer_get_time();
+    if (now < s_next_us) return;
+    s_next_us = now + 1000000;           /* 1 Hz */
+
+    int plugged = bsp_headphone_detect() ? 1 : 0;
+    if (plugged == s_last) return;
+    s_last = plugged;
+
+    bsp_set_speaker_amp_enable(!plugged);
+    ESP_LOGI(TAG, "headphones %s - internal speaker %s",
+             plugged ? "IN" : "out", plugged ? "OFF" : "on");
+}
+
 static void rxcap_auto_tick(void)
 {
 #if RXCAP_AUTO_SECONDS > 0

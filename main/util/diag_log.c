@@ -43,6 +43,20 @@ static const char *reset_reason_str(esp_reset_reason_t r)
     }
 }
 
+/* Read once and cached: esp_reset_reason() describes the boot, so it cannot
+ * change, and callers on small stacks should not pay for the call. */
+const char *diag_log_reset_reason(void)
+{
+    static const char *s_cached;
+    if (!s_cached) s_cached = reset_reason_str(esp_reset_reason());
+    return s_cached;
+}
+
+bool diag_log_booted_after_brownout(void)
+{
+    return esp_reset_reason() == ESP_RST_BROWNOUT;
+}
+
 // Emit the self-identifying header. Runs with capture already enabled, so
 // every line lands in the ring as well as the serial console. Keeps every
 // fact a remote bug report needs in one place, regardless of whether logging

@@ -1191,6 +1191,12 @@ static esp_err_t status_handler(httpd_req_t *req)
      * reading that has to be current to the millisecond. */
     cJSON_AddNumberToObject(root, "sockets_free", sock_probe_free_cached(6, 10000));
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
+    /* Why this boot started. Cheap (cached) and it answers the single most
+     * expensive support question we have had - "it reboots on its own" - by
+     * separating a brownout, which is the operator's supply, from a crash,
+     * which is ours. Samuel W7STF lost days to that distinction being
+     * invisible. See diag_log.h. */
+    cJSON_AddStringToObject(root, "last_reset",  diag_log_reset_reason());
 
     int band_count = 0;
     const cat_band_entry_t *bands = cat_get_band_list(&band_count);

@@ -488,6 +488,41 @@ void bsp_set_ext_antenna_enable(bool en)
     i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
 }
 
+/* Speaker power amplifier enable - PI4IOE1 P1.
+ *
+ * ⭐ THE PIN IS NAMED NOWHERE IN THE HEADER. It is recorded in exactly one
+ * place upstream: the Chinese comment in bsp_audio_codec_speaker_init(),
+ * `.pa_pin = -1,  // PI4IOE1 P1 控制` ("controlled by PI4IOE1 P1"). The header's
+ * BSP_POWER_AMP_IO is GPIO_NUM_NC with "(GPIO_NUM_53)" beside it, which looks
+ * like the answer and is not - GPIO 53 on this board is BSP_EXT_I2C_SDA.
+ *
+ * Added for Roy KI0ER, 2026-09-24: the Tab5 plays through the internal speaker
+ * AND the headphone jack at once, because both are fed from the codec's
+ * LOUT1/ROUT1 pair - measured, see rx_audio.c. The codec therefore cannot
+ * separate them; gating the speaker AMP is the only way, and this is its
+ * control line.
+ *
+ * Read-modify-write on the shared output register, same as every other pin
+ * function here: P4/P5 are the LCD and touch resets and must not be disturbed. */
+void bsp_set_speaker_amp_enable(bool en)
+{
+    uint8_t write_buf[2] = {0};
+    uint8_t read_buf[1]  = {0};
+
+    write_buf[0] = PI4IO_REG_OUT_SET;
+    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+
+    write_buf[0] = PI4IO_REG_OUT_SET;
+    write_buf[1] = read_buf[0];
+    if (en) {
+        setbit(write_buf[1], 1);
+    } else {
+        clrbit(write_buf[1], 1);
+    }
+
+    i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
+}
+
 void bsp_set_wifi_power_enable(bool en)
 {
     uint8_t write_buf[2] = {0};
