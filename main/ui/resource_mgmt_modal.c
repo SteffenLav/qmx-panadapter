@@ -92,6 +92,44 @@ static lv_obj_t *s_lbl_release_val = NULL;
 static lv_obj_t *s_sld_vol     = NULL;
 static lv_obj_t *s_lbl_vol_val = NULL;
 
+/* ---- AGC presets (Samuel W7STF, 2026-09-25) ------------------------------
+ *
+ * "it would be nice if we had a FAST, MED, SLOW, OFF 'AGC' preset buttons.
+ * Perhaps CUSTOM could be the one attached to the sliders? SLOW and MED would
+ * be good for SSB. For CW maybe FAST. For faint signals, or per other personal
+ * preferences: OFF."
+ *
+ * CUSTOM is deliberately NOT a button: it is the state you are already in when
+ * the sliders do not match any preset, so making it clickable would raise the
+ * question of what it applies. It is shown as a caption instead, which is what
+ * he asked for - the sliders are the custom setting.
+ *
+ * ⚠ OFF is not a slider pair. See the branch in rx_audio.c's sample loop: the
+ * gain law is envelope-driven at every setting, so the slowest AGC still rides
+ * the signal. OFF needs the separate bypass flag, which is why it is a
+ * settings key and not two numbers here. */
+typedef struct {
+    const char *cap;
+    uint8_t     attack_ms;   /* ignored when off */
+    uint16_t    release_ms;  /* ignored when off */
+    bool        off;
+} agc_preset_t;
+
+static const agc_preset_t AGC_PRESETS[] = {
+    /* FAST: CW, where a fast-rising signal must not be let through loud.  */
+    { "Fast",  1,  30, false },
+    /* MED: the shipped default since these controls existed.              */
+    { "Med",   3, 150, false },
+    /* SLOW: SSB, where a fast release pumps on speech pauses.             */
+    { "Slow",  5, 400, false },
+    /* OFF: fixed gain at the ceiling - for faint signals, his words.      */
+    { "Off",   0,   0, true  },
+};
+#define AGC_PRESET_N ((int)(sizeof(AGC_PRESETS) / sizeof(AGC_PRESETS[0])))
+
+static lv_obj_t *s_btn_preset[AGC_PRESET_N];
+static lv_obj_t *s_lbl_preset_state = NULL;
+
 // Plain checkbox, themed square indicator, generous touch target - same
 // idiom as ft8_filter_modal.c's make_checkbox(), copied rather than shared
 // because that one is file-static there.
@@ -212,6 +250,17 @@ static void refresh_gating(void)
         lv_obj_set_style_text_opa(s_lbl_attack_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
     if (s_lbl_release_val)
         lv_obj_set_style_text_opa(s_lbl_release_val, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
+    /* The preset buttons follow RX Audio for the same reason the sliders do -
+     * they set the same three values. Plain opacity + DISABLED: unlike the
+     * sliders these have no INDICATOR/KNOB parts to chase. */
+    for (int i = 0; i < AGC_PRESET_N; i++) {
+        if (!s_btn_preset[i]) continue;
+        if (audio_on) lv_obj_clear_state(s_btn_preset[i], LV_STATE_DISABLED);
+        else          lv_obj_add_state(s_btn_preset[i], LV_STATE_DISABLED);
+        lv_obj_set_style_opa(s_btn_preset[i], audio_on ? LV_OPA_COVER : LV_OPA_40, LV_PART_MAIN);
+    }
+    if (s_lbl_preset_state)
+        lv_obj_set_style_text_opa(s_lbl_preset_state, audio_on ? LV_OPA_COVER : LV_OPA_50, 0);
 
     /* The pan sliders need audio AND binaural: they shape a split that is not
      * being produced otherwise, so leaving them live would offer three controls
@@ -304,12 +353,89 @@ static void rx_vol_cb(lv_event_t *e)
     if (s_lbl_vol_val) lv_label_set_text_fmt(s_lbl_vol_val, "%d", v);
 }
 
+/* Which preset, if any, the current settings correspond to. -1 = Custom.
+ *
+ * Derived from the SETTINGS every time rather than remembered in a variable:
+ * the sliders, the web API and a restored config can all move these values
+ * without going through a preset button, and a remembered index would then be
+ * a lie. Same rule as the CW strip re-deriving its own visibility every tick. */
+static int agc_preset_current(void)
+{
+    if (settings_get_rxaud_agc_off()) {
+        for (int i = 0; i < AGC_PRESET_N; i++) if (AGC_PRESETS[i].off) return i;
+        return -1;
+    }
+    uint8_t  a = settings_get_rxaud_agc_attack_ms();
+    uint16_t r = settings_get_rxaud_agc_release_ms();
+    for (int i = 0; i < AGC_PRESET_N; i++) {
+        if (AGC_PRESETS[i].off) continue;
+        if (AGC_PRESETS[i].attack_ms == a && AGC_PRESETS[i].release_ms == r) return i;
+    }
+    return -1;
+}
+
+/* Paint the button row and the caption to match the settings. Called after a
+ * preset press AND after any attack/release slider move, so dragging a slider
+ * drops the highlight and the caption reads "Custom" immediately. */
+static void agc_preset_refresh(void)
+{
+    int cur = agc_preset_current();
+    for (int i = 0; i < AGC_PRESET_N; i++) {
+        if (!s_btn_preset[i]) continue;
+        if (i == cur) lv_obj_add_state(s_btn_preset[i], LV_STATE_CHECKED);
+        else          lv_obj_clear_state(s_btn_preset[i], LV_STATE_CHECKED);
+    }
+    if (s_lbl_preset_state) {
+        if (cur < 0)
+            lv_label_set_text(s_lbl_preset_state, "Custom");
+        else if (AGC_PRESETS[cur].off)
+            lv_label_set_text(s_lbl_preset_state, "Off - AGC Ceiling is a manual gain");
+        else
+            lv_label_set_text(s_lbl_preset_state, "");
+    }
+}
+
+/* Apply a preset: settings, the live audio path, and the two sliders that show
+ * it. The sliders are moved with LV_ANIM_OFF and their labels written directly
+ * - lv_slider_set_value() does NOT raise LV_EVENT_VALUE_CHANGED, so their own
+ * callbacks do not run and each value would otherwise be written once here and
+ * displayed from stale text. */
+static void agc_preset_apply(int i)
+{
+    if (i < 0 || i >= AGC_PRESET_N) return;
+    const agc_preset_t *p = &AGC_PRESETS[i];
+
+    settings_set_rxaud_agc_off(p->off);
+    rx_audio_set_agc_off(p->off);
+
+    if (!p->off) {
+        settings_set_rxaud_agc_attack_ms(p->attack_ms);
+        rx_audio_set_agc_attack_ms(p->attack_ms);
+        settings_set_rxaud_agc_release_ms(p->release_ms);
+        rx_audio_set_agc_release_ms(p->release_ms);
+
+        if (s_sld_attack)  lv_slider_set_value(s_sld_attack,  p->attack_ms,  LV_ANIM_OFF);
+        if (s_lbl_attack_val)  lv_label_set_text_fmt(s_lbl_attack_val,  "%d ms", (int)p->attack_ms);
+        if (s_sld_release) lv_slider_set_value(s_sld_release, p->release_ms, LV_ANIM_OFF);
+        if (s_lbl_release_val) lv_label_set_text_fmt(s_lbl_release_val, "%d ms", (int)p->release_ms);
+    }
+    ESP_LOGI(TAG, "AGC preset '%s' (attack %u ms, release %u ms, off=%d)",
+             p->cap, (unsigned)p->attack_ms, (unsigned)p->release_ms, (int)p->off);
+    agc_preset_refresh();
+}
+
+static void agc_preset_cb(lv_event_t *e)
+{
+    agc_preset_apply((int)(intptr_t)lv_event_get_user_data(e));
+}
+
 static void agc_attack_cb(lv_event_t *e)
 {
     int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
     settings_set_rxaud_agc_attack_ms((uint8_t)v);
     rx_audio_set_agc_attack_ms((uint8_t)v);
     if (s_lbl_attack_val) lv_label_set_text_fmt(s_lbl_attack_val, "%d ms", v);
+    agc_preset_refresh();   /* the operator has just made it Custom */
 }
 
 static void agc_release_cb(lv_event_t *e)
@@ -318,6 +444,7 @@ static void agc_release_cb(lv_event_t *e)
     settings_set_rxaud_agc_release_ms((uint16_t)v);
     rx_audio_set_agc_release_ms((uint16_t)v);
     if (s_lbl_release_val) lv_label_set_text_fmt(s_lbl_release_val, "%d ms", v);
+    agc_preset_refresh();   /* the operator has just made it Custom */
 }
 
 static void pan_width_cb(lv_event_t *e)
@@ -545,6 +672,52 @@ static void modal_build(void)
 
                     y += ROW_H;
                 }
+
+                /* Preset row, directly under the sliders it drives - see
+                 * AGC_PRESETS. Same 210 px left margin as the sliders so the
+                 * caption column lines up with theirs. */
+                {
+                    lv_obj_t *cap = lv_label_create(s_scroll);
+                    lv_label_set_text(cap, "AGC Preset");
+                    lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
+                    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+                    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y + 8);
+
+                    const int BTN_W = 140, BTN_H = 50, BTN_GAP = 16;
+                    for (int i = 0; i < AGC_PRESET_N; i++) {
+                        lv_obj_t *b = lv_button_create(s_scroll);
+                        lv_obj_set_size(b, BTN_W, BTN_H);
+                        lv_obj_align(b, LV_ALIGN_TOP_LEFT, 210 + i * (BTN_W + BTN_GAP), y);
+                        lv_obj_set_style_radius(b, 8, 0);
+                        /* Unchecked = the panel's key colour, checked = the
+                         * same PRIMARY the check boxes use when ticked, so
+                         * "this one is active" reads the same way everywhere
+                         * in this window. */
+                        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_KEY_BG), 0);
+                        lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+                        lv_obj_set_style_border_width(b, 1, 0);
+                        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_PRIMARY), LV_STATE_CHECKED);
+                        lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_PRIMARY_BORDER), LV_STATE_CHECKED);
+                        lv_obj_add_event_cb(b, agc_preset_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+                        lv_obj_t *l = lv_label_create(b);
+                        lv_label_set_text(l, AGC_PRESETS[i].cap);
+                        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+                        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+                        lv_obj_center(l);
+                        s_btn_preset[i] = b;
+                    }
+
+                    s_lbl_preset_state = lv_label_create(s_scroll);
+                    lv_obj_align(s_lbl_preset_state, LV_ALIGN_TOP_LEFT,
+                                 210 + AGC_PRESET_N * (BTN_W + BTN_GAP), y + 14);
+                    lv_obj_set_style_text_color(s_lbl_preset_state,
+                                                lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+                    lv_obj_set_style_text_font(s_lbl_preset_state, &lv_font_montserrat_20, 0);
+                    lv_label_set_text(s_lbl_preset_state, "");
+                    agc_preset_refresh();
+
+                    y += BTN_H + 12;
+                }
             }
         } else if (d->row == ROW_BINAURAL) {
             // The three pan controls, side by side directly under the switch
@@ -723,6 +896,10 @@ void resource_mgmt_modal_open(void)
 {
     modal_build();
     rows_refresh_from_settings();
+    /* The web form can set these behind our back while the window is shut,
+     * so re-derive the highlight on every open rather than trusting the last
+     * press - see agc_preset_current(). */
+    agc_preset_refresh();
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
     ESP_LOGI(TAG, "opened");

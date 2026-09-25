@@ -76,6 +76,11 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out);
 // tau ~= 1/(alpha*fs_dec) and calls through to the coefficient setters.
 void rx_audio_set_agc_attack_ms(uint8_t ms);    // 1..50   (default 3)
 void rx_audio_set_agc_release_ms(uint16_t ms);  // 10..500 (default 150)
+/* AGC bypass. With it set, the envelope is still tracked (the squelch needs
+ * it) but the gain is pinned at the ceiling set by rx_audio_set_agc_gain_max()
+ * - so the AGC Ceiling control becomes a manual gain. See the branch in the
+ * sample loop for why a "very slow AGC" is not the same thing. */
+void rx_audio_set_agc_off(bool off);
 
 // ---- Panoramic CW (2026-09-20) ---------------------------------------------
 // Splits the CW filter's own selected width in half AT THE TUNED PITCH and

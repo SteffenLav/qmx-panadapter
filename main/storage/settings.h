@@ -264,6 +264,15 @@ typedef struct {
     uint8_t  rxaud_pan_ovlp_x100; /* filter overlap x100    (30 = 0.30) */
     uint8_t  rxaud_agc_attack_ms;  /* AGC attack time, ms  (default 3)   */
     uint16_t rxaud_agc_release_ms; /* AGC release time, ms (default 150) */
+    /* AGC bypass (Samuel W7STF, 2026-09-25: "FAST, MED, SLOW, OFF presets").
+     * The other three presets are just attack/release pairs, but OFF is not
+     * expressible in them: the gain law is always target/(envelope+1), so a
+     * very slow AGC still rides the signal, it just rides it slowly. With this
+     * set, the envelope is still computed (the squelch needs it) but the gain
+     * is pinned at rxaud_gain_d10 - i.e. the AGC Ceiling slider becomes a
+     * manual gain control, which is what "AGC off plus a gain knob" means on
+     * any other receiver. */
+    bool     rxaud_agc_off;
     // Propagation feedback: query PSK Reporter for who has heard US. Separate
     // from pskreporter_en (which is about SENDING reports) - they are opposite
     // directions and an operator may reasonably want one without the other.
@@ -710,6 +719,9 @@ void    settings_set_rxaud_agc_attack_ms(uint8_t v);   // 1..50   (default 3)
 uint8_t settings_get_rxaud_agc_attack_ms(void);
 void    settings_set_rxaud_agc_release_ms(uint16_t v); // 10..500 (default 150)
 uint16_t settings_get_rxaud_agc_release_ms(void);
+// AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
+void    settings_set_rxaud_agc_off(bool v);
+bool    settings_get_rxaud_agc_off(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

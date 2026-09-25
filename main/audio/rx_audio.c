@@ -199,6 +199,8 @@ static volatile float s_agc_target   = DEF_AGC_TARGET;
 static volatile float s_agc_attack   = DEF_AGC_ATTACK;
 static volatile float s_agc_release  = DEF_AGC_RELEASE;
 static volatile float s_agc_gain_max = DEF_AGC_GAIN_MAX;
+/* AGC bypass (Samuel W7STF, 2026-09-25). See rx_audio_set_agc_off(). */
+static volatile bool  s_agc_off      = false;
 
 // How many output samples hit s_out_clamp since the last read - an objective
 // answer to "how much is it actually clicking", instead of judging by ear.
@@ -1184,6 +1186,7 @@ static void rx_audio_task(void *arg)
         float agc_release  = s_agc_release;
         float agc_target   = s_agc_target;
         float agc_gain_max = s_agc_gain_max;
+        bool  agc_off      = s_agc_off;
         float out_clamp    = s_out_clamp;
         bool  panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
 
@@ -1260,8 +1263,23 @@ static void rx_audio_task(void *arg)
             s_noise += (s_agc_env - s_noise) * AGC_NOISE_TC;
             if (s_noise < 1.0f) s_noise = 1.0f;
 
-            float gain = agc_target / (s_agc_env + 1.0f);
-            if (gain > agc_gain_max) gain = agc_gain_max;
+            /* ⛔ AGC OFF IS NOT "A VERY SLOW AGC". The gain law below is
+             * target/(envelope+1) - it is driven by the envelope at every
+             * setting, so lengthening attack/release only makes it ride the
+             * signal SLOWLY, never stop riding it. An operator who asks for
+             * AGC off wants a fixed gain, so pin it at the ceiling and let
+             * the AGC Ceiling slider be the manual gain control.
+             *
+             * The envelope above is still computed on purpose: the squelch
+             * below uses s_agc_env/s_noise, and switching the AGC off must
+             * not also silently switch the squelch off. */
+            float gain;
+            if (agc_off) {
+                gain = agc_gain_max;
+            } else {
+                gain = agc_target / (s_agc_env + 1.0f);
+                if (gain > agc_gain_max) gain = agc_gain_max;
+            }
 
             float snr = s_agc_env / s_noise;
             float sq  = (snr - SQ_LO) / (SQ_HI - SQ_LO);
@@ -1759,6 +1777,7 @@ void rx_audio_apply_settings(void)
     rx_audio_set_pan_overlap ((float)settings_get_rxaud_pan_ovlp_x100()  / 100.0f);
     rx_audio_set_agc_attack_ms (settings_get_rxaud_agc_attack_ms());
     rx_audio_set_agc_release_ms(settings_get_rxaud_agc_release_ms());
+    rx_audio_set_agc_off       (settings_get_rxaud_agc_off());
 }
 
 void rx_audio_init(void)
@@ -2094,6 +2113,7 @@ void rx_audio_set_agc_target(float v)   { if (v > 0.0f) s_agc_target   = v; }
 void rx_audio_set_agc_attack(float v)   { if (v > 0.0f && v <= 1.0f) s_agc_attack  = v; }
 void rx_audio_set_agc_release(float v)  { if (v > 0.0f && v <= 1.0f) s_agc_release = v; }
 void rx_audio_set_agc_gain_max(float v) { if (v > 0.0f) s_agc_gain_max = v; }
+void rx_audio_set_agc_off(bool off)     { s_agc_off = off; }
 
 /* Operator-facing units (ms) for the two coefficients above - same tau ~=
  * 1/(alpha*fs_dec) relationship DEF_AGC_ATTACK/DEF_AGC_RELEASE derive from,

@@ -94,6 +94,7 @@ static const char *TAG = "settings";
 #define KEY_RXA_POVLP    "rxa_po"
 #define KEY_RXA_ATTACK   "rxa_atk"
 #define KEY_RXA_RELEASE  "rxa_rel"
+#define KEY_RXA_AGCOFF   "rxa_agcoff"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
@@ -409,7 +410,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
  * later, not silently skipped - see the commit message. */
 #define DIRTY_WIFI_PREF       128  /* designated-preferred WiFi network */
 #define DIRTY_RXA_ATTACK      129  /* AGC attack time, ms */
-#define DIRTY_RXA_RELEASE     130  /* AGC release time, ms; 29 spare after this */
+#define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
+#define DIRTY_RXA_AGCOFF      131  /* AGC bypass; 28 spare after this */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -445,7 +447,7 @@ static const uint8_t s_config_export_bits[] = {
      * the same reason the power calibration does - nobody can recreate it from
      * memory. config_io_export() prints all four. */
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
-    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE,
+    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -609,6 +611,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_RXA_POVLP))    nvs_set_u8(s_nvs, KEY_RXA_POVLP,  snap.rxaud_pan_ovlp_x100);
         if (dirty_test(&dirty_local, DIRTY_RXA_ATTACK))   nvs_set_u8(s_nvs, KEY_RXA_ATTACK, snap.rxaud_agc_attack_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_RELEASE))  nvs_set_u16(s_nvs, KEY_RXA_RELEASE, snap.rxaud_agc_release_ms);
+        if (dirty_test(&dirty_local, DIRTY_RXA_AGCOFF))   nvs_set_u8(s_nvs, KEY_RXA_AGCOFF, snap.rxaud_agc_off ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
             nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
@@ -908,6 +911,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->rxaud_pan_ovlp_x100  = 30;
     out->rxaud_agc_attack_ms  = 3;
     out->rxaud_agc_release_ms = 150;
+    out->rxaud_agc_off        = false;   /* tracking AGC, as before */
     out->act_type   = 0;          // not activating anything
     out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
@@ -1010,6 +1014,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_RXA_POVLP,  &out->rxaud_pan_ovlp_x100);
     nvs_get_u8(s_nvs, KEY_RXA_ATTACK,  &out->rxaud_agc_attack_ms);
     nvs_get_u16(s_nvs, KEY_RXA_RELEASE, &out->rxaud_agc_release_ms);
+    { uint8_t b; if (nvs_get_u8(s_nvs, KEY_RXA_AGCOFF, &b) == ESP_OK) out->rxaud_agc_off = (b != 0); }
     nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
     out->act_ref[0] = '\0';
     sz = sizeof(out->act_ref);
@@ -2396,6 +2401,27 @@ void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }
 void settings_set_rxaud_agc_release_ms(uint16_t v) { RXA_SET_U16(rxaud_agc_release_ms, DIRTY_RXA_RELEASE, 10, 500); }
 uint16_t settings_get_rxaud_agc_release_ms(void)   { RXA_GET_U16(rxaud_agc_release_ms, 150); }
+
+/* Not via the RXA_* macros: those clamp a numeric range, which a bool has
+ * none of. Same mutex + dirty-bit shape as settings_set_psk_rx_en(). */
+void settings_set_rxaud_agc_off(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.rxaud_agc_off == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rxaud_agc_off = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RXA_AGCOFF);
+}
+
+bool settings_get_rxaud_agc_off(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.rxaud_agc_off;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
 
 int16_t settings_get_cw_tx_offset_hz(void)
 {
