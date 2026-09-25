@@ -237,12 +237,27 @@ int ft8_op_mode_slot_ms(void)
 // boundary TX path fires it at dt~=0 - no doubles, no cycle lost, and a low dt
 // for every receiving station. If a busy-band decode still overruns the
 // boundary the hold/reply machinery above catches it exactly as before (small
-// positive dt, never a skipped slot). FT8-only, and ONLY while
-// ft8_qso_is_busy() (an exchange or CQ-run) - plain monitoring keeps the
-// full-slot capture so band decode yield is untouched. RESERVE = time left
-// before the boundary for the decode to run; cut point = period - RESERVE
-// (13.2 s), still 0.56 s past the 12.64 s signal end.
-#define FT8_DECODE_RESERVE_MS 1800
+// positive dt, never a skipped slot). BOTH PROTOCOLS since the guard below was
+// derived rather than tabulated - it was FT8-only, for no reason beyond the
+// mode the original report came from. The cut lands one RX-latency guard past
+// the signal end: 13.2 s of a 15 s FT8 slot, 5.6 s of a 7.5 s FT4 slot.
+/* ⭐ DERIVED, NOT TABULATED - and that is what gave FT4 the same treatment.
+ *
+ * The old figure was FT8_DECODE_RESERVE_MS = 1800, cutting at 15000-1800 =
+ * 13200 ms. Note what 13200 actually is: 12640 ms of burst plus 560 ms. The
+ * "reserve" was never a free parameter - it was the signal end plus an RX
+ * latency guard, written down from the FT8 end of the arithmetic and therefore
+ * unusable for any other slot length. Expressed the other way round it applies
+ * to both protocols unchanged:
+ *
+ *     cut = ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS
+ *     FT8: 12640 + 560 = 13200   <- bit-identical to the old constant
+ *     FT4:  5040 + 560 =  5600
+ *
+ * The guard is a WALL-CLOCK quantity - our own audio-path latency plus however
+ * late the other station is - so it does not scale with the slot. 560 ms in
+ * both. */
+#define FT8_RX_LATENCY_GUARD_MS 560
 
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
@@ -2054,12 +2069,14 @@ static void ft8_task(void *arg)
             if (ms_to_boundary < 2000)                  ms_to_boundary = 2000;
             if (ms_to_boundary > (int)SLOT_TIMEOUT_MS)  ms_to_boundary = SLOT_TIMEOUT_MS;
 
-            // Early-decode cut point (see FT8_DECODE_RESERVE_MS). Mid-QSO, stop
-            // capturing ~2 s before the boundary so the decode runs and arms the
-            // fresh reply in time to fire at dt~=0. The capture buffer stays
-            // full-size (begin() got slot_samples); finish() zero-pads the tail
-            // we skipped, so the decoder still sees a normal 93-block waterfall.
-            // FT8-only; full-slot when just monitoring, for max band yield.
+            // Early-decode cut point (see FT8_RX_LATENCY_GUARD_MS). Stop
+            // capturing once the signal has ended plus a guard, so the decode
+            // runs and arms the fresh reply in time to fire at dt~=0. The
+            // capture buffer stays full-size (begin() got slot_samples);
+            // finish() zero-pads the tail we skipped, so the decoder sees a
+            // shorter but otherwise normal waterfall and bounds-checks against
+            // wf.num_blocks. Both protocols; full-slot when the toggle is off
+            // and nothing is pending, for max band yield.
             int cap_target = slot_samples;
             // Early-cut whenever a QSO is running OR a reply is merely ARMED
             // (a hand-tapped Transmit/pounce that hasn't fired yet): both mean
@@ -2081,9 +2098,37 @@ static void ft8_task(void *arg)
             bool want_early_cut = ft8_qso_is_busy(NULL, 0) ||
                                   (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ||
                                   cut_cfg.ft8_early_decode;
-            if (!is_ft4 && want_early_cut) {
-                int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
-                if (cut > slot_samples) cut = slot_samples;   // reserve too small
+            if (want_early_cut) {
+                /* ⛔ FT4 WAS EXCLUDED FOR NO STATED REASON, and it needed this
+                 * MORE than FT8 did.
+                 *
+                 * 3c6bcf8 wrote "FT8-only" with no obstacle given - Steve N0SZ
+                 * had reported it on FT8 and the fix was scoped to his mode.
+                 * Meanwhile FT4's own arithmetic was the worse of the two: the
+                 * burst ends at 5040 ms of a 7500 ms slot, so 2460 ms of dead
+                 * tail was captured before the decode could even be queued.
+                 * Decode then takes ~2 s, landing ~2000 ms into the next slot
+                 * against a hold deadline of 2060 ms. Every FT4 reply was
+                 * arriving within 60 ms of missing its slot - a structural
+                 * one-cycle-late risk, not bad luck.
+                 *
+                 * Cutting at 5600 ms queues the decode 1900 ms earlier, which
+                 * lands it ~100 ms into the next slot instead of ~2000.
+                 *
+                 * Safe by the same mechanism FT8 already relies on: a short
+                 * capture simply yields a shorter waterfall. monitor_process()
+                 * counts the blocks it stored into wf.num_blocks, and every
+                 * access in ft8_lib's decode.c bounds-checks against it -
+                 * including the FT4 sync branches. Nothing assumes a full
+                 * 156-block slot. capture_finish() zero-pads the skipped tail.
+                 *
+                 * ⚠ FT4 is the thing this project has broken before by
+                 * half-removing a gate. This removes the gate WHOLE: there is
+                 * now one code path, one guard constant and one operator
+                 * toggle for both protocols. */
+                int cut = (ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS)
+                          * (SR_HZ / 1000);
+                if (cut > slot_samples) cut = slot_samples;   // guard exceeds the tail
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut
             }
 
@@ -2129,11 +2174,15 @@ static void ft8_task(void *arg)
                     // of waiting a full cycle. See FT8_REPLY_TX_WINDOW_MS. Safe -
                     // should_run only returns a legitimately-armed, correct-parity
                     // request, so this can never misfire a spurious/wrong-parity TX.
-                    // FT8-only: this optimization's timing/parity assumptions are
-                    // tuned to the 15 s FT8 grid and FT8 QSO automation isn't (yet)
-                    // mirrored for FT4 (FT4 currently only supports CQ, no
-                    // auto-reply) - so there's never a legitimate FT4 reply to catch
-                    // here anyway. Gate explicitly rather than rely on that.
+                    // ⚠ THIS COMMENT WAS STALE and said the opposite of the code.
+                    // It claimed FT8-only, "FT4 currently only supports CQ, no
+                    // auto-reply". Neither half is true any more: the decision
+                    // moved into ft8_gate_should_late_fire(), whose
+                    // ft8_gate_late_fire_enabled() deliberately answers the same
+                    // for both protocols, and ft8_qso.c carries FT4 throughout
+                    // (slot formula, period_ms, ADIF MODE). Left uncorrected it
+                    // would have talked the next reader out of a path that is
+                    // already live for FT4.
                     //
                     // hold_for_fresh (set at the boundary): the ARMED request was
                     // deliberately NOT fired at the boundary because the previous
