@@ -4213,3 +4213,14 @@ Audio and binaural CW remain a **declared beta**.
 ⚠ **Still unfixed and honestly stated:** audio breaks up while a web page is open (close the page while you listen); with WiFi on, SD writes stop within about 30 seconds of boot; and the display occupies so much of the second processor that the decoder cannot use it on a busy band — the change above works around that rather than curing it.
 
 Audio and binaural CW remain a **declared beta**.
+
+### v1.16.6 — 2026-09-25
+
+**A hotfix for a crash that is older than the release it was found on.**
+
+- **The unit could abort while sitting idle.** Found on the bench 400 seconds into an idle panadapter session on v1.16.5: a background task asked the C library for a lock, there was not enough of the small internal memory pool left to make one, and the firmware stopped. ⭐ **Not new in v1.16.5, and not caused by it** — that pool has run with a recorded minimum of zero on essentially every build since v1.16.0, and the same abort has happened twice before in other tasks. The retry already built in for exactly this case did retry; the memory never came back. **If you are on v1.16.4 or earlier you have the same exposure.**
+- **What is fixed here:** v1.16.5 moved the headphone-jack check onto its own task — a large improvement to audio timing — and that task took 3 KB of the scarce internal pool. Its working memory now lives in the plentiful external memory instead. It gives back what the previous release borrowed from the margin.
+
+⚠ **This reduces the exposure, it does not remove it.** The underlying shortage is unchanged and is measured in every diagnostic log's start-up ledger: the audio output stage alone accounts for 46.5 KB and halves the largest unbroken block. The remedy for that trades against audio buffering depth and deserves a soak rather than a hurried change.
+
+Everything in v1.16.5 is unchanged and still applies — see its entry above.

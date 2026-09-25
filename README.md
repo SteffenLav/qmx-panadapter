@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.5.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.6.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.16.6 is a hotfix.** The unit could abort while sitting idle — a background task could not get a lock because the small internal memory pool was exhausted. ⭐ **Not new in v1.16.5**: that pool has run with a recorded minimum of zero on essentially every build since v1.16.0, so v1.16.4 and earlier carry the same exposure. v1.16.5's headphone task gives back the 3 KB it borrowed from that margin. ⚠ This reduces the exposure, it does not remove it.
 >
 > **v1.16.5 makes the decoder keep up with the band.** ⭐ On a crowded band a slot's decode was taking **11 to 14 seconds** — longer than an FT8 slot — so the message that decides your next transmission arrived after the moment to send it had passed. Work is now taken as each processor becomes free instead of being split in half in advance: **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates a slot were being abandoned, and **3-15 stations decoded per slot instead of 0-3**. **FT4 stops recording 2.5 seconds of silence** before it decides what to say. **Pick your next station while the closing 73 is still going out** *(Randy N4OPI)*, and **a station calling you out of the blue starts a full automatic QSO**. **AGC presets — Fast, Med, Slow and Off** *(Samuel W7STF)*. **The WiFi page says which network you are actually on.** And **switching between FT8 and FT4 could crash the unit** — fixed.
 >
@@ -34,7 +36,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.5.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.6.pdf).
 
 <!-- USERGUIDE:START -->
 

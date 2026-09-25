@@ -4,6 +4,17 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.6** — 2026-09-25
+
+**A hotfix for a crash that is older than the release it was found on.**
+
+- **The unit could abort while sitting idle.** Found on the bench 400 seconds into an idle panadapter session: a background task asked the C library for a lock, the small internal memory pool had none left, and the firmware stopped. ⭐ **Not new in v1.16.5 and not caused by it** — that pool has run with a recorded minimum of zero on essentially every build since v1.16.0, and the same abort has happened twice before in other tasks. **If you are on v1.16.4 or earlier you have the same exposure.**
+- **What is fixed:** v1.16.5 moved the headphone-jack check onto its own task — a large improvement to audio timing — and that task took 3 KB of the scarce internal pool. Its working memory now lives in the plentiful external memory instead.
+
+⚠ This reduces the exposure, it does not remove it. Everything in v1.16.5 is unchanged and still applies.
+
+## Previous Releases
+
 **v1.16.5** — 2026-09-25
 
 **The decoder stops taking two slots to do one slot's work, three things operators asked for while operating, and a crash nobody had hit yet.**
