@@ -30,6 +30,23 @@ static lv_obj_t *s_wifi_slash    = NULL;  // diagonal red line, shown only when 
                                           // used for the bottom-bar battery-absent
                                           // indicator (see s_bot_batt_slash in ui.c)
 static bool      s_wifi_on       = false;
+/* Status line under the password field - what the unit is ACTUALLY on, and
+ * whether a Web UI preferred network is going to override it at the next boot.
+ *
+ * Randy N4OPI, 2026-09-25: "when the Tab5 connects to the WebUI configured
+ * Preferred WLAN, that currently connected WLAN is not reflected on the Tab5
+ * settings page ... they select a WLAN from the Tab5 and all is well until it
+ * reboots, when it connects to a different network. No clue as to why on the
+ * Tab5."
+ *
+ * He is right, and the cause is that the two fields above show the CONFIGURED
+ * credentials (settings_load_all()'s wifi_ssid), while the preferred-network
+ * path deliberately joins WITHOUT persisting the SSID - see
+ * panadapter_wifi_apply_preferred(), which uses apply_creds_live() precisely so
+ * a preference does not overwrite the operator's configuration. So the page was
+ * telling the truth about what is STORED and saying nothing about what is
+ * CONNECTED, and those legitimately differ. This line shows both. */
+static lv_obj_t *s_lbl_status    = NULL;
 static lv_obj_t *s_keyboard      = NULL;
 static bool      s_modal_open  = false;
 static void    (*s_on_close)(void) = NULL;  // one-shot, fired when the modal closes
@@ -367,6 +384,18 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_eye_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(s_eye_lbl);
 
+    /* Status line - see s_lbl_status. Sits in the gap between the password row
+     * (ends y=250) and the Cancel/Save row (bottom-aligned, 72 tall), so it
+     * costs no layout anywhere else. Filled by refresh_status_line() on every
+     * open, never cached: the connection can change while the modal is shut. */
+    s_lbl_status = lv_label_create(s_panel);
+    lv_obj_set_width(s_lbl_status, 832);
+    lv_obj_align(s_lbl_status, LV_ALIGN_TOP_LEFT, 0, 258);
+    lv_label_set_long_mode(s_lbl_status, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(s_lbl_status, "");
+
     // Bottom row: Cancel, Save, and the WiFi on/off toggle share this row now
     // (2026-07-04) - the toggle sits in the Eye button's column (x=656, same
     // 172x60 size), which used to be Save's territory, so Cancel and Save
@@ -517,6 +546,55 @@ void wifi_config_modal_init(void)
     modal_build();
 }
 
+/* Fill the status line. Two independent facts, because they can disagree and
+ * the disagreement is the whole point of Randy's report:
+ *
+ *   1. What we are connected to NOW. wifi_get_ssid() asks the driver
+ *      (esp_wifi_sta_get_ap_info()), so it is the live association and not the
+ *      stored configuration the fields above show.
+ *   2. Whether a preferred network is set in the Web UI. If it is, it wins at
+ *      the next boot regardless of what is typed here - so say so, rather than
+ *      letting the operator discover it by rebooting.
+ *
+ * ⚠ THE NARROW ACCESSOR, never settings_load_all(): this runs on taskLVGL,
+ * which has ~8 KB of stack, and the full settings struct is kilobytes - the
+ * mistake that boot-looped the device in #307. (wifi_config_modal_show() does
+ * call settings_load_all(); that is pre-existing and out of scope here, but do
+ * not add a second one.) */
+static void refresh_status_line(void)
+{
+    if (!s_lbl_status) return;
+
+    char pref[33];
+    settings_get_wifi_preferred_ssid(pref);
+    const char *live = wifi_is_connected() ? wifi_get_ssid() : NULL;
+
+    char buf[160];
+    if (live && live[0])
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WIFI "  Connected to: %s", live);
+    else
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WIFI "  Not connected");
+
+    if (pref[0]) {
+        size_t n = strlen(buf);
+        /* Only call it an override when it actually differs from the live
+         * association - saying "overrides" while already ON the preferred
+         * network would be noise. */
+        if (live && live[0] && strcmp(pref, live) == 0)
+            snprintf(buf + n, sizeof(buf) - n, "   (Web UI preferred network)");
+        else
+            /* LV_SYMBOL_WARNING, not a raw U+26A0: the built-in montserrat
+             * fonts carry only ASCII plus the LV_SYMBOL set, so a bare
+             * Unicode warning sign draws as a box. */
+            snprintf(buf + n, sizeof(buf) - n,
+                     "   " LV_SYMBOL_WARNING " Web UI prefers '%s' - it wins after a reboot", pref);
+    }
+    lv_label_set_text(s_lbl_status, buf);
+    lv_obj_set_style_text_color(s_lbl_status,
+                                lv_color_hex(pref[0] && (!live || strcmp(pref, live) != 0)
+                                             ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT_SECONDARY), 0);
+}
+
 void wifi_config_modal_show_then(void (*on_close)(void))
 {
     s_on_close = on_close;
@@ -553,6 +631,8 @@ void wifi_config_modal_show(void)
 
     // Make sure keyboard starts hidden every time.
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+
+    refresh_status_line();
 
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
