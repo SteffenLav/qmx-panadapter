@@ -1539,15 +1539,50 @@ static void web_reply_drain(void)
                  call, extra ? extra : "(grid TX1, FD mode)");
     }
 
-    // Their fresh CQ -> the full auto-sequencer, because the operator is NOT in
-    // front of the radio to click each exchange step. Anything mid-exchange ->
-    // arm the one correct next message, with the same manual-QSO bookkeeping the
-    // modal's Transmit does (working-highlight, and WAIT_DONE seeding so a
-    // closing 73 still logs to ADIF).
-    if (is_fresh_grid) {
+    /* The full auto-sequencer, because the operator is NOT in front of the
+     * radio to click each exchange step - that was always the reason, and it
+     * used to be applied only to a fresh CQ.
+     *
+     * ⛔ THAT TEST WAS THE WRONG ONE, and its own rationale said so. Randy
+     * N4OPI, 2026-09-25: "If I am in an exchange and a different operator calls
+     * me out of the blue (not responding to a CQ or previous call from me) I
+     * can click on their call and the next exchange is sent, but it is forever
+     * in manual QSO mode. Not auto QSO. Is this intentional behaviour?"
+     *
+     * It was intentional, and it was backwards. is_fresh_grid is false for ANY
+     * message addressed to us carrying a payload - which is exactly the
+     * unsolicited caller, the one case where an operator in another room most
+     * wants the sequencer to take over. He then had to click every remaining
+     * step of a QSO he did not start.
+     *
+     * What actually matters here is not "was it a CQ" but "is there an exchange
+     * left to run". We are past the busy gate above, so the QSO machine is
+     * IDLE/DONE/TIMEOUT and whatever we send now OPENS an exchange - except a
+     * closing 73, where the contact is already over and a sequencer would have
+     * nothing to sequence. So: everything but the closing message starts a QSO.
+     *
+     * ⭐ ft8_qso_start() is already built for entering mid-ladder and has been
+     * since #234/#292: a REPLY carrying a report starts in WAIT_ROGER, and a
+     * ROGER_RPT starts in WAIT_RR73, both with first_rpt seeded so RST_SENT
+     * logs. Those branches exist precisely because the pileup path - a station
+     * who called US - needs them. This just stops the web path from being the
+     * one caller that never uses them.
+     *
+     * A closing 73 still takes the one-shot arm below, with the same manual-QSO
+     * bookkeeping the modal's Transmit does (working-highlight, and
+     * ft8_qso_notify_manual_final() seeding WAIT_DONE so it still logs to
+     * ADIF).
+     *
+     * ⚠ Randy also offered "single click for next exchange, double click to
+     * enter Auto QSO". Not taken: a double-click is an awkward gesture on a
+     * touch browser page, and making the plain click do the right thing removes
+     * the need for a second one. If anyone does want a single-message click
+     * back, it is an "auto": false field on the reply command, not a rework. */
+    if (req.kind != FT8_TX_KIND_73) {
         if (ft8_qso_start(&req, err, sizeof(err))) {
             web_result_set("Working %s (auto QSO)", call);
-            ESP_LOGI(TAG, "web reply: auto pounce on %s", call);
+            ESP_LOGI(TAG, "web reply: auto QSO with %s (%s)", call,
+                     is_fresh_grid ? "answered their CQ" : "they called us");
         } else {
             web_result_set("%s", err[0] ? err : "Pounce refused");
         }
