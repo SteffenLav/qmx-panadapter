@@ -127,6 +127,7 @@ static const agc_preset_t AGC_PRESETS[] = {
 };
 #define AGC_PRESET_N ((int)(sizeof(AGC_PRESETS) / sizeof(AGC_PRESETS[0])))
 
+static lv_obj_t *s_cb_hp_mute = NULL;   /* speaker auto-mute on headphone insert */
 static lv_obj_t *s_btn_preset[AGC_PRESET_N];
 static lv_obj_t *s_lbl_preset_state = NULL;
 
@@ -346,6 +347,17 @@ static void gain_cb(lv_event_t *e)
 /* rx_audio_set_volume() persists to settings itself, so unlike the sliders
  * below there is no separate settings_set_* call here - adding one would just
  * write the same key twice. */
+/* ⛔ AN ESCAPE HATCH, NOT A PREFERENCE. Two operators lost all audio to the
+ * headphone auto-mute after v1.16.4 and neither could be reproduced here, so
+ * there has to be a way to switch it off from the device itself - a user with
+ * no sound cannot be asked to edit a config file. Applies immediately. */
+static void hp_mute_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state((lv_obj_t *)lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_hp_mute_en(on);
+    ESP_LOGI(TAG, "headphone auto-mute: %s", on ? "ON" : "OFF (speaker always on)");
+}
+
 static void rx_vol_cb(lv_event_t *e)
 {
     int v = lv_slider_get_value((lv_obj_t *)lv_event_get_target(e));
@@ -718,6 +730,22 @@ static void modal_build(void)
 
                     y += BTN_H + 12;
                 }
+
+                /* The auto-mute escape hatch - see hp_mute_cb(). Directly
+                 * under the audio controls it affects. */
+                {
+                    lv_obj_t *cb = make_checkbox(s_scroll);
+                    lv_obj_align(cb, LV_ALIGN_TOP_LEFT, 0, y);
+                    if (settings_get_hp_mute_en()) lv_obj_add_state(cb, LV_STATE_CHECKED);
+                    lv_obj_add_event_cb(cb, hp_mute_cb, LV_EVENT_VALUE_CHANGED, NULL);
+                    s_cb_hp_mute = cb;
+                    lv_obj_t *l = lv_label_create(s_scroll);
+                    lv_label_set_text(l, "Mute speaker when headphones are plugged in");
+                    lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+                    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+                    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 60, y + 4);
+                    y += ROW_H;
+                }
             }
         } else if (d->row == ROW_BINAURAL) {
             // The three pan controls, side by side directly under the switch
@@ -900,6 +928,10 @@ void resource_mgmt_modal_open(void)
      * so re-derive the highlight on every open rather than trusting the last
      * press - see agc_preset_current(). */
     agc_preset_refresh();
+    if (s_cb_hp_mute) {
+        if (settings_get_hp_mute_en()) lv_obj_add_state(s_cb_hp_mute, LV_STATE_CHECKED);
+        else                           lv_obj_clear_state(s_cb_hp_mute, LV_STATE_CHECKED);
+    }
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
     ESP_LOGI(TAG, "opened");

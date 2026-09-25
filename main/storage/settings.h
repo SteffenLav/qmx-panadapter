@@ -273,6 +273,12 @@ typedef struct {
      * manual gain control, which is what "AGC off plus a gain knob" means on
      * any other receiver. */
     bool     rxaud_agc_off;
+    /* Mute the internal speaker when headphones are detected (v1.16.4).
+     * Default TRUE - it is what everyone expects. Switchable because the
+     * detection is a single I2C read that DOES fail in the field, and two
+     * operators lost audio to it; a feature that cannot be verified remotely
+     * must not be the only thing between a user and their audio. */
+    bool     hp_mute_en;
     // Propagation feedback: query PSK Reporter for who has heard US. Separate
     // from pskreporter_en (which is about SENDING reports) - they are opposite
     // directions and an operator may reasonably want one without the other.
@@ -722,6 +728,9 @@ uint16_t settings_get_rxaud_agc_release_ms(void);
 // AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
 void    settings_set_rxaud_agc_off(bool v);
 bool    settings_get_rxaud_agc_off(void);
+// Speaker auto-mute on headphone insert. Default true.
+void    settings_set_hp_mute_en(bool v);
+bool    settings_get_hp_mute_en(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

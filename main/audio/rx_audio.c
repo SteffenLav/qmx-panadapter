@@ -2389,6 +2389,20 @@ static void rx_audio_headphone_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(HP_POLL_US / 1000));
 
+        /* ⭐ THE OPERATOR CAN TURN THIS OFF. Two people lost audio to this
+         * feature after v1.16.4 and I could not reproduce either on the bench,
+         * so it does not get to be the only thing between a user and their
+         * sound. Off = leave the amplifier alone and force it ON once, so
+         * disabling the setting is itself the recovery. Re-read every pass, so
+         * the switch takes effect without a restart. */
+        if (!settings_get_hp_mute_en()) {
+            if (s_last != -2) { s_last = -2; s_cand = -1; s_cand_n = 0;
+                                bsp_set_speaker_amp_enable(true);
+                                ESP_LOGI(TAG, "headphone auto-mute is OFF - speaker forced on"); }
+            continue;
+        }
+        if (s_last == -2) s_last = -1;   /* re-enabled: decide afresh */
+
     int plugged = bsp_headphone_detect() ? 1 : 0;
 
     /* ⛔ ONE BAD READ USED TO BE ENOUGH TO SWITCH THE SPEAKER.

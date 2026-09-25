@@ -95,6 +95,7 @@ static const char *TAG = "settings";
 #define KEY_RXA_ATTACK   "rxa_atk"
 #define KEY_RXA_RELEASE  "rxa_rel"
 #define KEY_RXA_AGCOFF   "rxa_agcoff"
+#define KEY_HP_MUTE      "hp_mute"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
 #define KEY_BP_REGION    "bp_region"
@@ -411,7 +412,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WIFI_PREF       128  /* designated-preferred WiFi network */
 #define DIRTY_RXA_ATTACK      129  /* AGC attack time, ms */
 #define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
-#define DIRTY_RXA_AGCOFF      131  /* AGC bypass; 28 spare after this */
+#define DIRTY_RXA_AGCOFF      131  /* AGC bypass */
+#define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones; 27 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -447,7 +449,7 @@ static const uint8_t s_config_export_bits[] = {
      * the same reason the power calibration does - nobody can recreate it from
      * memory. config_io_export() prints all four. */
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
-    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF,
+    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_HP_MUTE,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -612,6 +614,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_RXA_ATTACK))   nvs_set_u8(s_nvs, KEY_RXA_ATTACK, snap.rxaud_agc_attack_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_RELEASE))  nvs_set_u16(s_nvs, KEY_RXA_RELEASE, snap.rxaud_agc_release_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_AGCOFF))   nvs_set_u8(s_nvs, KEY_RXA_AGCOFF, snap.rxaud_agc_off ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_HP_MUTE))      nvs_set_u8(s_nvs, KEY_HP_MUTE, snap.hp_mute_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
             nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
@@ -912,6 +915,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->rxaud_agc_attack_ms  = 3;
     out->rxaud_agc_release_ms = 150;
     out->rxaud_agc_off        = false;   /* tracking AGC, as before */
+    out->hp_mute_en           = true;    /* what everyone expects */
     out->act_type   = 0;          // not activating anything
     out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
@@ -1015,6 +1019,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_RXA_ATTACK,  &out->rxaud_agc_attack_ms);
     nvs_get_u16(s_nvs, KEY_RXA_RELEASE, &out->rxaud_agc_release_ms);
     { uint8_t b; if (nvs_get_u8(s_nvs, KEY_RXA_AGCOFF, &b) == ESP_OK) out->rxaud_agc_off = (b != 0); }
+    { uint8_t b; if (nvs_get_u8(s_nvs, KEY_HP_MUTE,    &b) == ESP_OK) out->hp_mute_en     = (b != 0); }
     nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
     out->act_ref[0] = '\0';
     sz = sizeof(out->act_ref);
@@ -2422,6 +2427,25 @@ bool settings_get_rxaud_agc_off(void)
     xSemaphoreGive(s_mutex);
     return v;
 }
+void settings_set_hp_mute_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.hp_mute_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.hp_mute_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_HP_MUTE);
+}
+
+bool settings_get_hp_mute_en(void)
+{
+    if (!s_ready) return true;   /* default ON before settings are up */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.hp_mute_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 
 int16_t settings_get_cw_tx_offset_hz(void)
 {

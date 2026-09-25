@@ -95,6 +95,7 @@ char *config_io_export(size_t *out_len)
     APP("rxaud_agc_attack_ms  = %u\n", (unsigned)c.rxaud_agc_attack_ms);  // AGC attack, ms (default 3)
     APP("rxaud_agc_release_ms = %u\n", (unsigned)c.rxaud_agc_release_ms); // AGC release, ms (default 150)
     APP("rxaud_agc_off        = %s\n", yn(c.rxaud_agc_off));            // AGC bypass: fixed gain at the ceiling
+    APP("hp_mute            = %s\n", yn(c.hp_mute_en));            // mute speaker when headphones are in
     APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
     APP("bt_mouse_en        = %d\n", c.bt_mouse_en ? 1 : 0);     // BLE mouse
     APP("cluster_en         = %d\n", c.cluster_en ? 1 : 0);      // DX cluster feed (phone spots)
@@ -420,6 +421,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "rxaud_agc_attack_ms"))  settings_set_rxaud_agc_attack_ms((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_release_ms")) settings_set_rxaud_agc_release_ms((uint16_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_off"))        settings_set_rxaud_agc_off(to_bool(val));
+            else if (!strcasecmp(key, "hp_mute"))             settings_set_hp_mute_en(to_bool(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
             else if (!strcasecmp(key, "bt_mouse_en"))       settings_set_bt_mouse_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cluster_en"))        settings_set_cluster_en(atoi(val) != 0);

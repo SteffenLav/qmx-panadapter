@@ -354,6 +354,22 @@ void bsp_io_expander_pi4ioe_init(i2c_master_bus_handle_t bus_handle)
  * The callers treat a failed read as "leave the hardware alone and try again
  * next time", which is right for every one of them but the poweroff signal -
  * see the note there. */
+/* Last known-good value of expander 1's OUT_SET.
+ *
+ * ⛔ WHY A SHADOW EXISTS AT ALL. Every pin function is a read-modify-write, and
+ * pi4io_read_reg() correctly refuses to write when the read fails - but for the
+ * SPEAKER AMPLIFIER "do nothing" is the wrong failure: if the amp is already
+ * off, giving up leaves the operator with no audio for the rest of the session,
+ * and the only way back is a reboot they have no reason to try.
+ *
+ * Two users lost audio after v1.16.4 (Steve N9SZ, Samuel W7STF), the release
+ * that started polling the headphone jack every second. The 0x0F read really
+ * does fail in the field - `PI4IO read of reg 0x0f failed (ESP_ERR_TIMEOUT)`
+ * appears in their logs AND 485 times in my own bench capture, so it is not a
+ * board difference. Seeded from the value init() writes, so it is correct from
+ * the first call. */
+static uint8_t s_pi4io1_out_shadow = 0b01110110;   /* == init's release value */
+
 static bool pi4io_read_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *out)
 {
     uint8_t addr = reg;
@@ -556,7 +572,19 @@ void bsp_set_speaker_amp_enable(bool en)
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) return;
+    /* ⭐ FAIL LOUD, NOT SAFE - see s_pi4io1_out_shadow.
+     *
+     * Turning the amp ON is a recovery action and must happen even when the
+     * read fails; the shadow carries the other pins so P4/P5 (LCD_RST, TP_RST)
+     * are not disturbed. Turning it OFF is only ever a convenience, so that
+     * direction still gives up on a failed read - the worst case there is the
+     * speaker playing alongside headphones for a second, which is what v1.16.3
+     * did for its whole life. */
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) {
+        if (!en) return;                       /* muting can wait for a good read */
+        read_buf[0] = s_pi4io1_out_shadow;     /* enabling cannot */
+        ESP_LOGW(TAG, "speaker amp ON from the shadow - the port read failed");
+    }
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -566,7 +594,9 @@ void bsp_set_speaker_amp_enable(bool en)
         clrbit(write_buf[1], 1);
     }
 
-    i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
+    if (i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2,
+                            I2C_MASTER_TIMEOUT_MS) == ESP_OK)
+        s_pi4io1_out_shadow = write_buf[1];
 }
 
 void bsp_set_wifi_power_enable(bool en)
