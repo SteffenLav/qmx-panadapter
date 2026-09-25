@@ -325,7 +325,7 @@ static void rxcap_auto_tick(void);   /* defined by the recorder block below */
  *     assigns base.set_reg. Use ctrl_if->write_reg if a register is ever
  *     genuinely needed.
  *   - bsp_headphone_detect() itself works perfectly (PI4IO expander 1, bit 7). */
-static void rx_audio_follow_headphone_jack(void);
+static void rx_audio_headphone_task(void *arg);
 static volatile uint32_t s_cap_gap_n  = 0;
 
 static volatile uint32_t s_gap_prev_us   = 0;   /* uptime of the previous gap */
@@ -1681,7 +1681,6 @@ static void rx_audio_task(void *arg)
 
         rxcap_push(s_out, pairs);   /* record exactly what is played */
         rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
-        rx_audio_follow_headphone_jack();   /* 1 Hz inside; speaker amp vs jack */
         esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
@@ -1883,6 +1882,19 @@ void rx_audio_init(void)
     // measured recovering to 42 KB by ~17.5 s on this same boot sequence.
     BaseType_t created = xTaskCreatePinnedToCore(rx_audio_task, "rx_audio", 4096, NULL,
                              RX_AUDIO_TASK_PRIORITY, &s_task, 1);
+
+    /* The headphone-jack follower, on its OWN task - see the block comment at
+     * rx_audio_headphone_task() for the measurement that moved it off the
+     * audio thread. Priority 1: below rx_audio (3) and everything else that
+     * matters, because a jack is not urgent and this one blocks on I2C.
+     * Core 0, so it cannot even compete with rx_audio's core. 3072 B covers
+     * the two BSP calls and their I2C driver frames. Not fatal if it fails -
+     * the speaker amp simply keeps whatever state the BSP left it in. */
+    BaseType_t hp = xTaskCreatePinnedToCore(rx_audio_headphone_task, "rx_hp", 3072,
+                                            NULL, 1, NULL, 0);
+    if (hp != pdPASS)
+        ESP_LOGW(TAG, "headphone follower task not created - speaker/jack "
+                      "switching is inactive this session");
     for (int attempt = 1; created != pdPASS && attempt <= 5; attempt++) {
         ESP_LOGW(TAG, "rx_audio task create failed (%d/5) - retrying in 2 s", attempt);
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -2318,16 +2330,41 @@ static void rxcap_dump_task(void *arg)
 #define HP_POLL_US      250000
 #define HP_DEBOUNCE_N   3
 
-static void rx_audio_follow_headphone_jack(void)
+/* ⛔⛔ THIS MUST NOT RUN ON THE AUDIO THREAD, AND IT USED TO.
+ *
+ * It was called once per frame from rx_audio_task's write loop, rate-limited
+ * internally. That looked free. It is not: bsp_headphone_detect() is an I2C
+ * transaction to the PI4IO expander on a bus shared with the touch controller
+ * and the battery monitor, and the frame-tail window that contains it measures
+ * up to ~82 ms.
+ *
+ * At the original 1 Hz that cost ~82 ms/s and was survivable. When I added the
+ * debounce I raised the poll to 4 Hz to reject a single bad read - roughly
+ * 320 ms of blocking per second, inside a real-time loop with a ~21 ms budget.
+ *
+ * Measured on bench dev, 2026-09-25, same board, same BLE state, decoder idle:
+ *
+ *     6f0d341 (1 Hz, on the audio thread)  OUT 47944-48074  frame max  35 ms
+ *     22bfb27 (4 Hz, on the audio thread)  OUT 37800-40555  frame max 603 ms
+ *
+ * ~20% of the output rate, the input ring overflowing, and the drift corrector
+ * pinned at its rail ("resample rate hit the rail"). The operator heard it
+ * immediately. I had "verified" the debounce by ear and by log without once
+ * measuring what it cost the loop it lived in.
+ *
+ * ⭐ The lesson is not "poll slower". A blocking bus transaction has no business
+ * on the audio thread at ANY rate - 1 Hz was already spending 82 ms of a
+ * real-time budget. It now runs on its own low-priority task, where it can
+ * debounce as fast as it likes and block whoever it wants. */
+static void rx_audio_headphone_task(void *arg)
 {
-    static int64_t s_next_us;
-    static int     s_last  = -1;   /* acted-on state; -1 forces the first decision */
-    static int     s_cand  = -1;   /* what the last few reads have been saying */
-    static int     s_cand_n = 0;   /* how many in a row have said it */
+    (void)arg;
+    int s_last  = -1;   /* acted-on state; -1 forces the first decision */
+    int s_cand  = -1;   /* what the last few reads have been saying */
+    int s_cand_n = 0;   /* how many in a row have said it */
 
-    int64_t now = esp_timer_get_time();
-    if (now < s_next_us) return;
-    s_next_us = now + HP_POLL_US;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(HP_POLL_US / 1000));
 
     int plugged = bsp_headphone_detect() ? 1 : 0;
 
@@ -2360,13 +2397,14 @@ static void rx_audio_follow_headphone_jack(void)
     if (plugged != s_cand)             { s_cand = plugged; s_cand_n = 1; }
     else if (s_cand_n < HP_DEBOUNCE_N) { s_cand_n++; }
 
-    if (s_cand_n < HP_DEBOUNCE_N) return;   /* not convinced yet */
-    if (plugged == s_last) return;          /* convinced, and nothing changed */
+    if (s_cand_n < HP_DEBOUNCE_N) continue;   /* not convinced yet */
+    if (plugged == s_last) continue;          /* convinced, nothing changed */
     s_last = plugged;
 
     bsp_set_speaker_amp_enable(!plugged);
     ESP_LOGI(TAG, "headphones %s - internal speaker %s",
              plugged ? "IN" : "out", plugged ? "OFF" : "on");
+    }
 }
 
 static void rxcap_auto_tick(void)
