@@ -2312,17 +2312,56 @@ static void rxcap_dump_task(void *arg)
  * controller and the battery monitor, and this loop runs every ~21 ms. A jack
  * is not moved faster than that. Writes only on a CHANGE, so a settled jack
  * costs one I2C read per second and nothing else. */
+/* Poll period and how many agreeing reads it takes to believe a change.
+ * 4 Hz x 3 = a real jack movement is acted on in ~0.75 s, FASTER than the 1 Hz
+ * single-shot this replaces, while a lone bad read changes nothing. */
+#define HP_POLL_US      250000
+#define HP_DEBOUNCE_N   3
+
 static void rx_audio_follow_headphone_jack(void)
 {
     static int64_t s_next_us;
-    static int     s_last = -1;          /* -1 = unknown, forces the first decision */
+    static int     s_last  = -1;   /* acted-on state; -1 forces the first decision */
+    static int     s_cand  = -1;   /* what the last few reads have been saying */
+    static int     s_cand_n = 0;   /* how many in a row have said it */
 
     int64_t now = esp_timer_get_time();
     if (now < s_next_us) return;
-    s_next_us = now + 1000000;           /* 1 Hz */
+    s_next_us = now + HP_POLL_US;
 
     int plugged = bsp_headphone_detect() ? 1 : 0;
-    if (plugged == s_last) return;
+
+    /* ⛔ ONE BAD READ USED TO BE ENOUGH TO SWITCH THE SPEAKER.
+     *
+     * Measured on bench dev, 2026-09-25, with headphones plugged in the whole
+     * time and nothing touching the jack:
+     *     5463.8 s  headphones out - internal speaker on
+     *     5464.8 s  headphones IN  - internal speaker OFF
+     * One poll read the wrong value and the next corrected it. The detect is a
+     * single I2C read of the PI4IO expander's input register on a bus shared
+     * with the touch controller and the battery monitor, and it is not
+     * filtered anywhere - so that glitch went straight to the amplifier.
+     *
+     * In that direction it is a one-second burst from the speaker while
+     * someone is on headphones. In the other direction - a spurious "IN" on an
+     * EMPTY jack - it mutes the speaker of someone who is not wearing
+     * headphones at all. Steve N9SZ reported exactly "no audio from the Tab5"
+     * on v1.16.4, the release that started calling this every second.
+     *
+     * ⚠ THIS IS NOT A PROVEN EXPLANATION OF HIS FAULT. A single glitch
+     * self-corrects on the next poll, so it gives a ~1 s dropout, not
+     * permanent silence; his would need a reading that is persistently wrong.
+     * This fix removes a real defect that the bench measured. It does not
+     * close his report, and the fix must not be announced as though it does.
+     *
+     * Deliberately NOT a running average or a hysteresis timer: the operator
+     * moves a jack at human speed and the only thing worth rejecting is a
+     * sample that disagrees with its neighbours. */
+    if (plugged != s_cand)             { s_cand = plugged; s_cand_n = 1; }
+    else if (s_cand_n < HP_DEBOUNCE_N) { s_cand_n++; }
+
+    if (s_cand_n < HP_DEBOUNCE_N) return;   /* not convinced yet */
+    if (plugged == s_last) return;          /* convinced, and nothing changed */
     s_last = plugged;
 
     bsp_set_speaker_amp_enable(!plugged);
