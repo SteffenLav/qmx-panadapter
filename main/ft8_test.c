@@ -1532,8 +1532,43 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         /* Both halves walk this one cursor - see decode_candidate_range(). */
         .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
     };
+    /* ⭐⭐ DO NOT HAND WORK TO A CORE THAT CANNOT DO IT.
+     *
+     * cpu_owners_report() on bench dev, 2026-09-25, mid-decode on a saturated
+     * band - the whole answer in four rows:
+     *
+     *     ft8_dec      92.1%   core 1   pri 1
+     *     taskLVGL     85.9%   core 0   pri 5
+     *     audio_task    9.4%   core 0   pri 6
+     *     ft8_dec0      0.1%   core 0   pri 2      <- the decode helper
+     *
+     * The helper gets ONE TENTH OF ONE PERCENT. taskLVGL owns core 0 and sits
+     * three priority levels above it, so the helper runs only when LVGL yields,
+     * which it does not while drawing the spectrum and waterfall.
+     *
+     * ⛔ Raising it is not available. To get CPU it would have to outrank
+     * taskLVGL (5), which stalls the display, and audio_task (6) is above that
+     * again for good reason. Core 0 has no capacity to give while the
+     * panadapter is drawing - that is #284/#285, a separate problem, and four
+     * hypotheses about it were already falsified on hardware.
+     *
+     * Work-stealing (the commit before this) already capped the damage at one
+     * candidate instead of half of them. This removes even that: a candidate
+     * handed to a task running at 0.1% takes ~8 s, and the join waits for it.
+     *
+     * So dispatch ADAPTIVELY - if the helper completed almost nothing last
+     * slot, decode single-core this slot and skip the join entirely. Re-probed
+     * every PROBE slots so a quiet display (FT8 page, screen off, operator on
+     * another view) wins the helper back automatically, rather than the
+     * decoder being permanently single-core because of one busy minute. */
+    static int  s_worker_useless_runs = 0;
+    #define WORKER_PROBE_EVERY   8   /* slots between re-probes while disabled */
+    #define WORKER_USEFUL_MIN    3   /* candidates that count as "it helped"   */
+    bool worker_disabled = (s_worker_useless_runs > 0) &&
+                           (s_worker_useless_runs % WORKER_PROBE_EVERY != 0);
+
     bool dispatched = false;
-    if (wctx && n_cand > 1) {
+    if (wctx && n_cand > 1 && !worker_disabled) {
         worker_job_t *jp = &job;   // job stays valid: we block on wctx->done below
         if (xQueueSend(wctx->jobs, &jp, 0) == pdTRUE) dispatched = true;
     }
@@ -1613,6 +1648,23 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     }
 
     int64_t t_join_done = esp_timer_get_time();
+    /* Did the helper earn its join? Counted only when we actually dispatched;
+     * a disabled slot must not reset the counter or it would re-probe forever. */
+    if (dispatched) {
+        if (r_worker.n_attempted < WORKER_USEFUL_MIN) {
+            if (s_worker_useless_runs == 0)
+                ESP_LOGW(TAG, "core-0 decode helper attempted only %d candidate(s) "
+                              "- going single-core (re-probe every %d slots)",
+                         r_worker.n_attempted, WORKER_PROBE_EVERY);
+            s_worker_useless_runs++;
+        } else if (s_worker_useless_runs) {
+            ESP_LOGI(TAG, "core-0 decode helper is useful again (%d candidates) "
+                          "- dual-core decode resumed", r_worker.n_attempted);
+            s_worker_useless_runs = 0;
+        }
+    } else if (s_worker_useless_runs) {
+        s_worker_useless_runs++;   /* advance towards the next probe */
+    }
     int dec_ms    = (int)((t_join_done - t_start) / 1000);
     /* search = candidate detection; main = this task's half; join = waiting for
      * the core-0 helper AFTER our own half finished. A large join with a small
