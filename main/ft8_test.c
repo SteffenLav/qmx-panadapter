@@ -804,6 +804,11 @@ typedef struct {
     float                   noise_db;
     int64_t                 slot_sec;
     int64_t                 t_start_us;   // shared budget anchor
+    /* ⭐ SHARED WORK CURSOR - the candidates are pulled from here by BOTH
+     * halves instead of being split evenly in advance. See the measurement at
+     * decode_candidate_range(). */
+    volatile int            next_cand;
+    portMUX_TYPE            cand_lock;
     int                     start_off_ms;
     int                     start;        // first candidate index
     int                     step;         // index stride (2 for the dual-core split)
@@ -1101,6 +1106,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    float noise_db, int64_t slot_sec,
                                    int64_t t_start_us, int start_off_ms,
                                    bool may_early_advance,
+                                   volatile int *cursor, portMUX_TYPE *cursor_lock,
                                    decode_result_t *out)
 {
     out->early_advanced = false;
@@ -1125,7 +1131,50 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     qmx_settings_t sim_qs;
     settings_load_all(&sim_qs);
     bool sim_suppresses_real = sim_qs.sim_mode_en;
-    for (int i = start; i < n_cand; i += step) {
+    /* ⭐⭐ WORK-STEALING, NOT AN EVEN SPLIT - the even split was costing 8x.
+     *
+     * This used to be `for (i = start; i < n_cand; i += step)`: core 1 took the
+     * even candidates, core 0 the odd ones, half each, decided before either
+     * had run. That assumes the two cores are equally fast. On this board they
+     * are nowhere close - core 0 also carries USB host, the hosted-WiFi SDIO
+     * link and the display, and runs at 0.0% idle on a busy band.
+     *
+     * Measured on bench dev 2026-09-25 (FT4 sim, saturated):
+     *
+     *   slot 61: decode 11185 ms = search 476 + main 1356 + join  9351 (cand=132)
+     *   slot 62: decode 14122 ms = search 295 + main 1680 + join 12146 (cand=140)
+     *
+     * Core 1 finished its half in ~1.4 s and then sat in the join for TEN
+     * SECONDS waiting for core 0 to grind through an identical amount of work.
+     * The decode was not dual-core in any useful sense; it ran at the speed of
+     * the slower core and idled the faster one.
+     *
+     * ⛔ Raising the worker's priority is not the fix - it is already
+     * tskIDLE_PRIORITY+2, ABOVE the core-1 decode task at +1. It is not losing
+     * to its sibling, it is losing to USB and WiFi, and those are the two
+     * subsystems that fail first when starved on this board.
+     *
+     * So stop deciding the split in advance. Both halves now pull the next
+     * candidate from one shared cursor: whoever is free takes the next one. A
+     * starved core 0 simply completes fewer, core 1 absorbs the rest, and the
+     * slot finishes at the speed of the FASTER core plus one candidate.
+     *
+     * Candidates stay strongest-first, so the budget still drops only the
+     * weakest tail - and it now does so far less often.
+     *
+     * The spinlock is held for an integer increment only, never across
+     * ftx_decode_candidate(). `wctx` is NULL on the single-core fallback path,
+     * where the plain strided walk is still correct and needs no locking. */
+    for (;;) {
+        int i;
+        if (cursor) {
+            portENTER_CRITICAL(cursor_lock);
+            i = (*cursor)++;
+            portEXIT_CRITICAL(cursor_lock);
+        } else {
+            i = start; start += step;      /* single-core fallback */
+        }
+        if (i >= n_cand) break;
         /* ⭐ ABANDON THE SLOT THE MOMENT WE ARE TEARING DOWN (#312).
          *
          * ft8_task clears s_ft8_running BEFORE it sends the stop sentinel, so
@@ -1372,7 +1421,8 @@ static void ft8_decode_worker_task(void *arg)
            for it and exactly one wins. See its comment. */
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
-                               job->start_off_ms, true, job->result);
+                               job->start_off_ms, true,
+                               &job->next_cand, &job->cand_lock, job->result);
         xSemaphoreGive(ctx->done);
     }
     /* MEASURE IT, so the 65536 above stops being a judgement call. This task
@@ -1479,6 +1529,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         .mon = mon, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
         .slot_sec = slot_sec, .t_start_us = t_start, .start_off_ms = start_off_ms,
         .start = 1, .step = 2, .result = &r_worker,
+        /* Both halves walk this one cursor - see decode_candidate_range(). */
+        .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
     };
     bool dispatched = false;
     if (wctx && n_cand > 1) {
@@ -1502,7 +1554,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     // Our half (even indices).
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
-                           t_start, start_off_ms, true, &r_main);
+                           t_start, start_off_ms, true,
+                           dispatched ? &job.next_cand : NULL,
+                           dispatched ? &job.cand_lock : NULL, &r_main);
     int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
@@ -1512,7 +1566,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         /* Inline fallback: this is still the DECODE TASK, so it may early-advance
            on the same terms as the even half above. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, true, &r_worker);
+                               t_start, start_off_ms, true, NULL, NULL, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
