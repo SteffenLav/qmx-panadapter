@@ -689,11 +689,17 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     return true;
 }
 
+/* How long the slot task will wait for an in-flight decode before giving up on
+ * a sub-mode rebuild. Short on purpose: this runs at the top of every slot, so
+ * giving up simply retries one slot later - far better than blocking the slot
+ * loop for the length of a worst-case decode. */
+#define POOL_REBUILD_WAIT_MS 2000
+
 // Top-of-slot check: if the operator switched FT8<->FT4, rebuild the monitor
 // pool for the new protocol. We're about to free monitors the decoder may still
-// be reading, so first drain any in-flight decode (bounded wait on the busy
-// flags), then free + rebuild. On rebuild failure the pool is left empty and
-// the loop's find_free_buffer() simply skips slots until the next mode toggle.
+// be reading, so first drain any in-flight decode - and if it will not drain,
+// DO NOT FREE. On rebuild failure the pool is left empty and the loop's
+// find_free_buffer() simply skips slots until the next mode toggle.
 static void reinit_pool_if_mode_changed(void)
 {
     ftx_protocol_t want = proto_for_mode();
@@ -701,12 +707,45 @@ static void reinit_pool_if_mode_changed(void)
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
              want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
-    for (int guard = 0; guard < 400; guard++) {   // ~4 s ceiling
-        bool any_busy = false;
-        for (int i = 0; i < FT8_NUM_BUFFERS; i++) if (s_buf_busy[i]) any_busy = true;
-        if (!any_busy) break;
+
+    /* ⛔ THIS FREED MEMORY THE DECODER WAS STILL READING, AND IT CRASHED THE
+     * BOARD. Measured on bench dev 2026-09-25, switching FT8 -> FT4:
+     *
+     *     Guru Meditation Error: Core 1 panic'ed (Load access fault)
+     *     MTVAL 0xce116fc7   (not a valid address on this part)
+     *     -> ft4_extract_symbol / ft4_extract_likelihood
+     *        / ftx_decode_candidate   decode.c:767/383/602
+     *
+     * The wait was bounded at 400 x 10 ms = 4 s and then fell through to
+     * free_monitor_objects() UNCONDITIONALLY. On a saturated band the decode
+     * does not finish in 4 s - the same capture shows dec=11136 ms through
+     * dec=12791 ms at cand=140, and FT8_DECODE_BUDGET_MS is itself 11000. So
+     * the wait expired, the monitors were freed, and the decode task carried
+     * on reading the waterfall it no longer owned.
+     *
+     * ⭐ Non-deterministic, which is why it had survived: the FIRST FT4 switch
+     * in the same capture succeeded, with dec=3207 ms - comfortably inside the
+     * 4 s. It only kills the board when the band is busy enough to be worth
+     * decoding.
+     *
+     * Two things wrong, and the bound was the lesser one. Waiting longer would
+     * only have made it rarer. Freeing a buffer another task is reading is
+     * never acceptable at any timeout, so a wait that expires now DEFERS the
+     * rebuild instead. This function runs at the top of every slot, so the
+     * retry costs one slot in the old sub-mode and nothing else. */
+    bool busy = true;
+    for (int guard = 0; guard < POOL_REBUILD_WAIT_MS / 10; guard++) {
+        busy = false;
+        for (int i = 0; i < FT8_NUM_BUFFERS; i++) if (s_buf_busy[i]) busy = true;
+        if (!busy) break;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    if (busy) {
+        ESP_LOGW(TAG, "sub-mode rebuild deferred - a decode is still running "
+                      "after %d ms; retrying next slot", POOL_REBUILD_WAIT_MS);
+        return;                      /* s_pool_proto unchanged -> we try again */
+    }
+
     free_monitor_objects();
     if (!build_monitor_pool(want)) {
         ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
