@@ -5,6 +5,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"   // xTaskCreatePinnedToCoreWithCaps - rx_hp stack in PSRAM
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -1890,8 +1891,30 @@ void rx_audio_init(void)
      * Core 0, so it cannot even compete with rx_audio's core. 3072 B covers
      * the two BSP calls and their I2C driver frames. Not fatal if it fails -
      * the speaker amp simply keeps whatever state the BSP left it in. */
-    BaseType_t hp = xTaskCreatePinnedToCore(rx_audio_headphone_task, "rx_hp", 3072,
-                                            NULL, 1, NULL, 0);
+    /* ⛔ STACK IN PSRAM, and the reason is a crash on the v1.16.5 bench.
+     *
+     * This task was added in 24c04fa with a default (INTERNAL) 3072-byte stack.
+     * Internal RAM on this board runs at a median of 13-21 KB free with
+     * `min=0KB` on essentially every build since v1.16.0, and 400 s into an
+     * idle panadapter session `sd_archive` aborted in newlib's
+     * lock_init_generic() - the documented "any task's first lock-needing call
+     * while internal heap is near zero" failure, already seen with diag_persist
+     * and spots, and the reason apply_newlib_lock_init_retry.ps1 exists. It
+     * retried and still could not get a lock.
+     *
+     * The shortage predates this task and the medians do not show v1.16.5 out
+     * of family (17 KB vs 18-19 KB on v1.16.4) - but 3 KB taken from a pool
+     * whose minimum is zero is not nothing, and it was mine to give back.
+     *
+     * ✅ Safe here, and checked rather than assumed: rx_hp is NOT on the
+     * psram-stack exclusion list (audio_task, fft_task, render_task, cat's
+     * link/poll tasks, ws_push_task - all excluded for measured latency). It
+     * wakes at 4 Hz, does two I2C transactions and sleeps. It has no latency
+     * requirement and touches no DMA buffer. It also never exits, so there is
+     * no vTaskDeleteWithCaps site to get wrong. */
+    BaseType_t hp = xTaskCreatePinnedToCoreWithCaps(rx_audio_headphone_task, "rx_hp",
+                                                    3072, NULL, 1, NULL, 0,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (hp != pdPASS)
         ESP_LOGW(TAG, "headphone follower task not created - speaker/jack "
                       "switching is inactive this session");
