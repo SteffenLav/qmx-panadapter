@@ -406,6 +406,10 @@ uint32_t ft8_get_timing_seq(void)
 // without a mutex.
 static monitor_t    *s_mon_pool[FT8_NUM_BUFFERS];
 static volatile bool s_buf_busy[FT8_NUM_BUFFERS];
+/* Set when a sub-mode rebuild is waiting for the decode queue to drain. While
+ * it is set the slot loop claims NO new monitor, so the in-flight decodes
+ * finish and nothing replaces them - see reinit_pool_if_mode_changed(). */
+static volatile bool s_pool_quiesce;
 // Protocol the pool is currently built for. The monitor's waterfall/block sizes
 // are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
 // so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
@@ -703,7 +707,12 @@ static bool build_monitor_pool(ftx_protocol_t proto)
 static void reinit_pool_if_mode_changed(void)
 {
     ftx_protocol_t want = proto_for_mode();
-    if ((int)want == s_pool_proto) return;
+    if ((int)want == s_pool_proto) {
+        /* Toggled back before the drain finished - nothing to rebuild, so let
+         * capture run again rather than leaving the loop paused for ever. */
+        s_pool_quiesce = false;
+        return;
+    }
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
              want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
@@ -741,11 +750,27 @@ static void reinit_pool_if_mode_changed(void)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (busy) {
-        ESP_LOGW(TAG, "sub-mode rebuild deferred - a decode is still running "
-                      "after %d ms; retrying next slot", POOL_REBUILD_WAIT_MS);
+        /* ⛔ DEFERRING ALONE WAS NOT ENOUGH, and the bench proved it within
+         * minutes. On a saturated band the decode runs 12-17 s against a 7.5 s
+         * FT4 slot, so a new job is queued before the last one finishes and
+         * the busy flags NEVER both clear. Measured 2026-09-25: four
+         * consecutive deferrals, and the operator's switch to FT8 simply never
+         * happened - the mode button silently did nothing. That is better than
+         * the crash it replaced and still not acceptable.
+         *
+         * So stop FEEDING the queue as well as waiting on it. With the quiesce
+         * flag set the slot loop claims no monitor, no new job is queued, and
+         * the backlog drains monotonically - which terminates, unlike waiting. */
+        if (!s_pool_quiesce) {
+            s_pool_quiesce = true;
+            ESP_LOGW(TAG, "sub-mode rebuild: a decode is still running after "
+                          "%d ms - pausing capture until the queue drains",
+                     POOL_REBUILD_WAIT_MS);
+        }
         return;                      /* s_pool_proto unchanged -> we try again */
     }
 
+    s_pool_quiesce = false;          /* drained - capture may resume */
     free_monitor_objects();
     if (!build_monitor_pool(want)) {
         ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
@@ -2072,6 +2097,14 @@ static void ft8_task(void *arg)
             // the opposite slot is the only way to hear the station we're
             // working (they transmit on the slot opposite ours). Skipping it
             // would make CQ-replies and QSO responses invisible.
+            /* A sub-mode rebuild is waiting for the queue to drain: claim
+             * nothing, so the decodes in flight are the last ones. */
+            if (s_pool_quiesce) {
+                ft8_status_set("RX: switching sub-mode...");
+                slot_idx++;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
             int bi = find_free_buffer();
             if (bi < 0) {
                 // All monitors in flight: the decoder has fallen behind (a run of
