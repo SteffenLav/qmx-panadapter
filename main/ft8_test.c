@@ -1486,9 +1486,24 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         if (xQueueSend(wctx->jobs, &jp, 0) == pdTRUE) dispatched = true;
     }
 
+    /* ⭐ WHERE THE DECODE TIME ACTUALLY GOES - measured, because dec_ms alone
+     * cannot say. dec_ms spans the WHOLE of decode_slot: candidate search, both
+     * LDPC halves and the join. FT8_DECODE_BUDGET_MS only guards BETWEEN
+     * candidates inside decode_candidate_range(), so a slot can overshoot it
+     * anywhere the budget never looks.
+     *
+     * Measured on bench dev 2026-09-25 in FT4 sim: dec=28010 ms against an
+     * 11000 ms budget, with idle0 at 0.0%. Three very different causes fit that
+     * one number - a slow candidate search, a single long candidate, or the
+     * core-0 half simply starved of CPU so the join waits on it - and they need
+     * opposite fixes. Splitting it is two timer reads on a path that runs once
+     * a slot. */
+    int64_t t_search_done = esp_timer_get_time();
+
     // Our half (even indices).
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
                            t_start, start_off_ms, true, &r_main);
+    int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
         xSemaphoreTake(wctx->done, portMAX_DELAY);
@@ -1543,7 +1558,19 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         s_timing_seq++;                   // bump after BOTH raw + applied are set
     }
 
-    int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000);
+    int64_t t_join_done = esp_timer_get_time();
+    int dec_ms    = (int)((t_join_done - t_start) / 1000);
+    /* search = candidate detection; main = this task's half; join = waiting for
+     * the core-0 helper AFTER our own half finished. A large join with a small
+     * main means the helper is starved, not slow. */
+    int search_ms = (int)((t_search_done - t_start) / 1000);
+    int main_ms   = (int)((t_main_done - t_search_done) / 1000);
+    int join_ms   = (int)((t_join_done - t_main_done) / 1000);
+    if (dec_ms > 3000)
+        ESP_LOGW(TAG, "slot %d: decode %d ms = search %d + main %d + join %d "
+                      "(cand=%d, budget %d)",
+                 slot_idx, dec_ms, search_ms, main_ms, join_ms,
+                 n_cand, FT8_DECODE_BUDGET_MS);
 
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
