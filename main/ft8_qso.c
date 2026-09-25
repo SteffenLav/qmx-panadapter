@@ -2623,6 +2623,25 @@ static void ft8_qso_advance_body(int64_t slot_sec)
     if (st == FT8_QSO_WAIT_DONE) {
         // Final (73/RR73) armed or fired; once it leaves the air we're done.
         if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
+            /* ⭐ HOW LONG THE WRAP-UP ACTUALLY TAKES - Gyula HA3HZ, 2026-09-25:
+             * "You have to wait for the save to be made to the LOG and this is
+             * where the controller becomes slow, because the save process is
+             * also time-consuming ... there is not enough time to respond after
+             * saving the LOG."
+             *
+             * He is describing a cost nothing has ever measured. This whole
+             * branch runs on the DECODE task and is synchronous: a
+             * settings_load_all(), a decode-table snapshot, spots lookups, and
+             * adif_log_record()'s fopen/fprintf/fsync/fclose to the card. Any
+             * of them could be the expensive one, and guessing which would be
+             * the usual mistake.
+             *
+             * So: total for the branch, and the ADIF write on its own. Logged
+             * once per completed QSO - not a hot path - and it costs two
+             * timer reads. Until these numbers exist, nothing here should be
+             * restructured and the TX timing certainly should not be. */
+            int64_t wrap_t0 = esp_timer_get_time();
+            int64_t adif_us = 0;
             lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
@@ -2760,7 +2779,9 @@ static void ft8_qso_advance_body(int64_t slot_sec)
                 ESP_LOGW(TAG, "not logging %s again - same call/band logged %llds ago",
                          target, (long long)((int64_t)time(NULL) - s_logged_ts));
             } else {
+                int64_t adif_t0 = esp_timer_get_time();
                 adif_log_record(&qso);
+                adif_us = esp_timer_get_time() - adif_t0;
                 strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
                 s_logged_call[sizeof(s_logged_call) - 1] = '\0';
                 s_logged_freq_hz = qso.freq_hz;
@@ -2771,6 +2792,13 @@ static void ft8_qso_advance_body(int64_t slot_sec)
             // the case the unattended pickers must not pick up again.
             note_worked_now(target, qso.freq_hz);
             s_fd_their_exch[0] = '\0';
+            /* The number Gyula's report rests on. "slow" is not a
+             * measurement; this is. If the branch total turns out to be small
+             * and he still sees the panel stall, the cost is somewhere else
+             * entirely and the log write is innocent. */
+            ESP_LOGI(TAG, "QSO wrap-up took %lld ms (ADIF write %lld ms)",
+                     (long long)((esp_timer_get_time() - wrap_t0) / 1000),
+                     (long long)(adif_us / 1000));
         }
         return;
     }
