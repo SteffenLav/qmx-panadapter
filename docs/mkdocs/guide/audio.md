@@ -136,12 +136,37 @@ All four audio level controls live in **Audio Settings** (settings drawer → Au
 
 All four are remembered across restarts and travel in a config backup.
 
+**AGC presets.** Four buttons under the sliders set the timing in one tap:
+
+| Preset | Attack | Release | For |
+|---|---|---|---|
+| **Fast** | 1 ms | 30 ms | CW |
+| **Med** | 3 ms | 150 ms | general, and the shipped default |
+| **Slow** | 5 ms | 400 ms | SSB, where a fast release pumps on speech pauses |
+| **Off** | — | — | no automatic gain at all |
+
+Move either slider and the caption reads **Custom** — the sliders *are* the
+custom setting, so there is no fifth button.
+
+**Off is a real bypass, not a very slow AGC.** The gain follows the signal at
+every attack and release value, so no combination of the sliders switches it
+off. With **Off** selected the gain is pinned at **AGC Ceiling**, and that
+slider becomes a plain manual gain control.
+
+⚠ **What to expect when you try them.** The AGC only starts regulating once a
+signal is strong enough; below that it already sits at the ceiling, so the gain
+is the same number whether the AGC is on or off. On a quiet band **every preset
+correctly sounds identical** — the difference is heard in how fast the noise
+returns between signals when the band is busy. The attack values (1–5 ms) are
+all far quicker than the ear resolves; **Release** is the audible one.
+
 **Volume and Ceiling are not the same thing.** Volume sets how loud the output is; Ceiling decides how hard a weak signal is lifted before it gets there. Running Volume to 100 does not mean you have run out of level — if it is still too quiet, raise **AGC Ceiling**.
 
 ### What changed in v1.16.3
 
 - **AGC Ceiling was called "Gain".** The name was wrong: it never was a plain gain, it is the ceiling on the AGC's own weak-signal boost, and calling it Gain led people to look for an AGC that was already there. Its range also went up from 800 to 1500, because the Tab5's internal speaker wants more headroom than the old ceiling allowed.
 - **Attack and Release are new** — the AGC's timing was fixed before, and is now yours to set.
+- **Presets arrived in v1.16.5** *(Samuel W7STF)*, along with a genuine **Off**.
 - **RX Volume moved here from the settings drawer**, and the drawer's RX Audio section is gone entirely. That includes its on/off box: **Audio Settings is now the only place to switch RX audio on or off.**
 
 ### What changed in v1.16.4

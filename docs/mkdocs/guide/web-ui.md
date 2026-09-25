@@ -122,12 +122,24 @@ own callsign stands out, as on the Tab5.
 
 **Click a station to work it** (at the operator's own
 request). The confirm dialog states what will happen, and then the browser runs
-the **same intelligent Transmit a Tab5 row-tap runs**: a fresh CQ starts the full
-automatic QSO (you are not in front of the radio to click each exchange step);
-anything mid-exchange sends the one correct next message. The outcome comes back
-in plain words under the TX banner - "Armed: ...", "Busy: working X", or a refusal
-if the station has aged out of the list, because transmitting at a station that
-may have left is worse than asking you to click again.
+the **same intelligent Transmit a Tab5 row-tap runs**: anything that opens an
+exchange starts the **full automatic QSO** — whether you are answering a CQ or
+answering someone who called *you* — because you are not in front of the radio
+to click each step. A closing 73 still goes out as a single message. The outcome
+comes back in plain words under the TX banner - "Armed: ...", "Working X (auto
+QSO)", or a refusal if the station has aged out of the list, because
+transmitting at a station that may have left is worse than asking you to click
+again.
+
+**You can pick your next station before the current one has finished.** From the
+moment your closing 73 is armed the exchange is settled, but it is not *over*
+for the best part of a minute — long enough for the caller you wanted to drop
+off the list. Clicking one during that window used to answer "Busy: working X"
+and discard the choice. It is now **held** and acted on the moment the machine
+is free, reported as "Queued: X, after this exchange". The callsign is what is
+remembered, not the prepared message, so the reply is built fresh from the live
+decode when it is actually sent. **Auto Pounce** on the Tab5 itself behaves the
+same way.
 
 **Who is calling you.** Below the table, the **pileup** - stations answering you
 while you are busy - each clickable with the same confirm. And the **grey-list**

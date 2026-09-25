@@ -123,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.5 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.4** fixes four faults operators found in their own shacks, mutes the speaker when headphones go in, and root-causes the long-running SD write problem.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.5** makes the decoder keep up with a busy band, gives FT4 the head start FT8 already had, and fixes a crash when switching between the two.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -139,6 +139,8 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     twice the room. **Your settings, QSO log and LoTW certificate are kept** —
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
+
+**v1.16.5 makes the decoder keep up with the band.** ⭐ **Decoding is two to three times faster and stops dropping stations on a busy band** — a slot's decode was taking 11-14 seconds, longer than an FT8 slot, so the message that decides your next transmission arrived after the moment to send it had passed. Work is now taken as each processor becomes free instead of split in half in advance: **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates a slot were abandoned, **3-15 stations per slot instead of 0-3**. **FT4 stops recording 2.5 seconds of silence** before deciding what to say. **Pick your next station while the closing 73 is still going out** *(Randy N4OPI)*, and **a station calling you out of the blue starts a full automatic QSO**. **AGC presets — Fast, Med, Slow and Off** *(Samuel W7STF)*. **The WiFi page says which network you are actually on.** And **switching between FT8 and FT4 could crash the unit** — fixed.
 
 **v1.16.4 fixes four faults operators found in their own shacks.** **A station answering your CQ is answered in the very next slot — every time** *(Gyula HA3HZ)*: decoding is split across both processors and only one half could act on a caller, so the same situation replied immediately about half the time and a cycle late the rest. **Waiting for a busy station really is capped at six minutes now** — the counter reset instead of latching, so it could wait over half an hour and never got back to calling them either. **Headphones silence the internal speaker** *(Roy KI0ER)*. **Resource Management is renamed Audio Settings**, with its own button in the settings drawer. **Preferred network actually decides which WiFi you join** *(Randy N4OPI)*. **A restart caused by a power brownout says so** *(Samuel W7STF)*. ⭐ And the recurring **SD "dot goes yellow and writes stop" is root-caused** — the card driver is refused a memory buffer, so the write never reaches a card that is mounted and healthy. ⚠ Audio still breaks up while a browser has the panadapter open.
 
@@ -289,7 +291,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.4.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.5.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

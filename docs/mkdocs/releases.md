@@ -4,6 +4,23 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.5** — 2026-09-25
+
+**The decoder stops taking two slots to do one slot's work, three things operators asked for while operating, and a crash nobody had hit yet.**
+
+- ⭐ **Decoding is two to three times faster, and stops dropping stations.** On a crowded band a slot's decode took **11-14 seconds** — longer than an FT8 slot, nearly twice an FT4 one — so the answer that decides your next transmission arrived after the moment to send it had passed. Work is split across both processors, and the split was decided before either had run. The second processor also carries USB, WiFi and the display, and measured at **0.1% of its own capacity** while drawing the spectrum, so one half finished in 1.4 seconds and waited nine more for the other. Work is now taken as each becomes free, and the slower one left out when it contributes nothing. **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates a slot were abandoned, **3-15 stations decoded per slot instead of 0-3**. An FT4 decode now finishes inside its own 7.5 second slot.
+- **FT4 stops listening to an empty slot before deciding what to say.** FT8 has cut its capture short since v1.14; FT4 never got it. FT4 transmits for 5.0 of its 7.5 seconds, so **2.5 seconds of silence** were recorded before the decode could start — landing the result 2.0 seconds into the next slot against a 2.06 second deadline. Every reply was within 60 milliseconds of missing its turn.
+- **Pick your next station while the closing 73 is still going out** *(Randy N4OPI)*. Clicking a caller in that window answered *"Busy: working …"* and threw the choice away — and that window is most of a minute, long enough for the station to leave the list. The choice is held and acted on as soon as the machine is free, and the reply is built fresh when it is sent. Same for **Auto Pounce** on the Tab5.
+- **A station calling you out of the blue starts a full automatic QSO** *(Randy N4OPI)*. It armed one message and left the rest to be clicked by hand — the sequencer ran only when answering a CQ, which is backwards: someone calling while you are busy is exactly when nobody is at the screen.
+- **AGC presets — Fast, Med, Slow and Off** *(Samuel W7STF)*, in Audio Settings, with the sliders as Custom. **Off** is a real bypass, not a very slow setting, and makes AGC Ceiling a plain manual gain. ⚠ The AGC only regulates once a signal is strong enough; on a quiet band every preset correctly sounds the same.
+- **The WiFi page says which network you are actually on**, and warns when a preferred network will take over at the next restart *(Randy N4OPI)*.
+- **Switching between FT8 and FT4 could crash the unit.** Buffers were freed after a four second wait whether or not the decoder had finished — and on a busy band it had not. Non-deterministic, which is why it survived.
+- **One bad reading no longer switches the speaker**, and following the jack moved off the audio path — late writes to the sound hardware fell from about 7% to under 2%. Audio is measurably cleaner than v1.16.4 even with the jack untouched.
+
+⚠ Still unfixed: audio breaks up while a web page is open; with WiFi on, SD writes stop within about 30 seconds of boot.
+
+## Previous Releases
+
 **v1.16.4** — 2026-09-25
 
 **Four faults operators found in their own shacks, headphones behaving as everyone expected, and the measurement that finally explains the SD card.**
