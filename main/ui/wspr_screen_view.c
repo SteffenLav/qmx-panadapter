@@ -720,7 +720,16 @@ static void bp_apply(int k)
      * poll, and a band change the operator just asked for must not be the
      * write that gets dropped. */
     wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
+    /* ⭐ AND TELL THE TOP BAR. John W5JSS, 2026-09-25: the WSPR page showed
+     * 20 m / 14.09 MHz while the top bar read 1.837 MHz, which is the value
+     * main.c restores at boot ("Restored last VFO"). It is display-only and is
+     * normally overwritten by the FA poll - but WSPR retunes and then the poll
+     * is PAUSED for the whole 110 s burst, so the stale figure is what the
+     * operator reads at exactly the moment they are checking whether the
+     * beacon is on the right band. Optimistic, same as every other deliberate
+     * retune in this project; the FA poll confirms it either way. */
     cat_set_frequency_forced(kBands[i].dial_hz);
+    ui_update_frequency(kBands[i].dial_hz);
     bp_button_refresh();
 }
 
@@ -1181,7 +1190,16 @@ static void hop_maybe(void)
     s_hop_done_cycle = next_cycle;
     settings_set_wspr_dial_hz(kBands[pick].dial_hz);
     wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
+    /* ⭐ AND TELL THE TOP BAR. John W5JSS, 2026-09-25: the WSPR page showed
+     * 20 m / 14.09 MHz while the top bar read 1.837 MHz, which is the value
+     * main.c restores at boot ("Restored last VFO"). It is display-only and is
+     * normally overwritten by the FA poll - but WSPR retunes and then the poll
+     * is PAUSED for the whole 110 s burst, so the stale figure is what the
+     * operator reads at exactly the moment they are checking whether the
+     * beacon is on the right band. Optimistic, same as every other deliberate
+     * retune in this project; the FA poll confirms it either way. */
     cat_set_frequency_forced(kBands[pick].dial_hz);
+    ui_update_frequency(kBands[pick].dial_hz);
     bp_button_refresh();   /* the hop changed the dial - say so on the button */
     ESP_LOGI(TAG, "band hop -> %sm (%lu Hz) for the cycle starting in %llds",
              kBands[pick].name, (unsigned long)kBands[pick].dial_hz,
@@ -2567,6 +2585,7 @@ void wspr_screen_view_tick(void)
                      * this page hears anything at all must not be the one that
                      * gets dropped. */
                     cat_set_frequency_forced(want);
+                    ui_update_frequency(want);   /* see the band-change note above */
                     s_dial_settle_us = esp_timer_get_time() + 3000000;
                     ESP_LOGW(TAG, "dial: pushed %lu Hz to the radio (was %lu)",
                              (unsigned long)want, (unsigned long)have);

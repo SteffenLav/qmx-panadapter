@@ -50,6 +50,29 @@ static void close_modal(void)
 
 static void minus_cb(lv_event_t *e) { (void)e; s_offset_days--; refresh(); }
 static void plus_cb(lv_event_t *e)  { (void)e; s_offset_days++; refresh(); }
+/* ⛔ ONE DAY AT A TIME IS NOT ENOUGH, and a real user proved it.
+ *
+ * This window was built for the realistic error - "the day I last used it", a
+ * few days back - and ± a day is right for that. John Dusek, 2026-09-26: a
+ * fresh install that had never been online showed **2023**, and stepping a day
+ * at a time to reach today is roughly a thousand taps. "THAT's a problem", and
+ * he is right.
+ *
+ * Month and year steps rather than a typed date: the window has no keyboard by
+ * design (two taps beat typing a date on glass at a park table), and three
+ * step sizes reach any plausible error in a handful of presses while keeping
+ * that property. 30 and 365 days are deliberately approximate - this sets a
+ * date the operator then CONFIRMS by reading it, so landing near and nudging
+ * with ± day is the intended way to use it.
+ *
+ * ⚠ The real fix for John is not this window at all: the clock is a SYMPTOM of
+ * never having been online, and it corrects itself from SNTP or a GPS-equipped
+ * QMX the moment the network works. This only stops the manual path being
+ * unusable meanwhile. */
+static void minus_mon_cb(lv_event_t *e) { (void)e; s_offset_days -= 30;  refresh(); }
+static void plus_mon_cb(lv_event_t *e)  { (void)e; s_offset_days += 30;  refresh(); }
+static void minus_yr_cb(lv_event_t *e)  { (void)e; s_offset_days -= 365; refresh(); }
+static void plus_yr_cb(lv_event_t *e)   { (void)e; s_offset_days += 365; refresh(); }
 
 static void ok_cb(lv_event_t *e)
 {
@@ -131,8 +154,17 @@ static void build(void)
 
     lv_obj_t *minus = make_btn(p, "- day", 0x2a3a4a, 150, 90, minus_cb);
     lv_obj_align(minus, LV_ALIGN_LEFT_MID, 0, 20);
+    /* Coarse steps above the day buttons - see minus_mon_cb(). */
+    lv_obj_t *minus_mo = make_btn(p, "- mth", 0x24303c, 150, 60, minus_mon_cb);
+    lv_obj_align(minus_mo, LV_ALIGN_LEFT_MID, 0, -50);
+    lv_obj_t *minus_yr = make_btn(p, "- year", 0x24303c, 150, 60, minus_yr_cb);
+    lv_obj_align(minus_yr, LV_ALIGN_LEFT_MID, 0, -118);
     lv_obj_t *plus = make_btn(p, "+ day", 0x2a3a4a, 150, 90, plus_cb);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 20);
+    lv_obj_t *plus_mo = make_btn(p, "+ mth", 0x24303c, 150, 60, plus_mon_cb);
+    lv_obj_align(plus_mo, LV_ALIGN_RIGHT_MID, 0, -50);
+    lv_obj_t *plus_yr = make_btn(p, "+ year", 0x24303c, 150, 60, plus_yr_cb);
+    lv_obj_align(plus_yr, LV_ALIGN_RIGHT_MID, 0, -118);
 
     s_lbl_date = lv_label_create(p);
     lv_obj_set_style_text_color(s_lbl_date, lv_color_hex(0xFFC864), 0);

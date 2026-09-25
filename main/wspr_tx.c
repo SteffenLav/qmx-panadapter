@@ -3,6 +3,7 @@
 // TA; "Transmit Audio" technique as ft8_tx.c).
 
 #include "wspr_tx.h"
+#include "ui.h"        // ui_toast_ms - a refusal the operator can act on must reach the screen
 #include "ui/power_cal_modal.h"   // power_cal_dbm_for_watts - the ONE watts->dBm rule
 #include "wspr_proto.h"
 #include "wspr_fano.h"
@@ -416,6 +417,16 @@ static void run_burst(const wspr_tx_request_t *req)
                       "still declare %d dBm to the world. Run Calibrate Power on "
                       "this band first.",
                  pa_x10 / 10, pa_x10 % 10, req->power_dbm);
+        /* ⭐ AND ON THE SCREEN. John W5JSS, 2026-09-25: his beacon went quiet,
+         * the QMX showed no S, nothing was spotted, and he spent an evening on
+         * the radio hardware before falling back to Virtual U3S. The firmware
+         * had made a correct decision and written it only to a log file nobody
+         * reads until they think to send it - the same gap the v1.16.4 brownout
+         * toast closed. A refusal the operator can ACT on has to reach them.
+         * 12 s: long enough to catch across the room, short enough not to sit
+         * over the waterfall. */
+        ui_toast_ms("WSPR did not transmit: this band is not calibrated. "
+                    "Run Calibrate Power on it.", 12000);
         s_state = WSPR_TX_IDLE;
         return;
     }
@@ -426,6 +437,9 @@ static void run_burst(const wspr_tx_request_t *req)
                       "wrong - and key the finals for ~110 s at more than declared. "
                       "Set Declared power to match, or recalibrate this band.",
                  wbuf[0] ? wbuf + 3 : "?", pa_dbm, req->power_dbm);
+        /* Same reasoning as the calibration refusal above. */
+        ui_toast_ms("WSPR did not transmit: the radio's power does not match "
+                    "the declared power. Fix Declared power or recalibrate.", 12000);
         /* run_burst() returns void and owns the state machine, so the refusal
          * looks exactly like a burst that ended: back to IDLE, nothing keyed,
          * and the slot loop schedules the next cycle as usual. */
