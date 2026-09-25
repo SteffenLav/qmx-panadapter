@@ -1274,6 +1274,41 @@ static void update_parity_btns(void);   // defined with the button, used by the 
 // a toast on the Tab5 is invisible from another room.
 static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
 static volatile bool s_web_reply_pending;
+/* How long a pick may sit waiting for the closing 73 to finish (Randy N4OPI,
+ * 2026-09-25). 0 = nothing queued.
+ *
+ * "When in an exchange, I have received an RR73, and I'm queued up to auto
+ * transmit my 73, I'd like to be able to click my next target CQ caller from
+ * the list. As it functions now, I have to wait for my 73 to finish
+ * transmitting and the exchange to be logged before I can pick a new target,
+ * which is a few seconds into the next cycle, and by then the caller I wanted
+ * to reach may have cleared from the display."
+ *
+ * The refusal he is hitting is real and the QSO machine is right to make it -
+ * but only for the states where a new target would CLOBBER a live exchange.
+ * FT8_QSO_WAIT_DONE is not one of those: the outcome is already decided, the
+ * closing message is armed, and nothing the operator picks now can change it.
+ * WAIT_DONE is also the LONGEST of the busy states from the operator's point
+ * of view - it is entered the moment the 73 is armed, which is typically ~15 s
+ * before the burst even starts, and it is not cleared until the next decode
+ * slot's ft8_qso_advance() sees TX idle, so it can refuse for most of a minute.
+ * That is the window his caller disappears in.
+ *
+ * So a pick made during WAIT_DONE is HELD rather than refused, and retried by
+ * the same 1 Hz drain until the machine is free.
+ *
+ * ⭐ THE CALLSIGN IS QUEUED, NOT THE BUILT REQUEST. web_reply_drain() derives
+ * everything - decode row or pileup fallback, report, tone, TX1-vs-report-first
+ * - at the moment it runs. Freezing a request built up to a minute earlier
+ * would transmit a stale report at a station whose row may have been refreshed
+ * (or aged out into the pileup) in between. Re-running the whole drain costs
+ * one table scan a second and is always current.
+ *
+ * Bounded on purpose: an exchange that does not end - a TIMEOUT that never
+ * advances, the FT8 view hidden - must not leave a pick to fire minutes later
+ * unasked. That is the same hazard the CQ flag's comment warns about. */
+#define WEB_REPLY_QUEUE_MAX_MS 90000
+static int64_t s_web_reply_queued_us;   /* 0 = not queued; else when it was */
 // Mid-QSO override requested from the browser (#205, Randy N4OPI: operating FT8
 // "from another room or location", where the Tab5's Re-send / RR73 / 73 buttons
 // and its tap-to-cancel are out of reach). Same deferral as the reply flag - the
@@ -1418,10 +1453,39 @@ static void web_reply_drain(void)
 
     char busy_target[24];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        /* WAIT_DONE = the closing 73/RR73 is armed and the exchange's outcome
+         * is settled. Hold the pick instead of dropping it, and let the next
+         * 1 Hz tick try again - see WEB_REPLY_QUEUE_MAX_MS. Every OTHER busy
+         * state still refuses outright: those are live exchanges, and starting
+         * a second one would clobber the first, which is exactly what
+         * ft8_qso_start()'s own guard exists to prevent. */
+        if (ft8_qso_get_state() == FT8_QSO_WAIT_DONE) {
+            int64_t now = esp_timer_get_time();
+            if (s_web_reply_queued_us == 0) s_web_reply_queued_us = now;
+            if (now - s_web_reply_queued_us <
+                (int64_t)WEB_REPLY_QUEUE_MAX_MS * 1000) {
+                /* Put it back for the next tick. Deliberately re-armed rather
+                 * than held in a second variable: a newer click overwrites
+                 * s_web_reply_call and simply wins, which is what a second
+                 * pick means. */
+                snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
+                s_web_reply_pending = true;
+                web_result_set("Queued: %s, after this %s", call,
+                               busy_target[0] ? "exchange" : "transmission");
+                return;
+            }
+            s_web_reply_queued_us = 0;
+            web_result_set("Gave up waiting to call %s", call);
+            ESP_LOGW(TAG, "web reply: queued pick '%s' expired after %d s",
+                     call, WEB_REPLY_QUEUE_MAX_MS / 1000);
+            return;
+        }
+        s_web_reply_queued_us = 0;
         if (busy_target[0]) web_result_set("Busy: working %s", busy_target);
         else                web_result_set("Busy: calling CQ");
         return;
     }
+    s_web_reply_queued_us = 0;   /* got through - the queue is spent */
 
     ft8_tx_request_t req;
     bool is_fresh_grid = false;
@@ -1652,6 +1716,10 @@ static void t_clock_cb(lv_timer_t *t)
         } else {
             s_web_reply_pending = false;
             s_web_reply_call[0] = '\0';
+            /* Clear the queue clock with it. Leaving it set would hand the
+             * NEXT pick a start time from minutes ago, so its very first
+             * tick would read as already expired. */
+            s_web_reply_queued_us = 0;
             web_result_set("Not in FT8 mode");
             ESP_LOGW(TAG, "web reply request ignored - not in FT8 mode");
         }
