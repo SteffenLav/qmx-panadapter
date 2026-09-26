@@ -69,6 +69,9 @@
 #include "adif/adif_log.h"
 #include "util/psram_task.h"
 #include "util/usb_replug.h"
+#include "util/heap_watch.h"   /* INSTRUMENT 2026-09-26 - the 84 zero-dips */
+#include "cJSON.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "main";
 
@@ -101,6 +104,30 @@ static const char *TAG = "main";
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+
+
+/* ⭐ cJSON OUT OF INTERNAL RAM (2026-09-26).
+ *
+ * MEASURED, not assumed: heap_watch's per-task attribution caught the `httpd`
+ * task growing +8688 B across 311 BLOCKS inside a single internal-RAM dip,
+ * and `httpd` was also the task whose 116 B allocations were being refused.
+ * webserver.c makes 495 cJSON_Add* calls, each of which allocates a node and
+ * often a string, and cJSON had NO allocator hooks anywhere in the tree - so
+ * every one of them came out of internal RAM, the scarcest pool on the board.
+ *
+ * JSON never needs to be DMA-capable or internal: it is built, printed into
+ * the socket, and freed. PSRAM is 14 MB free and idle.
+ *
+ * Hooks are global and must be installed before ANY cJSON use. heap_caps_free
+ * handles both pools, so anything allocated before this point still frees
+ * correctly. Falls back to internal RAM if PSRAM ever refuses, because a
+ * failed API response is worse than a small internal allocation. */
+static void *qmx_json_malloc(size_t sz)
+{
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
+static void qmx_json_free(void *p) { heap_caps_free(p); }
 
 void app_main(void)
 {
@@ -236,6 +263,11 @@ void app_main(void)
     // card (POTA: log in the field, analyse at home). Background task, 256 KB
     // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
+    /* Start early: the dips begin about 30 min in, but an allocation that
+     * FAILS during boot is exactly the SD/BLE symptom we are chasing. */
+    heap_watch_start();
+    { cJSON_Hooks h = { .malloc_fn = qmx_json_malloc, .free_fn = qmx_json_free };
+      cJSON_InitHooks(&h); }
 
     // TEMP INSTRUMENT, ANSWERED AND STOOD DOWN AGAIN 2026-09-20. Re-armed at
     // 180/420/600 s to find who holds MALLOC_CAP_DMA once it settles (~8-12 KB

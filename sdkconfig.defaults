@@ -281,6 +281,11 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # slot with internal heap min at 1 KB. Turn it on only to run
 # /api/cmd {"action":"dma_owners"}, and turn it off again before measuring or
 # releasing anything. dma_owners_report() compiles to a stub without it.
+# TEMP 2026-09-26 - ON to name the owner of the 60 ms internal-RAM dips
+# (heap_watch.c). The dips run at 24/min and bottom at 143-191 B; tag
+# correlation and an RBN/cluster A/B both came back negative, so the only
+# thing left that answers "who" is per-task attribution.
+# TURN THIS BACK OFF before measuring timing or releasing anything.
 # CONFIG_HEAP_TASK_TRACKING is not set
 
 # NimBLE host task on CORE 1, not the IDF default of core 0.
