@@ -356,8 +356,14 @@ static void run_burst(const wspr_tx_request_t *req)
      * operator set by hand, or a band never calibrated). */
     char wbuf[20] = "";
     int8_t pa_dbm = -1;
+    /* Hoisted out of the block below so the REFUSAL can name them. John W5JSS,
+     * 2026-09-26, reading his own log: "It's not clear what the band is." He
+     * had two bands in play and the message named neither, so he could not
+     * tell which one to calibrate and lost an evening to it. */
+    uint32_t dial_hz  = cat_get_frequency();
+    const char *band  = adif_log_band_for_freq(dial_hz);
+    if (!band || !band[0]) band = "?";
     if (pa_x10 > 0) {
-        const char *band = adif_log_band_for_freq(cat_get_frequency());
         uint16_t w_x100;
         if (band && band[0] && power_cal_watts_for_voltage(band, (uint16_t)pa_x10, &w_x100)) {
             if (w_x100 < 100) snprintf(wbuf, sizeof(wbuf), " = %u mW", (unsigned)w_x100 * 10);
@@ -412,11 +418,13 @@ static void run_burst(const wspr_tx_request_t *req)
      * be the fault this paragraph replaced. Only a KNOWN voltage we cannot
      * price refuses. */
     if (pa_x10 > 0 && pa_dbm < 0) {
-        ESP_LOGE(TAG, "WSPR TX REFUSED: this band is not calibrated, so the radio's "
-                      "%d.%d V cannot be turned into watts - and the message would "
-                      "still declare %d dBm to the world. Run Calibrate Power on "
-                      "this band first.",
-                 pa_x10 / 10, pa_x10 % 10, req->power_dbm);
+        ESP_LOGE(TAG, "WSPR TX REFUSED on %s (%lu.%06lu MHz): this band is not "
+                      "calibrated, so the radio's %d.%d V cannot be turned into "
+                      "watts - and the message would still declare %d dBm to the "
+                      "world. Run Calibrate Power on %s first.",
+                 band, (unsigned long)(dial_hz / 1000000UL),
+                 (unsigned long)(dial_hz % 1000000UL),
+                 pa_x10 / 10, pa_x10 % 10, req->power_dbm, band);
         /* ⭐ AND ON THE SCREEN. John W5JSS, 2026-09-25: his beacon went quiet,
          * the QMX showed no S, nothing was spotted, and he spent an evening on
          * the radio hardware before falling back to Virtual U3S. The firmware

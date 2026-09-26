@@ -2675,11 +2675,20 @@ void wspr_screen_view_tick(void)
                 esp_timer_get_time() > s_dial_settle_us) {
                 if (have != s_last_mismatch) {
                     s_last_mismatch = have;
-                    ESP_LOGW(TAG, "dial MISMATCH: the radio is on %lu Hz but WSPR "
-                                  "is set to %lu Hz - every spot this cycle will be "
-                                  "filed against the WSPR setting, so its band is "
-                                  "wrong. Re-pick the band on this page to agree.",
-                             (unsigned long)have, (unsigned long)want);
+                    /* John W5JSS, 2026-09-26: "I don't understand what
+                     * 'filed against the WSPR setting' means." Say what is
+                     * actually reported to wsprnet and what to do, in words
+                     * that do not need this source file to decode. */
+                    ESP_LOGW(TAG, "dial MISMATCH: the radio is tuned to %lu.%06lu MHz "
+                                  "but this page is set to %lu.%06lu MHz. Spots heard "
+                                  "this cycle will be reported to wsprnet on the "
+                                  "page's frequency, not the one you are really "
+                                  "listening on, so they will show the wrong band. "
+                                  "Set the band on this page to match the radio.",
+                             (unsigned long)(have / 1000000UL),
+                             (unsigned long)(have % 1000000UL),
+                             (unsigned long)(want / 1000000UL),
+                             (unsigned long)(want % 1000000UL));
                 }
             } else {
                 s_last_mismatch = 0;
