@@ -12,9 +12,24 @@
 // exactly what a clean flash does to NVS, but selectively:
 //
 //   settings  -> erases the "user_nvs" partition (all app settings + memory
-//                channels). Keeps the ADIF QSO log and WiFi/system state.
-//   network   -> erases the default "nvs" partition (WiFi credentials, PHY
-//                calibration, esp_hosted state). Keeps all app settings.
+//                channels), EXCEPT the WiFi keys, which are saved before the
+//                erase and written back after. Keeps the ADIF QSO log and
+//                WiFi credentials.
+//   network   -> erases the default "nvs" partition (PHY calibration,
+//                esp_hosted state) AND the WiFi-specific keys inside
+//                "user_nvs" (credentials, static IP, remembered-network
+//                list). Keeps every other app setting.
+//
+// ⛔ Randy N4OPI, 2026-09-26: WiFi credentials live in "user_nvs" (see
+// storage/settings.c's single "qmx" namespace), NOT in the default "nvs"
+// partition this file used to assume. As originally written, "network" erased
+// a partition WiFi credentials do not live in (so "Reset WiFi" never touched
+// them), and "settings" erased the partition they DO live in (so "Reset
+// settings" took them despite its own tooltip promising otherwise). Both
+// buttons did the opposite of what their labels said. Fixed by pulling the
+// WiFi-specific keys out of "user_nvs" as a separate, named group — see
+// factory_reset.c's WIFI_KEYS table. Adding a new WiFi-related settings key
+// in settings.c means adding it to that table too.
 //
 // The erase is deferred to the *next* boot: a request sets a flag in RTC memory
 // (retained across esp_restart) and reboots; factory_reset_apply_pending() then

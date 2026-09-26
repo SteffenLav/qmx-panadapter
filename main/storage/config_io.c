@@ -631,7 +631,16 @@ int config_io_import(char *text)
     }
 
     if (filt_touched) settings_set_ft8_filters(&filt);
-    if (sip_touched)  settings_set_wifi_static(sip, smask, sgw, sdns);
+    if (sip_touched) {
+        settings_set_wifi_static(sip, smask, sgw, sdns);
+        /* Unbind, same reason as webserver.c's settings_post_handler: an
+         * imported address belongs to whatever network it next works on, not
+         * to the one the previous address (still bound from before this
+         * import) was for. Without this, restoring a config while on a
+         * different WLAN than the bound one silently keeps the old binding
+         * and the imported address is never applied. */
+        settings_set_wifi_static_ssid("");
+    }
     // Applied wholesale, in file order: see the buffer's declaration.
     if (known_touched) settings_wifi_known_set_all(known, known_n);
     if (kp_touched)  settings_set_freq_kp_pos(kp_dx, kp_dy);
