@@ -48,6 +48,28 @@ void screenshot_fb_row(uint32_t y, uint32_t x, uint32_t count, uint16_t *dst);
 
 void screenshot_fb_end(void);
 
+// Copy a w x h region out of the live frame buffer into a private PSRAM
+// buffer, in ONE lock hold, so the result is a single instant rather than
+// whatever the screen did across however long the caller then takes to send
+// it. Steffen OZ1LAV, 2026-09-26: a full-frame /ss.bmp over a slow WiFi link
+// takes up to ~15 s to leave (see ss_bmp_handler's own chunking comment), and
+// without this, every one of those ~15 s worth of rows is read live off the
+// panel as it keeps redrawing - the panadapter or waterfall moves mid-capture,
+// so the top of the image is an older frame than the bottom. A zig-zag, not
+// corruption.
+//
+// *out_buf is allocated in PSRAM and must be freed by the caller with
+// heap_caps_free(). Valid only between _begin() and _end() - like _row(),
+// this reads through the pointer _begin() set up.
+//
+// Returns ESP_ERR_NO_MEM if w*h*2 bytes of contiguous PSRAM aren't available
+// (the same contiguous-allocation problem screenshot_capture_rgb565() has,
+// just at whatever size the caller's crop asks for rather than always the
+// full 1.8 MB) - the caller should fall back to reading _row() live rather
+// than fail outright, exactly as it did before this existed.
+esp_err_t screenshot_fb_freeze(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                                uint16_t **out_buf);
+
 #ifdef __cplusplus
 }
 #endif

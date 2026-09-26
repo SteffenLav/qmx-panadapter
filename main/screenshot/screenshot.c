@@ -199,3 +199,29 @@ void screenshot_fb_end(void)
 {
     s_fb = NULL;
 }
+
+esp_err_t screenshot_fb_freeze(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                               uint16_t **out_buf)
+{
+    if (!s_fb || !out_buf) return ESP_ERR_INVALID_STATE;
+
+    size_t size = (size_t)w * (size_t)h * 2;
+    uint16_t *buf = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    /* One instant, not stitched across however long the caller takes to send
+     * it: hold the display lock for the whole copy so LVGL cannot render and
+     * flush a newer frame into the source buffer mid-read - same lock
+     * screenshot_capture_rgb565() already uses to freeze animations for the
+     * same reason. This is a raw memory copy (no render, no allocation
+     * happens inside the lock), so it holds the lock for on the order of a
+     * millisecond, not the ~15 s this data can take to leave over a weak
+     * WiFi link. */
+    bsp_display_lock(portMAX_DELAY);
+    for (uint32_t r = 0; r < h; r++)
+        screenshot_fb_row(y + r, x, w, buf + (size_t)r * w);
+    bsp_display_unlock();
+
+    *out_buf = buf;
+    return ESP_OK;
+}
