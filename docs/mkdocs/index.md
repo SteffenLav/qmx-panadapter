@@ -123,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.6 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.7 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.6** is a hotfix for an idle abort that is older than v1.16.5; **v1.16.5** makes the decoder keep up with a busy band, gives FT4 the head start FT8 already had, and fixes a crash when switching between the two.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.7** root-causes the idle abort - the web interface was building its JSON in the scarce internal memory pool, emptying it 24 times a minute - and ties a static IP to the network it belongs to; **v1.16.5** makes the decoder keep up with a busy band, gives FT4 the head start FT8 already had, and fixes a crash when switching between the two.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -140,7 +140,7 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
 
-**v1.16.6 is a hotfix.** The unit could abort while sitting idle — a background task could not get a lock because the small internal memory pool was exhausted. ⭐ **Not new in v1.16.5, and not caused by it**: that pool has run with a recorded minimum of zero on essentially every build since v1.16.0, and the same abort has happened twice before in other tasks — **v1.16.4 and earlier carry the same exposure**. v1.16.5's headphone task gives back the 3 KB it borrowed from that margin. ⚠ This reduces the exposure, it does not remove it.
+**v1.16.7 solves the idle abort.** v1.16.6 reduced the exposure and said the shortage was unchanged; it was, and the unit aborted twice more. Measured properly: **no leak** (20.5 h trends upward), but the internal pool was emptied **24 times a minute** for 60-360 ms, down to 143 bytes. ⭐ The cause was the web interface building its JSON replies in that pool - 495 pieces of one reply, 8.7 KB across 311 allocations - while 14 MB of external memory sat unused. Fixed: **24.1 droughts per minute became none**, free internal memory at rest 28 KB to 56 KB. ⚠ SD writes stopping ~30 s after boot is a SEPARATE shortage and is unchanged.
 
 **v1.16.5 makes the decoder keep up with the band.** ⭐ **Decoding is two to three times faster and stops dropping stations on a busy band** — a slot's decode was taking 11-14 seconds, longer than an FT8 slot, so the message that decides your next transmission arrived after the moment to send it had passed. Work is now taken as each processor becomes free instead of split in half in advance: **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates a slot were abandoned, **3-15 stations per slot instead of 0-3**. **FT4 stops recording 2.5 seconds of silence** before deciding what to say. **Pick your next station while the closing 73 is still going out** *(Randy N4OPI)*, and **a station calling you out of the blue starts a full automatic QSO**. **AGC presets — Fast, Med, Slow and Off** *(Samuel W7STF)*. **The WiFi page says which network you are actually on.** And **switching between FT8 and FT4 could crash the unit** — fixed.
 
@@ -293,7 +293,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.6.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.7.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

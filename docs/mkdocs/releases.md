@@ -4,6 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.7** - 2026-09-26
+
+**The idle abort is root-caused and fixed, and the cause was the web interface quietly eating the memory everything else needs.**
+
+- ⭐ **The idle abort is solved, not merely reduced.** Measuring it settled two things: there is **no leak** (20.5 hours untouched trends *upward*), and the internal pool was being emptied **24 times a minute** for 60-360 ms at a time, down to 143 bytes - too briefly for the old ten-second instrument to see.
+- ⭐ **The cause was the JSON the web interface builds** - 495 pieces of a single reply assembled in the scarce internal pool, caught taking 8.7 KB across 311 allocations, while 14 MB of external memory sat unused. It now builds there. **24.1 droughts per minute became none in nine minutes**, and free internal memory at rest went from 28 KB to 56 KB.
+- **The retry that should have absorbed it was 80 ms** - shorter than most of the droughts, and chosen before anyone measured them. Now two seconds.
+- **A static IP belongs to a network, not to the unit** *(Randy N4OPI)*. Take the Tab5 elsewhere and the old address was still applied: it joined, had no route, and the status just read **Off**. Now tied to the network it first works on; everywhere else uses DHCP.
+- **WSPR names the band it refused, and warns above 1 W before you lose the finals** *(John W5JSS)*. A burst is 110.6 s of continuous key-down and a lower PA voltage does not shorten it.
+- Also: refused transmissions appear on screen, the top bar follows a WSPR retune, the date editor steps in months and years *(John Dusek)*, the speaker turns **on** if the headphone detector cannot be read and the auto-mute can be switched off *(Samuel W7STF)*.
+
+⚠ SD writes can still stop about 30 seconds after boot with WiFi on - a separate shortage, confirmed again and untouched here.
+
+## Previous Releases
+
 **v1.16.6** — 2026-09-25
 
 **A hotfix for a crash that is older than the release it was found on.**
@@ -12,8 +27,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **What is fixed:** v1.16.5 moved the headphone-jack check onto its own task — a large improvement to audio timing — and that task took 3 KB of the scarce internal pool. Its working memory now lives in the plentiful external memory instead.
 
 ⚠ This reduces the exposure, it does not remove it. Everything in v1.16.5 is unchanged and still applies.
-
-## Previous Releases
 
 **v1.16.5** — 2026-09-25
 
