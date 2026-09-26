@@ -48,6 +48,7 @@ idf_component_register(
     "util/net_guard.c"
     "util/ip_guard.c"
     "util/sock_probe.c"
+    "util/heap_watch.c"
     "util/sock_owners.c"
     "util/ansi_term.c"
         "util/bandplan.c"
