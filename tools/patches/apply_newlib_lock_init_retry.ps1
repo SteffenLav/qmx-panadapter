@@ -25,10 +25,19 @@
 # at tens of ms to a few seconds - never hold a spinlock across a wait),
 # pause briefly, and try again - re-checking *lock first each time, in case
 # a racing thread initialised it while this one was waiting. Still aborts
-# after 5 attempts (~100 ms), preserving the exact original behaviour for
-# genuine, sustained exhaustion - this narrows the transient boot-time
-# window that caused both captured crashes, it does not claim to make
-# exhaustion impossible.
+# after 100 attempts (~2 s), preserving the original behaviour for genuine,
+# sustained exhaustion.
+#
+# 2026-09-26: THE BUDGET WAS 5 ATTEMPTS (~100 ms) AND THAT WAS TOO SHORT.
+# It was chosen before anyone had measured how long the trough lasts. A 50 Hz
+# sampler (main/util/heap_watch.c) measured the real events on a SHIPPING
+# build: internal free reaches 143-191 B for 60, 100, 121 and 361 ms, about
+# 24 times a minute, at steady state and not only at boot. So the retry
+# expired INSIDE a single ordinary dip and aborted - `sd_archive` at 641 s on
+# 2026-09-25 and again at 401 s on 2026-09-26, both decoding to
+# lock_init_generic at locks.c:80. 2 s covers the measured worst case with
+# more than 5x margin. The dips themselves are a separate, still-open fault;
+# this only stops them from being fatal.
 #
 # Edits the pinned IDF tree, so an IDF reinstall wipes it - per-build-machine,
 # like the other IDF-tree patches. Idempotent, marker-guarded.
@@ -118,7 +127,7 @@ static void IRAM_ATTR lock_init_generic(_lock_t *lock, uint8_t mutex_type)
             return;
         }
         portEXIT_CRITICAL(&lock_init_spinlock);
-        if (qmx_try >= 4) {
+        if (qmx_try >= 99) {
             abort(); /* No more semaphores available or OOM, after retrying */
         }
         vTaskDelay(pdMS_TO_TICKS(20));
