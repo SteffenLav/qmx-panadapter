@@ -1004,13 +1004,13 @@ static void process_cat_message(const char *msg, size_t len)
         size_t ulen = len - 3;
         if (ulen >= sizeof(s_qmx_uid)) ulen = sizeof(s_qmx_uid) - 1;
         memcpy(s_qmx_uid, msg + 2, ulen);
-        s_qmx_uid[ulen] = ' ';
+        s_qmx_uid[ulen] = '\0';
         bool hex = ulen >= 16;
         for (size_t i = 0; i < ulen && hex; i++)
             if (!isxdigit((unsigned char)s_qmx_uid[i])) hex = false;
         if (!hex) {
             ESP_LOGW(TAG, "QMX unique id not recognised ('%s') - ignoring", s_qmx_uid);
-            s_qmx_uid[0] = ' ';
+            s_qmx_uid[0] = '\0';
         } else {
             ESP_LOGI(TAG, "QMX unique id: %s", s_qmx_uid);
             settings_radio_identity_changed(s_qmx_uid);

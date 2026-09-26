@@ -121,6 +121,7 @@ static const char *TAG = "settings";
 #define KEY_DRAWER_EXPERT  "drw_expert"
 #define KEY_WIFI_KNOWN     "wifi_known"
 #define KEY_WIFI_PREF_SSID "wifi_pref"   // designated-preferred SSID, empty = none
+#define KEY_WIFI_STATIC_SSID "wifi_stssid" // the SSID the static IP belongs to, empty = unbound
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
@@ -413,7 +414,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_RXA_ATTACK      129  /* AGC attack time, ms */
 #define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
 #define DIRTY_RXA_AGCOFF      131  /* AGC bypass */
-#define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones; 27 spare */
+#define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones */
+#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for; 26 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -450,6 +452,7 @@ static const uint8_t s_config_export_bits[] = {
      * memory. config_io_export() prints all four. */
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
     DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_HP_MUTE,
+    DIRTY_WIFI_STATIC_SSID,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -469,6 +472,12 @@ static int          s_known_n = 0;
 // path runs on the system event task's <3 KB stack and must not pull in a
 // settings_load_all() copy of the ~1 KB qmx_settings_t just for one string.
 static char s_wifi_pref_ssid[33] = {0};
+/* The SSID the stored static IP was made for. Empty = not yet bound; it is
+ * bound on the first connection where the static config is actually used.
+ * Randy N4OPI, 2026-09-26: a static address had NO network context, so
+ * moving to another WLAN applied an address from the old one - the unit
+ * associates and then has no usable route, and the Tab5 just shows "Off". */
+static char s_wifi_static_ssid[33] = {0};
 
 static bool             s_ready          = false;
 static nvs_handle_t     s_nvs            = 0;
@@ -661,6 +670,13 @@ static void flush_task(void *arg)
         snprintf(pref, sizeof(pref), "%s", s_wifi_pref_ssid);
         xSemaphoreGive(s_mutex);
         nvs_set_str(s_nvs, KEY_WIFI_PREF_SSID, pref);
+    }
+    if (dirty_test(&dirty_local, DIRTY_WIFI_STATIC_SSID)) {
+        char own[33];
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        snprintf(own, sizeof(own), "%s", s_wifi_static_ssid);
+        xSemaphoreGive(s_mutex);
+        nvs_set_str(s_nvs, KEY_WIFI_STATIC_SSID, own);
     }
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
@@ -1169,9 +1185,16 @@ static void load_from_nvs(qmx_settings_t *out)
 
     // Designated-preferred network - see s_wifi_pref_ssid's declaration.
     {
-        s_wifi_pref_ssid[0] = ' ';
+        s_wifi_pref_ssid[0] = '\0';
         size_t psz = sizeof(s_wifi_pref_ssid);
         nvs_get_str(s_nvs, KEY_WIFI_PREF_SSID, s_wifi_pref_ssid, &psz);
+    }
+
+    // Which SSID the stored static IP belongs to - see s_wifi_static_ssid.
+    {
+        s_wifi_static_ssid[0] = '\0';
+        size_t ssz = sizeof(s_wifi_static_ssid);
+        nvs_get_str(s_nvs, KEY_WIFI_STATIC_SSID, s_wifi_static_ssid, &ssz);
     }
 
     if (nvs_get_u8(s_nvs, KEY_FIELD_DAY_EN, &u8v) == ESP_OK) out->field_day_en = (u8v != 0);
@@ -2939,7 +2962,7 @@ void settings_wifi_known_remember(const char *ssid, const char *pass)
 void settings_get_wifi_preferred_ssid(char out[33])
 {
     if (!out) return;
-    out[0] = ' ';
+    out[0] = '\0';
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     snprintf(out, 33, "%s", s_wifi_pref_ssid);
@@ -2954,6 +2977,26 @@ void settings_set_wifi_preferred_ssid(const char *ssid)
     if (changed) snprintf(s_wifi_pref_ssid, sizeof(s_wifi_pref_ssid), "%s", ssid ? ssid : "");
     xSemaphoreGive(s_mutex);
     if (changed) mark_dirty(DIRTY_WIFI_PREF);
+}
+
+void settings_get_wifi_static_ssid(char out[33])
+{
+    if (!out) return;
+    out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, 33, "%s", s_wifi_static_ssid);
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_set_wifi_static_ssid(const char *ssid)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = strcmp(s_wifi_static_ssid, ssid ? ssid : "") != 0;
+    if (changed) snprintf(s_wifi_static_ssid, sizeof(s_wifi_static_ssid), "%s", ssid ? ssid : "");
+    xSemaphoreGive(s_mutex);
+    if (changed) mark_dirty(DIRTY_WIFI_STATIC_SSID);
 }
 
 void settings_wifi_known_set_all(const wifi_known_t *list, int n)

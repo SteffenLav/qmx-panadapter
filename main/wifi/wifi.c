@@ -203,10 +203,34 @@ static void manual_netif_start(esp_event_base_t base, int32_t id, void *data)
  * bytes. Keep it that way; do not "simplify" this back to the whole struct. */
 typedef struct { char ip[16], mask[16], gw[16], dns[16]; } static_ip_cfg_t;
 
+/* ⛔ A STATIC ADDRESS BELONGS TO ONE NETWORK, NOT TO THE UNIT.
+ *
+ * This used to answer "is a static IP configured?" and nothing else, so the
+ * address from one WLAN was installed on every other one. Randy N4OPI,
+ * 2026-09-26: "it has no context as to which wireless network you are attached
+ * to ... it will connect but never authenticate. On the Tab5 the WLAN status
+ * will just show Off." The unit associates, gets an address from the wrong
+ * subnet, and has no usable route - with no message saying why, and a remote
+ * operator locks themselves out.
+ *
+ * The stored owner SSID is bound the first time the static config is actually
+ * used (see the GOT_IP path), so an operator who set one on their own network
+ * keeps exactly today's behaviour there, and is dropped to DHCP anywhere else.
+ */
 static bool static_ip_wanted(static_ip_cfg_t *out)
 {
     settings_get_wifi_static(out->ip, out->mask, out->gw, out->dns);
-    return out->ip[0] != '\0';
+    if (out->ip[0] == '\0') return false;
+
+    char owner[33];
+    settings_get_wifi_static_ssid(owner);
+    if (owner[0] && s_ssid[0] && strcmp(owner, s_ssid) != 0) {
+        ESP_LOGW(TAG, "static IP %s belongs to '%s' but this is '%s' - using DHCP "
+                      "instead. Set a static address again here if you want one.",
+                 out->ip, owner, s_ssid);
+        return false;
+    }
+    return true;
 }
 
 /* ⛔ esp_netif_str_to_ip4() RETURNS esp_err_t, AND ESP_OK IS 0.
@@ -614,6 +638,21 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         // means there is nothing for the operator to maintain - which is the
         // whole point of the request.
         settings_wifi_known_remember(s_ssid, s_pass);
+
+        /* Bind an unbound static address to the network it just worked on.
+         * Done HERE, on proven success, not when the operator types it: that
+         * way an existing configuration migrates itself with no UI step and no
+         * chance of binding to a network that never worked. */
+        {
+            char sip[16], smask[16], sgw[16], sdns[16], owner[33];
+            settings_get_wifi_static(sip, smask, sgw, sdns);
+            settings_get_wifi_static_ssid(owner);
+            if (sip[0] && !owner[0] && s_ssid[0]) {
+                settings_set_wifi_static_ssid(s_ssid);
+                ESP_LOGI(TAG, "static IP %s is now bound to '%s' - other networks "
+                              "will use DHCP", sip, s_ssid);
+            }
+        }
 
         // Announce qmx.local now that there is an interface to announce on.
         // Idempotent, so the reconnects and roams that are routine here cost

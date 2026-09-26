@@ -5071,6 +5071,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         // gateway or DNS has been filled in from the live lease, which is a
         // better answer than the /24 wifi.c would otherwise have guessed.
         settings_set_wifi_static(use.ip, use.mask, use.gw, use.dns);
+        /* Unbind: the new address belongs to whatever network it next works
+         * on, not to the one the previous address was for. wifi.c re-binds it
+         * on the next successful connect. Without this, editing a static
+         * address while on a different WLAN would save it and then ignore it. */
+        settings_set_wifi_static_ssid("");
         ESP_LOGI(TAG, "static IP set to '%s' mask %s gw %s dns %s - takes "
                       "effect on the next connect",
                  use.ip[0] ? use.ip : "(DHCP)",

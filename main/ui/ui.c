@@ -15180,6 +15180,7 @@ static void drawer_usedhcp_btn_cb(lv_event_t *e)
     ESP_LOGW(TAG, "operator cleared the static IP from the drawer - "
                   "restarting on DHCP");
     settings_set_wifi_static("", "", "", "");
+    settings_set_wifi_static_ssid("");   /* clearing the address clears its network too */
     settings_flush();           // must reach NVS before the restart
 
     lv_refr_now(NULL);
