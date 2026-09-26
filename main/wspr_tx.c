@@ -644,6 +644,31 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
         return false;
     }
 
+    /* ⭐ WARN ABOUT THE FINALS AT ARM TIME, NOT ONLY IN A DRAWER.
+     *
+     * A ">1 W" label exists in the WSPR drawer (ui.c), shown only when the dBm
+     * dropdown is already above 30 - so an operator who set the level once and
+     * never reopened that section never sees it. John W5JSS, 2026-09-26, had
+     * already blown BS170s, turned his PA voltage down, and was still running
+     * 2 W: "so it should be pretty safe". The PA voltage is not what protects
+     * them. A WSPR burst is 110.6 s of CONTINUOUS key-down - about nine times
+     * an FT8 slot with no gap to cool - and lowering the voltage does not
+     * shorten that. The operator's own radio read 0.310 A idle after running
+     * 2.5 W where a healthy one draws 0.100 A, which is leaky finals. Stan has
+     * said the QMX's own WSPR beacon runs at 1 W.
+     *
+     * This WARNS, it does not refuse: the declared power is the operator's
+     * call, and a refusal here would break anyone legitimately running a
+     * higher-power rig. It just has to be impossible to miss. */
+    if (req->power_dbm > 30) {
+        ESP_LOGW(TAG, "WSPR at %d dBm is above 1 W. A burst is 110.6 s of "
+                      "continuous key-down - about nine times an FT8 slot with "
+                      "no gap to cool - and a lower PA voltage does not shorten "
+                      "that. This is how BS170s are lost. The QMX's own beacon "
+                      "runs at 1 W.", req->power_dbm);
+        ui_toast_ms("WSPR above 1 W - 110 s of key-down risks the finals", 12000);
+    }
+
     // In a DRY-RUN build, a missing radio is not a reason to refuse. tx_cmd()
     // sends zero bytes when WSPR_TX_SEND_LIVE is 0, so the burst cannot key
     // anything, cannot mis-set a mode, and cannot reach the radio at all - the
