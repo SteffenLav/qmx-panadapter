@@ -8,9 +8,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 **Documentation:** [tab5.lav.dk](https://tab5.lav.dk) — the user guide, quick-start, and reference as plain web pages. A more approachable read than this page if you just want to set the device up; the source code and release downloads stay here on GitHub.
 
-![Panadapter on M5Stack Tab5 — QMX+ tuned to 14.074 MHz, FT8/FT4 traffic visible](docs/QMX-Panadapter_v0.9.2.png)
+![Panadapter on M5Stack Tab5 — QMX+ tuned to 7.019.470 MHz, 40 m CW activity with callsign spot labels above the waterfall](docs/QMX-Panadapter_v1.16.7.png)
 
-*20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
+*40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
 > **Release — v1.16.7.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
