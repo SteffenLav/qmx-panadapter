@@ -977,6 +977,8 @@ void panadapter_wifi_update_credentials(const char *ssid, const char *pass)
     ESP_LOGI(TAG, "credentials updated for '%s' (connection state unchanged)", s_ssid);
 }
 
+static void reconnect_deferred(void);   // defined below; used by both reconnect paths
+
 void panadapter_wifi_reconnect(const char *ssid, const char *pass)
 {
     if (!ssid || ssid[0] == '\0') {
@@ -1004,39 +1006,51 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
         s_wifi_started = true;
     } else {
         // Already running: cycle the connection with the new config.
-        esp_wifi_disconnect();
-        esp_wifi_connect();
+        // Deferred, not inline - see reconnect_deferred()'s own comment:
+        // this is reachable from webserver.c's settings save (switching to a
+        // remembered network with no password typed), and an inline
+        // esp_wifi_disconnect() here kills that same request's own response.
+        reconnect_deferred();
     }
 }
 
-typedef struct { char ssid[33]; char pass[65]; } deferred_pref_t;
-
-/* ⛔ THE DISCONNECT MUST NOT HAPPEN INSIDE THE HTTP HANDLER THAT SAVED IT.
+/* ⛔ NEVER esp_wifi_disconnect()+connect() INLINE FROM AN HTTP HANDLER.
  *
- * Randy N4OPI, 2026-09-27: repeatedly saw the settings save hang at
- * "Saving..." and never reach "Saved...", right when the save also changed
- * the preferred network. esp_wifi_disconnect() tears the STA link down
- * immediately - including the very TCP connection the httpd worker is using
- * to send that request's own "{"ok":true}" response back to the browser. The
- * device-side save had completed; the browser just never heard about it,
- * because the link it was waiting on was the one just cut.
+ * Randy N4OPI, 2026-09-27: repeatedly saw a settings save hang at
+ * "Saving..." and never reach "Saved...", specifically whenever the save
+ * also changed the network the unit is on. esp_wifi_disconnect() tears the
+ * STA link down immediately - including the TCP connection the httpd worker
+ * is using RIGHT NOW to send that same request's own "{"ok":true}" response.
+ * The device-side save had completed; the browser just never heard about it,
+ * because the link it was waiting on was the one just cut out from under it.
  *
- * Run the actual disconnect/reconnect on a short delay, off the httpd
- * worker's stack, so the response goes out over the OLD network first -
- * same reasoning as factory_reset.c's reboot_task giving an HTTP response
- * time to flush before esp_restart() pulls the rug out. */
-static void apply_preferred_deferred_task(void *arg)
+ * This is not specific to the preferred-network path - panadapter_wifi_
+ * reconnect() (used at webserver.c's "switch to a remembered network, no
+ * password typed" case) had the exact same shape, and I only found it by
+ * going looking after this same bug bit him a second time under a different
+ * name. Both now route through this one deferred primitive, so a third
+ * caller doing this inline cannot reintroduce it unnoticed.
+ *
+ * Runs the disconnect/reconnect ~500 ms later, off the caller's stack, so an
+ * HTTP response has time to leave over the OLD link first - same reasoning
+ * as factory_reset.c's reboot_task giving a response time to flush before
+ * esp_restart() pulls the rug out. Harmless when the caller is the on-device
+ * UI instead of the web UI (ui/wifi_config.c): a fifth of a second of extra
+ * delay before a touch-driven network switch is not something a human
+ * notices. */
+static void reconnect_deferred_task(void *arg)
 {
-    deferred_pref_t *p = (deferred_pref_t *)arg;
+    (void)arg;
     vTaskDelay(pdMS_TO_TICKS(500));
-    ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
-             p->ssid, s_ssid);
-    apply_creds_live(p->ssid, p->pass);
     s_retry_count = 0;
     esp_wifi_disconnect();
     esp_wifi_connect();
-    free(p);
     vTaskDelete(NULL);
+}
+
+static void reconnect_deferred(void)
+{
+    xTaskCreate(reconnect_deferred_task, "wifi_recon", 2048, NULL, 5, NULL);
 }
 
 /* Act on a freshly-saved preferred network without waiting for a reboot.
@@ -1063,18 +1077,10 @@ void panadapter_wifi_apply_preferred(void)
     int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
     for (int k = 0; k < kn; k++) {
         if (strcmp(known[k].ssid, pref) != 0) continue;
-        deferred_pref_t *p = malloc(sizeof(*p));
-        if (!p) {
-            ESP_LOGE(TAG, "preferred-network switch dropped: out of memory");
-            return;
-        }
-        /* Precisions, not a bare %s - same -Werror=format-truncation reason
-         * as wifi_task()'s own copy out of known[] above: the compiler can't
-         * see that an element is NUL-terminated, only that the array is
-         * fixed-size. */
-        snprintf(p->ssid, sizeof(p->ssid), "%.32s", known[k].ssid);
-        snprintf(p->pass, sizeof(p->pass), "%.64s", known[k].pass);
-        xTaskCreate(apply_preferred_deferred_task, "wifi_pref", 3072, p, 5, NULL);
+        ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
+                 pref, s_ssid);
+        apply_creds_live(known[k].ssid, known[k].pass);
+        reconnect_deferred();
         return;
     }
     ESP_LOGW(TAG, "preferred network '%s' is not one of the %d remembered "
