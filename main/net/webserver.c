@@ -5039,9 +5039,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         }
     }
 
-    // Static IP. Only touched when the form actually carries wifi_ip, so every
-    // other settings save leaves the network configuration alone; an empty
-    // string IS meaningful here and means "go back to DHCP".
+    // Static IP. Only touched when the form actually carries wifi_ip, AND the
+    // value actually differs from what's already stored.
+    //
+    // ⛔ ONLY WHEN IT ACTUALLY CHANGED - same reason and same fix as wifi_ssid
+    // just above. The form is built from the GET, so wifi_ip/mask/gw/dns ride
+    // along on EVERY settings save: brightness, the preferred network, a WSPR
+    // option, anything. Without this check, saving something unrelated could
+    // silently re-apply (and thereby unbind) a static address the operator
+    // never touched, or worse, get the WHOLE save refused with a 400 if the
+    // browser's copy of the address happened to be off-subnet relative to the
+    // live lease - exactly what Randy N4OPI hit 2026-09-26/27: changing only
+    // the preferred network kept re-writing "(DHCP)" over his static address,
+    // and one save reported "Saving..." and never returned "Saved..." at all.
     //
     // ⛔ REFUSED HERE RATHER THAN AT CONNECT TIME, and this is the only moment
     // it can be done: the check needs a live lease to compare against, and a
@@ -5052,69 +5062,80 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // See util/ip_guard.h.
     cJSON *sip = cJSON_GetObjectItem(root, "wifi_ip");
     if (cJSON_IsString(sip)) {
-        ip_guard_cfg_t want = { 0 }, lease = { 0 }, use = { 0 };
-        snprintf(want.ip, sizeof(want.ip), "%s", sip->valuestring);
         const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_mask"));
         const char *g = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_gw"));
         const char *d = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_dns"));
-        if (m) snprintf(want.mask, sizeof(want.mask), "%s", m);
-        if (g) snprintf(want.gw,   sizeof(want.gw),   "%s", g);
-        if (d) snprintf(want.dns,  sizeof(want.dns),  "%s", d);
 
-        bool have_lease = panadapter_wifi_get_lease(lease.ip, lease.mask,
-                                                    lease.gw, lease.dns);
-        ip_guard_result_t r = ip_guard_check(&want, have_lease ? &lease : NULL, &use);
+        char cur_ip[16], cur_mask[16], cur_gw[16], cur_dns[16];
+        settings_get_wifi_static(cur_ip, cur_mask, cur_gw, cur_dns);
 
-        // Configuring in advance for a network the device is not on yet is
-        // legitimate, so the OFF_SUBNET refusal can be overridden deliberately -
-        // the browser asks first, and sends wifi_ip_force only after a yes. The
-        // guard's job is to make the fatal case a decision, not to forbid it.
-        // Nothing else is overridable: those are malformed, not merely remote.
-        cJSON *force = cJSON_GetObjectItem(root, "wifi_ip_force");
-        if (r == IP_GUARD_OFF_SUBNET && cJSON_IsTrue(force)) {
-            ESP_LOGW(TAG, "static IP '%s' is off this subnet (%s) - stored "
-                          "anyway, the operator confirmed it is for another "
-                          "network", want.ip, lease.ip);
-            r = ip_guard_check(&want, NULL, &use);   // re-run for the fill-in
+        bool changed = strcmp(sip->valuestring, cur_ip) != 0 ||
+                       strcmp(m ? m : "", cur_mask)      != 0 ||
+                       strcmp(g ? g : "", cur_gw)        != 0 ||
+                       strcmp(d ? d : "", cur_dns)       != 0;
+
+        if (changed) {
+            ip_guard_cfg_t want = { 0 }, lease = { 0 }, use = { 0 };
+            snprintf(want.ip, sizeof(want.ip), "%s", sip->valuestring);
+            if (m) snprintf(want.mask, sizeof(want.mask), "%s", m);
+            if (g) snprintf(want.gw,   sizeof(want.gw),   "%s", g);
+            if (d) snprintf(want.dns,  sizeof(want.dns),  "%s", d);
+
+            bool have_lease = panadapter_wifi_get_lease(lease.ip, lease.mask,
+                                                        lease.gw, lease.dns);
+            ip_guard_result_t r = ip_guard_check(&want, have_lease ? &lease : NULL, &use);
+
+            // Configuring in advance for a network the device is not on yet is
+            // legitimate, so the OFF_SUBNET refusal can be overridden deliberately -
+            // the browser asks first, and sends wifi_ip_force only after a yes. The
+            // guard's job is to make the fatal case a decision, not to forbid it.
+            // Nothing else is overridable: those are malformed, not merely remote.
+            cJSON *force = cJSON_GetObjectItem(root, "wifi_ip_force");
+            if (r == IP_GUARD_OFF_SUBNET && cJSON_IsTrue(force)) {
+                ESP_LOGW(TAG, "static IP '%s' is off this subnet (%s) - stored "
+                              "anyway, the operator confirmed it is for another "
+                              "network", want.ip, lease.ip);
+                r = ip_guard_check(&want, NULL, &use);   // re-run for the fill-in
+            }
+
+            if (r != IP_GUARD_OK && r != IP_GUARD_DHCP) {
+                char why[256];
+                ip_guard_explain(r, &want, have_lease ? &lease : NULL, why, sizeof(why));
+                ESP_LOGW(TAG, "static IP '%s' refused: %s", want.ip, why);
+                cJSON_Delete(root);
+                // The rest of this save is abandoned on purpose. A settings POST is
+                // one form; committing every other field and silently dropping the
+                // network one would leave the browser showing a configuration the
+                // device does not have.
+                cJSON *err = cJSON_CreateObject();
+                cJSON_AddBoolToObject(err, "ok", false);
+                cJSON_AddStringToObject(err, "error", why);
+                cJSON_AddBoolToObject(err, "off_subnet", r == IP_GUARD_OFF_SUBNET);
+                char *body = cJSON_PrintUnformatted(err);
+                cJSON_Delete(err);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_status(req, "400 Bad Request");
+                esp_err_t se = httpd_resp_send(req, body ? body : "{\"ok\":false}",
+                                               HTTPD_RESP_USE_STRLEN);
+                if (body) free(body);
+                return se;
+            }
+
+            // Store what the guard RESOLVED, not what was typed: a blank mask,
+            // gateway or DNS has been filled in from the live lease, which is a
+            // better answer than the /24 wifi.c would otherwise have guessed.
+            settings_set_wifi_static(use.ip, use.mask, use.gw, use.dns);
+            /* Unbind: the new address belongs to whatever network it next works
+             * on, not to the one the previous address was for. wifi.c re-binds it
+             * on the next successful connect. Without this, editing a static
+             * address while on a different WLAN would save it and then ignore it. */
+            settings_set_wifi_static_ssid("");
+            ESP_LOGI(TAG, "static IP set to '%s' mask %s gw %s dns %s - takes "
+                          "effect on the next connect",
+                     use.ip[0] ? use.ip : "(DHCP)",
+                     use.mask[0] ? use.mask : "-", use.gw[0] ? use.gw : "-",
+                     use.dns[0] ? use.dns : "-");
         }
-
-        if (r != IP_GUARD_OK && r != IP_GUARD_DHCP) {
-            char why[256];
-            ip_guard_explain(r, &want, have_lease ? &lease : NULL, why, sizeof(why));
-            ESP_LOGW(TAG, "static IP '%s' refused: %s", want.ip, why);
-            cJSON_Delete(root);
-            // The rest of this save is abandoned on purpose. A settings POST is
-            // one form; committing every other field and silently dropping the
-            // network one would leave the browser showing a configuration the
-            // device does not have.
-            cJSON *err = cJSON_CreateObject();
-            cJSON_AddBoolToObject(err, "ok", false);
-            cJSON_AddStringToObject(err, "error", why);
-            cJSON_AddBoolToObject(err, "off_subnet", r == IP_GUARD_OFF_SUBNET);
-            char *body = cJSON_PrintUnformatted(err);
-            cJSON_Delete(err);
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_status(req, "400 Bad Request");
-            esp_err_t se = httpd_resp_send(req, body ? body : "{\"ok\":false}",
-                                           HTTPD_RESP_USE_STRLEN);
-            if (body) free(body);
-            return se;
-        }
-
-        // Store what the guard RESOLVED, not what was typed: a blank mask,
-        // gateway or DNS has been filled in from the live lease, which is a
-        // better answer than the /24 wifi.c would otherwise have guessed.
-        settings_set_wifi_static(use.ip, use.mask, use.gw, use.dns);
-        /* Unbind: the new address belongs to whatever network it next works
-         * on, not to the one the previous address was for. wifi.c re-binds it
-         * on the next successful connect. Without this, editing a static
-         * address while on a different WLAN would save it and then ignore it. */
-        settings_set_wifi_static_ssid("");
-        ESP_LOGI(TAG, "static IP set to '%s' mask %s gw %s dns %s - takes "
-                      "effect on the next connect",
-                 use.ip[0] ? use.ip : "(DHCP)",
-                 use.mask[0] ? use.mask : "-", use.gw[0] ? use.gw : "-",
-                 use.dns[0] ? use.dns : "-");
     }
 
     cJSON_Delete(root);
