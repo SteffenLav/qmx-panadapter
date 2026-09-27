@@ -1009,6 +1009,36 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
     }
 }
 
+typedef struct { char ssid[33]; char pass[65]; } deferred_pref_t;
+
+/* ⛔ THE DISCONNECT MUST NOT HAPPEN INSIDE THE HTTP HANDLER THAT SAVED IT.
+ *
+ * Randy N4OPI, 2026-09-27: repeatedly saw the settings save hang at
+ * "Saving..." and never reach "Saved...", right when the save also changed
+ * the preferred network. esp_wifi_disconnect() tears the STA link down
+ * immediately - including the very TCP connection the httpd worker is using
+ * to send that request's own "{"ok":true}" response back to the browser. The
+ * device-side save had completed; the browser just never heard about it,
+ * because the link it was waiting on was the one just cut.
+ *
+ * Run the actual disconnect/reconnect on a short delay, off the httpd
+ * worker's stack, so the response goes out over the OLD network first -
+ * same reasoning as factory_reset.c's reboot_task giving an HTTP response
+ * time to flush before esp_restart() pulls the rug out. */
+static void apply_preferred_deferred_task(void *arg)
+{
+    deferred_pref_t *p = (deferred_pref_t *)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
+             p->ssid, s_ssid);
+    apply_creds_live(p->ssid, p->pass);
+    s_retry_count = 0;
+    esp_wifi_disconnect();
+    esp_wifi_connect();
+    free(p);
+    vTaskDelete(NULL);
+}
+
 /* Act on a freshly-saved preferred network without waiting for a reboot.
  *
  * Randy N4OPI, 2026-09-24. Without this the operator sets the preference, sees
@@ -1033,12 +1063,18 @@ void panadapter_wifi_apply_preferred(void)
     int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
     for (int k = 0; k < kn; k++) {
         if (strcmp(known[k].ssid, pref) != 0) continue;
-        ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
-                 pref, s_ssid);
-        apply_creds_live(known[k].ssid, known[k].pass);
-        s_retry_count = 0;
-        esp_wifi_disconnect();
-        esp_wifi_connect();
+        deferred_pref_t *p = malloc(sizeof(*p));
+        if (!p) {
+            ESP_LOGE(TAG, "preferred-network switch dropped: out of memory");
+            return;
+        }
+        /* Precisions, not a bare %s - same -Werror=format-truncation reason
+         * as wifi_task()'s own copy out of known[] above: the compiler can't
+         * see that an element is NUL-terminated, only that the array is
+         * fixed-size. */
+        snprintf(p->ssid, sizeof(p->ssid), "%.32s", known[k].ssid);
+        snprintf(p->pass, sizeof(p->pass), "%.64s", known[k].pass);
+        xTaskCreate(apply_preferred_deferred_task, "wifi_pref", 3072, p, 5, NULL);
         return;
     }
     ESP_LOGW(TAG, "preferred network '%s' is not one of the %d remembered "
