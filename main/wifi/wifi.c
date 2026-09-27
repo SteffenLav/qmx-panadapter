@@ -255,7 +255,32 @@ static inline bool ip4_ok(const char *str, esp_ip4_addr_t *out)
 static void static_ip_apply_on_connect(void)
 {
     static_ip_cfg_t st;
-    if (!static_ip_wanted(&st)) return;
+    if (!static_ip_wanted(&st)) {
+        /* ⛔ THIS RUNS ON EVERY CONNECT, NOT JUST THE FIRST ONE - and a
+         * PREVIOUS connect (to a network the static address WAS bound to)
+         * may have left the DHCP client stopped and this exact static
+         * ip_info still sitting on the netif. static_ip_wanted() only
+         * decides whether to apply a NEW static config - it says nothing
+         * about undoing an OLD one, and a bare return here left that OLD
+         * config in place.
+         *
+         * Randy N4OPI, 2026-09-27: his log shows the mismatch correctly
+         * detected - "static IP 192.168.1.199 belongs to 'HomePlace' but
+         * this is 'uBitX24' - using DHCP instead" - and 20 ms later, "Got IP:
+         * 192.168.1.199" anyway. Not a fresh DHCP lease: the stale static
+         * address the netif already had, because nothing had told the DHCP
+         * client to start again. His "Connected to uBitX24 with HomePlace
+         * settings" was this exact log, worded differently.
+         *
+         * Idempotent and cheap when DHCP was already running (the ordinary
+         * case, no static IP ever configured) - ALREADY_STARTED is silently
+         * fine, same convention as the _STOP call below. */
+        esp_err_t e = esp_netif_dhcpc_start(s_sta_netif);
+        if (e != ESP_OK && e != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
+            ESP_LOGW(TAG, "could not restart the DHCP client: %s",
+                     esp_err_to_name(e));
+        return;
+    }
 
     esp_netif_ip_info_t ip = { 0 };
     if (!ip4_ok(st.ip, &ip.ip)) {
