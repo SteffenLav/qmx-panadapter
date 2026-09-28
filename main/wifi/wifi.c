@@ -302,6 +302,31 @@ static void static_ip_apply_on_connect(void)
         esp_netif_str_to_ip4("255.255.255.0", &ip.netmask);
     if (st.gw[0]) (void)ip4_ok(st.gw, &ip.gw);
 
+    /* ⛔ STOP DHCP HERE TOO - do not rely on the one-time STA_START stop.
+     *
+     * Randy N4OPI, 2026-09-27/28: "when it is switched to HomePlace it comes
+     * up on DHCP, but after a Tab5 reboot it seems to always come up properly
+     * on the static settings." His earlier log already had the reason in it,
+     * unfollowed: repeated "static IP refused: ESP_ERR_ESP_NETIF_DHCP_NOT_
+     * STOPPED - the DHCP client is probably still running".
+     *
+     * esp_netif_set_ip_info() REFUSES outright unless the DHCP client is
+     * stopped (see this file's own header comment on that quirk). The ONLY
+     * place that ever stopped it was WIFI_EVENT_STA_START, guarded to run
+     * once per boot (s_netif_started) - so the FIRST connect of a boot always
+     * has DHCP stopped in time, and every LIVE reconnect after that (a
+     * preferred-network switch, a roam, anything using esp_wifi_disconnect()
+     * + esp_wifi_connect() without a fresh STA_START) does not. Once DHCP had
+     * been restarted for a DIFFERENT network (the a094e75 fix, also correct),
+     * switching BACK to the bound network found DHCP still running and this
+     * call failed every time - logged, but never retried, so the unit was
+     * left on whatever DHCP had already handed it. This function must be
+     * self-sufficient on every connect, not just the boot's first one. */
+    esp_err_t stop_e = esp_netif_dhcpc_stop(s_sta_netif);
+    if (stop_e != ESP_OK && stop_e != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED)
+        ESP_LOGW(TAG, "could not stop the DHCP client before a static IP: %s",
+                 esp_err_to_name(stop_e));
+
     esp_err_t e = esp_netif_set_ip_info(s_sta_netif, &ip);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "static IP refused: %s - the DHCP client is probably "
