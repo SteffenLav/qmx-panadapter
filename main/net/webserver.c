@@ -5125,11 +5125,31 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             // gateway or DNS has been filled in from the live lease, which is a
             // better answer than the /24 wifi.c would otherwise have guessed.
             settings_set_wifi_static(use.ip, use.mask, use.gw, use.dns);
-            /* Unbind: the new address belongs to whatever network it next works
-             * on, not to the one the previous address was for. wifi.c re-binds it
-             * on the next successful connect. Without this, editing a static
-             * address while on a different WLAN would save it and then ignore it. */
-            settings_set_wifi_static_ssid("");
+            if (use.ip[0]) {
+                /* ⛔ BIND TO THE NETWORK THIS SAVE NAMES - do not leave it
+                 * unbound "for the next successful connect".
+                 *
+                 * Randy N4OPI, 2026-09-28: set static settings meant for
+                 * 'HomePlace', rebooted, HomePlace did not answer right away,
+                 * the unit roamed to 'uBitX24' for that one boot - and the
+                 * still-unbound address silently bound itself to uBitX24
+                 * instead, with no warning. "Whatever network connects first"
+                 * is not "the network the operator meant"; a boot-time roam
+                 * (or any transient failure of the intended network) makes
+                 * that gap real, not theoretical.
+                 *
+                 * The web form's "Network name" field IS the operator's
+                 * stated intent for these settings - use it directly. Falls
+                 * back to whatever is currently configured only when that
+                 * field is blank (e.g. editing just the address via a config
+                 * file, where wifi_ssid was never part of the same save). */
+                char cur_ssid_fb[33] = { 0 }, cur_pass_fb[65];
+                if (!ssid || !ssid[0])
+                    settings_get_wifi_creds(cur_ssid_fb, cur_pass_fb, NULL);
+                settings_set_wifi_static_ssid((ssid && ssid[0]) ? ssid : cur_ssid_fb);
+            } else {
+                settings_set_wifi_static_ssid("");   // cleared to DHCP - nothing to bind
+            }
             ESP_LOGI(TAG, "static IP set to '%s' mask %s gw %s dns %s - takes "
                           "effect on the next connect",
                      use.ip[0] ? use.ip : "(DHCP)",

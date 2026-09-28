@@ -633,13 +633,24 @@ int config_io_import(char *text)
     if (filt_touched) settings_set_ft8_filters(&filt);
     if (sip_touched) {
         settings_set_wifi_static(sip, smask, sgw, sdns);
-        /* Unbind, same reason as webserver.c's settings_post_handler: an
-         * imported address belongs to whatever network it next works on, not
-         * to the one the previous address (still bound from before this
-         * import) was for. Without this, restoring a config while on a
-         * different WLAN than the bound one silently keeps the old binding
-         * and the imported address is never applied. */
-        settings_set_wifi_static_ssid("");
+        /* ⛔ BIND TO THE CURRENTLY CONFIGURED SSID, not "unbind and hope".
+         *
+         * Randy N4OPI, 2026-09-28: an unbound address applies to WHATEVER
+         * network connects first, which is not necessarily the one the
+         * import was for - a boot-time roam away from a briefly-unreachable
+         * intended network binds it to the wrong one silently. Same fix as
+         * webserver.c's settings_post_handler, applied here too (same class
+         * of bug, sweeping for the sibling rather than waiting to be told).
+         *
+         * wifi_ssid is parsed earlier in this same pass (the `case
+         * SEC_WIFI... "wifi_ssid"` branch above calls settings_set_wifi_ssid()
+         * directly), so by now settings_get_wifi_creds() already reflects
+         * whatever this import set it to - or the pre-existing configured
+         * SSID, if this file did not touch it. Either way, that is the
+         * correct network to bind to, not an empty "not yet decided" state. */
+        char cur_ssid[33] = { 0 }, cur_pass_unused[65];
+        settings_get_wifi_creds(cur_ssid, cur_pass_unused, NULL);
+        settings_set_wifi_static_ssid(sip[0] ? cur_ssid : "");
     }
     // Applied wholesale, in file order: see the buffer's declaration.
     if (known_touched) settings_wifi_known_set_all(known, known_n);
