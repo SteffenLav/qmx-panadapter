@@ -227,18 +227,33 @@ static int64_t            s_last_done_ts;
 // budget is now 6 inside 5 minutes.
 #define FINAL_RESEND_WINDOW_SEC 300
 #define FINAL_RESEND_MAX          6
-static char               s_final_call[FT8_CALL_MAX_LEN];  // who we owe a final to ('\0' = nobody)
-static int                s_final_freq_hz;                 // our tone for it
-static ft8_tx_kind_t      s_final_kind;                    // 73 (pounce) or RR73 (CQ-run)
-static char               s_final_extra[16];               // the final's third field (matches ft8_tx_request_t)
-static int                s_final_resends;
+// ⭐ A SMALL ARRAY, NOT ONE SLOT (Steffen, 2026-09-28, thinking about pileups:
+// finish A, immediately work B while A never decoded our final - A's repeats
+// used to fall out of tracking the instant B's QSO completed, because there
+// was exactly one "who do we owe a final to" slot and B overwrote it). Four is
+// a guess at "more than a real pileup hands you inside one 300 s window", not
+// a measurement - if it turns out too small, watch for the "final-track full"
+// log line before raising it.
+#define FINAL_TRACK_MAX 4
+typedef struct {
+    char          call[FT8_CALL_MAX_LEN];  // who we owe a final to ('\0' = empty slot)
+    int           freq_hz;                 // our tone for it
+    ft8_tx_kind_t kind;                    // 73 (pounce) or RR73 (CQ-run)
+    char          extra[16];               // the final's third field (matches ft8_tx_request_t)
+    int           resends;
+    int64_t       done_ts;                 // when THIS contact completed (own window per slot)
+} final_track_t;
+static final_track_t      s_final[FINAL_TRACK_MAX];
 
-// True while a just-worked partner is still asking for our final. Set once per
-// RX slot by advance(); read by rearm_current(), which is the single choke point
-// for CQ arming. This is what stops us calling CQ over somebody who is waiting
-// on us even after the re-send budget is spent - staying silent is the polite
-// answer, and it was Roy KI0ER's own suggestion.
+// True while at least one just-worked partner is still asking for a final. Set
+// once per RX slot by advance(); read by rearm_current(), which is the single
+// choke point for CQ arming. This is what stops us calling CQ over somebody who
+// is waiting on us even after the re-send budget is spent - staying silent is
+// the polite answer, and it was Roy KI0ER's own suggestion.
 static bool s_final_hold = false;
+// Which call s_final_hold is about, for the CQ-hold log line only - cosmetic,
+// not used for any decision (that's the array itself).
+static char s_final_hold_call[FT8_CALL_MAX_LEN];
 
 // Duplicate-log guard. The log is written once at WAIT_DONE -> DONE, but that
 // state can legitimately be entered twice for one contact - most easily by
@@ -997,7 +1012,7 @@ static void rearm_current(void)
     // clears it as soon as he stops (or the window closes), at which point the
     // CQ resumes through the normal arm_current_if_idle() safety net.
     if (st == FT8_QSO_CQ && s_final_hold) {
-        ESP_LOGI(TAG, "holding CQ: %s is still asking for our final", s_final_call);
+        ESP_LOGI(TAG, "holding CQ: %s is still asking for our final", s_final_hold_call);
         return;
     }
 
@@ -2285,41 +2300,89 @@ static bool partner_still_awaiting_final(int64_t slot_sec, const char *call)
     return asking;
 }
 
-// Re-send the final to a just-worked partner who is still asking for it. Does
-// NOT touch s_state or s_cur_req: it builds and arms one message directly, so
-// whatever we were doing (idle, or an armed CQ) resumes by itself on the next
-// on_tx_complete() re-arm. Nothing is logged - the QSO already was.
-static bool final_resend_if_still_asked(int64_t slot_sec)
+// Is tracked slot idx still within its window and still being asked-for this
+// slot? Clears the slot itself if the window has closed - same "stop watching
+// for them" behaviour the old single-slot code had, just per-entry now.
+static bool final_track_still_asking(int64_t slot_sec, int idx)
 {
-    if (!s_final_call[0]) return false;
+    final_track_t *f = &s_final[idx];
+    if (!f->call[0]) return false;
     int64_t now_s = (int64_t)time(NULL);
-    if ((now_s - s_last_done_ts) > FINAL_RESEND_WINDOW_SEC) {
-        s_final_call[0] = '\0';       // window closed - stop watching for them
+    if ((now_s - f->done_ts) > FINAL_RESEND_WINDOW_SEC) {
+        f->call[0] = '\0';            // window closed - stop watching for them
         return false;
     }
-    if (s_final_resends >= FINAL_RESEND_MAX) return false;
+    return partner_still_awaiting_final(slot_sec, f->call);
+}
+
+// Re-send the final for tracked slot idx. Caller has already confirmed this
+// slot is still being asked-for THIS RX slot (final_track_still_asking()) -
+// this only re-checks the resend budget and TX availability, so the decode
+// scan in partner_still_awaiting_final() runs once per tracked partner per
+// slot, not twice. Does NOT touch s_state or s_cur_req: it builds and arms one
+// message directly, so whatever we were doing (idle, or an armed CQ) resumes
+// by itself on the next on_tx_complete() re-arm. Nothing is logged - the QSO
+// already was.
+static bool final_track_try_resend(int64_t slot_sec, int idx)
+{
+    final_track_t *f = &s_final[idx];
+    if (f->resends >= FINAL_RESEND_MAX) return false;
     // Mid-burst: leave it alone and catch them on their next repeat.
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return false;
-    if (!partner_still_awaiting_final(slot_sec, s_final_call)) return false;
 
     ft8_tx_request_t req;
     char err[64];
-    if (!ft8_tx_build_request(s_final_kind, s_final_call, s_final_freq_hz,
-                              slot_sec, s_final_extra, &req, err, sizeof(err))) {
-        ESP_LOGW(TAG, "final re-send build failed for %s: %s", s_final_call, err);
-        s_final_call[0] = '\0';
+    if (!ft8_tx_build_request(f->kind, f->call, f->freq_hz,
+                              slot_sec, f->extra, &req, err, sizeof(err))) {
+        ESP_LOGW(TAG, "final re-send build failed for %s: %s", f->call, err);
+        f->call[0] = '\0';
         return false;
     }
     if (!ft8_tx_arm(&req, err, sizeof(err))) {
-        ESP_LOGW(TAG, "final re-send arm failed for %s: %s", s_final_call, err);
+        ESP_LOGW(TAG, "final re-send arm failed for %s: %s", f->call, err);
         return false;
     }
-    s_final_resends++;
+    f->resends++;
     ft8_status_set("QSO %s: never heard our %s - re-sending (%d/%d)",
-                   s_final_call, s_final_extra, s_final_resends, FINAL_RESEND_MAX);
+                   f->call, f->extra, f->resends, FINAL_RESEND_MAX);
     ESP_LOGI(TAG, "%s still asking after completion - re-sending %s (%d/%d)",
-             s_final_call, s_final_extra, s_final_resends, FINAL_RESEND_MAX);
+             f->call, f->extra, f->resends, FINAL_RESEND_MAX);
     return true;
+}
+
+// Start (or refresh) tracking a just-completed partner's final. Same call
+// re-completing refreshes its own slot rather than duplicating it. Slots are
+// small and fixed (FINAL_TRACK_MAX) - if all are in use, evict the OLDEST
+// completion (smallest done_ts) rather than refuse the newest, since the
+// newest is the one most likely to still be in range and listening.
+// ⚠ NOT YET EXERCISED ON AIR WITH >1 SLOT IN USE AT ONCE - built and run
+// through FT8 sim mode with two overlapping partners, not a real pileup.
+static void final_track_add(const char *call, int freq_hz, ft8_tx_kind_t kind,
+                             const char *extra)
+{
+    int idx = -1;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (s_final[i].call[0] && strcmp(s_final[i].call, call) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+            if (!s_final[i].call[0]) { idx = i; break; }
+        }
+    }
+    if (idx < 0) {
+        idx = 0;
+        for (int i = 1; i < FINAL_TRACK_MAX; i++)
+            if (s_final[i].done_ts < s_final[idx].done_ts) idx = i;
+        ESP_LOGI(TAG, "final-track full (%d slots) - dropping oldest watch on %s for %s",
+                 FINAL_TRACK_MAX, s_final[idx].call, call);
+    }
+    final_track_t *f = &s_final[idx];
+    snprintf(f->call, sizeof(f->call), "%s", call);
+    f->freq_hz = freq_hz;
+    f->kind    = kind;
+    snprintf(f->extra, sizeof(f->extra), "%s", extra);
+    f->resends = 0;
+    f->done_ts = time(NULL);
 }
 
 bool ft8_qso_msg_is_for_us(const char *text)
@@ -2446,26 +2509,40 @@ static void ft8_qso_advance_body(int64_t slot_sec)
         ft8_qso_state_t stf = s_state;
         unlock();
         if (stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) {
-            // Is a just-worked partner STILL asking for our final? Evaluated
-            // regardless of whether we have re-sends left, because the answer
-            // also decides whether we are allowed to start talking to anyone
-            // else this slot.
-            int64_t now_s = (int64_t)time(NULL);
-            bool asking = s_final_call[0] &&
-                          (now_s - s_last_done_ts) <= FINAL_RESEND_WINDOW_SEC &&
-                          partner_still_awaiting_final(slot_sec, s_final_call);
-            s_final_hold = asking;
+            // Is ANY tracked just-worked partner STILL asking for our final?
+            // Evaluated regardless of whether that partner has re-sends left,
+            // because the answer also decides whether we are allowed to start
+            // talking to anyone else this slot. Only one message can go out
+            // this slot, so at most one tracked partner gets a re-send here -
+            // the rest (if any) wait their turn next slot, same as they would
+            // if a human were juggling more than one still-open contact.
+            bool any_asking    = false;
+            int  first_asking  = -1;
+            for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+                if (!final_track_still_asking(slot_sec, i)) continue;
+                any_asking = true;
+                if (first_asking < 0) first_asking = i;
+                if (final_track_try_resend(slot_sec, i)) {
+                    s_final_hold = true;
+                    strncpy(s_final_hold_call, s_final[i].call, sizeof(s_final_hold_call) - 1);
+                    s_final_hold_call[sizeof(s_final_hold_call) - 1] = '\0';
+                    return;
+                }
+            }
+            s_final_hold = any_asking;
 
-            if (asking) {
-                if (final_resend_if_still_asked(slot_sec)) return;
+            if (any_asking) {
+                strncpy(s_final_hold_call, s_final[first_asking].call, sizeof(s_final_hold_call) - 1);
+                s_final_hold_call[sizeof(s_final_hold_call) - 1] = '\0';
 
-                // Budget spent, but he is still calling. Say nothing rather than
-                // call CQ over him: disarm anything queued (an ARMED burst fires
-                // on its own otherwise - the lesson from the v1.3.3 busy-station
-                // hold) and give the slot up. rearm_current() will not arm a new
-                // CQ while s_final_hold is set.
+                // Every asking partner's budget is spent (or TX was busy), but
+                // at least one is still calling. Say nothing rather than call CQ
+                // over him: disarm anything queued (an ARMED burst fires on its
+                // own otherwise - the lesson from the v1.3.3 busy-station hold)
+                // and give the slot up. rearm_current() will not arm a new CQ
+                // while s_final_hold is set.
                 if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ft8_tx_disarm();
-                ft8_status_set("%s still asking - holding TX", s_final_call);
+                ft8_status_set("%s still asking - holding TX", s_final_hold_call);
                 return;
             }
         } else {
@@ -2664,25 +2741,22 @@ static void ft8_qso_advance_body(int64_t slot_sec)
             s_last_done_call[sizeof(s_last_done_call) - 1] = '\0';
             s_last_done_ts = time(NULL);
             // Remember the final we just sent, so it can be re-sent if they turn
-            // out not to have decoded it (see final_resend_if_still_asked).
+            // out not to have decoded it (see final_track_still_asking() /
+            // final_track_try_resend()). Working a second station right after
+            // does NOT stop this one being tracked any more - see
+            // FINAL_TRACK_MAX above.
             //
             // HOUND (rule 4): except after a hound contact, where there is no
             // final to re-send - the Fox's RR73 closed it and we deliberately
-            // stayed quiet. Leaving s_final_call set would have us transmitting
-            // "73" into a Fox's frequency for up to three slots simply because it
-            // is still calling other hounds, which it always is.
+            // stayed quiet. Tracking it would have us transmitting "73" into a
+            // Fox's frequency for up to three slots simply because it is still
+            // calling other hounds, which it always is.
             if (s_hound_active) {
-                s_final_call[0] = '\0';
-                s_final_resends = 0;
                 s_hound_active  = false;   // session over; the next start decides afresh
             } else {
-                strncpy(s_final_call, target, sizeof(s_final_call) - 1);
-                s_final_call[sizeof(s_final_call) - 1] = '\0';
-                s_final_freq_hz = s_freq_hz;
-                s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
-                snprintf(s_final_extra, sizeof(s_final_extra), "%s",
-                         s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
-                s_final_resends = 0;
+                final_track_add(target, s_freq_hz,
+                                 s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73,
+                                 s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
             }
             unlock();
 
