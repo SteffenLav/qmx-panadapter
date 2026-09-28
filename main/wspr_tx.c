@@ -225,20 +225,26 @@ int wspr_tx_seconds_until_next_slot(void)
 
 // ---- CAT send helpers - mirror ft8_tx.c's tx_cmd()/tx_cmd_critical() ----
 
-static void tx_cmd(int64_t t0, const char *fmt_freq)
+// Returns whether the send actually reached the radio, so callers that need
+// to know (the tone loop's failure count; formerly nobody did) can find out
+// without re-deriving it from the log. A dry run or sim counts as "sent".
+static bool tx_cmd(int64_t t0, const char *fmt_freq)
 {
     if (s_burst_sim) {   /* simulation: the radio must not hear a thing */
         ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), fmt_freq);
-        return;
+        return true;
     }
 #if WSPR_TX_SEND_LIVE
     esp_err_t err = cat_send_raw_cmd("%s", fmt_freq);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "send failed (0x%x): %s - continuing burst (radio may be disconnected)",
                  err, fmt_freq);
+        return false;
     }
+    return true;
 #else
     ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), fmt_freq);
+    return true;
 #endif
 }
 
@@ -475,9 +481,35 @@ static void run_burst(const wspr_tx_request_t *req)
 
     int64_t t0 = esp_timer_get_time();
     sleep_until(t0, 0);
-    tx_cmd(t0, "TX;");
+
+    /* ⛔ VERIFY THE KEY-DOWN, DON'T ASSUME IT. Steffen OZ1LAV, 2026-09-28: the
+     * WSPR screen said "transmitted" for five bursts where the radio's
+     * current draw stayed at RX level the whole time - his log showed
+     * exactly why: TX; (key-down) is CAT like any other command, the CDC
+     * link had gone flaky, and the old tx_cmd() helper logged a warning on
+     * failure and carried on regardless, sending 162 tone commands to a
+     * radio that was never keyed, then logging "burst complete" as if
+     * nothing had gone wrong. FT8 checks its transmission against a live
+     * power readback; WSPR checked nothing at all for the one command its
+     * whole burst depends on.
+     *
+     * tx_cmd_critical() is the same retry-hard-then-force-RX helper this
+     * file already uses for the STOP command, reused here because a failed
+     * key-down deserves the same treatment: know for certain, and leave the
+     * radio in a safe, known state either way. */
+    bool keyed = tx_cmd_critical(t0, "TX;");
+    if (!keyed) {
+        ESP_LOGE(TAG, "WSPR TX FAILED: key-down (TX;) never reached the radio - "
+                      "NOTHING WAS TRANSMITTED this cycle");
+        ui_toast_ms("WSPR did not transmit: the key-down command never reached "
+                    "the radio (CAT link trouble). Nothing was sent.", 12000);
+        if (!s_burst_sim) cat_poll_set_paused(false);
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
 
     bool aborted = false;
+    int  tone_failures = 0;
     for (int i = 0; i < WSPR_NSYM; i++) {
         if (s_abort_requested) {
             ESP_LOGW(TAG, "WSPR TX abort requested at symbol %d/%d - keying up now", i, WSPR_NSYM);
@@ -491,7 +523,7 @@ static void run_burst(const wspr_tx_request_t *req)
         sleep_until(t0, (int64_t)i * WSPR_SYMBOL_PERIOD_US);
         char buf[32];
         snprintf(buf, sizeof(buf), "TA%.2f;", (double)freq);
-        tx_cmd(t0, buf);
+        if (!tx_cmd(t0, buf)) tone_failures++;
 
         /* MEASURE what actually goes out, mid-burst while the radio is keyed -
          * SW; reads nothing once back in Receive. The async pair is used, not
@@ -546,8 +578,27 @@ static void run_burst(const wspr_tx_request_t *req)
     tx_cmd_critical(t0, "RX;");
 
     if (!s_burst_sim) cat_poll_set_paused(false);
-    ESP_LOGI(TAG, "WSPR TX burst %s (%.1f s)", aborted ? "ABORTED" : "complete",
-             (double)(esp_timer_get_time() - t0) / 1e6);
+    /* ⭐ "complete" must not mean "every symbol went out" when it didn't. A
+     * tone command lost mid-burst does not un-key the radio - the QMX keeps
+     * transmitting the LAST tone it received until the next one arrives, so
+     * a handful of misses blur a few symbols rather than silencing the
+     * burst, but enough of them and the decode at the far end fails even
+     * though the radio was genuinely on the air the whole time. Surfaced as
+     * a count rather than silently folded into "complete", which is what
+     * hid this class of problem the first time. */
+    if (tone_failures > 0 && !aborted) {
+        ESP_LOGW(TAG, "WSPR TX burst complete but DEGRADED (%.1f s): %d/%d tone "
+                      "command(s) never reached the radio - decode at the far end "
+                      "may fail even though the radio was keyed",
+                 (double)(esp_timer_get_time() - t0) / 1e6, tone_failures, WSPR_NSYM);
+        if (tone_failures >= WSPR_NSYM / 10) {   // >10% lost: worth a toast, not just a log line
+            ui_toast_ms("WSPR burst sent but the CAT link dropped several tone "
+                        "commands - it may not decode.", 8000);
+        }
+    } else {
+        ESP_LOGI(TAG, "WSPR TX burst %s (%.1f s)", aborted ? "ABORTED" : "complete",
+                 (double)(esp_timer_get_time() - t0) / 1e6);
+    }
 }
 
 static void wspr_tx_worker_task(void *arg)
