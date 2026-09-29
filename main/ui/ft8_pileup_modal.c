@@ -12,6 +12,7 @@
 #include "ui_theme.h"
 #include "ui.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -198,7 +199,7 @@ static void add_pileup_row(lv_obj_t *parent, const ft8_pileup_entry_t *entry, bo
     lv_obj_set_style_text_color(l_call, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_align(l_call, LV_ALIGN_LEFT_MID, 12, 0);
 
-    const char *country = dxcc_lookup(entry->call);
+    const char *country = country_display(entry->call, 64);
     lv_obj_t *l_country = lv_label_create(row);
     lv_label_set_text(l_country, country ? country : "-");
     lv_obj_set_style_text_font(l_country, &lv_font_montserrat_20, 0);

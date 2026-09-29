@@ -142,6 +142,27 @@ When robot mode is on and you're idle, the panadapter scans every FT8 decode for
 5. **TX3** — send 73 or RR73 (exchange complete)
 6. **Log** — ADIF entry created, move to next CQ
 
+## Pause — skip one transmission
+
+Sometimes you want to *listen* on your own slot: to check the frequency is still
+clear, or to hear whether the station you are working is actually answering you
+rather than someone else.
+
+**Pause** sits with Re-send, RR73 and 73 in the mid-QSO row, and it is on the
+browser page as well as the Tab5 (v1.16.2). It skips exactly one transmission
+and leaves the exchange intact — unlike **Cancel**, which ends it.
+
+- It shows a **pause** symbol normally and a **play** symbol on yellow while a
+  transmission is being skipped, so you can see the state at a glance.
+- Press it again and the pause is taken straight back, re-arming the
+  transmission if the slot still has room.
+- It works while **calling CQ** as well as mid-exchange.
+- A slot you skip on purpose **does not count** against the six cycles before
+  the Tab5 gives up on a contact. Pausing can never cost you the QSO.
+
+*Asked for by Randy N4OPI, who works his station from another room; the
+countdown behaviour was caught by Gyula HA3HZ.*
+
 **An experienced caller who skips a step is followed** (v1.8.5): if someone answers
 your CQ with a **report** instead of a grid — common from operators who already know
 they have you — the reply acknowledges it with `R` plus your report and waits for
@@ -303,7 +324,7 @@ Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE
 
 **Resume after timeout** — if a QSO times out because the partner faded, and they come back within ~5 minutes calling you, the exchange **resumes where it left off** automatically (or tap their row to resume manually) instead of restarting from scratch.
 
-**If they never heard your final** (v1.3.4) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 now notices: if the station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to three times within four minutes, *before* anything else can start a new contact. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
+**If they never heard your final** (v1.3.4, extended in v1.16.8) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 notices: if a station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to six times within five minutes, *before* anything else can start a new contact. This now tracks **up to four partners at once** rather than only the most recent one — finishing a QSO and immediately working the next caller in a pileup no longer drops the first station's re-sends. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
 
 ### 8. Power & SWR Readout
 
@@ -383,6 +404,15 @@ On a crowded band several stations answer the same CQ and the caller works one o
 **You are not committed to the wait** (Roy KI0ER's report). The status line carries a **TAP TO CANCEL** line while the hold is on; tapping it drops the pounce so you are free to work somebody else. The abandoned exchange stays resumable for a few minutes, in case the station frees up and you want back in.
 
 This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
+
+!!! warning "Fixed in v1.16.4 — the six-minute cap did not work"
+
+    Before v1.16.4 that cap never actually took effect: the counter reset
+    itself instead of stopping, so the Tab5 could wait **more than half an
+    hour** for a station working somebody else. Worse, each held slot cancelled
+    the call it had just queued, so it never got back to calling them either —
+    which is why it could look like the radio had simply given up and gone
+    quiet *(Gyula HA3HZ)*. Both are the same fault, and both are fixed.
 
 To tune to a different frequency while CQ is running:
 

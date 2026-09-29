@@ -3,13 +3,25 @@
 #include "net_quiet.h"
 #include "esp_log.h"
 
-static volatile bool s_quiet = false;
+static volatile int s_holds = 0;
 
-void net_quiet_set(bool quiet)
+void net_quiet_hold(void)
 {
-    if (s_quiet == quiet) return;
-    s_quiet = quiet;
-    ESP_LOGW("net_quiet", "%s starting new network work", quiet ? "HOLDING" : "resuming");
+    int n = ++s_holds;
+    if (n == 1) ESP_LOGW("net_quiet", "HOLDING starting new network work");
 }
 
-bool net_quiet_active(void) { return s_quiet; }
+void net_quiet_release(void)
+{
+    if (s_holds <= 0) {
+        // A release with no matching hold is a bug in the CALLER, not here -
+        // log it rather than going negative and reporting "active" wrong for
+        // ever after a single stray call.
+        ESP_LOGE("net_quiet", "release() with no outstanding hold - ignored");
+        return;
+    }
+    int n = --s_holds;
+    if (n == 0) ESP_LOGW("net_quiet", "resuming starting new network work");
+}
+
+bool net_quiet_active(void) { return s_holds > 0; }

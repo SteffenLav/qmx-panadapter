@@ -6,6 +6,7 @@ extern "C"
 {
 #endif
 
+#include <stdbool.h>
 #include <ft8/decode.h>
 #include <fft/kiss_fftr.h>
 
@@ -50,6 +51,10 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg);
 void monitor_reset(monitor_t* me);
 void monitor_process(monitor_t* me, const float* frame);
 void monitor_free(monitor_t* me);
+/// True only if every buffer monitor_init() allocated actually exists. On a
+/// memory-starved device monitor_init() can come back with any of them NULL,
+/// and monitor_process() writes through them unchecked.
+bool monitor_alloc_ok(const monitor_t* me);
 
 #ifdef WATERFALL_USE_PHASE
 void monitor_resynth(const monitor_t* me, const candidate_t* candidate, float* signal);

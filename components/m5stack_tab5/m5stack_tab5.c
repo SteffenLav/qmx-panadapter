@@ -332,13 +332,62 @@ void bsp_io_expander_pi4ioe_init(i2c_master_bus_handle_t bus_handle)
     i2c_master_transmit(i2c_dev_handle_pi4ioe2, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
 }
 
+/* Read one PI4IO register, and say whether the read actually happened.
+ *
+ * ⛔ THE REASON THIS EXISTS. Every pin function below is a read-modify-write
+ * of an OUTPUT register: read OUT_SET, flip one bit, write the byte back. The
+ * upstream versions ignored the read's return value, and read_buf is zeroed on
+ * entry - so an I2C read that FAILED left 0x00 in it and the function then
+ * wrote 0x00 to the whole output register, clearing every other pin on that
+ * expander.
+ *
+ * On expander 1 that is not a cosmetic bug: P4 is LCD_RST and P5 is TP_RST
+ * (bsp_io_expander_pi4ioe_init() drives them low then high to reset the panel).
+ * Writing 0x00 asserts both - a dead display and a dead touch controller, from
+ * one dropped I2C transaction on a bus shared with the touch controller and the
+ * battery monitor.
+ *
+ * Found by reading, not by failure: the risk went up sharply in v1.16.4, when
+ * bsp_set_speaker_amp_enable() started being called once a second from the
+ * audio write loop. Before that these ran a handful of times a boot.
+ *
+ * The callers treat a failed read as "leave the hardware alone and try again
+ * next time", which is right for every one of them but the poweroff signal -
+ * see the note there. */
+/* Last known-good value of expander 1's OUT_SET.
+ *
+ * ⛔ WHY A SHADOW EXISTS AT ALL. Every pin function is a read-modify-write, and
+ * pi4io_read_reg() correctly refuses to write when the read fails - but for the
+ * SPEAKER AMPLIFIER "do nothing" is the wrong failure: if the amp is already
+ * off, giving up leaves the operator with no audio for the rest of the session,
+ * and the only way back is a reboot they have no reason to try.
+ *
+ * Two users lost audio after v1.16.4 (Steve N9SZ, Samuel W7STF), the release
+ * that started polling the headphone jack every second. The 0x0F read really
+ * does fail in the field - `PI4IO read of reg 0x0f failed (ESP_ERR_TIMEOUT)`
+ * appears in their logs AND 485 times in my own bench capture, so it is not a
+ * board difference. Seeded from the value init() writes, so it is correct from
+ * the first call. */
+static uint8_t s_pi4io1_out_shadow = 0b01110110;   /* == init's release value */
+
+static bool pi4io_read_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *out)
+{
+    uint8_t addr = reg;
+    esp_err_t err = i2c_master_transmit_receive(dev, &addr, 1, out, 1, I2C_MASTER_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "PI4IO read of reg 0x%02x failed (%s) - leaving the port alone",
+                 reg, esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
 void bsp_set_charge_qc_en(bool en)
 {
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -356,8 +405,7 @@ void bsp_set_charge_en(bool en)
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -375,8 +423,7 @@ void bsp_set_usb_5v_en(bool en)
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -394,8 +441,7 @@ void bsp_set_ext_5v_en(bool en)
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -414,9 +460,21 @@ void bsp_generate_poweroff_signal()
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    /* ⛔ THE ONE CALLER THAT MUST NOT BAIL OUT ON A FAILED READ.
+     * Everywhere else, giving up preserves the other pins and the next
+     * call tries again. Here there IS no next call - this is the power
+     * button's own signal, and refusing to write would leave the machine
+     * on. Clobbering the other pins costs nothing on a board that is
+     * about to lose power, so proceed from 0x00 and say so.
+     *
+     * ⚠ write_buf[0] is ALSO set explicitly below. It used to be left
+     * over from the read's own transmit buffer - the only function here
+     * that depended on that, which is exactly how a mechanical sweep
+     * breaks one site out of ten. */
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0]))
+        ESP_LOGW(TAG, "poweroff: reading the port failed - signalling anyway");
 
+    write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
 
     // Try to generate poweroff signal 3 times to make sure it works :)
@@ -433,11 +491,14 @@ void bsp_generate_poweroff_signal()
 
 bool bsp_headphone_detect()
 {
-    uint8_t write_buf[2] = {0};
-    uint8_t read_buf[1]  = {0};
+    uint8_t read_buf[1] = {0};   /* pi4io_read_reg() builds its own address byte */
 
-    write_buf[0] = PI4IO_REG_IN_STA;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    /* A failed read returns false, which is the safe answer for both
+     * callers: no headphone detected means nothing is switched off. It is
+     * logged rather than silent - a detect that is actually failing
+     * every second reads exactly like a jack that is simply unplugged. */
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_IN_STA, &read_buf[0]))
+        return false;
 
     // printf("get %02x\n", read_buf[0]);
 
@@ -452,11 +513,14 @@ bool bsp_headphone_detect()
 
 bool bsp_usb_c_detect()
 {
-    uint8_t write_buf[2] = {0};
-    uint8_t read_buf[1]  = {0};
+    uint8_t read_buf[1] = {0};   /* pi4io_read_reg() builds its own address byte */
 
-    write_buf[0] = PI4IO_REG_IN_STA;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    /* A failed read returns false, which is the safe answer for both
+     * callers: no USB-C detected means nothing is switched off. It is
+     * logged rather than silent - a detect that is actually failing
+     * every second reads exactly like a jack that is simply unplugged. */
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_IN_STA, &read_buf[0]))
+        return false;
 
     // printf("get %02x\n", read_buf[0]);
 
@@ -474,8 +538,7 @@ void bsp_set_ext_antenna_enable(bool en)
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -488,6 +551,54 @@ void bsp_set_ext_antenna_enable(bool en)
     i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
 }
 
+/* Speaker power amplifier enable - PI4IOE1 P1.
+ *
+ * ⭐ THE PIN IS NAMED NOWHERE IN THE HEADER. It is recorded in exactly one
+ * place upstream: the Chinese comment in bsp_audio_codec_speaker_init(),
+ * `.pa_pin = -1,  // PI4IOE1 P1 控制` ("controlled by PI4IOE1 P1"). The header's
+ * BSP_POWER_AMP_IO is GPIO_NUM_NC with "(GPIO_NUM_53)" beside it, which looks
+ * like the answer and is not - GPIO 53 on this board is BSP_EXT_I2C_SDA.
+ *
+ * Added for Roy KI0ER, 2026-09-24: the Tab5 plays through the internal speaker
+ * AND the headphone jack at once, because both are fed from the codec's
+ * LOUT1/ROUT1 pair - measured, see rx_audio.c. The codec therefore cannot
+ * separate them; gating the speaker AMP is the only way, and this is its
+ * control line.
+ *
+ * Read-modify-write on the shared output register, same as every other pin
+ * function here: P4/P5 are the LCD and touch resets and must not be disturbed. */
+void bsp_set_speaker_amp_enable(bool en)
+{
+    uint8_t write_buf[2] = {0};
+    uint8_t read_buf[1]  = {0};
+
+    /* ⭐ FAIL LOUD, NOT SAFE - see s_pi4io1_out_shadow.
+     *
+     * Turning the amp ON is a recovery action and must happen even when the
+     * read fails; the shadow carries the other pins so P4/P5 (LCD_RST, TP_RST)
+     * are not disturbed. Turning it OFF is only ever a convenience, so that
+     * direction still gives up on a failed read - the worst case there is the
+     * speaker playing alongside headphones for a second, which is what v1.16.3
+     * did for its whole life. */
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) {
+        if (!en) return;                       /* muting can wait for a good read */
+        read_buf[0] = s_pi4io1_out_shadow;     /* enabling cannot */
+        ESP_LOGW(TAG, "speaker amp ON from the shadow - the port read failed");
+    }
+
+    write_buf[0] = PI4IO_REG_OUT_SET;
+    write_buf[1] = read_buf[0];
+    if (en) {
+        setbit(write_buf[1], 1);
+    } else {
+        clrbit(write_buf[1], 1);
+    }
+
+    if (i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2,
+                            I2C_MASTER_TIMEOUT_MS) == ESP_OK)
+        s_pi4io1_out_shadow = write_buf[1];
+}
+
 void bsp_set_wifi_power_enable(bool en)
 {
     uint8_t write_buf[2] = {0};
@@ -495,8 +606,7 @@ void bsp_set_wifi_power_enable(bool en)
 
     ESP_LOGI(TAG, "set_wifi_power_enable: %d", en);
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -508,8 +618,7 @@ void bsp_set_wifi_power_enable(bool en)
 
     i2c_master_transmit(i2c_dev_handle_pi4ioe2, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe2, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe2, PI4IO_REG_OUT_SET, &read_buf[0])) return;
     printf("0x%02X: %02x\n", PI4IO_REG_OUT_SET, read_buf[0]);
 }
 
@@ -523,8 +632,7 @@ void bsp_reset_tp()
     uint8_t write_buf[2] = {0};
     uint8_t read_buf[1]  = {0};
 
-    write_buf[0] = PI4IO_REG_OUT_SET;
-    i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, write_buf, 1, read_buf, 1, I2C_MASTER_TIMEOUT_MS);
+    if (!pi4io_read_reg(i2c_dev_handle_pi4ioe1, PI4IO_REG_OUT_SET, &read_buf[0])) return;
 
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = read_buf[0];
@@ -634,7 +742,21 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
         .sclk_io_num     = GPIO_SDMMC_CLK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = 4000,
+        /* ⛔ THIS WAS 4000, AND THE DIAG LOG WRITES 4096 (2026-09-22).
+         *
+         * A 4096-byte f_write is 8 sectors, which sdmmc_write_sectors issues as
+         * ONE SPI transaction of 4096 data bytes - larger than the DMA
+         * descriptor pool sized by max_transfer_sz, so the transfer fails and
+         * FatFs returns FR_DISK_ERR, which esp_vfs_fat maps to EIO. That is
+         * exactly the symptom: mount fine, README.txt (a few hundred bytes, one
+         * sector) fine, every 4 KB append to qmx-log.txt EIO, on a 31 GB card
+         * with 99.95% free and a zero-length log file.
+         *
+         * 32 KB, not 4096+1: the descriptor pool costs ~12 bytes per 4092-byte
+         * span, so the whole increase is under 100 bytes, and a value this
+         * close to the writes it has to carry is what made a one-sector change
+         * anywhere else in the tree turn into a dead SD card. */
+        .max_transfer_sz = 32768,
     };
     ret_val = spi_bus_initialize(BSP_SD_SPI_HOST, &bus_cfg, SDSPI_DEFAULT_DMA);
     if (ret_val != ESP_OK) {
@@ -1675,6 +1797,19 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t* config, esp_lcd_touch_handle_t
 }
 
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)
+/* The DSI panel handle, kept so a caller can reach the panel's own frame
+ * buffer. screenshot.c streams /ss.bmp straight out of it: a full-screen
+ * snapshot is 1280x720x2 = 1.8 MB and lv_snapshot_take_to_buf() needs that
+ * CONTIGUOUS, which on the WSPR page simply is not available - measured
+ * 2026-09-12, 2.26 MB free but a 1.31 MB largest block. The frame buffer
+ * already exists and already holds exactly what is on the glass. */
+static esp_lcd_panel_handle_t s_bsp_panel = NULL;
+
+esp_lcd_panel_handle_t bsp_display_get_panel_handle(void)
+{
+    return s_bsp_panel;
+}
+
 static lv_display_t* bsp_display_lcd_init(const bsp_display_cfg_t* cfg)
 {
     assert(cfg != NULL);
@@ -1690,6 +1825,8 @@ static lv_display_t* bsp_display_lcd_init(const bsp_display_cfg_t* cfg)
     } else {
         BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles(NULL, &lcd_panels));
     }
+
+    s_bsp_panel = lcd_panels.panel;
 
     /* Add LCD screen */
     ESP_LOGD(TAG, "Add LCD screen");

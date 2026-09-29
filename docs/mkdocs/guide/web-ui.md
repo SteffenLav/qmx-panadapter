@@ -122,12 +122,24 @@ own callsign stands out, as on the Tab5.
 
 **Click a station to work it** (at the operator's own
 request). The confirm dialog states what will happen, and then the browser runs
-the **same intelligent Transmit a Tab5 row-tap runs**: a fresh CQ starts the full
-automatic QSO (you are not in front of the radio to click each exchange step);
-anything mid-exchange sends the one correct next message. The outcome comes back
-in plain words under the TX banner - "Armed: ...", "Busy: working X", or a refusal
-if the station has aged out of the list, because transmitting at a station that
-may have left is worse than asking you to click again.
+the **same intelligent Transmit a Tab5 row-tap runs**: anything that opens an
+exchange starts the **full automatic QSO** — whether you are answering a CQ or
+answering someone who called *you* — because you are not in front of the radio
+to click each step. A closing 73 still goes out as a single message. The outcome
+comes back in plain words under the TX banner - "Armed: ...", "Working X (auto
+QSO)", or a refusal if the station has aged out of the list, because
+transmitting at a station that may have left is worse than asking you to click
+again.
+
+**You can pick your next station before the current one has finished.** From the
+moment your closing 73 is armed the exchange is settled, but it is not *over*
+for the best part of a minute — long enough for the caller you wanted to drop
+off the list. Clicking one during that window used to answer "Busy: working X"
+and discard the choice. It is now **held** and acted on the moment the machine
+is free, reported as "Queued: X, after this exchange". The callsign is what is
+remembered, not the prepared message, so the reply is built fresh from the live
+decode when it is actually sent. **Auto Pounce** on the Tab5 itself behaves the
+same way.
 
 **Who is calling you.** Below the table, the **pileup** - stations answering you
 while you are busy - each clickable with the same confirm. And the **grey-list**
@@ -159,6 +171,28 @@ Asked for by Dennis WN4FLA. A CQ run that has timed out, or that has reached its
 > **Not yet confirmed on the air.** The endpoint, the hand-off, the preset/tone/parity reuse and the error path are all verified on hardware; the final key-down is inferred from sharing the Tab5 button's code. Please report how it behaves.
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
+
+## Mid-QSO controls
+
+While an exchange is running, a **Mid-QSO** row appears under the FT8 controls:
+
+- **Re-send** — send the current message again
+- **RR73** / **73** — jump straight to either
+- **Pause** — skip exactly one transmission and keep the exchange (new in v1.16.2)
+- **Cancel** — stop transmitting and end the exchange
+
+**Pause** is the one to reach for when you want to listen on your own slot: to
+check the frequency is still clear, or to hear whether the station is really
+answering *you*. It shows a **pause** symbol normally and a **play** symbol on
+yellow while a transmission is being skipped, and pressing it again takes the
+pause back. A slot you skip on purpose never counts against giving up on the
+contact.
+
+The Tab5's own button does exactly the same thing, so the two screens always
+agree about whether you are paused.
+
+*Randy N4OPI asked for this on the web page specifically — he runs his station
+from another room and rarely touches the Tab5 itself.*
 
 ## Choosing your TX tone
 
@@ -208,12 +242,24 @@ it: a channel you cannot legally tune is worse than no channel.
 ## Antenna Tune from the browser (QMX 1.04+)
 
 With a QMX on firmware 1.04+, an **Antenna Tune** button
-appears in the bottom bar. It **keys the radio with a steady carrier**, so it
-confirms first - and while running, the button itself becomes the readout:
-**live power and SWR**, click again to stop. Both ends carry a **60-second
-safety stop**: the device's own timer fires even if the browser tab dies, and
-the radio's prior mode is restored, never left keyed. Stopping Tune from the
-QMX's own front panel is honoured too.
+appears in the bottom bar. It **keys the radio with a steady carrier** the
+moment you click it - there is no confirmation step, because tuning into a load
+is an ordinary part of operating and the 60-second stop is the real safety net.
+
+While it runs, a **panel appears in the middle of the page** with the live
+**SWR**, the **power** in watts, and the **seconds left** before the tune stops
+itself, plus a **STOP Tune** button. The panel stays up whatever else you click,
+so you can keep both hands on an ATU and still read the SWR; the rest of the
+page carries on working underneath it. The SWR figure is also colour-coded -
+green below 1.5, amber below 2.5, red above - and the number itself is always
+shown, so the colour is never the only thing telling you.
+
+The bottom-bar button doubles as the same readout and the same stop, for when
+the menu happens to be open.
+
+Both ends carry a **60-second safety stop**: the device's own timer fires even
+if the browser tab dies, and the radio's prior mode is restored, never left
+keyed. Stopping Tune from the QMX's own front panel is honoured too.
 
 ## Settings, with a real keyboard
 
@@ -226,7 +272,9 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **The FT8 include/exclude filter terms** (both pairs) and the filter toggles.
 - **Everyday switches**: POTA and RBN spots, PSK Reporter, grey-listing, distance
   units, I/Q balance, band-plan region, and the QMX volume in dB.
-- **WiFi**: add another network from a laptop. The Tab5 remembers up to six.
+- **WiFi**: add another network from a laptop. The Tab5 remembers up to six, and
+  a **Preferred network** field (under network name and password) decides which
+  one wins — see below.
 - **Show RIT button**, matching the Tab5 setting — hide the RIT button on the panadapter
   if you never use it.
 - **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
@@ -235,6 +283,50 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
+
+### Preferred network
+
+The Tab5 remembers up to six networks. Before this field existed it always took
+whichever remembered network was **loudest**, which is the wrong answer on a
+site with more than one — a DMZ and a house network, say, where the loud one is
+not the one you want the panadapter on.
+
+Set **Preferred network** to the SSID you want and the Tab5 takes it over any
+stronger alternative whenever it is reachable. Leave it empty and nothing
+changes, so nobody who does not need this is affected.
+
+Both this field and **Network name** list the networks your Tab5 actually
+remembers, under the field itself. Only a name from that list will work.
+
+!!! warning "v1.16.3 — the field was there but it did almost nothing"
+
+    In v1.16.3 the preference was only consulted after the Tab5 had **failed**
+    to connect twice. So it worked when your usual network was down, and did
+    nothing in the case it was written for: both networks up, the usual one
+    answers immediately, and you wanted the other. It also did not take effect
+    until the next reboot. If you set it on v1.16.3 and saw no difference, that
+    is why — and it was not something you did wrong.
+
+    **Fixed in v1.16.4**: the preference is read when the Tab5 connects, and
+    saving it moves the Tab5 straight away *(Randy N4OPI)*.
+
+If the preferred network does not answer, the Tab5 falls back to the strongest
+remembered one after a few seconds, so an unreachable preference costs you
+about ten seconds at start-up and nothing else. It is re-tried on every later
+fallback too, so it wins again the moment it comes back.
+
+**Switching to a network the Tab5 already knows** needs only the **Network
+name** — leave the password blank and the stored one is used. (Up to v1.16.3 a
+blank password made the Tab5 discard the name silently, which read as the
+setting not saving. Fixed in v1.16.4.)
+
+**The FT8 transmit tone saves properly too, from v1.16.4.** Setting `tx_tone_hz`
+on the settings page used to answer *Saved* and write it down without telling
+the radio, so bursts kept going out on the old tone until the next restart. The
+tone control on the FT8 page was never affected.
+
+> Not carried in a config backup. A restored config does not bring the
+> preferred network with it; set it again on each unit.
 
 Also here: the **Display & waterfall** group -
 brightness, waterfall black level, contrast, FFT window, colour map, display
@@ -324,6 +416,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Reboot the Tab5** (new in v1.16.2) — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
 - **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 
     !!! warning "Experimenter feature — you fit the connector yourself"

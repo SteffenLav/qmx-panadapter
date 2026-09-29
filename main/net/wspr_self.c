@@ -14,9 +14,20 @@
 // &nbsp;value&nbsp; regardless of column.
 //
 // Verified live query, 2026-09-11:
-//   https://www.wsprnet.org/olddb?mode=html&band=all&limit=30&findcall=DL8UG&findReporter=&sort=date
+//   http://www.wsprnet.org/olddb?mode=html&band=all&limit=30&findcall=DL8UG&findReporter=&sort=date
 // (querying the www host directly - the bare wsprnet.org host 302-redirects
 // to it, and there is no reason to pay that extra round trip every poll).
+//
+// Plain HTTP, not HTTPS: verified live (three consecutive fetches, identical
+// byte count each time) that this specific endpoint answers 200 directly
+// over HTTP with no redirect - unlike every other read-only feed this
+// project queries (hamqsl.com, PSK Reporter's own retrieve.*, spothole.app,
+// tab5.lav.dk all 301 straight to HTTPS; POTA's API 403s plain HTTP
+// outright). net/wsprnet.c's own POST to this same host has used plain HTTP
+// for its entire history for the same reason. Skipping the TLS handshake
+// avoids an mbedtls session on every one of this module's periodic polls -
+// this data (who heard our own already-public WSPR beacon) carries no
+// credential and needs no confidentiality.
 
 #include "wspr_self.h"
 #include "wifi.h"
@@ -49,7 +60,7 @@ static const char *TAG = "wspr_self";
 #define QUERY_LIMIT     30      // rows requested - plenty for "who's hearing me right now"
 #define POLL_INTERVAL_S 180     // WSPR cycles are 2 min; this trails by half a cycle so a
                                  // just-uploaded report has landed in wsprnet's DB by the time we ask
-#define WSPR_SELF_TTL_S 1800    // same half-hour map lifetime as net/rbn.c's and net/pskr_self.c's self-spots
+#define WSPR_SELF_TTL_S (24 * 3600)   // same as net/rbn.c's RBN_SELF_TTL_S - see the reason there
 
 static EXT_RAM_BSS_ATTR wspr_self_spot_t s_store[WSPR_SELF_MAX];
 static int               s_count;
@@ -197,6 +208,17 @@ static void parse_and_store(const char *html)
         double lat, lon;
         if (maidenhead_to_latlon(field[9], &lat, &lon)) {
             sp.lat = (float)lat; sp.lon = (float)lon; sp.has_pos = true;
+            /* The grid as SENT - see the same note in net/pskr_self.c. */
+            snprintf(sp.grid, sizeof(sp.grid), "%.6s", field[9]);
+        } else {
+            // Same diagnostic shape as net/pskr_self.c's own - wsprnet.org's
+            // "loc" column IS the reporter's own grid, straight from their
+            // upload, so a miss here means the grid string itself (not a
+            // lookup, there is none for WSPR) didn't parse. field[9] is
+            // already a bounded 24-byte copy (next_td()), safe to log as-is.
+            ESP_LOGW(TAG, "no position for reporter '%s' - loc='%s' (len=%d, %s)",
+                     sp.call, field[9], (int)strlen(field[9]),
+                     field[9][0] ? "grid present but unparsed" : "no grid in report");
         }
 
         store_add(&sp);
@@ -220,7 +242,7 @@ static void fetch_once(const char *mycall)
 
     char url[192];
     snprintf(url, sizeof(url),
-             "https://www.wsprnet.org/olddb?mode=html&band=all&limit=%d&findcall=%s&findReporter=&sort=date",
+             "http://www.wsprnet.org/olddb?mode=html&band=all&limit=%d&findcall=%s&findReporter=&sort=date",
              QUERY_LIMIT, call_upper);
 
     esp_http_client_config_t cfg = {
@@ -257,8 +279,13 @@ static void wspr_self_task(void *arg)
     while (!wifi_is_connected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_S * 1000));
+    /* ⛔ QUERY FIRST, THEN WAIT. The delay used to come first, so nothing
+     * appeared for a full POLL_INTERVAL_S (3 min) after boot - the operator's
+     * "the list starts populating like 3min after opening the map". A short
+     * settle lets the post-Got-IP burst (SNTP, POTA, web server) pass. */
+    vTaskDelay(pdMS_TO_TICKS(15000));
+    for (bool first = true; ; first = false) {
+        if (!first) vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_S * 1000));
 
         if (net_quiet_active()) continue;
         // The spot map is opt-in (settings.h, spotmap_en) and this is one of
@@ -283,6 +310,8 @@ void wspr_self_init(void)
 {
     if (s_mutex) return;
     s_mutex = xSemaphoreCreateMutex();
-    psram_task_create(wspr_self_task, "wspr_self", 6144, NULL, 3, tskNO_AFFINITY);
+    // 6144 -> 9216: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(wspr_self_task, "wspr_self", 11264, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "self-spotting ready (wsprnet.org query, %d s poll)", POLL_INTERVAL_S);
 }

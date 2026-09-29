@@ -43,6 +43,13 @@ typedef struct {
      * reason - an unmeasured number displayed as a measurement is a fabricated
      * one, and a missing field is honest where a wrong one is not. */
     int16_t  snr_db;
+    /* km came from a COUNTRY CENTROID, not from the station's grid. Spots with
+     * no grid used to show "--"; geo_coords can place the callsign's country,
+     * which is worth having for sorting and a rough heading - but a whole
+     * country collapses to one point (~2,000 km from either US coast), so the
+     * view prefixes such a distance with "~". An unmarked estimate would be a
+     * measurement we did not make, which is the rule that deleted the "599". */
+    bool     km_approx;
     /* WSPR_DRIFT_UNKNOWN until measured. Note 0 is a genuine and common value -
      * fifty stations reported drift 0 for our own transmission - so a default of
      * 0 would be indistinguishable from a real clean reading. That is precisely

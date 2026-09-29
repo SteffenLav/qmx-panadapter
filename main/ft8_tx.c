@@ -760,9 +760,12 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
     // Skipped entirely under the FT8 simulation-mode hard interlock (see
     // ft8_sim.h) - cat_set_mode() below is a real CAT write, and sim mode's
     // whole point is that NOTHING here touches a possibly-connected QMX.
-    qmx_settings_t arm_sim_s;
-    settings_load_all(&arm_sim_s);
-    bool sim = arm_sim_s.sim_mode_en;
+    //
+    // ⛔ Read via the narrow accessor, NOT settings_load_all() (#409) - this
+    // function runs on whatever task called ft8_tx_arm(), which includes the
+    // httpd worker task (10 KB stack) via the web UI's tone-apply re-arm path.
+    // A whole qmx_settings_t on that stack rebooted the Tab5 every time.
+    bool sim = settings_get_sim_mode_en();
     const char *mode = sim ? "DiGi" : cat_get_mode_str();
     if (strcmp(mode, "DiGi") != 0) {
         ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
@@ -1110,6 +1113,18 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // burst's reading from ~2 s in. Skipped in sim mode (no real link).
         bool ps_sent = false, ps_have = false;
         int  ps_read_at = 0;
+        // Diagnostic only (Randy N4OPI, 2026-09-16: web PWR sometimes takes
+        // "as much as 6 seconds", sometimes "never updates during the current
+        // TX cycle"). The post-burst query a few lines below already logs
+        // every attempt; this mid-burst cycle never did, so a slow or failed
+        // burst was silent right up to whatever the NEXT successful read
+        // happened to show. ps_attempts counts every send/read round; the
+        // per-round line below reports why each one did or didn't land, and
+        // the summary after the symbol loop reports the outcome for the whole
+        // burst in one line, cheap to grep for.
+        int   ps_attempts = 0;
+        int   ps_first_ok_symbol = -1;
+        int64_t ps_first_ok_ms = -1;
         // SWR protection limit, sampled once per burst so a settings change
         // mid-transmission cannot alter the rules half way through.
         float swr_limit = 0.0f;
@@ -1159,14 +1174,24 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                     cat_pwr_swr_async_send();
                     ps_sent = true;
                     ps_read_at = i + 8;
+                    ps_attempts++;
+                    ESP_LOGI(TAG, "live pwr/swr: attempt %d sent at symbol %d/%d (t=%ldms)",
+                             ps_attempts, i, nn, (long)((esp_timer_get_time() - t0) / 1000));
                 } else if (ps_sent && i >= ps_read_at) {
                     float pw = -1.0f, sw = -1.0f;
-                    if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK && pw >= 0.0f && sw >= 0.0f) {
+                    esp_err_t rd_err = cat_pwr_swr_async_read(&pw, &sw);
+                    int64_t t_ms = (esp_timer_get_time() - t0) / 1000;
+                    if (rd_err == ESP_OK && pw >= 0.0f && sw >= 0.0f) {
                         s_last_power_w   = pw;
                         s_last_swr       = sw;
                         s_last_pwr_swr_us = esp_timer_get_time();
+                        if (ps_first_ok_symbol < 0) {
+                            ps_first_ok_symbol = i;
+                            ps_first_ok_ms = t_ms;
+                        }
                         ps_have = true;
-                        ESP_LOGI(TAG, "live TX power=%.1fW SWR=%.2f", (double)pw, (double)sw);
+                        ESP_LOGI(TAG, "live TX power=%.1fW SWR=%.2f (attempt %d, symbol %d/%d, t=%ldms)",
+                                 (double)pw, (double)sw, ps_attempts, i, nn, (long)t_ms);
                         // Trip: cut the burst short and latch. Only a reading
                         // with real power behind it counts - SW; can report a
                         // meaningless ratio when the PA is not actually loaded.
@@ -1179,6 +1204,15 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                             aborted = true;
                             break;
                         }
+                    } else {
+                        // Either still waiting (rd_err == ESP_ERR_TIMEOUT, the
+                        // QMX hasn't answered yet) or it answered but one field
+                        // came back negative/unparseable - cat_pwr_swr_async_read()
+                        // already logs the raw pc/sw strings on a genuine OK, so
+                        // this line is what is missing on every OTHER outcome.
+                        ESP_LOGW(TAG, "live pwr/swr: attempt %d not usable at symbol %d/%d "
+                                      "(t=%ldms, err=0x%x, pw=%.1f, sw=%.2f) - retrying",
+                                 ps_attempts, i, nn, (long)t_ms, rd_err, (double)pw, (double)sw);
                     }
                     ps_sent = false;   // re-arm the next send/read cycle
                 }
@@ -1217,6 +1251,25 @@ void ft8_tx_run(const ft8_tx_request_t *req)
 #endif
         }
 
+#if FT8_TX_SEND_LIVE
+        // Diagnostic summary for the whole burst - see ps_attempts' own
+        // comment above. One line, cheap to grep for ("live pwr/swr: burst
+        // summary"), and the thing to look at first for "sometimes never
+        // updates": if ps_first_ok_symbol never got set, every attempt this
+        // burst was rejected, not just slow.
+        if (!sim && !is_ft4) {
+            if (ps_first_ok_symbol >= 0) {
+                ESP_LOGI(TAG, "live pwr/swr: burst summary - %d attempt(s), first usable "
+                              "reading at symbol %d/%d (t=%ldms)",
+                         ps_attempts, ps_first_ok_symbol, nn, (long)ps_first_ok_ms);
+            } else {
+                ESP_LOGW(TAG, "live pwr/swr: burst summary - %d attempt(s), NO usable "
+                              "reading this burst - display kept the previous one",
+                         ps_attempts);
+            }
+        }
+#endif
+
         if (!aborted) {
             // Let the final symbol play out its full period before keying
             // up - otherwise we'd truncate the last tone for receivers.
@@ -1243,9 +1296,35 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                      pswr_err, (double)power_w, (double)swr);
             if (power_w >= 0.0f && swr >= 0.0f) {
                 ESP_LOGI(TAG, "TX power=%.1fW SWR=%.2f", (double)power_w, (double)swr);
-                s_last_power_w = power_w;
-                s_last_swr = swr;
-                s_last_pwr_swr_us = esp_timer_get_time();
+                // ⛔ RANDY N4OPI'S "DISPLAYS A FRACTION OF THE ACTUAL POWER" -
+                // caught in the diagnostic capture added for this, 2026-09-16.
+                // This query runs AFTER the envelope-drop keyup tone and its
+                // settle delay (FT8_TX_ENVELOPE_SETTLE_MS), by which point the
+                // QMX's PA has often already started ramping down - so on an
+                // FT8 burst (which the mid-burst sampler above already read
+                // consistently and accurately, symbol 14 onward, every ~1.3s)
+                // this backstop reading sometimes lands on a genuinely-lower
+                // instantaneous power as the RF is winding down, not a wrong
+                // measurement of a wrong thing. Real captured example: mid-burst
+                // read 3.7W/SWR 1.20 at symbol 77/79 (t=12334ms), then this
+                // query ~340ms later read 0.0W/SWR 1.22 - both true readings of
+                // the antenna at their own instant, but the second one is not
+                // what the burst actually ran at, and it was unconditionally
+                // overwriting the good value every single burst, so the display
+                // was a coin toss between the two.
+                //
+                // So: only let this update the DISPLAYED figures when nothing
+                // better already came from mid-burst this transmission (FT4 has
+                // no mid-burst sampler at all - #300 - so it always lands here).
+                // The SWR-protection trip below stays UNCONDITIONAL regardless -
+                // a fault appearing only in this last instant must still latch,
+                // and power_w > 0.1f already excludes a winding-down near-zero
+                // reading from ever tripping it.
+                if (!ps_have) {
+                    s_last_power_w = power_w;
+                    s_last_swr = swr;
+                    s_last_pwr_swr_us = esp_timer_get_time();
+                }
                 // Post-burst trip. Catches what the mid-burst sampler could not:
                 // an FT4 burst (no mid-burst query at all), a fault that only
                 // appeared near the end, or a burst too short to sample. The

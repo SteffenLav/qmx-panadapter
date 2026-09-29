@@ -2,6 +2,7 @@
 
 #include "rbn.h"
 #include "net/net_quiet.h"
+#include "audio/rx_audio.h"
 #include "spots.h"
 #include "wifi.h"
 #include "cat.h"
@@ -55,7 +56,10 @@ static const char *TAG = "rbn";
 // oldest is evicted first, same eviction rule as below) plus a manual Flush
 // (rbn_self_spots_clear()) so the map can be started fresh on demand.
 #define RBN_SELF_MAX  100
-#define RBN_SELF_TTL_S 1800       // stays on the map half an hour after being heard
+/* 24 h, was 1800. ⛔ At 1800 the map's "Older >30 min" checkbox could never
+ * show a real spot: the store deleted it at exactly the age the map would
+ * have started drawing it faded. The 100-entry evict-oldest cap bounds it. */
+#define RBN_SELF_TTL_S (24 * 3600)
 
 // Bench override for bringing the feature up when there is no way to reach the
 // settings toggle (the web UI behind a hotel subnet, nobody at the screen).
@@ -233,9 +237,27 @@ static void note_self_spot(const char *skimmer, uint32_t freq_hz, int snr, int64
     s->self[slot].freq_hz    = freq_hz;
     s->self[slot].snr_db     = snr;
     s->self[slot].heard_unix = now;
-    s->self[slot].has_pos = qrz_coords_lookup_cached(skimmer, &s->self[slot].lat, &s->self[slot].lon) ||
-                            geo_coords_for_call(skimmer, &s->self[slot].lat, &s->self[slot].lon);
-    ESP_LOGI(TAG, "self-spotted by %s, %d dB on %lu Hz", skimmer, snr, (unsigned long)freq_hz);
+
+    // Position is resolved ONCE, right here, at capture time - re-hearing the
+    // same skimmer later (the strcmp branch above) never touches it again, so
+    // a miss here is permanent for as long as this entry survives in the ring
+    // buffer. Field-reported 2026-09-11: EI4HQ and G4ZFQ both showed up with
+    // no position even though their prefixes ("EI", "G") are plainly in
+    // util/geo_coords.c's table and match in isolation (verified by hand) -
+    // this diagnostic exists to catch the ACTUAL string/state the next time
+    // it happens, rather than guessing again. %.15s + explicit length: a
+    // stray trailing byte (CR, space, a truncated dash-suffix) would compare
+    // unequal to the clean prefix and miss silently otherwise.
+    bool have_qrz = qrz_coords_lookup_cached(skimmer, &s->self[slot].lat, &s->self[slot].lon);
+    bool have_geo = have_qrz ? false : geo_coords_for_call(skimmer, &s->self[slot].lat, &s->self[slot].lon);
+    s->self[slot].has_pos = have_qrz || have_geo;
+    if (!s->self[slot].has_pos) {
+        ESP_LOGW(TAG, "no position for skimmer '%.15s' (len=%d, qrz_logged_in=%d) - "
+                      "neither QRZ nor the geo_coords.c prefix table matched",
+                 skimmer, (int)strlen(skimmer), (int)qrz_coords_is_logged_in());
+    }
+    ESP_LOGI(TAG, "self-spotted by %s, %d dB on %lu Hz%s", skimmer, snr, (unsigned long)freq_hz,
+             s->self[slot].has_pos ? "" : " [NO POSITION]");
 }
 
 static void expire_self(int64_t now)
@@ -393,9 +415,13 @@ static void session(int fd, const char *mycall)
         qmx_settings_t st;
         settings_load_all(&st);
         // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
-        // exactly the internal-heap churn the verify cannot afford. A live
-        // connection is left running; this only gates starting a new one.
-        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        // exactly the internal-heap churn the verify cannot afford. (Left as it
+        // was - the OTA fix was verified with this read loop pausing.)
+        if (net_quiet_active() || rx_audio_is_enabled()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        /* ⛔ NO bg_feed_gate HERE - this is the READ loop of a live session.
+         * Gating it stopped recv() whenever any overlay was up, so while the
+         * SelfSpotter was open RBN delivered NOTHING, including the CW
+         * self-spots that screen exists to show. */
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) { ESP_LOGI(TAG, "session ending (disabled or offline)"); return; }
 
@@ -450,9 +476,15 @@ static void session(int fd, const char *mycall)
         if (esp_timer_get_time() - last_pub_us >= PUBLISH_EVERY_MS * 1000LL) {
             last_pub_us = esp_timer_get_time();
             publish(now);
-            ESP_LOGI(TAG, "%lu lines -> %d stations held (%lu new)",
-                     (unsigned long)lines, s->n, (unsigned long)spots);
-            lines = 0; spots = 0;
+            /* Every 5 min, was every 10 s (log audit 2026-09-13). lines/new are
+             * accumulated over the whole window, so nothing is lost but noise. */
+            static int s_windows = 0;
+            if (++s_windows >= 30) {
+                s_windows = 0;
+                ESP_LOGI(TAG, "%lu lines -> %d stations held (%lu new) in 5 min",
+                         (unsigned long)lines, s->n, (unsigned long)spots);
+                lines = 0; spots = 0;
+            }
         }
     }
 }
@@ -468,7 +500,9 @@ static void rbn_task(void *arg)
         // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
         // exactly the internal-heap churn the verify cannot afford. A live
         // connection is left running; this only gates starting a new one.
-        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+        // NOT bg_feed_gate: RBN carries the SelfSpotter's CW self-spots, so
+        // holding its reconnect while an overlay is up starves that very screen.
+        if (net_quiet_active() || rx_audio_is_enabled()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) {
             // Drop anything we were showing: stale RBN spots are worse than none.
@@ -591,6 +625,12 @@ void rbn_init(void)
     s = heap_caps_calloc(1, sizeof(rbn_state_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s) { ESP_LOGE(TAG, "no PSRAM for state (%u B)", (unsigned)sizeof(rbn_state_t)); return; }
     rbn_selftest();
-    psram_task_create(rbn_task, "rbn", 5120, NULL, 2, tskNO_AFFINITY);
+    // 5120 -> 8192 -> 10240: qmx_settings_t grew ~1350 B for the first
+    // Calibrate Power table, then another ~1550 B when its sweep went
+    // 23 -> 45 steps for finer resolution (settings.h PWRCAL_STEPS). Both
+    // bumps generous, not incremental - the first +1024 undershot on this
+    // class of task elsewhere (sd_archive). PSRAM-backed, costs nothing but
+    // PSRAM.
+    psram_task_create(rbn_task, "rbn", 10240, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "RBN client started (opt-in; state %u B)", (unsigned)sizeof(rbn_state_t));
 }

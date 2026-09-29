@@ -10,23 +10,39 @@ your grid square to theirs.
 
 This is Uwe DL8UG's work, contributed to the project.
 
-!!! note "Off by default"
-    The spot map is **opt-in**. Switch it on in
-    **Settings -> Network -> Spot map (live reports of my signal)**. Until you do, nothing connects
-    and nothing runs — see [Why it is off until you ask](#5-why-it-is-off-until-you-ask).
+!!! note "Always on, no setting to find"
+    The three feeds below connect from the moment the Tab5 boots and stay
+    connected — there is nothing to switch on. Earlier versions asked you to
+    enable it first and only ran the feeds while the map was open; both of
+    those were tried and dropped, in that order, on the operator's own
+    instruction, once he found the list was still empty the first few
+    minutes after opening it either way. See
+    [What it costs, running all the time](#5-what-it-costs-running-all-the-time).
 
 ---
 
 ### 1. Opening it
 
-**Swipe down from the very top edge of the screen.** The map opens over whatever
+**Open the settings drawer and tap SelfSpotter** — the button right below
+**Need guidance?**, near the top of the drawer. The map opens over whatever
 page you were on, and **Exit** (top right) closes it. A Bluetooth keyboard's
 `Esc` closes it too.
 
-The gesture works from the panadapter, FT8 and WSPR pages alike.
+!!! note "Not a swipe any more"
+    Earlier versions opened this with a swipe down from the top edge of the
+    screen. That gesture collided with the top bar's own Band/Mode/BW/Zoom
+    taps and was easy to trigger by accident, so it was replaced with the
+    drawer button above.
 
-If the map is switched off, the swipe tells you so and points you at the setting
-rather than opening an empty world.
+The button works from the panadapter, FT8 and WSPR pages alike — the drawer
+itself opens the same way from any of them (swipe in from the right edge).
+
+The header shows your **callsign, dial frequency, and the current UTC date and
+time** — so a screenshot of the map stands on its own without needing anything
+else to say when or where it was taken.
+
+There is nothing to switch on first — the feeds have been running since boot
+(see below), so the map is never starting from a cold, empty world.
 
 ---
 
@@ -46,25 +62,36 @@ what other people have already published about you.
 A report stays on the map for **half an hour**, then drops off. The map is a
 picture of who is hearing you *now*.
 
-The **Source** checkboxes in the left sidebar show or hide each one. **Flush**
-empties the map immediately so you can start a fresh picture — it does not stop
-any of the feeds, they simply begin filling it again.
+The **Source** checkboxes in the left sidebar show or hide each one. **Flush**,
+in the header beside **Exit**, empties the map immediately so you can start a
+fresh picture — useful when you change band. It does not stop any of the feeds;
+they simply begin filling it again. *(Contributed by Uwe DL8UG. It was in the
+sidebar until v1.14.4.)*
 
 ---
 
 ### 3. The three tabs
 
 **MAP** draws a line from your position to each station that reported you, over a
-world outline. Line colour matches the source: **blue** for CW, **amber** for
-digital, **green** for WSPR — the same colours the band-plan strip uses for those
-modes. Your own position is a dot, drawn on top.
+world map — filled land, lighter than the sea, with a coastline outline on top.
+Line colour matches the source: **blue** for CW, **amber** for digital, **green**
+for WSPR. A line older than 30 minutes fades rather than disappearing, so a
+quiet stretch still shows what was heard recently. Your own position is a dot,
+drawn on top of everything.
 
 - **Drag** with one finger to pan.
-- **Pinch** with two fingers to zoom, up to 8×. Zoom is anchored on your own
+- **Pinch** with two fingers to zoom, up to 50×. Zoom is anchored on your own
   station, so your QTH stays put while the world grows around it.
 
-**LIST** is the same data as a table — receiver, mode, band, frequency, SNR,
-distance and age — when you want the numbers rather than the picture.
+**LIST** is the same data as a table — **RECEIVER, GRID, COUNTRY, MODE, BAND,
+FREQUENCY, SNR, KM** and **AGE** — when you want the numbers rather than the
+picture. Every column is sortable; tap a header to sort by it.
+
+**GRID** is the locator the receiving station itself sent, not one worked
+backwards from a position, so it is blank for CW skimmers: they report a
+callsign and not a location. **COUNTRY** names the *country*, which can differ
+from the DXCC entity the map plots — a Hawaiian station's marker sits on
+Hawaii, while its country reads United States.
 
 **CONDITIONS** is HF propagation from hamqsl.com: day and night ratings per band
 group, plus solar flux, A and K index, sunspot number, geomagnetic field and
@@ -94,23 +121,25 @@ from the QRZ Logbook API key used for uploading contacts.
 
 ---
 
-### 5. Why it is off until you ask
+### 5. What it costs, running all the time
 
-Two reasons, both worth knowing rather than just working around:
+Worth knowing, since there is no longer a setting to weigh this against:
 
-**It opens a connection on your behalf.** While the map is on, the Tab5 holds a
-live session to PSK Reporter's broker subscribed to your callsign, and polls
-wsprnet and hamqsl. That is a reasonable thing to do when you have asked for it,
-and not something to inherit from a firmware update.
+**It holds a connection on your behalf, permanently.** From boot, the Tab5
+holds a live session to PSK Reporter's broker subscribed to your callsign,
+and polls RBN and wsprnet. That used to be something you asked for first;
+now it starts with everything else.
 
-**It costs memory that other things need.** Measured on the bench, running the
-feeds costs about 6.6 KB of internal RAM and 2.6 KB of the DMA pool — and that
-DMA pool is the one that microSD mounts, USB and encrypted uploads draw on when
-they need it. Charging that to everyone, including operators who never open the
-map, is not a good trade.
+**It costs memory that other things need.** Measured on the bench, running
+the feeds costs about 6.6 KB of internal RAM and 2.6 KB of the DMA pool —
+and that DMA pool is the one that microSD mounts, USB and encrypted uploads
+draw on when they need it. Every unit pays this now, whether or not the map
+is ever opened.
 
-Switching it on and off takes effect immediately, no reboot. Switching it off
-gives the memory back.
+The feeds run whether the map is on screen or not — opening it doesn't start
+them and closing it doesn't stop them — so the picture is already populated
+with whatever has come in since boot the first time you look, rather than
+starting from nothing.
 
 ---
 

@@ -27,8 +27,9 @@ WiFi indicator with the network name and IP address.
 | Item | Meaning |
 |------|---------|
 | Battery % | Charge level (e.g. `88%`, or `88%  ⚡` while charging). `(limit)` is appended when charging has been deliberately capped at your Battery Care setting - it reads identically to "not charging" otherwise, and this tells you it's on purpose (v1.9.4) |
-| **SD** (green dot) | A microSD card is mounted and being mirrored **continuously** — the case with WiFi off (see [Settings](../guide/settings.md)) |
-| **SD** (yellow dot) | A card is present and your start-up backup is written, but continuous mirroring has stopped — the case with WiFi on. Your log, config and LoTW certificate are safe on the card; later QSOs are written at the next start-up |
+| **SD** (green dot) | A card is mounted and **writes are reaching it** — something landed in the last 90 seconds (see [Settings](../guide/settings.md)) |
+| **SD** (yellow dot) | A card is mounted but **nothing has been written lately**. Either there is genuinely nothing to write, or writes are failing — see [Troubleshooting](../reference/troubleshooting.md) |
+| **SD** (grey dot, struck through) | No card in the slot. Not an error |
 | `UTC(GPS)` / `UTC(NTP)` / `UTC(FT8)` / `UTC(FT4)` | The time source **currently** in charge — GPS-disciplined QMX, WiFi/SNTP, or FT8/FT4 offline sync (RTC / manual show as `UTC(RTC)` / `UTC(MAN)`) |
 | Firmware version | Currently flashed firmware version |
 | WiFi fan icon | Link strength, at the right-hand end with the network name and IP address. The dot alone means a weak link (above 25 %), plus the first bow above 50 %, plus the second above 80 %; all three faint means connected but very weak, or `off`. From v1.3.4 this replaces the old `-NN dBm` figure — the width went to the network name, which is far more often too long to fit |
@@ -150,10 +151,22 @@ The **visible-span block** inside the strip shows the exact portion of the band 
 
 A **passband sub-block** inside the visible-span block mirrors the current filter width at band scale (grey tint), so you can see how your passband sits within the CW/Digi/Phone zones.
 
-**Tune directly from the strip:**
+**Tap and drag do different things, on purpose:**
 
-- **Tap** anywhere on the strip to jump to that frequency
-- **Drag** to scrub along the band — the frequency label updates live and the QMX retunes on release
+- **Tap** anywhere on the strip to jump to that frequency. Tapping says *go there*.
+- **Drag the visible-span block** to move the window along the band. Dragging says
+  *look there*. The block, the VFO marker and the passband all travel together as
+  one piece, keeping the dial exactly where it sits inside the window, and the
+  radio follows. Let go and it stays where you put it.
+
+The filter passband and the CW/Digi/Phone labels hide while you drag and fade back
+in when you let go, so you can see the VFO marker arrive at its new home.
+
+**The grab area is taller than the strip looks.** The strip itself is only a few
+millimetres, which is not a finger, so touches are accepted for about 8 mm of the
+waterfall directly above it as well. Tap-to-tune gives up that last centimetre of
+the waterfall — nothing interesting lives there, and it is the difference between
+catching the handle first time and getting a tune cursor instead.
 
 **Drag from the bottom bar too.** The visible-span block acts as a slider handle that reaches *below* the thin strip: touch on or just under it — anywhere along the bottom status bar — and **drag sideways** to scrub the band, exactly like dragging the strip itself. This gives you a much taller grab target. It coexists with the memory-picker gesture on the same row: a **sideways** drag retunes the band-plan, while a **vertical up-swipe** still opens the memory picker.
 

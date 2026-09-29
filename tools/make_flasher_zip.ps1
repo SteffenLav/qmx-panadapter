@@ -31,7 +31,12 @@ $bytes = [System.IO.File]::ReadAllBytes($binPath)
 #  the first attempt got it wrong and made a good binary look corrupt.)
 if ([BitConverter]::ToUInt32($bytes, 32) -ne 2882360370) { Write-Error "qmx_panadapter.bin has no valid app descriptor." }
 $ver = [System.Text.Encoding]::ASCII.GetString($bytes, 48, 32).Split([char]0)[0]
-if ($ver -notmatch '^v\d+\.\d+\.\d+$') { Write-Error "Refusing to package a non-release version: '$ver'" }
+# Four components allowed on purpose: net/update_check.c's parse_ver() reads up
+# to four and names "v1.2.3.1" in its own comment, so a point revision of an
+# already-published release (same fixes, re-cut) is a legitimate release tag and
+# is how an OTA reaches units that already took the first cut. Still refuses a
+# -dirty or git-describe string, which is what this check is actually for.
+if ($ver -notmatch '^v\d+\.\d+\.\d+(\.\d+)?$') { Write-Error "Refusing to package a non-release version: '$ver'" }
 
 $files = @(
     "README.txt",

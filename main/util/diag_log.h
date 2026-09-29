@@ -43,6 +43,28 @@ void diag_log_write_session_header(void);
 // callers that gate verbose CAT TX/RX logging on it keep compiling.
 bool diag_log_enabled(void);
 
+/* ⛔ WHY THE RESET REASON IS NOW READABLE OUTSIDE THIS FILE.
+ *
+ * Samuel W7STF spent days on "the Tab5 reboots on its own" while listening to
+ * SSB, suspected his own unit, and posted "it's bothersome others are not
+ * reporting this." His three diagnostic logs contain TEN
+ * `reset_reason=brownout` lines: his supply rail is collapsing, not our
+ * firmware crashing. Every one of those reboots was already correctly
+ * identified by reset_reason_str() - and then written only to a log file
+ * nobody reads until they think to send it.
+ *
+ * A brownout is the one reset reason the OPERATOR can act on, and the only
+ * one that is not our bug. It must reach a screen.
+ *
+ * Returns the same short string the session header prints ("brownout",
+ * "panic/exception", "power-on", ...). Never NULL. */
+const char *diag_log_reset_reason(void);
+
+// True when THIS boot followed a supply brownout. Distinct from a crash: the
+// rail dropped below the chip's threshold, so nothing in our code was at
+// fault and nothing in our code could have prevented it.
+bool diag_log_booted_after_brownout(void);
+
 // Number of bytes currently held in the ring (<= capacity).
 size_t diag_log_size(void);
 

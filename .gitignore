@@ -110,3 +110,7 @@ wspr_subtract_sweep.exe
 
 # Serial capture output (cap_serial_reboot.ps1 default -Out)
 reboot.txt
+
+# tools/gen_world_map.py's downloaded Natural Earth source cache (~10 MB) -
+# fetched on demand, not source. Re-run the script to regenerate it.
+tools/ne_*m_land.geojson

@@ -277,6 +277,34 @@ static bool addr_is_bonded(const ble_addr_t *addr)
 
 // Does this advertisement claim HID? Checked against the 16-bit service UUID
 // lists; a mouse may put it in either the complete or incomplete list.
+#define SEEN_TAB_N     48
+#define SEEN_RELOG_US  (600LL * 1000000)   // a HID device is re-listed every 10 min
+typedef struct { uint8_t a[6]; bool used; int64_t us; } seen_ent_t;
+static EXT_RAM_BSS_ATTR seen_ent_t s_seen_tab[SEEN_TAB_N];
+static int s_seen_next;   // round-robin eviction
+
+// True the first time an address is seen this boot (a HID address: also once
+// SEEN_RELOG_US has passed). NimBLE host task only, so no lock.
+static bool seen_first_time(const uint8_t *a, bool hid)
+{
+    int64_t now = esp_timer_get_time();
+    for (int i = 0; i < SEEN_TAB_N; i++) {
+        if (s_seen_tab[i].used && memcmp(s_seen_tab[i].a, a, 6) == 0) {
+            if (hid && now - s_seen_tab[i].us > SEEN_RELOG_US) {
+                s_seen_tab[i].us = now;
+                return true;
+            }
+            return false;
+        }
+    }
+    seen_ent_t *e = &s_seen_tab[s_seen_next];
+    s_seen_next = (s_seen_next + 1) % SEEN_TAB_N;
+    memcpy(e->a, a, 6);
+    e->used = true;
+    e->us = now;
+    return true;
+}
+
 static bool adv_has_hid(const struct ble_hs_adv_fields *f)
 {
     for (int i = 0; i < f->num_uuids16; i++)
@@ -321,9 +349,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     bool hid = bonded || adv_has_hid(&f);
     s_seen++;
 
-    // Log HID devices always; everything else only in the first few, so a busy
-    // hotel does not flood the diag ring with earbuds.
-    if (hid || s_seen <= SCAN_LOG_MAX) {
+    // Log each ADDRESS once per boot (a HID one again after SEEN_RELOG_US), not
+    // every advert of every open window. The old per-window reset re-listed the
+    // same phones and earbuds every ~75 s - ~30 lines/min of diag log on a bench
+    // with no mouse or keyboard at all. A device that turns up later is still
+    // new, so "my keyboard does not appear" stays answerable from the log.
+    if (seen_first_time(event->disc.addr.val, hid) && (hid || s_seen <= SCAN_LOG_MAX)) {
         const uint8_t *a = event->disc.addr.val;
         ESP_LOGI(TAG, "%s %02x:%02x:%02x:%02x:%02x:%02x rssi=%d %s",
                  hid ? "HID DEVICE:" : "  seen:",
@@ -604,18 +635,28 @@ static void start_scan(void)
         ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
         return;
     }
-    if (wl) ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty%s)",
+    // The cycle restarts every 60 s + 15 s for as long as a slot is free, i.e.
+    // for ever on a unit with no mouse. Say what it is doing when that CHANGES,
+    // not on every lap.
+    static int  s_last_wl = -1;
+    static bool s_last_burst;
+    static bool s_open_logged;
+    if (wl) {
+        if (wl != s_last_wl || burst != s_last_burst)
+            ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty%s)",
                      wl, (p.window * 100) / p.itvl, burst ? " - BURST after a drop" : "");
-    else {
-        // Reset the per-scan log budget so EVERY open window reports what it
-        // found, not only the first one after boot. The old counter was
-        // cumulative, so from the ninth device onward the log showed HID
-        // devices and nothing else - which makes "my keyboard does not appear"
-        // indistinguishable from "my keyboard does not advertise HID", and
-        // those need completely different answers.
+        s_last_wl = wl;
+        s_last_burst = burst;
+    } else {
+        // Per-window budget for NEW addresses; seen_first_time() is what keeps
+        // an already-listed device from being listed again. Resetting per window
+        // keeps "my keyboard does not appear" distinguishable from "my keyboard
+        // does not advertise HID".
         s_seen = 0;
-        ESP_LOGI(TAG, "scanning open for %d s - turn the mouse on / put it in pairing mode",
-                 (int)(SCAN_OPEN_MS / 1000));
+        if (!s_open_logged)
+            ESP_LOGI(TAG, "scanning open for %d s every %d s - turn the mouse on / put it in pairing mode",
+                     (int)(SCAN_OPEN_MS / 1000), (int)((SCAN_OPEN_MS + SCAN_WL_MS) / 1000));
+        s_open_logged = true;
     }
 }
 
@@ -1206,6 +1247,47 @@ static void bt_start_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(3000));   // let the link settle past DHCP/SNTP
     }
 
+    // ⛔ AND WAIT FOR MEMORY, NOT JUST FOR THE LINK (2026-09-06).
+    //
+    // The wait above is a proxy for "the C6 link is healthy", and it says
+    // nothing about the heap. That was harmless while WiFi came up late: BLE
+    // used to start at ~71 s with 36-43 KB internal free. Once the SD mount
+    // was sequenced after the SDIO card init (so esp_hosted no longer waits
+    // for the card), WiFi connected ~55 s earlier and this task fired at
+    // 17.4 s instead - straight into the boot memory trough, where the
+    // periodic heap line reads:
+    //
+    //     int free=0KB (min=0KB lblk=0KB LOW!)   at 15.6 s and 15.8 s
+    //     int free=9KB                            by 25.8 s
+    //
+    // nimble_port_init() does NOT return an error there. It asserts inside
+    // IDF's porting layer - "assert failed: npl_freertos_sem_init
+    // npl_os_freertos.c:636 (0)", task bt_start, at 15.501 s of uptime - i.e.
+    // a semaphore create returned NULL and the assert took the device down.
+    // The graceful-failure branch below can never run for that case.
+    //
+    // So gate on the heap as well. BLE is opt-in and nobody is waiting on it
+    // during boot, which is exactly why deferring it is the right answer
+    // rather than a workaround - and why giving up entirely is acceptable if
+    // the memory never appears. No mouse beats a boot loop.
+    {
+        const int MEM_WAIT_S = 60;
+        const size_t NEED = 24 * 1024;   // init itself costs ~5 KB; the rest is headroom
+        size_t have = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        for (int i = 0; i < MEM_WAIT_S * 2 && have < NEED; i++) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            have = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        }
+        if (have < NEED) {
+            ESP_LOGW(TAG, "internal heap still %u B after %d s (need %u) - "
+                          "NOT starting BLE this boot; nimble_port_init() would "
+                          "assert rather than fail", (unsigned)have, MEM_WAIT_S,
+                     (unsigned)NEED);
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+
     log_heap("before NimBLE init");
     esp_err_t e = nimble_port_init();
     if (e != ESP_OK) {
@@ -1255,7 +1337,9 @@ void bt_hid_mouse_init(void)
     }
     // PSRAM stack, low priority: this task spends its life sleeping and must
     // not compete with the audio/FFT pipeline.
-    psram_task_create(bt_start_task, "bt_start", 6144, NULL, 2, tskNO_AFFINITY);
+    // 6144 -> 9216: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(bt_start_task, "bt_start", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "BLE mouse enabled - waiting for the C6 link before starting NimBLE");
 }
 

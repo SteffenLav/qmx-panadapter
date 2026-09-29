@@ -159,8 +159,21 @@ static bool claim_keyboard(void)
     uint8_t probe = 0;
     if (reg_read8(REG_INT_CFG, &probe) != ESP_OK) return false;
 
+    /* ⛔ A PHANTOM KEYBOARD, 2026-09-13. With NO keyboard attached (operator
+     * confirmed), the dev bench logged "keyboard detected" then "no longer
+     * answering" about every 43 s - the phantom answered for 200-700 ms, and its
+     * firmware byte read 0x44 one time and 0x00 the next, at moments that lined
+     * up with screen touches. So a single ACK is not a keyboard. Require the
+     * version register to read back the SAME non-zero value three times over a
+     * full second; a real keyboard does that trivially, and every phantom seen
+     * vanished well inside that window. */
     uint8_t ver = 0;
-    reg_read8(REG_VERSION, &ver);
+    for (int i = 0; i < 3; i++) {
+        uint8_t v = 0;
+        if (reg_read8(REG_VERSION, &v) != ESP_OK || v == 0x00 || (i > 0 && v != ver)) return false;
+        ver = v;
+        if (i < 2) vTaskDelay(pdMS_TO_TICKS(500));
+    }
     ESP_LOGI(TAG, "Tab5 keyboard detected at 0x%02X (fw 0x%02X) on GPIO%d/%d",
              KB_ADDR, ver, KB_SDA_GPIO, KB_SCL_GPIO);
 

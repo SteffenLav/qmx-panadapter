@@ -247,7 +247,26 @@ esp_err_t display_init(lv_display_t **out_disp)
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = {
             .task_priority    = 4,
-            .task_stack       = 8192,
+            // 8192 -> 12288, 2026-09-15: taskLVGL was stack-overflowing on
+            // EVERY boot (hardware watchpoint, "Breakpoint" panic in
+            // xTaskPriorityDisinherit/spinlock_acquire, SP within 12 bytes of
+            // the stack floor) at the FT8-mode-restore point right after
+            // boot. Root cause per [[feedback_generous_not_incremental_stack_fix]]:
+            // qmx_settings_t grew ~1.3 KB for the Calibrate Power per-band
+            // table (settings.h pwr_cal), and ui.c alone has ~50
+            // settings_load_all()-onto-the-stack call sites, all on this
+            // task. That earlier fix pass bumped main/rbn/sd_archive/mqtt but
+            // never taskLVGL itself. +4096 is deliberately generous (not a
+            // token increment - see the memory note) since several of those
+            // call sites can nest in one callback chain.
+            //
+            // 12288 -> 16384, 2026-09-15: Calibrate Power's own sweep went
+            // 23 -> 45 steps for finer dBm resolution (settings.h
+            // PWRCAL_STEPS), growing qmx_settings_t by another ~1.5 KB on
+            // top of the growth above - same struct, same ~50 call sites,
+            // same task. Bumped proactively rather than waiting for this to
+            // crash too, per the same "generous, not incremental" lesson.
+            .task_stack       = 16384,
             // ⛔ CORE 0, and moving it is FALSIFIED ON HARDWARE (#284,
             // 2026-08-28). Everything LVGL does ends in the software 90-degree
             // rotation, which saturates this core (panadapter idle0 measured

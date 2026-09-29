@@ -24,6 +24,7 @@
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 
 // v0.12.0: Manual FT8 TX (Reply + Call CQ) - tap a heard-station row, or
 // the "Call CQ" button below, to open the confirmation modal; a small
@@ -57,36 +58,87 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | AGE
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | AGE
 // SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
-// the pre-v1.3.1 layout; the country column shrank from full entity names
-// (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
-// tighter SNR (no " dB" suffix) - freed the width for two new columns
-// (Roy KI0ER request): DT (slot-timing offset, seconds, band-consensus-
-// relative so on-time stations read ~0.0) and HZ (the station's audio tone).
+// the pre-v1.3.1 layout.
+//
+// The country column was cut to 3-letter codes in v1.3.1 to pay for DT and HZ
+// (Roy KI0ER). It is back to spelled-out names at 126 px / ~10 characters,
+// paid for by DROPPING BRG (62 px) and by AGE losing its "s" suffix (~12 px) -
+// the operator's call, 2026-09-17: a bearing is derivable from the distance
+// and the map, and the country is read far more often.
+//
+// 10 IS A COLUMN WIDTH. country_display() spells the name out when it fits and
+// SHORTENS it when it does not - "Netherlan." with the full stop that marks an
+// abbreviation, never a bare "Netherlan" and never the 3-letter code.
+//
+// ⛔ It DID return the code until 2026-09-19, on the reasoning that a clipped
+// name reads as a bug while NLD is the shorter true answer. Reversed by the
+// operator, who was looking at a column of mixed names and codes: "apples and
+// pears". See country_shorten.c, and CLAUDE.md for the width table - at 10
+// chars 28 of 340 names need shortening, at 18 none do.
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
 #define COL_CALL_X      46
 #define COL_TEXT_X      184
 #define COL_COUNTRY_X   479
-#define COL_SNR_X       537
-#define COL_DT_X        599
-#define COL_HZ_X        669
-#define COL_KM_X        739
-#define COL_BRG_X       817
-#define COL_AGE_X       885
+#define COL_SNR_X       611
+/* ⭐ TONE BEFORE DT (operator, 2026-09-19), so all three list screens read in
+ * the same order: ... SNR TONE DT KM ... A straight swap of the two x
+ * positions, because both columns are 64 px wide. */
+#define COL_HZ_X        673
+/* One character (montserrat_24 advances ~12.1 px) closer to KM - operator,
+ * 2026-09-19. KM's own box moves with it by half that, so DT's box still ENDS
+ * exactly where KM's begins and the two can never overlap even on the widest
+ * value KM can print ("~12.345"). */
+#define COL_DT_X        755
+/* ⛔ KM's VALUES OVERLAPPED AGE's BOX BY 10 px (Gyula HA3HZ, re-reported
+ * 2026-09-22 - "those two columns are almost growing together").
+ *
+ * Measured from the constants, not eyeballed. The KM values are drawn at
+ * COL_KM_X + COL_KM_VAL_DX (the offset below), so before this change:
+ *
+ *     KM  values  829 .. 913   (829 + COL_KM_W 84)
+ *     AGE values  903 .. 944   (903 + COL_AGE_W 41)
+ *                 ^^^^^^^^^^   10 px of shared box
+ *
+ * Both columns are right-aligned, so the boxes overlapping is not itself
+ * visible - what IS visible is that a 5-digit KM right-aligns at 913 while a
+ * 3-digit AGE starts near 907, and the two numbers touch. The +10 offset
+ * added on 2026-09-19 pushed KM right without AGE moving out of the way.
+ *
+ * Fixed by moving BOTH columns left/right into the 16 px of unused right
+ * margin rather than by narrowing KM, which still has to print "~20000":
+ *
+ *     KM  values  819 .. 903   (COL_KM_W unchanged at 84)
+ *     AGE values  913 .. 954   (COL_AGE_W unchanged at 41, margin 16 -> 6)
+ *                 10 px clear gutter
+ *
+ * DT's box still ends exactly where KM's VALUE box begins (819), which is
+ * what the 2026-09-19 note above asked for. */
+#define COL_KM_X        809
+#define COL_KM_VAL_DX   10    // KM/HZ values sit this far right of their header box
+#define COL_AGE_X       913
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
 #define COL_CALL_W      (COL_TEXT_X    - COL_CALL_X    - 8)
 #define COL_MSG_W       272
-#define COL_COUNTRY_W   52
+// 126 px is ~10 characters of montserrat_24, which spells out 195 of the 227
+// entities in dxcc.c whole; the rest fall back to their 3-letter code.
+#define COL_COUNTRY_W   126
 #define COL_SNR_W       56
 #define COL_DT_W        64
 #define COL_HZ_W        64
-#define COL_KM_W        72
-#define COL_BRG_W       62
-#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
+// KM carries a leading "~" when the distance came from a country centroid
+// instead of a decoded grid, so it is a character wider than the digits need.
+#define COL_KM_W        84
+// What COL_COUNTRY_W is worth in characters of montserrat_24 (~12.1 px each).
+#define COL_COUNTRY_CHARS 10
+// Right margin cut 16 -> 6 to pay for the 10 px gutter in front of AGE (see
+// the block above COL_KM_X). AGE never prints more than 3 digits - rows age
+// out of the table at the max-age setting - so 41 px still has slack.
+#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 6)
 
 // Pool size: pre-allocated row container/label objects.
 // Combined with shared lv_style_t (below), per-row local styles drop
@@ -121,7 +173,6 @@ static lv_style_t s_style_col_snr;      // SNR base (font/pos/align), colour set
 static lv_style_t s_style_col_dt;       // DT (dim, right)
 static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
-static lv_style_t s_style_col_brg;      // BRG (dim, right)
 static lv_style_t s_style_col_age;      // AGE (dim, right)
 static lv_style_t s_style_header;       // column header row
 static lv_style_t s_style_header_label; // column header text
@@ -137,7 +188,6 @@ typedef struct {
     lv_obj_t *l_dt;
     lv_obj_t *l_hz;
     lv_obj_t *l_km;
-    lv_obj_t *l_brg;
     lv_obj_t *l_age;
     // Dirty-tracking cache: skip lv_label_set_text when unchanged.
     char prev_call[16];
@@ -147,7 +197,6 @@ typedef struct {
     char prev_dt[12];
     char prev_hz[12];
     char prev_km[12];
-    char prev_brg[12];
     char prev_age[12];
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
@@ -201,6 +250,8 @@ static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send 
 static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_resend (updated per-state)
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
 static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
+static lv_obj_t *s_btn_override_pause  = NULL;  // manual QSO override: pause next TX
+static lv_obj_t *s_lbl_pause           = NULL;  // its label - text changes Pause/Paused
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
 // ONE button cycling ANY -> EVEN -> ODD -> ANY, colour-coded to match the slot
 // countdown (grey = any, steel blue = EVEN, warm orange = ODD). It was two
@@ -358,11 +409,10 @@ static void styles_init(void)
     lv_style_set_y         (&s_style_col_snr, 6);
 
     INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    // HZ/KM/BRG values sit +10 px right of their (unchanged) header labels so
+    // HZ/KM values sit +10 px right of their (unchanged) header labels so
     // the numbers center under the right-aligned headings (operator request).
-    INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_hz,      COL_HZ_X + COL_KM_VAL_DX, COL_HZ_W, LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_km,      COL_KM_X + COL_KM_VAL_DX, COL_KM_W, LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
@@ -854,7 +904,6 @@ static void build_row(int i)
     r->l_dt      = make_label_styled(r->row, &s_style_col_dt);
     r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
-    r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
     r->l_age     = make_label_styled(r->row, &s_style_col_age);
 
     // SNR colour starts white; per-row local override on update.
@@ -867,7 +916,6 @@ static void build_row(int i)
     r->prev_country[0] = '\0';
     r->prev_snr[0]     = '\0';
     r->prev_km[0]      = '\0';
-    r->prev_brg[0]     = '\0';
     r->prev_age[0]     = '\0';
     r->prev_snr_db       = -127;
     r->prev_color        = -1;
@@ -880,11 +928,15 @@ static void update_row(int i, const ft8_call_t *src)
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
-    const char *country = dxcc_lookup_alpha3(src->call);
+    /* Width, not truncation - see the layout note at the top of this file.
+     * country_display() also falls back to Uwe's geo_coords table for the ~130
+     * entities dxcc.c has never known, so Monaco, Malta, Andorra and the rest
+     * stop printing nothing. */
+    const char *country = country_display(src->call, COL_COUNTRY_CHARS);
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_age[12];
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_age[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
     // Seconds since last heard, not heard_count - the browser's decode list
     // already shows this (Randy N4OPI asked for parity between the two, and
@@ -894,7 +946,9 @@ static void update_row(int i, const ft8_call_t *src)
     {
         int64_t age = (int64_t)time(NULL) - src->last_utc;
         if (age < 0) age = 0;
-        snprintf(b_age, sizeof(b_age), "%us", (unsigned)age);
+        // No "s" suffix: the heading says AGE and every value is seconds, so
+        // the letter was 12 px of the width the country column now uses.
+        snprintf(b_age, sizeof(b_age), "%u", (unsigned)age);
     }
 
     // DT: the station's slot-timing offset in seconds, relative to the band
@@ -910,25 +964,39 @@ static void update_row(int i, const ft8_call_t *src)
     }
     snprintf(b_hz, sizeof(b_hz), "%d", (int)src->last_freq);
 
+    /* Distance. THE GRID IS THE SOURCE AND THE CENTROID IS ONLY THE BACKSTOP,
+     * never the other way round: a 4-character Maidenhead square places a
+     * station to ~70-150 km, while geo_coords collapses a whole country to one
+     * point - ~2,000 km from either US coast. Using the centroid where a grid
+     * exists would replace a real measurement with a worse one.
+     *
+     * The column is blank so often because most FT8 messages carry no grid at
+     * all: only a CQ and the opening exchange do, so a station heard sending a
+     * report or an RR73 has never told us where it is. Those are the rows the
+     * fallback fills.
+     *
+     * A centroid distance is PREFIXED WITH "~". It is an estimate, and an
+     * unmarked estimate is a measurement we did not make - the same rule that
+     * keeps a fabricated 599 out of the log. */
+    bool km_ok = false, km_approx = false;
+    double km_val = 0.0;
     if (s_user_loc_valid && src->last_grid[0]) {
         double rlat = 0.0, rlon = 0.0;
         if (maidenhead_to_latlon(src->last_grid, &rlat, &rlon)) {
-            double km  = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
-            double brg = bearing_deg (s_user_lat, s_user_lon, rlat, rlon);
-            if (s_distance_in_miles) {
-                double miles = km * 0.621371;
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(miles + 0.5));
-            } else {
-                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
-            }
-            snprintf(b_brg, sizeof(b_brg), "%d°", (int)(brg + 0.5));
-        } else {
-            snprintf(b_km,  sizeof(b_km),  "--");
-            snprintf(b_brg, sizeof(b_brg), "--");
+            km_val = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
+            km_ok  = true;
         }
+    }
+    if (!km_ok && s_user_loc_valid) {
+        km_ok = km_approx = country_centroid_km(src->call, s_user_lat,
+                                                s_user_lon, &km_val);
+    }
+    if (km_ok) {
+        double shown = s_distance_in_miles ? km_val * 0.621371 : km_val;
+        snprintf(b_km, sizeof(b_km), "%s%d", km_approx ? "~" : "",
+                 (int)(shown + 0.5));
     } else {
-        snprintf(b_km,  sizeof(b_km),  "--");
-        snprintf(b_brg, sizeof(b_brg), "--");
+        snprintf(b_km, sizeof(b_km), "--");
     }
 
     /* E (blue) / O (amber) slot parity indicator, on the ACTIVE protocol's
@@ -958,7 +1026,6 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_dt,      r->prev_dt,      sizeof(r->prev_dt),      b_dt);
     set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
-    set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     b_age);
 
     /* Colour scheme: AMBER=actively working now, RED=own call heard,
@@ -1207,6 +1274,41 @@ static void update_parity_btns(void);   // defined with the button, used by the 
 // a toast on the Tab5 is invisible from another room.
 static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
 static volatile bool s_web_reply_pending;
+/* How long a pick may sit waiting for the closing 73 to finish (Randy N4OPI,
+ * 2026-09-25). 0 = nothing queued.
+ *
+ * "When in an exchange, I have received an RR73, and I'm queued up to auto
+ * transmit my 73, I'd like to be able to click my next target CQ caller from
+ * the list. As it functions now, I have to wait for my 73 to finish
+ * transmitting and the exchange to be logged before I can pick a new target,
+ * which is a few seconds into the next cycle, and by then the caller I wanted
+ * to reach may have cleared from the display."
+ *
+ * The refusal he is hitting is real and the QSO machine is right to make it -
+ * but only for the states where a new target would CLOBBER a live exchange.
+ * FT8_QSO_WAIT_DONE is not one of those: the outcome is already decided, the
+ * closing message is armed, and nothing the operator picks now can change it.
+ * WAIT_DONE is also the LONGEST of the busy states from the operator's point
+ * of view - it is entered the moment the 73 is armed, which is typically ~15 s
+ * before the burst even starts, and it is not cleared until the next decode
+ * slot's ft8_qso_advance() sees TX idle, so it can refuse for most of a minute.
+ * That is the window his caller disappears in.
+ *
+ * So a pick made during WAIT_DONE is HELD rather than refused, and retried by
+ * the same 1 Hz drain until the machine is free.
+ *
+ * ⭐ THE CALLSIGN IS QUEUED, NOT THE BUILT REQUEST. web_reply_drain() derives
+ * everything - decode row or pileup fallback, report, tone, TX1-vs-report-first
+ * - at the moment it runs. Freezing a request built up to a minute earlier
+ * would transmit a stale report at a station whose row may have been refreshed
+ * (or aged out into the pileup) in between. Re-running the whole drain costs
+ * one table scan a second and is always current.
+ *
+ * Bounded on purpose: an exchange that does not end - a TIMEOUT that never
+ * advances, the FT8 view hidden - must not leave a pick to fire minutes later
+ * unasked. That is the same hazard the CQ flag's comment warns about. */
+#define WEB_REPLY_QUEUE_MAX_MS 90000
+static int64_t s_web_reply_queued_us;   /* 0 = not queued; else when it was */
 // Mid-QSO override requested from the browser (#205, Randy N4OPI: operating FT8
 // "from another room or location", where the Tab5's Re-send / RR73 / 73 buttons
 // and its tap-to-cancel are out of reach). Same deferral as the reply flag - the
@@ -1240,6 +1342,7 @@ static char          s_web_reply_result[64];
 static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
 static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
 static bool          s_web_done_said;            // DONE reported once per QSO
+static bool          s_web_timeout_said;          // TIMEOUT reported once per QSO - see web_result_set_sticky's TIMEOUT call below
 
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
@@ -1314,7 +1417,7 @@ void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
 
 void ft8_screen_view_request_override(int what)
 {
-    if (what < 1 || what > 4) return;
+    if (what < 1 || what > 5) return;
     s_web_override_pending = what;
 }
 
@@ -1350,10 +1453,39 @@ static void web_reply_drain(void)
 
     char busy_target[24];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        /* WAIT_DONE = the closing 73/RR73 is armed and the exchange's outcome
+         * is settled. Hold the pick instead of dropping it, and let the next
+         * 1 Hz tick try again - see WEB_REPLY_QUEUE_MAX_MS. Every OTHER busy
+         * state still refuses outright: those are live exchanges, and starting
+         * a second one would clobber the first, which is exactly what
+         * ft8_qso_start()'s own guard exists to prevent. */
+        if (ft8_qso_get_state() == FT8_QSO_WAIT_DONE) {
+            int64_t now = esp_timer_get_time();
+            if (s_web_reply_queued_us == 0) s_web_reply_queued_us = now;
+            if (now - s_web_reply_queued_us <
+                (int64_t)WEB_REPLY_QUEUE_MAX_MS * 1000) {
+                /* Put it back for the next tick. Deliberately re-armed rather
+                 * than held in a second variable: a newer click overwrites
+                 * s_web_reply_call and simply wins, which is what a second
+                 * pick means. */
+                snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
+                s_web_reply_pending = true;
+                web_result_set("Queued: %s, after this %s", call,
+                               busy_target[0] ? "exchange" : "transmission");
+                return;
+            }
+            s_web_reply_queued_us = 0;
+            web_result_set("Gave up waiting to call %s", call);
+            ESP_LOGW(TAG, "web reply: queued pick '%s' expired after %d s",
+                     call, WEB_REPLY_QUEUE_MAX_MS / 1000);
+            return;
+        }
+        s_web_reply_queued_us = 0;
         if (busy_target[0]) web_result_set("Busy: working %s", busy_target);
         else                web_result_set("Busy: calling CQ");
         return;
     }
+    s_web_reply_queued_us = 0;   /* got through - the queue is spent */
 
     ft8_tx_request_t req;
     bool is_fresh_grid = false;
@@ -1407,15 +1539,50 @@ static void web_reply_drain(void)
                  call, extra ? extra : "(grid TX1, FD mode)");
     }
 
-    // Their fresh CQ -> the full auto-sequencer, because the operator is NOT in
-    // front of the radio to click each exchange step. Anything mid-exchange ->
-    // arm the one correct next message, with the same manual-QSO bookkeeping the
-    // modal's Transmit does (working-highlight, and WAIT_DONE seeding so a
-    // closing 73 still logs to ADIF).
-    if (is_fresh_grid) {
+    /* The full auto-sequencer, because the operator is NOT in front of the
+     * radio to click each exchange step - that was always the reason, and it
+     * used to be applied only to a fresh CQ.
+     *
+     * ⛔ THAT TEST WAS THE WRONG ONE, and its own rationale said so. Randy
+     * N4OPI, 2026-09-25: "If I am in an exchange and a different operator calls
+     * me out of the blue (not responding to a CQ or previous call from me) I
+     * can click on their call and the next exchange is sent, but it is forever
+     * in manual QSO mode. Not auto QSO. Is this intentional behaviour?"
+     *
+     * It was intentional, and it was backwards. is_fresh_grid is false for ANY
+     * message addressed to us carrying a payload - which is exactly the
+     * unsolicited caller, the one case where an operator in another room most
+     * wants the sequencer to take over. He then had to click every remaining
+     * step of a QSO he did not start.
+     *
+     * What actually matters here is not "was it a CQ" but "is there an exchange
+     * left to run". We are past the busy gate above, so the QSO machine is
+     * IDLE/DONE/TIMEOUT and whatever we send now OPENS an exchange - except a
+     * closing 73, where the contact is already over and a sequencer would have
+     * nothing to sequence. So: everything but the closing message starts a QSO.
+     *
+     * ⭐ ft8_qso_start() is already built for entering mid-ladder and has been
+     * since #234/#292: a REPLY carrying a report starts in WAIT_ROGER, and a
+     * ROGER_RPT starts in WAIT_RR73, both with first_rpt seeded so RST_SENT
+     * logs. Those branches exist precisely because the pileup path - a station
+     * who called US - needs them. This just stops the web path from being the
+     * one caller that never uses them.
+     *
+     * A closing 73 still takes the one-shot arm below, with the same manual-QSO
+     * bookkeeping the modal's Transmit does (working-highlight, and
+     * ft8_qso_notify_manual_final() seeding WAIT_DONE so it still logs to
+     * ADIF).
+     *
+     * ⚠ Randy also offered "single click for next exchange, double click to
+     * enter Auto QSO". Not taken: a double-click is an awkward gesture on a
+     * touch browser page, and making the plain click do the right thing removes
+     * the need for a second one. If anyone does want a single-message click
+     * back, it is an "auto": false field on the reply command, not a rework. */
+    if (req.kind != FT8_TX_KIND_73) {
         if (ft8_qso_start(&req, err, sizeof(err))) {
             web_result_set("Working %s (auto QSO)", call);
-            ESP_LOGI(TAG, "web reply: auto pounce on %s", call);
+            ESP_LOGI(TAG, "web reply: auto QSO with %s (%s)", call,
+                     is_fresh_grid ? "answered their CQ" : "they called us");
         } else {
             web_result_set("%s", err[0] ? err : "Pounce refused");
         }
@@ -1523,12 +1690,39 @@ static void t_clock_cb(lv_timer_t *t)
         char err[64] = "";
         if (!up) {
             web_result_set("Not in FT8 mode");
+        } else if (what == 5) {
+            /* Pause the next transmission from the browser (Randy N4OPI,
+               2026-09-22: "I did not make it clear that I was referring to the
+               Web UI... I almost never use the Tab5 interface directly. One of
+               the greatest features I see in this app is the remote
+               capability."). Same call the Tab5's own Pause button makes, so
+               the two cannot drift apart. */
+            if (ft8_qso_pause_next_tx(err, sizeof(err)))
+                web_result_set("Next transmission paused");
+            else
+                web_result_set("%s", err[0] ? err : "Cannot pause now");
         } else if (what == 4) {
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
             // "mid-QSO over-ride/cancel button".
+            //
+            // ⛔ THIS USED TO STOP ONLY AT THE NEXT SLOT BOUNDARY, NOT
+            // IMMEDIATELY - Randy again, 2026-09-16, wanting it to work like the
+            // Tab5's own tap "in case the operator has turned off the SWR
+            // protection and needs to cancel quickly". ft8_tx_disarm() is a
+            // no-op while a burst is ACTIVE (see its own comment) - it only
+            // clears an ARMED request - so an in-progress transmission ran to
+            // the end of the slot regardless of this handler firing. The Tab5's
+            // own tap (tx_indicator_tap_cb, above) also calls
+            // ft8_tx_request_abort(), which is what actually breaks the live
+            // symbol-send loop mid-burst; the web path never did. Added here,
+            // same as the Tab5 tap - safe to call whether or not a burst is
+            // actually running (it is a plain flag ft8_tx_run() checks between
+            // symbols, and is silently ignored if nothing is transmitting).
+            ft8_robot_stand_down("you cancelled a transmission");
             ft8_tx_disarm();
             ft8_qso_abort();
+            ft8_tx_request_abort();
             // No confirmation text - operator, 2026-09-05: "do not show
             // anything - just go back to the initial view". Every other
             // override outcome is worth reading (Armed/Busy/refused); Cancel
@@ -1557,6 +1751,10 @@ static void t_clock_cb(lv_timer_t *t)
         } else {
             s_web_reply_pending = false;
             s_web_reply_call[0] = '\0';
+            /* Clear the queue clock with it. Leaving it set would hand the
+             * NEXT pick a start time from minutes ago, so its very first
+             * tick would read as already expired. */
+            s_web_reply_queued_us = 0;
             web_result_set("Not in FT8 mode");
             ESP_LOGW(TAG, "web reply request ignored - not in FT8 mode");
         }
@@ -1743,7 +1941,8 @@ static void t_clock_cb(lv_timer_t *t)
         ft8_qso_state_t qso_st = ft8_qso_get_state();
         // Re-armed for the next contact the moment this one stops being DONE,
         // so every completed QSO announces itself exactly once.
-        if (qso_st != FT8_QSO_DONE) s_web_done_said = false;
+        if (qso_st != FT8_QSO_DONE)    s_web_done_said    = false;
+        if (qso_st != FT8_QSO_TIMEOUT) s_web_timeout_said = false;
         char b[128];
 
         // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
@@ -1938,6 +2137,21 @@ static void t_clock_cb(lv_timer_t *t)
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
+            // Randy N4OPI, 2026-09-16: wants a browser watching from another
+            // room to keep seeing the timeout, "like the 'QSO Completed'
+            // notification behaviour" - which already solves exactly this via
+            // web_r (see web_result_set_sticky's own comment above: the state
+            // machine is not the right owner of a message that stands until
+            // the operator reacts, because the same "it blocks new processes"
+            // problem THAT quoted comment names is why this sticky state
+            // auto-clears after 20s in the first place). Same treatment,
+            // reported once per timeout the same way DONE is reported once
+            // per QSO, right above.
+            if (!s_web_timeout_said) {
+                s_web_timeout_said = true;
+                web_result_set_sticky("%s  QSO timeout", target);
+            }
+
         } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
                    qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
             // A QSO/CQ session is alive but nothing is armed. Transient
@@ -1978,29 +2192,85 @@ static void t_clock_cb(lv_timer_t *t)
                 if (s_lbl_resend) {
                     char extra[16] = {0};
                     ft8_qso_get_cur_extra(extra, sizeof(extra));
-                    if (extra[0]) {
-                        lv_label_set_text_fmt(s_lbl_resend, "Re-send\n%s", extra);
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
-                    } else {
-                        lv_label_set_text(s_lbl_resend, "Re-send");
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
-                    }
+                    // Font and width are set once at build time and must NOT be
+                    // changed here - that is what shrank the other three
+                    // buttons. See the button row's comment.
+                    if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Again\n%s", extra);
+                    else          lv_label_set_text(s_lbl_resend, "Again");
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
             } else {
-                // Reset to plain "Re-send" so if no extra is available on next show it
-                // doesn't display stale content from the previous exchange.
+                // Reset to the bare label so a stale report from the previous
+                // exchange is not shown on the next open. Deliberately does NOT
+                // touch the font: setting it to 24 here was how the old
+                // too-wide label came back after every hide.
                 if (s_lbl_resend) {
-                    lv_label_set_text(s_lbl_resend, "Re-send");
-                    lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
+                    lv_label_set_text(s_lbl_resend, "Again");
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+            }
+
+            /* Pause has a WIDER condition than the other three, which is why it
+             * is not in the block above: Re-send/RR73/73 only mean something
+             * once there is a partner, but skipping one transmission to listen
+             * is just as useful while calling CQ - and that is where Randy
+             * N4OPI looked for it first. Matches
+             * ft8_qso_pause_next_tx()'s own guard. */
+            if (s_btn_override_pause) {
+                if (show || qso_st == FT8_QSO_CQ)
+                    lv_obj_clear_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
+                else
+                    lv_obj_add_flag(s_btn_override_pause, LV_OBJ_FLAG_HIDDEN);
+
+                /* The WORD changes, not just the colour.
+                 *
+                 * A pause is invisible by nature - it is the ABSENCE of a
+                 * transmission a slot or two later - so the button is the only
+                 * confirmation before the skipped slot arrives. Colour alone was
+                 * not enough: dark gold against bright gold on a 76 px button is
+                 * easy to miss, and the operator could not tell when it had gone
+                 * back to normal either.
+                 *
+                 * Text also goes BLACK while armed. White on that yellow was
+                 * unreadable - it is a light background, and the label is the
+                 * thing that has to be legible precisely when it matters. */
+                const bool pause_armed = ft8_qso_pause_pending();
+                lv_obj_set_style_bg_color(s_btn_override_pause,
+                                          lv_color_hex(pause_armed ? 0xffc02a : 0x8b6914), 0);
+                if (s_lbl_pause) {
+                    /* ⭐ TRANSPORT ICONS (operator, 2026-09-22: "why don't we
+                     * use the Play/Pause icons we all know from recorders and
+                     * players?"). They say what the NEXT press does, which is
+                     * the convention every player already taught everyone:
+                     *   not paused -> a PAUSE glyph, pressing it pauses
+                     *   paused     -> a PLAY glyph, pressing it resumes
+                     * The word stays alongside because this button also has to
+                     * read as a state, not only as an action - a pause is the
+                     * ABSENCE of a transmission a slot later, so the button is
+                     * the only confirmation before the skipped slot arrives. */
+                    /* ⭐ ICON ONLY, AND BIG (operator, 2026-09-22: "should
+                     * ONLY have the play/pause icon - no text - and enlarge the
+                     * icon so it is very visible"). The glyph says what the
+                     * NEXT press does, the convention every player already
+                     * taught everyone:
+                     *   not paused -> PAUSE glyph, pressing it pauses
+                     *   paused     -> PLAY glyph on bright gold, it resumes
+                     * ⚠ This is the ONE button in the row with a different font
+                     * - deliberate, asked for, and not to be "made consistent"
+                     * with its three neighbours later. Shrinking the other
+                     * three to match one button has already been a mistake on
+                     * this row once (the Re-send -13 episode, 2026-09-21). */
+                    lv_label_set_text(s_lbl_pause, pause_armed
+                                      ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
+                    lv_obj_set_style_text_color(s_lbl_pause,
+                                                lv_color_hex(pause_armed ? 0x000000 : 0xffffff), 0);
+                }
             }
         }
     }
@@ -2166,6 +2436,19 @@ static void override_73_cb(lv_event_t *e)
     char err[64];
     if (!ft8_qso_override_next(FT8_TX_KIND_73, err, sizeof(err)))
         ESP_LOGW(TAG, "73 override failed: %s", err);
+}
+
+static void override_pause_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64];
+    if (!ft8_qso_pause_next_tx(err, sizeof(err))) {
+        // Put the reason where the operator is already looking. A button that
+        // refuses silently is indistinguishable from one that does nothing,
+        // which is how this feature was first reported.
+        ft8_status_set("%s", err);
+        ESP_LOGW(TAG, "Pause override failed: %s", err);
+    }
 }
 
 // Start a fresh CQ run. Shared by the Call CQ button and the web interface's
@@ -3081,29 +3364,69 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 
-    // Manual QSO override buttons — Re-send / RR73 / 73.
+    // Manual QSO override buttons — Re-send / RR73 / 73 / Pause.
     // Hidden when IDLE/CQ/DONE; shown during active exchange (WAIT_RPT/ROGER/RR73).
     // Sized to fill the left pane's full usable width (288px after padding)
     // and given more height - the original 91x44 buttons were cramped for
     // big-finger field use.
     {
-        // Re-send carries more text ("Re-send" + a second line like "JO45"/"-07")
-        // than RR73/73, so it gets 20% more width (110px vs the uniform 92px) and
-        // the other two shrink to 83px each - still sums to the full 288px pane
-        // width with the same 6px gaps: 110 + 6 + 83 + 6 + 83 = 288.
-        const int bh = 64, gap = 6, by = 540;
-        const int bw_resend = 110, bw_other = 83;
+        // FOUR buttons on ONE row. Re-send carries two lines ("Re-send" plus
+        // "JO45"/"-07") so it keeps the most width; the other three are sized to
+        // their own text at font 20.
+        //
+        // ⛔ DO NOT put a second row under this one. The pane's content height is
+        // MID_H(624) - pad_top(8) - pad_bottom(16) = 600, and this row already
+        // occupies 540..604. Pause originally went in at y=610 and was therefore
+        // OFF THE PANE ENTIRELY - shipped in v1.16.0, announced, and Randy N4OPI
+        // reported it missing because it was never drawn. Anything else added here
+        // has to come out of this row's 288 px, not out of space below it.
+        //
+        // ⭐ ALL FOUR EXACTLY THE SAME SIZE, AND PARENTED TO s_container, NOT
+        // THE LEFT PANE.
+        //
+        // Two problems fixed together. Sizing each button to its own text
+        // (104/58/44/64) made them unequal and small - "73" was 44 px - and the
+        // operator could not reliably hit them. And the pane's 16 px side
+        // padding wasted 32 px of a 320 px column on a row that wants every
+        // pixel.
+        //
+        // s_container has pad_all 0 and sits at the screen's left edge, so
+        // hanging the row off it gives the full width: x = 0 is the edge of the
+        // glass, and 316 stops 4 px short of the decode list at LEFT_W(320), as
+        // asked for. y shifts 540 -> 548 because the PANE's pad_top(8) no longer
+        // applies. Height 64 ends at 612, inside MID_H(624) with room to spare,
+        // where the old row ran 4 px past the pane's content box.
+        //
+        // 76*4 + 4*3 = 316, exactly.
+        //
+        // ⛔ THE LABEL, NOT THE FONT, IS WHAT HAD TO GIVE. "Re-send" did not fit
+        // 76 px, so I shortened it to "Resend" - still too wide - then dropped
+        // the font to 18, which shrank the OTHER THREE for a problem only the
+        // first button had, and "Resend" was clipped anyway. Two wrong fixes in
+        // a row because I kept adjusting size instead of the word.
+        //
+        // All four are font 20. The first button says "Again", which fits with
+        // room to spare and still reads correctly whatever the message is - it
+        // re-sends the CURRENT one, which may be a grid rather than a report, so
+        // "RPT" would have been wrong in WAIT_RPT.
+        //
+        // Every label is also width-constrained to the button, so a future label
+        // that is too wide wraps inside its own button instead of centring
+        // itself over the edge of the screen - which is what made this visible
+        // only on the leftmost button.
+        const int bh = 64, gap = 4, bw = 76, by = 548;
         int x = 0;
-        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; int w; } btns[] = {
-            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend, bw_resend },
-            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73,   bw_other  },
-            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73,     bw_other  },
+        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
+            { "Again",  0x604010, override_resend_cb, &s_btn_override_resend },
+            { "RR73",   0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
+            { "73",     0x1e6028, override_73_cb,     &s_btn_override_73     },
+            { "Pause",  0x8b6914, override_pause_cb,  &s_btn_override_pause  },
         };
-        for (int j = 0; j < 3; j++) {
-            lv_obj_t *b = lv_btn_create(s_left_pane);
-            lv_obj_set_size(b, btns[j].w, bh);
+        for (int j = 0; j < 4; j++) {
+            lv_obj_t *b = lv_btn_create(s_container);
+            lv_obj_set_size(b, bw, bh);
             lv_obj_set_pos(b, x, by);
-            x += btns[j].w + gap;
+            x += bw + gap;
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[j].col), 0);
             lv_obj_set_style_radius(b, 4, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -3112,11 +3435,29 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            // Bound the label to the button and centre the TEXT inside it. Both
+            // are needed: lv_obj_center() only centres the label BLOCK, so a
+            // block wider than the button straddles its edges, and a multi-line
+            // label defaults to left-aligned, which left the report hanging
+            // under the first letter instead of under the word.
+            lv_obj_set_width(l, bw);
+            lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_center(l);
+            // "Paused" is a character longer than "Pause" and this button is
+            // only 76 px. CLIP rather than wrap: if it does not quite fit, a
+            // clipped word inside its own button is recoverable and obvious,
+            // where a wrapped one silently becomes two lines and looks broken.
+            lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
             if (j == 0) s_lbl_resend = l;
+            if (btns[j].ptr == &s_btn_override_pause) {
+                s_lbl_pause = l;
+                /* Icon-only and oversized - see the paint in the tick handler.
+                   Set here so it survives every later set_text(). */
+                lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
+            }
         }
     }
 
@@ -3141,12 +3482,11 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "SL",      COL_SLOT_X,    COL_SLOT_W,    LV_TEXT_ALIGN_LEFT  },
         { "CALL",    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT  },
         { "MESSAGE", COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT  },
-        { "CTY",     COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
+        { "COUNTRY", COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
         { "SNR",     COL_SNR_X,     COL_SNR_W,     LV_TEXT_ALIGN_RIGHT },
+        { "TONE",    COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "DT",      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT },
-        { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
-        { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
         { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };
     for (int i = 0; i < 10; i++) {

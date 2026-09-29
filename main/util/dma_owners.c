@@ -500,3 +500,65 @@ void cpu_owners_report(void)
     heap_caps_free(b);
     heap_caps_free(a);
 }
+
+// === BOOT TRACE (2026-09-06) ==============================================
+//
+// WHY THIS EXISTS: MALLOC_CAP_DMA measured 54,355 B at 7.0 s and 10,499 B at
+// 15.6 s on the rx-audio bench - 44 KB gone in 8.6 s - then drifted to about
+// 2,231 B, at which point the SD card writes started failing with EIO and a
+// 736-byte largest block. The consumer of those 44 KB is not identified, and
+// the /api/cmd route to this report is useless for finding it: WiFi on this
+// track wedges within minutes, and the window in question closes at 15.6 s,
+// barely after the link has an IP.
+//
+// So the report triggers ITSELF at fixed uptimes and goes to the serial log,
+// which needs no network and survives the wedge. Same reasoning that moved
+// the rx_audio capture to a serial dump.
+//
+// ⛔ STILL NOT PERIODIC. Three one-shot reports, then the task deletes
+// itself. dma_owners_report() walks the heap with interrupts off, which is
+// the documented cause of this panel's cyan flash (#281) - a handful of
+// one-off blinks during boot diagnostics is the same exemption the on-demand
+// route already takes, a repeating timer is not.
+//
+// ⚠ Needs CONFIG_HEAP_TASK_TRACKING, which is DELIBERATELY off in
+// sdkconfig.defaults for shipping builds - so a fullclean reverts it and this
+// trace goes quiet by itself. Read the ATTRIBUTION, not the totals: block
+// headers are larger on a tracking build, so absolute free figures run low.
+
+#include "freertos/task.h"
+
+/* Own tag, for the same reason TAG_CPU has one: this lives OUTSIDE the
+ * CONFIG_HEAP_TASK_TRACKING guard, so it cannot use TAG. Without tracking
+ * the report itself says so and returns, which is the right behaviour -
+ * the trace still runs and still tells you the build cannot answer. */
+static const char *TAG_TRACE = "dmatrace";
+
+static void dma_boot_trace_task(void *arg)
+{
+    (void)arg;
+    // Re-targeted 2026-09-20 for the rx-audio-session finding: this time the
+    // pool is healthy at boot and goes tight over MINUTES, not seconds (int
+    // free ~18KB at t=17s -> 7-11KB by t=167-180s, esp_dma_capable_malloc
+    // failures observed by t=419s and again at t=545s on the prior boot).
+    // Bracket the settle (180s), the point failures were seen (420s), and a
+    // later steady-state read (600s).
+    static const int at_s[] = { 180, 420, 600 };
+    int prev = 0;
+    for (unsigned i = 0; i < sizeof(at_s) / sizeof(at_s[0]); i++) {
+        vTaskDelay(pdMS_TO_TICKS((at_s[i] - prev) * 1000));
+        prev = at_s[i];
+        ESP_LOGW(TAG_TRACE, "=== DMA OWNERS at ~%d s of uptime ===", at_s[i]);
+        dma_owners_report();
+    }
+    ESP_LOGW(TAG_TRACE, "=== DMA owners boot trace done ===");
+    vTaskDelete(NULL);
+}
+
+void dma_owners_boot_trace_start(void)
+{
+    // Low priority, its own task: the report is slow and must never run on a
+    // caller that matters. 4 KB because the report builds a task-status array.
+    xTaskCreatePinnedToCore(dma_boot_trace_task, "dma_trace", 4096, NULL,
+                            1, NULL, tskNO_AFFINITY);
+}

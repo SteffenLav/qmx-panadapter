@@ -72,22 +72,103 @@ All six need a version gate. `cat_qmx_fw_at_least()` already exists (it parses t
 **The dev bench is already on `1_04_004`**, so BD/BN/BU/UI/SR can be exercised today; GP
 wants 005 or later.
 
+### ⛔ 2026-09-20: WE SUPPORT UP TO 1_04_010. 1_04_011 IS NOT APPROVED.
+
+Operator's call, on the strength of the QRP Labs group thread the morning after
+1_04_011 (19-Sep-2026) went out. The one report that is OURS:
+
+> **Gyula HA3HZ:** *"I'm having a transmission issue with the Tab5 using CAT control - there is no output power. I reverted to version 1.4.10, and it works fine there."*
+
+That is our `TX;` / `TA<freq>;` / `RX;` burst path, i.e. every FT8, FT4 and WSPR
+transmission the panadapter makes.
+
+### ⭐ REPRODUCED AND NARROWED ON THE BENCH, same morning
+
+Dev QMX, 20 m, dummy load, `Max. PA voltage` 11.8 V, **both sweeps in the same
+Tab5 boot six minutes apart** with nothing but the radio firmware changed.
+Instrument: Calibrate Power, which keys with exactly those primitives at 44 PA
+voltages and reads `PC;` back at each.
+
+| | 1_04_010 | 1_04_011 |
+|---|---|---|
+| 1.3 V | 0.10 W | 0.00 W |
+| 5.8 V | 1.00 W | 0.00 W |
+| 11.8 V | **3.50 W** | **0.00 W** |
+| SWR into the dummy load | steady **1.06-1.08** | wandering **1.32-2.24** |
+
+⭐ **The SWR figure is what makes this "no RF" rather than "a mis-reported
+`PC;`"**: a bridge with real forward power reads a steady 1.06 into a dummy
+load, and noise without it. Reading `PC00;` alone could not have told the two
+apart.
+
+⭐ **And the radio still transmits on 011 - it is the DiGi CAT path only.**
+`MD3;` then `KD1;` answers `PC35;` at `SW105;`, the same 3.5 W the sweep could
+not produce one minute earlier. So the PA, the LPF, the load and the PA voltage
+are all fine.
+
+**Ruled out by measuring, each one:**
+
+| Candidate | Test | Answer |
+|---|---|---|
+| SWR protection latched | `SR;` | `SR0;` |
+| CW Practice mode (011 changed it - "no RF emitted" is exactly this symptom) | `LC;` | no `P`, no `G` |
+| PA voltage left low | `MMProtection\|Max. PA voltage;` | `MM11.8;` |
+| `TA` argument form | `TA1500.0;` vs `TA1500;` | `PC00;` either way |
+| Commands refused | every `TX;` / `TA...;` | no `?;` |
+| Config reset by the update | band table at both CAT link-ups | **identical**, Band[0..8] |
+
+That last row is what makes the A/B one variable, and it was checked rather
+than assumed. ⚠ `KD1;` in DiGi answers `?;` - key state is CW-only - so the
+"is it the keying or the tone" half cannot be tested directly from CAT.
+
+⭐ **Ralph DL1HR's retraction does not contradict Gyula.** He was checking
+FREQUENCY CONTROL through flrig, which never sends a Digi tone burst. Two
+different paths; both reports can be true. Worth remembering before letting a
+withdrawal talk you out of a measurement.
+
+Reported to the QRP Labs group with the numbers on 2026-09-20. Evidence in
+`scratchpad/qmx-011-test.md` (gitignored - the numbers that matter are above).
+
+### Separate, NOT part of this fault
+
+`MMSystem config|GPS & Ser. ports|USB serial ports;` reads **`MM1;`** on the dev
+radio, so interface 5 does not exist and **Radio Menus cannot open**
+(`qmx_term: port 2 (interface 5) would not open (0x105)`). It wants 2. Untested
+on 010, so it is NOT filed against 011 - but it means **1_04_011's
+multi-terminal locking clean-up is still untested**, which was the other reason
+for loading 011 at all.
+
+Docs changed the same day: quick-start, troubleshooting and README now say
+1.03.002 **up to 1.04.010**, with a warning naming the symptom. ⛔ **No firmware
+gate was added**, deliberately - a hardcoded "011 is bad" ships into a binary
+that lives for months, and Hans will very likely fix this in 012 within days.
+The claim belongs in documents that can be corrected in an hour, not in a
+`cat_qmx_fw_at_least()` test.
+
 ### Changelog since 1_04_006
 
 | Version | Entry | Why it matters here |
 |---|---|---|
+| **1_04_011** (19-Sep-2026) | **#4 "Major clean-up of multi-terminal functionality (locking etc)"** | ⚠ **The highest-risk entry for us in this whole line.** Radio Menus (#147, `qmx_term.c`) holds a terminal session on the radio's SECOND serial port (interface 5) while CAT keeps polling interface 0, and closing it walks the radio's own "Exit terminal" by reading the screen. Locking between concurrent terminal users is exactly what that leans on. **Untested against 011**, and 011 is not approved, so this is a thing to check when the next release is |
+| **1_04_011** | **#8 "Bug fix: Don't stop SWR Tune display when a CAT character is received"** | ✅ Radio-side fix for the hazard Stan KC7XE described in thread #176111 - *"in that menu ANY character sent over the CAT interface will lock up the radio controls"*. Our own Antenna Tune was never affected (Stan re-tested it: CAT-entered `MD8;` Tune is fine), but a user entering Tune from the FRONT PANEL with the Tab5 polling was. Fixed for 011 and later - which the two freeze reports above unfortunately make academic for now |
+| **1_04_010** (14-Sep-2026) | **#6 "CAT not reporting correct frequency during Virtual U3S operations"**, #7 radio not returned to the normal frequency between vU3S TX slots, #8 vU3S RX not on the stated frequency | ✅ Anyone running the radio's OWN beacon with the Tab5 attached had `FA;` lying to us, so the dial readout, the band-plan strip and every frequency-derived overlay were wrong. Nothing to do on our side; fixed ≥010 |
+| **1_04_009** (30-Aug-2026) | "Bug fix: Accidentally WSPR was transmitted 250 Hz too low - now it's correct" | **Not us, and have the answer ready** - this is the radio's own Virtual U3S encoder. Our WSPR TX synthesises the 162 symbols itself and keys them with `TA<freq>;`, so the transmitted frequency was never the radio's to get wrong |
 | **1_04_008** (27-Aug-2026) | "Added all remaining U3S modes to Virtual U3S" and **"Added RTTY to Virtual U3S (not available in real U3S)"** | The radio can now beacon RTTY itself. `JS8 / RTTY` sits in our roadmap behind `docs/rtty-feasibility.md`, where the cost was always the **transmit** side. If the QMX will key RTTY natively, the Tab5's part shrinks to choosing the frequency, showing the waterfall and driving it over CAT. Also worth thinking about against the WSPR page we shipped in v1.10.0: the radio's Virtual U3S is a standalone beacon, ours is receive + spots + reporting + transmit. Not a conflict; a question about what each is for. **No CAT change** — Virtual U3S is configured from the radio's own menus |
 | **1_04_007** (14-Aug-2026) | **"Bug fix: Fixed the 160m image rejection (90-degree quad LO phase relationship on 160m)"** | ⚠ **Do NOT file this as the cause of #118.** #118's phantom CW is reproducible on demand by a front-panel menu visit and cured by re-asserting IQ mode, which points at `Q9` session state, not LO phase — and it is not 160m-specific. What it *does* do is **weaken one piece of our own supporting evidence**: CLAUDE.md's spur section says the phantom-CW reports on low bands "stand on their own as evidence that image rejection is poor". On 160 m that was a known radio-side defect, fixed in 007, so it is no longer independent evidence |
 | **1_04_007** | Stored-CW-message fixes (frequency written as 00,000,000; continuous key-down between repeats), leading-edge CW RF spikes reintroduced in 006 | Radio-side. Relevant only to the CW page work on `feat/cw-page` |
 | **1_04_007** | "Image Sweep screen had incorrect result first time it ran" | Radio-side display |
 
-**Is 1_04 GA yet? Not established — and be careful how this is phrased.** The changelog
-labels **1_04_000** and **1_04_002** explicitly "Beta firmware version"; entries for
-**1_04_003 through 1_04_008 carry no such label**. That is the *absence* of a beta marker,
-not an announced general release, and a summarising fetch reading it as "not labelled
-BETA" is how that turns into a false claim. Our quick-start still recommends `1_03_002`.
-Changing that recommendation needs a positive statement from QRP Labs, or the §5 hardware
-checks actually run — not an inference from a missing word.
+**Is 1_04 GA yet? Still not ANNOUNCED - but the evidence moved, and the docs did.**
+The changelog labels **1_04_000, 001 and 002** "Beta firmware version"; **003 through
+011 carry no such label**. That on its own is the *absence* of a marker, and a
+summarising fetch reading it as "general release" is how that becomes a false claim -
+it happened again on 2026-09-20 and was caught by re-reading the raw page. What HAS
+changed since this paragraph was written is positive rather than absent: QRP Labs has
+published a full **operating manual** and a full **CAT programming manual** "for
+firmware 1_04_004 and above", which is an act, not a missing word.
+
+So our documents no longer call them betas - they say **1.03.002 up to 1.04.010** -
+while still not claiming a GA nobody announced.
 
 **Also newer than our cache:** an **operating manual for 1_04_004 and above** (23-Jul-2026)
 and a **Virtual U3S manual for 1_04_008a and above** (28-Aug-2026). Note "**008a**" — a
@@ -103,8 +184,9 @@ wiped; the user must re-select their firmware variant at the post-reset prompt).
 fixes, grid-locator display, repeated-CW-message truncation) — **no CAT changes between
 1_04_001 and 1_04_002**, so the 1_04_001 CAT manual is authoritative for 1_04_002.
 
-**Recommendation unchanged:** `1_03_002` remains the known-good firmware in our quick-start
-until the items in §5 are verified on real 1_04 hardware.
+**Recommendation (superseded 2026-09-20):** this used to read *"`1_03_002` remains the
+known-good firmware in our quick-start"*. It is now **1.03.002 up to 1.04.010**, with
+1_04_011 explicitly not approved - see the section at the top.
 
 ---
 

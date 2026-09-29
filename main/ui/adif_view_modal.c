@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "adif/adif_log.h"
 #include "util/dxcc.h"
+#include "util/country.h"
 #include "storage/sd_archive.h"   // "Restore from SD" - card presence + the read
 #include "util/psram_task.h"      // the restore runs OFF taskLVGL; see restore_task()
 
@@ -611,7 +612,7 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     if (strlen(date) >= 8) snprintf(mmdd, sizeof(mmdd), "%.2s-%.2s", date + 4, date + 6);
     if (strlen(time_on) >= 4) snprintf(hhmm, sizeof(hhmm), "%.2s:%.2s", time_on, time_on + 2);
 
-    const char *country = dxcc_lookup(call);
+    const char *country = country_display(call, 64);
 
     lv_obj_t *row = make_row(parent);
     if (even_row) {
@@ -683,7 +684,7 @@ static bool record_matches_query(const char *raw)
     {
         char call[24];
         if (adif_log_extract_field(raw, "CALL", call, sizeof(call))) {
-            const char *country = dxcc_lookup(call);
+            const char *country = country_display(call, 64);
             if (country) {
                 for (const char *c = country; *c && n < (int)sizeof(hay) - 2; c++)
                     hay[n++] = (char)toupper((unsigned char)*c);
@@ -1450,6 +1451,7 @@ static void modal_build(void)
     ui_theme_style_textarea(s_search_ta);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_FOCUSED,       NULL);
+    lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_CLICKED,       NULL);  /* see ui_osk_show() */
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_DEFOCUSED,     NULL);
     lv_obj_add_event_cb(s_search_ta, search_ta_cb, LV_EVENT_READY,         NULL);
 

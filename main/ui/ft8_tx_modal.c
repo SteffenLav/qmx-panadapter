@@ -97,7 +97,20 @@ static void transmit_btn_cb(lv_event_t *e)
     // ACTIVE on air, not one merely ARMED-and-waiting) - refuse the same way
     // ft8_qso_start() does for Auto Pounce.
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
-        if (busy_target[0]) snprintf(err, sizeof(err), "Busy: working %s", busy_target);
+        /* Name the state rather than saying a flat "Busy". WAIT_DONE clears on
+         * its own within a slot or two, and "try again shortly" is actionable
+         * where "Busy: working <call>" reads as a wall. The pick is still
+         * dropped here on purpose - see the note on Auto Pounce above for why
+         * this button must not be promoted into an auto QSO.
+         *
+         * ⚠ STILL OPEN: a one-shot Transmit picked during WAIT_DONE has
+         * nowhere to wait. Queueing it needs the report re-derived at arm time,
+         * not the modal's minute-old s_pending_req - that is a real change, not
+         * a message tweak, and nobody has asked for it yet. */
+        if (ft8_qso_get_state() == FT8_QSO_WAIT_DONE)
+            snprintf(err, sizeof(err), "Finishing with %s - try again in a moment",
+                     busy_target[0] ? busy_target : "the last contact");
+        else if (busy_target[0]) snprintf(err, sizeof(err), "Busy: working %s", busy_target);
         else                 snprintf(err, sizeof(err), "Busy: calling CQ");
         ESP_LOGW(TAG, "transmit refused: %s", err);
         lv_label_set_text(s_lbl_error, err);
@@ -130,6 +143,32 @@ static void pounce_btn_cb(lv_event_t *e)
 {
     (void)e;
     char err[64] = {0};
+    /* ⭐ QUEUE IT IF THE ONLY THING IN THE WAY IS A CLOSING MESSAGE.
+     *
+     * ft8_qso_start() refuses on its own is_busy() check, and WAIT_DONE counts
+     * as busy for most of a minute after the 73 is armed - long enough for the
+     * row to age out from under the operator. Randy N4OPI hit this on the web
+     * page; the panel has always had the identical gate.
+     *
+     * This button MEANS "run the whole exchange for me", which is exactly what
+     * web_reply_drain() does with a queued pick, so hand it over rather than
+     * building a second queue. The CALLSIGN is queued, not this request: the
+     * one in s_pending_req was built when the modal opened and its report can
+     * be a minute stale by the time the machine frees. The drain rebuilds from
+     * the live decode row (or the pileup fallback) at the moment it sends.
+     *
+     * ⚠ Deliberately NOT done on the Transmit button below. That one means
+     * "send this ONE message"; routing it here would silently promote a
+     * one-shot into an auto QSO, which is not what the operator pressed. */
+    if (ft8_qso_is_busy(NULL, 0) && ft8_qso_get_state() == FT8_QSO_WAIT_DONE &&
+        s_pending_req.target_call[0]) {
+        ft8_screen_view_request_reply(s_pending_req.target_call);
+        ESP_LOGI(TAG, "auto pounce queued behind the closing message: %s",
+                 s_pending_req.target_call);
+        ui_toast("Queued - will call after this exchange");
+        modal_close();
+        return;
+    }
     // Pass the pre-built, pre-encoded TX1 request directly — no re-encoding,
     // parity already correctly set by ft8_tx_build_request at row_activate time.
     if (ft8_qso_start(&s_pending_req, err, sizeof(err))) {

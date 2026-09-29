@@ -62,6 +62,21 @@ static const char *TAG = "time_sync";
 // reference), so this leash only applies offline.
 #define FT8_LEASH_MS      500
 
+/* ⭐ IS THE DATE ITSELF TRUSTWORTHY? (Don WB0LQW, 2026-09-13)
+ *
+ * Every offline time source here gives only a TIME OF DAY - the QMX's TM;, the
+ * QMX-GPS tick, and the manual HH:MM:SS set - and each pastes it onto
+ * get_date_anchor(), which with no RTC and no internet is last_unix_time: the
+ * last moment this unit had a good clock. The supercap RTC holds 30-40 h, so a
+ * Tab5 left off "a couple of days" boots with the date it was last used and
+ * logs every QSO under it. Don found his POTA log two days behind; his time of
+ * day was perfect.
+ *
+ * So the date is verified only by something that actually knows it: SNTP, an
+ * RTC that survived, or the operator (time_sync_set_date / confirm_date).
+ * ui/date_confirm_modal.c asks while this is false. Logging is never blocked. */
+static bool              s_date_verified     = false;
+
 // Timestamps of the last accepted sync from each source; 0 = never.
 static int64_t           s_last_qmx_sync_ms  = 0;
 static int64_t           s_last_sntp_sync_ms = 0;
@@ -280,7 +295,58 @@ void time_sync_notify_sntp(time_t utc)
     apply_and_persist(utc, "SNTP");
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
+    s_date_verified = true;
     push_to_qmx(utc);
+}
+
+/* Dev only: a bench with WiFi always has a verified date, so without this the
+ * question could never be seen before it reaches a park. Cleared by the
+ * operator answering, exactly like the real case. */
+static bool s_dev_force_unverified = false;
+
+void time_sync_dev_force_date_unverified(void)
+{
+    s_dev_force_unverified = true;
+    s_date_verified = false;
+    ESP_LOGW(TAG, "DEV: date forced to unverified (ignores SNTP until answered)");
+}
+
+bool time_sync_date_verified(void)
+{
+    if (s_dev_force_unverified) return s_date_verified;
+    return s_date_verified || (wifi_is_connected() && wifi_time_is_valid());
+}
+
+void time_sync_confirm_date(void)
+{
+    if (!s_date_verified) ESP_LOGI(TAG, "date confirmed by the operator");
+    s_date_verified = true;
+    s_dev_force_unverified = false;
+}
+
+// Replace the DATE, keeping the current time of day to the microsecond - the
+// operator is correcting the day, and the seconds they may have just set by
+// hold-and-release must not move.
+bool time_sync_set_date(int year, int mon, int mday)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t tod = (int64_t)tv.tv_sec % 86400;
+    if (tod < 0) tod += 86400;
+    struct tm tm_d = { .tm_year = year - 1900, .tm_mon = mon - 1, .tm_mday = mday, .tm_isdst = 0 };
+    time_t day = mktime(&tm_d);   // ESP-IDF runs in UTC, so mktime == timegm
+    time_t utc = day + (time_t)tod;
+    if (day == (time_t)-1 || !epoch_is_sane((int64_t)utc)) {
+        ESP_LOGW(TAG, "date %04d-%02d-%02d rejected", year, mon, mday);
+        return false;
+    }
+    tv.tv_sec = utc;
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(utc, "date");
+    s_date_verified = true;
+    s_dev_force_unverified = false;
+    ESP_LOGI(TAG, "date set by the operator: %04d-%02d-%02d (time of day kept)", year, mon, mday);
+    return true;
 }
 
 // Priority 3: QMX TM; time-of-day — offline fallback only.
@@ -543,9 +609,10 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
     return true;
 }
 
-// True once we've made a real (online) GPS/not-GPS determination for the current
-// QMX. Reset by a reboot (static init) - so a QMX swap re-detects on next boot;
-// a hot-swap keeps the prior verdict until reboot (acceptable - swaps are rare).
+// True once qmx_sync_once() has made its FIRST determination for the current
+// QMX - no longer gates whether detection retries (see the 2026-09-23 fix
+// note below), only whether push_to_qmx() has already seeded a non-GPS
+// radio's RTC once. Reset by a reboot (static init) or time_redetect().
 static bool s_qmx_detect_done = false;
 
 void time_sync_force_redetect(void)
@@ -554,10 +621,10 @@ void time_sync_force_redetect(void)
     ESP_LOGW(TAG, "GPS auto-detect re-armed - will run on the next periodic pass");
 }
 
-// One QMX time sync + one-time GPS auto-detection (replaces the manual flag).
-// Detection runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS
-// QMX's tick agrees tightly -> confirmed; a small/unset QMX is far off ->
-// rejected, and we push our time to set its RTC.
+// QMX time sync + GPS auto-detection (replaces the manual flag). Detection
+// runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS QMX's
+// tick agrees tightly (within QMX_GPS_CONFIRM_MS) -> confirmed; a small/unset
+// QMX is far off -> rejected, and we push our time to set its RTC.
 //
 // ⚠ Ordering within one boot is NOT sufficient protection, though this comment
 // used to say it was ("happens BEFORE any Tab5->QMX push, so a push cannot
@@ -567,20 +634,37 @@ void time_sync_force_redetect(void)
 // earlier session. That is a real false positive, seen on a GPS-less bench unit.
 // The durable guard is s_qmx_time_pushed, which crosses boots the same way the
 // radio's clock does.
+//
+// ⛔ WAS ONE-SHOT, NOT ANYMORE - 2026-09-23. The tight-agreement test used to
+// run exactly once (~15-45 s after boot) and latch its verdict for the rest of
+// the session: a fail was permanent until a reboot or the time_redetect escape
+// hatch. Measured on the bench: a QMX+ with a genuine GPS fix, moved/settling
+// right after boot, missed the 300 ms window by ~430 ms at the one-shot's
+// 45.8 s mark and then sat at "not GPS-disciplined" for 17+ minutes with the
+// fix long since solid - nothing ever checked again. Steffen OZ1LAV and John
+// Schindler (W5JSS) both hit this on real GPS-equipped units. Retrying is
+// safe: apply_gps_tick()'s own s_qmx_time_pushed guard already stops a Tab5-
+// pushed clock from being mistaken for GPS on any later attempt, same as the
+// first one, so nothing here can produce a false positive by trying again.
 static void qmx_sync_once(void)
 {
     int h, m, s;
     int64_t flip_us;
     bool sntp_up = wifi_is_connected() && wifi_time_is_valid();
 
-    // --- One-time auto-detect (needs SNTP to compare against) ---
-    if (!s_qmx_detect_done && sntp_up) {
+    // --- Auto-detect (needs SNTP to compare against), retried every periodic
+    // pass until confirmed. push_to_qmx() still fires only on the very first
+    // attempt - later attempts leave seeding the radio's RTC to the steady-
+    // state fallback below, which already runs every pass regardless. ---
+    if (!s_qmx_gps_confirmed && sntp_up) {
         bool gps = (cat_gps_tick_sync(&h, &m, &s, &flip_us) == ESP_OK) &&
                    apply_gps_tick(h, m, s, flip_us);   // tight-agreement test inside
         set_qmx_gps_confirmed(gps);
-        s_qmx_detect_done = true;
-        if (!gps) push_to_qmx(time(NULL));   // non-GPS: set its own RTC (once)
-        if (gps)  return;                    // GPS confirmed + applied
+        if (!s_qmx_detect_done) {
+            s_qmx_detect_done = true;
+            if (!gps) push_to_qmx(time(NULL));   // non-GPS: set its own RTC (once)
+        }
+        if (gps) return;                         // GPS confirmed + applied
     }
 
     // --- Steady state ---
@@ -634,6 +718,7 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     } else if (rtc_is_valid()) {
         if (rtc_apply_to_system()) {
             s_source = TIME_SOURCE_RTC;
+            s_date_verified = true;   // the supercap held, so the date is the one it kept
         } else {
             ESP_LOGW(TAG, "RTC read failed despite valid flag");
         }
@@ -673,10 +758,9 @@ void time_sync_init(i2c_master_bus_handle_t bus)
         set_qmx_time_pushed(true);
     }
 
-    /* 4608, not 3072: this task puts qmx_settings_t on its stack (twice), and
-     * that struct is now 1192 bytes and grows with every setting added - the
-     * same growth that overflowed "settings_flush" on 2026-09-01. The stack is
-     * in PSRAM, so the extra 1.5 KB is free. If a third settings copy ever
-     * lands here, heap it instead of raising this again. */
-    psram_task_create(time_sync_task, "time_sync", 4608, NULL, 4, tskNO_AFFINITY);
+    // 3072 -> 6144: a qmx_settings_t local (icfg) on the tightest stack in
+    // this file. qmx_settings_t grew ~1350 B total this session (#pwrcal) -
+    // generous this time, not incremental, after a +1024 bump undershot on
+    // the same bug class elsewhere (sd_archive).
+    psram_task_create(time_sync_task, "time_sync", 8192, NULL, 4, tskNO_AFFINITY);
 }

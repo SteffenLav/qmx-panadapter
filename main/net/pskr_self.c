@@ -10,6 +10,7 @@
 #include "pskr_self.h"
 #include "wifi.h"
 #include "net/net_quiet.h"
+#include "audio/rx_audio.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/psram_task.h"
@@ -36,7 +37,7 @@ static const char *BROKER_URI = "mqtt://mqtt.pskreporter.info:1883";
 // than a resource limit - oldest evicted first) plus a manual Flush
 // (pskr_self_clear()) so the map can be started fresh on demand.
 #define PSKR_SELF_MAX 100
-#define PSKR_SELF_TTL_S 1800   // same half-hour map lifetime as net/rbn.c's self-spots
+#define PSKR_SELF_TTL_S (24 * 3600)   // same as net/rbn.c's RBN_SELF_TTL_S - see the reason there
 
 static EXT_RAM_BSS_ATTR pskr_self_spot_t s_store[PSKR_SELF_MAX];
 static int              s_count;
@@ -161,17 +162,25 @@ static void handle_payload(const char *data, int len)
         sp.lat = (float)lat;
         sp.lon = (float)lon;
         sp.has_pos = true;
+        /* Keep the grid ITSELF, not just the position it resolves to - the LIST
+         * shows it, and re-deriving a grid from lat/lon would hand back a
+         * DIFFERENT string from the one the station sent (the position is a
+         * square's centre, so the round trip is lossy at 6 characters). */
+        snprintf(sp.grid, sizeof(sp.grid), "%.6s", rl->valuestring);
     }
 
-    // Copy sc's string out BEFORE deleting root - cJSON_GetObjectItemCaseSensitive()
+    // Copy sc's/rl's strings out BEFORE deleting root - cJSON_GetObjectItemCaseSensitive()
     // returns a pointer INTO the tree, not a copy, so sc (like every other
     // cJSON* above) is dangling the instant root is freed. Reading
     // sc->valuestring after cJSON_Delete() below is what actually crashed
     // mqtt_task on hardware (Load access fault, reliably ~30 s in) - every
     // other field here was already copied into `sp` first for the same
-    // reason, this check just wasn't.
+    // reason, this check just wasn't. rl's copy is diagnostic-only (see
+    // below), not required for correctness the way sender_call is.
     char sender_call[16] = {0};
     if (cJSON_IsString(sc)) snprintf(sender_call, sizeof(sender_call), "%s", sc->valuestring);
+    char rl_raw[24] = {0};
+    if (cJSON_IsString(rl)) snprintf(rl_raw, sizeof(rl_raw), "%.23s", rl->valuestring);
 
     cJSON_Delete(root);
 
@@ -179,6 +188,21 @@ static void handle_payload(const char *data, int len)
     // subscribed tx_call topic segment, but confirm before storing rather
     // than trusting that blindly.
     if (sp.call[0] && sender_call[0] && strcasecmp(sender_call, s_subscribed_call) == 0) {
+        // Field-reported 2026-09-11 (G4ZFQ, live FT8 test): a self-spot with
+        // no distance in ui/spot_map_view.c's LIST tab. Unlike RBN's
+        // QRZ/geo_coords fallback chain, PSK Reporter self-spots have no
+        // fallback at all - the reporting station's own "rl" (receiver
+        // locator) field IS the only source, so a report with rl missing or
+        // unparseable genuinely has nothing to draw. This confirms which,
+        // rather than guessing: an empty rl_raw means PSK Reporter itself
+        // never got a grid from that station; a non-empty one that still
+        // failed means maidenhead_to_latlon() rejected a value it should
+        // have accepted.
+        if (!sp.has_pos) {
+            ESP_LOGW(TAG, "no position for reporter '%s' - rl='%s' (len=%d, %s)",
+                     sp.call, rl_raw, (int)strlen(rl_raw),
+                     rl_raw[0] ? "grid present but unparsed" : "no grid in report");
+        }
         store_add(&sp);
     }
 }
@@ -191,10 +215,14 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_CONNECTED: {
         ESP_LOGI(TAG, "connected to broker");
         s_connected = true;
-        qmx_settings_t s;
-        settings_load_all(&s);
+        // Narrow read, not settings_load_all() - this callback runs on
+        // esp-mqtt's OWN internal task, whose stack is not ours to size.
+        // A full qmx_settings_t local here is exactly what crashed it
+        // (Stack protection fault, ~26 s uptime, hardware-confirmed).
+        char my_call[16];
+        settings_get_my_callsign(my_call, sizeof(my_call));
         char call[16];
-        call_upper(s.my_callsign, call, sizeof(call));
+        call_upper(my_call, call, sizeof(call));
         s_subscribed_call[0] = '\0';   // force a fresh SUBSCRIBE, not just the change-detect path
         do_subscribe(call);
         break;
@@ -225,6 +253,31 @@ static bool client_create(void)
         // esp_mqtt_client_start()'s internal xTaskCreate() (always INTERNAL
         // RAM, see watchdog_task()'s comment) needs to find contiguous.
         .task.stack_size = 4096,
+        /* ⛔ ABOVE taskLVGL BY DEFAULT, AND THAT IS A UI STALL.
+         *
+         * esp-mqtt's own Kconfig default is priority 5 (its Kconfig:120-122,
+         * applied in mqtt_client.c:423-425 only when this field is <= 0), and
+         * with core selection off its task runs tskNO_AFFINITY - so it could
+         * float onto CORE 0 and preempt taskLVGL (priority 4, pinned to core
+         * 0) on every incoming publish, for the whole session, whether or not
+         * the SelfSpotter screen was ever opened. That is exactly the class
+         * CLAUDE.md's own history names: nothing above priority 4 may contend
+         * with the LVGL thread on core 0.
+         *
+         * Randy N4OPI, 2026-09-17, on v1.13.0 (the first release shipping
+         * SelfSpotter): "things are generally sluggish, especially the
+         * Panadapter. In FT8, clicking a CQ caller is very slow to act, 1-3
+         * seconds. Sometimes it doesn't register the mouse click unless I
+         * click it again... If I go back to 1.12.4, life is good" - and,
+         * separately, that it happens "even without the map being enabled",
+         * which is the half a rendering-cost explanation cannot cover and
+         * this one does: the feed connects at boot regardless.
+         *
+         * 3 matches this file's own watchdog_task, i.e. a background feed
+         * with nothing latency-critical about it. The other half of the fix
+         * is CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED + core 1 in sdkconfig,
+         * keeping it off core 0 entirely. */
+        .task.priority = 3,
     };
     s_client = esp_mqtt_client_init(&cfg);
     if (!s_client) return false;
@@ -268,7 +321,14 @@ static void watchdog_task(void *arg)
     int  backoff_ms = 2000;
 
     for (;;) {
-        bool want = settings_get_spotmap_en();
+        // Tears down an already-running session too, not just the initial
+        // wait before the loop - this is the standing MQTT client task
+        // (esp-mqtt's own xTaskCreate() has no PSRAM option), so it is
+        // exactly the feed RX audio needs the room back from (2026-09-20).
+        // rx_audio_is_enabled(), not net_quiet: that flag is OTA-only again,
+        // see net_quiet.h's 2026-09-20 note - this is a direct check because
+        // this feed's standing task is heavy enough to matter on its own.
+        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_is_enabled();
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }
@@ -305,10 +365,10 @@ static void watchdog_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
 
         if (!started || !s_connected) continue;
-        qmx_settings_t s;
-        settings_load_all(&s);
+        char my_call[16];
+        settings_get_my_callsign(my_call, sizeof(my_call));
         char call[16];
-        call_upper(s.my_callsign, call, sizeof(call));
+        call_upper(my_call, call, sizeof(call));
         if (call[0] && strcmp(call, s_subscribed_call) != 0) {
             do_subscribe(call);
         }
@@ -326,7 +386,9 @@ void pskr_self_init(void)
     // allocates the client context and its own copy of the config, so calling
     // it at boot charged that to every unit including the ones that never
     // open the map.
-    psram_task_create(watchdog_task, "pskr_self", 4096, NULL, 3, tskNO_AFFINITY);
+    // 4096 -> 7168: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(watchdog_task, "pskr_self", 7168, NULL, 3, tskNO_AFFINITY);
     // "ready", not "started" - nothing is allocated and nothing is connected
     // until spotmap_en says so, and the task above says when it is.
     ESP_LOGI(TAG, "live self-spotting ready (MQTT, %s; opt-in)", BROKER_URI);

@@ -73,12 +73,20 @@ static void status_timer_cb(lv_timer_t *t)
     float pw = -1.0f, swr = -1.0f;
     cat_pwr_swr_async_read(&pw, &swr);
     if (s_status_lbl) {
-        char buf[48];
+        /* The seconds left on the safety stop, on BOTH screens. The web UI's
+         * panel has carried this since it was built; this one did not, and the
+         * operator noticed at once - the readout going still is otherwise
+         * indistinguishable from a frozen display, and the radio is keyed the
+         * whole time. Two screens, one rule. */
+        uint32_t left_ms = (now_ms - s_enter_ms < TUNE_TIMEOUT_MS)
+                         ? (TUNE_TIMEOUT_MS - (now_ms - s_enter_ms)) : 0;
+        unsigned left_s  = (left_ms + 999) / 1000;
+        char buf[64];
         if (swr >= 0.0f) {
-            snprintf(buf, sizeof(buf), "SWR %.2f   %.1f W", (double)swr,
-                     (double)(pw >= 0.0f ? pw : 0.0f));
+            snprintf(buf, sizeof(buf), "SWR %.2f   %.1f W   %us", (double)swr,
+                     (double)(pw >= 0.0f ? pw : 0.0f), left_s);
         } else {
-            snprintf(buf, sizeof(buf), "Tuning...");
+            snprintf(buf, sizeof(buf), "Tuning...   %us", left_s);
         }
         lv_label_set_text(s_status_lbl, buf);
     }

@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"   // esp_ptr_external_ram() - which pool a stack is in
 #include "esp_log.h"
 
 static const char *TAG = "stacks";
@@ -32,7 +33,11 @@ void task_stacks_report(void)
 
     ESP_LOGW(TAG, "=== task stack headroom (unused bytes, LOWEST EVER for each "
                   "task - only covers paths that actually ran) ===");
-    ESP_LOGW(TAG, "%-18s %5s %4s %9s", "task", "core", "pri", "free");
+    /* `stack` says WHERE the stack lives. Internal stacks come out of the
+     * scarce MALLOC_CAP_DMA pool (CLAUDE.md #284), PSRAM ones do not - and a
+     * patch that moves a stack to PSRAM is otherwise invisible: its fallback to
+     * the stock internal create looks identical in every other number. */
+    ESP_LOGW(TAG, "%-18s %5s %4s %9s  %s", "task", "core", "pri", "free", "stack");
 
     // Selection sort, tightest first - the answer is always at the top.
     for (UBaseType_t i = 0; i < n; i++) {
@@ -43,11 +48,12 @@ void task_stacks_report(void)
 
         unsigned freeb = (unsigned)t[i].usStackHighWaterMark * sizeof(StackType_t);
         BaseType_t core = t[i].xCoreID;
-        ESP_LOGW(TAG, "%-18s %5s %4u %7u B%s",
+        ESP_LOGW(TAG, "%-18s %5s %4u %7u B  %s%s",
                  t[i].pcTaskName,
                  (core == tskNO_AFFINITY) ? "any" : (core == 0 ? "0" : "1"),
                  (unsigned)t[i].uxCurrentPriority,
                  freeb,
+                 esp_ptr_external_ram(t[i].pxStackBase) ? "PSRAM" : "int  ",
                  (freeb < STACK_WARN_BYTES) ? "   <-- LOW" : "");
     }
 

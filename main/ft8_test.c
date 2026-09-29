@@ -237,12 +237,27 @@ int ft8_op_mode_slot_ms(void)
 // boundary TX path fires it at dt~=0 - no doubles, no cycle lost, and a low dt
 // for every receiving station. If a busy-band decode still overruns the
 // boundary the hold/reply machinery above catches it exactly as before (small
-// positive dt, never a skipped slot). FT8-only, and ONLY while
-// ft8_qso_is_busy() (an exchange or CQ-run) - plain monitoring keeps the
-// full-slot capture so band decode yield is untouched. RESERVE = time left
-// before the boundary for the decode to run; cut point = period - RESERVE
-// (13.2 s), still 0.56 s past the 12.64 s signal end.
-#define FT8_DECODE_RESERVE_MS 1800
+// positive dt, never a skipped slot). BOTH PROTOCOLS since the guard below was
+// derived rather than tabulated - it was FT8-only, for no reason beyond the
+// mode the original report came from. The cut lands one RX-latency guard past
+// the signal end: 13.2 s of a 15 s FT8 slot, 5.6 s of a 7.5 s FT4 slot.
+/* ⭐ DERIVED, NOT TABULATED - and that is what gave FT4 the same treatment.
+ *
+ * The old figure was FT8_DECODE_RESERVE_MS = 1800, cutting at 15000-1800 =
+ * 13200 ms. Note what 13200 actually is: 12640 ms of burst plus 560 ms. The
+ * "reserve" was never a free parameter - it was the signal end plus an RX
+ * latency guard, written down from the FT8 end of the arithmetic and therefore
+ * unusable for any other slot length. Expressed the other way round it applies
+ * to both protocols unchanged:
+ *
+ *     cut = ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS
+ *     FT8: 12640 + 560 = 13200   <- bit-identical to the old constant
+ *     FT4:  5040 + 560 =  5600
+ *
+ * The guard is a WALL-CLOCK quantity - our own audio-path latency plus however
+ * late the other station is - so it does not scale with the slot. 560 ms in
+ * both. */
+#define FT8_RX_LATENCY_GUARD_MS 560
 
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
@@ -391,6 +406,10 @@ uint32_t ft8_get_timing_seq(void)
 // without a mutex.
 static monitor_t    *s_mon_pool[FT8_NUM_BUFFERS];
 static volatile bool s_buf_busy[FT8_NUM_BUFFERS];
+/* Set when a sub-mode rebuild is waiting for the decode queue to drain. While
+ * it is set the slot loop claims NO new monitor, so the in-flight decodes
+ * finish and nothing replaces them - see reinit_pool_if_mode_changed(). */
+static volatile bool s_pool_quiesce;
 // Protocol the pool is currently built for. The monitor's waterfall/block sizes
 // are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
 // so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
@@ -566,6 +585,19 @@ static bool build_monitor_pool(ftx_protocol_t proto)
             return false;
         }
         monitor_init(s_mon_pool[i], &cfg);   // allocates the waterfall in PSRAM
+        /* ⛔ monitor_init() does not check its own allocations, and a NULL
+         * waterfall is only found by the first capture writing through it.
+         * Serial-captured 2026-09-11 on the dev bench: WSPR -> FT8 with WSPR
+         * still holding 11.25 MB left ~900 KB of PSRAM, the capture scratch
+         * fitted, one 163 KB waterfall did not - and `ft8` took a Store access
+         * fault at MTVAL 0 (monitor.c:181) seven seconds later, on the first
+         * slot. The pool was logged as "built" the whole time. */
+        if (!monitor_alloc_ok(s_mon_pool[i])) {
+            ESP_LOGE(TAG, "monitor %d/%d: buffers not allocated (%u KB PSRAM free)",
+                     i, FT8_NUM_BUFFERS,
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+            return false;
+        }
         // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
         // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
         // threshold) - across the pool that starves internal heap (main runs at
@@ -661,24 +693,84 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     return true;
 }
 
+/* How long the slot task will wait for an in-flight decode before giving up on
+ * a sub-mode rebuild. Short on purpose: this runs at the top of every slot, so
+ * giving up simply retries one slot later - far better than blocking the slot
+ * loop for the length of a worst-case decode. */
+#define POOL_REBUILD_WAIT_MS 2000
+
 // Top-of-slot check: if the operator switched FT8<->FT4, rebuild the monitor
 // pool for the new protocol. We're about to free monitors the decoder may still
-// be reading, so first drain any in-flight decode (bounded wait on the busy
-// flags), then free + rebuild. On rebuild failure the pool is left empty and
-// the loop's find_free_buffer() simply skips slots until the next mode toggle.
+// be reading, so first drain any in-flight decode - and if it will not drain,
+// DO NOT FREE. On rebuild failure the pool is left empty and the loop's
+// find_free_buffer() simply skips slots until the next mode toggle.
 static void reinit_pool_if_mode_changed(void)
 {
     ftx_protocol_t want = proto_for_mode();
-    if ((int)want == s_pool_proto) return;
+    if ((int)want == s_pool_proto) {
+        /* Toggled back before the drain finished - nothing to rebuild, so let
+         * capture run again rather than leaving the loop paused for ever. */
+        s_pool_quiesce = false;
+        return;
+    }
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
              want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
-    for (int guard = 0; guard < 400; guard++) {   // ~4 s ceiling
-        bool any_busy = false;
-        for (int i = 0; i < FT8_NUM_BUFFERS; i++) if (s_buf_busy[i]) any_busy = true;
-        if (!any_busy) break;
+
+    /* ⛔ THIS FREED MEMORY THE DECODER WAS STILL READING, AND IT CRASHED THE
+     * BOARD. Measured on bench dev 2026-09-25, switching FT8 -> FT4:
+     *
+     *     Guru Meditation Error: Core 1 panic'ed (Load access fault)
+     *     MTVAL 0xce116fc7   (not a valid address on this part)
+     *     -> ft4_extract_symbol / ft4_extract_likelihood
+     *        / ftx_decode_candidate   decode.c:767/383/602
+     *
+     * The wait was bounded at 400 x 10 ms = 4 s and then fell through to
+     * free_monitor_objects() UNCONDITIONALLY. On a saturated band the decode
+     * does not finish in 4 s - the same capture shows dec=11136 ms through
+     * dec=12791 ms at cand=140, and FT8_DECODE_BUDGET_MS is itself 11000. So
+     * the wait expired, the monitors were freed, and the decode task carried
+     * on reading the waterfall it no longer owned.
+     *
+     * ⭐ Non-deterministic, which is why it had survived: the FIRST FT4 switch
+     * in the same capture succeeded, with dec=3207 ms - comfortably inside the
+     * 4 s. It only kills the board when the band is busy enough to be worth
+     * decoding.
+     *
+     * Two things wrong, and the bound was the lesser one. Waiting longer would
+     * only have made it rarer. Freeing a buffer another task is reading is
+     * never acceptable at any timeout, so a wait that expires now DEFERS the
+     * rebuild instead. This function runs at the top of every slot, so the
+     * retry costs one slot in the old sub-mode and nothing else. */
+    bool busy = true;
+    for (int guard = 0; guard < POOL_REBUILD_WAIT_MS / 10; guard++) {
+        busy = false;
+        for (int i = 0; i < FT8_NUM_BUFFERS; i++) if (s_buf_busy[i]) busy = true;
+        if (!busy) break;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    if (busy) {
+        /* ⛔ DEFERRING ALONE WAS NOT ENOUGH, and the bench proved it within
+         * minutes. On a saturated band the decode runs 12-17 s against a 7.5 s
+         * FT4 slot, so a new job is queued before the last one finishes and
+         * the busy flags NEVER both clear. Measured 2026-09-25: four
+         * consecutive deferrals, and the operator's switch to FT8 simply never
+         * happened - the mode button silently did nothing. That is better than
+         * the crash it replaced and still not acceptable.
+         *
+         * So stop FEEDING the queue as well as waiting on it. With the quiesce
+         * flag set the slot loop claims no monitor, no new job is queued, and
+         * the backlog drains monotonically - which terminates, unlike waiting. */
+        if (!s_pool_quiesce) {
+            s_pool_quiesce = true;
+            ESP_LOGW(TAG, "sub-mode rebuild: a decode is still running after "
+                          "%d ms - pausing capture until the queue drains",
+                     POOL_REBUILD_WAIT_MS);
+        }
+        return;                      /* s_pool_proto unchanged -> we try again */
+    }
+
+    s_pool_quiesce = false;          /* drained - capture may resume */
     free_monitor_objects();
     if (!build_monitor_pool(want)) {
         ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
@@ -712,6 +804,11 @@ typedef struct {
     float                   noise_db;
     int64_t                 slot_sec;
     int64_t                 t_start_us;   // shared budget anchor
+    /* ⭐ SHARED WORK CURSOR - the candidates are pulled from here by BOTH
+     * halves instead of being split evenly in advance. See the measurement at
+     * decode_candidate_range(). */
+    volatile int            next_cand;
+    portMUX_TYPE            cand_lock;
     int                     start_off_ms;
     int                     start;        // first candidate index
     int                     step;         // index stride (2 for the dual-core split)
@@ -1009,6 +1106,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    float noise_db, int64_t slot_sec,
                                    int64_t t_start_us, int start_off_ms,
                                    bool may_early_advance,
+                                   volatile int *cursor, portMUX_TYPE *cursor_lock,
                                    decode_result_t *out)
 {
     out->early_advanced = false;
@@ -1033,7 +1131,50 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     qmx_settings_t sim_qs;
     settings_load_all(&sim_qs);
     bool sim_suppresses_real = sim_qs.sim_mode_en;
-    for (int i = start; i < n_cand; i += step) {
+    /* ⭐⭐ WORK-STEALING, NOT AN EVEN SPLIT - the even split was costing 8x.
+     *
+     * This used to be `for (i = start; i < n_cand; i += step)`: core 1 took the
+     * even candidates, core 0 the odd ones, half each, decided before either
+     * had run. That assumes the two cores are equally fast. On this board they
+     * are nowhere close - core 0 also carries USB host, the hosted-WiFi SDIO
+     * link and the display, and runs at 0.0% idle on a busy band.
+     *
+     * Measured on bench dev 2026-09-25 (FT4 sim, saturated):
+     *
+     *   slot 61: decode 11185 ms = search 476 + main 1356 + join  9351 (cand=132)
+     *   slot 62: decode 14122 ms = search 295 + main 1680 + join 12146 (cand=140)
+     *
+     * Core 1 finished its half in ~1.4 s and then sat in the join for TEN
+     * SECONDS waiting for core 0 to grind through an identical amount of work.
+     * The decode was not dual-core in any useful sense; it ran at the speed of
+     * the slower core and idled the faster one.
+     *
+     * ⛔ Raising the worker's priority is not the fix - it is already
+     * tskIDLE_PRIORITY+2, ABOVE the core-1 decode task at +1. It is not losing
+     * to its sibling, it is losing to USB and WiFi, and those are the two
+     * subsystems that fail first when starved on this board.
+     *
+     * So stop deciding the split in advance. Both halves now pull the next
+     * candidate from one shared cursor: whoever is free takes the next one. A
+     * starved core 0 simply completes fewer, core 1 absorbs the rest, and the
+     * slot finishes at the speed of the FASTER core plus one candidate.
+     *
+     * Candidates stay strongest-first, so the budget still drops only the
+     * weakest tail - and it now does so far less often.
+     *
+     * The spinlock is held for an integer increment only, never across
+     * ftx_decode_candidate(). `wctx` is NULL on the single-core fallback path,
+     * where the plain strided walk is still correct and needs no locking. */
+    for (;;) {
+        int i;
+        if (cursor) {
+            portENTER_CRITICAL(cursor_lock);
+            i = (*cursor)++;
+            portEXIT_CRITICAL(cursor_lock);
+        } else {
+            i = start; start += step;      /* single-core fallback */
+        }
+        if (i >= n_cand) break;
         /* ⭐ ABANDON THE SLOT THE MOMENT WE ARE TEARING DOWN (#312).
          *
          * ft8_task clears s_ft8_running BEFORE it sends the stop sentinel, so
@@ -1266,19 +1407,28 @@ static void ft8_decode_worker_task(void *arg)
         worker_job_t *job = NULL;
         if (xQueueReceive(ctx->jobs, &job, portMAX_DELAY) != pdTRUE) continue;
         if (!job) break;   // termination sentinel
-        /* false: the worker is a DIFFERENT TASK from the one that has always
-           called ft8_qso_advance(), and this is not the evening to add a second
-           caller into the QSO state machine. It costs almost nothing - the
-           decode task takes the EVEN candidates, which are the strongest, and a
-           partner replying to us is the loudest thing in the slot. If it lands
-           on an odd candidate we simply fall back to the end-of-slot advance,
-           i.e. today's behaviour. */
+        /* ⭐ true, as of 2026-09-24. This was false, with the note that the
+           worker is a different task from the one that has always called
+           ft8_qso_advance() - a fair objection, but the cost was not "almost
+           nothing". Candidates are split even/odd, so whether a station
+           calling us was answered in its own slot or a full cycle (30 s)
+           later came down to which half decoded them. Gyula HA3HZ measured the
+           result from the operator's side: "it responds rather sluggishly ...
+           the unit ignores it and continues sending CQ".
+
+           ft8_qso_advance() now serialises its callers on its own mutex and
+           refuses a second advance for the same slot, so both halves may race
+           for it and exactly one wins. See its comment. */
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
-                               job->start_off_ms, false, job->result);
+                               job->start_off_ms, true,
+                               &job->next_cand, &job->cand_lock, job->result);
         xSemaphoreGive(ctx->done);
     }
-    ESP_LOGI(TAG, "decode worker exiting");
+    /* MEASURE IT, so the 65536 above stops being a judgement call. This task
+     * calls ft8_qso_advance(), which is what overflowed the old 32768. */
+    ESP_LOGW(TAG, "decode worker exiting - stack high-water: %u bytes still free",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
     // Signal the join BEFORE self-deleting: after this the worker touches
     // nothing shared (context/job), so the decode task can safely free them
     // once it sees this.
@@ -1379,16 +1529,70 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         .mon = mon, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
         .slot_sec = slot_sec, .t_start_us = t_start, .start_off_ms = start_off_ms,
         .start = 1, .step = 2, .result = &r_worker,
+        /* Both halves walk this one cursor - see decode_candidate_range(). */
+        .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
     };
+    /* ⭐⭐ DO NOT HAND WORK TO A CORE THAT CANNOT DO IT.
+     *
+     * cpu_owners_report() on bench dev, 2026-09-25, mid-decode on a saturated
+     * band - the whole answer in four rows:
+     *
+     *     ft8_dec      92.1%   core 1   pri 1
+     *     taskLVGL     85.9%   core 0   pri 5
+     *     audio_task    9.4%   core 0   pri 6
+     *     ft8_dec0      0.1%   core 0   pri 2      <- the decode helper
+     *
+     * The helper gets ONE TENTH OF ONE PERCENT. taskLVGL owns core 0 and sits
+     * three priority levels above it, so the helper runs only when LVGL yields,
+     * which it does not while drawing the spectrum and waterfall.
+     *
+     * ⛔ Raising it is not available. To get CPU it would have to outrank
+     * taskLVGL (5), which stalls the display, and audio_task (6) is above that
+     * again for good reason. Core 0 has no capacity to give while the
+     * panadapter is drawing - that is #284/#285, a separate problem, and four
+     * hypotheses about it were already falsified on hardware.
+     *
+     * Work-stealing (the commit before this) already capped the damage at one
+     * candidate instead of half of them. This removes even that: a candidate
+     * handed to a task running at 0.1% takes ~8 s, and the join waits for it.
+     *
+     * So dispatch ADAPTIVELY - if the helper completed almost nothing last
+     * slot, decode single-core this slot and skip the join entirely. Re-probed
+     * every PROBE slots so a quiet display (FT8 page, screen off, operator on
+     * another view) wins the helper back automatically, rather than the
+     * decoder being permanently single-core because of one busy minute. */
+    static int  s_worker_useless_runs = 0;
+    #define WORKER_PROBE_EVERY   8   /* slots between re-probes while disabled */
+    #define WORKER_USEFUL_MIN    3   /* candidates that count as "it helped"   */
+    bool worker_disabled = (s_worker_useless_runs > 0) &&
+                           (s_worker_useless_runs % WORKER_PROBE_EVERY != 0);
+
     bool dispatched = false;
-    if (wctx && n_cand > 1) {
+    if (wctx && n_cand > 1 && !worker_disabled) {
         worker_job_t *jp = &job;   // job stays valid: we block on wctx->done below
         if (xQueueSend(wctx->jobs, &jp, 0) == pdTRUE) dispatched = true;
     }
 
+    /* ⭐ WHERE THE DECODE TIME ACTUALLY GOES - measured, because dec_ms alone
+     * cannot say. dec_ms spans the WHOLE of decode_slot: candidate search, both
+     * LDPC halves and the join. FT8_DECODE_BUDGET_MS only guards BETWEEN
+     * candidates inside decode_candidate_range(), so a slot can overshoot it
+     * anywhere the budget never looks.
+     *
+     * Measured on bench dev 2026-09-25 in FT4 sim: dec=28010 ms against an
+     * 11000 ms budget, with idle0 at 0.0%. Three very different causes fit that
+     * one number - a slow candidate search, a single long candidate, or the
+     * core-0 half simply starved of CPU so the join waits on it - and they need
+     * opposite fixes. Splitting it is two timer reads on a path that runs once
+     * a slot. */
+    int64_t t_search_done = esp_timer_get_time();
+
     // Our half (even indices).
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
-                           t_start, start_off_ms, true, &r_main);
+                           t_start, start_off_ms, true,
+                           dispatched ? &job.next_cand : NULL,
+                           dispatched ? &job.cand_lock : NULL, &r_main);
+    int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
         xSemaphoreTake(wctx->done, portMAX_DELAY);
@@ -1397,7 +1601,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         /* Inline fallback: this is still the DECODE TASK, so it may early-advance
            on the same terms as the even half above. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, true, &r_worker);
+                               t_start, start_off_ms, true, NULL, NULL, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
@@ -1443,7 +1647,36 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         s_timing_seq++;                   // bump after BOTH raw + applied are set
     }
 
-    int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000);
+    int64_t t_join_done = esp_timer_get_time();
+    /* Did the helper earn its join? Counted only when we actually dispatched;
+     * a disabled slot must not reset the counter or it would re-probe forever. */
+    if (dispatched) {
+        if (r_worker.n_attempted < WORKER_USEFUL_MIN) {
+            if (s_worker_useless_runs == 0)
+                ESP_LOGW(TAG, "core-0 decode helper attempted only %d candidate(s) "
+                              "- going single-core (re-probe every %d slots)",
+                         r_worker.n_attempted, WORKER_PROBE_EVERY);
+            s_worker_useless_runs++;
+        } else if (s_worker_useless_runs) {
+            ESP_LOGI(TAG, "core-0 decode helper is useful again (%d candidates) "
+                          "- dual-core decode resumed", r_worker.n_attempted);
+            s_worker_useless_runs = 0;
+        }
+    } else if (s_worker_useless_runs) {
+        s_worker_useless_runs++;   /* advance towards the next probe */
+    }
+    int dec_ms    = (int)((t_join_done - t_start) / 1000);
+    /* search = candidate detection; main = this task's half; join = waiting for
+     * the core-0 helper AFTER our own half finished. A large join with a small
+     * main means the helper is starved, not slow. */
+    int search_ms = (int)((t_search_done - t_start) / 1000);
+    int main_ms   = (int)((t_main_done - t_search_done) / 1000);
+    int join_ms   = (int)((t_join_done - t_main_done) / 1000);
+    if (dec_ms > 3000)
+        ESP_LOGW(TAG, "slot %d: decode %d ms = search %d + main %d + join %d "
+                      "(cand=%d, budget %d)",
+                 slot_idx, dec_ms, search_ms, main_ms, join_ms,
+                 n_cand, FT8_DECODE_BUDGET_MS);
 
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
@@ -1547,7 +1780,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     /* EXACTLY ONCE per slot. If a message addressed to us turned up mid-list,
        the early-advance above has already run this and running it again would
-       re-scan the same message and could step the state machine twice. */
+       re-scan the same message and could step the state machine twice.
+       ft8_qso_advance() now enforces that itself (it records the slot it last
+       advanced), so this test is belt-and-braces rather than the only guard -
+       which it has to be, now that the core-0 worker can early-advance too and
+       these two flags are set from two different tasks. */
     if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
@@ -1586,8 +1823,29 @@ static void ft8_decode_task(void *arg)
         wctx->done   = xSemaphoreCreateBinary();
         wctx->exited = xSemaphoreCreateBinary();
         if (wctx->jobs && wctx->done && wctx->exited) {
+            /* ⛔ 65536, NOT 32768 - AND THE REASON IS A CRASH, NOT A HUNCH.
+             *
+             * 2026-09-24, on air, mid-QSO, 22555 s of uptime:
+             *     Guru Meditation Error: Core 0 panic'ed (Stack protection fault)
+             *     task: ft8_dec0   MEPC=ft8_op_mode_set  RA=note_tx_slot
+             * The whole board rebooted while a station was answering our CQ.
+             *
+             * Cause: this task had just been allowed to call ft8_qso_advance()
+             * (see the worker's allow_early_advance argument). 32768 was sized
+             * for DECODING ONLY. ft8_qso_advance() is a large function - it
+             * puts a ~1 KB qmx_settings_t on the stack via settings_load_all()
+             * and takes decode-table snapshots - and the task that has always
+             * called it, ft8_task, is created with 65536. Giving the worker the
+             * same call on half the stack was the defect.
+             *
+             * Matched to ft8_task deliberately rather than nudged upwards: the
+             * two now run the same code, so they get the same budget. The stack
+             * is PSRAM, where 32 KB more is nothing against ~14 MB free, and
+             * the standing rule after the last stack bug is generous, not
+             * incremental. The high-water mark is logged at exit so the next
+             * person sizes this from a measurement instead of an argument. */
             BaseType_t wrc = xTaskCreatePinnedToCoreWithCaps(
-                ft8_decode_worker_task, "ft8_dec0", 32768, wctx,
+                ft8_decode_worker_task, "ft8_dec0", 65536, wctx,
                 tskIDLE_PRIORITY + 2, &worker, 0,
                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (wrc != pdPASS) {
@@ -1736,25 +1994,31 @@ static void ft8_task(void *arg)
      *
      * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
      * fixing one direction and not asking about the other is what let this
-     * through. The memory genuinely arrives - wait for it. */
-    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
-        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
-        if (s_cap_scratch) break;
+     * through. The memory genuinely arrives - wait for it.
+     *
+     * ⛔ AND WAIT FOR ALL OF IT, NOT JUST THE FIRST ALLOCATION. This loop used
+     * to retry only the scratch, on the reasoning that it is the biggest single
+     * block. It is - but it is not the whole bill. On 2026-09-11 the scratch
+     * (720 KB) fitted into ~900 KB while WSPR was still releasing, the monitor
+     * pool then could not, and the unchecked waterfall crashed the device (see
+     * build_monitor_pool). So the WHOLE set is retried: a partial pool is freed
+     * and the attempt repeated once the previous page has let go. */
+    bool pool_ok = false;
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
+        if (!s_cap_scratch)
+            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
+        free_monitor_objects();                    /* partial pool; scratch kept */
         if (attempt == 0)
-            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+            ESP_LOGW(TAG, "capture buffers not available yet (%u KB PSRAM free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
         vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
     }
-    if (!s_cap_scratch) {
-        ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
-        s_ft8_task_alive = false;
-        task_park_and_reap();
-        return;
-    }
-    if (!build_monitor_pool(proto_for_mode())) {
-        ESP_LOGE(TAG, "initial monitor pool build failed");
+    if (!pool_ok) {
+        ESP_LOGE(TAG, "PSRAM alloc for the capture pool failed (%u KB free)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
         free_capture_pool();
         s_ft8_task_alive = false;
         task_park_and_reap();
@@ -1966,6 +2230,14 @@ static void ft8_task(void *arg)
             // the opposite slot is the only way to hear the station we're
             // working (they transmit on the slot opposite ours). Skipping it
             // would make CQ-replies and QSO responses invisible.
+            /* A sub-mode rebuild is waiting for the queue to drain: claim
+             * nothing, so the decodes in flight are the last ones. */
+            if (s_pool_quiesce) {
+                ft8_status_set("RX: switching sub-mode...");
+                slot_idx++;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
             int bi = find_free_buffer();
             if (bi < 0) {
                 // All monitors in flight: the decoder has fallen behind (a run of
@@ -2002,12 +2274,14 @@ static void ft8_task(void *arg)
             if (ms_to_boundary < 2000)                  ms_to_boundary = 2000;
             if (ms_to_boundary > (int)SLOT_TIMEOUT_MS)  ms_to_boundary = SLOT_TIMEOUT_MS;
 
-            // Early-decode cut point (see FT8_DECODE_RESERVE_MS). Mid-QSO, stop
-            // capturing ~2 s before the boundary so the decode runs and arms the
-            // fresh reply in time to fire at dt~=0. The capture buffer stays
-            // full-size (begin() got slot_samples); finish() zero-pads the tail
-            // we skipped, so the decoder still sees a normal 93-block waterfall.
-            // FT8-only; full-slot when just monitoring, for max band yield.
+            // Early-decode cut point (see FT8_RX_LATENCY_GUARD_MS). Stop
+            // capturing once the signal has ended plus a guard, so the decode
+            // runs and arms the fresh reply in time to fire at dt~=0. The
+            // capture buffer stays full-size (begin() got slot_samples);
+            // finish() zero-pads the tail we skipped, so the decoder sees a
+            // shorter but otherwise normal waterfall and bounds-checks against
+            // wf.num_blocks. Both protocols; full-slot when the toggle is off
+            // and nothing is pending, for max band yield.
             int cap_target = slot_samples;
             // Early-cut whenever a QSO is running OR a reply is merely ARMED
             // (a hand-tapped Transmit/pounce that hasn't fired yet): both mean
@@ -2029,9 +2303,37 @@ static void ft8_task(void *arg)
             bool want_early_cut = ft8_qso_is_busy(NULL, 0) ||
                                   (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ||
                                   cut_cfg.ft8_early_decode;
-            if (!is_ft4 && want_early_cut) {
-                int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
-                if (cut > slot_samples) cut = slot_samples;   // reserve too small
+            if (want_early_cut) {
+                /* ⛔ FT4 WAS EXCLUDED FOR NO STATED REASON, and it needed this
+                 * MORE than FT8 did.
+                 *
+                 * 3c6bcf8 wrote "FT8-only" with no obstacle given - Steve N0SZ
+                 * had reported it on FT8 and the fix was scoped to his mode.
+                 * Meanwhile FT4's own arithmetic was the worse of the two: the
+                 * burst ends at 5040 ms of a 7500 ms slot, so 2460 ms of dead
+                 * tail was captured before the decode could even be queued.
+                 * Decode then takes ~2 s, landing ~2000 ms into the next slot
+                 * against a hold deadline of 2060 ms. Every FT4 reply was
+                 * arriving within 60 ms of missing its slot - a structural
+                 * one-cycle-late risk, not bad luck.
+                 *
+                 * Cutting at 5600 ms queues the decode 1900 ms earlier, which
+                 * lands it ~100 ms into the next slot instead of ~2000.
+                 *
+                 * Safe by the same mechanism FT8 already relies on: a short
+                 * capture simply yields a shorter waterfall. monitor_process()
+                 * counts the blocks it stored into wf.num_blocks, and every
+                 * access in ft8_lib's decode.c bounds-checks against it -
+                 * including the FT4 sync branches. Nothing assumes a full
+                 * 156-block slot. capture_finish() zero-pads the skipped tail.
+                 *
+                 * ⚠ FT4 is the thing this project has broken before by
+                 * half-removing a gate. This removes the gate WHOLE: there is
+                 * now one code path, one guard constant and one operator
+                 * toggle for both protocols. */
+                int cut = (ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS)
+                          * (SR_HZ / 1000);
+                if (cut > slot_samples) cut = slot_samples;   // guard exceeds the tail
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut
             }
 
@@ -2077,11 +2379,15 @@ static void ft8_task(void *arg)
                     // of waiting a full cycle. See FT8_REPLY_TX_WINDOW_MS. Safe -
                     // should_run only returns a legitimately-armed, correct-parity
                     // request, so this can never misfire a spurious/wrong-parity TX.
-                    // FT8-only: this optimization's timing/parity assumptions are
-                    // tuned to the 15 s FT8 grid and FT8 QSO automation isn't (yet)
-                    // mirrored for FT4 (FT4 currently only supports CQ, no
-                    // auto-reply) - so there's never a legitimate FT4 reply to catch
-                    // here anyway. Gate explicitly rather than rely on that.
+                    // ⚠ THIS COMMENT WAS STALE and said the opposite of the code.
+                    // It claimed FT8-only, "FT4 currently only supports CQ, no
+                    // auto-reply". Neither half is true any more: the decision
+                    // moved into ft8_gate_should_late_fire(), whose
+                    // ft8_gate_late_fire_enabled() deliberately answers the same
+                    // for both protocols, and ft8_qso.c carries FT4 throughout
+                    // (slot formula, period_ms, ADIF MODE). Left uncorrected it
+                    // would have talked the next reader out of a path that is
+                    // already live for FT4.
                     //
                     // hold_for_fresh (set at the boundary): the ARMED request was
                     // deliberately NOT fired at the boundary because the previous
@@ -2391,6 +2697,14 @@ static void ft8_arrl_fd_e2e_selftest_task(void *arg)
         return;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor buffers)");
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        task_park_and_reap();
+        return;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;
@@ -2526,6 +2840,12 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
         return false;
     }
     monitor_init(mon, &cfg);
+    if (!monitor_alloc_ok(mon)) {      /* see build_monitor_pool() */
+        monitor_free(mon);
+        heap_caps_free(mon);
+        heap_caps_free(signal);
+        return false;
+    }
 
     int blk = mon->block_size;
     int n_blocks = SLOT_SAMPLES / blk;

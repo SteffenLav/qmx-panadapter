@@ -1262,9 +1262,16 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
         {
             TickType_t nowt = xTaskGetTickCount();
             if (nowt - s_rx_stat_last >= pdMS_TO_TICKS(1000)) {
-                ESP_LOGI(TAG, "RX xport: %u xfers %u B %u badpkt",
-                         (unsigned)s_rx_stat_xfers, (unsigned)s_rx_stat_bytes,
-                         (unsigned)s_rx_stat_bad_pkts);
+                /* Every 10 s when clean, at once when a second had bad packets
+                 * or delivered under ~96 % of 288000 B (2026-09-13: 60 lines a
+                 * minute of "0 badpkt" buried the capture). */
+                static int s_quiet_s = 0;
+                if (s_rx_stat_bad_pkts > 0 || s_rx_stat_bytes < 276000 || ++s_quiet_s >= 10) {
+                    s_quiet_s = 0;
+                    ESP_LOGI(TAG, "RX xport: %u xfers %u B %u badpkt",
+                             (unsigned)s_rx_stat_xfers, (unsigned)s_rx_stat_bytes,
+                             (unsigned)s_rx_stat_bad_pkts);
+                }
                 s_rx_stat_xfers = 0;
                 s_rx_stat_bytes = 0;
                 s_rx_stat_bad_pkts = 0;

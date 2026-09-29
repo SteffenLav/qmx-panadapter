@@ -9,11 +9,15 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 | Swipe → | **Left edge** | Cycle Panadapter -> FT8/FT4 -> WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
-| Swipe ↓ | **Top edge** | Open the [spot map](../guide/spot-map.md) (who is hearing me) |
 
-Slim **breathing grip handles** on each edge show where to swipe. The top
-strip is thinner than the other three, because the top bar's own controls claim
-nearly the whole width just below it.
+Slim **breathing grip handles** on these three edges show where to swipe.
+
+!!! note "There is no top-edge swipe any more"
+    Earlier versions opened the [spot map](../guide/spot-map.md) with a swipe
+    down from the top edge. Removed — it collided with the top bar's own
+    Band/Mode/BW/Zoom taps and was easy to trigger by accident. The spot map
+    now opens from a **SelfSpotter** button in the settings drawer, right
+    below **Need guidance?** — see the Settings Drawer section below.
 
 ## Top Bar Taps
 
@@ -47,7 +51,8 @@ The thin coloured strip just above the bottom status bar shows where you are wit
 | Gesture | Effect |
 |---|---|
 | **Tap** the strip | Jump to that frequency in the band |
-| **Drag** the strip sideways | Scrub along the band — frequency updates live, QMX retunes on release |
+| **Drag** the visible-span block sideways | Move the window along the band. Block, VFO marker and passband travel together and stay where you let go; the radio follows |
+| **Touch just above the strip** | Counts as the strip — about 8 mm of the waterfall above it is a grab area, so the handle is catchable first time |
 | **Drag from the bottom bar** (sideways) | Same band scrub, grabbed on/under the slider handle *anywhere along the bottom status bar* — a taller, easier target |
 | **Swipe ↑** from the bottom bar | Still opens the memory picker (vertical = memory, sideways = band-plan — the two share the row) |
 
@@ -121,6 +126,7 @@ Swipe ← from right edge. The drawer is a single scrolling list of sections (th
 
 - **User Manual** (top button) — opens this documentation on the Tab5 itself, at the chapter covering the screen you were on (see below)
 - **Need guidance?** (directly below it) — a list of symptoms and questions in plain words; picking one opens the manual at the answer. See [Getting Help](../getting-help.md)
+- **SelfSpotter** (directly below that) — opens the [spot map](../guide/spot-map.md), who is hearing your signal. All three of these top buttons go somewhere else in the app rather than tuning a setting, which is why they sit together above everything else.
 - **Text fields** — tap to edit (opens keyboard if needed)
 - **Toggles** — tap to on/off
 - **Buttons** — tap to open modals (Config, Time, etc.)

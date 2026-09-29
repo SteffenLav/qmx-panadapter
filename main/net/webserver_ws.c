@@ -26,6 +26,16 @@
 // reverted to 10 fps so the browser view isn't needlessly choppy. The core-0
 // saturation (with core 1 ~94% idle) is the thing to fix — by rebalancing to
 // core 1 / cutting the rotation cost — not here.
+//
+// ⚠ "NOT with a browser connecting" IS STALE, AND RX AUDIO IS WHY (2026-09-22).
+// That was measured 2026-07-14, before Tab5-native RX audio existed, when core 0
+// still had ~12% idle to give. With the radio streaming it now runs at 0.0-0.2%
+// idle, so the browser is no longer a minor contributor - it is the last straw,
+// and a page left open AUDIBLY BREAKS THE AUDIO. The operator A/B'd it on the
+// bench (closing the browser: idle0 0.1% -> 2.9%, fps and invalidation
+// unchanged), and Gyula HA3HZ had already told the groups.io list to close the
+// page to get working audio. Do not re-derive "the browser doesn't matter" from
+// the paragraph above without re-measuring WITH audio enabled.
 #define WS_PUSH_PERIOD_MS       100        // ~10 fps
 // ⛔ AN ADAPTIVE FRAME RATE WAS TRIED HERE AND REMOVED (#232, 2026-08-21). It
 // raised the period when a frame needed more than one socket write and lowered
@@ -584,7 +594,9 @@ static void ws_push_task(void *arg)
 
         sent++;
         TickType_t now = xTaskGetTickCount();
-        if ((now - fps_at) >= pdMS_TO_TICKS(5000)) {
+        /* 60 s window, was 5 s (log audit 2026-09-13): 12 lines a minute for as
+         * long as a browser watched. A teardown is logged where it happens. */
+        if ((now - fps_at) >= pdMS_TO_TICKS(60000)) {
             float fps = (float)sent * 1000.0f / (float)pdTICKS_TO_MS(now - fps_at);
             // `partial` counts frames that needed more than one send() to go out.
             // Every one of those was, before this fix, a silently corrupted stream
@@ -637,6 +649,18 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
            so the extra 1 KB is paid out of the scarce pool on purpose, because
            an overflow here corrupts a neighbour and, with canary-only checking,
            says nothing when it does. */
+        /* ⛔ TRIED core-1-vs-core-0 pinning here, 2026-09-23 - REVERTED, it made
+         * LATE writes WORSE, not better. Theory was that this task, unpinned,
+         * lands on core 1 and round-robins at equal priority (3) with
+         * rx_audio_task/render_task, matching a measured LATE-write increase
+         * with a browser attached (render.c even has a standing comment
+         * predicting this exact risk). Pinning this task to core 0 measured
+         * clean: core 1 idle rose 25%->40-47% (confirming the pin worked), but
+         * LATE writes rose too, 10-11/450 -> 20-24/450, same bench, same
+         * firmware otherwise, past boot transients. So core-1 scheduling
+         * contention with THIS task is not the mechanism - do not re-try this
+         * exact change without new evidence. The actual cause of the browser-
+         * attached breakup is still open. */
         BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");

@@ -103,18 +103,18 @@ static bool s_have_spectrum = false;
 static TaskHandle_t s_fft_task = NULL;
 static uint32_t s_frames_this_period = 0;
 
-// ---- CW audio out: real-time I/Q forward ring -------------------------------
+// ---- RX audio out: real-time I/Q forward ring -------------------------------
 // Producer = audio.c process_rx (every decoded USB sample); consumer =
-// cw_audio_task. BYTEBUF so variable-size producer chunks stream contiguously
+// rx_audio_task. BYTEBUF so variable-size producer chunks stream contiguously
 // and the consumer reads fixed pair counts with continuous fs/4 mixer phase.
 // ~125 ms of 48 kHz stereo int16 in INTERNAL RAM. Internal (not PSRAM) is
 // deliberate: the producer (core 0) and consumer (core 1) both hit this ring
 // every sample; in PSRAM that cross-core traffic contends with process_rx's
 // own PSRAM writes and halves the UAC drain rate. Internal RAM has no such
 // penalty.
-#define CW_RING_BYTES (24 * 1024)
-static RingbufHandle_t s_cw_ring    = NULL;
-static volatile bool   s_cw_forward = false;
+#define RXAUDIO_RING_BYTES (24 * 1024)
+static RingbufHandle_t s_rxaudio_ring    = NULL;
+static volatile bool   s_rxaudio_forward = false;
 static int64_t  s_period_start_us = 0;
 
 #ifndef M_PI
@@ -230,6 +230,125 @@ static uint32_t s_cap_begin_head = 0;   // s_pre_head at begin() (no-audio detec
 static bool     s_ft8_in_mode    = false;   // producer-side FT8-mode edge tracker
 static int      s_ft8_smeter_tick = 0;
 
+/* ⭐ TIME-BASE REPAIR: FILL AUDIO THAT NEVER ARRIVED (2026-09-11).
+ *
+ * The pre-ring's position is a SAMPLE COUNT, so it only advances when audio
+ * arrives. Audio lost upstream - at the USB wire, which isochronous transfer
+ * never retries and nothing counts (#51, #376) - therefore does not leave a hole;
+ * it silently shortens the time base. Everything after the loss arrives early
+ * relative to the UTC-anchored window. For FT8 that is an offset. For WSPR it is
+ * a RATE error, and it is fatal: the 17:08 cycle on 2026-09-11 lost 1.7 % of
+ * its audio (3.7 % during a 51 s stretch), about 3 symbols of slip, and all 20
+ * candidates - several strong enough to see plainly on the carpet - failed with
+ * the Fano search at its ceiling. The very next cycle, with 0.1 % loss,
+ * decoded two stations on the same build.
+ *
+ * The repair is to hold the ring to the WALL CLOCK: when fewer samples have
+ * arrived than time has passed, the difference is filled with silence at about
+ * the point it went missing. A few symbols then carry a gap - which the code's
+ * FEC is built to ride through - instead of every later symbol sitting in the
+ * wrong place, which it is not.
+ *
+ * ⛔ A LATE SAMPLE IS NOT A LOST ONE, and that is the whole design. Upstream of
+ * this ring the audio is buffered - 1.0 s in the UAC driver's ring
+ * (INTERNAL_RX_BUF_BYTES) plus 0.34 s in audio.c's sample ring - so a busy
+ * moment shows here as a temporary shortfall that the backlog then repays.
+ * Filling that would be worse than nothing: the real samples arrive afterwards
+ * and everything after them lands LATE by the amount filled. So a shortfall is
+ * only filled once it has persisted for a whole GAPFILL_BUCKET_US - the MINIMUM
+ * over the bucket must still be short. No backlog can hold that long: at 1.34 s
+ * of total buffering, a consumer stalled for longer overflows and loses the
+ * audio for real, at which point filling it is correct.
+ *
+ * The line is re-anchored whenever arrivals run AHEAD of it (the QMX's clock a
+ * hair fast, or an anchor taken while a backlog was draining), so it rides the
+ * earliest-arrival edge and needs no clock estimate. A QMX clock slightly SLOW
+ * gets a 30 ms fill every few minutes, which is also correct: WSPR and FT8 both
+ * want samples on UTC.
+ *
+ * Counted, never silent (#189): s_gapfill_total is reported on every arm line,
+ * so a repaired cycle still says it lost audio. dsp_gapfill_set_enabled() turns
+ * the repair off for an A/B (dev action `gapfill`). */
+#define GAPFILL_BUCKET_US   2000000                  /* must exceed the 1.34 s of buffering */
+#define GAPFILL_MIN_SMP     360                      /* 30 ms at 12 kHz - below this is jitter */
+#define GAPFILL_MAX_SMP     (12000 * 10)             /* > 10 s is an outage: re-anchor, do not fill */
+static volatile bool s_gapfill_en = true;
+static int64_t   s_tb_anchor_us;
+static uint32_t  s_tb_anchor_head;
+static int64_t   s_tb_bucket_us;
+static int32_t   s_tb_bucket_min = INT32_MAX;
+static volatile uint32_t s_gapfill_total;            /* samples filled since boot */
+static volatile uint32_t s_gapfill_events;
+
+/* Dev-only loss SIMULATOR for testing the repair: drop `ms` of audio every
+ * `every_s` seconds between the audio ring and the pre-ring - which, seen from
+ * the pre-ring, is exactly what a missed isochronous interval looks like. */
+static volatile uint32_t s_simdrop_ms, s_simdrop_every_s;
+static int64_t   s_simdrop_next_us;
+static int32_t   s_simdrop_left_pairs;
+
+void dsp_gapfill_set_enabled(bool on) { s_gapfill_en = on; }
+bool dsp_gapfill_enabled(void)        { return s_gapfill_en; }
+uint32_t dsp_gapfill_total_samples(void) { return s_gapfill_total; }
+uint32_t dsp_gapfill_events(void)     { return s_gapfill_events; }
+void dsp_sim_audio_drop(uint32_t ms, uint32_t every_s)
+{
+    s_simdrop_left_pairs = 0;
+    s_simdrop_next_us    = esp_timer_get_time() + (int64_t)every_s * 1000000;
+    s_simdrop_every_s    = every_s;
+    s_simdrop_ms         = (every_s > 0) ? ms : 0;
+}
+
+/* Append `n` zeros to the pre-ring. Producer side only (fft_task). */
+static void pre_ring_append_zeros(uint32_t n)
+{
+    uint32_t pos   = s_pre_head % FT8_PRE_CAP;
+    uint32_t first = FT8_PRE_CAP - pos;
+    if (first > n) first = n;
+    memset(&s_ft8_pre[pos], 0, first * sizeof(float));
+    if (n > first) memset(&s_ft8_pre[0], 0, (n - first) * sizeof(float));
+    __sync_synchronize();
+    s_pre_head += n;
+}
+
+/* Called by fft_task right after each window lands in the pre-ring. */
+static void time_base_check(int64_t now)
+{
+    int64_t expect  = (int64_t)s_tb_anchor_head + ((now - s_tb_anchor_us) * 12) / 1000;
+    int64_t deficit = expect - (int64_t)s_pre_head;
+    if (deficit < 0) {                      /* ahead of the line - move the line */
+        s_tb_anchor_us   = now;
+        s_tb_anchor_head = s_pre_head;
+        deficit = 0;
+    }
+    if (deficit < s_tb_bucket_min) s_tb_bucket_min = (int32_t)deficit;
+    if (now - s_tb_bucket_us < GAPFILL_BUCKET_US) return;
+
+    const int32_t m = s_tb_bucket_min;      /* shortest the ring ran all bucket */
+    s_tb_bucket_us  = now;
+    s_tb_bucket_min = INT32_MAX;
+    if (m > GAPFILL_MAX_SMP) {
+        ESP_LOGW(TAG, "time base: audio %d ms behind the clock - an outage, not a "
+                      "loss; re-anchoring without filling", (int)(m / 12));
+        s_tb_anchor_us   = now;
+        s_tb_anchor_head = s_pre_head;
+    } else if (m >= GAPFILL_MIN_SMP && s_gapfill_en && s_ft8_pre) {
+        pre_ring_append_zeros((uint32_t)m);
+        s_gapfill_total += (uint32_t)m;
+        s_gapfill_events++;
+        ESP_LOGW(TAG, "time base: %d ms of audio never arrived - filled with silence "
+                      "at head=%u (total %u ms)", (int)(m / 12),
+                 (unsigned)s_pre_head, (unsigned)(s_gapfill_total / 12));
+    } else if (m >= GAPFILL_MIN_SMP) {
+        /* Repair switched off (A/B): still SAY so, and re-anchor, or turning it
+         * back on would dump the whole accumulated shortfall in one block. */
+        ESP_LOGW(TAG, "time base: %d ms of audio never arrived - NOT filled "
+                      "(repair off)", (int)(m / 12));
+        s_tb_anchor_us   = now;
+        s_tb_anchor_head = s_pre_head;
+    }
+}
+
 static float *s_ft8_dst    = NULL;
 static volatile int s_ft8_idx    = 0;   // decimated samples copied into dst so far
 static int    s_ft8_target = 0;
@@ -324,18 +443,28 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
     // the next starved build says so itself.
     static uint32_t s_prev_arm_head;
     static int64_t  s_prev_arm_us;
+    static uint32_t s_prev_arm_fill;
     int64_t now_us = esp_timer_get_time();
+    /* The rate is what ARRIVED - the time-base repair's fill is taken back out,
+     * so a starved cycle still reads short here even though its window was
+     * repaired (see time_base_check). `filled` says how much was put back. */
+    const uint32_t fill_now = s_gapfill_total;
+    const uint32_t filled   = fill_now - s_prev_arm_fill;
     unsigned rate_mx = 0;                     /* milli-samples per ms */
     if (s_prev_arm_us) {
         int64_t dus = now_us - s_prev_arm_us;
-        if (dus > 0) rate_mx = (unsigned)(((uint64_t)(head - s_prev_arm_head) * 1000000ULL) / (uint64_t)dus);
+        uint32_t arrived = (head - s_prev_arm_head) - filled;
+        if (dus > 0) rate_mx = (unsigned)(((uint64_t)arrived * 1000000ULL) / (uint64_t)dus);
     }
     s_prev_arm_head = head;
     s_prev_arm_us   = now_us;
-    ESP_LOGI(TAG, "FT8 arm: head=%u bf=%u start=%u rate=%u.%03u smp/ms%s",
+    s_prev_arm_fill = fill_now;
+    ESP_LOGI(TAG, "FT8 arm: head=%u bf=%u start=%u rate=%u.%03u smp/ms filled=%u ms%s",
              (unsigned)head, (unsigned)bf, (unsigned)(head - bf),
-             rate_mx / 1000, rate_mx % 1000,
-             (rate_mx && rate_mx < 11950) ? "  <-- AUDIO LOST" : "");
+             rate_mx / 1000, rate_mx % 1000, (unsigned)(filled / 12),
+             (rate_mx && rate_mx < 11950)
+                 ? (filled ? "  <-- AUDIO LOST (time base repaired)" : "  <-- AUDIO LOST")
+                 : "");
     return ESP_OK;
 }
 
@@ -487,8 +616,10 @@ esp_err_t dsp_init(void)
     }
 
     // Spawn the real-time FFT task on core 1 at lower priority than audio.
+    // DSP_FFT_TASK_PRIORITY (dsp.h) names this 4 for rx_audio_task's benefit -
+    // that task must never preempt this one.
     BaseType_t ok = xTaskCreatePinnedToCore(
-        fft_task, "fft_task", 6144, NULL, 4, &s_fft_task, 1);
+        fft_task, "fft_task", 6144, NULL, DSP_FFT_TASK_PRIORITY, &s_fft_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create fft_task");
         return ESP_FAIL;
@@ -758,8 +889,26 @@ static void zoom_process(const int16_t *samples)
     int n_out_i = dsps_fird_f32(&s_zoom_fir_i, s_zoom_mix_i, s_zoom_dec_i, n_out_target);
     int n_out_q = dsps_fird_f32(&s_zoom_fir_q, s_zoom_mix_q, s_zoom_dec_q, n_out_target);
     s_zoomfir_us += (uint32_t)(esp_timer_get_time() - t0);
+    /* ⛔ ESP_LOGD, NOT LOGI - THIS RUNS ON fft_task, ONCE PER SECOND, WHILE ZOOMED.
+     *
+     * The comment above says "silent unless zoomed (D > 1), i.e. never in normal
+     * use". That is wrong about how the radio is actually operated: the operator
+     * sits at x2 for ordinary listening, so this fired 1/s for the whole session
+     * - 254 lines in one 4-minute window of the 2026-09-22 capture.
+     *
+     * fft_task is the audio ring's SOLE consumer and #51 is the standing record
+     * of what starving it costs. A console write from it is the one thing this
+     * task must not do on a cadence; the console is USB Serial/JTAG, which can
+     * block on the host, and every line also goes through the diag ring.
+     *
+     * ⚠ NOT ESTABLISHED as the cause of the audio break-ups the operator
+     * reported the same day - core 0 was also at 1% idle with the display
+     * invalidating ~21 screens/s, and the two were not separated. Demoted
+     * because periodic debug output on this task is wrong regardless of which
+     * one it turns out to be. LOGD is compiled out at the default log level;
+     * raise the level if the measurement is wanted again. */
     if (++s_zoomfir_n >= 47) {   // ~1 s of windows at 46.9 Hz
-        ESP_LOGI(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
+        ESP_LOGD(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
                  (unsigned)ZOOM_FIR_LEN, D,
                  (double)s_zoomfir_us / (double)s_zoomfir_n / 1000.0);
         s_zoomfir_us = 0;
@@ -824,36 +973,56 @@ const float *dsp_get_zoom_spectrum(void)
     return s_zoom_spectrum[idx];
 }
 
-// ---- CW audio out: real-time forward-ring API -------------------------
-void dsp_cw_forward_enable(bool en)
+// ---- RX audio out: real-time forward-ring API -------------------------
+
+// Allocate the ring now, before WiFi/BLE/spots fragment internal RAM for the
+// rest of the session. Found 2026-09-04: creating it lazily on first CW/SSB
+// activation (the old behaviour of dsp_rxaudio_forward_enable() below) meant
+// the 24 KB contiguous request competed with a heap that only gets MORE
+// fragmented as the session runs, so a unit that had been up for a while
+// could never get it - the exact same class of race this file's rx_audio.c
+// preopen comment already describes for the I2S/DMA claim, just for a plain
+// internal-RAM block instead of DMA-capable RAM. Call this as early as
+// possible (rx_audio_preopen(), same place I2S grabs its DMA RAM before the
+// USB host starts). Idempotent; safe to call even if RX audio ends up never
+// enabled - 24 KB sitting idle is cheap next to losing RX audio for a whole
+// session with no recovery short of a reboot.
+void dsp_rxaudio_ring_preinit(void)
 {
-    if (en && s_cw_ring == NULL) {
-        // BYTEBUF ring in INTERNAL RAM (see CW_RING_BYTES note re: PSRAM
-        // cross-core contention throttling the UAC drain).
-        s_cw_ring = xRingbufferCreateWithCaps(
-            CW_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
-            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        if (s_cw_ring == NULL) {
-            ESP_LOGE(TAG, "cw_ring alloc failed");
-            return;
-        }
-        ESP_LOGI(TAG, "cw_ring created (%d bytes)", CW_RING_BYTES);
+    if (s_rxaudio_ring != NULL) return;
+    s_rxaudio_ring = xRingbufferCreateWithCaps(
+        RXAUDIO_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (s_rxaudio_ring == NULL) {
+        ESP_LOGE(TAG, "rxaudio_ring preinit alloc failed");
+        return;
     }
-    s_cw_forward = en;
+    ESP_LOGI(TAG, "rxaudio_ring created early (%d bytes)", RXAUDIO_RING_BYTES);
+}
+
+void dsp_rxaudio_forward_enable(bool en)
+{
+    if (en && s_rxaudio_ring == NULL) {
+        // Preinit didn't run (or failed) - fall back to the old lazy path so
+        // this still works, just without the fragmentation head start.
+        dsp_rxaudio_ring_preinit();
+        if (s_rxaudio_ring == NULL) return;
+    }
+    s_rxaudio_forward = en;
 }
 
 // Producer: called by audio.c for every decoded chunk. Best-effort (0-tick);
 // if the consumer is briefly behind, the oldest unread audio is the loss.
-void dsp_cw_forward(const int16_t *pairs, size_t n_pairs)
+void dsp_rxaudio_forward(const int16_t *pairs, size_t n_pairs)
 {
-    if (!s_cw_forward || s_cw_ring == NULL || pairs == NULL || n_pairs == 0) return;
-    xRingbufferSend(s_cw_ring, pairs, n_pairs * 2 * sizeof(int16_t), 0);
+    if (!s_rxaudio_forward || s_rxaudio_ring == NULL || pairs == NULL || n_pairs == 0) return;
+    xRingbufferSend(s_rxaudio_ring, pairs, n_pairs * 2 * sizeof(int16_t), 0);
 }
 
 // Consumer: fill up to n_pairs (loops over BYTEBUF wrap). Returns pairs read.
-size_t dsp_cw_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms)
+size_t dsp_rxaudio_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms)
 {
-    if (s_cw_ring == NULL || dst == NULL || n_pairs == 0) return 0;
+    if (s_rxaudio_ring == NULL || dst == NULL || n_pairs == 0) return 0;
     size_t want_bytes = n_pairs * 2 * sizeof(int16_t);
     size_t got_bytes  = 0;
     uint8_t *d = (uint8_t *)dst;
@@ -861,11 +1030,11 @@ size_t dsp_cw_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms)
     while (got_bytes < want_bytes) {
         size_t chunk = 0;
         uint32_t to = (got_bytes == 0) ? timeout_ms : 0;
-        void *item = xRingbufferReceiveUpTo(s_cw_ring, &chunk, pdMS_TO_TICKS(to),
+        void *item = xRingbufferReceiveUpTo(s_rxaudio_ring, &chunk, pdMS_TO_TICKS(to),
                                             want_bytes - got_bytes);
         if (item == NULL) break;
         memcpy(d + got_bytes, item, chunk);
-        vRingbufferReturnItem(s_cw_ring, item);
+        vRingbufferReturnItem(s_rxaudio_ring, item);
         got_bytes += chunk;
     }
     return got_bytes / (2 * sizeof(int16_t));
@@ -958,6 +1127,24 @@ static void fft_task(void *arg)
                 s_pre_head       = 0;
                 s_cap_read_head  = 0;
                 s_ft8_in_mode    = true;
+                /* New time base for the new mode - see time_base_check(). */
+                s_tb_anchor_us   = esp_timer_get_time();
+                s_tb_anchor_head = 0;
+                s_tb_bucket_us   = s_tb_anchor_us;
+                s_tb_bucket_min  = INT32_MAX;
+            }
+            /* Dev loss simulator (dsp_sim_audio_drop): throw this window away
+             * as if it had never crossed the USB wire. */
+            if (s_simdrop_ms) {
+                int64_t tnow = esp_timer_get_time();
+                if (s_simdrop_left_pairs <= 0 && tnow >= s_simdrop_next_us) {
+                    s_simdrop_left_pairs = (int32_t)(s_simdrop_ms * 48);
+                    s_simdrop_next_us    = tnow + (int64_t)s_simdrop_every_s * 1000000;
+                }
+                if (s_simdrop_left_pairs > 0) {
+                    s_simdrop_left_pairs -= DSP_FFT_SIZE;
+                    continue;
+                }
             }
             for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
                 s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
@@ -982,8 +1169,12 @@ static void fft_task(void *arg)
             s_ft8_iter_count++;
             s_ft8_total_n_out += n_out;
             int64_t now = esp_timer_get_time();
-            if (now - s_ft8_last_log_us > 1000000) {
-                ESP_LOGI(TAG, "FT8 cap: %u iters %u smp head=%u active=%d idx=%d/%d",
+            if (s_ft8_pre) time_base_check(now);
+            /* Every 10 s, was every second (2026-09-13 log audit). Counts are
+             * over the whole window, so ~480 iters / ~120000 smp is healthy.
+             * The time-base check above still reports any real gap at once. */
+            if (now - s_ft8_last_log_us > 10000000) {
+                ESP_LOGI(TAG, "capture (10 s): %u iters %u smp head=%u active=%d idx=%d/%d",
                     (unsigned)s_ft8_iter_count, (unsigned)s_ft8_total_n_out,
                     (unsigned)s_pre_head, (int)s_ft8_active, s_ft8_idx, s_ft8_target);
                 s_ft8_iter_count = 0;

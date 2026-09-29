@@ -93,6 +93,7 @@ static uint8_t *s_ring_storage = NULL;   // where the ring's 64 KB landed (PSRAM
 static void heap_watchdog_task(void *arg)
 {
     (void)arg;
+    int s_heap_quiet = 5;   // first healthy report after 10 s, then every 60 s
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
 
@@ -115,7 +116,10 @@ static void heap_watchdog_task(void *arg)
                      (unsigned)(i_free / 1024), (unsigned)(i_min / 1024), (unsigned)(i_lblk / 1024),
                      (unsigned)(p_free / 1024), (void *)s_ring_storage,
                      (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
-        } else {
+        } else if (++s_heap_quiet >= 6) {
+            // Every 60 s when healthy (2026-09-13 log audit: it was 6 W lines a
+            // minute). The LOW branch above still reports every 10 s.
+            s_heap_quiet = 0;
             // TEMP DIAGNOSTIC (2026-07-26): dma= tracks the MALLOC_CAP_DMA pool.
             // SD failures show it exhausted (704 B largest block) while general
             // internal RAM is fine (31 KB largest) - this time series shows WHEN
@@ -467,8 +471,35 @@ static void log_stats(void)
         // INFO (#51 instrumentation, was DEBUG): the USB-side delivery rate is
         // the stage-2 loss probe - expect ~48000 pairs/s; a deficit here with
         // drop=0 means the UAC driver discarded transfers upstream.
-        ESP_LOGI(TAG, "RX %u pairs/s peak L=%d R=%d",
-                 (unsigned)pairs_per_sec, (int)pL, (int)pR);
+        //
+        // ⭐ Every 10 s when healthy, not every second (2026-09-13, operator:
+        // "we need to be in control of what is happening here"): 60 identical
+        // lines a minute buried everything else in the capture. An abnormal
+        // second - a rate more than 2 % off 48 k, or a stream that starts or
+        // stops - still logs at once, so the #51 loss probe keeps its resolution
+        // exactly where it matters.
+        //
+        // ⚠ The band is TWO USB transfers wide, not 2 %. One transfer is 40
+        // packets = 1920 pairs, and a 1 s window catches 24, 25 or 26 of them
+        // depending on where its edges fall, so a perfect stream reads
+        // 46080/48000/49920 (measured 46859..49507 on a healthy bench). A 2 %
+        // band flagged that jitter as abnormal about once a second. Real loss
+        // shows as the 10 s mean, which is printed on the quiet line.
+        static int      s_quiet = 0;
+        static uint32_t s_prev_pps = 0;
+        static uint32_t s_sum_pps = 0;
+        bool odd = (pairs_per_sec > 0 && (pairs_per_sec < 46000 || pairs_per_sec > 50000)) ||
+                   ((pairs_per_sec == 0) != (s_prev_pps == 0));
+        s_prev_pps = pairs_per_sec;
+        s_sum_pps += pairs_per_sec;
+        s_quiet++;
+        if (odd || s_quiet >= 10) {
+            ESP_LOGI(TAG, "RX %u pairs/s peak L=%d R=%d  (mean %u over %d s)",
+                     (unsigned)pairs_per_sec, (int)pL, (int)pR,
+                     (unsigned)(s_sum_pps / (uint32_t)s_quiet), s_quiet);
+            s_quiet = 0;
+            s_sum_pps = 0;
+        }
     }
 }
 
@@ -602,11 +633,14 @@ static bool process_rx(void)
             s_dropped_total += pairs;
         }
 
-        // BAND-AID (v0.18.5): e07f114 added dsp_cw_forward() in the audio hot path.
-        // Even as a no-op when CW disabled, it degrades FT8 decode by ~2-3x
-        // (avg 39→11 on fading band, likely due to call overhead on core-0 audio task).
-        // Disabled pending a proper fix. CW audio remains shelved.
-        // dsp_cw_forward(decoded, pairs);
+        // Feeds rx_audio.c's demodulator (any supported mode, not just CW - see
+        // rx_audio.h). Bool-gated no-op when RX audio is off; measured clean
+        // over an 8.7 h live FT8 session (zero ring drops/skips) before this
+        // call was trusted again - the v0.18.5 band-aid's "this costs 2-3x FT8
+        // decode" claim did not reproduce once isolated from the actual root
+        // cause (a priority-6 consumer task preempting fft_task - see
+        // rx_audio.c). See memory project_rx_audio_track.md for the A/B.
+        dsp_rxaudio_forward(decoded, pairs);
         // Loop back for another non-blocking drain read.
     }
 }

@@ -19,7 +19,7 @@
 #include "cat.h"
 #include "cw_decode.h"
 #include "audio.h"
-#include "cw_audio.h"
+#include "rx_audio.h"
 #include "dsp.h"
 #include "render.h"
 #include "render_waterfall.h"
@@ -62,6 +62,7 @@
 #include "panic_hook.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
+#include "util/dma_owners.h"   // TEMP INSTRUMENT #283 - boot DMA trace
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "usb_hid_mouse.h"
@@ -69,8 +70,65 @@
 #include "adif/adif_log.h"
 #include "util/psram_task.h"
 #include "util/usb_replug.h"
+#include "util/heap_watch.h"   /* INSTRUMENT 2026-09-26 - the 84 zero-dips */
+#include "cJSON.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "main";
+
+/* ---- Boot memory ledger -------------------------------------------------
+ *
+ * Internal RAM is THE constraint on this board and nothing measured where it
+ * goes. On 2026-09-25 the bench sat at 19 KB free / 10-12 KB largest block
+ * with audio on, which is enough to cost three separate features:
+ *   - the SD diag mirror (esp_dma_capable_malloc refused, backing off to 240 s),
+ *   - four network feeds (gated off whenever RX audio is on),
+ *   - the BLE mouse (its guard needs 24576 B and measured 21391 B).
+ *
+ * dma_owners can attribute it, but only with CONFIG_HEAP_TASK_TRACKING, which
+ * stores an owner handle in EVERY block header and so changes the very numbers
+ * being measured (documented in sdkconfig.defaults, measured 2026-08-28).
+ *
+ * This is the non-perturbing alternative: print free DMA-capable and internal
+ * bytes either side of each major init, so the consumer is named by
+ * SUBTRACTION rather than by attribution. Two heap_caps_get_free_size() calls
+ * and one log line per milestone - no tracking, no allocation, nothing that
+ * changes what it observes.
+ *
+ * Deliberately INFO and deliberately permanent: every field diagnostic then
+ * carries the same ledger, so a user reporting "no Bluetooth" or a yellow SD
+ * dot arrives with the reason already in the file. */
+#define MEM_LEDGER(stage)                                                     \
+    ESP_LOGI("memledger", "%-26s dma=%6u B (lblk %5u)  int=%6u B (lblk %5u)", \
+             (stage),                                                         \
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),               \
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+
+
+/* ⭐ cJSON OUT OF INTERNAL RAM (2026-09-26).
+ *
+ * MEASURED, not assumed: heap_watch's per-task attribution caught the `httpd`
+ * task growing +8688 B across 311 BLOCKS inside a single internal-RAM dip,
+ * and `httpd` was also the task whose 116 B allocations were being refused.
+ * webserver.c makes 495 cJSON_Add* calls, each of which allocates a node and
+ * often a string, and cJSON had NO allocator hooks anywhere in the tree - so
+ * every one of them came out of internal RAM, the scarcest pool on the board.
+ *
+ * JSON never needs to be DMA-capable or internal: it is built, printed into
+ * the socket, and freed. PSRAM is 14 MB free and idle.
+ *
+ * Hooks are global and must be installed before ANY cJSON use. heap_caps_free
+ * handles both pools, so anything allocated before this point still frees
+ * correctly. Falls back to internal RAM if PSRAM ever refuses, because a
+ * failed API response is worse than a small internal allocation. */
+static void *qmx_json_malloc(size_t sz)
+{
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
+static void qmx_json_free(void *p) { heap_caps_free(p); }
 
 void app_main(void)
 {
@@ -78,6 +136,14 @@ void app_main(void)
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+
+    // Library INFO chatter that says nothing about OUR state (2026-09-13 log
+    // audit): NimBLE prints 5-6 lines every time a scan window starts (every
+    // 60 s + 15 s, for ever, on a unit with no mouse), and the cert bundle
+    // prints one per TLS handshake. Warnings and errors still come through;
+    // btmouse logs the BLE events that matter under its own tag.
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
     // #117: if the last boot crashed, report it NOW - immediately after the log
     // hook is installed, so the record is captured, and before anything else can
@@ -96,6 +162,7 @@ void app_main(void)
     ESP_LOGI(TAG, "HEAP boot: int=%uKB psram=%zuMB",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));
+    MEM_LEDGER("app_main entry");
     // Initialise NVS (settings persistence). If the partition is full or
     // a new version invalidated it, erase and retry - never block boot.
     esp_err_t nvs_err = nvs_flash_init();
@@ -197,13 +264,54 @@ void app_main(void)
     // card (POTA: log in the field, analyse at home). Background task, 256 KB
     // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
+    /* Start early: the dips begin about 30 min in, but an allocation that
+     * FAILS during boot is exactly the SD/BLE symptom we are chasing. */
+    heap_watch_start();
+    { cJSON_Hooks h = { .malloc_fn = qmx_json_malloc, .free_fn = qmx_json_free };
+      cJSON_InitHooks(&h); }
+
+    // TEMP INSTRUMENT, ANSWERED AND STOOD DOWN AGAIN 2026-09-20. Re-armed at
+    // 180/420/600 s to find who holds MALLOC_CAP_DMA once it settles (~8-12 KB
+    // free, confirmed FLAT across the whole 10-minute trace - not a leak, a
+    // fixed ceiling: 180,616 B under one dead app_main handle - WiFi/esp_hosted/
+    // LVGL bring-up, legitimately long-lived - plus 96,000 B across 26 task
+    // stacks still internal, taskLVGL's 17,408 B the single biggest of those.
+    // See apply_lvgl_port_task_psram.ps1, the fix taken from this reading.
+    // Re-enable the call (and CONFIG_HEAP_TASK_TRACKING in sdkconfig) to ask
+    // again.
+    //
+    // Prior run 2026-09-06 (8/18/60 s): usb_host_install() takes 47 KB, dsp_init
+    // 37 KB, pool spent before WiFi is reached.
+
+    /* Heap, not stack: this struct grew again (#pwrcal) and "main" is an 8 KB
+     * task that still has everything below to do - see CLAUDE.md, "Task
+     * stacks on this board are TINY". Used across a wide span of app_main()
+     * (down to dsp_set_window() below), so it lives until its last read,
+     * freed right after. 28 MB of PSRAM is free at this point in boot; a
+     * failed allocation here means something is badly wrong, so fall back to
+     * a zeroed on-stack instance rather than dereference NULL for the next
+     * couple hundred lines. */
+    /* ...and in PSRAM, not internal DIRAM (2026-09-17): this is 3,596 bytes of
+     * the scarcest memory on the board, held for the entire session, insuring
+     * a path that by the comment above only runs when "something is badly
+     * wrong". Safe despite insuring a PSRAM allocation - .ext_ram.bss is
+     * mapped at LINK time, so it does not depend on the heap that failed.
+     * Part of the DIRAM reclamation that took the internal-free watermark off
+     * 0 KB; see ft8_screen.c's s_table for the measurements. */
+    static EXT_RAM_BSS_ATTR qmx_settings_t s_cfg_fallback;  // static, NOT stack - see above
+    qmx_settings_t *cfg = heap_caps_malloc(sizeof(*cfg), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (cfg) {
+        settings_load_all(cfg);
+    } else {
+        ESP_LOGE(TAG, "boot config: PSRAM allocation failed - using defaults");
+        cfg = &s_cfg_fallback;
+    }
+    iq_balance_init(cfg->iq_enabled);  /* Restore IQ balance state from NVS */
     diag_log_write_session_header();  /* always-on capture; stamp the session */
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
+    MEM_LEDGER("display_init");
 
     bsp_info_log();
     manual_embed_log_summary();   // built-in user manual shipped intact?
@@ -232,6 +340,7 @@ void app_main(void)
     wspr_spots_init();
 
     ui_init(disp);
+    MEM_LEDGER("ui_init (LVGL)");
     ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
 
     /* ⭐ RESTORE THE PAGE BEFORE THE BACKLIGHT, so the Tab5 is ON the page it
@@ -248,7 +357,7 @@ void app_main(void)
         ESP_LOGW(TAG, "no display lock - the saved page will not be restored");
     }
 
-    display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
+    display_fade_in_backlight(cfg->brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // === BENCH HOOK - MUST be 0 in shipping builds =======================
     // Opens the Reader at boot so the built-in manual can be screenshotted via
@@ -265,6 +374,7 @@ void app_main(void)
     // after ui_init so the SD mount never races display bring-up and the dot
     // exists when the first mount callback fires.
     sd_archive_init();
+    MEM_LEDGER("sd_archive_init");
 
     // Belt-and-suspenders: sync the dot in case a mount completed before this.
     ui_set_sd_active(sd_archive_is_mounted());
@@ -278,19 +388,20 @@ void app_main(void)
     }
 
     // Apply persisted settings to UI / render pipeline.
-    ui_set_db_range(cfg.db_min, cfg.db_max);
-    ui_set_db_labels(cfg.db_min, cfg.db_max);
-    render_set_ema_alpha(cfg.ema_alpha);
-    display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
+    ui_set_db_range(cfg->db_min, cfg->db_max);
+    ui_set_db_labels(cfg->db_min, cfg->db_max);
+    render_set_ema_alpha(cfg->ema_alpha);
+    display_set_flipped(cfg->display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
-    // BAND-AID (v0.18.5): e07f114 (CW audio) introduced cw_audio_preopen() which
-    // degrades FT8 decode yield by 2-3x even when CW is disabled. Root cause under
-    // investigation (likely I2S/DMA contention with USB-audio pipeline). Disabled
-    // pending a proper fix. CW audio remains shelved until pipeline rework.
-    // cw_audio_preopen();
+    // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
+    // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
+    // costs nothing on any unit that has never turned it on.
+    rx_audio_preopen();
+    MEM_LEDGER("rx_audio_preopen (I2S)");
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+    MEM_LEDGER("usb_host_start");
     ESP_LOGI(TAG, "USB host started");
     // Make every firmware-initiated reboot tear the USB link down properly, so
     // the QMX is told we are going rather than finding out (see usb_shutdown.h).
@@ -308,25 +419,46 @@ void app_main(void)
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
-    iq_balance_set_enabled(cfg.iq_enabled);
-    ui_set_flat_mode(cfg.flat_mode);
+    MEM_LEDGER("audio_init (UAC ring)");
+    iq_balance_set_enabled(cfg->iq_enabled);
+    ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
     // ~13 s from now), so the MMCW write this used to make went nowhere on every
     // single boot. The radio tells us its own centre at link-up instead, and that is
     // the value that wins; this is just what to show until it does.
-    ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
-    ui_set_cw_cal_hz(cfg.cw_cal_hz);
-    ui_set_rit_pill_show(cfg.rit_pill_show);   // before the drawer is ever opened
+    ui_seed_cw_pitch_hz(cfg->cw_pitch_hz);
+    ui_set_cw_cal_hz(cfg->cw_cal_hz);
+    ui_set_rit_pill_show(cfg->rit_pill_show);   // before the drawer is ever opened
     /* #298: before the first frame, so nobody sees the wrong one and then a jump.
      * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
-    ui_set_still_view(cfg.still_view);
-    ui_still_notice_arm(!cfg.still_notice_done);
-    render_waterfall_set_colormap(cfg.colormap_idx);
+    ui_set_still_view(cfg->still_view);
+    ui_still_notice_arm(!cfg->still_notice_done);
+    render_waterfall_set_colormap(cfg->colormap_idx);
+
+    /* ⛔ SAY IT ON THE SCREEN WHEN THE SUPPLY BROWNED OUT.
+     *
+     * Samuel W7STF, 2026-09-24: days lost to "the Tab5 reboots on its own"
+     * while listening to SSB, convinced his unit was faulty - "it's bothersome
+     * others are not reporting this". His logs carry TEN
+     * reset_reason=brownout. The firmware knew every time and told nobody.
+     *
+     * Brownout is the one reset the operator can actually fix, and the one
+     * that is NOT our bug, so it is the one that must not stay buried in a
+     * log file. Long toast because it arrives during boot clutter and the
+     * whole point is that it gets read. Not persisted and not a modal: a
+     * single brownout on a dodgy cable should inform, not nag. */
+    if (diag_log_booted_after_brownout()) {
+        ESP_LOGW(TAG, "previous boot ended in a SUPPLY BROWNOUT - not a crash; "
+                      "the 5 V rail dropped below the chip's threshold");
+        ui_toast_ms("Restarted by a power brownout - not a fault. "
+                    "Check the USB-C supply and cable; loud audio draws the most.",
+                    12000);
+    }
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
-    if (cfg.last_vfo_hz != 0) {
-        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg.last_vfo_hz);
-        ui_update_frequency(cfg.last_vfo_hz);
+    if (cfg->last_vfo_hz != 0) {
+        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg->last_vfo_hz);
+        ui_update_frequency(cfg->last_vfo_hz);
     } else {
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
@@ -337,11 +469,17 @@ void app_main(void)
        Every caller reads g_freq_style at format time, so this is the only
        place it has to be set. */
     {
-        qmx_settings_t fs; settings_load_all(&fs);
-        g_freq_style = (fs.freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+        /* Heap, not stack - same reasoning as the cfg block above. */
+        qmx_settings_t *fs = heap_caps_malloc(sizeof(*fs), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fs) {
+            settings_load_all(fs);
+            g_freq_style = (fs->freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+            heap_caps_free(fs);
+        }
     }
     cw_decode_init();
     ESP_ERROR_CHECK(cat_init());
+    MEM_LEDGER("cat_init (CDC)");
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
     // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
@@ -366,12 +504,62 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: forced wifi_enabled=%d (BENCH_WIFI_ENABLED=%d)",
              (BENCH_WIFI_ENABLED == -1), BENCH_WIFI_ENABLED);
     #endif
+    // ⛔ WAIT FOR THE SD BOOT PROBE BEFORE STARTING WiFi (2026-09-06).
+    //
+    // sd_archive.h has said for a long time that sd_archive_wait_mounted() is
+    // "intended for one caller: app_main ... BEFORE panadapter_wifi_start() -
+    // the only window in which SD writes are reliable on this board". It had
+    // ZERO callers, so that ordering was never actually enforced and the two
+    // simply raced.
+    //
+    // Measured on the dev bench, same build, two consecutive boots:
+    //
+    //   mount finished 5.703 s, esp_hosted_init 5.842 s -> mounted FIRST TRY,
+    //     one attempt, 51 KB of MALLOC_CAP_DMA taken and held (the card's own
+    //     working buffers - legitimate, not a leak)
+    //   attempt 1 at 5.62 s, esp_hosted_init 5.88 s      -> all FIVE attempts
+    //     failed 0x108/0x109/0x103/0x104, DMA fell 135 KB -> 4.4 KB, and that
+    //     same boot took an Instruction access fault in sdio_read with
+    //     MEPC=0x00000000
+    //
+    // A ~200 ms scheduling difference decided it. That is precisely CLAUDE.md's
+    // long-standing "mount fails intermittently with 0x108, observed on 2 of 5
+    // boots" - not bad luck, a race that was documented as being prevented.
+    //
+    // The cost is bounded: the probe is 5 tries with a short gap, ~1.2 s worst
+    // case, and returns as soon as a card mounts (typically ~0.5 s). A unit
+    // with no card pays the full window once per boot, before WiFi - which is
+    // the same trade the probe itself already makes.
+    //
+    // ⚠ This does NOT claim to fix the SD/WiFi wedge. It removes one race that
+    // was making the mount a coin toss; whether the wedge survives it is a
+    // separate question and needs its own soak.
     #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
+    MEM_LEDGER("wifi_start (hosted/SDIO)");
+    // ⭐ REVERSED 2026-09-06, and the reason is measured rather than tidy.
+    //
+    // This used to wait for the SD mount BEFORE starting WiFi, on the strength
+    // of sd_archive.h's "the only window in which SD writes are reliable".
+    // That guarantees the mount takes its ~51 KB of MALLOC_CAP_DMA first, and
+    // measurement showed what that leaves esp_hosted's SDIO card init: 2039 B,
+    // largest block 1152 B, against 19927/10240 with the archive off. A card
+    // init that cannot allocate used to reboot the device.
+    //
+    // So WiFi goes first now, and sd_archive's own boot probe waits for the
+    // card init to finish (qmx_sdio_card_ready_wait) before mounting. Both
+    // still get their memory before the system is busy; neither is asking
+    // while the other allocates.
+    //
+    // The wait below is kept, and still runs before the Reader's staged
+    // offline manual is flushed - it just no longer gates WiFi on it.
+    if (!sd_archive_wait_mounted(9000))
+        ESP_LOGW(TAG, "SD: no card mounted in the boot window");
     #else
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
     ESP_ERROR_CHECK(dsp_init());
+    MEM_LEDGER("dsp_init");
     // After dsp_init: the detector arms dsp_avg_*, which needs the FFT running.
     spur_map_init();
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
@@ -381,37 +569,30 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+    MEM_LEDGER("render_init");
 
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
     // exist, and ui_set_drawer_expert() is a no-op when the value matches.
-    ui_set_drawer_expert(cfg.drawer_expert);
+    ui_set_drawer_expert(cfg->drawer_expert);
 
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
-    render_waterfall_set_black_level(cfg.wf_black_db);
-    render_waterfall_set_contrast_db(cfg.wf_contrast_db);
-    render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
-    dsp_set_window(cfg.wf_window);
+    render_waterfall_set_black_level(cfg->wf_black_db);
+    render_waterfall_set_contrast_db(cfg->wf_contrast_db);
+    render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
+    dsp_set_window(cfg->wf_window);
+    render_set_waterfall_speed_mult(cfg->wf_speed_mult);
+    if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
+    cfg = NULL;
 
-    // BAND-AID EXTENDED (v0.18.6): cw_audio_init() spawns cw_audio_task at
-    // PRIORITY 6 on core 1 - higher than fft_task (4) and both FT8 tasks (1) -
-    // looping forever on a 120ms vTaskDelay even though cw_audio_preopen() is
-    // already disabled above (s_codec_ready can never become true, so the task
-    // does nothing but wake/check/sleep). The v0.18.5 band-aid disabled the two
-    // things CW audio actually DOES but missed this: a priority-6 "ghost" task
-    // preempting fft_task - the audio ring's sole consumer for BOTH panadapter
-    // and FT8 capture - ~125 times per 15s FT8 slot, for the entire session.
-    // Root-caused 2026-06-25 via empirical diff against v0.18.0 (which has no
-    // cw_audio.c at all) after the user found NO release after v0.18.0 matched
-    // its sustained decode yield, even with the v0.18.5 band-aid applied. Fits
-    // the "first slot decodes great, every slot after collapses" pattern from
-    // the v0.18.4 investigation: fresh-boot ring has no backlog yet; periodic
-    // high-priority preemption of fft_task lets the ring backlog grow, so each
-    // subsequent FT8 capture reads time-shifted audio that still syncs (sync
-    // detection tolerates jitter) but doesn't decode (LDPC needs exact symbol
-    // alignment). CW audio remains fully shelved - do not re-enable without
-    // also fixing this task's priority/cadence as part of the pipeline rework.
-    // cw_audio_init();
+    // Spawns rx_audio_task, pinned strictly below fft_task's priority and
+    // fully blocked (no wakeups at all) whenever RX audio is disabled - see
+    // rx_audio.h for why the old CW-only version (priority ABOVE fft_task,
+    // polling every 120 ms even when idle) cost FT8 decode yield, and how
+    // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
+    // before this call was re-enabled (memory project_rx_audio_track.md).
+    rx_audio_init();
+    MEM_LEDGER("rx_audio_init");
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew

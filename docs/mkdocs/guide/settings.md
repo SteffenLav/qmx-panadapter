@@ -240,6 +240,10 @@ to restart.
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
 
+**Waterfall scroll speed** — 1× to 4× (default 1×). How many rows the waterfall
+advances per render, independent of the spectrum and S-meter update rate, which
+stay unchanged either way.
+
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.
 
@@ -382,18 +386,37 @@ a large part of the display, and with a real keyboard you get that space back.
 
 ## Firmware updates
 
-**Download updates automatically** *(Network — on by default, v1.9.3)* — when a
-newer release appears, the Tab5 fetches it quietly in the background so that
-the only thing left for you is one decision: restart now, or later. The
-spectrum, waterfall and FT8 decoding keep running while it downloads.
+!!! warning "The next update after v1.14.4 needs a USB-C cable, once"
 
-Switch it off if you are on a metered connection — a phone hotspot in a field,
-for example — as each update is about 3.3 MB. With it off nothing is fetched
-until you ask: the bottom bar still offers the update, and the window's button
-reads **Download now**.
+    v1.14.4 is the last release that installs over the air for a while. The one
+    after it claims 2.81 MB of flash that no partition has ever used, which
+    means rewriting the partition table — and an over-the-air update can only
+    ever write the app, never the map of the flash. That is deliberate: it is
+    what stops a failed download taking the layout with it.
 
-⚠ Turning this on never installs anything by itself. Applying an update
-restarts the Tab5, and only you can ask for that — see
+    So the next firmware arrives as a **flasher download** — the same USB-C data
+    cable and the same `flash.bat` / `flash.command` you used the first time.
+    One time, and everything after it is over the air again.
+
+    **Your settings and your log are kept.** Press **Enter** at the flash-type
+    prompt. Do *not* press **E** — that erases the whole chip, including your
+    QSO log and your LoTW private key, and it is not needed here.
+
+    The Tab5 will tell you when the time comes: the update window says so
+    instead of offering a download, and it refuses to fetch an image it cannot
+    install.
+
+**Updating is one route, and you are always asked** *(v1.14.4)* — when a newer
+release appears, the version at the bottom of the screen changes to show it.
+Tap it, and a window opens with **Download now**. The download runs in the
+background, and when it finishes the same window offers **Restart now**.
+
+Nothing is fetched and nothing is installed until you press something. The
+earlier "download updates in the background" option is gone: it had been
+suppressed by a memory guard for months and never actually ran, so removing it
+made the behaviour match what it had always been in practice.
+
+⚠ Applying an update
 [Keeping It Up To Date](../quick-start.md#step-10-keeping-it-up-to-date).
 
 ---
@@ -429,19 +452,11 @@ copied them just now rather than someone having typed it an hour ago.
 
 ## Spot Map
 
-**Spot map (live reports of my signal)** — **Off** by default. Switches on the
-full-screen map of stations that have reported *your* signal, opened by swiping
-down from the top edge. Full details in [Spot Map](spot-map.md).
-
-Off by default for two reasons. While it is on, the Tab5 holds a live session to
-PSK Reporter's broker subscribed to your callsign and polls wsprnet and
-hamqsl — a connection worth asking for rather than inheriting. And the feeds cost
-about 6.6 KB of internal memory and 2.6 KB of the DMA pool that microSD, USB and
-encrypted uploads draw on, which is not a fair charge on an operator who never
-opens the map.
-
-The switch applies immediately, both ways, with no reboot. Switching it off
-releases the memory again.
+There is no setting here any more — the full-screen map of stations that have
+reported *your* signal runs its feeds from boot, always, and opens from the
+**SelfSpotter** button in the drawer (below **Need guidance?**), not a
+setting or a switch. Full details in [Spot Map](spot-map.md), including what
+running the feeds all the time costs.
 
 Wants **your grid square** (the map draws lines from it) and **your callsign**
 (it is what the feeds are asked about). QRZ callbook credentials are optional and
@@ -457,6 +472,17 @@ only place RBN skimmers more precisely.
 **Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
 
 **Fast pounce (early decode)** — On by default. Decodes surface ~1.8 s *before* the slot boundary (WSJT-X style), so a fresh CQ can be answered in the very next slot and mid-QSO replies land on the beat. Trade-off: the capture window closes early, so a station transmitting late in the slot can occasionally be missed. ⚠️ *Not yet A/B-verified on a live band — if your decodes-per-slot drop with it on, turn it off and please report your numbers.*
+
+!!! tip "v1.16.4 made this actually deliver"
+
+    Starting the decode early only helps if the *decision* to transmit is taken
+    early too, and until v1.16.4 only one of the Tab5's two processors was
+    allowed to take it. Which one happened to find the station calling you was
+    chance — so the same situation answered immediately about half the time and
+    a full cycle (30 s) late the rest, which is exactly how it looked from the
+    operator's chair *(Gyula HA3HZ: "sometimes it works well, other times the
+    transmission is delayed")*. Both halves may now decide. Verified on the air
+    over three contacts, every message going out in the immediate slot.
 
 **Distance in miles** — Show the decode list's distance column in miles instead of kilometres.
 
@@ -476,7 +502,7 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 ## WSPR
 
 The **WSPR** group appears only while the WSPR page is up, and holds **Allow
-transmitting**, **Declared power**, **Duty cycle**, **Band hopping** and **Publish spots
+transmitting**, **Declared power**, **Transmit schedule**, **Band hopping** and **Publish spots
 to wsprnet**. They are described where they make sense — see [WSPR](wspr.md).
 
 ## The snap-on keyboard
@@ -543,7 +569,7 @@ Useful for troubleshooting rare issues.
 
 ## microSD Auto-Archive — Station Backup
 
-Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) **before switching the Tab5 on** and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
+Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
 
 | File | Contents |
 |------|----------|
@@ -554,20 +580,45 @@ Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is 
 | `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
 | `README.txt` | A plain-text description of every file, written on each mount |
 
-**Insert the card before switching the Tab5 on.** A card pushed in later is not picked up until the next start-up — the Tab5 can only claim the card during a short window early in boot.
+**After inserting the SD card your Tab5 needs a restart.** The Tab5 can only claim the card during a short window early in boot, so a card pushed in while it is running is not used until you restart.
+
+### Benefits of a microSD card
+
+The Tab5 works perfectly well without one. With a card in, you also get:
+
+- **A full diagnostic history instead of the last few minutes.** Without a card, the log that survives a restart is held in a small area of internal flash and is overwritten roughly every 11 minutes of busy operating. On the card it is kept whole — so if something goes wrong overnight, or an hour ago, the evidence is still there when you come to report it.
+- **A grab-and-go station backup.** Your QSO log, every setting, your WiFi details and your LoTW certificate and key, mirrored automatically. Move the card to another Tab5 and your station comes with it, with no computer involved.
+- **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
+- **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
+
+A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
+
+**After inserting the SD card your Tab5 needs a restart.**
 
 ### When the mirror runs
 
 The microSD card and the WiFi co-processor share a bus on this hardware and cannot both use it reliably. Rather than fail at an unpredictable moment, the Tab5 picks the behaviour that works:
 
-| | What happens | SD dot |
-|---|---|---|
-| **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in | **Green** |
-| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds | **Yellow** |
+| | What happens |
+|---|---|
+| **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in |
+| **WiFi on** | One complete backup within a few seconds of switching on, then file mirroring stops — but the diagnostic log and the CW transcript keep going, every 30 seconds |
 
 Either way your QSO log, config, and LoTW certificate and key are backed up. With WiFi on, QSOs made later in that session reach the card at the **next start-up** — so if you have been operating with WiFi up and want them on the card now, restart the Tab5.
 
-If no card is inserted the dot is absent, which is not an error.
+### What the SD dot means (changed in v1.16.3)
+
+The dot reports whether writes are actually **landing**, not merely whether a card mounted:
+
+| Dot | Meaning |
+|---|---|
+| **Green** | A write succeeded in the last 90 seconds |
+| **Yellow** | A card is mounted, but nothing has been written lately |
+| **Grey, struck through** | No card in the slot — not an error |
+
+Before v1.16.3 the dot went yellow about ten seconds into any WiFi session and stayed yellow for the rest of it, whatever the card was doing — so it read the same on a perfectly healthy unit and on one where every write was failing. It now distinguishes those.
+
+A short spell of yellow is not a fault: on a quiet session there may be nothing to write. Yellow that persists while the Tab5 is clearly busy means writes are failing — see [Troubleshooting](../reference/troubleshooting.md).
 
 **While a browser is watching the spectrum, those 30-second writes wait.** The
 card and the WiFi co-processor share a bus, and writing the card holds the

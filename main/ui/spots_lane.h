@@ -3,6 +3,16 @@
 #include <stdint.h>
 #include "lvgl.h"
 
+// Source colours, shared with the settings-drawer checkboxes (ui.c's
+// DRAWER_SEC_SPOTS) so a checkbox's label text and the spot it toggles can
+// never show two different colours for the same thing. POTA/DX-cluster/SOTA
+// all currently share COL_POTA - see spots_lane.c's own comment on the
+// colour table for why (no source-specific hue exists yet for the latter
+// two). Defined here rather than left file-local in spots_lane.c precisely
+// so a second file can reference them instead of re-typing the hex.
+#define SPOTS_COL_POTA 0xFFC864
+#define SPOTS_COL_RBN  0x70FF90
+
 // Live POTA/RBN spots drawn at their frequency as a SEE-THROUGH overlay on the
 // spectrum - the FlexRadio/SmartSDR convention: a bright callsign with a thin
 // vertical line dropping from it to the frequency axis, so the line points at the

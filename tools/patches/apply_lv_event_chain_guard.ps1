@@ -12,7 +12,8 @@
 # Diagnostic, not a cure - it comes out when the cause is understood.
 $ErrorActionPreference = 'Stop'
 
-$target = 'C:/dev/qmx-panadapter/managed_components/lvgl__lvgl/src/misc/lv_event.c'
+$repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$target = Join-Path $repo 'managed_components/lvgl__lvgl/src/misc/lv_event.c'
 $stored = Join-Path $PSScriptRoot 'lv_event.c.patched'
 $marker = 'qmx_lv_event_chain_bad'
 

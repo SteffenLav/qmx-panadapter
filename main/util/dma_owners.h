@@ -18,3 +18,10 @@ void dma_owners_report(void);
 // TEMP (#284): per-task CPU share over 1 s. On demand only - see the header
 // comment in dma_owners.c. Delete with the rest of this instrument.
 void cpu_owners_report(void);
+
+// Fires dma_owners_report() at ~8, ~18 and ~60 s of uptime, to the SERIAL log,
+// then deletes its own task. Built because the 44 KB of MALLOC_CAP_DMA that
+// disappears between 7 s and 15.6 s cannot be caught through /api/cmd: WiFi on
+// this track wedges, and the window closes before a browser could ask.
+// Three one-shot reports, NOT a periodic path - see the note in the .c.
+void dma_owners_boot_trace_start(void);

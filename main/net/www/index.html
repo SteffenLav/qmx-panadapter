@@ -808,6 +808,53 @@
   .btn-ok[disabled], .btn-primary[disabled], .btn-danger[disabled],
   .btn-neutral[disabled] { opacity: .45; cursor: default; }
 
+  /* ---- Antenna Tune live readout (Randy N4OPI) ----
+     The readout used to live in the Radio menu ITEM'S OWN LABEL, so watching
+     power and SWR meant holding that menu open - and the bar's document-level
+     "a click anywhere closes every menu" handler shuts it on the first click
+     anywhere else. Randy: "it would be nice if the PWR and SWR would be
+     displayed instead of having to re-open the menu to see the results and
+     stop the tune sequence." So the numbers and the stop get their own panel.
+
+     ⛔ position:fixed, which is what keeps it OUT of the page grid. <body> is
+     the grid container and every in-flow child is pinned to an explicit
+     grid-row (see the note at the top of this stylesheet); a normal-flow
+     element added here would be auto-placed into a row and move the spectrum.
+     The modals escape the same way.
+
+     Centred like the Tab5's own tune modal, and deliberately WITHOUT a
+     backdrop: the radio is keying a carrier for up to a minute and the
+     operator is turning an ATU, so the rest of the page stays live and
+     clickable. z-index sits under the modals (1000) - a modal opened over a
+     running tune should still be on top. */
+  #tune-panel {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 900;
+    background: var(--card); border: 2px solid #b83030; border-radius: 10px;
+    padding: 14px 20px 16px; text-align: center;
+    box-shadow: 0 10px 34px rgba(0,0,0,.6);
+    min-width: min(20rem, 92vw);
+  }
+  #tune-panel[hidden] { display: none; }
+  #tune-panel-head {
+    color: #ff6060; font-weight: 700; letter-spacing: .06em;
+    font-size: .95rem; margin-bottom: .55rem;
+  }
+  #tune-panel-nums {
+    display: flex; gap: 1.6rem; justify-content: center; margin-bottom: .8rem;
+  }
+  #tune-panel-nums .k {
+    color: var(--dim); font-size: .72rem; letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  /* Tabular figures so the numbers do not jitter sideways as they change -
+     this updates once a second with someone watching it closely. */
+  #tune-panel-nums .v {
+    font-size: clamp(1.5rem, 4vw, 2.3rem); font-weight: 700; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  #tune-panel button { font-size: 1rem; padding: 8px 26px; }
+
   .bot-menu-wrap { position: relative; display: inline-block; margin-left: 1.4rem; }
   .bot-menu-wrap > .bot-btn { margin-left: 0; }
   /* position:fixed (coords set in JS on open) so the popup escapes #bot's
@@ -1062,7 +1109,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-countdown" class="ft8-stat" hidden><div class="k">TX in</div><div class="v" id="ft8-countdown-v">--</div></div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="visibility:hidden;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-countdown" class="ft8-stat" hidden><div class="k">TX in</div><div class="v" id="ft8-countdown-v">--</div></div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="visibility:hidden;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-pause" title="Skip the next transmission without ending the exchange - use the listening slot to check the frequency">Pause</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -1218,7 +1265,8 @@
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
-        <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
+        <a href="/ss.bmp" id="ss-link" target="_blank" title="Downloads as PNG - most apps and forums won't take a .bmp">Tab5 screenshot</a>
+        <a href="#" id="reboot-link" title="Restart the Tab5 now. Receiving stops for about ten seconds. Until now this was only reachable after a firmware update.">Reboot the Tab5</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
@@ -1248,11 +1296,12 @@
              contact closure must need a deliberate pulse) and it is the answer to
              "can GPIO53/54 float?": not as the firmware currently drives them. -->
         <div id="gpio-row" title="!Experimenter feature!&#10;Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND signals - for power-cycling it after a remote firmware upgrade with nobody at the bench.&#10;&#10;!Note! The QMX does not natively have a PWR_ON/GND jack. You would need to extend those signals from the main circuit board or front panel to an external connector.&#10;&#10;The pins rest as driven outputs, not floating.">
-          <span>Power-cycle relay:</span>
+          <span>Remote relay:</span>
           <select id="gpio-pin"><option value="53">GPIO53</option><option value="54">GPIO54</option></select>
           <select id="gpio-level"><option value="1">active HIGH</option><option value="0">active LOW</option></select>
           <input id="gpio-ms" type="number" min="50" max="5000" step="50" value="1000" title="How long to hold the pulse, in milliseconds - long enough for your relay/QMX to register it, no longer.">ms
           <button type="button" id="gpio-pulse-btn">Pulse</button>
+          <button type="button" id="gpio-pc-btn" title="A single Pulse on a PWR_ON line only TOGGLES the QMX - one click turns it off, the next back on, with nothing saying which. This does the deterministic sequence instead: off-pulse (the ms above), wait 1s, on-pulse 500ms, wait, then confirms over CAT and reports whether the QMX answered.">Power-cycle QMX</button>
           <span id="gpio-result"></span>
         </div>
       </div>
@@ -1272,6 +1321,20 @@
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
     <input type="file" id="adif-restore-file" accept=".adi,.adif,text/plain" style="display:none">
+  </div>
+
+  <!-- Antenna Tune live readout. Filled by tuneAntSync() from /api/status's
+       "tune" object, which only exists while a web tune is running - so the
+       panel's visibility is driven by the DEVICE's idea of whether it is
+       transmitting, never by this page's memory of having started one. -->
+  <div id="tune-panel" hidden>
+    <div id="tune-panel-head">&#9888; ANTENNA TUNE &mdash; TRANSMITTING</div>
+    <div id="tune-panel-nums">
+      <div><div class="k">SWR</div><div class="v" id="tune-swr">--</div></div>
+      <div><div class="k">Power</div><div class="v" id="tune-watts">--</div></div>
+      <div><div class="k">Stops in</div><div class="v" id="tune-secs">--</div></div>
+    </div>
+    <button id="tune-stop-btn" class="btn-danger">STOP Tune</button>
   </div>
 
   <!-- POTA / SOTA activation. Mirrors ui/activation_modal.c: pick the programme,
@@ -1645,6 +1708,35 @@
    State from /api/status
    ===================================================================== */
 let lastFreqHz     = 0;
+/* ⛔ EVERY LOCAL TUNE MUST ARM THIS, NOT JUST THE WHEEL.
+ *
+ * The status poll overwrites lastFreqHz, and for a moment after a commit it is
+ * still carrying the radio's OLD frequency: the CAT write has to go out, the
+ * device's own FA poll has to read it back, and the next poll has to carry it
+ * here. Write the poll's value in that window and the display snaps backwards,
+ * then forwards when the real one lands - the rubber band.
+ *
+ * The wheel path fixed this for itself and the other three tune paths were left
+ * on the old behaviour. The band-plan drag is where it shows worst, because the
+ * strip draws the marker, the passband AND the window box from lastFreqHz, so
+ * the whole strip twitches: "it does not stop where i left it but bounces off
+ * that position" (2026-09-18). */
+let freqHoldUntil  = 0;
+/* The debounce, plus a POST round trip, plus a poll interval to carry the new
+   value back. Generous on purpose - being briefly stale is invisible, whereas
+   being briefly WRONG is the rubber band. */
+const FREQ_HOLD_MS = 1520;
+/* Adopt a frequency this browser just asked for, and outrank the poll until the
+   device has had time to agree. Does NOT send - callers own the commit. */
+function holdLocalFreq(hz) {
+  lastFreqHz    = hz;
+  freqHoldUntil = Date.now() + FREQ_HOLD_MS;
+  document.getElementById("vfo").textContent = fmtHz(hz);
+  updateFreqAxis();
+}
+/* The still-display SETTING, mirrored from /api/status. Decides whether a tune
+   holds the window (still) or drags it along (off) - see bpSolveView. */
+let lastStillView  = true;
 let lastPassbandHz = 0;
 /* RIT: the OFFSET is radio state and comes from the device; the ARMED flag is
    local to this browser on purpose. Arming changes what a CLICK does, and a
@@ -1682,6 +1774,37 @@ let lastTimeSrc      = "";     // what maintains the Tab5 clock: NTP/GPS/QMX/RTC
 let spotBoxes        = [];     // hit-test rects in CANVAS px: {x,y,w,h,hz,mode}
 let spotOffBoxes     = [];     // the two off-screen counters, same shape
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
+/* The passband block and the CW/Digi/Phone labels are hidden for the duration of
+   a band-plan drag and fade back in after it - the Tab5 has done this since
+   v1.8.x and the browser only ever popped them straight back. Worth matching,
+   because since the drag moves the dial with the window the returning passband
+   is what SHOWS the dial came along. Same two numbers as ui.c's
+   PASSBAND_FADE_DELAY_MS / PASSBAND_FADE_DURATION_MS - keep them in step. */
+const BP_FADE_DELAY_MS = 500;
+const BP_FADE_MS       = 1000;
+let   bpFadeFrom       = 0;    // ms timestamp the fade may start at; 0 = fully shown
+let   bpFadeRaf        = 0;
+/* 0 while dragging, ramps 0..1 after the delay, 1 once done. Clears bpFadeFrom
+   on completion, which is also what stops the redraw loop below. */
+function bpFadeAlpha() {
+  if (bpDragging) return 0;
+  if (!bpFadeFrom) return 1;
+  const t = Date.now() - bpFadeFrom;
+  if (t <= 0)          return 0;
+  if (t >= BP_FADE_MS) { bpFadeFrom = 0; return 1; }
+  return t / BP_FADE_MS;
+}
+/* The strip is otherwise only redrawn on a status poll, which is far too coarse
+   to fade with - so drive it from rAF for the second or so it takes, and stop. */
+function bpStartFade() {
+  bpFadeFrom = Date.now() + BP_FADE_DELAY_MS;
+  if (bpFadeRaf) return;
+  const step = () => {
+    drawBandplan();
+    bpFadeRaf = bpFadeFrom ? requestAnimationFrame(step) : 0;
+  };
+  bpFadeRaf = requestAnimationFrame(step);
+}
 
 const SPEC_W     = 1024;
 const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
@@ -2176,7 +2299,7 @@ document.getElementById("ft8-status").addEventListener("click", async (e) => {
 /* Mid-QSO override (#205, Randy N4OPI). Deliberately only visible while an
    exchange is actually running - these key the radio, and four always-on buttons
    next to Call CQ would be four ways to transmit by accident. */
-[["ovr-resend","resend"],["ovr-rr73","rr73"],["ovr-73","73"],["ovr-cancel","cancel"]]
+[["ovr-resend","resend"],["ovr-rr73","rr73"],["ovr-73","73"],["ovr-pause","pause"],["ovr-cancel","cancel"]]
   .forEach(([id, what]) => {
     const b = document.getElementById(id);
     if (!b) return;
@@ -2703,11 +2826,13 @@ function adifImportMessage(j) {
       if (lvlEl && relay.level !== undefined) lvlEl.value = String(relay.level);
       if (msEl  && relay.ms    !== undefined) msEl.value  = String(relay.ms);
     };
+    const pcBtn = document.getElementById("gpio-pc-btn");
+    const out   = document.getElementById("gpio-result");   // shared by both buttons
+
     btn.addEventListener("click", async function () {
       const pin   = document.getElementById("gpio-pin").value;
       const level = document.getElementById("gpio-level").value;
       const ms    = document.getElementById("gpio-ms").value;
-      const out   = document.getElementById("gpio-result");
       btn.disabled = true;
       out.textContent = "pulsing…";
       try {
@@ -2728,7 +2853,57 @@ function adifImportMessage(j) {
         setTimeout(() => { out.textContent = ""; }, 4000);
       }
     });
+
+    /* The sequence itself is reported through /api/status (gpio_pc: "idle"/
+       "running"/"ok"/"failed", latched on the device - see gpio_relay.c),
+       not through this fetch's response, because it runs for several
+       seconds on the device's own timers and this button click only STARTS
+       it. window.applyGpioPc is called from the 1 Hz status tick below;
+       lastGpioPc lets it tell "still running" from "a fresh result just
+       arrived" so a result is shown once rather than on every poll while it
+       sits latched. */
+    let lastGpioPc = "idle";
+    window.applyGpioPc = function (pc) {
+      if (pc === lastGpioPc) return;
+      lastGpioPc = pc;
+      if (pc === "running") {
+        btn.disabled = true; pcBtn.disabled = true;
+        out.textContent = "power-cycling…";
+      } else if (pc === "ok") {
+        btn.disabled = false; pcBtn.disabled = false;
+        out.textContent = "QMX responded";
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      } else if (pc === "failed") {
+        btn.disabled = false; pcBtn.disabled = false;
+        out.textContent = "no response from QMX";
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      }
+    };
+
+    if (pcBtn) pcBtn.addEventListener("click", async function () {
+      const pin   = document.getElementById("gpio-pin").value;
+      const level = document.getElementById("gpio-level").value;
+      const ms    = document.getElementById("gpio-ms").value;
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "gpio_power_cycle", pin: +pin, level: +level, ms: +ms })
+        });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => "");
+          out.textContent = "refused: " + (txt || ("HTTP " + r.status));
+          setTimeout(() => { out.textContent = ""; }, 4000);
+        }
+        // On success the /api/status poll takes it from here via applyGpioPc.
+      } catch (err) {
+        out.textContent = "no answer from the Tab5";
+        setTimeout(() => { out.textContent = ""; }, 4000);
+      }
+    });
   })();
+
+  { const rb = document.getElementById("reboot-link");
+    if (rb) rb.addEventListener("click", (e) => { e.preventDefault(); plainRestart(); }); }
 
   wireReset("reset-settings-link", "reset_settings",
     "Reset ALL app settings and memory channels to defaults?\n\n" +
@@ -3455,7 +3630,7 @@ async function toneOpen() {
     toneSel  = toneState.hz;
     toneHold = !!toneState.hold;
     document.getElementById("tone-hold").checked = toneHold;
-    st.textContent = toneState.busy_tx ? "Transmitting - a change will be refused until the burst ends" : "";
+    st.textContent = toneState.busy_tx ? "Transmitting - Apply now queues the change for right after this burst" : "";
     toneSync();
   } catch (e) {
     st.textContent = "Could not read the tone (" + e.message + ")";
@@ -3476,7 +3651,7 @@ async function toneRefresh() {
     const fresh = await (await fetch("/api/tone", { cache: "no-store" })).json();
     toneState = fresh;
     const st = document.getElementById("tone-status");
-    if (st) st.textContent = toneState.busy_tx ? "Transmitting - a change will be refused until the burst ends" : "";
+    if (st) st.textContent = toneState.busy_tx ? "Transmitting - Apply now queues the change for right after this burst" : "";
     toneSync();
   } catch (e) {
     // Transient - keep showing the last-known picture rather than blanking it.
@@ -3510,10 +3685,23 @@ function toneFindClear() {
 async function toneApply() {
   const st = document.getElementById("tone-status");
   st.textContent = "Applying...";
+  // Bounded, not indefinite - Randy N4OPI, 2026-09-16: "gets stuck on
+  // Applying and loses contact with the QMX" about half the time. The
+  // device-side race this pointed at (a blocking CAT write racing an
+  // already-ACTIVE burst for the CDC pipe) is fixed at the source
+  // (cat_set_mode() now refuses instead of colliding), but a button with no
+  // ceiling on how long it will say "Applying..." is still the wrong shape
+  // for a web request - any OTHER stall (WiFi drops mid-request, the device
+  // reboots) would read identically to the hang this was chasing, with no
+  // way out except reloading the page. 8 s is generous against the pre-flight
+  // retry loop's own ~1 s bound.
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), 8000);
   try {
     const r = await fetch("/api/tone", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hz: toneSel, hold: document.getElementById("tone-hold").checked })
+      body: JSON.stringify({ hz: toneSel, hold: document.getElementById("tone-hold").checked }),
+      signal: ac.signal
     });
     if (r.ok) {
       st.textContent = "Applied";
@@ -3525,7 +3713,11 @@ async function toneApply() {
       try { msg = (await r.json()).error || msg; } catch (e) {}
       st.textContent = msg;
     }
-  } catch (e) { st.textContent = "Failed (" + e.message + ")"; }
+  } catch (e) {
+    st.textContent = (e.name === "AbortError") ? "No response - try again" : "Failed (" + e.message + ")";
+  } finally {
+    clearTimeout(to);
+  }
 }
 
 (function wireTone() {
@@ -4032,7 +4224,6 @@ const SET_FIELDS = [
 
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
-  ["Spots & reporting", "spotmap_en",     "bool", "Spot map (live reports of my signal)", "Swipe down from the Tab5 top edge. Off by default: while on it holds a connection to PSK Reporter and polls wsprnet and hamqsl"],
   ["Spots & reporting", "cluster_en",      "bool", "DX cluster spots (phone)",
      "Human-typed spots. The ONLY source of SSB spots - RBN is automated skimmers and no SSB skimmer exists. A second connection, so off by default"],
   ["Spots & reporting", "sota_en",        "bool", "SOTA spots (summits)",
@@ -4043,6 +4234,30 @@ const SET_FIELDS = [
   ["Spots & reporting", "spots_mode_filter", "bool", "Mode filter the spots",
      "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
+
+  /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
+     this page can reach. All three were Tab5-only for no reason anyone could
+     name - the rest of their own group was already here. */
+  ["Radio & display", "display.wf_speed_mult", "sel", "Waterfall speed",
+     "How fast the waterfall scrolls. Faster spreads a signal out in time; slower fits more history on screen. The spectrum and S-meter are unaffected",
+     [["1","Normal"],["2","2x"],["3","3x"],["4","4x"]]],
+  /* ⛔ "My QMX has GPS" IS NOT HERE, AND MUST NOT COME BACK. GPS is DETECTED,
+     not declared - time_sync.c compares the radio's own second tick against
+     SNTP - and the Tab5's drawer dropped this checkbox on 2026-07-19 when that
+     landed. It was re-added HERE in v1.15.0 as one of "three settings that had
+     been Tab5-only", which was wrong: the setting had been dead for two months
+     and only the web page had not noticed.
+
+     Ticking it changed nothing that lasted, because the NVS qmx_gps field is
+     now just where the firmware PERSISTS its own verdict for an offline
+     session - so the next detection wrote over whatever the operator chose.
+     John W5JSS, 2026-09-19: "Your release notes mentioned a checkbox for 'my
+     QMX has GPS' ... I have checked the QMX menus ... How can I get it to use
+     the GPS?" He could not, and there was nothing wrong with his radio.
+
+     Same rule as the Adaptive floor slider, removed for exactly this reason: a
+     control that cannot change anything is worse than a missing one, because
+     it invites tuning something that is not there. */
 
   /* The same five choices the Tab5's dropdown offers, in the same words. It was a
      free "x10" number, which asked the operator to know the encoding and let them
@@ -4103,6 +4318,11 @@ const SET_FIELDS = [
   // PA-voltage guard below (measured 5.4 W -> 1.6 W on the bench). The colours
   // stay as a hint, since they are honest as a correlate: if you are genuinely
   // declaring 37, you are running full power into a ~110 s key-down.
+  /* Band NAMES, not the bitmask the setting stores: the device converts, so
+     nobody has to know the encoding. Hopping is on whenever more than one band
+     is listed - the same rule the Tab5 uses, not a second switch. */
+  ["WSPR", "wspr_hop_bands", "text", "Band hopping",
+     "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
      "What your transmitter really produces - it is published worldwide",
      [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
@@ -4111,9 +4331,12 @@ const SET_FIELDS = [
       ["30","30 dBm (1 W)"],
       ["33","33 dBm (2 W)", "#c87000"],
       ["37","37 dBm (5 W)", "#d01000"]]],
-  ["WSPR", "wspr_duty_pct", "sel", "Duty cycle",
-     "Share of two-minute cycles that transmit; the rest listen",
-     [["0","Receive only"],["10","10%"],["20","20%"],["33","33%"],["50","50%"]]],
+  ["WSPR", "wspr_tx_cycles", "sel", "Transmit cycles",
+     "How many two-minute cycles in a row this beacon transmits for. The group then listens for the receive cycles below, and repeats for ever - so the period is simply the two added together",
+     [["0","Receive only"],["1","1"],["2","2"],["3","3"],["4","4"]]],
+  ["WSPR", "wspr_rx_cycles", "sel", "Receive cycles",
+     "How many two-minute cycles it listens for after each group. 2 transmit + 8 receive repeats every 20 minutes, transmitting 20% of the time",
+     [["1","1"],["2","2"],["3","3"],["4","4"],["5","5"],["6","6"],["7","7"],["8","8"],["9","9"],["10","10"],["12","12"],["15","15"],["20","20"]]],
   ["WSPR", "wspr_dial_hz", "sel", "Band (dial frequency)", "",
      [["1836600","160 m  1.836600"],["3568600","80 m   3.568600"],
       ["5287200","60 m   5.287200"],["7038600","40 m   7.038600"],
@@ -4174,11 +4397,17 @@ const SET_FIELDS = [
      version exists, which is the part nobody wanted to lose; it just waits
      for you to ask before spending 3.3 MB. Applying an update is a separate,
      always-deliberate press either way. */
-  ["Updates", "ota_autodl", "bool", "Download updates in the background",
-     "When a new version appears, fetch it quietly so it is ready to install in seconds. Turn this off to be told about it and download only when you ask - useful on a phone hotspot, where the image is 3.3 MB. Either way, nothing is ever installed without you pressing Restart"],
-
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
+  /* Randy N4OPI, 2026-09-23: he runs a DMZ network alongside a home LAN, both
+     remembered, and the automatic fallback used to hand the roam to whichever
+     was loudest on a given reboot - not whichever he wanted, and "beyond my
+     control as to which network it will connect to." Must already be one of
+     the remembered networks above (typing an SSID here does not add it to the
+     list by itself) - empty clears the preference and returns to picking by
+     signal strength, which is what every unit does today. */
+  ["WiFi", "wifi_prefer_ssid", "text", "Preferred network",
+     "Must already be a remembered network (see above). When it is reachable the Tab5 chooses it over any other remembered network, even a louder one. Leave empty to fall back by signal strength, same as today"],
   /* Static IP (Randy N4OPI). Leave the address empty for DHCP, which is what
      every unit does today - so these appear without changing anyone's network.
      Deliberately four plain text fields and no "use static IP" checkbox: the
@@ -4495,7 +4724,20 @@ function setBuildForm(cfg, ft8Opts) {
                 '" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
       }
     }
-    if (hint) html += '<span style="color:var(--dim);font-size:13px;flex:1">' + hint + "</span>";
+    /* Name the remembered networks on the two fields that require one (Randy
+       N4OPI, 2026-09-24). Both fields only accept a network the Tab5 already
+       knows, and nothing in the UI ever showed which those were - so the
+       operator had to remember, and a typo produced silence. Appended to the
+       hint rather than given a row of its own: it is the answer to "what may I
+       type here", which belongs next to the question. */
+    let hintText = hint;
+    if ((path === "wifi_prefer_ssid" || path === "wifi_ssid") &&
+        Array.isArray(cfg.wifi_known) && cfg.wifi_known.length) {
+      const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      hintText = (hint ? hint + ". " : "") + "Remembered: " +
+                 cfg.wifi_known.map(esc).join(", ");
+    }
+    if (hintText) html += '<span style="color:var(--dim);font-size:13px;flex:1">' + hintText + "</span>";
     html += "</div>";
   }
   body.innerHTML = html + "</div>";
@@ -4512,6 +4754,26 @@ function setBuildForm(cfg, ft8Opts) {
       sel.style.color = (o && o.dataset.tint) ? o.dataset.tint : "#ddd";
     });
   });
+
+  /* "Receive only" means there is no group, so the receive count has nothing
+     to describe - it is greyed AND disabled, never just dimmed. Greyed means
+     inert everywhere in this project; a control that looks dead and still
+     takes input is the broken promise the Tab5's own top bar was fixed for. */
+  {
+    const tx = body.querySelector("#set__wspr_tx_cycles");
+    const rx = body.querySelector("#set__wspr_rx_cycles");
+    if (tx && rx) {
+      const lbl = body.querySelector('label[for="set__wspr_rx_cycles"]');
+      const sync = () => {
+        const off = (tx.value === "0");
+        rx.disabled = off;
+        rx.style.opacity = off ? "0.4" : "1";
+        if (lbl) lbl.style.opacity = off ? "0.4" : "1";
+      };
+      tx.addEventListener("change", sync);
+      sync();
+    }
+  }
 }
 
 /* ---- CW profiles (#359, Uwe DL8UG) ---------------------------------------
@@ -5203,10 +5465,10 @@ async function pollWspr() {
     /* Keep the button honest: wspr_tx_en is changed by the Tab5 button and, on
        entry, forced off by the firmware - so the label must follow the device
        rather than remember what this page last clicked. */
-    try {
-      const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
-      document.getElementById("wspr-tx").textContent = cfg.wspr_tx_en ? "TX ON" : "TX OFF";
-    } catch (e) { /* leave the last label */ }
+    /* From /api/wspr itself - fetching the whole /api/settings every 5 s for one
+       flag also made the Tab5 query the radio each time. */
+    if (typeof j.wspr_tx_en === "boolean")
+      document.getElementById("wspr-tx").textContent = j.wspr_tx_en ? "TX ON" : "TX OFF";
 
     /* ⚠ BEFORE the table, deliberately. The table block below returns early
        when there are no spots, and these three panels are at their most useful
@@ -5686,17 +5948,50 @@ let tuneAntRunning = false;
 function tuneAntSync(s) {
   const btn = document.getElementById("tune-ant-btn");
   btn.style.display = s.tune_ok ? "" : "none";
+  const panel = document.getElementById("tune-panel");
   if (s.tune) {
     tuneAntRunning = true;
     btn.textContent = "STOP Tune  " + (s.tune.watts || 0).toFixed(1) + " W  SWR " +
                       (s.tune.swr ? s.tune.swr.toFixed(2) : "-");
     btn.style.color = "#ff4040"; btn.style.borderColor = "#ff4040";
+    /* The panel says the same thing without the menu having to stay open.
+       Wording matches the Tab5's tune_modal.c ("SWR %.2f   %.1f W") so the two
+       screens read the same during the same transmission. */
+    const swrEl = document.getElementById("tune-swr");
+    swrEl.textContent = s.tune.swr ? s.tune.swr.toFixed(2) : "--";
+    /* Colour is an ADDITION to the number, never the only channel carrying it
+       (Don N2VGU) - the figure is always there to read. 1.5 and 2.5 are the
+       ordinary "fine" / "workable" / "stop and look at it" marks. */
+    swrEl.style.color = !s.tune.swr      ? "var(--dim)"
+                      : s.tune.swr < 1.5 ? "var(--ok)"
+                      : s.tune.swr < 2.5 ? "var(--accent)"
+                                         : "#ff6060";
+    document.getElementById("tune-watts").textContent =
+      (s.tune.watts || 0).toFixed(1) + " W";
+    /* secs is absent on a device running firmware older than this change; show
+       a dash rather than "undefined" or a wrong zero. */
+    const secs = document.getElementById("tune-secs");
+    secs.textContent = (typeof s.tune.secs === "number") ? s.tune.secs + " s" : "--";
+    secs.style.color = (typeof s.tune.secs === "number" && s.tune.secs <= 10)
+                       ? "#ff6060" : "var(--fg)";
   } else if (tuneAntRunning) {
     tuneAntRunning = false;
     btn.textContent = "Antenna Tune";
     btn.style.color = ""; btn.style.borderColor = "";
   }
+  /* Set unconditionally rather than only on the transition the button label
+     uses. The panel says the radio is transmitting, so it must never be able to
+     drift out of step with /api/status - including when this page is opened
+     while a tune started somewhere else is already running. */
+  panel.hidden = !s.tune;
 }
+/* Stopping from the panel is the SAME command the menu item sends - one path,
+   so the two controls cannot end up disagreeing about how a tune is stopped.
+   The panel is not hidden here: it goes away when /api/status stops reporting a
+   tune, i.e. when the RADIO has actually come out of it. */
+document.getElementById("tune-stop-btn").addEventListener("click", async () => {
+  await sendCmd({ action: "tune_stop" });
+});
 document.getElementById("tune-ant-btn").addEventListener("click", async () => {
   if (tuneAntRunning) { await sendCmd({ action: "tune_stop" }); return; }
   /* No confirm here either, at the operator's instruction - see the note on the
@@ -5996,7 +6291,7 @@ async function tick() {
      * one poll has had time to return carrying it. That window is the debounce
      * plus a round trip; anything shorter and the last snap-back still shows. */
     radioFreqHz = s.freq_hz || 0;      /* always - see its declaration */
-    if (Date.now() >= wheelHoldUntil) lastFreqHz = s.freq_hz || 0;
+    if (Date.now() >= freqHoldUntil) lastFreqHz = s.freq_hz || 0;
     lastPassbandHz = s.passband_hz || 0;
     lastCwFilterMask = (typeof s.cw_filter_mask === "number") ? s.cw_filter_mask : 0;
     /* Absent means older firmware: keep whatever we had and let the local
@@ -6038,12 +6333,28 @@ async function tick() {
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
+
+    /* The Pause button has to SHOW the pause, not just set it - it shipped
+       without this and the operator caught it immediately ("clicking the web
+       Pause does what it should do if you check the Tab5, but stays the same").
+       Transport icons say what the next press does, same as the Tab5's. */
+    { const pb = document.getElementById("ovr-pause");
+      if (pb && s.ft8) {
+        const on = !!s.ft8.pause;
+        pb.textContent = on ? "▶ Paused" : "⏸ Pause";
+        pb.style.background = on ? "#ffc02a" : "";
+        pb.style.color      = on ? "#000"    : "";
+        pb.style.borderColor= on ? "#ffc02a" : "";
+      } }
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
     lastIfCalHz    = s.if_cal_hz   || 0;
     lastZoom       = s.zoom        || 1.0;
     lastPanBins    = s.pan_bins    || 0;
+    /* Absent means older firmware - assume still, which is the default and the
+       only case where the prediction differs from "the view follows the dial". */
+    lastStillView  = (typeof s.still_view === "boolean") ? s.still_view : true;
     /* Absent means the device is on the zoom-FFT path (or is older firmware):
      * keep the last viewport rather than blanking, exactly as "spots" does. */
     if (s.view_lo_hz !== undefined && s.span_hz > 0) {
@@ -6444,6 +6755,7 @@ async function tick() {
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");
     if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
+    if (typeof s.gpio_pc === "string" && window.applyGpioPc) window.applyGpioPc(s.gpio_pc);
     /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
        reads freqSepStyle at call time, so live text follows by itself - but the
        WSPR band picker and the FT8 preset list are composed once behind a
@@ -6932,9 +7244,7 @@ function tuneToSpot(box) {
   if (!box || !box.hz) return;
   sendCmd({ action: "set_freq", hz: box.hz });
   if (box.mode) sendCmd({ action: "set_mode", mode: box.mode });
-  lastFreqHz = box.hz;
-  document.getElementById("vfo").textContent = fmtHz(box.hz);
-  updateFreqAxis();
+  holdLocalFreq(box.hz);
 }
 
 /* Draw the cyan cursor line + freq label on a canvas context */
@@ -7031,9 +7341,7 @@ function handleTuneCommit(clientX, rect) {
   }
   if (hz > 0) {
     sendCmd({ action: "set_freq", hz: hz });
-    lastFreqHz = hz;
-    document.getElementById("vfo").textContent = fmtHz(hz);
-    updateFreqAxis();
+    holdLocalFreq(hz);
   }
   tuneCursorX = -1;
   tuneActive  = false;
@@ -7385,16 +7693,179 @@ document.addEventListener("keypress", (e) => {
   if (diagBoth) {
     diagBoth.addEventListener("click", (e) => {
       e.preventDefault();
-      const dl = (url, name) => {
-        const a = document.createElement("a");
-        a.href = url; a.download = name;
-        document.body.appendChild(a); a.click(); a.remove();
+      /* ⛔ ONE ZIP, FETCHED SEQUENTIALLY, WITH THE SPECTRUM STREAM PAUSED.
+         Three separate faults, all reported by John W5JSS on 2026-09-19 as
+         "the qmx-log.txt is not saved. Chrome is showing that site wasn't
+         available", and what finally reached us was a corrupt binary file.
+
+         1. It fired both files as plain <a download> clicks 600 ms apart.
+            /api/log serves a 5 MB PSRAM ring, which takes far longer, so the
+            second request landed on a SINGLE-WORKER httpd still streaming the
+            first - on top of the ~10 fps WebSocket. Exactly the combination
+            that hard-wedged httpd during LoTW setup, fixed there the same way.
+
+         2. ⛔ A FAILED DOWNLOAD DESTROYS THE LOG. GET /api/log calls
+            diag_log_clear() after a successful send, so the ring is "since the
+            last download" - a transfer that dies half way takes the evidence
+            with it. He had been losing it every attempt.
+
+         3. Two files meant a "this site wants to download multiple files"
+            prompt, and two attachments for the user to find and send.
+            Operator: "why are we not making a zip file of the two? Much
+            easier to attach for users?"
+
+         ⭐ NO ZIP LIBRARY. The archive is built here, and deflate comes from
+         the browser's own CompressionStream - the same reasoning as the
+         device-side gzip in lotw_upload.c, which hand-rolls stored blocks
+         rather than pulling in a compressor. A text log deflates roughly
+         10:1, which is the difference between a 5 MB attachment and one that
+         goes through by e-mail. Where CompressionStream is missing the entry
+         is STORED instead, so the zip is always valid. */
+      const crc32 = (() => {
+        const t = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+          let c = i;
+          for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+          t[i] = c >>> 0;
+        }
+        return (u8) => {
+          let c = 0xFFFFFFFF;
+          for (let i = 0; i < u8.length; i++) c = t[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+          return (c ^ 0xFFFFFFFF) >>> 0;
+        };
+      })();
+
+      const deflateRaw = async (u8) => {
+        if (typeof CompressionStream === "undefined") return null;
+        try {
+          const cs = new CompressionStream("deflate-raw");
+          const blob = await new Response(
+            new Blob([u8]).stream().pipeThrough(cs)).blob();
+          return new Uint8Array(await blob.arrayBuffer());
+        } catch (e) { return null; }
       };
-      dl("/api/log", "qmx-log.txt");
-      setTimeout(() => dl("/api/log/saved", "qmx-log-saved.txt"), 600);
+
+      /* Minimal ZIP writer: local headers + data + central directory + EOCD.
+         No zip64 - these logs are megabytes, not gigabytes - and no unicode
+         path flag, because the names are plain ASCII. */
+      const makeZip = async (files) => {
+        const enc = new TextEncoder();
+        const parts = [], central = [];
+        let offset = 0;
+        const u16 = (n) => [n & 0xFF, (n >>> 8) & 0xFF];
+        const u32 = (n) => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+        for (const [name, raw] of files) {
+          const nm = enc.encode(name);
+          const crc = crc32(raw);
+          const def = await deflateRaw(raw);
+          const useDef = def && def.length < raw.length;
+          const body = useDef ? def : raw;
+          const method = useDef ? 8 : 0;
+          const hdr = new Uint8Array([
+            ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(method),
+            ...u16(0), ...u16(0),                       /* no meaningful mtime */
+            ...u32(crc), ...u32(body.length), ...u32(raw.length),
+            ...u16(nm.length), ...u16(0), ...nm]);
+          parts.push(hdr, body);
+          central.push(new Uint8Array([
+            ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(method),
+            ...u16(0), ...u16(0),
+            ...u32(crc), ...u32(body.length), ...u32(raw.length),
+            ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+            ...u32(0), ...u32(offset), ...nm]));
+          offset += hdr.length + body.length;
+        }
+        let cdSize = 0;
+        for (const c of central) cdSize += c.length;
+        const eocd = new Uint8Array([
+          ...u32(0x06054b50), ...u16(0), ...u16(0),
+          ...u16(central.length), ...u16(central.length),
+          ...u32(cdSize), ...u32(offset), ...u16(0)]);
+        return new Blob([...parts, ...central, eocd], { type: "application/zip" });
+      };
+
+      (async () => {
+        const jobs = [["/api/log", "qmx-log.txt"],
+                      ["/api/log/saved", "qmx-log-saved.txt"]];
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+        pauseWs();
+        try {
+          const files = [];
+          for (const [url, name] of jobs) {
+            const r = await fetch(url, { cache: "no-store" });
+            if (!r.ok) throw new Error(name + ": HTTP " + r.status);
+            const u8 = new Uint8Array(await r.arrayBuffer());
+            if (!u8.length) throw new Error(name + ": empty");
+            files.push([name, u8]);
+          }
+          const zip = await makeZip(files);
+          const u = URL.createObjectURL(zip);
+          const a = document.createElement("a");
+          a.href = u; a.download = "qmx-diag-" + stamp + ".zip";
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(u), 10000);
+        } catch (err) {
+          alert("Diagnostic download failed - " + err.message +
+                "\n\nThe live log is cleared by a successful download, so " +
+                "some of it may be gone. Close other browser tabs on the " +
+                "Tab5 and try again.");
+        } finally {
+          resumeWs();
+        }
+      })();
     });
   }
 })();
+
+/* Tab5 screenshot: convert to PNG client-side before saving.
+   Steffen OZ1LAV, 2026-09-26: "the bmp file cannot be used many places - i
+   need a png file." The device serves plain uncompressed BMP on purpose - no
+   PNG/zlib encoder on an embedded target - so the conversion happens here
+   instead. Every browser can decode BMP through a plain <img>, so this needs
+   no BMP parser: load it into an <img>, draw it to a canvas, re-export as
+   PNG. Falls back to the old inline-BMP behaviour (plain navigation to the
+   href) if anything here fails, so a screenshot is never worse than before. */
+const ssLink = document.getElementById("ss-link");
+if (ssLink) {
+  ssLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    (async () => {
+      const fallback = () => window.open(ssLink.href, "_blank");
+      try {
+        const resp = await fetch("/ss.bmp", { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const bmpBlob = await resp.blob();
+        const bmpUrl = URL.createObjectURL(bmpBlob);
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          c.getContext("2d").drawImage(img, 0, 0);
+          URL.revokeObjectURL(bmpUrl);
+          c.toBlob((pngBlob) => {
+            if (!pngBlob) { fallback(); return; }
+            const now = new Date(), pad = (n) => String(n).padStart(2, "0");
+            const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}` +
+                          `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}` +
+                          `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(pngBlob);
+            a.download = `qmx-shot-${stamp}.png`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+          }, "image/png");
+        };
+        img.onerror = () => { URL.revokeObjectURL(bmpUrl); fallback(); };
+        img.src = bmpUrl;
+      } catch (err) {
+        fallback();
+      }
+    })();
+  });
+}
 
 // Dev-only resource-monitor overlay toggle. keydown (not keypress) is
 // needed to reliably see modifier-held combos in all browsers.
@@ -7567,6 +8038,15 @@ async function otaInstall(latest) {
   if (r && r.ok === false) alert("Cannot update right now:" + "\n" + "\n" + (r.error || "unknown reason"));
 }
 
+// Randy N4OPI, 2026-09-22: "is there a way to reboot the Tab5 from the Web UI?
+// The only means I see is when the next version comes out and it is time to
+// reboot for that." He runs the station from another room, so the Tab5's own
+// power button is not a route. Same confirm-then-restart shape as otaRestart().
+async function plainRestart() {
+  if (!confirm("Restart the Tab5 now?" + String.fromCharCode(10,10) + "This interrupts receiving for about ten seconds.")) return;
+  await sendCmd({ action: "reboot" });
+}
+
 async function otaRestart() {
   // Deliberately does NOT mention power-cycling the QMX. The Tab5 already says
   // "Now turn on or reboot your QMX/+" across the middle of its own screen
@@ -7719,6 +8199,25 @@ async function forceUpdateCheck() {
 }
 
 
+/* The band-plan knob moves the WINDOW, not the dial - the full rationale is at
+   bp_solve_view() in main/ui/ui.c, and this is the same arithmetic so the two
+   screens cannot disagree about what the gesture does. Given a wanted window
+   centre it answers where the dial and the pan end up: the dial is left alone
+   while the radio can reach that window, and comes along by exactly the
+   shortfall when it cannot. Pure, so the drag preview and the commit agree. */
+function bpSolveView(wantCenterHz) {
+  /* The pan is preserved exactly: box, VFO marker and passband translate
+     together. Same arithmetic as bp_solve_view() in main/ui/ui.c - the long
+     rationale, including why the pan-only version was dropped, is there. */
+  const pan = (lastStillView && lastView && typeof lastView.span === "number")
+                ? (lastView.lo + lastView.span / 2 - lastFreqHz) : 0;
+  /* The DIAL lands on a whole kHz, so the box lands within 500 Hz of where it
+     was dropped - under two pixels at band scale. */
+  let d = Math.round((wantCenterHz - pan) / 1000) * 1000;
+  if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
+  return { dial: d, center: d + pan };
+}
+
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
   if (!canvas) return;
@@ -7738,11 +8237,15 @@ function drawBandplan(previewHz) {
   const bp      = lastBandplan;
   const bandLo  = bp.lo, bandHi = bp.hi;
   const span    = Math.max(1, bandHi - bandLo);
-  const freqHz  = (previewHz !== undefined) ? previewHz : lastFreqHz;
+  /* previewCenter is a WINDOW centre during a drag, not a dial - the dial only
+     moves when the radio cannot reach that window. See bpSolveView. */
+  const sol     = (previewHz !== undefined) ? bpSolveView(previewHz) : null;
+  const freqHz  = sol ? sol.dial : lastFreqHz;
   const LABEL_MIN_FRAC = 56 / 1280;   // same visual threshold as the Tab5 (56px @ 1280px wide)
 
   // CW/Digi/Phone segments, with a label once the block is wide enough.
   const labelFontPx = Math.max(10, Math.round(H * 0.55));  // scales with strip height/dpr, not a fixed px size
+  const fadeA = bpFadeAlpha();   // 0 while dragging, ramping back to 1 after
   ctx.textBaseline = "middle";
   ctx.textAlign    = "center";
   bp.segs.forEach(seg => {
@@ -7751,9 +8254,9 @@ function drawBandplan(previewHz) {
     const w  = Math.max(1, x1 - x0);
     ctx.fillStyle = "#" + seg.c;
     ctx.fillRect(x0, 0, w, H);
-    if (w / W >= LABEL_MIN_FRAC && !bpDragging) {
+    if (w / W >= LABEL_MIN_FRAC && fadeA > 0) {
       ctx.font      = "bold " + labelFontPx + "px ui-monospace, monospace";
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = "rgba(255,255,255," + fadeA + ")";
       ctx.fillText(seg.l, x0 + w / 2, Math.round(H / 2) + 1);
     }
   });
@@ -7763,11 +8266,19 @@ function drawBandplan(previewHz) {
   // spectrum/waterfall (depends on zoom + pan), same formula as the
   // frequency-axis labels so the two stay in lockstep.
   /* Device viewport when we have one; the old dial-centred derivation is
-     the fallback for a device not sending one. */
+     the fallback for a device not sending one.
+
+     ⛔ WHILE DRAGGING, THIS IS A PREDICTION, NOT THE CURRENT VIEWPORT.
+     It used to be drawn as `previewHz + (current view centre - lastFreqHz)`,
+     i.e. the window slid along under the finger while the commit wrote the
+     DIAL - and the still display then held the view, so the box computed
+     straight back to where it started. Preview and release disagreed by exactly
+     the drag distance. The gesture moves the window now, and both ends run
+     bpSolveView, so the box lands where it was let go. */
   const spanHz = lastView ? lastView.span : 48000 / lastZoom;
-  const panHz  = lastView ? (lastView.lo + lastView.span / 2 - lastFreqHz)
-                          : lastPanBins * HZ_PER_BIN;
-  const center = freqHz + panHz;
+  const center = sol ? sol.center
+                     : (lastView ? lastView.lo + lastView.span / 2
+                                 : freqHz + lastPanBins * HZ_PER_BIN);
   let sx0 = Math.round((center - spanHz / 2 - bandLo) / span * W);
   let sx1 = Math.round((center + spanHz / 2 - bandLo) / span * W);
   sx0 = Math.max(0, sx0); sx1 = Math.min(W, sx1);
@@ -7775,9 +8286,9 @@ function drawBandplan(previewHz) {
   ctx.fillStyle = "rgba(255,255,255,0.10)";
   ctx.fillRect(sx0, 0, sw, H);
 
-  // Passband sub-block (filter passband, mode + width dependent) - hidden
-  // during a drag, same as the Tab5's own strip.
-  if (!bpDragging) {
+  // Passband sub-block (filter passband, mode + width dependent) - hidden for
+  // the drag and faded back in, same as the Tab5's own strip.
+  if (fadeA > 0) {
     const edges = computePassbandEdgesHz();
     if (edges) {
       let px0 = Math.round((freqHz + edges.loHz - bandLo) / span * W);
@@ -7785,7 +8296,7 @@ function drawBandplan(previewHz) {
       px0 = Math.max(0, px0); px1 = Math.min(W, px1);
       let pw = px1 - px0;
       if (pw < 6 * dpr) pw = 6 * dpr;
-      ctx.fillStyle = "rgba(176,176,176,0.8)";
+      ctx.fillStyle = "rgba(176,176,176," + (0.8 * fadeA) + ")";
       ctx.fillRect(px0, 0, pw, H);
     }
   }
@@ -7846,9 +8357,10 @@ function drawBandplanOob(ctx, W, H, dpr) {
 
   // The label is the only thing telling you why the segments vanished, so it
   // stays put while idle and gets out of the way during a drag.
-  if (!bpDragging) {
+  const fadeA = bpFadeAlpha();
+  if (fadeA > 0) {
     ctx.textAlign = "center";
-    ctx.fillStyle = "#95a0ab";
+    ctx.fillStyle = "rgba(149,160,171," + fadeA + ")";
     ctx.fillText("Out of band  -  drag to tune", half, H / 2);
   }
 }
@@ -7866,6 +8378,7 @@ function drawBandplanOob(ctx, W, H, dpr) {
   const BP_DRAG_THRESHOLD_PX = 8;
 
   let active = false, startX = 0, startFreq = 0, targetHz = 0;
+  let startCenter = 0, targetCenter = 0;
 
   function clamp(hz) {
     hz = Math.round(hz / 1000) * 1000;
@@ -7879,6 +8392,11 @@ function drawBandplanOob(ctx, W, H, dpr) {
     startX = e.clientX;
     startFreq = lastFreqHz;
     targetHz = lastFreqHz;
+    /* The drag moves the WINDOW, so what it tracks is the window centre. */
+    startCenter = (lastView && typeof lastView.span === "number")
+                    ? lastView.lo + lastView.span / 2
+                    : lastFreqHz;
+    targetCenter = startCenter;
     canvas.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
@@ -7922,16 +8440,45 @@ function drawBandplanOob(ctx, W, H, dpr) {
     }
 
     const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rectW;
-    targetHz = clamp(startFreq + dx * hzPerPx);
-    drawBandplan(targetHz);
+    targetCenter = Math.max(lastBandplan.lo,
+                     Math.min(lastBandplan.hi, startCenter + dx * hzPerPx));
+    drawBandplan(targetCenter);
+    /* Usually unchanged - a drag inside the radio's reach moves the window and
+       leaves the dial alone, which is the point of the gesture. */
+    targetHz = bpSolveView(targetCenter).dial;
     document.getElementById("vfo").textContent = fmtHz(targetHz);
   });
 
+  /* Put the window at centerHz. Goes out as "view_center", NOT "set_freq":
+     the gesture must be allowed to leave the dial alone, and a frequency write
+     cannot say that. Same device entry point the Tab5's own strip uses. */
+  function commitCenter(centerHz) {
+    const sol = bpSolveView(centerHz);
+    /* Carry the local VIEWPORT too, computed BEFORE lastFreqHz moves. Without
+       it the box snaps back to the old centre for the ~100 ms until the
+       device's next frame arrives - the same rubber band as the frequency, one
+       layer up, and on this control it is the thing the eye is following. The
+       device's own frames overwrite this within a frame or two; this only has
+       to cover the gap. */
+    if (lastView && typeof lastView.span === "number") {
+      const d = sol.dial - lastFreqHz;
+      lastView = { ...lastView,
+                   lo: sol.center - lastView.span / 2,
+                   hi: sol.center + lastView.span / 2,
+                   capLo: (typeof lastView.capLo === "number") ? lastView.capLo + d : lastView.capLo,
+                   capHi: (typeof lastView.capHi === "number") ? lastView.capHi + d : lastView.capHi };
+    }
+    sendCmd({ action: "view_center", hz: Math.round(centerHz) });
+    holdLocalFreq(sol.dial);
+    drawBandplan();
+  }
+
+  /* A TAP is still a tune - pointing at a place in the band means "go there",
+     while dragging the window means "look there". Same split the spectrum makes
+     between tap-to-tune and swipe-to-pan; see bp_solve_view() in ui.c. */
   function commit(hz) {
     sendCmd({ action: "set_freq", hz: hz });
-    lastFreqHz = hz;
-    document.getElementById("vfo").textContent = fmtHz(hz);
-    updateFreqAxis();
+    holdLocalFreq(hz);
     drawBandplan();
   }
 
@@ -7946,11 +8493,13 @@ function drawBandplanOob(ctx, W, H, dpr) {
       const dragged = bpDragging;
       bpDragging = false;
       bpOobOffPx = 0;
-      if (dragged) commit(targetHz); else drawBandplan();
+      if (dragged) { bpStartFade(); commit(targetHz); } else drawBandplan();
       return;
     }
     if (bpDragging) {
-      commit(targetHz);
+      bpDragging = false;      /* before the fade starts, or alpha stays pinned at 0 */
+      bpStartFade();
+      commitCenter(targetCenter);
     } else {
       const rect = canvas.getBoundingClientRect();
       const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rect.width;
@@ -8851,13 +9400,9 @@ function connectWs() {
    click still feels immediate. The device rate-limits CAT writes at 200 ms, so
    there is nothing to gain by going below that. */
 const WHEEL_SETTLE_MS = 120;
-/* How long the LOCAL frequency outranks the polled one after a wheel click:
-   the debounce, plus a POST round trip, plus a poll interval to carry the new
-   value back. Generous on purpose - being briefly stale is invisible, whereas
-   being briefly WRONG is the rubber band. */
-const WHEEL_HOLD_MS   = WHEEL_SETTLE_MS + 1400;
+/* The hold window itself is FREQ_HOLD_MS, declared with lastFreqHz - it belongs
+   to every local tune, not to the wheel (see holdLocalFreq). */
 let wheelTimer     = null;
-let wheelHoldUntil = 0;
 function handleWheel(e) {
   e.preventDefault();
   if (!lastFreqHz) return;
@@ -8891,18 +9436,14 @@ function handleWheel(e) {
    * each click still lands on the grid) and only the COMMIT is deferred until
    * the wheel has been still for WHEEL_SETTLE_MS. Same shape as the Tab5's own
    * touch path, which defers its CAT write to release for the same reason. */
-  lastFreqHz = newHz;
-  document.getElementById("vfo").textContent = fmtHz(newHz);
-  updateFreqAxis();
-
-  wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+  holdLocalFreq(newHz);
   if (wheelTimer) clearTimeout(wheelTimer);
   wheelTimer = setTimeout(() => {
     wheelTimer = null;
     sendCmd({ action: "set_freq", hz: lastFreqHz });
     /* Re-armed from the COMMIT, not from the last click: the poll that must be
        ignored is the one racing this request, and it has not happened yet. */
-    wheelHoldUntil = Date.now() + WHEEL_HOLD_MS;
+    freqHoldUntil = Date.now() + FREQ_HOLD_MS;
   }, WHEEL_SETTLE_MS);
 }
 document.getElementById("spec-overlay").addEventListener("wheel", handleWheel, { passive: false });

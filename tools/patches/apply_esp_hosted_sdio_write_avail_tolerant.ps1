@@ -33,6 +33,29 @@
 #   * The restart is KEPT as a last resort behind a consecutive-failure streak,
 #     so a genuinely dead link still recovers, while transients cannot
 #     accumulate toward a reboot. Any success clears the streak.
+#
+# 2026-09-12: A STREAK OF 32 IS HALF A SECOND, NOT A DEAD LINK.
+# ------------------------------------------------------------
+# Each call is 8 tries x 2 ms = ~16 ms, so 32 of them span ~0.5 s - the device
+# was rebooting after half a second of trouble. Measured on the dev bench: two
+# restarts in an afternoon, at 31 min and 61 min of uptime, the SECOND with the
+# bench idle and no screenshot traffic. Both reached exactly 32 with no
+# successful write in between, so nothing ever cleared the streak.
+#
+# A reboot is far more expensive than the reboot: it is a warm reset with the
+# radio attached, i.e. the documented #74 wedge, so each one costs the QMX until
+# somebody power-cycles it by hand.
+#
+# The restart now needs BOTH the streak AND QMX_SDIO_DEATH_MS (10 s) of
+# continuous failure. A C6 that comes back inside the window clears the streak
+# and nothing reboots.
+#
+# ⚠ It also LOGS the elapsed time, and logs recovery explicitly ("slave answered
+# again after N failure(s) over Nms - NOT restarting"), because whether these
+# ever recover on their own is the thing nobody can currently answer: we always
+# rebooted at 0.5 s before finding out. Read those lines before tuning the 10 s
+# either way - if recovery never appears, the window is only delaying an
+# inevitable restart and the real fix is elsewhere.
 #   * Logs the state at each give-up, which is what makes the next occurrence
 #     diagnosable at all - stock, it printed one line and rebooted.
 #
@@ -46,7 +69,12 @@ $f = Join-Path $repo "managed_components\espressif__esp_hosted\host\drivers\tran
 
 if (-not (Test-Path $f)) { Write-Error "not found: $f  (run idf.py reconfigure first)"; exit 1 }
 
-$src = Get-Content -Raw -Encoding UTF8 $f
+# Normalize to LF before matching: the target C source is LF-only (see
+# .gitattributes), but this .ps1 file's own here-strings check out as CRLF
+# under some git configs, and a byte-exact anchor match then silently fails
+# on a file that is otherwise identical - found 2026-09-20, merging this
+# patch into a worktree where it had never actually been exercised before.
+$src = (Get-Content -Raw -Encoding UTF8 $f) -replace "`r`n", "`n"
 if ($src -match "QMX_SDIO_WRITE_AVAIL_TOLERANT") {
     Write-Host "already patched (sdio_is_write_buffer_available tolerant)."
     exit 0
@@ -69,6 +97,8 @@ $new = @'
 	uint32_t max_retry_sdio_not_responding = 8;
 '@
 
+$old = $old -replace "`r`n", "`n"
+$new = $new -replace "`r`n", "`n"
 if ($src -notmatch [regex]::Escape($old)) { Write-Error "anchor A not found - upstream changed, re-check by hand"; exit 1 }
 $src = $src.Replace($old, $new)
 
@@ -110,6 +140,8 @@ $newB = @'
 				continue;
 '@
 
+$oldB = $oldB -replace "`r`n", "`n"
+$newB = $newB -replace "`r`n", "`n"
 if ($src -notmatch [regex]::Escape($oldB)) { Write-Error "anchor B not found - upstream changed, re-check by hand"; exit 1 }
 $src = $src.Replace($oldB, $newB)
 
@@ -121,9 +153,11 @@ $newC = @'
 			qmx_unresp_streak = 0;   /* the slave answered - see the patch header */
 			if (buf_available < buf_needed) {
 '@
+$oldC = $oldC -replace "`r`n", "`n"
+$newC = $newC -replace "`r`n", "`n"
 if ($src -notmatch [regex]::Escape($oldC)) { Write-Error "anchor C not found"; exit 1 }
 $src = $src.Replace($oldC, $newC)
 
-Set-Content -Path $f -Value $src -Encoding UTF8 -NoNewline
+[System.IO.File]::WriteAllText($f, $src, (New-Object System.Text.UTF8Encoding $false))
 Write-Host "Patched sdio_is_write_buffer_available: 8 tries with a pause, drop the frame, restart only on a streak."
 Write-Host "  $f"

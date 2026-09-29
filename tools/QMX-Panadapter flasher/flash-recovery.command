@@ -63,6 +63,20 @@ echo " STEP 1: FULL CHIP ERASE"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
+# !! VALIDATE BEFORE ERASING. These checks used to be absent entirely, and the
+# app below named a merged v0.18.5 image that is NOT in this folder - so the
+# erase ran, the flash then failed on a missing file, and the Tab5 was left
+# wiped AND with nothing written to it. The erase takes the WiFi credentials,
+# the callsign, the memory channels, the QSO log and the LoTW private key, and
+# none of that comes back. Nothing is destroyed until every file needed to
+# rebuild it is confirmed present.
+for f in bootloader.bin partition-table.bin qmx_panadapter.bin ota_data_initial.bin; do
+    if [ ! -f "$SCRIPT_DIR/$f" ]; then
+        echo "ERROR: $f not found next to this script - nothing has been erased."
+        exit 1
+    fi
+done
+
 "$ESPTOOL" --chip esp32p4 -b 460800 erase_flash || {
     echo "ERROR: Erase failed. Check USB connection."
     exit 1
@@ -77,8 +91,9 @@ echo ""
 "$ESPTOOL" --chip esp32p4 -b 460800 \
     write_flash \
     0x2000 "$SCRIPT_DIR/bootloader.bin" \
-    0x10000 "$SCRIPT_DIR/qmx_panadapter_merged_v0.18.5-hotfix.bin" \
-    0x8000 "$SCRIPT_DIR/partition-table.bin"
+    0x8000 "$SCRIPT_DIR/partition-table.bin" \
+    0x10000 "$SCRIPT_DIR/qmx_panadapter.bin" \
+    0x920000 "$SCRIPT_DIR/ota_data_initial.bin"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Flash failed"

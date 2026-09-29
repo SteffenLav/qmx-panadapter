@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
 /* ⭐ IS THE WSPR PAGE REACHABLE AT ALL?
  *
@@ -84,10 +86,21 @@ bool wspr_rx_running(void);
  *
  * Generalise it: do not size a DISPLAY window from the distribution of
  * SUCCESSES. That is the same trap as a change-detected repaint keyed on only
- * part of what the render reads. */
-#define WSPR_WF_LO_HZ  1350.0f
+ * part of what the render reads.
+ *
+ * 1360-1650 since 2026-09-11 (operator). It went to 1330-1630 for an hour
+ * first, on a left-edge trace he took for a WSPR station and then recognised as
+ * a wild CW transmitter - the same lesson as above from the other side: check
+ * what a trace IS before moving the window to include it. The search window in
+ * wspr_rx.c and the decoder's stage-1 centre in wspr_decode.c follow this -
+ * see both.
+ *
+ * ⚠ WSPR_WF_COLS must be (HI - LO) / 1.4648, rounded: the view maps columns to
+ * pixels and the axis maps Hz to pixels, and they only agree if the columns
+ * span exactly this window. A literal because it sizes static arrays. */
+#define WSPR_WF_LO_HZ  1360.0f
 #define WSPR_WF_HI_HZ  1650.0f
-#define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
+#define WSPR_WF_COLS   198            /* (1650-1360) / 1.4648 = 197.98 */
 
 /* ---- THE CARPET FLOWS, IT DOES NOT REDRAW ------------------------------
  *
@@ -336,12 +349,48 @@ void wspr_pa_guard_reclaim_on_link(void);
  * never confirmed and silently failed to reach the radio. */
 void wspr_pa_guard_periodic_check(void);
 
+/* Apply the Max. PA voltage a PAST Calibrate Power sweep measured as
+ * producing `dbm` on the CURRENT band (adif_log_band_for_freq() of
+ * cat_get_frequency()), so "Declared power" is something the radio was
+ * actually asked to produce rather than a number typed into wsprnet.
+ *
+ * ⛔ REFUSES while the PA-voltage guard is CURRENTLY reducing
+ * (settings_get_wspr_pa_saved_x10() != 0) - that state IS the radio
+ * deliberately turned down to protect the finals over WSPR's ~110 s
+ * key-down, and writing a calibrated-for-full-power voltage over it would
+ * silently undo that protection. The guard's own restore-on-disengage
+ * already puts back whatever was here before it engaged, calibrated or
+ * not, so nothing is lost by waiting - the next call (drawer reopen, a
+ * dropdown change, a band change) tries again once the guard lets go.
+ *
+ * Call this: whenever the dropdown selection changes, whenever the WSPR
+ * drawer is opened/refreshed, and after the WSPR page pushes a new dial
+ * frequency to the radio (the same declared dBm can map to a different
+ * voltage - or become uncalibrated - on a different band).
+ *
+ * Fire-and-forget: like the guard's own writes, this is a CAT command, not
+ * a query, so success is not returned here - wspr_pa_calibrated_status()
+ * below is what a UI polls to know what happened. Safe to call from the
+ * LVGL/UI thread; the actual write goes to poll_task like every other CAT
+ * command (cat_request_pa_voltage_x10()). */
+void wspr_pa_apply_declared_dbm(int8_t dbm);
+
+/* What the last wspr_pa_apply_declared_dbm() call actually did, for a UI
+ * hint under the dropdown - same idea as wspr_tx_advised_dbm()'s "what the
+ * radio measured", but for what was ASKED rather than what came back.
+ * Writes a short human-readable line into `out` (band, applied voltage or
+ * why not) and returns true if a voltage was applied, false otherwise
+ * (uncalibrated band, no match within tolerance, or the guard is holding
+ * the line - `out` says which). Safe from the UI thread; touches no CAT
+ * state itself, only the small static this file already keeps. */
+bool wspr_pa_calibrated_status(char *out, size_t out_sz);
+
 /* Re-roll the schedule after the operator changes whether or how often we
  * transmit. Call it from the TX on/off control and from any path that writes
- * wspr_duty_pct, or the countdown keeps describing the previous setting until
+ * the tx/rx cycle counts, or the countdown keeps describing the previous setting until
  * the next cycle boundary.
  *
  * ⚠ Takes the two values rather than reading the settings, because both callers
  * are UI tasks and settings_load_all() is a multi-kilobyte stack allocation -
  * the bug class that has boot-looped this board four times. */
-void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t duty_pct);
+void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles);

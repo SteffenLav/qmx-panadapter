@@ -95,6 +95,17 @@ bool cat_is_ready(void);
  */
 int cat_get_cw_offset_hz(void);
 
+/* Ask the RADIO whether it is in split, and read the answer back. The answer is
+ * -1 (unknown), 0 (simplex) or 1 (split), and it arrives asynchronously a poll
+ * or two after the request - so request early and judge later, never block.
+ *
+ * cat_cw_tx_offset_engaged() answers a DIFFERENT question: whether WE put it
+ * there. A split the operator left on, or one a menu visit created, is invisible
+ * to that and visible to this. Anything about to transmit unattended wants this
+ * one. */
+void cat_request_split_read(void);
+int  cat_get_split_state(void);
+
 // True while WE are holding the radio in split for the CW transmit offset.
 // RIT is refused while this is true - the two are mutually exclusive, since the
 // offset is implemented as split (the QMX has no XIT) and RIT would move the
@@ -156,6 +167,10 @@ int cat_probe_terminal(void);
  * Returns an empty string until the radio has answered VN; after link-up.
  */
 const char *cat_get_qmx_fw(void);
+/* WHICH radio is attached: the STM32 unique id from UI;, 24 hex chars, or ""
+ * when unknown (1_03 has no such command). Used to keep the power calibration
+ * per-radio - see settings.h. */
+const char *cat_get_qmx_uid(void);
 /**
  * @brief Check whether the connected QMX's firmware is at least major.minor.patch.
  *
@@ -434,6 +449,24 @@ void cat_cw_poll_set_active(bool active);     /* TB; poll while CW page visible 
  * @param paused  true to pause polling, false to resume
  */
 void cat_poll_set_paused(bool paused);
+
+/* ⛔ A "FORCED" FREQUENCY WRITE CAN STILL BE DEFERRED, AND IT RETURNS ESP_OK.
+ * cat_set_frequency_forced() is forced against the 200 ms RATE LIMITER only.
+ * If a burst owns the pipe the write is parked in s_pending_freq_hz and sent
+ * seconds later, and the caller is told nothing.
+ *
+ * That cost a real fault on 2026-09-19: the spur map's 25 Hz nudge was
+ * deferred, its own restore went out FIRST, and the nudge then landed seven
+ * seconds later - leaving the radio 25 Hz high, which is precisely what that
+ * code's "always restore, forced" comment claimed to prevent.
+ *
+ * So anything that writes a frequency it intends to take back needs both of
+ * these: ask BEFORE writing, and withdraw the parked write if it never
+ * arrived. The withdrawal is value-matched so it can only ever cancel the
+ * caller's OWN write, never an operator band change parked in the same slot
+ * (it is one slot, last-one-wins). */
+bool cat_poll_is_paused(void);
+bool cat_cancel_pending_freq_if(uint32_t freq_hz);
 
 // Close the CAT link deliberately, on our way out - see util/usb_shutdown.h.
 // Sends TA0;RX; first so the radio is never left keyed, then tears the CDC

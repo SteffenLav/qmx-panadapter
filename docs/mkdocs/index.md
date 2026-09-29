@@ -22,6 +22,17 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **Touch tuning** — tap or drag to tune with mode-aware snapping, pinch-zoom (a real
   zoom-FFT, not a stretch), one-finger pan-and-retune, edge-swipe navigation between
   screens, and a frequency keypad.
+- **Audio, and binaural CW** *(beta)* — the I/Q the radio already sends becomes sound on
+  the device. The **panoramic CW split** places two stations on different frequencies to
+  the left and right of the stereo image rather than on top of each other, with **pan
+  width**, **pan blend** and **overlap** adjustable live while you listen. It plays to
+  something your ears do far better than any decoder — separating two sources by where
+  they come from. A single-channel reader must pull both signals out of one waveform;
+  binaural CW gives the job to the part of your hearing built for it, and two stations
+  calling together stop being a jumble. Best at **300 Hz bandwidth and up**; **below
+  200 Hz there is little separation**, because the signals then share too much of the
+  audio passband. Long-press the top bar on the Panadapter page for **Resource
+  Management**, where audio is switched on and off. See [Audio](guide/audio.md).
 - **QMX control** — frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware 1.04+),
   SSB filter width, CW passband, TX power and SWR, and QMX volume in decibels matching
   the radio's own display. Band presets with per-band frequency recall, 32 memory
@@ -43,10 +54,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **WSPR** — a third page, reached by the same swipe. A propagation beacon rather than a
   contact mode: a very slow, very weak signal carrying your callsign, grid and power,
   which stations worldwide report hearing. What was heard each two-minute cycle with band,
-  distance and bearing, the furthest of the session, and a per-cycle history. Receiving is
-  the default; transmitting is opt-in, with a duty cycle, optional band hopping, and
-  **Protect finals** turning the radio's PA voltage down for the long key-down WSPR needs.
-  See [WSPR](guide/wspr.md).
+  distance and bearing, and the furthest of the session. Receiving is
+  the default; transmitting is opt-in, with a transmit schedule and optional band hopping.
+  **Calibrate Power** measures real RF output per band on a dummy load, so **Declared
+  power** only offers standard dBm steps the radio actually reaches — labelled with the
+  real wattage, not a textbook figure — which is also how you protect the finals for a
+  long beacon run. A separate **Output power** slider covers every other mode. See
+  [WSPR](guide/wspr.md).
 - **Logging & upload** — every QSO written to an ADIF log on the device, readable and
   editable on the Tab5 or in the browser, and uploaded *(needs WiFi)* to **QRZ Logbook**,
   **eQSL**, **ARRL LoTW** and **your own Cloudlog or Wavelog** — LoTW QSOs signed on the
@@ -71,9 +85,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   band presets, live TX status with a **Call CQ** button, a sortable QSO log you can
   correct entries in, config download and upload, a microSD file browser, screenshots,
   and the diagnostic log.
-- **Updating from the device** *(needs WiFi)* — a new release is fetched quietly in the
-  background and offered once, with **Restart now** or **Later**. Nothing is installed
-  without you asking, and the automatic download can be switched off.
+- **Updating from the device** *(needs WiFi)* — tap the version line, press **Download
+  now**, then **Restart now**. Nothing is fetched or installed until you ask.
+  ⚠ **Coming from v1.14.x or earlier? v1.15.0 needed a one-time USB-C cable
+  update** — do that first and everything after it is over the air. See
+  [Settings](guide/settings.md#firmware-updates).
 - **Built-in manual** — this whole guide is compiled into the firmware, so it is instant
   and needs no WiFi and no card. It opens at the chapter for the screen you are on,
   warning banners are tappable, and a **Need guidance?** panel takes your symptom in plain
@@ -82,9 +98,10 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   power-off, the QMX's clock as an offline fallback, automatic GPS phase-lock if your QMX
   has one, a manual set-and-sync panel, and FT8 timing that self-corrects from the decoded
   band consensus.
-- **microSD backup** — insert a card *before switching on* and your ADIF log, full config,
+- **microSD backup** — insert a card (restart afterwards) and your ADIF log, full config,
   LoTW certificate and key, and diagnostic log are mirrored automatically. Continuous with
-  WiFi off (green SD dot); one complete backup per start-up with WiFi on (yellow dot).
+  WiFi off; one complete backup per start-up with WiFi on. The SD dot is green while writes
+  are reaching the card and yellow when nothing has landed lately.
 - **Diagnostics** — an always-on log with nothing to enable: 5 MB in RAM, a rolling copy
   in flash that survives a power cut, and a full mirror to microSD. A crash survives the
   reboot and is reported on the next boot, so a diagnostic download is enough to answer
@@ -106,13 +123,76 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.12.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.8** finally makes static IP and preferred network fully reliable - no more reboot needed, no more following you onto the wrong network; **v1.16.7** root-causes the idle abort and ties a static IP to the network it belongs to; **v1.16.5** makes the decoder keep up with a busy band, gives FT4 the head start FT8 already had, and fixes a crash when switching between the two.
 
-**New in v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
+!!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
+
+    **v1.15.0** reclaimed 2.81 MB of unused flash, which meant rewriting the
+    partition table — something an over-the-air update cannot do. If you are
+    still on v1.14.x or earlier you need that one **flasher download**, over
+    the same USB-C cable you used the first time. **Everything from v1.15.0
+    onwards, including this release, is over the air again** with more than
+    twice the room. **Your settings, QSO log and LoTW certificate are kept** —
+    press **Enter** at the flash-type prompt, never **E**. New users are
+    unaffected, and anyone already on v1.15.0 simply updates from the device.
+
+**v1.16.8 makes static IP and preferred network genuinely reliable.** ⭐ Randy N4OPI spent several days field-testing one build after another - each round found a real bug hiding under the last one: reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and switching networks from the web UI killing the very HTTP connection that asked for the switch. Confirmed on his bench: switching or setting a static address no longer needs a reboot. Also: **screenshots download as PNG and no longer tear**, **WSPR no longer reports "transmitted" on a burst where the radio was never keyed**, and **FT8's re-send-to-a-partner tracks up to four at once** instead of one. ⚠ The WSPR waterfall still shows nothing during the wait between cycles, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
+
+**v1.16.7 solves the idle abort.** v1.16.6 reduced the exposure and said the shortage was unchanged; it was, and the unit aborted twice more. Measured properly: **no leak** (20.5 h trends upward), but the internal pool was emptied **24 times a minute** for 60-360 ms, down to 143 bytes. ⭐ The cause was the web interface building its JSON replies in that pool - 495 pieces of one reply, 8.7 KB across 311 allocations - while 14 MB of external memory sat unused. Fixed: **24.1 droughts per minute became none**, free internal memory at rest 28 KB to 56 KB. ⚠ SD writes stopping ~30 s after boot is a SEPARATE shortage and is unchanged.
+
+**v1.16.5 makes the decoder keep up with the band.** ⭐ **Decoding is two to three times faster and stops dropping stations on a busy band** — a slot's decode was taking 11-14 seconds, longer than an FT8 slot, so the message that decides your next transmission arrived after the moment to send it had passed. Work is now taken as each processor becomes free instead of split in half in advance: **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates a slot were abandoned, **3-15 stations per slot instead of 0-3**. **FT4 stops recording 2.5 seconds of silence** before deciding what to say. **Pick your next station while the closing 73 is still going out** *(Randy N4OPI)*, and **a station calling you out of the blue starts a full automatic QSO**. **AGC presets — Fast, Med, Slow and Off** *(Samuel W7STF)*. **The WiFi page says which network you are actually on.** And **switching between FT8 and FT4 could crash the unit** — fixed.
+
+**v1.16.4 fixes four faults operators found in their own shacks.** **A station answering your CQ is answered in the very next slot — every time** *(Gyula HA3HZ)*: decoding is split across both processors and only one half could act on a caller, so the same situation replied immediately about half the time and a cycle late the rest. **Waiting for a busy station really is capped at six minutes now** — the counter reset instead of latching, so it could wait over half an hour and never got back to calling them either. **Headphones silence the internal speaker** *(Roy KI0ER)*. **Resource Management is renamed Audio Settings**, with its own button in the settings drawer. **Preferred network actually decides which WiFi you join** *(Randy N4OPI)*. **A restart caused by a power brownout says so** *(Samuel W7STF)*. ⭐ And the recurring **SD "dot goes yellow and writes stop" is root-caused** — the card driver is refused a memory buffer, so the write never reaches a card that is mounted and healthy. ⚠ Audio still breaks up while a browser has the panadapter open.
+
+**v1.16.3 finishes the audio fix and gathers the controls.** The **crackle is actually gone** — v1.16.2 shipped the first of five attempts at the clock correction and you could still hear it working. **All four level controls are in one window**: RX Volume moved into Resource Management, "Gain" is renamed **AGC Ceiling** and reaches 1500, and **Attack** and **Release** are adjustable for the first time. ⚠ The settings drawer's RX Audio section is gone, including its on/off box — long-press the top bar instead. **A GPS that locks late is no longer missed** *(John W5JSS)*: detection ran once 45 seconds after boot and never again; a QMX+ here locked 25 minutes in. **WSPR gives the radio back its mode** instead of leaving it in Digi. **Preferred network** decides which remembered WiFi wins *(Randy N4OPI)*. The **SD dot** is green only while writes are actually landing. ⚠ Audio still breaks up while a browser has the panadapter open — close the page while you listen.
+
+**v1.16.0 brings audio to the Tab5, as a beta.** The I/Q the radio already sends becomes sound on the device, and the first thing built on it is a **panoramic CW split** — two stations on different frequencies placed left and right across the stereo image rather than on top of each other, with **pan width**, **pan blend** and **overlap** adjustable live while you listen. **Binaural CW is a first implementation: use 300 Hz bandwidth and up, and do not expect much separation below 200 Hz.** Audio costs resources, so **long-press the top bar on the Panadapter page** to open **Resource Management**, where it is switched on and off and where you can see what it competes with. The whole audio part is **beta and subject to further development** — the next step is the same features in the web interface, with only the I/Q sent to the PC and processed there. Full detail in the [Audio guide](guide/audio.md). A **Pause button** also arrives for QSOs *(Randy N4OPI)*: skip one transmission to check your slot is still clear, then carry on with the same message.
+
+**v1.15.1 gives WSPR more working memory.** The routine that picks signals out of a cycle needs a large block of it, and on a busy page it could be left with only just enough — so a cycle could come back empty with traces plainly visible on the waterfall, most often after moving between pages. Freeing 2.8 MB removes the squeeze. The **Diagnostic download** is now a single zip file you can attach to an email, and it no longer clears the log when a transfer fails. **FT8, the SelfSpotter list and WSPR share one column order** so the same information sits in the same place on every screen.
+
+**v1.14.4 fixed the reboots.** Fifteen runs on the bench before the fix lasted a median
+of 15 minutes; with it, the same bench ran 14.7 hours with none.
+
+**v1.14.1 fixed a v1.14.0 crash on tuning or QMX power-on.** A settings copy too
+large for a 4096-byte task stack, hit by nearly any frequency change. Thanks to Martin
+Howard and Rick Trommer W5NR for the reports, and Uwe DL8UG for the fix.
+
+**New in v1.14.0 — Calibrate Power.** Sweeps *Max. PA voltage* through 45 points on a
+dummy load and measures the real RF output at each, per band. **Declared power** (WSPR)
+now only offers the standard dBm steps a band's calibration actually reaches, each one
+labelled with the real measured wattage rather than a textbook figure computed from the
+step's own name — so a declared level and what actually goes out can no longer disagree.
+The old fixed "hold the PA at 6 V for the whole beacon" guard is gone; protecting the
+finals is now just picking a low declared level, with a plain warning above 1 W. A
+separate **Output power** slider covers every other mode and stays off the WSPR page,
+since Declared power always owns the radio there. Both grow a **Recalibrate this band**
+button once calibrated. Also: **SelfSpotter's** callsign-to-country table rebuilt from an
+authoritative cty.dat-style source (~580 hand-curated prefixes → ~4,100 generated ones,
+Uwe DL8UG), plus a new **ISO** country-code column on the map's LIST tab.
+
+**In v1.13.0 — SelfSpotter** *(Uwe DL8UG, who wrote the whole thing and sent it as
+a patch)*, a full-screen map and list answering "who is hearing me right now" from PSK
+Reporter, wsprnet, and RBN's own self-spot feed, opened from the settings drawer. It
+ships off by default. Land is filled in, not just outlined — LVGL has no built-in
+polygon fill, so this is a small scanline rasteriser of its own — with the coastline
+stroked back on top in its own colour so it doesn't disappear into the fill. A
+deterministic **"Power-cycle QMX"** sequence *(Randy N4OPI)* for the web UI's remote
+relay: pulse off, wait, pulse on, wait, then confirm over CAT rather than assume it
+worked. Diagnostic log volume cut from roughly 300 lines a minute to under 50 on a
+quiet bench. And this manual's own "Need guidance?" panel caught up with seven real
+features that had no way in from it at all — Radio Menus, Still Spectrum, FT8
+Simulation Mode, SWR protection, Antenna Tune, RIT, and "Release radio" — plus two
+guidance bugs and a stale description of how to reach the spot map, both fixed.
+
+**In v1.12.4 — one bug, twelve releases old.** Tapping a spot after tuning away with
+the dial moved the spectrum and waterfall several kHz away from where the spot line
+itself stayed, reachable only above ×1 zoom. Fixed.
+
+**In v1.12.3 — the web page stops freezing, and WSPR stops reaching into your
 other modes.** Writing the microSD card holds the spectrum stream, and on this
 hardware that write can take a very long time — measured at 3, 10, 15 and once
 29 seconds for four kilobytes, which is what made the web page look broken while
@@ -215,7 +295,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.12.4.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.8.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

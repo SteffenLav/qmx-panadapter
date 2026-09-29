@@ -298,5 +298,7 @@ void wsprnet_init(void)
      * esp_http_client_perform() still needs real room and the first version
      * took a Stack protection fault here. pskreporter and update_check both
      * use 6144 for comparable work; the extra is PSRAM and costs nothing. */
-    psram_task_create(wsprnet_task, "wsprnet", 8192, NULL, 2, tskNO_AFFINITY);
+    // 8192 -> 11264: a qmx_settings_t local in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(wsprnet_task, "wsprnet", 13312, NULL, 2, tskNO_AFFINITY);
 }

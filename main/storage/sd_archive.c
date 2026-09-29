@@ -11,6 +11,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "sdio_ready.h"
+#include "wifi.h"
 #include "esp_attr.h"      // RTC_NOINIT_ATTR - the #282 durable instrument
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
@@ -88,15 +90,20 @@ static const char *TAG = "sd_arch";
  * transcript's doing: the diag mirror has run every 30 s since #153, and it is
  * the worse of the two.
  *
- * So while someone is actually watching the stream, the writes wait. Nobody
- * watching, nothing to freeze - and that is the common case, since the web UI
- * is opened to look at something rather than left running.
+ * ⛔ THE ANSWER IS NOT TO WRITE LESS OFTEN WHILE SOMEONE WATCHES. v1.12.3 did
+ * exactly that and the deferral was REMOVED on 2026-09-12, because a web page
+ * is a MONITOR and must not change what the device records. Leaving one open
+ * overnight took the mirror from 4 KB/30 s to 4 KB/180 s - 23 B/s - which is
+ * below what WSPR alone produces, so the card fell four hours behind and the SD
+ * record of a ten-hour soak ended at 6.5 h. A monitor that silently truncates
+ * the log is worse than a stuttering spectrum.
  *
- * ⚠ BUT NOT FOR EVER, and this is the load-bearing half. #153 exists so that a
- * crash reaches the card, and an operator who leaves a browser open all session
- * is exactly the one whose crash would otherwise be lost. After this long the
- * write happens regardless and the browser takes the stutter. */
-#define WS_DEFER_MAX_MS   180000   /* 3 min: write anyway, watcher or not */
+ * ⭐ The numbers above are also the way out, and they were in the log all along:
+ * 3107 ms for 4096 B, and elsewhere "8,942 ms to write ONE byte". The cost is
+ * per WRITE, not per byte - the open, the fsync, the close, the contention. So
+ * mirror_diag_slow() drains up to 64 KB inside ONE open at the same 30 s
+ * cadence. The stream is interrupted once per 30 s whether or not anybody is
+ * looking, which is precisely what makes the browser irrelevant. */
 
 /* ⛔ TEMPORARY EXPERIMENT (#378), DEFAULT 0 - REMOVE WHEN IT HAS ANSWERED.
  *
@@ -266,6 +273,28 @@ static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see 
 #define SD_WRITE_FAIL_UNMOUNT 5
 static int s_consec_write_fail = 0;
 
+// A write failure while MALLOC_CAP_DMA is this starved is almost certainly the
+// boot-time trough (WiFi+BLE+the TLS feeds all converging on the same pool),
+// not a pulled card - measured 2026-09-20: DMA free=151 B / lblk=84 B for the
+// entire ~30 s span that killed every one of that boot's 5 write attempts and
+// got the card declared removed, while INT free stayed 1.7-14 KB throughout
+// (healthy operation elsewhere on this bench runs 10-18 KB DMA free). A real
+// unplug is not a memory event and does not care about this threshold.
+//
+// Failures attributed to the trough do NOT count toward SD_WRITE_FAIL_UNMOUNT
+// - they get their own, much longer budget instead, so the card survives a
+// trough that outlasts 15 s (this one ran ~56 s) without declaring itself
+// gone. 40 x WORK_MS = 2 min, comfortably past every trough measured so far,
+// while still bounded so a card that is ACTUALLY gone during a starved boot
+// is not retried forever.
+#define SD_DMA_STARVED_BYTES     4096
+#define SD_MEM_RETRY_MAX         40
+static int s_consec_mem_fail = 0;
+// One rotate-and-retry per mount before concluding the card is gone - see the
+// write-failure branch in sd_archive_task(). Cleared on every successful mount
+// so a later session gets its own attempt, never re-armed within one.
+static bool s_log_rotate_tried = false;
+
 // Quick mount retries inside the boot window, while DMA memory is still plentiful.
 // Forward declaration: the temp instrument in mirror_diag() reports it.
 static bool s_parked;
@@ -339,6 +368,10 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 }
 
 #define SD_BOOT_MOUNT_TRIES   5
+// A/B switch for the DMA measurement at the boot-probe loop below. 1 skips
+// the probe entirely - safe on a bench with no card, and the only way to
+// separate the probe's DMA cost from the WiFi bring-up it now overlaps.
+#define SD_BOOT_PROBE_DISABLE 0
 #define SD_BOOT_MOUNT_GAP_MS  150
 
 // Append any decoded CW waiting in cw_decode.c to cw-decode.txt (#323, Michael
@@ -479,6 +512,46 @@ static void mirror_cw(void)
 
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
 // Returns false on a write error (possible card removal).
+/* ⛔ THE 5 MB ROTATION WAS UNREACHABLE ON EVERY WiFi UNIT, AND THAT IS HOW THE
+ * CARD FILLS UP (2026-09-22, chasing Dennis WN4FLA's "SD not mounted").
+ *
+ * The rotate used to live in ONE place: inside mirror_diag()'s write loop,
+ * after a chunk had already been written. Two consequences, and the second is
+ * the one that bites:
+ *
+ *  - mirror_diag() is the CONTINUOUS burst path, and on a WiFi unit it stops
+ *    running within seconds of boot (park_snapshot()). From then on the only
+ *    writer is mirror_diag_slow(), which had NO rotate at all. So qmx-log.txt
+ *    grows without limit for the entire life of the card. The bench's own copy,
+ *    pulled 2026-09-20, is 5,368,581 B - already past SD_LOG_MAX_BYTES.
+ *
+ *  - ⭐ The rotate is what FREES space (remove() of the previous
+ *    qmx-log.1.txt), and it was gated behind a SUCCESSFUL write. On a card with
+ *    no room left, the write is exactly the thing that cannot happen, so the
+ *    one action that would recover the card was unreachable by construction.
+ *
+ * Both write paths and the mount now go through this, and the size is checked
+ * BEFORE writing as well as after. See sd_archive_task()'s unmount path for
+ * what the unrecoverable version looked like from the outside: mount OK,
+ * README written OK, first append fails, five retries, "card removed". */
+static void rotate_diag_log(void)
+{
+    const bool was_open = (s_log_file != NULL);
+    if (s_log_file) { fflush(s_log_file); fclose(s_log_file); s_log_file = NULL; }
+    // remove() FIRST - this is the call that actually returns space to the
+    // volume. rename() alone frees nothing.
+    remove(SD_LOG_PATH_1);
+    if (rename(SD_LOG_PATH, SD_LOG_PATH_1) != 0)
+        ESP_LOGW(TAG, "rotate: rename %s failed: %s", SD_LOG_PATH, strerror(errno));
+    s_log_bytes = 0;
+    if (was_open) {
+        s_log_file = fopen(SD_LOG_PATH, "ab");
+        if (!s_log_file)
+            ESP_LOGW(TAG, "rotate: reopen %s failed: %s", SD_LOG_PATH, strerror(errno));
+    }
+    ESP_LOGW(TAG, "rotated diag log on SD - previous qmx-log.1.txt deleted");
+}
+
 static bool mirror_diag(void)
 {
     // === TEMP INSTRUMENT (2026-08-28, #282) - remove once the contradiction is
@@ -563,19 +636,8 @@ static bool mirror_diag(void)
         s_log_bytes  += got;
 
         if (s_log_bytes >= SD_LOG_MAX_BYTES) {
-            // Rotate: qmx-log.txt -> qmx-log.1.txt, start fresh.
-            fclose(s_log_file);
-            s_log_file = NULL;
-            remove(SD_LOG_PATH_1);
-            rename(SD_LOG_PATH, SD_LOG_PATH_1);
-            s_log_file = fopen(SD_LOG_PATH, "ab");
-            s_log_bytes = 0;
-            if (!s_log_file) {
-                ESP_LOGW(TAG, "reopen %s after rotate failed: %s",
-                         SD_LOG_PATH, strerror(errno));
-                return false;
-            }
-            ESP_LOGI(TAG, "rotated diag log on SD");
+            rotate_diag_log();
+            if (!s_log_file) return false;   // reopen failed, rotate_diag_log() logged it
         }
     }
     // fflush pushes the stdio buffer into FatFs, but FatFs only writes the
@@ -592,6 +654,35 @@ static bool mirror_diag(void)
 static bool s_parked = false;   // (forward-declared above for the temp instrument)
 static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
 static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
+
+/* ⭐ WHEN A WRITE LAST ACTUALLY SUCCEEDED - what the bottom-bar dot is driven
+ * from (esp_timer us; 0 = not once yet this session).
+ *
+ * Before this, the dot was green only from mount until park_snapshot(), which
+ * on any WiFi unit is about ten seconds, and YELLOW for the entire session
+ * afterwards - because park_snapshot() sets UI_SD_SNAPSHOT_ONLY once and
+ * nothing ever set it back. So after ten seconds the dot said the same thing
+ * for ever, no matter what the card was doing: yellow on a perfectly healthy
+ * unit writing every 30 s, and yellow on bench dev 2026-09-23 where the
+ * MALLOC_CAP_DMA pool collapsed when WiFi came up (58 KB free/31 KB largest
+ * block -> 151 B/28 B) and every open returned EIO for 53 minutes straight,
+ * slow diag mirror and CW transcript both failing with the backlog piling up
+ * in RAM. Two opposite situations, one colour. The operator's words, and the
+ * reason this changed: "I never had a green dot tonight - always yellow
+ * except just after boot up."
+ *
+ * ⚠ OUTCOME, NOT POLICY - and that is the point. The obvious fix, going yellow
+ * when the mirror backs off, was tried before and deliberately removed (see the
+ * BACK OFF block in the task loop): a backoff is not a stop, and one failed
+ * cycle followed by a good one should not flicker the dot. Keying off the last
+ * SUCCESS satisfies both - a transient failure inside the window stays green,
+ * and only a sustained one goes yellow.
+ *
+ * 90 s = three missed 30 s cycles, the same "three in a row" the backoff logic
+ * already treats as meaningful, so the dot and the backoff agree about what
+ * counts as trouble. */
+static int64_t s_last_write_ok_us = 0;
+#define SD_WRITE_FRESH_US  (90 * 1000000LL)
 /* Current slow-mirror retry interval, in ms - starts at SLOW_LOG_MS and
  * DOUBLES (capped at SLOW_LOG_MAX_MS) every time s_slow_fail reaches 3,
  * resetting back to SLOW_LOG_MS on the next success. Replaces a permanent
@@ -668,6 +759,27 @@ static int64_t s_mount_retry_last_us = 0;
 // The contention being avoided is SPI2-SD DMA against WiFi-SDIO DMA, and the
 // ~10 fps spectrum stream is the SDIO traffic that matters. Pausing it is the
 // whole point; quieting the FFT is not.
+//
+// ⭐ ONE OPEN, MANY CHUNKS - AND THE COST IS PER WRITE, NOT PER BYTE.
+// This used to write exactly DIAG_CHUNK (4 KB) per call, with its own fopen /
+// fwrite / fsync / fclose around it. At the #153 cadence of 30 s that is
+// 136 B/s, and in WSPR mode the ring produces more than that - so the card's
+// copy fell steadily behind the device. Measured overnight 2026-09-11: the
+// mirror ended up FOUR HOURS behind, and the SD record of a ten-hour soak
+// stopped at 6.5 h.
+//
+// Writing more per call is very nearly free, and the log said so long before
+// anyone asked: "8,942 ms to write ONE byte". A write that takes nine seconds
+// for a single byte is not bandwidth-limited, it is paying a fixed cost -
+// the open, the fsync, the close, and the SPI2-vs-WiFi contention the pause
+// exists to dodge. So drain the backlog inside ONE open instead of taking that
+// fixed cost 16 times for 64 KB.
+//
+// The cap matters in the other direction: the stream is paused for the whole
+// burst, so an unbounded drain after a long stall would freeze the browser for
+// as long as it took. SLOW_DRAIN_MAX keeps the worst case bounded while still
+// being 16x what a single chunk moved.
+#define SLOW_DRAIN_MAX_CHUNKS 16            // <= 64 KB inside one open
 static bool mirror_diag_slow(void)
 {
     static char buf[DIAG_CHUNK];
@@ -691,18 +803,45 @@ static bool mirror_diag_slow(void)
     const bool was_paused = webserver_ws_is_paused();
     if (exp_pause && !was_paused) webserver_ws_set_paused(true);
 
+    // Rotate BEFORE opening, not after a successful write - on a full card the
+    // write is the thing that cannot happen, and this is the path that frees
+    // the space. s_log_file is NULL here (parked), so rotate_diag_log() just
+    // removes/renames and leaves nothing open, which is what this path wants.
+    if (s_log_bytes >= SD_LOG_MAX_BYTES) rotate_diag_log();
+
     FILE *f = fopen(SD_LOG_PATH, "ab");
     bool ok;
+    size_t wrote = 0;
     if (!f) {
         sd_fail_diag("slowopen", errno);
         ok = false;
     } else {
-        ok = (fwrite(buf, 1, got, f) == got);
-        if (ok) { fflush(f); fsync(fileno(f)); }
-        else    { sd_fail_diag("slowwrite", errno); }
+        ok = true;
+        for (int chunk = 0; chunk < SLOW_DRAIN_MAX_CHUNKS && got > 0; chunk++) {
+            if (fwrite(buf, 1, got, f) != got) {
+                sd_fail_diag("slowwrite", errno);
+                // Same reason as the burst path: clear the stream error or every
+                // later fwrite on this FILE* returns short WITHOUT touching the
+                // card, and a transient fault reads as a permanent one. The
+                // cursor is advanced only for chunks that actually landed, so
+                // the next call resumes exactly here.
+                clearerr(f);
+                ok = false;
+                break;
+            }
+            // Advance per chunk, not once at the end: a failure half way through
+            // must not re-write the chunks that already reached the card.
+            s_diag_cursor = next;
+            s_log_bytes  += got;
+            wrote        += got;
+            got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
+        }
+        // One fsync for the whole burst - it is the expensive part, and the
+        // bytes are equally durable whether it runs once or sixteen times.
+        if (wrote > 0) { fflush(f); fsync(fileno(f)); }
         fclose(f);
-        if (ok) { s_diag_cursor = next; s_log_bytes += got; }
     }
+    got = wrote;                            // report what actually went to the card
 
     if (exp_pause && !was_paused) webserver_ws_set_paused(false);
 
@@ -777,10 +916,38 @@ static void unmount(const char *why)
 // heap with interrupts off, which is what caused the FT4 cyan flash, and
 // try_mount() retries every 10 s. Never let this run unbounded on that path.
 #define SD_FAIL_DIAG_MAX 8
+/* ⭐ SAY HOW FULL THE CARD IS - ONCE, AND ONLY WHEN A WRITE HAS FAILED.
+ *
+ * Dennis WN4FLA reported "SD not mounted" and the only thing the device could
+ * tell him was a grey dot, while the firmware knew the error code, the heap
+ * AND this. A full card and a broken card look identical from the outside and
+ * are nothing alike.
+ *
+ * ⚠ NOT at mount. esp_vfs_fat_info() walks the FAT, and on the 31 GB bench
+ * card that measured TEN SECONDS (9.1 s -> 19.3 s in the 2026-09-22 boot),
+ * which delayed the mount, the first write and app_main's
+ * sd_archive_wait_mounted() behind it. Lazy and one-shot costs nothing on a
+ * healthy unit and still answers the only question it was added for. */
+static void sd_space_report_once(void)
+{
+    static bool done = false;
+    if (done) return;
+    done = true;
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &freeb) != ESP_OK) return;
+    ESP_LOGW(TAG, "SD space: %llu KB free of %llu KB; qmx-log.txt %u KB "
+                  "(rotates at %u KB)",
+             (unsigned long long)(freeb / 1024), (unsigned long long)(total / 1024),
+             (unsigned)(s_log_bytes / 1024), (unsigned)(SD_LOG_MAX_BYTES / 1024));
+    if (freeb < (uint64_t)SD_LOG_MAX_BYTES)
+        ESP_LOGW(TAG, "SD is nearly full - appends will fail until the log rotates");
+}
+
 static void sd_fail_diag(const char *where, int err)
 {
     static int n = 0;
     if (n++ >= SD_FAIL_DIAG_MAX) return;
+    sd_space_report_once();
     ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
              where, err,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -828,17 +995,81 @@ static bool try_mount(void)
     }
     long pos = ftell(s_log_file);
     s_log_bytes = (pos > 0) ? (size_t)pos : 0;
+
+    // Rotate at mount if the log is already at the limit. The old code could
+    // only reach the rotate after a successful write, so an oversized log on a
+    // full card stayed oversized for ever - see rotate_diag_log()'s header.
+    if (s_log_bytes >= SD_LOG_MAX_BYTES) rotate_diag_log();
+    if (!s_log_file) {
+        ESP_LOGW(TAG, "diag log unavailable after rotate - unmounting");
+        bsp_sdcard_deinit(SD_MOUNT_POINT);
+        return false;
+    }
     // The handle now EXISTS while s_mounted is still false. If anything below
     // fails or blocks, that is the state the capture appears to have caught.
     ESP_LOGW(TAG, "INSTR mount() opened log handle %p, s_mounted still %d",
              (void *)s_log_file, (int)s_mounted);
 
+    s_log_rotate_tried = false;    // each mount gets one rotate-and-retry
     s_adif_dirty = true;           // force a full mirror right after mounting
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
+
+    /* ⛔⛔ OPEN THE LONG-LIVED LOG HANDLE **LAST**, AFTER EVERY OTHER FILE THIS
+     * MOUNT TOUCHES. THIS IS THE FIX FOR "SD MOUNTS THEN GOES GREY".
+     *
+     * Symptom, on this bench every boot from ~v1.15.1 to v1.16.1: the card
+     * mounts, README.txt is written to it successfully, and 10-30 ms later the
+     * FIRST append to qmx-log.txt returns EIO. Five retries over 15 s, then
+     * unmount("write failures"), and because WiFi is up by then the no-card
+     * branch latches s_parked for the rest of the session. The card was never
+     * gone - 267 remounts across the capture each failed the same way, hours
+     * in, with 100 KB of DMA free.
+     *
+     * ⭐ MEASURED, at the moment of failure, with a one-shot probe:
+     *     512 B to THIS handle ("ab", opened above)  -> 0, EIO
+     *     4096 B to a fresh "wb" file                -> 4096, OK
+     *     4096 B to a fresh "ab" file                -> 4096, OK
+     *     4096 B to qmx-log.txt reopened "wb"        -> 4096, OK
+     * So the card, the volume, the file and append are all healthy. The only
+     * thing wrong is the HANDLE, and the only thing that distinguishes it from
+     * the three that work is that it was opened EARLIER in try_mount() - before
+     * ensure_dir()'s sibling work and before write_readme() opened and closed
+     * another file on the same volume.
+     *
+     * ⚠ WHAT INSIDE FatFs INVALIDATES IT IS NOT ESTABLISHED. The suspicion is
+     * the exFAT path: FF_USE_LFN is 3 here (CONFIG_FATFS_LFN_HEAP), so
+     * INIT_NAMBUF/FREE_NAMBUF put fs->dirbuf in a heap block that is freed when
+     * the call returns, and exFAT keeps per-file directory-entry state there.
+     * f_sync() reloads it under its own NAMBUF, so that one is safe; the write
+     * path was not traced to the end. DO NOT record the exFAT theory as the
+     * diagnosis. What IS established is the before/after above.
+     *
+     * It also fits Gyula HA3HZ's advice to Dennis WN4FLA - "format it to FAT
+     * and it will be recognised" - which would sidestep the exFAT path
+     * entirely, and which nobody could explain at the time.
+     *
+     * The early open exists only so ftell() can size the log for the rotate
+     * check above. That is done by now, so close it and open the handle we
+     * actually keep, last. Anything added to this function later must go
+     * ABOVE this block. */
+    if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
+    s_log_file = fopen(SD_LOG_PATH, "ab");
+    if (!s_log_file) {
+        ESP_LOGW(TAG, "reopen %s after mount failed: %s - unmounting",
+                 SD_LOG_PATH, strerror(errno));
+        bsp_sdcard_deinit(SD_MOUNT_POINT);
+        return false;
+    }
+
     s_mounted = true;
     s_instr.mount_ok++;
+    /* Mounting wrote README.txt (and the snapshot is about to write qso.adi and
+     * qmx-config.txt), so this IS a demonstrated-good write - stamp it, or the
+     * dot would sit yellow for the first 30 s of every healthy boot waiting for
+     * the slow mirror's first tick. */
+    s_last_write_ok_us = esp_timer_get_time();
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
     return true;
@@ -911,7 +1142,59 @@ static void sd_archive_task(void *arg)
     // WHY init is flaky; it only needs the good window to be used properly.
     // ~0.6 s worst case, all before WiFi starts (sd_archive_init runs well ahead
     // of panadapter_wifi_start in app_main).
-    for (int i = 0; i < SD_BOOT_MOUNT_TRIES && !s_mounted; i++) {
+    // ⛔ THE COMMENT ABOVE IS NO LONGER TRUE, MEASURED 2026-09-06. It claims
+    // these retries all happen "before WiFi starts". They do not: on the
+    // rx-audio build esp_hosted_init() logs at 5.88 s, i.e. BETWEEN attempt 1
+    // (5.62 s) and attempt 2 (5.97 s). So the probe and the WiFi bring-up now
+    // contend for MALLOC_CAP_DMA at the same moment, and on a bench with NO
+    // CARD AT ALL the pool went 135 KB -> 4.4 KB across the five attempts,
+    // then to 103 B once NimBLE initialised. At that point the device is one
+    // allocation away from anything: the same boot recorded sdio_read taking
+    // an Instruction access fault with MEPC=0x00000000, and a later probe
+    // asserting inside sdmmc_init_host_frequency.
+    //
+    // Whose bytes those are is NOT yet established - the two overlap, so one
+    // boot cannot separate them. These two lines make it separable: flip
+    // SD_BOOT_PROBE_DISABLE and compare "boot probe DMA" after against
+    // before. Do not draw the conclusion without running both.
+    // ⭐ LET esp_hosted's SDIO CARD INIT GO FIRST (2026-09-06). Measured: the
+    // SD mount leaves that init 2039 B of MALLOC_CAP_DMA against 19927 B when
+    // the archive is off, and a card init that cannot allocate used to REBOOT
+    // the device. Both allocations are brief and early; they were overlapping
+    // only because nothing sequenced them. See util/sdio_ready.h for why this
+    // is aimed at the card init rather than at "before WiFi", and for the
+    // caveat that this is a hypothesis with a clean test.
+    //
+    // The timeout is generous but bounded, and proceeding on a timeout is
+    // deliberate - WiFi may be off, or the sdio_drv.c patch may be missing
+    // after a fullclean, and neither should mean "never mount the card".
+    {
+        // Only wait if WiFi is actually going to run. With it off nothing ever
+        // signals, and the card would sit through the whole timeout for a
+        // contention that cannot happen - a pointless 6 s delay on exactly the
+        // POTA/field configuration where the SD archive matters most.
+        // ⛔ panadapter_wifi_is_enabled(), NOT settings_load_all(). This runs
+        // on sd_archive's 6 KB task, qmx_settings_t is multi-kilobyte, and the
+        // compiler reserves every local's frame at the prologue whether the
+        // path is taken or not - so a second copy here adds to the peak even
+        // though the one in the loop below already exists. That is the exact
+        // bug class CLAUDE.md records FOUR instances of, three of them in
+        // wifi.c. A narrow accessor costs a bool.
+        if (panadapter_wifi_is_enabled()) {
+            qmx_sdio_card_ready_wait(6000);
+        } else {
+            ESP_LOGI(TAG, "WiFi off - mounting immediately, nothing to contend with");
+        }
+    }
+
+    // Two largest_free_block() walks per BOOT, not on a periodic path - the
+    // cyan-flash rule bans the latter, and the SDFAIL path below already
+    // takes the same exemption with a hard cap of 3.
+    ESP_LOGW(TAG, "boot probe DMA before: free=%u lblk=%u (int free=%u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    for (int i = 0; i < (SD_BOOT_PROBE_DISABLE ? 0 : SD_BOOT_MOUNT_TRIES) && !s_mounted; i++) {
         if (i) vTaskDelay(pdMS_TO_TICKS(SD_BOOT_MOUNT_GAP_MS));
         if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
         bool got = try_mount();
@@ -923,6 +1206,11 @@ static void sd_archive_task(void *arg)
         }
         ESP_LOGW(TAG, "boot mount attempt %d/%d failed", i + 1, SD_BOOT_MOUNT_TRIES);
     }
+    ESP_LOGW(TAG, "boot probe DMA after:  free=%u lblk=%u (int free=%u)%s",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             SD_BOOT_PROBE_DISABLE ? "  [PROBE DISABLED]" : "");
     // Release app_main, which flushes the Reader's staged offline manual to the
     // card before it starts WiFi (see sd_archive_wait_mounted).
     s_boot_probe_done = true;
@@ -934,6 +1222,21 @@ static void sd_archive_task(void *arg)
         qmx_settings_t gs;
         settings_load_all(&gs);
         const bool wifi_on = gs.wifi_enabled;
+
+        /* Bottom-bar dot, reconciled every pass from what the card actually
+         * did - see s_last_write_ok_us. GREEN = a write landed inside the
+         * freshness window, YELLOW = mounted but nothing has landed lately,
+         * and UI_SD_NONE (grey + stroke) is left to the unmount paths that
+         * know the card is gone. ui_set_sd_state() only stores an int8 and the
+         * UI side redraws only on a change, so calling it every WORK_MS costs
+         * nothing. This deliberately overrides park_snapshot()'s one-shot
+         * yellow: parking stops the continuous burst, it does not stop the
+         * 30 s mirror, and the dot should report the mirror. */
+        if (s_mounted) {
+            const bool fresh = s_last_write_ok_us != 0 &&
+                               (esp_timer_get_time() - s_last_write_ok_us) < SD_WRITE_FRESH_US;
+            ui_set_sd_state(fresh ? UI_SD_MIRRORING : UI_SD_SNAPSHOT_ONLY);
+        }
 
         if (s_parked) {
             // Background mirroring stays off for the rest of the session, but the
@@ -1026,39 +1329,33 @@ static void sd_archive_task(void *arg)
             // no-card park below must stay silent.
             if (s_mounted) {
                 int64_t now_us = esp_timer_get_time();
-                /* Defer while a browser is watching - see WS_DEFER_MAX_MS.
-                 * s_slow_last_us is NOT advanced when we defer, so the moment
-                 * the browser goes away the write happens on the next tick
-                 * rather than waiting out another full interval. */
-                static int64_t s_defer_since_us = 0;
-                bool defer = false;
-#if SD_PAUSE_EXPERIMENT
-                (void)0;   /* no deferral during the experiment - see the flag */
-#else
-                if (webserver_ws_client_streaming()) {
-                    if (s_defer_since_us == 0) s_defer_since_us = now_us;
-                    defer = (now_us - s_defer_since_us < (int64_t)WS_DEFER_MAX_MS * 1000);
-                    if (!defer) {
-                        ESP_LOGW(TAG, "card writes deferred %d s for a watching "
-                                      "browser - writing anyway, so a crash still "
-                                      "reaches the card",
-                                 (int)((now_us - s_defer_since_us) / 1000000));
-                        /* Restart the window, or every tick from here would
-                           force a write and the deferral would be gone. */
-                        s_defer_since_us = now_us;
-                    }
-                } else {
-                    s_defer_since_us = 0;   /* nobody watching - back to normal */
-                }
-#endif
-                if (!defer &&
-                    now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
+                /* ⛔ NO BROWSER DEFERRAL. A web page is a MONITOR: having one
+                 * open must not change what the device records.
+                 *
+                 * v1.12.3 deferred card writes while webserver_ws_client_streaming(),
+                 * up to WS_DEFER_MAX_MS, to stop the spectrum freezing. The
+                 * arithmetic was the bug: one 4 KB chunk per forced write meant
+                 * 4 KB / 180 s = 23 B/s with a browser open against 4 KB / 30 s
+                 * = 136 B/s without one, and WSPR produces more than either. So
+                 * a browser left open did not slow the record down, it stopped
+                 * it keeping up at all - measured overnight 2026-09-11, the card
+                 * ended FOUR HOURS behind and the SD record of a ten-hour soak
+                 * stopped at 6.5 h.
+                 *
+                 * The freeze that deferral was protecting is addressed where it
+                 * belongs instead: the cost is per WRITE, not per byte (the log
+                 * has "8,942 ms to write ONE byte"), so mirror_diag_slow() now
+                 * drains up to 64 KB inside ONE open. The number of times the
+                 * stream is interrupted is unchanged at one per 30 s, watcher or
+                 * not - which is exactly what makes the browser irrelevant. */
+                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
                         // recovery branch, which would have written the same
                         // chunk to the card a second time.
                         bool ok = mirror_diag_slow();
+                        if (ok) s_last_write_ok_us = esp_timer_get_time();
                         if (!ok) {
                             if (++s_slow_fail >= 3) {
                                 // ⛔ BACK OFF - DO NOT STOP, DO NOT UNMOUNT.
@@ -1233,6 +1530,17 @@ static void sd_archive_task(void *arg)
         // several consecutive failed bursts. A genuinely removed card just fails
         // SD_WRITE_FAIL_UNMOUNT times first, which costs nothing that matters.
         if (!ok) {
+            size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+            if (dma_free < SD_DMA_STARVED_BYTES && s_consec_mem_fail < SD_MEM_RETRY_MAX) {
+                s_consec_mem_fail++;
+                ESP_LOGW(TAG, "SD write failed with DMA pool starved (%u B free, "
+                              "< %u) - NOT counting toward removal (%d/%d mem retries)",
+                         (unsigned)dma_free, SD_DMA_STARVED_BYTES,
+                         s_consec_mem_fail, SD_MEM_RETRY_MAX);
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+                vTaskDelay(pdMS_TO_TICKS(WORK_MS));
+                continue;
+            }
             s_consec_write_fail++;
             if (s_consec_write_fail < SD_WRITE_FAIL_UNMOUNT) {
                 ESP_LOGW(TAG, "SD write failed (%d/%d) - retrying on live handle",
@@ -1241,20 +1549,58 @@ static void sd_archive_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(WORK_MS));
                 continue;
             }
+            /* ⭐ BEFORE DECLARING THE CARD GONE, TRY A DIFFERENT FILE - ONCE.
+             *
+             * Measured across 547 boots (capture-dev.txt, 2026-09-22): in the
+             * failing sessions, every file opened "wb" is written successfully
+             * on the same mount - README.txt 265 for 265 - while every append
+             * to qmx-log.txt fails with EIO. The card remounted 267 times and
+             * the first append failed again every time, hours into the session
+             * with 100 KB of DMA free. A card that is genuinely gone cannot
+             * write README.txt; a card whose qmx-log.txt has a damaged cluster
+             * chain behaves exactly like this, because "wb" discards the old
+             * chain and "ab" has to walk and extend it.
+             *
+             * Rotating renames the suspect file to qmx-log.1.txt and starts a
+             * new one, which is the cheapest thing that can distinguish the two
+             * and is also the repair if it is the file. If the next burst still
+             * fails, the card really is unhappy and the unmount below stands.
+             *
+             * ⚠ The cause of the corruption is NOT established - holding the
+             * log open across unmount() and unclean power-downs is the obvious
+             * suspect, and the unreachable rotation (see rotate_diag_log()) is
+             * why the file was allowed past 5 MB in the first place. Do not
+             * record this comment as the diagnosis. */
+            if (!s_log_rotate_tried) {
+                s_log_rotate_tried = true;
+                ESP_LOGW(TAG, "SD write failed %d times - the card writes OTHER "
+                              "files fine, so rotating qmx-log.txt out of the way "
+                              "and trying once more before calling it removed",
+                         s_consec_write_fail);
+                rotate_diag_log();
+                s_consec_write_fail = 0;
+                s_consec_mem_fail = 0;
+                if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+                vTaskDelay(pdMS_TO_TICKS(WORK_MS));
+                continue;
+            }
             ESP_LOGW(TAG, "SD write failed %d times consecutively - treating as removal",
                      s_consec_write_fail);
             s_consec_write_fail = 0;
+            s_consec_mem_fail = 0;
             unmount("write failures");
             if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
         }
-        if (s_consec_write_fail) {
+        if (s_consec_write_fail || s_consec_mem_fail) {
             // The measured answer to "is the EIO transient?" - if this line ever
             // appears, retrying on the live handle is the right fix.
-            ESP_LOGW(TAG, "SD write RECOVERED after %d consecutive failure(s)",
-                     s_consec_write_fail);
+            ESP_LOGW(TAG, "SD write RECOVERED after %d consecutive failure(s) "
+                          "(%d attributed to a starved DMA pool)",
+                     s_consec_write_fail + s_consec_mem_fail, s_consec_mem_fail);
             s_consec_write_fail = 0;
+            s_consec_mem_fail = 0;
         }
 
         int burst_ms = (int)((esp_timer_get_time() - burst_t0) / 1000);
@@ -1303,7 +1649,13 @@ void sd_archive_init(void)
     return;
 #endif
     s_sd_mutex = xSemaphoreCreateMutex();
-    psram_task_create(sd_archive_task, "sd_archive", 6144, NULL,
+    // 6144 -> 12288: a qmx_settings_t local in this file (gs). CONFIRMED
+    // crashing this task on hardware 2026-09-14 (Stack protection fault,
+    // ~5 s uptime) TWICE - a first +1024 bump was not enough, because the
+    // struct grew ~1350 B total this session (pwr_cal field, then the
+    // 5->23-point expansion) and +1024 undershot that. Generous this time,
+    // not incremental - PSRAM-backed, costs nothing but PSRAM.
+    psram_task_create(sd_archive_task, "sd_archive", 14336, NULL,
                        2 /* low priority */, 0);
 }
 
@@ -1311,6 +1663,14 @@ bool sd_archive_is_mounted(void)        { return s_mounted; }
 
 bool sd_archive_wait_mounted(uint32_t timeout_ms)
 {
+#if SD_ARCHIVE_DISABLED
+    /* Nothing will ever set s_boot_probe_done when the archive is compiled
+     * out, so without this the caller in app_main burns the WHOLE timeout
+     * before starting WiFi. Measured 2026-09-06 while A/B-testing the SD
+     * archive's DMA cost: esp_hosted_init moved 5.81 s -> 9.23 s purely
+     * because of this, which confounded the very experiment it was in. */
+    return false;
+#else
     const uint32_t step = 25;
     uint32_t waited = 0;
     while (!s_boot_probe_done && waited < timeout_ms) {
@@ -1318,6 +1678,7 @@ bool sd_archive_wait_mounted(uint32_t timeout_ms)
         waited += step;
     }
     return s_mounted;
+#endif
 }
 void sd_archive_mark_adif_dirty(void)   { s_adif_dirty = true; }
 void sd_archive_mark_config_dirty(void) { s_config_dirty = true; }

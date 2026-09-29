@@ -20,7 +20,7 @@
   "benches": [
     {
       "name": "dev",
-      "role": "MAIN, on v1.12.1 (released 2026-09-09, tag on 4262566). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-v1121.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
+      "role": "MAIN, on v1.14.4 (released 2026-09-18, tag on 4c2b71b). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-v1121.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
         "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
         "what 'bench flash dev' builds from. A stale entry here does not read",
@@ -39,7 +39,7 @@
       ],
       "board": "Tab5 #1",
       "mac": "30:ED:A0:EA:DD:57",
-      "ip": "192.168.1.209",
+      "ip": "192.168.1.210",
       "ip_note": "DHCP, so it drifts - a convenience, not the authority. The board prints its own address at boot ('sta ip:' in its capture). qmx.local is NOT a discriminator: every unit answers to it, and on 2026-08-27 it resolved to a different board entirely.",
       "com": "COM5",
       "com_note": "Was COM3 on the old laptop; re-verified by MAC (30:ED:A0:EA:DD:57) on the Ryzen box 2026-09-03, enumerated as COM5 there instead. COM follows the socket, not the board - re-check on any machine change.",

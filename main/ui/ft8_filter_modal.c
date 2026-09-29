@@ -318,6 +318,7 @@ static void make_filter_row(lv_obj_t *panel, int y, lv_obj_t **cb_out, lv_obj_t 
     ui_theme_style_textarea(ta);
     lv_obj_set_style_text_color(ta, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_event_cb(ta, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(ta, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     // Extra gap so a finger on the checkbox can't also clip the textarea.
     // No text on this one, so font doesn't matter here - make_checkbox()'s

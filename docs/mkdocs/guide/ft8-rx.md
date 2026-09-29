@@ -30,13 +30,19 @@ The list shows every decoded FT8 message:
 | **SL** | Slot parity: **E** (blue) or **O** (amber) |
 | **CALL** | Their callsign |
 | **MESSAGE** | The full decoded message text |
-| **CTY** | Country as a 3-letter code (from the callsign prefix) |
+| **COUNTRY** | Country, spelled out where it fits and shortened where it does not - never a 3-letter code (v1.15.0) |
 | **SNR** | Signal-to-noise estimate, colour-banded by strength |
+| **TONE** | The station's audio tone within the FT8 passband (v1.3.1) |
 | **DT** | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 (v1.3.1) |
-| **HZ** | The station's audio tone within the FT8 passband (v1.3.1) |
-| **KM / MI** | Great-circle distance from your grid |
-| **BRG** | Bearing from your grid |
+| **KM / MI** | Great-circle distance from your grid. A `~` means the station never sent a grid, so the distance is worked out from its country and is approximate (v1.14.4) |
 | **HRD** | Times decoded since last appearance |
+
+The **BRG** column was removed in v1.14.4 to make room for spelled-out country
+names; a bearing is derivable from the distance and the map.
+
+All three lists — this one, the SelfSpotter LIST tab and WSPR — use the same
+column order and capitalised headings since v1.15.1, so the same kind of
+information sits in the same place whichever screen you are on.
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 

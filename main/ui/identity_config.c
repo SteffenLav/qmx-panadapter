@@ -130,6 +130,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_call, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_call);
     lv_obj_add_event_cb(s_ta_call, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_call, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     lv_obj_t *grid_lbl = lv_label_create(s_panel);
     lv_label_set_text(grid_lbl, "Maidenhead grid (4 or 6 chars)");
@@ -146,6 +147,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_grid, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_grid);
     lv_obj_add_event_cb(s_ta_grid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_grid, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
     lv_obj_set_size(cancel_btn, 240, 72);

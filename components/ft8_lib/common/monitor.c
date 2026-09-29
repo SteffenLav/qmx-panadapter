@@ -64,7 +64,11 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
     // const int len_window = 1.8f * me->block_size; // hand-picked and optimized
 
     me->window = (float*)malloc(me->nfft * sizeof(me->window[0]));
-    for (int i = 0; i < me->nfft; ++i)
+    /* Every allocation here can fail on the Tab5 (PSRAM can be nearly full
+     * while another page still holds its buffers), so nothing may be written
+     * through a NULL. The caller checks the pointers - see
+     * monitor_alloc_ok(). */
+    for (int i = 0; me->window && i < me->nfft; ++i)
     {
         // window[i] = 1;
         me->window[i] = me->fft_norm * hann_i(i, me->nfft);
@@ -110,6 +114,11 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
     me->symbol_period = symbol_period;
 
     me->max_mag = -120.0f;
+}
+
+bool monitor_alloc_ok(const monitor_t* me)
+{
+    return me->window && me->last_frame && me->fft_work && me->fft_cfg && me->wf.mag;
 }
 
 void monitor_free(monitor_t* me)

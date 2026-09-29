@@ -41,6 +41,24 @@ No internet needed — FT8 timing works offline.
     something is better than nothing. Failing that, set the clock by hand
     (**FT8 -> Options -> Sync Time**), which also accepts seconds.
 
+!!! warning "The date is checked separately from the time"
+
+    The QMX, its GPS and the hours/minutes/seconds boxes all give only a
+    **time of day**. If the Tab5 has been off longer than its clock lasts and
+    there is no internet, the date it has is simply the last day it was used —
+    so a perfectly set time can still be logged under the wrong day.
+    Reported by Don WB0LQW, whose POTA log came out two days behind.
+
+    So when the date cannot be checked, the Tab5 asks about a minute after it
+    starts: **"Is today's date right?"** Step it with **- day / + day** if
+    needed and tap **This date is right**. If WiFi comes up while the question
+    is on screen, it closes by itself. QSOs are still logged if you do not
+    answer — nothing is ever held back.
+
+    The **Set and Sync the Clock** window also shows the date on its second
+    line, marked *(unverified)* when it has not been checked. Tap that line to
+    change it.
+
 ### 3. WiFi + SNTP
 
 When WiFi is active:
@@ -58,7 +76,19 @@ If your QMX has **internal GPS** (QMX+ models often do), there is **nothing to e
 
 1. At connect, it catches the QMX's `TM;` seconds *flip* (the true GPS second boundary) and compares it against SNTP.
 2. If they agree tightly — **and the Tab5 has not itself set that radio's clock** — the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
-3. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback.
+3. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback — and the check is **repeated every 5 minutes** until it does agree.
+
+!!! note "A GPS that locks late is no longer missed (v1.16.3)"
+    Before v1.16.3 that check ran **once**, about 45 seconds after boot, and its
+    verdict stuck for the whole session. A receiver still hunting for satellites
+    at that moment was written off as "no GPS" and never looked at again, short
+    of a reboot. That is not a rare case: a cold start, or an antenna that has
+    just been moved, can easily take longer than 45 seconds.
+
+    Measured on the bench: a QMX+ with a genuine fix failed the one-shot three
+    times, then locked — and the panadapter picked it up **25 minutes after
+    boot**, which the old code could never have reached. If your GPS takes its
+    time, you no longer have to do anything.
 
 A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
 

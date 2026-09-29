@@ -102,6 +102,25 @@ void ft8_qso_mark_robot_started(void);
 // if there is no active exchange or the arm is refused.
 bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
+// Skip the NEXT transmission - one only - so the operator can hear whether their
+// transmit slot is still clear, then carry on with the same message. Unlike
+// ft8_qso_abort() this does not break the exchange (Randy N4OPI).
+//
+// Valid while calling CQ as well as during WAIT_RPT / WAIT_ROGER / WAIT_RR73:
+// skipping one CQ call to listen is the manual form of the automatic
+// cq_listen_every slot. Returns false + err when nothing is transmitting.
+//
+// The flag is consumed by rearm_current() and cleared by ft8_qso_abort(), so it
+// can never leak into the next contact.
+bool ft8_qso_pause_next_tx(char *err, size_t err_len);
+
+// True while a pause is armed and has not yet been spent, i.e. the next
+// transmission will be skipped. Goes false the moment it is consumed. The FT8
+// screen lights the Pause button from this - without it the button looks
+// identical whether it worked or not, which is how it first read as doing
+// nothing at all.
+bool ft8_qso_pause_pending(void);
+
 ft8_qso_state_t ft8_qso_get_state(void);
 
 // True while the running contact is being worked as a HOUND (Fox/Hound

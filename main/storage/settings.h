@@ -58,6 +58,74 @@ typedef struct {
     uint8_t max_age_sec;
 } ft8_filters_t;
 
+// Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/
+// power_cal_modal.c): a per-band table of measured RF output at a sweep of
+// Max. PA voltage settings, built against a dummy load by keying a real
+// DiGi TA<freq>; tone - the same primitives a WSPR/FT8 burst is built from.
+//
+// This is a property of the RADIO'S HARDWARE, not an operator preference -
+// deliberately NOT part of config export/import (a restored config on a
+// different physical QMX would carry the wrong radio's numbers).
+//
+// 1.0-12.0 V, average 0.25 V steps: the QMX operation manual (op_104.txt,
+// "Max. PA voltage") states a setting below ~1 V has no further effect -
+// leakage from the 74ACT08 driver chip through to the LPF sets the real
+// floor - so there is nothing to gain by sweeping lower. WSPR is commonly
+// run at 10-27 dBm (10-500 mW), well below the ~1 W a plain 5-point sweep
+// bottomed out at, hence the resolution: this range is where it actually
+// matters.
+//
+// ⚠ "0.25 V steps" is an AVERAGE, not a literal step size - the CAT `MM`
+// Set for this field is `%u.%u`, one decimal digit, so the radio itself
+// only accepts 0.1 V granularity (1.25 V cannot be asked for; 1.2 or 1.3
+// can). The table alternates +0.3/+0.2 V (see s_test_voltage_x10 in
+// power_cal_modal.c) so every individual point is something the radio can
+// actually be set to, while the sequence averages the finer resolution.
+// Widened 0.5 -> ~0.25 V, 2026-09-15, for the 23 dBm (200 mW) - 27 dBm
+// (500 mW) gap the operator found unexpectedly coarse (2.5 V vs 4.0 V, no
+// calibrated point between them) - operator: "there seems to be a huge PA
+// diff between 23 and 27 dBm ... maybe we need more steps in-between".
+//
+// ⛔ THIS DOES NOT HELP BELOW ~20 dBm (100 mW). The QMX's own `PC;` power
+// readback only resolves to about 100 mW - the radio cannot itself tell
+// 0 mW from 50 mW apart - so 0/3/7/10/13/17 dBm will always read `--`
+// regardless of sweep density. That is an instrument floor of the
+// measurement technique, not something more calibration points can fix;
+// verifying anything below it needs a different measurement path (an
+// external power meter or attenuator), which this feature does not have.
+#define PWRCAL_STEPS     45   // 1.0 V to 12.0 V, 44 steps averaging 0.25 V (see s_test_voltage_x10)
+#define PWRCAL_MAX_BANDS 16   // one row per legal_band_edges() band is plenty
+
+typedef struct {
+    char     band[8];                   // adif_log_band_for_freq() string, e.g. "20m"; "" = unused slot
+    uint8_t  voltage_x10[PWRCAL_STEPS]; // test points actually reached, tenths of a volt; 0 = unset
+    uint16_t watts_x100[PWRCAL_STEPS];  // measured PC; output at that point, hundredths of a watt; 0 = not measured
+    uint32_t cal_unix_time;             // time(NULL) when this row was last (re)measured, 0 = never
+} pwr_cal_band_t;
+
+typedef struct {
+    pwr_cal_band_t bands[PWRCAL_MAX_BANDS];
+} pwr_cal_table_t;
+
+// The operator's own target output power per band - a PREFERENCE, unlike
+// pwr_cal_table_t above (a fact about the radio's hardware). Deliberately
+// separate: an operator's "I want 1 W on 20m" survives a recalibration or a
+// different radio in a way the measured voltage that satisfies it never
+// could. Independent of, and unrelated to, WSPR's own declared-power dBm
+// (wspr_tx_dbm) - operator, 2026-09-15: "1 W for WSPR, whatever I want for
+// FT8/CW/SSB" - two different numbers on the same band, on purpose.
+//
+// 0 = never set on this band (band[0] == '\0' for an unused slot, same
+// convention as pwr_cal_table_t).
+typedef struct {
+    char     band[8];
+    uint16_t target_w_x100;   // hundredths of a watt
+} pwr_target_band_t;
+
+typedef struct {
+    pwr_target_band_t bands[PWRCAL_MAX_BANDS];
+} pwr_target_table_t;
+
 // User-defined physical-keyboard shortcuts (#233).
 //
 // A binding is a modifier plus a key plus an ACTION ID. The id is what is
@@ -163,12 +231,13 @@ typedef struct {
     char     cloudlog_key[64];   // Cloudlog API key
     char     cloudlog_station[8];// station_profile_id, as text - it is an opaque id, not arithmetic
     uint32_t cloudlog_uploaded_n;// count of ADIF records already uploaded to Cloudlog
-    bool     cw_audio_en;     // CW sidetone audio on Tab5 speaker/headphone (default false)
-    uint8_t  cw_audio_vol;    // CW audio output volume 0..100 (default 60)
+    bool     rx_audio_en;     // demodulated RX audio on Tab5 speaker/headphone, any supported mode (default false)
+    uint8_t  rx_audio_vol;    // RX audio output volume 0..100 (default 60)
     float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
+    uint8_t  wf_speed_mult;   // waterfall scroll speed, 1..4x the normal 10 rows/s (default 1)
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -188,6 +257,31 @@ typedef struct {
     // short and latched off rather than driving a mismatched load for the
     // whole 12.7 s. The QMX's finals are the thing being protected here.
     uint8_t  swr_limit_x10;
+    /* RX audio, persisted so a level set by ear is not lost at the next boot -
+     * these were live RAM-only values tuned over /api/cmd during development,
+     * which is not something a user can reach. Scaled integers, same idiom as
+     * swr_limit_x10 above. */
+    uint8_t  rxaud_gain_d10;      /* AGC gain ceiling / 10  (20 = 200) */
+    uint8_t  rxaud_pan_width_x10; /* mid/side width x10     (18 = 1.8) */
+    uint8_t  rxaud_pan_blend_x100;/* cross-feed x100        (15 = 0.15) */
+    uint8_t  rxaud_pan_ovlp_x100; /* filter overlap x100    (30 = 0.30) */
+    uint8_t  rxaud_agc_attack_ms;  /* AGC attack time, ms  (default 3)   */
+    uint16_t rxaud_agc_release_ms; /* AGC release time, ms (default 150) */
+    /* AGC bypass (Samuel W7STF, 2026-09-25: "FAST, MED, SLOW, OFF presets").
+     * The other three presets are just attack/release pairs, but OFF is not
+     * expressible in them: the gain law is always target/(envelope+1), so a
+     * very slow AGC still rides the signal, it just rides it slowly. With this
+     * set, the envelope is still computed (the squelch needs it) but the gain
+     * is pinned at rxaud_gain_d10 - i.e. the AGC Ceiling slider becomes a
+     * manual gain control, which is what "AGC off plus a gain knob" means on
+     * any other receiver. */
+    bool     rxaud_agc_off;
+    /* Mute the internal speaker when headphones are detected (v1.16.4).
+     * Default TRUE - it is what everyone expects. Switchable because the
+     * detection is a single I2C read that DOES fail in the field, and two
+     * operators lost audio to it; a feature that cannot be verified remotely
+     * must not be the only thing between a user and their audio. */
+    bool     hp_mute_en;
     // Propagation feedback: query PSK Reporter for who has heard US. Separate
     // from pskreporter_en (which is about SENDING reports) - they are opposite
     // directions and an operator may reasonably want one without the other.
@@ -236,16 +330,22 @@ typedef struct {
     // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
     // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
     // plus the QRZ callbook lookups that place an RBN skimmer on the map.
-    // Opt-in (default FALSE) for two reasons, neither of them about the map
-    // itself being expensive to draw:
+    // ⛔ NOT A USER SETTING ANY MORE (2026-09-13) - there is no drawer checkbox
+    // for this, on the Tab5 or the web, and it is never written to NVS. It is
+    // driven ENTIRELY by ui/spot_map_view.c's own show()/hide(): true for as
+    // long as the SELFSPOTTER overlay is open, false the instant it closes,
+    // exactly mirroring what a permanent "on" checkbox used to mean while it
+    // was checked. Reasons this exists at all, unchanged from when it was a
+    // checkbox:
     //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
     //     on the operator's own callsign, for the life of the session. An
     //     outward-facing connection is something to ask for, not to inherit.
     //   - measured against v1.12.4 with all four running: internal free
     //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
     //     the headroom that pool has left. That pool is what fails SD mounts,
-    //     USB endpoint allocation and TLS when it runs dry (#65/#284), so the
-    //     cost belongs to operators who asked for the feature.
+    //     USB endpoint allocation and TLS when it runs dry (#65/#284) - which
+    //     is exactly why it is now tied to the SCREEN being open rather than
+    //     to a switch someone could forget they left on.
     // Applies live, no reboot: each feed re-reads this every pass, the same
     // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
     bool     spotmap_en;
@@ -308,8 +408,48 @@ typedef struct {
      * 0.2 W whatever the operator was actually running. */
     uint32_t wspr_dial_hz;    // standard WSPR dial for the chosen band (default 20 m)
     bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
-    uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
+    /* ⛔ THE SCHEDULE IS SPELLED OUT, NOT NAMED. Two counts describing one
+     * repeating group: transmit this many cycles back to back, then receive
+     * this many, for ever.
+     *
+     *     wspr_tx_cycles = 2, wspr_rx_cycles = 8
+     *     -> Tx Tx Rx Rx Rx Rx Rx Rx Tx Tx Rx Rx ...   period 10 cycles = 20 min
+     *
+     * It replaced a "1 in N" dropdown plus a separate "bursts per
+     * transmission", and the reason is that the pair had no agreed meaning.
+     * "1 in 5" plainly means one cycle in five - and with a single burst that
+     * is exactly what the code did. Ask for TWO bursts and the phrase stops
+     * saying anything: does the group grow into the listening time (period
+     * stays 5) or is the listening time preserved (period becomes 6)? The code
+     * did the second, and I told John W5JSS on 2026-09-18 that it did the
+     * first. Neither of us was misreading the other; the label could not settle
+     * it. Operator: "why dont we just skip the '1 in X' change it all to:
+     * number of TX's + number of RX's in a forever repeating group".
+     *
+     * The period is now simply wspr_tx_cycles + wspr_rx_cycles, which is the
+     * whole point: nothing has to be inferred.
+     *
+     * ⚠ MIGRATION IS EXACT, not approximate. The old period was
+     * duty + bursts - 1, so rx = duty - 1 and tx = bursts reproduce it
+     * cycle-for-cycle - no unit changes behaviour on upgrade. Guarded by
+     * KEY_WSPR_SCHED_V so a stored 5 is never reinterpreted as 5 receive
+     * cycles; this field's meaning has already changed once (percentage ->
+     * period, 2026-09-12) and that migration is the precedent.
+     *
+     * wspr_tx_cycles == 0 means RECEIVE ONLY - it is how transmitting is turned
+     * off from this control, replacing the old dropdown's "Receive only" row.
+     * wspr_rx_cycles is never 0: that would key the radio continuously and the
+     * page would never receive, which was measured on the bench and is recorded
+     * in CLAUDE.md under the bursts-per-transmission note. */
+    uint8_t  wspr_rx_cycles;  // receive cycles after each group, 1-20
+    uint8_t  wspr_tx_cycles;  // consecutive transmit cycles per group, 0-4 (0 = RX only)
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
+    /* Pinned WSPR transmit tone in Hz, or 0 for a fresh random one per burst
+     * (the default, and the standalone-beacon convention - see
+     * WSPR_TX_RANDOM_SPAN_HZ). Set by tapping the WSPR waterfall. */
+    uint16_t wspr_tx_tone_hz;
+    pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
+    pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
     /* Captured windows still to be written to the SD card as WAV.
      *
      * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
@@ -495,9 +635,11 @@ void settings_set_cq_sel(uint8_t idx);
 // Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
 // preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
 void settings_set_cq_max_calls(uint8_t n);
+uint8_t settings_get_cq_max_calls(void);    // narrow: rearm_current() runs on whatever task re-armed (#409)
 void settings_set_hound_mode(uint8_t m);    // 0 off, 1 guided, 2 automatic
 /* Spend one slot listening after every N CQ calls. 0 = never. */
 void settings_set_cq_listen_every(uint8_t n);
+uint8_t settings_get_cq_listen_every(void); // narrow, same reason (#409)
 
 // CW keyer memories (idx 0..5) and the POTA park reference for the {PARK}
 // macro. Defaults are pre-filled (CQ / CQ POTA / exchange / TU 73 / AGN / QRZ)
@@ -519,10 +661,10 @@ void settings_set_onboarded(bool v);
 void settings_set_ft8_filters(const ft8_filters_t *f);
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
-// CW audio output: enable the on-device CW sidetone (speaker/headphone), and
-// its volume 0..100 (debounced flush).
-void settings_set_cw_audio_en(bool v);
-void settings_set_cw_audio_vol(uint8_t v);
+// RX audio output: enable demodulated audio on the Tab5 speaker/headphone
+// (CW/CW-R/USB/LSB - see rx_audio.c), and its volume 0..100 (debounced flush).
+void settings_set_rx_audio_en(bool v);
+void settings_set_rx_audio_vol(uint8_t v);
 
 // Waterfall colorisation (debounced flush). Black level and contrast are in
 // dB; floor blend is 0..100 (% per-bin vs global floor); window is the FFT
@@ -531,6 +673,7 @@ void settings_set_wf_black_db(float db);
 void settings_set_wf_contrast_db(float db);
 void settings_set_wf_floor_blend(uint8_t pct);
 void settings_set_wf_window(uint8_t idx);
+void settings_set_wf_speed_mult(uint8_t mult);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
@@ -546,7 +689,8 @@ int16_t settings_get_cw_tx_offset_hz(void);
 /* Narrow reads for the WSPR transmit schedule - see the note in settings.c.
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
-uint8_t settings_get_wspr_duty_pct(void);
+uint8_t settings_get_wspr_rx_cycles(void);
+uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
  * be NULL. Empty ip means DHCP.
@@ -581,9 +725,33 @@ void settings_get_bandplan(uint8_t *region_out, char grid_out[8]);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)
+bool    settings_get_cluster_en(void);           // narrow: spots_any_source_enabled() runs on render (4096 B stack)
 void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
+
+/* RX audio level and panoramic-split shape. Stored scaled; the Resource
+ * Management sliders are the only writers. Ranges are clamped to what
+ * rx_audio.h documents, so a bad stored value cannot put the DSP somewhere
+ * it does not expect. */
+void    settings_set_rxaud_gain_d10(uint8_t v);      // AGC ceiling / 10, 5..150 (default 20 = 200)
+uint8_t settings_get_rxaud_gain_d10(void);
+void    settings_set_rxaud_pan_width_x10(uint8_t v); // 0..30  (default 18 = 1.8)
+uint8_t settings_get_rxaud_pan_width_x10(void);
+void    settings_set_rxaud_pan_blend_x100(uint8_t v);// 0..50  (default 15 = 0.15)
+uint8_t settings_get_rxaud_pan_blend_x100(void);
+void    settings_set_rxaud_pan_ovlp_x100(uint8_t v); // 0..100 (default 30 = 0.30)
+uint8_t settings_get_rxaud_pan_ovlp_x100(void);
+void    settings_set_rxaud_agc_attack_ms(uint8_t v);   // 1..50   (default 3)
+uint8_t settings_get_rxaud_agc_attack_ms(void);
+void    settings_set_rxaud_agc_release_ms(uint16_t v); // 10..500 (default 150)
+uint16_t settings_get_rxaud_agc_release_ms(void);
+// AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
+void    settings_set_rxaud_agc_off(bool v);
+bool    settings_get_rxaud_agc_off(void);
+// Speaker auto-mute on headphone insert. Default true.
+void    settings_set_hp_mute_en(bool v);
+bool    settings_get_hp_mute_en(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
@@ -617,11 +785,16 @@ void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
+bool settings_get_spots_en(void);       // narrow: spots_any_source_enabled() runs on render (4096 B stack)
 void settings_set_rbn_en(bool v);
+bool settings_get_rbn_en(void);         // narrow, same reason
 void settings_set_spotmap_en(bool v);   // spot map + its self-spot feeds (see spotmap_en above)
 bool settings_get_spotmap_en(void);     // narrow: callers are on small stacks
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
+bool settings_get_sota_en(void);        // narrow, same reason as settings_get_spots_en
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
+bool settings_get_sim_mode_en(void);    // narrow: ft8_tx_arm()'s Digi pre-flight runs on WHATEVER
+                                         // task armed it - the httpd worker among them (#409)
 void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot
 
 // ---- Known WiFi networks --------------------------------------------------
@@ -664,6 +837,25 @@ void settings_wifi_known_set_all(const wifi_known_t *list, int n);
 void settings_wifi_known_forget(const char *ssid);
 void settings_wifi_known_clear(void);
 
+// Designated-preferred network among the remembered list (Randy N4OPI,
+// 2026-09-23): when set and reachable, wifi.c's roam-on-failure path picks it
+// outright instead of whichever remembered network is loudest. Empty = no
+// preference (default, today's exact behaviour). Not required to already be
+// in the known list - it is just an SSID string compared against scan
+// results, same as everything else in the roam path.
+void settings_get_wifi_preferred_ssid(char out[33]);
+void settings_set_wifi_preferred_ssid(const char *ssid);
+
+// Which SSID the stored static IP was made for (Randy N4OPI, 2026-09-26).
+// A static address had NO network context: move the Tab5 to another WLAN and
+// the old address was still installed, so it associated and then had no usable
+// route - the status just reads "Off" with no clue why, and a remote user can
+// lock themselves out. Empty = not yet bound; wifi.c binds it to the SSID the
+// static config first works on, so an existing user keeps today's behaviour on
+// their own network and is protected on every other one.
+void settings_get_wifi_static_ssid(char out[33]);
+void settings_set_wifi_static_ssid(const char *ssid);
+
 // FT8/FT4 TX tone preference and hold (debounced flush) - see ft8_tx.h for what
 // "hold" means to the TX paths. Both are written by the TX tone picker's Apply.
 void settings_set_tx_tone_hz(uint16_t v);
@@ -695,8 +887,67 @@ void settings_set_fd_section(const char *section);
 void settings_set_sim_mode_en(bool v);
 void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
-void settings_set_wspr_duty_pct(uint8_t v);
+void settings_set_wspr_rx_cycles(uint8_t v);   // clamped 1-20
+void settings_set_wspr_tx_cycles(uint8_t v);   // clamped 0-4, 0 = receive only
 void settings_set_wspr_tx_dbm(int8_t v);
+int8_t settings_get_wspr_tx_dbm(void);  // narrow: applied at wspr_rx_start()
+/* WSPR's OWN dial, which is what its declared power is calibrated against - not
+ * wherever the radio happens to be when WSPR is entered. See the long note at
+ * wspr_pa_apply_declared_dbm(). */
+uint32_t settings_get_wspr_dial_hz(void);
+/* 0 = pick a new random tone every burst; otherwise the pinned tone in Hz. */
+uint16_t settings_get_wspr_tx_tone_hz(void);
+void     settings_set_wspr_tx_tone_hz(uint16_t hz);
+// Power calibration table, one band's row at a time (main/ui/power_cal_modal.c).
+// Never the whole blob: both copy exactly one pwr_cal_band_t (28 bytes), so a
+// caller has no reason to reach for settings_load_all() just for this.
+// _set replaces the row for `band` (adding it if the table has a free slot, else
+// overwriting whichever row is oldest by cal_unix_time). _get returns false and
+// leaves the buffers untouched if `band` has never been calibrated.
+/* ---- PER-RADIO power calibration ------------------------------------
+ *
+ * The calibration is a measurement of ONE radio's PA: a 9 V build, a 12 V
+ * build and one with the 4:4 PA mod all answer `PC;` differently at the same
+ * Max. PA voltage. Keyed by band alone, swapping in a second QMX would apply
+ * the first one's curve - and the declared power we publish to wsprnet would
+ * be a figure never measured on the radio actually transmitting.
+ *
+ * `UI;` (1_04_003 and later) returns the STM32's 96-bit unique ID as 24 hex
+ * characters, which is a per-radio identity. settings_radio_identity_changed()
+ * is called with it once CAT knows it:
+ *
+ *   - same radio as last time -> nothing happens;
+ *   - different radio -> the table in NVS is PARKED to /spiffs/pcal_<uid>.bin
+ *     and that radio's own parked table is loaded in its place, or the table
+ *     is cleared if this radio has never been calibrated here.
+ *
+ * So NVS always holds the ATTACHED radio's table and every existing reader and
+ * writer is untouched; only the swap moves anything. Parked tables live in
+ * SPIFFS rather than NVS because user_nvs is 24 KB total and one table is
+ * ~2.4 KB - three radios would have eaten a third of it.
+ *
+ * ⚠ A 1_03 radio has no `UI;`, so a swap between two of those cannot be seen.
+ * Passing NULL/"" leaves everything alone rather than guessing.
+ */
+void settings_radio_identity_changed(const char *uid);
+bool settings_get_radio_uid(char *out, size_t n);
+
+void settings_set_pwr_cal_band(const char *band, const uint8_t voltage_x10[PWRCAL_STEPS],
+                                const uint16_t watts_x100[PWRCAL_STEPS]);
+bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEPS],
+                                uint16_t watts_x100[PWRCAL_STEPS]);
+// The operator's own general "Output power" target, one band at a time -
+// independent of WSPR's declared-power dBm (settings_set/get_wspr_tx_dbm),
+// which is its own separate number even on the same band. _get returns
+// false (watts_x100 untouched) if `band` has no target set yet.
+void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100);
+bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100);
+// Narrow read of just the callsign - out is NUL'd first, always safe to print
+// even if settings aren't ready yet. See pskr_self.c's mqtt_event_handler(),
+// which runs on esp-mqtt's OWN internal task (not ours to resize) and used
+// to pull a full qmx_settings_t onto that stack for this one field.
+void settings_get_my_callsign(char *out, size_t out_sz);
+bool settings_get_wspr_pa_reduce(void);         // narrow getter - small-stack callers
 void settings_set_wspr_pa_reduce(bool v);       // #290 halve PA voltage while WSPR TX is on
 void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a volt, 0 = none
 void settings_set_wspr_hop_mask(uint16_t v);

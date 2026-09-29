@@ -19,6 +19,8 @@
 
 #include "dxcluster.h"
 #include "net/net_quiet.h"
+#include "audio/rx_audio.h"
+#include "net/bg_feed_gate.h"
 #include "spots.h"
 #include "storage/settings.h"
 #include "wifi/wifi.h"
@@ -449,7 +451,12 @@ static void session(int fd, const char *mycall)
             refresh_band();
             publish(now);
             last_pub = now;
-            ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            /* Only when the count changes (log audit 2026-09-13: every 10 s). */
+            static int s_logged_count = -1;
+            if (s_pub_count != s_logged_count) {
+                s_logged_count = s_pub_count;
+                ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
+            }
         }
         qmx_settings_t cfg;
         settings_load_all(&cfg);
@@ -464,7 +471,10 @@ static void dxc_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
         qmx_settings_t cfg;
         settings_load_all(&cfg);
-        if (net_quiet_active()) continue;   // see net_quiet.h - no new sessions during an OTA
+        // no new sessions during an OTA, a full-screen overlay, or while RX
+        // audio is on (standing telnet session, one of the heavier feeds -
+        // 2026-09-20)
+        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_is_enabled()) continue;
         if (!cfg.cluster_en || !cfg.my_callsign[0] || !wifi_is_connected()) {
             if (s->n) { s->n = 0; spots_publish(SPOT_SRC_CLUSTER, NULL, 0); s_pub_count = 0; }
             continue;
@@ -488,7 +498,9 @@ void dxcluster_init(void)
        deep path had not finished running when the first reading was taken (the
        tab5_kb lesson in CLAUDE.md: a high-water mark only describes the paths
        that actually ran). PSRAM stack, so no internal RAM cost. */
-    psram_task_create(dxc_task, "dxcluster", 7168, NULL, 2, tskNO_AFFINITY);
+    // 7168 -> 10240: three qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(dxc_task, "dxcluster", 12288, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));
 }

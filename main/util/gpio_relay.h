@@ -62,6 +62,38 @@ bool gpio_relay_busy(void);
 #define GPIO_RELAY_MIN_MS   50
 #define GPIO_RELAY_MAX_MS   5000   /* a QMX long-press is a few seconds, not more */
 
+// Deterministic power-cycle sequence (Randy N4OPI, 2026-09-13). A single
+// gpio_relay_pulse() on a PWR_ON line only TOGGLES the QMX - one click turns
+// it off, the next turns it on, and there was no way to tell which, or
+// whether it worked. This runs the whole sequence he asked for: pulse `pin`
+// active for `off_ms` (the operator's own "how long to hold it" figure),
+// wait 1 s, pulse 500 ms to press it back on, wait 2 s, then poll CAT for a
+// response - up to a further ~8 s, since a fixed single check 2 s after power
+// risked reporting a QMX that was still coming up as "failed".
+//
+// Runs asynchronously via esp_timer, same as gpio_relay_pulse - never blocks
+// the caller. Refuses (returns false, fills `err`) on the same grounds as
+// gpio_relay_pulse (bad pin, bad ms, a relay operation already running), and
+// does not repeat those checks in its own callers.
+bool gpio_relay_power_cycle_start(uint8_t pin, bool level, uint16_t off_ms,
+                                   char *err, size_t errlen);
+
+typedef enum {
+    GPIO_PC_IDLE = 0,    // never run since boot, or the last run's result was read
+    GPIO_PC_RUNNING,
+    GPIO_PC_OK,          // QMX answered CAT after the on-pulse
+    GPIO_PC_FAILED,      // on-pulse refused, or no CAT response within the window
+} gpio_pc_status_t;
+
+// Current phase of the power-cycle sequence - for /api/status. OK/FAILED are
+// LATCHED, not auto-cleared: the sequence runs on its own timers, well
+// outside the 1 Hz status poll's cadence, and a status good for exactly one
+// read could be missed by whichever poll happens to land on it. It stays at
+// OK/FAILED until the next gpio_relay_power_cycle_start() call moves it back
+// to RUNNING - a client wanting "show this result once" diffs against the
+// last value it saw, same as the rest of this device's live status fields.
+gpio_pc_status_t gpio_relay_power_cycle_status(void);
+
 #ifdef __cplusplus
 }
 #endif

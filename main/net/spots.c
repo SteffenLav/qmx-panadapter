@@ -15,6 +15,7 @@
 
 #include "spots.h"
 #include "net/net_quiet.h"
+#include "net/bg_feed_gate.h"
 #include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
 #include "webserver_ws.h"     // webserver_ws_set_paused
 #include "wifi.h"             // wifi_is_connected
@@ -320,9 +321,14 @@ void spots_request_refresh(void) { s_refresh_req = true; }
 // its own source.
 bool spots_any_source_enabled(void)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
-    return s.spots_en || s.rbn_en || s.cluster_en || s.sota_en;
+    // Was settings_load_all(&s) into a local qmx_settings_t - a multi-
+    // kilobyte stack allocation, and this is called from spots_lane.c's
+    // repaint() on the render TASK, whose stack is only 4096 B (render.c).
+    // Crashed on hardware as a "Stack protection fault" in render - see
+    // CLAUDE.md's "Task stacks on this board are TINY" and the comment on
+    // the narrow getters this now uses instead (storage/settings.c).
+    return settings_get_spots_en() || settings_get_rbn_en() ||
+           settings_get_cluster_en() || settings_get_sota_en();
 }
 
 // ---- fetch -----------------------------------------------------------------
@@ -666,7 +672,7 @@ static void spots_task(void *arg)
         // net_quiet: an OTA verify needs internal heap, and a POTA fetch is a
         // whole TLS session built and torn down. Skipping it costs one polling
         // interval; colliding with the verify has cost a watchdog reset.
-        if (s.spots_en && now >= next_pota_us && !net_quiet_active()) {
+        if (s.spots_en && now >= next_pota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             fetch_pota();
             bool ok = (spots_age_s() == 0);
             next_pota_us = esp_timer_get_time() +
@@ -678,7 +684,7 @@ static void spots_task(void *arg)
         // an update - measured mid-download as "spots: SOTA: 18 spots (23600
         // bytes)" while internal free was 5 KB. Closing three of four doors is
         // not closing the door.
-        if (s.sota_en && now >= next_sota_us && !net_quiet_active()) {
+        if (s.sota_en && now >= next_sota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             bool ok = fetch_sota();
             if (ok) {
                 sota_backoff_s = 0;
@@ -703,6 +709,8 @@ void spots_init(void)
     s_scratch = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_lock    = xSemaphoreCreateMutex();
     if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
-    psram_task_create(spots_task, "spots", 6144, NULL, 2, tskNO_AFFINITY);
+    // 6144 -> 9216: two qmx_settings_t locals in this file, generous not
+    // incremental - see sd_archive.c's comment for why.
+    psram_task_create(spots_task, "spots", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }

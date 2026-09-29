@@ -457,6 +457,7 @@ static void modal_build(void)
         lv_obj_set_style_text_font(s_ta[i], &lv_font_montserrat_24, 0);
         ui_theme_style_textarea(s_ta[i]);
         lv_obj_add_event_cb(s_ta[i], ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+        lv_obj_add_event_cb(s_ta[i], ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
         lv_obj_add_event_cb(s_ta[i], ta_value_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
         s_radio[i] = lv_checkbox_create(panel);

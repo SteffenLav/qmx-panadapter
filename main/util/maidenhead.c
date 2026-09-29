@@ -18,7 +18,13 @@ bool maidenhead_to_latlon(const char *grid, double *lat_out, double *lon_out)
     if (!grid || !lat_out || !lon_out) return false;
     size_t len = 0;
     while (grid[len]) len++;
-    if (len != 4 && len != 6) return false;
+    // 8-char "extended precision" grids (e.g. PSK Reporter/WSPR reporters
+    // sometimes publish "IO51uu43") used to be rejected outright here -
+    // field-reported 2026-09-11 (EI4HQ's own report carried exactly this
+    // shape, net/pskr_self.c's diagnostic pinned the value). Accepted and
+    // resolved to a finer centre point below rather than truncated to 6
+    // chars and thrown away, since the extra pair is cheap to use correctly.
+    if (len != 4 && len != 6 && len != 8) return false;
 
     int A = toupper((unsigned char)grid[0]) - 'A';   // 0..17 (lon field, 20 deg wide)
     int B = toupper((unsigned char)grid[1]) - 'A';   // 0..17 (lat field, 10 deg tall)
@@ -29,21 +35,32 @@ bool maidenhead_to_latlon(const char *grid, double *lat_out, double *lon_out)
 
     double lon = -180.0 + A * 20.0 + C * 2.0;
     double lat =  -90.0 + B * 10.0 + D * 1.0;
+    double cell_lon = 2.0, cell_lat = 1.0;   // size of the finest field resolved so far
 
-    if (len == 6) {
+    if (len >= 6) {
         int E = toupper((unsigned char)grid[4]) - 'A';   // 0..23 (lon subsq, 5 min = 0.0833 deg)
         int F = toupper((unsigned char)grid[5]) - 'A';   // 0..23 (lat subsq, 2.5 min = 0.0417 deg)
         if (E < 0 || E > 23 || F < 0 || F > 23) return false;
-        lon += E * (2.0 / 24.0);
-        lat += F * (1.0 / 24.0);
-        // Centre of subsquare
-        lon += (2.0 / 24.0) / 2.0;
-        lat += (1.0 / 24.0) / 2.0;
-    } else {
-        // Centre of 2x1 deg square
-        lon += 1.0;
-        lat += 0.5;
+        cell_lon /= 24.0;
+        cell_lat /= 24.0;
+        lon += E * cell_lon;
+        lat += F * cell_lat;
+
+        if (len == 8) {
+            int G = grid[6] - '0';   // 0..9 (further lon precision, 1/10 subsquare)
+            int H = grid[7] - '0';   // 0..9 (further lat precision, 1/10 subsquare)
+            if (G < 0 || G > 9 || H < 0 || H > 9) return false;
+            cell_lon /= 10.0;
+            cell_lat /= 10.0;
+            lon += G * cell_lon;
+            lat += H * cell_lat;
+        }
     }
+    // Centre of whichever cell size was actually resolved (2x1 deg for a
+    // 4-char grid, subsquare for 6, extended sub-subsquare for 8).
+    lon += cell_lon / 2.0;
+    lat += cell_lat / 2.0;
+
     *lon_out = lon;
     *lat_out = lat;
     return true;

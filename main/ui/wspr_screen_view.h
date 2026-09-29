@@ -18,6 +18,11 @@ void      wspr_screen_view_init(lv_obj_t *parent);
 void      wspr_screen_view_show(void);
 void      wspr_screen_view_hide(void);
 lv_obj_t *wspr_screen_view_get_container(void);
+/* Centre of the WSPR waterfall in SCREEN coordinates, and its width - so the
+ * "turn on your QMX" prompt can sit on the waterfall rather than over the
+ * left pane. Derived from the page's own layout constants, not from
+ * lv_obj_get_coords(), so it is right even while the page is hidden. */
+void      wspr_screen_view_wf_geometry(int *cx, int *cy, int *w);
 
 // Called from the 1 Hz UI tick while the page is up: refreshes the countdown,
 // the status line and (only when it has changed) the spot list.
@@ -72,5 +77,3 @@ void wspr_screen_view_open_hop_picker(void);
 /* The legal WSPR duty-cycle values, shared with the settings drawer so the two
  * places that offer them cannot drift apart. WSPR asks "what fraction of cycles
  * may I transmit", and these are the answers - see docs/wspr-ui-design.md. */
-extern const uint8_t kDuty[];
-#define WSPR_N_DUTY 5
