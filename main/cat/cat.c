@@ -588,10 +588,18 @@ esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
     return ESP_OK;
 }
 
+/* ⛔ The log line must NOT name a TX burst. This flag is taken by FOUR
+   callers and only two of them transmit: ft8_tx.c and wspr_tx.c do, while
+   cat_query_qmx_time() and cat_gps_tick_sync() take it to read TM; - a pure
+   query that never keys the radio. It used to print "PAUSED (TX burst owns
+   the link)" for all four, so a capture of an ordinary time sync read as a
+   radio that was transmitting (2026-09-30: three of these right after a QMX
+   power cycle were read as an unattended transmission and chased as one).
+   A log line that names the wrong cause is worse than one that names none. */
 void cat_poll_set_paused(bool paused)
 {
     s_poll_paused = paused;
-    ESP_LOGI(TAG, "background poll %s", paused ? "PAUSED (TX burst owns the link)" : "resumed");
+    ESP_LOGI(TAG, "background poll %s", paused ? "PAUSED (another op owns the CDC link)" : "resumed");
 }
 
 static void link_task(void *arg);
