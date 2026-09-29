@@ -154,11 +154,14 @@ static void usb_stale_detect_task(void *arg)
         // it lands as a toast across the page (operator-reported 2026-08-04).
         // Skipping the whole check also parks the auto-replug, which is the
         // right call here: a practice session has no USB work to protect.
-        {
-            qmx_settings_t sc;
-            settings_load_all(&sc);
-            if (sc.sim_mode_en || sc.cw_sim_en) continue;
-        }
+        //
+        // ⛔ NARROW ACCESSORS, never settings_load_all(). This task's stack is
+        // 4096 bytes and qmx_settings_t is 3888 (nm on s_pending), so one local
+        // copy overflows it: a Breakpoint exception in usb_stale_det at 4.740 s
+        // of every boot, i.e. a crash loop. It fitted when it was written and
+        // stopped fitting because the STRUCT grew - nobody touched this line.
+        // See CLAUDE.md's "Task stacks on this board are TINY".
+        if (settings_get_sim_mode_en() || settings_get_cw_sim_en()) continue;
 
         uint32_t fails = diag_log_usb_enum_failures();
         // audio_uac_active() is load-bearing here, not belt-and-suspenders:

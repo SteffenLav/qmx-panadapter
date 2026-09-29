@@ -2643,6 +2643,22 @@ bool settings_get_sim_mode_en(void)
     return v;
 }
 
+// Narrow for the same reason, and the reason is measured: usb_replug.c's
+// usb_stale_detect_task has a 4096-byte stack and read BOTH simulation flags
+// with one settings_load_all(). qmx_settings_t is 3888 bytes today (nm on
+// s_pending), so that local alone overflows the stack - the task took a
+// breakpoint at 4.740 s of every boot and the device crash-looped. It fitted
+// when it was written and stopped fitting because the STRUCT grew, which is
+// what makes this class of bug arrive without anyone touching the caller.
+bool settings_get_cw_sim_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cw_sim_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 // Narrow on purpose: the drawer callback and the feed tasks that read this are
 // on stacks that cannot afford a whole qmx_settings_t local - see CLAUDE.md's
 // "Task stacks on this board are TINY", where that mistake has landed four

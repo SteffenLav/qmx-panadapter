@@ -651,6 +651,8 @@ void settings_set_cw_park(const char *park);
 // enabling CW practice must not arm the FT8 phantoms when swiping to that
 // page, and vice versa (operator, 2026-08-02).
 void settings_set_cw_sim_en(bool v);
+bool settings_get_cw_sim_en(void);      // narrow: usb_stale_detect_task has a 4096 B
+                                       // stack and qmx_settings_t is 3888 B (see settings.c)
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never
