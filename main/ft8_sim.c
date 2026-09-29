@@ -61,6 +61,17 @@ typedef struct {
                            // with a bare report instead of R<report>, wasting a
                            // cycle. A fixture so it stays reproducible on the
                            // bench, where it can be checked without an antenna.
+    bool        never_hears_final;  // never decodes OUR closing message (73 or
+                           // RR73) - keeps re-sending whatever it sent us just
+                           // before that instead of progressing or going quiet.
+                           // The field report this models: Roy KI0ER working
+                           // VE3INB (2026-07-29), who kept sending "KI0ER
+                           // VE3INB R-10" after Roy's side had already logged
+                           // the QSO and moved on. Exercises
+                           // final_track_still_asking()/final_track_try_resend()
+                           // in ft8_qso.c, which cannot otherwise be reached
+                           // from the bench - every OTHER phantom hears its own
+                           // closing exchange correctly and goes quiet.
     bool        worked;    // completed a QSO with us this sim session - stops
                            // answering our CQ (still CQs itself, so pounce and
                            // the worked-before filter stay testable). Cleared
@@ -121,8 +132,15 @@ static const char *const s_fox_queue[] = { "JA3ABC", "EA5XYZ", "VK2DEF", "PY2GHI
 
 #define N_PHANTOMS 7
 static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
-    { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false },        // ARRL HQ, US
-    { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },        // US
+    { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false, .never_hears_final = true },
+                           // ARRL HQ, US - NEVER HEARS OUR FINAL (see field above).
+                           // Paired with K9ZZ below so a real pileup (finish one,
+                           // immediately work the next while the first is still
+                           // asking) is reproducible: two overlapping "still
+                           // asking" partners at once is exactly what a single
+                           // s_final_call slot used to lose track of.
+    { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false, .never_hears_final = true },
+                           // US - NEVER HEARS OUR FINAL, same as W1AW above.
     { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, .terse = true }, // US - TERSE: answers
                            // our CQ with a report, not a grid (see `terse`).
     { "VK3ABC", "QF22", "1D", "DX",  1550.0f, .terse = true }, // Australia (DX)
@@ -495,6 +513,30 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
     // R-09 recorded at +86 s, clobbered by the phantom's own CQ at +94 s,
     // advance() at +97 s found only the CQ). Real stations don't CQ mid-QSO.
     ph->engaged = true;
+
+    // FIXTURE: never_hears_final phantoms don't decode OUR closing message.
+    // Scoped to the standard (non-FD) exchange, which is what
+    // final_track_still_asking()/final_track_try_resend() in ft8_qso.c exist
+    // for. The message CONTENT is left exactly as it was (a real partner who
+    // never heard our final keeps repeating their own last message, not a new
+    // one) - but the repeat COUNT is topped up, not left alone.
+    //
+    // ⚠ First cut left pend_repeats untouched, on the assumption whatever was
+    // left from the exchange's own SIM_PHANTOM_REPEATS budget would be enough.
+    // It wasn't: bench-observed 2026-09-29, both W1AW and K9ZZ (this fixture,
+    // testing two overlapping partners) gave up and went silent BEFORE the
+    // engine ever came up for air from the second QSO to check on the first -
+    // final_track_still_asking() had nothing left to find, so the resend path
+    // this whole fixture exists to exercise never ran at all. A real stubborn
+    // partner keeps calling for minutes, not the ~1-2 that
+    // SIM_PHANTOM_REPEATS models for every other phantom's ordinary patience.
+    if (!field_day_en && ph->never_hears_final &&
+        (strcmp(sent_extra, "73") == 0 || strcmp(sent_extra, "RR73") == 0)) {
+        ph->pend_repeats = 20;   // ~10 min of 30 s repeats - outlasts a second QSO
+        ESP_LOGI(TAG, "%s (fixture never_hears_final) - pretending not to have decoded our %s, still asking (repeats reset to %d)",
+                 ph->call, sent_extra, ph->pend_repeats);
+        return;
+    }
 
     int repeats = SIM_PHANTOM_REPEATS;
 
