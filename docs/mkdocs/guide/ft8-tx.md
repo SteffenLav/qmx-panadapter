@@ -324,7 +324,7 @@ Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE
 
 **Resume after timeout** — if a QSO times out because the partner faded, and they come back within ~5 minutes calling you, the exchange **resumes where it left off** automatically (or tap their row to resume manually) instead of restarting from scratch.
 
-**If they never heard your final** (v1.3.4) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 now notices: if the station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to three times within four minutes, *before* anything else can start a new contact. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
+**If they never heard your final** (v1.3.4, extended in v1.16.8) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 notices: if a station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to six times within five minutes, *before* anything else can start a new contact. This now tracks **up to four partners at once** rather than only the most recent one — finishing a QSO and immediately working the next caller in a pileup no longer drops the first station's re-sends. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
 
 ### 8. Power & SWR Readout
 

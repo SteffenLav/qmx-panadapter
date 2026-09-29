@@ -4,6 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.8** - 2026-09-29
+
+**Static IP finally does what it says, a screenshot that doesn't tear, WSPR that doesn't lie about transmitting, and FT8 that doesn't forget a pileup mid-QSO.**
+
+- ⭐ **Static IP and preferred network are now genuinely reliable.** Randy N4OPI spent several days field-testing one build after another to get this all the way through - each round found a real bug hiding under the last: the reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and switching networks from the web UI killing the very HTTP connection that asked for the switch. Confirmed on his bench: switching networks or setting a static address no longer needs a reboot, and an address never follows you onto the wrong network.
+- **Screenshots download as PNG and no longer tear** - `/ss.bmp` now freezes the region before streaming it instead of capturing a screen still being drawn.
+- **WSPR no longer reports "transmitted" on a burst where the radio was never keyed.** A flaky CAT link could let the key-down silently fail while the tone sequence played out anyway. Verified before any tones go out; a failure says so on screen instead of logging a phantom burst.
+- **FT8's re-send-to-a-partner-who-never-heard-you now tracks up to four partners at once**, not one - finishing with station A and immediately working B in a pileup no longer drops A's re-sends.
+- **The Audio Settings top-bar shortcut is gone** *(Gyula HA3HZ)* - it was easy to trigger by accident while working the Band/Mode/BW/Frequency pickers. The drawer button is now the only way in.
+
+⚠ SD writes can still stop about 30 seconds after boot with WiFi on. Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
+
+## Previous Releases
+
 **v1.16.7** - 2026-09-26
 
 **The idle abort is root-caused and fixed, and the cause was the web interface quietly eating the memory everything else needs.**
@@ -942,7 +956,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.8.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

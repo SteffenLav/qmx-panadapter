@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.7.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.8.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.16.8 makes static IP and preferred network genuinely reliable.** ⭐ Randy N4OPI spent several days field-testing one build after another so this could actually be nailed down — each round turned up a real, distinct bug hiding under the last one: the reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and — the one that took longest to find — switching networks from the web UI killing the very HTTP connection that asked for the switch. It works now, confirmed on his bench: switching networks or setting a static address no longer needs a reboot, and an address never follows you onto the wrong network. Also this release: **screenshots download as PNG and no longer tear**, **WSPR no longer reports "transmitted" on a burst where the radio was never keyed**, and **FT8's re-send-to-a-partner-who-never-heard-you now tracks up to four partners at once instead of one** — the exact shape of a real pileup.
 >
 > **v1.16.7 solves the idle abort.** v1.16.6 reduced the exposure and said plainly that the shortage was unchanged. It was, and the unit aborted twice more. Measured properly, there is **no leak** — 20.5 hours untouched trends *upward* — but the small internal pool was being emptied **24 times a minute**, for 60-360 ms at a time, down to 143 bytes. ⭐ The cause was the web interface building its JSON replies in that pool: 495 pieces of a single reply, caught taking 8.7 KB across 311 allocations, while 14 MB of external memory sat unused. **24.1 droughts per minute became none in nine minutes**, and free internal memory at rest went from 28 KB to 56 KB. Also: a static IP now belongs to a network rather than to the unit *(Randy N4OPI)*, and WSPR names the band it refused and warns above 1 W *(John W5JSS)*. ⚠ SD writes stopping about 30 s after boot is a **separate** shortage and is unchanged.
 >
@@ -22,7 +24,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **New in v1.16.0 — audio on the Tab5, as a beta.** The radio's I/Q now becomes sound you can listen to, and the first thing built on it is a **panoramic CW split**: two stations on different frequencies are placed left and right across the stereo image instead of sitting on top of each other. Three controls — **pan width**, **pan blend** and **overlap** — are live, so you adjust them while listening rather than in a menu. **Binaural CW is a first implementation and is best used at 300 Hz bandwidth and up; do not expect much separation below 200 Hz.**
 >
-> **Audio costs resources, so not every feature can be on at once.** An **Audio Settings** window — its own button in the settings drawer, or long-press the top bar on the Panadapter page — is where you turn audio on and off and see what it is competing with. The whole audio part is **beta and subject to further development**: it is there to be tried and reported on, not to be relied on. I am looking forward to the feedback. Details, limits and what is planned next (the same audio features in the web interface, with only the I/Q channels sent to the PC and processed there) are in **[docs/mkdocs/guide/audio.md](docs/mkdocs/guide/audio.md)**.
+> **Audio costs resources, so not every feature can be on at once.** An **Audio Settings** window — its own button in the settings drawer — is where you turn audio on and off and see what it is competing with. The whole audio part is **beta and subject to further development**: it is there to be tried and reported on, not to be relied on. I am looking forward to the feedback. Details, limits and what is planned next (the same audio features in the web interface, with only the I/Q channels sent to the PC and processed there) are in **[docs/mkdocs/guide/audio.md](docs/mkdocs/guide/audio.md)**.
 >
 > **A Pause button during a QSO** (Randy N4OPI) — skip a single transmission to check whether your slot is still clear, then carry on with the same message. It sits with Re-send / RR73 / 73 and does not break the exchange the way Cancel does.
 >
@@ -36,7 +38,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.7.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.8.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -84,8 +86,8 @@ waveform; binaural CW hands the job to the part of your hearing that evolved for
 two stations calling together stop being a jumble. Best at **300 Hz bandwidth and up** —
 **below 200 Hz there is little separation to be had**, because the signals then share too
 much of the audio passband for any amount of panning to pull them apart. Audio competes
-for resources, so **long-press the top bar on the Panadapter page** to open **Resource
-Management**, where it is switched on and off. This is a first implementation and is
+for resources, so open **Audio Settings** from the settings drawer, where it is switched
+on and off. This is a first implementation and is
 **beta**, with the same features planned for the web interface — sending only the I/Q to
 the PC and doing the work there. See [Audio](docs/mkdocs/guide/audio.md).
 

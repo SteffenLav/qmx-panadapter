@@ -65,10 +65,11 @@ Audio decoding shares the Tab5's compute and memory budget with the spectrum, wa
 
 Open the **settings drawer** and tap **Audio Settings**, directly below SelfSpotter.
 
-You can also **long-press the top bar** in the Panadapter view — any of the Band,
-Mode, BW, Freq or Zoom areas. That still works, but those same areas open the
-Band, Mode, BW and Frequency pickers on a short tap, so it is easy to land on one
-of those instead. The drawer button cannot be mistaken for anything else.
+!!! note "Top-bar shortcut removed in v1.16.8"
+
+    A long-press on the top bar used to open Audio Settings too. It shared its
+    area with the Band, Mode, BW and Frequency pickers, so it was easy to open
+    the wrong thing by accident. The drawer button is now the only way in.
 
 The window lists RX audio and the background network feeds that compete with it for the same scarce memory, each with a tick box:
 
