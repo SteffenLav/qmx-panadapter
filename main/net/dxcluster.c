@@ -170,10 +170,14 @@ static int mode_from_comment(const char *comment)
 // carries no mode: 14.020 is CW, 14.285 is phone.
 static int mode_from_bandplan(uint32_t freq_hz)
 {
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
+    /* ⛔ NARROW, never settings_load_all(): see dxcluster_init(). This one is
+       the worst of the three - it is called per spot LINE, from inside
+       session(), which has its own frame on the same stack. */
+    uint8_t region_u8 = 0;
+    char    grid[8] = {0};
+    settings_get_bandplan(&region_u8, grid);
     bandplan_region_t reg =
-        bandplan_effective_region((bandplan_region_t)cfg.bandplan_region, cfg.my_grid);
+        bandplan_effective_region((bandplan_region_t)region_u8, grid);
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(freq_hz, reg, &segs);
     for (int i = 0; i < n; i++) {
@@ -458,9 +462,7 @@ static void session(int fd, const char *mycall)
                 ESP_LOGI(TAG, "%d station(s) held", s_pub_count);
             }
         }
-        qmx_settings_t cfg;
-        settings_load_all(&cfg);
-        if (!cfg.cluster_en) { ESP_LOGI(TAG, "disabled - closing feed"); return; }
+        if (!settings_get_cluster_en()) { ESP_LOGI(TAG, "disabled - closing feed"); return; }
     }
 }
 
@@ -469,20 +471,21 @@ static void dxc_task(void *arg)
     (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        qmx_settings_t cfg;
-        settings_load_all(&cfg);
+        char my_call[16] = {0};
+        settings_get_my_callsign(my_call, sizeof(my_call));
+        const bool cluster_en = settings_get_cluster_en();
         // no new sessions during an OTA, a full-screen overlay, or while RX
         // audio is on (standing telnet session, one of the heavier feeds -
         // 2026-09-20)
         if (net_quiet_active() || bg_feed_gate_active() || rx_audio_is_enabled()) continue;
-        if (!cfg.cluster_en || !cfg.my_callsign[0] || !wifi_is_connected()) {
+        if (!cluster_en || !my_call[0] || !wifi_is_connected()) {
             if (s->n) { s->n = 0; spots_publish(SPOT_SRC_CLUSTER, NULL, 0); s_pub_count = 0; }
             continue;
         }
         refresh_band();
         int fd = connect_feed();
         if (fd < 0) { vTaskDelay(pdMS_TO_TICKS(30000)); continue; }
-        session(fd, cfg.my_callsign);
+        session(fd, my_call);
         close(fd);
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
@@ -498,8 +501,15 @@ void dxcluster_init(void)
        deep path had not finished running when the first reading was taken (the
        tab5_kb lesson in CLAUDE.md: a high-water mark only describes the paths
        that actually ran). PSRAM stack, so no internal RAM cost. */
-    // 7168 -> 10240: three qmx_settings_t locals in this file, generous not
-    // incremental - see sd_archive.c's comment for why.
+    /* ⛔ 7168 -> 12288 was the WRONG LEVER and it did not hold: with the
+       three qmx_settings_t locals still in place, this task took a stack
+       overflow at 110.358 s on the dev bench (Breakpoint in
+       xQueueSemaphoreTake, inside settings_load_all). qmx_settings_t is
+       3888 bytes now, and TWO of them were live at once - dxc_task's and
+       session()'s - with mode_from_bandplan adding a third per spot line.
+       The struct grows every release, so any figure chosen here expires.
+       All three are narrow accessors now; the stack is left at 12288 as
+       headroom for the telnet session itself, not for a settings copy. */
     psram_task_create(dxc_task, "dxcluster", 12288, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "DX cluster client started (opt-in; state %u B)",
              (unsigned)sizeof(dxc_state_t));

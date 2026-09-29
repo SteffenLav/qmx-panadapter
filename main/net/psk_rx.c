@@ -213,10 +213,14 @@ static esp_err_t on_data(esp_http_client_event_t *evt)
 
 static int parse_body(const char *xml)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
+    /* ⛔ NARROW, never settings_load_all(): parse_body() runs UNDER
+       psk_rx_task() via fetch_once(), and that task had a qmx_settings_t of
+       its own - two 3888-byte copies live at once. Same shape as the
+       dxcluster overflow of 2026-09-30. */
+    char my_grid[8] = {0};
+    settings_get_my_grid(my_grid, sizeof(my_grid));
     double my_lat = 0, my_lon = 0;
-    bool have_me = s.my_grid[0] && maidenhead_to_latlon(s.my_grid, &my_lat, &my_lon);
+    bool have_me = my_grid[0] && maidenhead_to_latlon(my_grid, &my_lat, &my_lon);
 
     // Build into a local list, then swap under one lock - a reader must never
     // see a half-replaced table (the same discipline spots.c documents).
@@ -330,9 +334,10 @@ static void psk_rx_task(void *arg)
         bool asked = s_refresh_req;
         s_refresh_req = false;
 
-        qmx_settings_t s;
-        settings_load_all(&s);
-        if (!s.psk_rx_en || !s.my_callsign[0] || !wifi_is_connected()) continue;
+        /* Narrow, same reason as parse_body() above. */
+        char my_call[16] = {0};
+        settings_get_my_callsign(my_call, sizeof(my_call));
+        if (!settings_get_psk_rx_en() || !my_call[0] || !wifi_is_connected()) continue;
         // net_quiet: this query's response cap is 64 KB and it comes over TLS -
         // by far the largest periodic allocation on the device. Not during an
         // update, where internal free has been measured at 5 KB. See net_quiet.h.
@@ -351,7 +356,7 @@ static void psk_rx_task(void *arg)
             continue;
         }
         s_last_try_us = now;
-        fetch_once(s.my_callsign);
+        fetch_once(my_call);
     }
 }
 

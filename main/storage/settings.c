@@ -2775,6 +2775,28 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
 }
 
 /* Two fields, for the same reason as the accessor above - see settings.h. */
+/* Narrow, for callers on a feed task - see settings_get_cw_sim_en()'s
+   comment. A qmx_settings_t is 3888 bytes and these tasks nest two frames
+   that each wanted one. */
+void settings_get_my_grid(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = ' ';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, out_sz, "%s", s_pending.my_grid);
+    xSemaphoreGive(s_mutex);
+}
+
+bool settings_get_psk_rx_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.psk_rx_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_get_bandplan(uint8_t *region_out, char grid_out[8])
 {
     if (region_out) *region_out = 0;
