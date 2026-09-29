@@ -1398,15 +1398,17 @@ static void zoom_label_clicked_cb(lv_event_t *e)
     zoom_popup_open();
 }
 
-// Long-press on ANY top-bar hit zone (Band/Mode/BW/Freq/Zoom) opens Resource
-// Management, in place of whatever short-tap dropdown that spot normally
-// opens - see the hit_zones[] loop for why SHORT_CLICKED is paired with this
-// rather than plain CLICKED.
-static void topbar_long_press_resmgmt_cb(lv_event_t *e)
-{
-    (void)e;
-    resource_mgmt_modal_open();
-}
+// ⛔ REMOVED (Gyula HA3HZ, 2026-09-29): long-press on ANY top-bar hit zone
+// used to open Resource Management too, on top of the short-tap dropdown that
+// spot normally opens. "I occasionally open it by accident" - a long-press
+// covering the ENTIRE top bar (five zones, ~1280 px wide) is an easy accident
+// to have while just trying to work one of those dropdowns. Resource
+// Management/Audio Settings is already one tap away from the drawer's own
+// button ("directly below SelfSpotter" - see drawer_audio_settings_cb), so
+// this shortcut was pure redundant risk, not the only way in. The 2026-09-20
+// history above (why this replaced a double-tap gesture) is now moot with it
+// gone - the tune-surface risk that motivated moving it here no longer
+// applies to anything.
 
 static void zoom_popup_open(void)
 {
@@ -6887,12 +6889,12 @@ void ui_init(lv_display_t *disp)
             // (Band/Mode/BW/...) AND Resource Management on the same press.
             // Same pairing as the RIT pill and the Call CQ/ADIF buttons.
             lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_SHORT_CLICKED, NULL);
-            // Long-press anywhere on the top bar opens Resource Management,
-            // regardless of which specific dropdown that spot would
-            // otherwise open (operator's ask, 2026-09-20) - off the
-            // spectrum's tune surface entirely, so a mistimed press here
-            // can never retune the radio the way it could on the spectrum.
-            lv_obj_add_event_cb(hit, topbar_long_press_resmgmt_cb, LV_EVENT_LONG_PRESSED, NULL);
+            // Long-press used to also open Resource Management here - removed
+            // (Gyula HA3HZ, 2026-09-29): redundant with the drawer's own
+            // Audio Settings button and easy to trigger by accident across a
+            // ~1280 px-wide top bar. Still SHORT_CLICKED only, so a long
+            // press on a hit zone now does nothing rather than fighting the
+            // zone's own dropdown.
             lv_obj_move_foreground(hit);
             if (i < N_TOPBAR_HIT_ZONES) s_topbar_hit_zones[i] = hit;
         }
