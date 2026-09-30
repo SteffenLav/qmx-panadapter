@@ -279,7 +279,33 @@ evenings and one wrong conclusion, so it is worth stating plainly:
   framings it tries are ready to go. **The radio setting and our format must
   always agree: plain form ↔ `NO`, padded form ↔ `YES`.**
 
-**Open, in priority order:**
+## ⭐ RESOLVED 2026-09-30: `KY` keys the radio
+
+The operator tried it on air and heard it: *"the cw is keyed clearly on the
+antenna - i have tried it and it works"*. Everything below this heading was
+written while the conclusion was "KY does not key", and it is kept because the
+reasoning is instructive, not because the conclusion stands.
+
+**Why two evenings got it wrong:** the whole negative case rested on no
+sidetone and no LCD `M` indicator, and **practice mode suppresses both of them
+for message sending** — a fact this very document records a few paragraphs up.
+So the instruments that reported "nothing happened" were switched off. A
+negative result needs its instruments proved alive exactly as much as a
+positive one does.
+
+**Consequently items 2 and 3 below are moot:** the TS480-compat path
+(`s_ky_ts480_compat`) is not needed — plain form against `KY TS480 = NO`
+works — and the groups.io question should NOT be sent, since its premise
+("CAT KY is accepted and never keyed") is false.
+
+**What is still genuinely open:** there is no way to abort a message in
+flight. The manual documents no `KY` abort in TS480-compat-OFF mode, so a sent
+message runs to the end of the radio's 80-character buffer. That is the next
+hardware question.
+
+---
+
+**Open, in priority order (HISTORICAL — see the section above):**
 
 1. **Practice mode OFF + dummy load** — now the FIRST thing to try, not the
    last. Every remaining question (does `KY` key at all, what aborts it, what
@@ -297,5 +323,6 @@ evenings and one wrong conclusion, so it is worth stating plainly:
    key real TX through this exact command daily, so a missing precondition is
    far more likely than a plain firmware bug.
 
-**Status for release notes: the CW page's TX path is UNVERIFIED on hardware.**
+**Status for release notes: the CW page keys the radio (operator-confirmed off
+air, 2026-09-30). What it cannot do is abort a message once sent.**
 Do not describe CW transmit as working until item 1 or 2 above passes.

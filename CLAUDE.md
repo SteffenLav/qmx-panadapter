@@ -99,18 +99,36 @@ branch and must not be assumed present on main: `cw_qso.c`,
 `ui/cw_screen_view.c`, `ui/cw_screen_view_*.c`, and the `s_ky_ts480_compat` KY
 experiment in `cat.c`.
 
-**CW TRANSMIT IS NOT HARDWARE-VERIFIED — do not describe it as working.** Two
-bench evenings (2026-08-03/04, QMX+ on 1_04_004) failed to get CAT `KY` to key
-the radio, and the reason it stayed unresolved is a lesson worth keeping:
-**practice mode suppresses both sidetone and the LCD `M` indicator for message
-sending, so the two obvious observables lie.** `TB`'s t-field (characters left
-to send) is the only honest one — it counts down for the radio's OWN
-front-panel message send and never moves for CAT `KY`. Also: `KY;` GET readings
-depend on buffer state, so take the baseline only after a QMX power cycle (an
-un-drained buffer makes the radio report itself permanently "sending"). Full
-findings, the retracted wrong conclusions, and the untested TS480-compat path
-are in `docs/cw-page-design.md`. **The next step is a dummy load, not more
-code.**
+⭐ **CW TRANSMIT WORKS — CAT `KY` KEYS THE RADIO, confirmed OFF AIR by the
+operator on 2026-09-30:** *"the cw is keyed clearly on the antenna - i have
+tried it and it works"*. It may be described as working.
+
+⛔ **This section said the opposite for two months, and the old text is worth
+keeping for WHY it was wrong rather than deleting.** Two bench evenings
+(2026-08-03/04, QMX+ on 1_04_004) concluded `KY` did not key, on the strength
+of no sidetone and no LCD `M` indicator. **Practice mode suppresses BOTH of
+those for message sending** — the same file said so in the next sentence — so
+the evidence for "it does not key" was two instruments that were both
+switched off. The finding is explained, not contradicted.
+
+⭐ **Generalise it: a negative result needs its instruments proved alive just
+as much as a positive one.** "Nothing happened" and "nothing was measured"
+read identically — the same trap as a dead serial capture looking like a quiet
+device, and as the silent USB patches that needed counters before anyone could
+tell a handled fault from an absent one. **RF on an antenna is the observable
+that cannot lie**, and it is what settled this. Do not reinstate an
+"unverified" caveat on the KY path.
+
+Still true and still useful: `TB`'s t-field (characters left to send) is the
+honest counter for what the radio is actually sending, and `KY;` GET readings
+depend on buffer state, so take a baseline only after a QMX power cycle (an
+un-drained buffer makes the radio report itself permanently "sending").
+
+⚠ **Genuinely still open, and NOT covered by the above: there is no abort.**
+The CAT manual documents no `KY` abort in TS480-compat-OFF mode, so a sent
+message runs to the end of the radio's 80-character buffer. That is the next
+hardware question. Full history, including the retracted wrong conclusions and
+the untested TS480-compat path, is in `docs/cw-page-design.md`.
 
 See MEMORY.md index for complete topic list.
 

@@ -13,12 +13,19 @@
 // a spinlock-guarded ring here and an LVGL timer renders it (the ft8_status
 // pattern). All CAT writes go through cat.c's poll task (the standing rule).
 //
-// ⚠ HARDWARE-UNVERIFIED: KY/KS/TB are implemented from the CAT manuals
-// (1_03 + 1_04 agree) but no QMX has been on the bench since this was
-// written. First-session checklist is at the bottom of cw-page-design.md.
-// Notably there is NO abort button yet: the manual documents no KY abort in
-// TS480-compat-OFF mode, and guessing (RX;? mode bounce?) risks worse than
-// letting an 80-char buffer finish. Resolve on hardware first.
+// ⭐ CW TRANSMIT KEYS THE RADIO - confirmed OFF AIR by the operator on
+// 2026-09-30: "the cw is keyed clearly on the antenna - i have tried it and
+// it works". That retires the long-standing "KY does not key" finding, which
+// was recorded across two bench evenings in 2026-08 and is explained rather
+// than contradicted: practice mode suppresses BOTH the sidetone and the LCD
+// `M` indicator, so the two observables those evenings relied on were both
+// lying. RF on the antenna is the observable that cannot lie. Do NOT
+// reinstate an "unverified" caveat on the KY path.
+//
+// ⚠ Still unresolved, and NOT covered by that: there is NO abort button. The
+// manual documents no KY abort in TS480-compat-OFF mode, and guessing (RX;?
+// mode bounce?) risks worse than letting an 80-char buffer finish. That is
+// the next hardware question, not a code one.
 
 #include "cw_screen_view.h"
 #include "ui_theme.h"
@@ -560,9 +567,14 @@ static bool send_cw_text(const char *raw)
         ui_toast(msg);
         return false;
     }
-    qmx_settings_t s;
-    settings_load_all(&s);
-    if (s.cw_sim_en) {
+    /* ⛔ The NARROW accessor, never settings_load_all(): this runs on
+       taskLVGL and a qmx_settings_t is 3888 bytes for the sake of one bool.
+       Two tasks died of exactly that on 2026-09-30 (usb_stale_det at 4.7 s,
+       dxcluster at 82-110 s) - see CLAUDE.md's "Task stacks on this board
+       are TINY". taskLVGL has room for it today; the struct grows every
+       release and this line does not need to. */
+    const bool cw_sim = settings_get_cw_sim_en();
+    if (cw_sim) {
         ESP_LOGI(TAG, "[SIM] CW send suppressed: '%s'", exp);
         cw_qso_sim_arm();            // phantom answers by pre-advance state
         cw_screen_feed_decoded(" ", 1);   // keep the stream's token boundary honest
@@ -571,7 +583,7 @@ static bool send_cw_text(const char *raw)
         cat_request_cw_send(exp);
     }
     cw_qso_note_sent(exp);
-    ESP_LOGI(TAG, "CW send: '%s'%s", exp, s.cw_sim_en ? " [SIM]" : "");
+    ESP_LOGI(TAG, "CW send: '%s'%s", exp, cw_sim ? " [SIM]" : "");
     if (s_lbl_status) {
         lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
         lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
