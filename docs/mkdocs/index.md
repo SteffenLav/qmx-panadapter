@@ -123,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.9 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.8** finally makes static IP and preferred network fully reliable - no more reboot needed, no more following you onto the wrong network; **v1.16.7** root-causes the idle abort and ties a static IP to the network it belongs to; **v1.16.5** makes the decoder keep up with a busy band, gives FT4 the head start FT8 already had, and fixes a crash when switching between the two.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.9** stops the SD card dying about 30 seconds after boot with WiFi on - a fault that stood under ⚠ for five releases; **v1.16.8** finally makes static IP and preferred network fully reliable - no more reboot needed, no more following you onto the wrong network; **v1.16.7** root-causes the idle abort and ties a static IP to the network it belongs to.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -139,6 +139,8 @@ and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see 
     twice the room. **Your settings, QSO log and LoTW certificate are kept** —
     press **Enter** at the flash-type prompt, never **E**. New users are
     unaffected, and anyone already on v1.15.0 simply updates from the device.
+
+**v1.16.9 stops the SD card dying.** ⭐ With WiFi on, card writes stopped about 30 seconds after boot and the SD symbol ended up crossed out - a known fault under ⚠ for five releases *(Gyula HA3HZ, Randy N4OPI)*. The card driver needs a small block of memory the hardware can transfer directly to and from, for every 512-byte block it moves, and it asks part of the way *through* the transfer. A failed request drops the chip-select with the card mid-block; from there the two are out of step and the Tab5 unmounts the card after five failures. What was consuming that memory is **RX audio** - about 29 KB, of which 24 KB was a buffer sitting in exactly the memory the card driver competes for. Moved to external memory. With the old buffer in place the card failed in 40 seconds with 87 bytes left; it now keeps writing. **Turning RX audio off is no longer the price of a working card.** ⚠ Not yet confirmed in the field - proven on the bench by turning the fault on and off deliberately.
 
 **v1.16.8 makes static IP and preferred network genuinely reliable.** ⭐ Randy N4OPI spent several days field-testing one build after another - each round found a real bug hiding under the last one: reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and switching networks from the web UI killing the very HTTP connection that asked for the switch. Confirmed on his bench: switching or setting a static address no longer needs a reboot. Also: **screenshots download as PNG and no longer tear**, **WSPR no longer reports "transmitted" on a burst where the radio was never keyed**, and **FT8's re-send-to-a-partner tracks up to four at once** instead of one. ⚠ The WSPR waterfall still shows nothing during the wait between cycles, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
 
@@ -295,7 +297,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.8.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.9.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -4,6 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.9** - 2026-09-30
+
+**The SD card stops dying. It was never the card, and it was never your card either.**
+
+- ⭐ **With WiFi on, SD card writes no longer stop about 30 seconds after boot** *(Gyula HA3HZ, Randy N4OPI)*. This has sat under ⚠ as a known fault for five releases. The card's driver needs a small block of memory that hardware can transfer directly to and from, and it needs one for every 512-byte block it moves - asking for it part of the way *through* the transfer, after the card has already started sending data. A failed request drops the chip-select with the card still mid-block; from there the two are out of step, every later command returns nonsense, and after five failures the Tab5 unmounts the card. That is the crossed-out SD symbol, and it is why a restart clears it and why it looks random.
+- **What was eating the memory: RX audio.** It needs about 29 KB, and 24 KB of that was a buffer placed in exactly the memory the card driver competes for, with no need to be there. Moved to external memory, where 14 MB sits spare.
+- **Measured both ways on the bench.** With RX audio on and the old buffer in place, the card failed in 40 seconds with 87 bytes of that memory left. With the buffer moved, the same unit ends start-up with 25,791 bytes free instead of 9,215 and keeps writing. This bench never showed the fault for months because RX audio was switched off here - which is why it reached two operators first.
+- **Turning RX audio off is no longer the price of a working SD card.**
+
+⚠ Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
+
+⚠ Not yet confirmed in the field. The cause and the fix are both proven on the bench by turning the fault on and off deliberately, but Gyula and Randy have not confirmed it on their own units yet. If the card still misbehaves on this release, send a diagnostic and say whether RX audio is on.
+
+## Previous Releases
+
 **v1.16.8** - 2026-09-29
 
 **Static IP finally does what it says, a screenshot that doesn't tear, WSPR that doesn't lie about transmitting, and FT8 that doesn't forget a pileup mid-QSO.**
@@ -16,7 +31,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ SD writes can still stop about 30 seconds after boot with WiFi on. Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
 
-## Previous Releases
 
 **v1.16.7** - 2026-09-26
 
@@ -30,8 +44,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - Also: refused transmissions appear on screen, the top bar follows a WSPR retune, the date editor steps in months and years *(John Dusek)*, the speaker turns **on** if the headphone detector cannot be read and the auto-mute can be switched off *(Samuel W7STF)*.
 
 ⚠ SD writes can still stop about 30 seconds after boot with WiFi on - a separate shortage, confirmed again and untouched here.
-
-## Previous Releases
 
 **v1.16.6** — 2026-09-25
 
@@ -956,7 +968,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.8.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.9.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

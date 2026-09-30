@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.8.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.9.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **v1.16.9 stops the SD card dying.** For five releases running this sat under a ⚠ as a known fault: with WiFi on, card writes stop about 30 seconds after boot and the SD symbol ends up crossed out. v1.16.4 proved the card was innocent without finding what was starving it. Both halves are answered now *(Gyula HA3HZ, Randy N4OPI)*. The card's driver needs a small block of memory that hardware can transfer directly to and from, and it needs one for **every 512-byte block it moves** — asking for it part of the way through the transfer, after the card has already begun sending. A failed request drops the chip-select with the card mid-block, and from there the two are out of step, every later command returns nonsense, and after five failures the Tab5 unmounts the card. One momentary shortage costs you the card for the whole session, which is why a restart clears it and why it looks random. ⭐ The memory was going to **RX audio** — about 29 KB of it, and 24 KB was a buffer I had put in exactly the memory the card driver was competing for, with no need to be there. Moved out to external memory, where 14 MB sits spare. My own bench never showed this because I had RX audio switched off; with it on and the old buffer in place the card failed in **40 seconds** with **87 bytes** of that memory left. Turning RX audio off is no longer the price of a working card.
 >
 > **v1.16.8 makes static IP and preferred network genuinely reliable.** ⭐ Randy N4OPI spent several days field-testing one build after another so this could actually be nailed down — each round turned up a real, distinct bug hiding under the last one: the reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and — the one that took longest to find — switching networks from the web UI killing the very HTTP connection that asked for the switch. It works now, confirmed on his bench: switching networks or setting a static address no longer needs a reboot, and an address never follows you onto the wrong network. Also this release: **screenshots download as PNG and no longer tear**, **WSPR no longer reports "transmitted" on a burst where the radio was never keyed**, and **FT8's re-send-to-a-partner-who-never-heard-you now tracks up to four partners at once instead of one** — the exact shape of a real pileup.
 >
@@ -38,7 +40,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.8.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.9.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -1180,19 +1182,14 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.15.0 is here.** Next on the bench:
+**v1.16.9 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
-- **Binaural CW audio.** Asked for by Roy KI0ER, and shaped by Don N2VGU and Michael KZ4LY: a stereo sound stage so two stations a few tens of hertz apart land in different places in your head, with the **stage width a setting** rather than a fixed angle. The DSP is small — the Tab5 already receives I and Q separately — but it needs the Tab5's own audio output path, which is the same rework the CW page waits on.
-
-  Uwe DL8UG pointed at the KX2's "AFX MD Delay" — Elecraft's own quasi-stereo mode, a fixed delay on one channel applied to the whole receive audio, sold on *reducing operating fatigue* rather than separating signals. It's a genuinely different, much cheaper technique (no I/Q phase math, just a delay line) that solves comfort, not the "which station is where" separation the stage-width idea above targets. Worth keeping as a candidate first step or a companion to the real thing, not a replacement for it.
-- **Tab5 audio output rework.** The blocker under both of the above: the output task must not run at all in FT8/FT4 (Michael KZ4LY's suggestion), since merely existing at a higher priority than the FFT consumer cost decode yield.
 
 ### Longer term
 
 - **CW decoder.** Goertzel-based, text scrolling under the spectrum. The QMX already does this internally — question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
-- **Tab5 speaker / headphone audio.** Demodulated CW/SSB passband audio out of the Tab5's own jack, so the operator can monitor without the QMX's audio path.
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of
