@@ -6,7 +6,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.16.9** - 2026-09-30
 
-**The SD card stops dying. It was never the card, and it was never your card either.**
+**With WiFi on, SD card writes no longer stop about 30 seconds after boot.**
 
 - ⭐ **With WiFi on, SD card writes no longer stop about 30 seconds after boot** *(Gyula HA3HZ, Randy N4OPI)*. This has sat under ⚠ as a known fault for five releases. The card's driver needs a small block of memory that hardware can transfer directly to and from, and it needs one for every 512-byte block it moves - asking for it part of the way *through* the transfer, after the card has already started sending data. A failed request drops the chip-select with the card still mid-block; from there the two are out of step, every later command returns nonsense, and after five failures the Tab5 unmounts the card. That is the crossed-out SD symbol, and it is why a restart clears it and why it looks random.
 - **What was eating the memory: RX audio.** It needs about 29 KB, and 24 KB of that was a buffer placed in exactly the memory the card driver competes for, with no need to be there. Moved to external memory, where 14 MB sits spare.
