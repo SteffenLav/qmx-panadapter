@@ -3033,12 +3033,21 @@ void wspr_screen_view_tick(void)
                 else snprintf(rbuf, sizeof(rbuf), "%lu.%03lu MHz",
                               (unsigned long)(s_mismatch_radio_hz / 1000000UL),
                               (unsigned long)((s_mismatch_radio_hz % 1000000UL) / 1000UL));
+                /* The page dial comes from our own band list, so a name is
+                 * almost always available; "?" keeps the line short in the
+                 * case where the operator has tuned off a standard dial. */
                 if (pb && pb[0]) snprintf(pbuf, sizeof(pbuf), "%sm", pb);
-                else snprintf(pbuf, sizeof(pbuf), "%lu.%03lu MHz",
-                              (unsigned long)(s_mismatch_page_hz / 1000000UL),
-                              (unsigned long)((s_mismatch_page_hz % 1000000UL) / 1000UL));
-                snprintf(pa_s, sizeof(pa_s), "RADIO IS ON %s", rbuf);
-                snprintf(ps_s, sizeof(ps_s), "page is %s - spots misfiled", pbuf);
+                else             snprintf(pbuf, sizeof(pbuf), "?");
+                /* ⛔ ONE LINE EACH, AND KEEP THEM SHORT. Seen on the glass
+                 * 2026-10-01: the radio was on 14.000000 MHz, which is not a
+                 * standard WSPR dial, so rbuf fell back to the long
+                 * "14.000 MHz" form - "RADIO IS ON 14.000 MHz" wrapped onto a
+                 * second line and landed on top of the line below it. The two
+                 * labels are stacked at a fixed pitch and neither can grow.
+                 * "tap here to free it" (19 chars) is the known-good width on
+                 * this pane; both of these now stay inside it. */
+                snprintf(pa_s, sizeof(pa_s), "RADIO: %s", rbuf);
+                snprintf(ps_s, sizeof(ps_s), "PAGE: %s - misfiled", pbuf);
                 pa_col = 0xFFA040;      /* amber: wrong, but nothing is broken */
                 mism = true;
             }
