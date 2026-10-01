@@ -75,6 +75,16 @@ CW page work (#351/#352), QDX/QDX-M support (#303 — no hardware to test agains
 binaural CW (#245/#102), static IP still unverified on hardware (#307 — shipped,
 just never flash-tested live), README/docs-tree unification (#111).
 
+**Live WSPR waterfall between cycles — PARKED BY THE REQUESTER (Samuel W7STF, 2026-10-01).**
+The pane shows nothing during the ~80 s wait between cycles, where WSJT-X shows a live
+band view. It would need its own continuous audio path independent of the decode capture,
+which is why it was never a quick one. After v1.16.9 said so plainly he withdrew the
+pressure himself: *"consider it a super-low enhancement, inquiry moreso than feature
+request. I'm currently pretty good with what you've provided us thus far. It's probably
+just not worth trying to cram it in."* ⛔ **Do not spend a release on this unless someone
+asks again.** It stays listed as a known difference from WSJT-X in the release notes,
+which remains accurate — parked is not fixed.
+
 ---
 
 ## ⚡ Status Legend
