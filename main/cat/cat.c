@@ -2547,6 +2547,46 @@ static void link_task(void *arg)
             // first try once the menu is ready; keep some margin but don't
             // make the user stare at "---" for 10+ seconds.
             vTaskDelay(pdMS_TO_TICKS(2000));
+
+            /* ⛔ REMEMBER WHERE THE RADIO WAS - THE SCAN BELOW MOVES IT.
+             *
+             * The band scan walks the QMX's own "Band config." menus, and
+             * qmx_term.c's header already records what that costs: "leave the
+             * menus, and the radio is on 160 m whatever band it started on."
+             * qmx_term.c saves and restores frequency and mode around a menu
+             * visit for exactly this reason. This scan drives the same menus
+             * and restored nothing, so every CAT link-up quietly dumped the
+             * operator on 160 m in whatever mode the menus left behind.
+             *
+             * John W5JSS, 2026-10-01: his WSPR page was set to 20 m and his
+             * radio kept turning up on 1.837700 MHz in CW. His capture shows
+             * the menu pages streaming past - 80m/3573000, 60m/5358500,
+             * 40m/7074000, 30m/10136000, his own configured band centres -
+             * and his radio on 160 m afterwards. It was blamed on a CAT
+             * fault, then on his QMX's Virtual U3S beacon; it was neither,
+             * and he disabled a beacon that was innocent.
+             *
+             * Asked directly rather than read from cat_get_frequency(): this
+             * runs BEFORE poll_task starts, so the cached values are stale or
+             * empty. process_cat_message() fills them from the RX callback,
+             * which does not need the poll task. */
+            uint32_t pre_freq = 0;
+            char     pre_mode_digit = 0;
+            {
+                const char *q = "FA;MD;";
+                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                                  strlen(q), 200) == ESP_OK) {
+                    for (int wi = 0; wi < 25 && !s_last_freq_hz; wi++)
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    vTaskDelay(pdMS_TO_TICKS(60));   /* let MD land too */
+                }
+                pre_freq       = s_last_freq_hz;
+                pre_mode_digit = s_last_mode_digit;
+                ESP_LOGI(TAG, "band scan: radio is on %lu Hz mode '%c' - will restore after",
+                         (unsigned long)pre_freq,
+                         (pre_mode_digit >= '1' && pre_mode_digit <= '9') ? pre_mode_digit : '?');
+            }
+
             {
                 s_band_count = 0;
                 int consecutive_empty = 0;
@@ -2640,6 +2680,42 @@ static void link_task(void *arg)
                     consecutive_empty = 0;
                 }
                 ESP_LOGI(TAG, "Band list: %d bands found", s_band_count);
+            }
+
+            /* ⭐ AND PUT IT BACK. Same contract as qmx_term.c's restore, and
+             * written the same way round: only act if it actually moved, so a
+             * radio the menus left alone is never written to.
+             *
+             * Sent directly rather than via cat_set_frequency_forced() /
+             * cat_request_mode(): both of those route through poll_task, which
+             * does not exist yet at this point in link-up. The blocking write
+             * is the same one the scan above just used, so if the scan could
+             * talk to the radio, so can this. */
+            if (pre_freq) {
+                const uint32_t now_hz = s_last_freq_hz;
+                if (now_hz != pre_freq) {
+                    char fa[20];
+                    snprintf(fa, sizeof(fa), "FA%011lu;", (unsigned long)pre_freq);
+                    ESP_LOGW(TAG, "the band scan left the radio on %lu Hz - restoring %lu Hz",
+                             (unsigned long)now_hz, (unsigned long)pre_freq);
+                    if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fa,
+                                                      strlen(fa), 200) == ESP_OK) {
+                        s_last_freq_hz = pre_freq;
+                        ui_update_frequency(pre_freq);
+                    } else {
+                        ESP_LOGW(TAG, "restore of %lu Hz could not be sent", (unsigned long)pre_freq);
+                    }
+                }
+            }
+            if (pre_mode_digit >= '1' && pre_mode_digit <= '9' &&
+                s_last_mode_digit != pre_mode_digit) {
+                char md[8];
+                snprintf(md, sizeof(md), "MD%c;", pre_mode_digit);
+                ESP_LOGW(TAG, "the band scan left the radio in mode '%c' - restoring '%c'",
+                         s_last_mode_digit ? s_last_mode_digit : '?', pre_mode_digit);
+                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)md,
+                                                  strlen(md), 200) != ESP_OK)
+                    ESP_LOGW(TAG, "restore of mode '%c' could not be sent", pre_mode_digit);
             }
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
