@@ -8,43 +8,54 @@
 
 ---
 
-## ⛔ 2026-09-13 — the section below is CURRENT, everything under "Master Table" is NOT
+## ⛔ RECONCILED 2026-10-01 against the code — read this, not the Master Table
 
-The master table's own header still says "Last updated 2026-09-02" and describes
-repo state as **v1.5.0** — the project is nine releases past that (currently
-**v1.12.4**, released) with dozens of commits since. It was never reconciled row
-by row against that gap, and doing so properly is a real, separate pass, not
-something to fold into a release-day check. **Do not read a row below this
-line as still true without checking it against the code first** — several are
-almost certainly already shipped and verified in a release the table predates.
+The project is at **v1.16.9, released**. Everything under "Master Table" still
+describes repo state as **v1.5.0** (its own header says "Last updated
+2026-09-02") and has never been reconciled row by row. **Do not read a row below
+the Master Table heading as still true without checking it against the code.**
 
-This section is the honest, current answer to "what is hanging, right now,
-2026-09-13" — built from `git log v1.12.4..HEAD`, not from the stale table.
+What the previous version of this section claimed, and what is actually true:
 
-### ⚠ 2026-09-17 — built on top of v1.14.3.1, NOT FLASHED, NOT RELEASED
+| Was listed as | Actually |
+|---|---|
+| ⚠ "built on v1.14.3.1, NOT FLASHED, NOT RELEASED" — drawer/TX-power `16565a7`, DIRAM reclamation `85ff840`+`53ccadd`, Antenna Tune live PWR/SWR `c74cc31` | **All four shipped in v1.14.4**, five releases ago. The "this is what is soaking" note was eleven days stale |
+| "Ready for today's release (v1.12.4 → next)" — SelfSpotter map, log audit, relay power-cycle | **Shipped v1.13.0** |
+| WSPR duty "1 in N"; WSPR TX-state orange UI | **Shipped v1.15.0** |
+| WSPR PA guard engages at TX-enable | **Shipped v1.16.0** |
+| microSD web freeze / `/ss.bmp` streaming | **Shipped v1.16.8** (rewritten again there to fix tearing) |
+| RPC orphan-deadlock patch #18 | **Standing patch, present** — `check_patches.py` confirms 24/24 as of this release |
 
-The dev bench has been soaking since 07:49 on the DIRAM-reclamation build and
-must not be flashed until that soak is called. Everything here is built and
-compiles clean; none of it has run on hardware.
+Verified by `git describe --contains` on the named SHAs and by `git log -S` on
+the identifying symbols, not by reading the rows.
+
+### ▶ Actually live, 2026-10-01
 
 | # | What | State |
 |---|---|---|
-| a | Drawer open cut TX power to WSPR's declared level (`16565a7`) | Committed, unpushed. Hardware-verified before the soak started |
-| b | 17,172 B of internal DIRAM reclaimed (`85ff840`, `53ccadd`) | Committed, unpushed. **This is what is soaking** |
-| c | **Antenna Tune: live PWR/SWR without the Radio menu** (Randy N4OPI) | ⚠ **BUILT, NEVER RUN.** His words: *"it would be nice if the PWR and SWR would be displayed instead of having to re-open the menu to see the results and stop the tune sequence."* The readout lived in the menu ITEM'S LABEL, and the bar closes every menu on the first click elsewhere - so watching SWR while turning an ATU meant reopening the menu, and so did stopping. Now a centred panel with SWR, watts, seconds-left and a STOP button, driven by `/api/status` `tune` so it can never disagree with the radio. `/api/status` gained `tune.secs`. Layout checked by rendering the panel standalone in a browser; **the live path has not been exercised against a radio** - that needs a dummy load and a QMX on 1.04+ |
+| A | WSPR page now says when the radio has left the page's band (`36ff011`) | ⚠ **COMMITTED, COMPILE-ONLY.** Bench powered down and remote; the labels have never been on a screen. `pa_s` 40 B / `ps_s` 48 B, so long band strings may clip |
+| B | CAT band scan restores frequency and mode (`819fbd9`) | ⚠ **COMMITTED, COMPILE-ONLY, never run against a radio.** The `FA;MD;` pre-query timing is reasoned, not measured. ⭐ **This is the unswept sibling of #261** (Randy N4OPI, "after using the radio's menus remotely, the QMX comes back on 160 m"): that fix went into `qmx_term.c` only, and `cat.c`'s band scan drives the SAME menus. Classic [[feedback_sweep_the_class_not_what_i_noticed]] - the class was known and half-fixed for weeks |
+| C | Reply to John W5JSS about B | Drafted in `scratchpad/`, **not sent** |
+| D | Screenshot downloads a PNG instead of opening a tab (John W5JSS) | Promise logged, undesigned. Decide: a setting, or restore the tab with PNG as an explicit download |
 
-### Ready for today's release (v1.12.4 → next), built and flashed, awaiting your look
-| # | What | State |
-|---|---|---|
-| 1 | SELFSPOTTER map + LIST + CONDITIONS (Uwe DL8UG's feature) | ✅ **Seen and approved on the actual screen tonight** ("looks awesome"). Land is now FILLED (own scanline fill, not LVGL's - it has none), not just outlined, with the coastline stroked back on top in its own colour after two rounds of "too bright" / "eating the historic traces". Trace lines doubled to 4px and landing dimples enlarged to match, after the brighter MAP_SRC_COLOR_* hues alone still read as dim. `help_topics.c`/`help_triage.c` had ZERO entries for this feature - added, then found and fixed TWICE more: WSPR was inheriting panadapter's triage rows (a pre-existing bug, unrelated to spot map, found while wiring it), and SelfSpotter itself - an OVERLAY, not a `ui_mode_t` - was inheriting whichever screen it was opened FROM, both ways (map showed the base page's rows, base page showed the map's). `spot_map_view_is_active()` now overrides the screen selection when true. "The spot map is empty" also went from a NULL condition to a real one (`spot_map_view_spot_count()==0`). Full doc audit against CURRENT code found the whole "swipe down from the top edge, opt-in setting" story was stale in FOUR files - both the gesture (now a drawer button) and the opt-in model (now always-on from boot) had changed earlier the same day and no doc had caught up. Rewritten in `spot-map.md`, `settings.md`, `README.md`, `gestures.md`. Seven OTHER real features (Radio Menus, Still Spectrum, Sim Mode, SWR protection, Antenna Tune, RIT, Release radio) also had complete guide content and zero "Need guidance?" path in - wired in, each individually verified against current code. `mkdocs build`: 33/33 deep links verified by the real anchor checker. **Not yet re-confirmed on the actual screen after the overlay fix** - the operator found the two bugs live but hadn't looked again as of this session ending. |
-| new | Log audit ("we need to be in control of what is happening here") | ✅ Steady-state ESP_LOG volume 78 → 46 lines/min on the dev bench: audio rate line widened to a real ~2-transfer band + 10s mean (was firing on ordinary jitter), heap line 10s → 60s when healthy, NimBLE/esp-x509-crt-bundle library INFO chatter dropped to WARN, BLE scan re-lists an address once per boot not once per ~75s window, RF gain re-query throttled to 30s, WSPR TX label reads from `/api/wspr` instead of polling all of `/api/settings`. No phantom keyboard, no crash from this pass. |
-| new | Remote relay: deterministic "Power-cycle QMX" (Randy N4OPI) | ✅ A plain Pulse on PWR_ON only toggles the QMX with no way to tell which state it left it in. New button runs off-pulse → wait 1s → on-pulse 500ms → wait → CAT-confirm, reporting "QMX responded" / "no response". Verified on the bench (no relay wired here, so this proved the software path - both the success and the refusal-path branches). Deliberately did NOT build the general "any pin, toggle, schedule it" submenu also asked for - the two pins stay whitelisted to this one job. |
-| 2 | WSPR duty cycle: "1 in N" instead of a percentage | Deterministic period, no more back-to-back bursts, legacy NVS values migrated. **Flashed; not yet watched over a real multi-cycle run.** |
-| 3 | WSPR TX-state UI: bar/counter go TX-orange, W/SWR hidden between bursts, carpet dims during TX | Flashed, not yet seen live. |
-| 4 | WSPR PA guard engages at TX-enable, not at the boundary | **Verified on air tonight** — burst fired at the very next boundary, no held cycle, 1.1 W measured at PA=6.0 V. Only gap: a cold-cache retry when CAT link-up races the guard (see below) — offered, no decision taken. |
-| 5 | RPC orphan-deadlock patch (#18) | **Hardware-confirmed tonight** — 17 seedings caught and refused in one run, zero wedges. Ready to call closed. |
-| 6 | microSD-write web freeze (screenshot streaming) | `/ss.bmp` now streams from the panel framebuffer instead of a 1-chunk-per-row send that was itself killing the WiFi link — fixed and flashed, not yet re-measured under a real CW+card session. |
-| 7 | SDIO 10 s death-window patch | Flashed. **The one thing it exists to prove — a `slave answered again ... NOT restarting` line — has not been seen yet.** Needs a longer soak. |
+⚠ A and B both change behaviour at CAT link-up. Flash them together and watch
+one cold start with the QMX attached; the new lines to look for are
+`band scan: radio is on ... - will restore after` and
+`the band scan left the radio on ... - restoring ...`.
+
+### ⚠ The Master Table still needs its own pass
+
+377 rows. **101 of them carry a status that is not ✅/shipped/closed** - but a
+large share of those read "Fixed pending", "🟢 FIXED on main, NOT exercised" or
+"Built pending", written when the repo was at v1.5.0. Most are almost certainly
+shipped and field-proven several releases since; #261 above is one that was
+genuinely half-done and cost a user a wrong diagnosis this week.
+
+This is a real pass of its own - 101 rows, each needing a code check - and doing
+it badly is worse than leaving the warning. **Not attempted here.** The tractable
+order is: the 101 non-shipped rows first (the shipped ones are archive), and
+within those, the ones naming a user by name, because an unfixed field report
+must not be able to look finished.
 
 ### Decisions you haven't made yet (I asked, no answer came)
 | # | What | Question |
@@ -58,8 +69,9 @@ compiles clean; none of it has run on hardware.
 | #383 | Spot lane hides in-view spots with no indication | Real gap, first fix was wrong and reverted, still unsolved |
 | #376/#367 | WSPR decoder steals USB audio at the wire; the "deep" candidate pass is measurably better but starves capture | Deliberately shipped OFF, root cause understood, not a quick fix |
 | #378 | Web page freezes up to 30 s during a microSD write | Mitigated (deferred while a browser watches), not cured |
-| #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | Instrument built, not yet flashed |
-| #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | Understood, not blocking anything currently planned |
+| #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | ✏ **Corrected 2026-10-01: the instrument IS flashed** - `sock_probe_free_cached()` is in the shipped 60 s HEAP line in `audio/audio.c`, so every field capture carries `sock=N`. The row said "not yet flashed" for weeks after it was. Culprit still not named |
+| SDIO | 10 s death-window patch - the line it exists to prove has never appeared | Standing patch present (24/24). ⚠ **Checked 2026-10-01: zero occurrences of `NOT restarting` in the whole dev-bench capture.** Either the window never opened on this bench, or the patch's own evidence line does not fire. Needs a long soak, or an admission that it is unproven |
+| #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | ✏ **Sharper than "understood" as of 2026-10-01.** With RX audio ON the DMA floor is **3,207 B, measured and stable**; v1.16.9 bought ~24 KB back by moving the RX-audio ring to PSRAM, after the same shortage killed SD cards for two users. The remaining lever is `dma_desc_num` 12→6 in `rx_audio.c` (~23 KB) and it **needs a soak** - it was raised to 12 deliberately and reverting made the chirp audibly worse |
 | new | Every WSPR decode (~33 s, core 1 at 0 % idle) causes CAT `TX transfer timeout`s about once a second; each recovers within ~100 ms | Seen 2026-09-13 at 191–220 s and 310–318 s of a boot. Same family as #376. No lost audio in those windows, no user-visible effect found yet |
 | new | Opening "Need guidance?" for the first time stalls LVGL long enough for one CAT timeout and a 1 s audio delay (caught up, nothing dropped) | Lazy first build of the panel. Seen once, 2026-09-13 125 s |
 | new | `cpu_owners` showed taskLVGL at priority **22** (base 4) | One sample, 2026-09-13 251 s. Raised priority on taskLVGL was the signature of the 2026-09-11 display_lock inversion — find who at 22 waits on the lock before assuming it is harmless |
@@ -67,9 +79,6 @@ compiles clean; none of it has run on hardware.
 | new | QMX dropped off USB, then the Tab5 itself rebooted ~50s later (`reset_reason=unknown`, no crash record) | 2026-09-13 ~23:27. Neither of us touched the hardware or issued a flash in that window (same firmware SHA before/after). ROM-level reset line was missed by the capture's reconnect. Not recurred since. Watch for a repeat rather than chase it cold |
 | new | "Need guidance?" - no row anywhere showed the amber flagged highlight, after the SelfSpotter overlay fix | Checked the render code (correct: amber bg/border, warning icon, all conditional on `flagged`) and the bench state at the time (CAT genuinely connected, WiFi genuinely up) - nothing SHOULD have been highlighted on the screens checked. "The spot map is empty" only appears in the list while actually inside the overlay, and only highlights if the map has zero spots at that instant - not confirmed whether that specific case was what was tested. Worth a deliberate check with fresh eyes (e.g. WiFi off, confirm "I cannot reach the web page" lights up) before assuming a real bug |
 
-| new | Screenshot downloads a PNG instead of opening a new tab *(John W5JSS, 2026-10-01)* | **He has no way to just glance at the screen.** v1.16.8 changed `/ss.bmp` to a PNG download to stop the tearing; the quick-look workflow went with it. He asked for a setting. Told him I would see about making it a choice - PROMISE LOGGED, not yet designed. Decide: a setting, or restore the tab and keep PNG as an explicit download |
-| new | CAT band scan dumped the radio on 160m at every link-up - FIX COMMITTED, UNVERIFIED | *(John W5JSS, 2026-10-01)* **His radio kept turning up on 1.837700 MHz in CW while his WSPR page said 20m.** The band-list scan walks the QMX's own Band config menus, and the QMX leaves its menus on 160m whatever band it started on. `qmx_term.c` has saved/restored frequency and mode around a menu visit for exactly this reason since it was written; `cat.c`'s scan restored nothing. `819fbd9` adds the same save/restore. ⚠ **COMPILE-ONLY, never run against a radio** - the `FA;MD;` pre-query timing is reasoned, not measured. ⛔ Blamed first on a dead CAT link, then by me on his Virtual U3S beacon; both wrong, and he disabled a beacon that was innocent. The timing was the giveaway and nobody read it: 80→60→30→20m inside **1.6 s** is nothing on a two-minute beacon schedule |
-| new | WSPR page does not say the radio has left the page's band - FIX COMMITTED, UNVERIFIED | *(John W5JSS, 2026-09-30)* His QMX's own Virtual U3S beacon band-hopped the radio out from under the WSPR page; the page kept showing 20m while the radio sat on 160m, so a correct "160M is not calibrated" refusal read as a fault. The mismatch was detected and logged four times in his capture and shown nowhere. `36ff011` puts it on screen in amber and makes the TX refusal name both bands. ⚠ **COMPILE-ONLY - never flashed, labels never seen on a screen.** `pa_s` is 40 B and `ps_s` 48 B, so long band strings may clip, and placement in the PA area is unchecked against the real layout |
 | new | "Now turn on or reboot your QMX/+" breathing overlay shows before the Tab5 itself is ready to take CAT | *(Dennis WN4FLA + Gyula HA3HZ, 2026-09-30/10-01)* Dennis: the overlay appears immediately at boot, ahead of the Tab5's own init finishing, so it reads as "the QMX is off" when the QMX may already be on and answering fine — the Tab5 just hasn't started polling CAT yet. Gyula agrees and adds a scope question: is this worth solving given who actually runs this (QRP, slow-CPU audience who can see the frequency match themselves)? Gates on `cat_is_ready()` in `qmx_wait_poll_cb()` (`main/ui/ui.c:4508`), shown immediately on creation (`main/ui/ui.c:7117`) — no check yet for whether the Tab5's own CAT subsystem has finished initializing. Not designed, not started |
 
 ### Deliberately parked (not today, by design)
