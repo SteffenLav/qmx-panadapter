@@ -43,19 +43,13 @@ one cold start with the QMX attached; the new lines to look for are
 `band scan: radio is on ... - will restore after` and
 `the band scan left the radio on ... - restoring ...`.
 
-### ⚠ The Master Table still needs its own pass
+### ✅ The Master Table is reconciled
 
-377 rows. **101 of them carry a status that is not ✅/shipped/closed** - but a
-large share of those read "Fixed pending", "🟢 FIXED on main, NOT exercised" or
-"Built pending", written when the repo was at v1.5.0. Most are almost certainly
-shipped and field-proven several releases since; #261 above is one that was
-genuinely half-done and cost a user a wrong diagnosis this week.
-
-This is a real pass of its own - 101 rows, each needing a code check - and doing
-it badly is worse than leaving the warning. **Not attempted here.** The tractable
-order is: the 101 non-shipped rows first (the shipped ones are archive), and
-within those, the ones naming a user by name, because an unfixed field report
-must not be able to look finished.
+Done 2026-10-01 — see **📒 RECONCILIATION LEDGER** below. All 377 rows read and
+given a verdict: 273 already ticked (archive), 4 reverted, 100 itemised. The net
+result is **14 genuinely open**, 10 waiting on a user, 39 shipped but never
+confirmed by the person who reported them, 31 decisions/ideas/parked, and 5 that
+were finished and never got their tick.
 
 ### Decisions you haven't made yet (I asked, no answer came)
 | # | What | Question |
@@ -98,6 +92,150 @@ which remains accurate — parked is not fixed.
 
 ---
 
+## 📒 RECONCILIATION LEDGER — all 377 Master Table rows, 2026-10-01
+
+Every row below the Master Table heading was read and given a verdict. **273**
+already carried ✅/shipped/closed and are archive; **4** were reverted or
+rejected; the **100** that did not are itemised here. The Master Table itself is
+left untouched as the historical record — this ledger is the authority.
+
+⭐ **The single most valuable find: #261.** Randy N4OPI, *"after using the radio's
+menus remotely, the QMX comes back on 160 m"*, fixed in `qmx_term.c` at v1.9.6 —
+but `cat.c`'s band scan drives the SAME menus and was never swept. That cost John
+W5JSS a wrong diagnosis this week and was only fixed today (`819fbd9`). An
+unfixed sibling sat in this table for seven weeks looking done.
+
+⚠ **"Pending" in this table meant pending RELEASE**, written when the repo was at
+v1.5.0. The tree is clean and eleven releases on, so every one of those shipped.
+What did NOT happen for most of them is confirmation by the person who reported
+it — which is the real open item, and is why they are not simply ticked.
+
+### 🔴 STILL OPEN — work remains (14)
+
+| # | What | Verdict |
+|---|---|---|
+| 111 | README and docs/mkdocs are two trees saying the same things | OPEN_CONFIRMED — still two doc trees - confirmed today |
+| 131 | SDIO recoveries — the reboot path is fixed, the degradation is not | OPEN-PARTIAL — reboot path fixed v1.8.4; the TX fix is UNEXERCISED |
+| 215 | QMX Diagnostics screen: colour and button animation not reproduced (Samuel | OPEN — made measurable (b78d54c); the fix needs one run |
+| 285 | 🔴 taskLVGL is 73.9 % of core 0 and only ~7 points of it is the rotation —  | OPEN_CONFIRMED — DMA floor measured 3,207 B with RX audio on |
+| 291 | 🟠 A setting changed from the web is not reflected in the Tab5 drawer's dro | OPEN-CLASS — declared power fixed; the web-vs-drawer CLASS is still open |
+| 313 | 🟠 The web server wedged while the device stayed perfectly healthy (observe | OPEN_CONFIRMED — instrument IS flashed (row was wrong); culprit unnamed |
+| 315 | 🟠 150 stack copies of a ~1 KB settings struct — the crash class that has n | OPEN-PARTIAL — <=4 KB-stack sites converted (69ed469, v1.10.7); the pattern is untouched elsewhere |
+| 367 | 🟠 WSPR decodes 19 of wsprd's 32. Root cause FOUND (an ordering bug) and th | OPEN_CONFIRMED — deep pass still OFF |
+| 376 | 🟠 THE WSPR DECODER STEALS THE RADIO'S AUDIO, AND A WSPR WINDOW WITH 1 % OF | OPEN_CONFIRMED — deep pass still OFF (WSPR_DEEP_MAX_PER_CYCLE 0) |
+| 378 | 🟠 The web page freezes for up to 30 s while the microSD is written (Gyula  | OPEN_CONFIRMED — mitigated not cured |
+| 383 | 🟡 The spot lane hides in-view spots with nothing saying so (operator, 2026 | OPEN_CONFIRMED — open |
+| 60 | Fast pounce (early decode) on-air A/B — still unverified | OPEN — on-air A/B still unverified - the no-antenna excuse has expired |
+| 65 | The real constraint is the MALLOC_CAP_DMA pool, not the internal heap | OPEN-PARTIAL — ⭐ this IS the DMA-pool constraint. PARTIALLY FIXED in v1.16.9 (RX-audio ring to PSRAM, ~24 KB back); floor now 3,207 B with RX audio on |
+| 96b | ⚠ Three manual diagrams state behaviour that is no longer true | OPEN-DOCS — three manual diagrams stated behaviour no longer true - NOT re-checked in this pass |
+
+### ⏳ WAITING ON A USER — cannot progress here (10)
+
+| # | What | Verdict |
+|---|---|---|
+| 133 | Flashing failed repeatedly until the Tab5 was rebooted (Samuel W7STF) | WAITING_ON_USER |
+| 197 | First entry into Radio Menus after a flash draws blank or corrupt; later e | WAITING_ON_USER |
+| 235 | 🔴 After an OTA update the FILTER menu is dead until a power-button reboot  | WAITING_ON_USER |
+| 266 | 🔴 An automatic update downloaded, rebooted the Tab5 by itself, and came ba | WAITING_ON_USER |
+| 269 | 🔴 After a band change something retunes the radio BACK to the old band ~11 | WAITING_ON_USER |
+| 274 | 🔴 Web UI froze 30-45 s after three uses of the out-of-band slider, and sho | WAITING_ON_USER |
+| 276 | In CW, tuning is followed by one or two automatic corrections (Samuel W7ST | WAITING_ON_USER |
+| 282 | 🟢 The SD archive wrote to a card it never mounted, and un-parked a flag no | WAITING_ON_USER |
+| 339 | 🟠 The SDIO link to the C6 died and the device restarted itself - standing  | WAITING_ON_USER |
+| 384 | 🟡 FT8 "arms for an answer and then waits another round" (Dirk DK7CVD, v1.1 | WAITING_ON_USER |
+
+### 🟢 SHIPPED, NEVER CONFIRMED BY THE REPORTER (39)
+
+| # | What | Verdict |
+|---|---|---|
+| 102 | Binaural sound-stage width should be a SETTING | VERIFIED_SHIPPED — v1.16.0 (pan width/blend/overlap are settings) |
+| 112 | FT8 Fox/Hound (DXpedition) mode - HOUND side | SHIPPED-UNCONFIRMED — built + sim-verified; never on-air verified |
+| 113 | RIT (and the RIT/XIT split of roles) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 135 | The occupancy strip for our OWN TX window goes all-green (reads as "all fr | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 136 | After aborting a TX, listen to the rest of that slot and rebuild the occup | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 137 | Long-press a CQ row to pounce immediately, without the modal (Roy KI0ER) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 138 | RIT cannot be cleared to off/zero; band change does not clear it; RIT stay | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 152 | USB mouse: pointer flies horizontally and crawls vertically (Kevin KW6E, M | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 199 | 🔴 The FT8 monitor pool can be built TWICE with no teardown, and the second | SHIPPED-UNCONFIRMED — root-caused + fixed (3f348fc); not reproduced-and-cleared |
+| 201 | 🔴 Auto-answer picks an OCCUPIED offset even with fresh EVEN+ODD maps showi | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 217 | Web UI: residual PSD stalls, 3-6 s, after a point-and-shoot (Samuel W7STF) | SHIPPED-UNCONFIRMED — cause found + fixed (56ff56b); never confirmed as HIS symptom |
+| 239 | The whole OTA flow moves off the bottom bar into a window (Don N2VGU, + op | VERIFIED_SHIPPED — shipped (OTA window) |
+| 244 | ⚠ The arrow in the update line is still not right (operator) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 245 | Binaural CW - second independent request (Dave KX3DX) | VERIFIED_SHIPPED — v1.16.0 (binaural CW) |
+| 250 | MY_CALL should be STATION_CALLSIGN (Don WB0LQW) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 251 | Park-to-Park: let the web log editor set SIG/SIG_INFO after the fact (Don  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 252 | FT4 must be MODE=MFSK + SUBMODE=FT4, not MODE=FT4 (Don WB0LQW) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 258 | "Check for updates" says "Up to date" about a release that already exists  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 259 | The mouse wheel scrolls panels past their last row into blank space (Roy K | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 261 | After using the radio's menus remotely, the QMX comes back on 160 m (Randy | VERIFIED_SHIPPED — v1.9.6 for qmx_term - ⛔ CLASS NOT SWEPT, cat.c fixed only today (819fbd9) |
+| 267 | A switch for the background download - it had none (Michael KZ4LY, Samuel  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 268 | Basic/Expert drawer choice is forgotten at every boot (Samuel W7STF) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 270 | The Bluetooth switch greys the icon out immediately, but the radio stays o | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 271 | "Later" is the wrong word on the update window's dismiss button (Don N2VGU | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 275 | Radio menus in the BROWSER cut off the right-hand side (Samuel W7STF) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 277 | The P2P ref column is filled in for ordinary hunting, when no activation i | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 278 | A digital-mode activator who never registered with POTA has no reference t | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 281 | 🔴 The FT8 per-slot log walked the heap with interrupts off - the documente | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 299 | 🔴 The bench CANNOT exercise the FT8/FT4 slot-loop gating without a live ra | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 300 | 🔴 FT4 reports a FABRICATED 5.0 W - the live path fell into the simulation  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 301 | 🔴 Auto-work-pileup called a station who was mid-QSO with someone else (Gyu | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 35 | Fast-charge enable/disable toggle (Samuel W7STF, groups.io #173236, Jul 4) | VERIFIED_SHIPPED — shipped (charge limit in settings) |
+| 36 | System status: add CPU% (+ mem%) to the resource-monitor overlay (Samuel W | VERIFIED_SHIPPED — shipped (per-core idle% in resmon) |
+| 381 | 🟢 WSPR band hopping retuned the radio during FT8 (Dirk DK7CVD) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 382 | 🟢 WSPR PA voltage stayed at 6 V after switching to FT8 (Dirk DK7CVD - his  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 49 | Broken-QSO resume (manual re-pounce + auto comeback) | SHIPPED-UNCONFIRMED — ship-on-faith (56c9141); never field-confirmed |
+| 6 | CW Audio (speaker/headphone output only) | VERIFIED_SHIPPED — v1.16.0 (RX audio out) |
+| 94c | Binaural CW: decide what sets stereo position | VERIFIED_SHIPPED — v1.16.0 |
+| 94d | CW audio: gate the task by MODE, never merely mute it | VERIFIED_SHIPPED — v1.16.0 (gated by mode_from_cat_str) |
+
+### ⚪ DECISIONS, IDEAS, PARKED, NOT STARTED (31)
+
+| # | What | Verdict |
+|---|---|---|
+| 10 | JS8 mode | DECISION_OR_NOT_STARTED |
+| 10b | RTTY mode | DECISION_OR_NOT_STARTED |
+| 11 | DSP polish (noise reduction, auto-notch) | DECISION_OR_NOT_STARTED |
+| 114 | The per-bin adaptive noise floor has never run - audio.c re-seeds it 17 ti | DECISION_OR_NOT_STARTED |
+| 128 | Show the QMX CW decode buffer - layout (Samuel W7STF) | PARKED — deferred to feat/cw-page |
+| 160 | Soak runs happen OVERNIGHT ONLY — the bench is for development in daylight | NOT-A-TASK — standing practice, not work |
+| 169 | Out-of-band handling below 1.838 MHz, and a user-defined 200 m band (Samue | ON-HOLD — band definition on hold at his request |
+| 192 | Give the diag log its own flash partition | DECIDED — DECIDED AGAINST - partitions.csv records the operator's call: the free tail is firmware headroom |
+| 222 | Spur suppression PARKED — it only ever worked at zoom ×1 (operator, 2026-0 | DECISION_OR_NOT_STARTED |
+| 238b | 💡 JS8Call on the Tab5 + snap-on keyboard for offgrid portable (Mark N5OBC) | IDEA — idea only, not promised |
+| 24 | Configurable FFT size / PSD refresh rate / waterfall speed / draggable spe | DECISION_OR_NOT_STARTED |
+| 241 | A small waterfall on the FT8 screen (Tab5 + browser) | DECISION_OR_NOT_STARTED |
+| 243 | 💡 PSK-31 — the licence blocker is GONE (Michael KZ4LY) | DECISION_OR_NOT_STARTED |
+| 243b | 💡 PSK-31 (superseded row) | DECISION_OR_NOT_STARTED |
+| 247 | The shipped v1.9.3 binary embeds the PRE-CLEANUP manual text | DECISION_OR_NOT_STARTED |
+| 248 | .bss has crept back: libmain.a owns 153,906 of 170,704 bytes | DECISION_OR_NOT_STARTED |
+| 249 | Bench build-out and the move to the shack machine | DECISION_OR_NOT_STARTED |
+| 253 | Remove FREQ / RST_SENT / RST_RCVD / MY_GRIDSQUARE / GRIDSQUARE from the AD | DECISION_OR_NOT_STARTED |
+| 262 | Install the panadapter from the M5Stack launcher (bmorcelli) instead of a  | DECISION_OR_NOT_STARTED |
+| 298 | 🔵 A STILL spectrum/waterfall with the VFO moving over it (FlexRadio model) | DECISION_OR_NOT_STARTED |
+| 303 | 💡 Support the QDX / QDX-M — a fully digital box with no display at all (re | DECISION_OR_NOT_STARTED |
+| 31 | FT8 weak-signal rescue — Stage 2 residual subtraction (offline research, N | PARKED — research done, next level not started |
+| 318 | 🟡 A/B the WebSocket send buffer: CONFIG_LWIP_TCP_SND_BUF_DEFAULT 2880 vs 5 | DECISION_OR_NOT_STARTED |
+| 351 | 💡 CW transmit: TWO independent paths at TWO independent speeds (Michael KZ | DECISION_OR_NOT_STARTED |
+| 37 | Navigation/gesture model — carousel vs base+overlay consistency (Samuel W7 | IDEA — UX thought, revisit later |
+| 4 | CW page — Phase 1: TX/memory (thread, Jun 24-25) | DECISION_OR_NOT_STARTED |
+| 43 | Web-UI audio streaming + server mode (Sam W7STF, email 2026-07-15) | DECISION_OR_NOT_STARTED |
+| 4b | CW page — Phase 2: RX decode | DECISION_OR_NOT_STARTED |
+| 7 | Speaker/headphone audio (Tab5 jack) | DECISION_OR_NOT_STARTED |
+| 8 | Extended waterfall history | DECISION_OR_NOT_STARTED |
+| 9 | QMX (small) support | DECISION_OR_NOT_STARTED |
+
+### ✔ CLOSED — row never got its tick (5)
+
+| # | What | Verdict |
+|---|---|---|
+| 229 | 🔴 The web UI took ~95 SECONDS to load — it read as "unreachable" (operator | CLOSED — FIXED + hardware-verified, 95 s -> 4.0 s cold. Row never got its tick |
+| 27b | Tab5 crashed mid-session, 4× reset_reason=panic/exception in one log captu | STALE — crash with no backtrace, 2026-08 era, not recurred - watch not chase |
+| 319 | 🟠 Two crashes, back to back, the first time RX audio was switched on and t | CLOSED — both crashes decoded; neither address exists in the current code |
+| 74 | QMX never re-enumerates after a Tab5 warm reboot | CLOSED-NOT-OURS — root-caused QMX-side, detector shipped, no fix possible from here |
+| 94b | RIT / "CLAR RX" over CAT — DROPPED | CLOSED — "Closed - not wanted" |
+
+---
+
 ## ⚡ Status Legend
 
 - 🔴 **Identified bug** — Code defect confirmed, ready to fix
@@ -110,7 +248,15 @@ which remains accurate — parked is not fixed.
 
 ---
 
-## 📋 Master Table
+## 📋 Master Table — HISTORICAL ARCHIVE
+
+⛔ **Reconciled 2026-10-01; the ledger above is the authority.** Rows here were
+written between 2026-06 and 2026-09-02 and describe repo state at v1.5.0. Do not
+read a status in this table as current - several said "pending" for eleven
+releases after the work shipped, and #261 said "built" while half its class was
+still broken. Kept intact because the DETAIL columns hold the reasoning, the
+measurements and the dead ends, which are still worth reading.
+
 
 | # | Item | Status | Effort | Next Step / Notes |
 |----|------|--------|--------|-----------|
