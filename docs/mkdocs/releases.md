@@ -15,7 +15,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
 
-⚠ Not yet confirmed in the field. The cause and the fix are both proven on the bench by turning the fault on and off deliberately, but Gyula and Randy have not confirmed it on their own units yet. If the card still misbehaves on this release, send a diagnostic and say whether RX audio is on.
+⭐ Confirmed in the field *(Randy N4OPI, 2026-10-01)* - three units on this release, RX audio switched on and rebooted on all three, card accessible throughout. With RX audio off the fault cannot occur, which is why this bench never showed it.
 
 ## Previous Releases
 

@@ -4267,6 +4267,6 @@ Audio and binaural CW remain a **declared beta**.
 
 ⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)* — a real feature request, not a quick one, since it would need its own continuous audio path independent of the decode capture; not attempted this cycle.
 
-⚠ **Not yet confirmed in the field.** The cause is proven and the fix is proven on my bench, by turning the fault on and off deliberately. Gyula and Randy have not had a chance to confirm it on their own units, and their setups carry more running at once than mine does. If the card still misbehaves for you on this release, please send a diagnostic and say whether RX audio is on.
+⭐ **Confirmed in the field** *(Randy N4OPI, 2026-10-01)*. Three of his units are on this release and the card works on all three. The test that matters is that he switched RX audio **on** — the state that triggered the fault — on all three and rebooted them, and the card stayed accessible. With RX audio off the fault cannot occur at all, which is why my own bench never showed it.
 
 Audio and binaural CW remain a **declared beta**.
