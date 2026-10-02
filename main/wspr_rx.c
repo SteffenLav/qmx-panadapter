@@ -330,6 +330,9 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
  * leaving a third of FT8_PRE_CAP's 15 s in reserve. Being late is free here;
  * SLEEPING through a boundary is what costs a whole cycle. */
 #define WSPR_ARM_GRACE_MS      10000
+/* How long before the boundary the settings read + PA guard are done, so the
+ * post-boundary path can reach wspr_tx_arm() inside WSPR_TX_START_OFFSET_MS. */
+#define WSPR_PREP_LEAD_MS       3000
 
 /* The audio window sits between 1400 and 1600 Hz for a standard WSPR dial, but
  * the search is widened a little either side: the operator's dial calibration,
@@ -2104,6 +2107,7 @@ static void wspr_rx_task(void *arg)
          * synthesizes a window in a moment rather than capturing for 120 s,
          * would come straight back inside the grace window and re-run the same
          * cycle in a tight loop. */
+        qmx_settings_t ws;
         int64_t t = now_ms();
         int64_t into = t % WSPR_CYCLE_MS;
         int64_t cyc  = t / WSPR_CYCLE_MS;
@@ -2111,7 +2115,38 @@ static void wspr_rx_task(void *arg)
                      ? 0 : (WSPR_CYCLE_MS - into);
         set_status("waiting %llds", (long long)(wait / 1000));
         s_wait_secs = (int)((wait + 999) / 1000);
+
+        /* ⭐ THE SETTINGS READ AND THE PA GUARD HAPPEN BEFORE THE BOUNDARY NOW.
+         *
+         * John W5JSS, 2026-10-01: with 2 tx + 8 rx his beacon transmitted only
+         * at :02, :22, :42 - the first cycle of every group never went out, and
+         * one spot landed at :16, off his own grid entirely.
+         *
+         * Measured from his log: the wait loop exits ON the boundary, but the
+         * work between there and wspr_tx_arm() took 2,106 ms - settings_load_all()
+         * reads NVS into a multi-kilobyte struct, then the PA guard runs, then
+         * the TX-busy check. WSPR_TX_START_OFFSET_MS is 1000, so by the time the
+         * arm was reached its own slot had passed and it target - ed the NEXT even
+         * minute. WSPR_ARM_GRACE_MS is 10,000, which is right for a capture and
+         * ten times too generous for a burst, so nothing caught it.
+         *
+         * Two consequences, and the second is the worse one: the group's first
+         * burst is lost, AND the deferred burst fires in whatever cycle comes
+         * next - which at the end of a group is a RECEIVE cycle, so the beacon
+         * transmits off its own UTC grid and publishes that to wsprnet.
+         *
+         * ⛔ THE ARM ITSELF HAS NOT MOVED, deliberately. The comment below spells
+         * out why "roll at the top of cycle N, arm for N+1" is wrong here and
+         * that it was measured, not reasoned. Only the PREPARATION moved - into
+         * the wait, where the task is idle anyway - so the post-boundary path is
+         * now a busy-check and the arm, and reaches it in a few hundred ms. */
+        bool ws_ready = false;
         while (s_run && wait > 0) {
+            if (!ws_ready && wait <= WSPR_PREP_LEAD_MS) {
+                settings_load_all(&ws);
+                wspr_pa_guard_update(&ws);
+                ws_ready = true;
+            }
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
             vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
             /* Catches the PA-voltage answer the enable-time check missed -
@@ -2154,12 +2189,12 @@ static void wspr_rx_task(void *arg)
          * synthesizes its window instead of capturing, so nothing clashes -
          * and live would have spent 120 s capturing our own 110 s
          * transmission. */
-        qmx_settings_t ws;
-        settings_load_all(&ws);
-
-        /* Turn the PA down before any burst can be armed, and put it back as
-         * soon as transmitting is switched off. Edge-triggered inside. */
-        wspr_pa_guard_update(&ws);
+        /* Loaded in the wait above on the normal path; this covers the grace
+         * entry, where there was no wait to prepare in. */
+        if (!ws_ready) {
+            settings_load_all(&ws);
+            wspr_pa_guard_update(&ws);
+        }
 
         char txtext[64];
 
@@ -2301,7 +2336,30 @@ static void wspr_rx_task(void *arg)
              * ⚠ -1 is "not answered yet" and must NOT refuse: grounding the
              * beacon because the radio was slow to reply would be a worse fault
              * than the one being prevented. */
-            if (cat_get_split_state() == 1 && !cat_cw_tx_offset_engaged()) {
+            /* ⛔ TOO LATE TO KEY IN THIS CYCLE MEANS SKIP IT, NEVER SLIDE.
+             *
+             * wspr_tx_arm() targets "the next even UTC minute", so arming more
+             * than WSPR_TX_START_OFFSET_MS into a cycle does not transmit in
+             * THIS cycle - it transmits in the NEXT one, whatever the schedule
+             * says that cycle is for. At the end of a group that is a RECEIVE
+             * cycle, so the beacon keys off its own UTC grid and the spot goes
+             * to wsprnet saying otherwise. John W5JSS, 2026-10-01: a spot at
+             * :16 against a 2 tx + 8 rx schedule that only permits :00 and :02.
+             *
+             * The prep hoist above should keep this from ever firing. It stays
+             * because a missed slot is a cycle that did not transmit - which is
+             * exactly what the UTC-anchored design already tolerates - and an
+             * unscheduled transmission is not tolerable at all. */
+            const int64_t into_now = now_ms() % WSPR_CYCLE_MS;
+            if (into_now > WSPR_TX_START_OFFSET_MS) {
+                ESP_LOGW(TAG, "cycle %lld: TX slot missed by %lld ms (key-down is "
+                              "at %d ms) - skipping this cycle rather than "
+                              "transmitting in the next one, which the schedule "
+                              "may not allow",
+                         (long long)cycle_utc,
+                         (long long)(into_now - WSPR_TX_START_OFFSET_MS),
+                         WSPR_TX_START_OFFSET_MS);
+            } else if (cat_get_split_state() == 1 && !cat_cw_tx_offset_engaged()) {
                 ESP_LOGE(TAG, "TX skipped: the radio is in SPLIT, so a burst would go "
                               "out on VFO B and every spot would name the wrong "
                               "frequency. Clear split on the radio (VFO A only) - "
