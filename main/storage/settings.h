@@ -56,6 +56,21 @@ typedef struct {
     // from before this field existed), read as "use the 90 s default", NOT
     // as "expire instantly" - see ft8_screen.c's row_stale_sec().
     uint8_t max_age_sec;
+    /* --- Keep other CQs visible during my own CQ run - appended; old NVS
+     * blobs read back 0 (=off), which is the behaviour everyone had before.
+     *
+     * Randy N4OPI, 2026-10-02: "When calling CQ in FT8 with the WebUI, the
+     * decode list never shows other CQ callers... It would be nice to know if a
+     * station of particular interest is calling CQ during my listening time
+     * slot so I could take a break from calling CQ and make a quick contact."
+     *
+     * ⛔ It was not a setting at all before this: ft8_qso_cq_filter_active()
+     * hid every plain CQ row for the whole of a CQ run, unconditionally, so
+     * there was nothing he could have turned off - which is why he went looking
+     * through the filters and found none that explained it. The hide exists so
+     * replies addressed to us are not buried; this makes it the operator's
+     * choice rather than ours. */
+    bool    cq_show_others;  /* running CQ: keep other stations' CQ rows visible */
 } ft8_filters_t;
 
 // Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/

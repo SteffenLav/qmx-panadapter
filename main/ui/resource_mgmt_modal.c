@@ -281,6 +281,14 @@ static void audio_cb(lv_event_t *e)
     bool on = lv_obj_has_state((lv_obj_t *)lv_event_get_target(e), LV_STATE_CHECKED);
     rx_audio_set_enabled(on);
     ESP_LOGI(TAG, "RX audio %s from resource panel", on ? "enabled" : "disabled");
+    /* ⛔ SAY IT WHEN THE SWITCH CANNOT DO ANYTHING YET. The codec is opened at
+     * boot or not at all (rx_audio.h), so switching audio on mid-session is
+     * silently inert - Samuel W7STF spent fifteen minutes and a reboot finding
+     * that out. The firmware knew the whole time and only told the log. */
+    if (on && rx_audio_restart_pending())
+        ui_toast_ms("RX audio is on, but it needs a restart of the Tab5 to take "
+                    "effect - the audio hardware is only started at boot. "
+                    "Your QMX will need a power cycle after that, as always.", 12000);
     refresh_gating();
 }
 

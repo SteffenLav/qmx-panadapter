@@ -4191,6 +4191,8 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.excl_worked_before", "bool", "Exclude stations worked before", "Per band - the same call on another band is still new"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
+  ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",
+   "While you run CQ, other stations' CQ rows are hidden so replies to you are not buried. Turn this on to keep seeing them in your listening slot"],
   ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
   ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
   ["FT8 filters", "filters.cq_manual_pick",     "bool", "Pick callers myself", "Running CQ: a caller waits in the pile-up until you tap them. The exchange itself is still automatic. Overrides Auto-work the pileup"],

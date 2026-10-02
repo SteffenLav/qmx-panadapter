@@ -4283,6 +4283,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(f, "excl_worked_before", c.ft8_filters.excl_worked_before);
     cJSON_AddBoolToObject(f, "excl_plain_cq",      c.ft8_filters.excl_plain_cq);
     cJSON_AddBoolToObject(f, "incl_cq_only",       c.ft8_filters.incl_cq_only);
+    cJSON_AddBoolToObject(f, "cq_show_others",     c.ft8_filters.cq_show_others);
     cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
     cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
     cJSON_AddBoolToObject(f, "cq_manual_pick",     c.ft8_filters.cq_manual_pick);
@@ -4789,6 +4790,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         BOOLF("excl_worked_before", excl_worked_before);
         BOOLF("excl_plain_cq",      excl_plain_cq);
         BOOLF("incl_cq_only",       incl_cq_only);
+        BOOLF("cq_show_others",     cq_show_others);
         BOOLF("skip_tx1",           skip_tx1);
         BOOLF("auto_pileup",        auto_pileup);
         BOOLF("cq_manual_pick",     cq_manual_pick);
@@ -5516,7 +5518,8 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     // The our-parity hide is deliberately NOT applied here - it exists because a
     // row frozen on screen for minutes is confusing on the Tab5's fixed-height
     // list; the browser shows an age column instead, which answers it honestly.
-    bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
+    bool hide_cq = (ft8_qso_cq_filter_active() && !qs.ft8_filters.cq_show_others)
+                   || qs.ft8_filters.excl_plain_cq;
 
     // Distance/bearing for the browser's own KM|BRG columns (Tony Abbey asked
     // for the distance the Tab5 already shows). Computed HERE, from the same

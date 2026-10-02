@@ -31,6 +31,7 @@ static lv_obj_t *s_ta_excl[2]  = { NULL, NULL };
 static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
+static lv_obj_t *s_cb_cq_show_others = NULL;
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
@@ -124,6 +125,7 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
+    f.cq_show_others     = lv_obj_has_state(s_cb_cq_show_others, LV_STATE_CHECKED);
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
@@ -158,10 +160,11 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
-             f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup);
+             f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup,
+             f.cq_show_others);
     modal_close();
 }
 
@@ -386,6 +389,7 @@ static void modal_build(void)
     // 60 px row spacing (was 44) - big-finger touch clearance around the
     // checkboxes was too tight to safely tap just one (field feedback).
     lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_skip_tx1, *lbl_robot;
+    lv_obj_t *lbl_cq_show_others;
 
     s_cb_worked_before = make_labeled_checkbox(panel, "Exclude worked-before", 4, 330, &lbl_worked_before);
     lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -395,6 +399,19 @@ static void modal_build(void)
 
     s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 450, &lbl_incl_cq_only);
     lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    /* Randy N4OPI, 2026-10-02: while a CQ run is up, every other station's CQ
+     * row is hidden so replies to us are not buried - and that was not a
+     * setting, so there was nothing he could turn off. He wants them during his
+     * listening slot: "if a station of particular interest is calling CQ ... I
+     * could take a break from calling CQ and make a quick contact." Off keeps
+     * the old behaviour, which is what every existing NVS blob reads back. */
+    /* ⚠ RIGHT column, y=390 - the left column's 510 is Skip TX1 and 450 is
+     * taken by the Max-age dropdown that aligns off it. The label is kept
+     * short because only ~340 px remain to the panel edge at x=700; the web
+     * UI carries the full explanation. NOT seen on the screen yet. */
+    s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs during my run", RIGHT_COL_X, 390, &lbl_cq_show_others);
+    lv_obj_set_style_text_color(lbl_cq_show_others, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Max age in list — same row, in the gap before the right column ---
     // How long a station stays in the LIVE decode list with no fresh decode.
@@ -679,6 +696,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
+    apply_checkbox_state(s_cb_cq_show_others, f->cq_show_others);
     apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,
