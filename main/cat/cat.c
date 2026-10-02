@@ -3106,7 +3106,14 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
      * RTC read clear a WSPR burst's hold 30 s into a 110.6 s transmission -
      * see cat.h. cat_gps_tick_sync() has always had this check; this one
      * never did, and the two run back to back. */
-    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) return ESP_ERR_INVALID_STATE;
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) {
+        /* ⛔ SAY SO. A silent refusal reads exactly like a periodic pass that
+         * never ran, and "no lines during the burst" would then be evidence of
+         * nothing at all. This is the line that proves the guard was reached
+         * and did its job. */
+        ESP_LOGI(TAG, "QMX RTC read skipped - %s holds the link", hold_name(s_poll_holds));
+        return ESP_ERR_INVALID_STATE;
+    }
 
     cat_poll_hold(CAT_HOLD_TIME_SYNC);
     s_tm_resp_len = 0;
@@ -3165,8 +3172,10 @@ static bool parse_tm_resp(int *h, int *m, int *s)
 esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us)
 {
     if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
-    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC))
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) {
+        ESP_LOGI(TAG, "GPS tick skipped - %s holds the link", hold_name(s_poll_holds));
         return ESP_ERR_INVALID_STATE;   // a burst owns the pipe
+    }
 
     cat_poll_hold(CAT_HOLD_TIME_SYNC);
     int       prev_sec      = -1;
