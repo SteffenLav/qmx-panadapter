@@ -429,3 +429,8 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 void ui_drawer_map_defaults(void);
 // Current masks, so a partial update can leave untouched sections alone.
 void ui_drawer_map_masks(uint64_t *basic, uint64_t *adv);
+
+/* Called by app_main when start-up is finished. Until then the "Now turn on
+ * or reboot your QMX/+" prompt stays hidden: obeying it mid-boot starves
+ * internal RAM for the whole session. */
+void ui_notify_boot_complete(void);

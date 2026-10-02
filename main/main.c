@@ -600,6 +600,10 @@ void app_main(void)
     gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
 
     ESP_LOGI(TAG, "Init complete - main task idle");
+    /* Only now may the "Now turn on or reboot your QMX/+" prompt appear.
+     * Powering the radio on before this starves internal RAM for the whole
+     * session - see the gate in ui.c's qmx_wait_poll_cb(). */
+    ui_notify_boot_complete();
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
     // Verifies ft8_lib encoder + monitor + decoder work on ESP32-P4.
     // Logs PASS/FAIL with per-stage timing once the worker completes.

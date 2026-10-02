@@ -46,6 +46,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "adif/adif_log.h"     // adif_log_band_for_freq() - which band the WSPR declared-power picker filters against
 #include "wifi_config.h"
+#include "wifi.h"
 #include "tune_modal.h"
 #include "power_cal_modal.h"   // power_cal_voltage_for_dbm() - filters "Declared power" to achievable levels
 #include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
@@ -4449,6 +4450,15 @@ static void cw_strip_init(void)
     lv_timer_create(cw_strip_tick_cb, 250, NULL);
 }
 
+/* Set from app_main once every subsystem is up - see the gate in
+ * qmx_wait_poll_cb(). Nothing may invite a QMX power-on before this. */
+static volatile bool s_boot_complete;
+
+void ui_notify_boot_complete(void)
+{
+    s_boot_complete = true;
+}
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
@@ -4505,14 +4515,29 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         }
         return;
     }
-    /* ⛔ NOT BEFORE THE TAB5 IS LISTENING. cat_is_ready() is false for the whole
-     * of our own start-up, so without this the prompt appears the instant the
-     * screen does and tells the operator to turn on a radio that may already be
-     * on and answering. Dennis WN4FLA and Gyula HA3HZ both reported exactly
-     * that, 2026-09-30/10-01. cat_host_is_up() is true once cat_init() has
-     * opened the CDC host - measured at 7,403 ms on bench dev - and only from
-     * there does "no CAT" say anything about the radio. */
-    if (!cat_host_is_up() || cat_is_ready()) {
+    /* ⛔⛔ THE PROMPT MUST NOT APPEAR UNTIL IT IS SAFE TO OBEY IT.
+     *
+     * This is the whole point of the fix, and gating on cat_host_is_up() alone
+     * missed it. Powering the QMX on while the Tab5 is still starting starves
+     * internal RAM FOR THE REST OF THE SESSION - measured on bench dev
+     * 2026-09-22: free_int 138 KB at ~7 s, 28 KB by 17.6 s, then flat at
+     * 15-20 KB with lblk 6-11 KB. The web server stops answering, the socket
+     * table exhausts, and a null-dereference panic becomes likely. It does not
+     * recover. The operator's own standing advice is "wait until the spectrum
+     * is running and WiFi shows a network".
+     *
+     * So a prompt that says "Now turn on or reboot your QMX/+" at 6.9 s is not
+     * merely premature, it is an instruction to damage the session - and the
+     * operator reported precisely that: "if i pc'ed the qmx too early ... it
+     * would wedge immediately".
+     *
+     * The gate is therefore the documented safe point, not an invented delay:
+     * app_main has finished (ui_notify_boot_complete), AND WiFi has a network
+     * or is switched off entirely. Dennis WN4FLA and Gyula HA3HZ reported the
+     * early appearance; this is what makes the prompt honest about both the
+     * radio AND the moment. */
+    const bool wifi_settled = !panadapter_wifi_is_enabled() || wifi_is_connected();
+    if (!s_boot_complete || !wifi_settled || !cat_host_is_up() || cat_is_ready()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
