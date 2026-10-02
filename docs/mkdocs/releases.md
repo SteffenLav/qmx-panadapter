@@ -4,20 +4,29 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.16.9** - 2026-09-30
+**v1.16.10** - 2026-10-02
 
-**With WiFi on, SD card writes no longer stop about 30 seconds after boot.**
+**Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.**
 
-- ⭐ **With WiFi on, SD card writes no longer stop about 30 seconds after boot** *(Gyula HA3HZ, Randy N4OPI)*. This has sat under ⚠ as a known fault for five releases. The card's driver needs a small block of memory that hardware can transfer directly to and from, and it needs one for every 512-byte block it moves - asking for it part of the way *through* the transfer, after the card has already started sending data. A failed request drops the chip-select with the card still mid-block; from there the two are out of step, every later command returns nonsense, and after five failures the Tab5 unmounts the card. That is the crossed-out SD symbol, and it is why a restart clears it and why it looks random.
-- **What was eating the memory: RX audio.** It needs about 29 KB, and 24 KB of that was a buffer placed in exactly the memory the card driver competes for, with no need to be there. Moved to external memory, where 14 MB sits spare.
-- **Measured both ways on the bench.** With RX audio on and the old buffer in place, the card failed in 40 seconds with 87 bytes of that memory left. With the buffer moved, the same unit ends start-up with 25,791 bytes free instead of 9,215 and keeps writing. This bench never showed the fault for months because RX audio was switched off here - which is why it reached two operators first.
-- **Turning RX audio off is no longer the price of a working SD card.**
+- ⭐ **The band scan puts the radio back where it found it** *(John W5JSS)*. Reading your QMX's band list means walking the radio's own "Band config." menus, and leaving those menus drops the radio on 160 m in whatever mode they left behind. That happened on every CAT link-up, to everyone, for as long as the band list has existed. John's WSPR page was set to 20 m and his radio kept turning up on 1.837700 MHz in CW. Frequency and mode are now saved before the scan and restored after it, and only if the scan actually moved them.
+- ⭐ **WSPR transmits in its own cycle, and never in one the schedule forbids** *(John W5JSS)*. With more than one transmit cycle in a group the first cycle never went out - and the burst it missed slid into the next cycle instead of being dropped, which at the end of a group is a **receive** cycle. The beacon then keyed off its own schedule and published that to wsprnet. The arming was being done by the receive loop, which arrives about a second and a half into every cycle, while key-down has to happen within one second. Arming now runs in a task of its own that waits on the clock and nothing else: 5 to 49 milliseconds into the cycle on the bench instead of 1,437, both cycles of a group transmitting, receive cycles silent.
+- **The time sync no longer interrupts a transmission.** The five-minutely QMX clock read could take the CAT link from a burst and hand it back mid-transmission, leaving the Tab5 polling a keyed radio 20 times a second for the last 80 seconds of it.
+- **The WSPR page says when the radio has left the page's band.**
+- **The screenshot link opens in a tab again** *(John W5JSS)*. Measured: the PNG conversion costs 62 ms and the download 7.7 seconds, so waiting for the conversion showed a blank tab for seven seconds. A plain link paints as it arrives. "(save PNG)" still converts.
+- **"Now turn on or reboot your QMX/+" waits until it is safe to obey** *(Dennis WN4FLA, Gyula HA3HZ)*. It used to appear before the Tab5 was listening - and powering the radio on during start-up starves the Tab5 of memory for the whole session. It now waits for start-up and WiFi, and does not wait forever on a unit whose WiFi never connects.
+- **FT8: other stations' CQ calls can stay visible while you run your own CQ** *(Randy N4OPI)*. New **Show CQs in my run** filter, off by default.
+- **The Tab5's TX tone panel updates while you watch it** *(Randy N4OPI)*. It used to draw the occupancy once and never again.
+- **Switching RX audio on mid-session says it needs a restart** *(Samuel W7STF)*. The audio hardware is started at boot or not at all; the switch used to say nothing.
+- **A dead hosted WiFi link is recovered without a reboot** *(Bryan N0LUF)*. Checked every 30 seconds; after six failures the WiFi co-processor is power-cycled, at most three times per session. ⚠ Never seen to rescue a real wedge - the fault exists only in his log and has not been reproduced here.
 
-⚠ Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
-
-⭐ Confirmed in the field *(Randy N4OPI, 2026-10-01)* - three units on this release, RX audio switched on and rebooted on all three, card accessible throughout. With RX audio off the fault cannot occur, which is why this bench never showed it.
+⚠ Audio still breaks up with a web page open. **AM and FM produce no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)*.
 
 ## Previous Releases
+
+### v1.16.9 - 2026-09-30
+
+With WiFi on, SD card writes no longer stop about 30 seconds after boot *(Gyula HA3HZ, Randy N4OPI)* - a fault that had stood under ⚠ for five releases. RX audio's 24 KB buffer sat in the one kind of memory the SD driver competes for; moved to external memory. Confirmed in the field on three units.
+
 
 **v1.16.8** - 2026-09-29
 

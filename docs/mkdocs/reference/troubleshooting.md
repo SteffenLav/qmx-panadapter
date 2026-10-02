@@ -49,6 +49,27 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
    - Check the QMX's own **System Config -> IQ Mode** setting is enabled
 3. On firmware older than v0.19.3, this failure was silent — only visible in the diagnostic log as `QMX IQ mode NOT confirmed`. Updating is the simplest fix.
 
+### The radio jumps to 160 m whenever the Tab5 connects (fixed in v1.16.10)
+
+**On v1.16.9 and earlier, every CAT link-up moved your radio.** To show you a band
+list, the Tab5 reads it out of the QMX's own **Band config.** menus — and leaving
+those menus drops the radio on 160 m, in whatever mode the menus left behind. The
+Tab5 did not put it back. It happened on every connection, to everyone.
+
+What it looks like: you set up on 20 m, the Tab5 connects, and the radio is on
+1.837700 MHz in CW. If you run WSPR or a beacon it is worse than an annoyance —
+you transmit on a band you did not choose.
+
+**Update to v1.16.10**, which saves the frequency and mode before the scan and puts
+them back afterwards, and only if the scan actually moved them.
+
+!!! note "It is easy to blame the wrong thing"
+
+    This was reported as a dead CAT link, and then blamed on the radio's Virtual
+    U3S beacon — both wrong, and one operator switched off a beacon that was
+    innocent. The giveaway is in the timing: the band menus flick past in well
+    under two seconds, far faster than any beacon schedule.
+
 ### QMX loses CAT connection after 1–2 minutes
 
 **Symptoms:** Frequency/mode/BW stop updating, FT8 can't transmit.
