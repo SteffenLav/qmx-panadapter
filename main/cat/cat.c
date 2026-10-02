@@ -1,4 +1,5 @@
 #include "cat.h"
+#include "util/cat_restore.h"   // what the band scan sends to undo itself
 
 #include <string.h>
 #include <stdarg.h>
@@ -2230,6 +2231,79 @@ static void poll_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* ⭐ PUT THE RADIO BACK WHERE THE BAND SCAN FOUND IT. Same contract as
+ * qmx_term.c's restore, and written the same way round: only act if it actually
+ * moved, so a radio the menus left alone is never written to.
+ *
+ * Sent directly rather than via cat_set_frequency_forced() / cat_request_mode():
+ * both of those route through poll_task, which does not exist yet at this point
+ * in link-up. The blocking write is the same one the scan itself uses, so if the
+ * scan could talk to the radio, so can this.
+ *
+ * ⛔ THE DECISION IS IN util/cat_restore.c, NOT HERE, because this branch cannot
+ * be reached on the bench: the band menus do not move this QMX's dial, so
+ * frequency and mode read identical before and after and nothing is ever
+ * restored. The save half is proven on hardware; this half is proven by
+ * test/cat_restore_harness.c and by the deliberate entry point below.
+ *
+ * ⚠ The WRITES have still never gone out after a real scan. */
+static void band_scan_restore(uint32_t pre_freq, char pre_mode_digit)
+{
+    const cat_restore_plan_t plan =
+        cat_restore_plan(pre_freq, pre_mode_digit, s_last_freq_hz, s_last_mode_digit);
+
+    if (plan.send_freq) {
+        char fa[20];
+        snprintf(fa, sizeof(fa), "FA%011lu;", (unsigned long)plan.freq_hz);
+        ESP_LOGW(TAG, "the band scan left the radio on %lu Hz - restoring %lu Hz",
+                 (unsigned long)s_last_freq_hz, (unsigned long)plan.freq_hz);
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fa,
+                                          strlen(fa), 200) == ESP_OK) {
+            s_last_freq_hz = plan.freq_hz;
+            ui_update_frequency(plan.freq_hz);
+        } else {
+            ESP_LOGW(TAG, "restore of %lu Hz could not be sent", (unsigned long)plan.freq_hz);
+        }
+    }
+
+    if (plan.send_mode) {
+        char md[8];
+        snprintf(md, sizeof(md), "MD%c;", plan.mode_digit);
+        ESP_LOGW(TAG, "the band scan left the radio in mode '%c' - restoring '%c'",
+                 s_last_mode_digit ? s_last_mode_digit : '?', plan.mode_digit);
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)md,
+                                          strlen(md), 200) != ESP_OK)
+            ESP_LOGW(TAG, "restore of mode '%c' could not be sent", plan.mode_digit);
+    }
+}
+
+/* ⛔ DELIBERATE TEST ENTRY POINT - the only way this restore has ever run.
+ *
+ * The bench QMX's band menus leave the dial where it was, so the restore branch
+ * is unreachable here no matter how many link-ups are watched. This runs the
+ * REAL function with a "where it was" the caller supplies, so a known-wrong
+ * value makes the radio move and the FA;/MD; writes can be seen on the dial and
+ * in the log. It does not simulate the restore - it IS the restore.
+ *
+ * POST /api/cmd {"action":"band_scan_restore_test","hz":<Hz>,"mode":"<digit>"}
+ *
+ * Nothing calls it in normal operation. It sends no TX and touches only VFO A
+ * and the mode. */
+void cat_band_scan_restore_test(uint32_t pre_freq, char pre_mode_digit)
+{
+    if (!s_cdc_dev) {
+        ESP_LOGW(TAG, "restore test: no CAT link");
+        return;
+    }
+    ESP_LOGW(TAG, "restore test: pretending the scan found %lu Hz mode '%c' "
+                  "(radio now reads %lu Hz mode '%c')",
+             (unsigned long)pre_freq,
+             (pre_mode_digit >= '1' && pre_mode_digit <= '9') ? pre_mode_digit : '?',
+             (unsigned long)s_last_freq_hz,
+             s_last_mode_digit ? s_last_mode_digit : '?');
+    band_scan_restore(pre_freq, pre_mode_digit);
+}
+
 static void link_task(void *arg)
 {
     while (1) {
@@ -2707,41 +2781,7 @@ static void link_task(void *arg)
                 ESP_LOGI(TAG, "Band list: %d bands found", s_band_count);
             }
 
-            /* ⭐ AND PUT IT BACK. Same contract as qmx_term.c's restore, and
-             * written the same way round: only act if it actually moved, so a
-             * radio the menus left alone is never written to.
-             *
-             * Sent directly rather than via cat_set_frequency_forced() /
-             * cat_request_mode(): both of those route through poll_task, which
-             * does not exist yet at this point in link-up. The blocking write
-             * is the same one the scan above just used, so if the scan could
-             * talk to the radio, so can this. */
-            if (pre_freq) {
-                const uint32_t now_hz = s_last_freq_hz;
-                if (now_hz != pre_freq) {
-                    char fa[20];
-                    snprintf(fa, sizeof(fa), "FA%011lu;", (unsigned long)pre_freq);
-                    ESP_LOGW(TAG, "the band scan left the radio on %lu Hz - restoring %lu Hz",
-                             (unsigned long)now_hz, (unsigned long)pre_freq);
-                    if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fa,
-                                                      strlen(fa), 200) == ESP_OK) {
-                        s_last_freq_hz = pre_freq;
-                        ui_update_frequency(pre_freq);
-                    } else {
-                        ESP_LOGW(TAG, "restore of %lu Hz could not be sent", (unsigned long)pre_freq);
-                    }
-                }
-            }
-            if (pre_mode_digit >= '1' && pre_mode_digit <= '9' &&
-                s_last_mode_digit != pre_mode_digit) {
-                char md[8];
-                snprintf(md, sizeof(md), "MD%c;", pre_mode_digit);
-                ESP_LOGW(TAG, "the band scan left the radio in mode '%c' - restoring '%c'",
-                         s_last_mode_digit ? s_last_mode_digit : '?', pre_mode_digit);
-                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)md,
-                                                  strlen(md), 200) != ESP_OK)
-                    ESP_LOGW(TAG, "restore of mode '%c' could not be sent", pre_mode_digit);
-            }
+            band_scan_restore(pre_freq, pre_mode_digit);
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
 

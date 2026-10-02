@@ -1517,6 +1517,31 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "band_scan_restore_test") == 0) {
+        /* ⛔ DEV HOOK, and the only way the band-scan restore has ever run.
+         *
+         * The restore (819fbd9, John W5JSS) fires only when the QMX's "Band
+         * config." menus move the dial, and on the bench QMX they do not -
+         * frequency and mode read identical before and after every scan - so
+         * the branch is unreachable here however many link-ups are watched.
+         * This calls the REAL restore with a "where the scan found it" of the
+         * caller's choosing: give it a frequency the radio is NOT on and the
+         * FA;/MD; writes go out and the dial moves.
+         *
+         * It is not a simulation of the restore, it IS the restore, which is
+         * the point - a simulation would prove the simulation.
+         *
+         *   {"action":"band_scan_restore_test","hz":14097000,"mode":"6"}
+         *
+         * No TX. Touches VFO A and the mode, nothing else. */
+        cJSON *hz_item = cJSON_GetObjectItem(root, "hz");
+        const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
+        if (!cJSON_IsNumber(hz_item)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "hz required");
+            return ESP_FAIL;
+        }
+        cat_band_scan_restore_test((uint32_t)hz_item->valuedouble, md ? md[0] : 0);
     } else if (action && strcmp(action, "clear_swr") == 0) {
         // The web equivalent of tapping the Tab5's own SWR-fault prompt
         // (Randy N4OPI: the web UI had no way to see the fault OR clear it).

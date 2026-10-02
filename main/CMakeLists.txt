@@ -45,6 +45,7 @@ idf_component_register(
     "util/wf_shift.c"
     "util/qmx_prompt_gate.c"
     "util/hosted_watchdog.c"
+    "util/cat_restore.c"
     "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"

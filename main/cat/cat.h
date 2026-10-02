@@ -518,3 +518,15 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
 // QMX transmitting until he power-cycled it.
 void cat_request_force_rx(void);
 bool cat_force_rx_pending(void);
+
+/* ⛔ DELIBERATE TEST ENTRY POINT for the band-scan restore (John W5JSS).
+ *
+ * The bench QMX's "Band config." menus do not move the dial, so the restore
+ * branch is unreachable on this hardware however many CAT link-ups are watched.
+ * This runs the REAL restore with a "where the scan found it" the caller
+ * supplies: a known-wrong value makes the radio move, which is the only way the
+ * FA;/MD; writes have ever gone out.
+ *
+ * Reached from POST /api/cmd {"action":"band_scan_restore_test", ...}. Nothing
+ * calls it in normal operation; it sends no TX. */
+void cat_band_scan_restore_test(uint32_t pre_freq, char pre_mode_digit);
