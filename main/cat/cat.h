@@ -398,7 +398,7 @@ int cat_get_rf_gain(void);
  * which would otherwise read a deliberate menu visit as a fault and eventually
  * power-cycle the USB port under the operator's hands.
  *
- * Deliberately separate from cat_poll_set_paused(): that flag belongs to the
+ * Deliberately separate from cat_poll_hold()/cat_poll_release(): that flag belongs to the
  * FT8 TX burst and is cleared at the end of every burst, which would silently
  * cancel the operator's pause.
  *
@@ -432,7 +432,40 @@ void cat_request_cw_passband(uint32_t hz);
  *
  * @param paused  true to pause polling, false to resume
  */
-void cat_poll_set_paused(bool paused);
+/* ⛔ IT IS A COUNT OF OWNERS, NOT A FLAG, AND THAT IS WHY.
+ *
+ * It WAS a plain bool, and five independent callers set it: the FT8 burst, the
+ * WSPR burst, the QMX RTC read and the GPS tick. Last writer won, so one owner
+ * released another's hold.
+ *
+ * Measured on bench dev 2026-10-02, inside a live 110.6 s WSPR transmission:
+ *
+ *   295201 background poll PAUSED        <- the burst takes the link
+ *   325934 background poll PAUSED        <- cat_query_qmx_time() takes it again
+ *   325955 background poll resumed       <- ...and releases it. The burst's
+ *   325955 QMX RTC time: 19:06:32           hold is gone, 80 s before the end
+ *   405804 background poll resumed       <- the burst releases what is already free
+ *
+ * For those 80 seconds the poll task sent FA;/MD;/FW; every 50 ms to a radio
+ * that was keyed - the exact interleaving this mechanism exists to prevent.
+ * The RTC read runs every 300 s, so it lands inside roughly 4% of FT8 bursts
+ * too, and those are only 12.6 s long.
+ *
+ * Holding is counted now, so releasing one owner's hold cannot release
+ * another's, and the log names who. A caller that must not merely queue behind
+ * a burst but must NOT RUN AT ALL during one - anything that writes to the
+ * radio - still has to ask cat_poll_held_by_other() first. */
+typedef enum {
+    CAT_HOLD_TX_BURST  = 1u << 0,   /* an FT8 or WSPR burst owns the link */
+    CAT_HOLD_TIME_SYNC = 1u << 1,   /* the GPS tick or the QMX RTC read */
+} cat_hold_t;
+
+void cat_poll_hold(cat_hold_t who);
+void cat_poll_release(cat_hold_t who);
+
+/* True when anyone OTHER than `me` is holding the link. The question a caller
+ * asks before writing to the radio. */
+bool cat_poll_held_by_other(cat_hold_t me);
 
 /* ⛔ A "FORCED" FREQUENCY WRITE CAN STILL BE DEFERRED, AND IT RETURNS ESP_OK.
  * cat_set_frequency_forced() is forced against the 200 ms RATE LIMITER only.

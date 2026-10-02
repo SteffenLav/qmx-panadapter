@@ -131,7 +131,8 @@ static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 // further up this file, refuses a RIT offset while it is set - the two controls
 // are mutually exclusive (see that function).
 static bool     s_split_engaged = false;
-static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
+static volatile uint32_t s_poll_holds  = 0;      /* cat_hold_t bits - see cat.h */
+static volatile bool     s_poll_paused = false;  /* == (s_poll_holds != 0), read on the poll path */
 
 // Pending mode digit (Kenwood MD digit '1'-'9') requested from the LVGL thread.
 // 0 = nothing pending. Drained by the poll task to avoid a CDC race.
@@ -535,10 +536,37 @@ esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
     return ESP_OK;
 }
 
-void cat_poll_set_paused(bool paused)
+/* See cat.h for the measurement that made this a count instead of a flag. */
+static const char *hold_name(uint32_t mask)
 {
-    s_poll_paused = paused;
-    ESP_LOGI(TAG, "background poll %s", paused ? "PAUSED (TX burst owns the link)" : "resumed");
+    if (mask == 0)                                     return "nobody";
+    if (mask == CAT_HOLD_TX_BURST)                     return "a TX burst";
+    if (mask == CAT_HOLD_TIME_SYNC)                    return "the time sync";
+    return "a TX burst + the time sync";
+}
+
+void cat_poll_hold(cat_hold_t who)
+{
+    const uint32_t before = s_poll_holds;
+    s_poll_holds |= (uint32_t)who;
+    s_poll_paused = (s_poll_holds != 0);
+    if (s_poll_holds != before)
+        ESP_LOGI(TAG, "background poll HELD by %s", hold_name(s_poll_holds));
+}
+
+void cat_poll_release(cat_hold_t who)
+{
+    const uint32_t before = s_poll_holds;
+    s_poll_holds &= ~(uint32_t)who;
+    s_poll_paused = (s_poll_holds != 0);
+    if (s_poll_holds != before)
+        ESP_LOGI(TAG, "background poll released by %s - now held by %s",
+                 hold_name((uint32_t)who), hold_name(s_poll_holds));
+}
+
+bool cat_poll_held_by_other(cat_hold_t me)
+{
+    return (s_poll_holds & ~(uint32_t)me) != 0;
 }
 
 static void link_task(void *arg);
@@ -3074,7 +3102,13 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
 {
     if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
 
-    cat_poll_set_paused(true);
+    /* ⛔ NOT WHILE A BURST IS KEYED. This was missing, and it is what let the
+     * RTC read clear a WSPR burst's hold 30 s into a 110.6 s transmission -
+     * see cat.h. cat_gps_tick_sync() has always had this check; this one
+     * never did, and the two run back to back. */
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) return ESP_ERR_INVALID_STATE;
+
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
     s_tm_resp_len = 0;
     esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 200);
     if (err == ESP_OK) {
@@ -3082,7 +3116,7 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    cat_poll_set_paused(false);
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
 
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "TM; query TX failed: 0x%x", err);
@@ -3131,9 +3165,10 @@ static bool parse_tm_resp(int *h, int *m, int *s)
 esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us)
 {
     if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
-    if (s_poll_paused)              return ESP_ERR_INVALID_STATE;  // FT8 TX / other op owns the pipe
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC))
+        return ESP_ERR_INVALID_STATE;   // a burst owns the pipe
 
-    cat_poll_set_paused(true);
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
     int       prev_sec      = -1;
     int64_t   prev_resp_us  = 0;
     int64_t   bracket_us    = 0;
@@ -3184,7 +3219,7 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         prev_resp_us = s_tm_resp_us;
     }
 
-    cat_poll_set_paused(false);
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
     if (result == ESP_OK)
         ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
                  *out_hour, *out_min, *out_sec,
