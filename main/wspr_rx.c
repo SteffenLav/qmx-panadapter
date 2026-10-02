@@ -2126,7 +2126,7 @@ static void wspr_rx_task(void *arg)
          * work between there and wspr_tx_arm() took 2,106 ms - settings_load_all()
          * reads NVS into a multi-kilobyte struct, then the PA guard runs, then
          * the TX-busy check. WSPR_TX_START_OFFSET_MS is 1000, so by the time the
-         * arm was reached its own slot had passed and it target - ed the NEXT even
+         * arm was reached its own slot had passed and it targeted the NEXT even
          * minute. WSPR_ARM_GRACE_MS is 10,000, which is right for a capture and
          * ten times too generous for a burst, so nothing caught it.
          *
@@ -2378,8 +2378,24 @@ static void wspr_rx_task(void *arg)
             } else if (!wspr_tx_arm(&req, err, sizeof(err))) {
                 ESP_LOGW(TAG, "TX arm refused: %s", err);
             } else {
-                ESP_LOGW(TAG, "TX armed for THIS cycle: %s %s %d dBm "
-                              "(group %u tx + %u rx = %u min)",
+                /* ⭐ THE ARM OFFSET IS THE WHOLE FIX, SO IT IS IN THE LOG.
+                 *
+                 * John W5JSS's fault was the arm being reached 2,106 ms into a
+                 * cycle whose key-down moment is at WSPR_TX_START_OFFSET_MS,
+                 * which silently aimed the burst at the NEXT cycle. Nothing
+                 * said so: the only visible evidence was his beacon turning up
+                 * at :02 and never at :00, four cycles later. Printing the
+                 * number makes the on-air check a grep rather than an
+                 * inference from which minutes were spotted. Anything at or
+                 * under WSPR_TX_START_OFFSET_MS transmits in THIS cycle.
+                 *
+                 * Read AFTER the arm, not at the guard above: that bounds the
+                 * real offset from above, which is the safe direction to be
+                 * wrong in. */
+                const int64_t armed_at = now_ms() % WSPR_CYCLE_MS;
+                ESP_LOGW(TAG, "TX armed for THIS cycle at +%lld ms of %d ms "
+                              "allowed: %s %s %d dBm (group %u tx + %u rx = %u min)",
+                         (long long)armed_at, WSPR_TX_START_OFFSET_MS,
                          ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
                          (unsigned)sched_tx, (unsigned)sched_rx,
                          (unsigned)((sched_tx + sched_rx) * 2u));
