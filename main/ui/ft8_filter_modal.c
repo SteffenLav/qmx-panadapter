@@ -409,8 +409,12 @@ static void modal_build(void)
     /* ⚠ RIGHT column, y=390 - the left column's 510 is Skip TX1 and 450 is
      * taken by the Max-age dropdown that aligns off it. The label is kept
      * short because only ~340 px remain to the panel edge at x=700; the web
-     * UI carries the full explanation. NOT seen on the screen yet. */
-    s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs during my run", RIGHT_COL_X, 390, &lbl_cq_show_others);
+     * UI carries the full explanation.
+     *
+     * ⚠ MEASURED ON THE SCREEN, not guessed: "Show CQs during my run" (22
+     * chars) was clipped to "Show CQs during my r". The right column's other
+     * labels are 16-19 characters and fit, so 18 is the budget here. */
+    s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs in my run", RIGHT_COL_X, 390, &lbl_cq_show_others);
     lv_obj_set_style_text_color(lbl_cq_show_others, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Max age in list — same row, in the gap before the right column ---
