@@ -43,6 +43,7 @@ idf_component_register(
     "util/pan_view.c"
     "util/hid_rotate.c"
     "util/wf_shift.c"
+    "util/qmx_prompt_gate.c"
     "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"

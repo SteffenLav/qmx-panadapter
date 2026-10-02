@@ -60,6 +60,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
 #include "util/wf_shift.h"
+#include "util/qmx_prompt_gate.h"   // WHEN the "turn on your QMX" prompt may appear
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -4535,9 +4536,27 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
      * app_main has finished (ui_notify_boot_complete), AND WiFi has a network
      * or is switched off entirely. Dennis WN4FLA and Gyula HA3HZ reported the
      * early appearance; this is what makes the prompt honest about both the
-     * radio AND the moment. */
-    const bool wifi_settled = !panadapter_wifi_is_enabled() || wifi_is_connected();
-    if (!s_boot_complete || !wifi_settled || !cat_host_is_up() || cat_is_ready()) {
+     * radio AND the moment.
+     *
+     * ⛔ THE WIFI HALF LIVES IN util/qmx_prompt_gate.c AND IS NOT THE ONE-LINER
+     * IT LOOKS LIKE. Written here first as
+     *
+     *     !panadapter_wifi_is_enabled() || wifi_is_connected()
+     *
+     * it is false FOREVER on a unit whose WiFi never associates - no
+     * credentials yet, wrong password, out of range, portable - so the prompt
+     * never appeared at all for the operators least able to guess what to do.
+     * The bench could not have shown it: it associates every time. The gate
+     * therefore bounds the wait and latches once open; the reasoning and the
+     * measurements are in that file's header and in
+     * test/qmx_prompt_gate_harness.c, which fails against the version that
+     * shipped. */
+    static qmx_prompt_gate_t s_prompt_gate;
+    const bool safe_moment = qmx_prompt_gate_tick(
+        &s_prompt_gate, s_boot_complete,
+        (uint32_t)(esp_timer_get_time() / 1000),
+        panadapter_wifi_is_enabled(), wifi_is_connected());
+    if (!safe_moment || !cat_host_is_up() || cat_is_ready()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
