@@ -2165,6 +2165,28 @@ static void wspr_rx_task(void *arg)
         s_wait_secs = -1;
         if (!s_run) break;
 
+        /* ⛔ WHERE THE POST-BOUNDARY MILLISECONDS GO, BECAUSE GUESSING GOT IT
+         * WRONG ONCE ALREADY.
+         *
+         * ecff9b9 was written on the premise that "the wait loop exits ON the
+         * boundary" and that the 2,106 ms to wspr_tx_arm() was settings_load_all()
+         * plus the PA guard. Measured on bench dev 2026-10-02 with the hoist in
+         * place, over 148 cycles across two builds, the arm is still reached at
+         * a median of ~1.6 s - and the same lateness appears on RECEIVE cycles,
+         * where none of that TX work runs at all. So the diagnosis was wrong,
+         * or incomplete, and the budget has to be split by measurement rather
+         * than by reading the call path.
+         *
+         * This line is the split: everything before it is the wait loop,
+         * everything between it and "capturing (armed +N ms)" is the rest. */
+        {
+            const int64_t exit_off = now_ms() % WSPR_CYCLE_MS;
+            ESP_LOGI(TAG, "cycle boundary: wait loop exited at +%lld ms "
+                          "(settings prep %s)",
+                     (long long)exit_off,
+                     ws_ready ? "done inside the wait" : "STILL AFTER THE BOUNDARY");
+        }
+
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
         last_cycle_idx = now_ms() / WSPR_CYCLE_MS;
 
