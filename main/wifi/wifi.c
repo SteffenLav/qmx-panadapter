@@ -779,6 +779,58 @@ static void ensure_sta_netif(void)
 }
 
 // Init runs in its own task so app_main is not blocked --------------
+/* Hosted-link watchdog state + limits. See the watchdog in wifi_task(). */
+#define WIFI_RELINK_AFTER_FAILS 6    /* x 30 s loop = ~3 min before acting */
+#define WIFI_RELINK_MAX         3    /* per session, then stop for good */
+static int s_hosted_fail_streak;
+static int s_relink_count;
+
+/* Power-cycle the C6 and bring the hosted transport back up.
+ *
+ * ⛔ THE ORDER MATTERS AND IS THE SAME ONE BOOT USES: stop WiFi, drop the
+ * co-processor's power rail, pause, raise it, re-init hosted, then start WiFi
+ * and reconnect. bsp_set_wifi_power_enable() is the same call wifi_task() makes
+ * at start-up, so this is not a new way of bringing the C6 up - it is the
+ * existing one, run again.
+ *
+ * ⚠ esp_wifi_stop()/start() are deliberately NOT ESP_ERROR_CHECK'd here. Every
+ * one of them talks to a co-processor we already believe is dead, so a failure
+ * is the expected case and must not abort the device - that is the same mistake
+ * the esp_hosted init-fail patch exists to undo. Each step logs and the next is
+ * tried regardless; if the whole sequence fails, the streak simply builds again
+ * and the attempt counter stops it for good. */
+static void hosted_relink(void)
+{
+    esp_err_t e;
+
+    s_wifi_started = false;
+    e = esp_wifi_stop();
+    if (e != ESP_OK) ESP_LOGW(TAG, "relink: esp_wifi_stop: %s", esp_err_to_name(e));
+
+    bsp_set_wifi_power_enable(false);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    bsp_set_wifi_power_enable(true);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    extern esp_err_t esp_hosted_init(void);
+    e = esp_hosted_init();
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "relink: esp_hosted_init failed: %s - giving this attempt up",
+                 esp_err_to_name(e));
+        return;
+    }
+
+    e = esp_wifi_start();
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "relink: esp_wifi_start failed: %s", esp_err_to_name(e));
+        return;
+    }
+    s_wifi_started = true;
+    e = esp_wifi_connect();
+    if (e != ESP_OK) ESP_LOGW(TAG, "relink: esp_wifi_connect: %s", esp_err_to_name(e));
+    ESP_LOGW(TAG, "relink: C6 power-cycled and WiFi restarted - waiting for the association");
+}
+
 static void wifi_task(void *arg)
 {
     ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
@@ -900,6 +952,67 @@ static void wifi_task(void *arg)
             ESP_LOGI(TAG, "online; UTC %04d-%02d-%02d %02d:%02d:%02d",
                      tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
                      tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+        }
+
+        /* ⭐ HOSTED-LINK WATCHDOG - the C6 can stop answering and never come
+         * back, and until now only a full reboot fixed it.
+         *
+         * Bryan N0LUF, 2026-10-01, captured on the SD card WHILE the WiFi was
+         * dead (the web download cannot work once it is - Michael KZ4LY made
+         * that point and he was right):
+         *
+         *   W H_SDIO_DRV: SDIO RX oversize: len=19838 host_cnt=.. slave_reg=..
+         *      - draining to recover            x183 in NINE SECONDS
+         *   W rpc_core: Timeout waiting for Resp for Req[0x126]   x61, forever
+         *
+         * The oversize drain (tools/patches/apply_esp_hosted_sdio_recovery.ps1)
+         * does advance the host counter correctly - host_cnt tracks the previous
+         * slave_reg every time - but the slave ran 10-20 KB further ahead on
+         * each pass, 20 times a second, and then went silent altogether. So the
+         * link does not merely desynchronise, it dies, and draining cannot fix
+         * a dead link however long it runs. ⛔ Its "recovered" line has never
+         * appeared in ANY capture, here or on the bench.
+         *
+         * 0x126 is WifiStaGetApInfo, which is exactly what
+         * esp_wifi_sta_get_ap_info() issues - so the same call that was timing
+         * out in his log is the cheapest possible probe for the condition.
+         *
+         * ⛔ BOUNDED, AND DELIBERATELY SLOW. CLAUDE.md records the FT8 respawn
+         * watchdog firing ~390 times and degrading the device it was rescuing.
+         * This needs SIX consecutive failures (~3 minutes, since the loop is
+         * 30 s) before it acts, and it acts at most WIFI_RELINK_MAX times in a
+         * session. A momentary RPC hiccup must not power-cycle the radio.
+         *
+         * ⚠ NOT YET SEEN TO RESCUE A REAL WEDGE. The condition has only been
+         * observed in Bryan's log, never reproduced on the bench, so this path
+         * has never run against the fault it is written for. */
+        if ((b & BIT_CONNECTED) && !s_wifi_user_disabled) {
+            wifi_ap_record_t probe;
+            if (esp_wifi_sta_get_ap_info(&probe) == ESP_OK) {
+                if (s_hosted_fail_streak) {
+                    ESP_LOGI(TAG, "hosted link answered again after %d missed probe(s)",
+                             s_hosted_fail_streak);
+                    s_hosted_fail_streak = 0;
+                }
+            } else if (++s_hosted_fail_streak >= WIFI_RELINK_AFTER_FAILS) {
+                s_hosted_fail_streak = 0;
+                if (s_relink_count >= WIFI_RELINK_MAX) {
+                    ESP_LOGE(TAG, "hosted link is dead and %d re-link attempt(s) did "
+                                  "not bring it back - stopping, a reboot is needed",
+                             WIFI_RELINK_MAX);
+                } else {
+                    s_relink_count++;
+                    ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
+                                  "(~%d s) - power-cycling the C6 and re-linking "
+                                  "(attempt %d/%d)",
+                             WIFI_RELINK_AFTER_FAILS,
+                             WIFI_RELINK_AFTER_FAILS * 30,
+                             s_relink_count, WIFI_RELINK_MAX);
+                    hosted_relink();
+                }
+            }
+        } else {
+            s_hosted_fail_streak = 0;
         }
     }
 }
