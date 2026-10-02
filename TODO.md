@@ -29,7 +29,10 @@ What the previous version of this section claimed, and what is actually true:
 Verified by `git describe --contains` on the named SHAs and by `git log -S` on
 the identifying symbols, not by reading the rows.
 
-### ▶ Actually live, 2026-10-01
+### ▶ Shipped in v1.16.10 (2026-10-02)
+
+All of the rows below went out in v1.16.10. What is verified and what is not is stated per row and did not change at the release.
+
 
 | # | What | State |
 |---|---|---|
