@@ -4505,7 +4505,14 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         }
         return;
     }
-    if (cat_is_ready()) {
+    /* ⛔ NOT BEFORE THE TAB5 IS LISTENING. cat_is_ready() is false for the whole
+     * of our own start-up, so without this the prompt appears the instant the
+     * screen does and tells the operator to turn on a radio that may already be
+     * on and answering. Dennis WN4FLA and Gyula HA3HZ both reported exactly
+     * that, 2026-09-30/10-01. cat_host_is_up() is true once cat_init() has
+     * opened the CDC host - measured at 7,403 ms on bench dev - and only from
+     * there does "no CAT" say anything about the radio. */
+    if (!cat_host_is_up() || cat_is_ready()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);

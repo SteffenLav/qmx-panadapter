@@ -551,6 +551,30 @@ static esp_err_t try_open_qmx(void);
 static void process_cat_message(const char *msg, size_t len);
 static void diag_log_rx(const char *msg, size_t len);
 
+/* ⭐ "IS THE TAB5 EVEN LISTENING YET?" - see cat_host_is_up().
+ *
+ * Dennis WN4FLA and Gyula HA3HZ, 2026-09-30/10-01: the "Now turn on or reboot
+ * your QMX/+" overlay appears the instant the screen does, which is BEFORE this
+ * function has run. At that point the Tab5 has not opened the CDC host at all,
+ * so a QMX that is switched on and perfectly healthy is still reported as
+ * missing - the prompt is describing the Tab5's own start-up, not the radio.
+ *
+ * Measured on bench dev: cat_init() returns at 7,403 ms. Everything before that
+ * is the Tab5's own boot and nothing about the radio can be concluded from it.
+ *
+ * ⛔ DELIBERATELY NO SETTLE TIMER ON TOP. Once the host is open the prompt is
+ * legitimate again - the radio may genuinely be off, or still enumerating - and
+ * a fixed "wait N seconds more" would be inventing a number. The same bench
+ * shows 45 s between cat_init() and the first CAT answer when the QMX needed a
+ * power cycle, so any settle long enough to cover enumeration would be long
+ * enough to hide a genuinely dead radio. */
+static volatile bool s_cat_host_up;
+
+bool cat_host_is_up(void)
+{
+    return s_cat_host_up;
+}
+
 esp_err_t cat_init(void)
 {
     ESP_LOGI(TAG, "CAT init (Phase 3.1 - descriptor dump on first connect)");
@@ -595,6 +619,7 @@ err = cdc_acm_host_install(NULL);
 
     ESP_LOGI(TAG, "CAT link task started, waiting for QMX (VID=0x%04X PID=0x%04X)",
              QMX_VID, QMX_PID);
+    s_cat_host_up = true;
     return ESP_OK;
 }
 

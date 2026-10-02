@@ -87,6 +87,12 @@ esp_err_t cat_set_passband_hz(uint32_t hz);
  * Cleared on QMX USB disconnect.
  */
 bool cat_is_ready(void);
+
+/* True once cat_init() has opened the CDC host, i.e. once the Tab5 is actually
+ * capable of seeing a QMX. Before this, cat_is_ready() being false says nothing
+ * about the radio - it only means we have not started looking. The "turn on
+ * your QMX" prompt is gated on it (Dennis WN4FLA, Gyula HA3HZ 2026-10-01). */
+bool cat_host_is_up(void);
 /**
  * @brief Get the CW offset (Hz) read from QMX at connect time.
  *
