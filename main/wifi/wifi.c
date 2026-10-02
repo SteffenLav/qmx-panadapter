@@ -1,4 +1,5 @@
 #include "wifi.h"
+#include "util/hosted_watchdog.h"   // when a dead C6 gets power-cycled
 #include "settings.h"
 #include "net/mdns_svc.h"   // qmx.local, announced once we have an IP
 #include <stdbool.h>
@@ -779,11 +780,13 @@ static void ensure_sta_netif(void)
 }
 
 // Init runs in its own task so app_main is not blocked --------------
-/* Hosted-link watchdog state + limits. See the watchdog in wifi_task(). */
-#define WIFI_RELINK_AFTER_FAILS 6    /* x 30 s loop = ~3 min before acting */
-#define WIFI_RELINK_MAX         3    /* per session, then stop for good */
-static int s_hosted_fail_streak;
-static int s_relink_count;
+/* Hosted-link watchdog state. The thresholds and the counting live in
+ * util/hosted_watchdog.c, because a bench unit never trips this: the probe
+ * succeeds every 30 s here, so a clean soak proves nothing about the bounds,
+ * and the fault itself has only ever been seen in Bryan N0LUF's capture.
+ * test/hosted_watchdog_harness.c exercises the decision on the host. The
+ * recovery below still has not run against a real wedge. */
+static hosted_wd_t s_hosted_wd;
 
 /* Power-cycle the C6 and bring the hosted transport back up.
  *
@@ -986,33 +989,34 @@ static void wifi_task(void *arg)
          * ⚠ NOT YET SEEN TO RESCUE A REAL WEDGE. The condition has only been
          * observed in Bryan's log, never reproduced on the bench, so this path
          * has never run against the fault it is written for. */
-        if ((b & BIT_CONNECTED) && !s_wifi_user_disabled) {
+        {
+            const bool watching = (b & BIT_CONNECTED) && !s_wifi_user_disabled;
             wifi_ap_record_t probe;
-            if (esp_wifi_sta_get_ap_info(&probe) == ESP_OK) {
-                if (s_hosted_fail_streak) {
-                    ESP_LOGI(TAG, "hosted link answered again after %d missed probe(s)",
-                             s_hosted_fail_streak);
-                    s_hosted_fail_streak = 0;
-                }
-            } else if (++s_hosted_fail_streak >= WIFI_RELINK_AFTER_FAILS) {
-                s_hosted_fail_streak = 0;
-                if (s_relink_count >= WIFI_RELINK_MAX) {
-                    ESP_LOGE(TAG, "hosted link is dead and %d re-link attempt(s) did "
-                                  "not bring it back - stopping, a reboot is needed",
-                             WIFI_RELINK_MAX);
-                } else {
-                    s_relink_count++;
-                    ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
-                                  "(~%d s) - power-cycling the C6 and re-linking "
-                                  "(attempt %d/%d)",
-                             WIFI_RELINK_AFTER_FAILS,
-                             WIFI_RELINK_AFTER_FAILS * 30,
-                             s_relink_count, WIFI_RELINK_MAX);
-                    hosted_relink();
-                }
+            const bool probe_ok = watching &&
+                                  esp_wifi_sta_get_ap_info(&probe) == ESP_OK;
+
+            switch (hosted_wd_tick(&s_hosted_wd, watching, probe_ok)) {
+            case HOSTED_WD_RECOVERED:
+                ESP_LOGI(TAG, "hosted link answered again after %d missed probe(s)",
+                         s_hosted_wd.last_missed);
+                break;
+            case HOSTED_WD_RELINK:
+                ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
+                              "(~%d s) - power-cycling the C6 and re-linking "
+                              "(attempt %d/%d)",
+                         HOSTED_WD_FAILS_BEFORE_RELINK,
+                         HOSTED_WD_FAILS_BEFORE_RELINK * 30,
+                         s_hosted_wd.relink_count, HOSTED_WD_MAX_RELINKS);
+                hosted_relink();
+                break;
+            case HOSTED_WD_EXHAUSTED:
+                ESP_LOGE(TAG, "hosted link is dead and %d re-link attempt(s) did "
+                              "not bring it back - stopping, a reboot is needed",
+                         HOSTED_WD_MAX_RELINKS);
+                break;
+            case HOSTED_WD_NOTHING:
+                break;
             }
-        } else {
-            s_hosted_fail_streak = 0;
         }
     }
 }
