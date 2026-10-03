@@ -6220,6 +6220,7 @@ static esp_err_t sd_check_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(o, "dirs",        r.dirs_seen);
     cJSON_AddNumberToObject(o, "bytes_read",  (double)r.bytes_read);
     cJSON_AddNumberToObject(o, "read_errors", r.read_errors);
+    cJSON_AddNumberToObject(o, "unchecked",   r.unchecked_files);
     cJSON_AddNumberToObject(o, "fragments",   r.suspect_names);
     cJSON_AddBoolToObject  (o, "write_ok",    r.write_verify_ok);
     cJSON_AddBoolToObject  (o, "write_run",   r.write_verify_run);

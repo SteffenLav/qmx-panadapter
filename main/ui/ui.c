@@ -15422,12 +15422,21 @@ static void sdchk_tick_cb(lv_timer_t *t)
                  (unsigned long long)(r.bytes_read / (1024 * 1024)), r.current);
         lv_label_set_text(s_sdchk_btnlbl, "Stop");
     } else {
+        /* "Not checked" only appears when it is non-zero. A line reading
+         * "Not checked: 0" on every healthy run is noise that teaches the
+         * operator to stop reading the box. */
+        char skipped[64] = "";
+        if (r.unchecked_files)
+            snprintf(skipped, sizeof(skipped), "@Not checked (Tab5 was busy): %lu",
+                     (unsigned long)r.unchecked_files);
         snprintf(buf, sizeof(buf),
                  "%lu files, %lu folders, %llu MB read@@"
-                 "Unreadable files: %lu@Recovered fragments: %lu@Write-and-read-back: %s@@%s",
+                 "Unreadable files: %lu%s@Recovered fragments: %lu@"
+                 "Write-and-read-back: %s@@%s",
                  (unsigned long)r.files_seen, (unsigned long)r.dirs_seen,
                  (unsigned long long)(r.bytes_read / (1024 * 1024)),
-                 (unsigned long)r.read_errors, (unsigned long)r.suspect_names,
+                 (unsigned long)r.read_errors, skipped,
+                 (unsigned long)r.suspect_names,
                  !r.write_verify_done ? "could not run"
                                       : (r.write_verify_ok ? "passed" : "FAILED"),
                  r.verdict);

@@ -52,6 +52,12 @@ typedef struct {
 
     /* Findings. */
     uint32_t read_errors;      /* files that would not read to the end */
+    /* ⛔ NOT THE SAME THING AS read_errors. A file the Tab5 was too short of
+     * DMA memory to read, after backing off and retrying, is a gap in the
+     * check - not a fault of the card. Counted apart so no verdict can mix
+     * the two (2026-10-03: a 24 KB pre-flight threshold made the check refuse
+     * to run at all, which is the same mistake one step earlier). */
+    uint32_t unchecked_files;
     uint32_t suspect_names;    /* FOUND.*, *.CHK, lost-chain leftovers */
     /* ⛔ THREE OUTCOMES, NOT TWO. "Could not write the test file" is NOT "the
      * card did not give the data back" - the first is inconclusive, the second
