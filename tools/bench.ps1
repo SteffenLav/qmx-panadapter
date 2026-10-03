@@ -716,6 +716,34 @@ function Cmd-Flash {
     $preLen = 0
     if (Test-Path $b.capture) { $preLen = (Get-Item $b.capture).Length }
     try {
+        # ⛔ ASK THE FIRMWARE TO LET GO BEFORE WE RESET IT.
+        #
+        # esptool resets the chip over RTS, from outside, with no warning - so
+        # esp_register_shutdown_handler() never runs and both the USB host and
+        # the SD card are dropped mid-transaction. The card is the one that
+        # cannot be put right afterwards: it keeps its own internal state
+        # across an SoC reset and the Tab5 has no software control of its
+        # power rail, so a card caught mid-transaction stays unreachable until
+        # the whole board is powered down.
+        #
+        # Measured here 2026-10-03, across six reflashes in an afternoon: the
+        # boot mount needed 4 attempts, then 5, then more than 5 and the card
+        # never came up. Nothing was corrupted - it was never let go of.
+        #
+        # Best effort by design: no IP, no answer, or an older build without
+        # the endpoint all just fall through to the flash, which is exactly
+        # what used to happen every time anyway.
+        if ($b.ip -and $b.ip -ne "UNKNOWN") {
+            try {
+                Invoke-WebRequest -Uri "http://$($b.ip)/api/cmd" -Method POST `
+                    -Body '{"action":"prepare_for_flash"}' -ContentType 'application/json' `
+                    -TimeoutSec 8 -UseBasicParsing | Out-Null
+                Write-Host "Asked $($b.name) to release the SD card and USB host before the reset." -ForegroundColor DarkGray
+                Start-Sleep -Milliseconds 600
+            } catch {
+                Write-Host "prepare_for_flash not answered ($($_.Exception.Message)) - flashing anyway." -ForegroundColor DarkYellow
+            }
+        }
         if ($hadCapture) { Cmd-StopCapture $reg $b }
         # Wait for the port to actually open, however the capture was stopped -
         # and even when there was no capture, since something else on this

@@ -1517,6 +1517,34 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "prepare_for_flash") == 0) {
+        /* ⛔ CLOSES THE ONE GAP THE SHUTDOWN HANDLERS CANNOT.
+         *
+         * esp_register_shutdown_handler() covers every reboot the firmware
+         * initiates, and nothing else: esptool resets the chip from outside
+         * with no warning at all. So the USB teardown and the SD teardown both
+         * get skipped on exactly the reboot we perform most often - a reflash.
+         *
+         * The SD card is the one that cannot be put right afterwards. It keeps
+         * its own internal state across an SoC reset and the Tab5 has no
+         * software control of its power rail, so a card caught mid-transaction
+         * stays unreachable until the whole board is powered down. Measured on
+         * the bench 2026-10-03 across six reflashes in an afternoon: boot
+         * mounts needed 4 attempts, then 5, then more than 5 - the card was
+         * never corrupted, it was never let go of.
+         *
+         * So: ask for the teardown over the network FIRST, then reset the chip.
+         * tools/bench.ps1 does this before every flash. The device is left
+         * idle and running - this does NOT reboot - so if the flash never
+         * comes, a restart puts everything back. */
+        ESP_LOGW(TAG, "prepare_for_flash: releasing the SD card and the USB "
+                      "host so an external reset cannot catch them mid-transaction");
+        sd_archive_shutdown();
+        usb_shutdown_graceful();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"ready\":true}");
+        return ESP_OK;
     } else if (action && strcmp(action, "wifi_kill_c6") == 0) {
         /* ⛔ DEV HOOK, AND IT NEEDS SAYING OUT LOUD TO WORK.
          *
