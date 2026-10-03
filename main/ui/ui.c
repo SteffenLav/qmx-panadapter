@@ -45,6 +45,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "help_triage.h"
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "adif/adif_log.h"     // adif_log_band_for_freq() - which band the WSPR declared-power picker filters against
+#include "storage/sd_archive.h"   // sd_archive_shutdown - the eject button
 #include "wifi_config.h"
 #include "wifi.h"
 #include "tune_modal.h"
@@ -2864,6 +2865,15 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
                                  // made the web UI unreachable (#307). Built only
                                  // when a static address is actually configured.
+/* ⛔ THE TWO THINGS A TAB5 COULD NOT DO FOR ITSELF.
+ *
+ * Measured 2026-10-03: an abrupt reset leaves a mounted card mid-transaction,
+ * and the next boot then needs five or more mount attempts. The ONLY restart a
+ * user had was pulling power, and the only way to take a card out was to pull
+ * it live - so the device offered no way to avoid the one thing that causes
+ * the fault. Both now run the orderly teardown. */
+#define DRAWER_SEC_SDEJECT   42  /* unmount the card so it can be taken out */
+#define DRAWER_SEC_REBOOT    46  /* restart, running the SD + USB teardowns */
 #define DRAWER_SEC_TUNESNAP  41  /* #347: the tap-to-tune grid, or off */
 #define DRAWER_SEC_CWPROF    40  /* #359: apply a stored CW profile (centre +
                                   * which filter widths the radio offers). The
@@ -3048,6 +3058,8 @@ static const drawer_item_t GRP_NETWORK[] = {
     // hiding it behind Advanced would hide the escape hatch from exactly the
     // operator who needs it.
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
+    { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
+    { DRAWER_SEC_REBOOT,  "Restart the Tab5", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     // Basic, not Advanced: it is off by default, so an operator who never finds
@@ -3159,6 +3171,8 @@ static void drawer_set_mode(ui_mode_t mode);
 // Defined next to the other restart-the-device callback, used up in the drawer
 // build - see drawer_usedhcp_btn_cb for why that button has to exist (#307).
 static void drawer_usedhcp_btn_cb(lv_event_t *e);
+static void drawer_sdeject_btn_cb(lv_event_t *e);
+static void drawer_reboot_btn_cb(lv_event_t *e);
 // Defined below, next to the mode switch that is its other caller.
 static void hide_panadapter_widgets_instant(void);
 static void apply_edge_grips_for_mode(ui_mode_t m);
@@ -12741,6 +12755,38 @@ static void drawer_build(void)
             y += 104;
         }
     }
+    /* Eject the card, and restart the Tab5. Together because they are the two
+     * halves of the same fault: both exist so an operator never has to pull a
+     * live card or pull the power. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SDEJECT, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_sdeject_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Eject microSD");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_REBOOT, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_reboot_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Restart the Tab5");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
@@ -15213,6 +15259,33 @@ static void drawer_bt_restart_cb(lv_event_t *e)
  * takes the ordinary DHCP path from the top, and this is a rare recovery, not a
  * hot path.
  */
+/* Unmount so the card can be taken out without the mid-transaction removal
+ * that costs the NEXT boot five mount attempts. Same call the shutdown handler
+ * and prepare_for_flash use. */
+static void drawer_sdeject_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    sd_archive_shutdown();
+    ui_toast_ms("microSD unmounted - safe to remove. After swapping, restart "
+                "the Tab5 rather than waiting: a card put in while running is "
+                "only looked for every five minutes.", 12000);
+}
+
+/* ⛔ THE FIRST RESTART THIS DEVICE HAS EVER OFFERED. Until now the only way
+ * was pulling power, which is the abrupt reset that leaves the card
+ * mid-transaction - so the device forced the very fault we spent a day
+ * chasing. esp_restart() runs the registered shutdown handlers, which now
+ * include the SD teardown as well as USB. */
+static void drawer_reboot_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_toast_ms("Restarting - your QMX will need a power cycle afterwards, "
+                "as it does after any Tab5 restart.", 4000);
+    lv_timer_handler();
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+
 static void drawer_usedhcp_btn_cb(lv_event_t *e)
 {
     lv_obj_t *btn = lv_event_get_target(e);
