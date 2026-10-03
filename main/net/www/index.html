@@ -1270,6 +1270,9 @@
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
+        <a href="#" id="sd-eject-link" title="Unmount the microSD so it can be taken out safely. Pulling a mounted card is the same mid-transaction removal an abrupt reset performs, and it costs the next boot several failed mount attempts">Eject microSD</a>
+        <a href="#" id="sd-check-link" title="Read every file on the card and then write and read back a known pattern. This is the test a file manager never does - it checks the data, not just the names. It detects; it cannot repair">Check microSD</a>
+        <a href="#" id="tab5-reboot-link" title="Restart the Tab5 cleanly, releasing the microSD and the USB host first - which pulling the power cannot do. Your QMX will need a power cycle afterwards">Restart the Tab5</a>
         <a href="#" id="sc-btn" title="Assign Ctrl and Alt shortcuts on the Tab5's snap-on keyboard - which key opens the radio menus, the manual, the log, and so on">Keyboard shortcuts</a>
         <!-- QRZ.com Callbook (XML) lookup credentials - separate from the QRZ
              Logbook API key above (qrz-creds-link): this is username+password
@@ -2786,6 +2789,82 @@ function adifImportMessage(j) {
       } catch (err) {
         alert("No answer from the Tab5 - it may already have closed the link.");
       } finally { link.textContent = prev; }
+    });
+  })();
+
+  /* Eject / Check / Restart - the same three the Tab5's own drawer carries.
+     The operator, 2026-10-03: "then dont forget to implement all these new
+     features in the web page as well....". A control that exists on only one
+     of the two surfaces is a control half the operators never find. */
+  (function () {
+    const ej = document.getElementById("sd-eject-link");
+    if (ej) ej.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Unmount the microSD so it can be removed?\n\n" +
+                   "Logging to the card stops until it is put back and the Tab5 restarts.")) return;
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sd_eject" })
+        });
+        alert(r.ok ? "microSD unmounted - safe to remove.\n\nAfter swapping, restart the Tab5 " +
+                     "rather than waiting: a card put in while it is running is only looked " +
+                     "for every five minutes."
+                   : "The device refused: HTTP " + r.status);
+      } catch (err) { alert("No answer from the Tab5."); }
+    });
+
+    const rb = document.getElementById("tab5-reboot-link");
+    if (rb) rb.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Restart the Tab5?\n\n" +
+                   "The microSD and the USB host are released first, which pulling the power " +
+                   "cannot do. Your QMX will need a power cycle afterwards, as it does after " +
+                   "any Tab5 restart.")) return;
+      try {
+        await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reboot_tab5" })
+        });
+      } catch (err) { /* the device goes away mid-request - that IS the success case */ }
+      alert("Restarting. This page will reconnect on its own in about half a minute.");
+    });
+
+    /* The check reads every file, so it reports progress rather than blocking:
+       start it, then poll /api/sd_check until it is no longer running. */
+    const ck = document.getElementById("sd-check-link");
+    if (ck) ck.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Check the microSD?\n\n" +
+                   "Every file is read end to end, then a known pattern is written and read " +
+                   "back. On a full card this takes minutes. It can tell you what is wrong; " +
+                   "it cannot repair anything.")) return;
+      const prev = ck.textContent;
+      try {
+        await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sd_check" })
+        });
+      } catch (err) { alert("No answer from the Tab5."); return; }
+      const poll = setInterval(async function () {
+        let d;
+        try { d = await (await fetch("/api/sd_check")).json(); }
+        catch (err) { return; }                      /* a dropped poll is not a failure */
+        if (d.state === "running") {
+          ck.textContent = "Checking - " + d.files + " files, " +
+                           Math.round(d.bytes_read / 1048576) + " MB";
+          return;
+        }
+        clearInterval(poll);
+        ck.textContent = prev;
+        if (d.state === "failed") { alert(d.verdict || "The check could not run."); return; }
+        alert(d.files + " files, " + d.dirs + " folders, " +
+              Math.round(d.bytes_read / 1048576) + " MB read\n\n" +
+              "Unreadable files: " + d.read_errors + "\n" +
+              "Recovered fragments: " + d.fragments + "\n" +
+              "Write-and-read-back: " + (d.write_run ? (d.write_ok ? "passed" : "FAILED")
+                                                     : "not run") + "\n\n" + d.verdict);
+      }, 1500);
     });
   })();
 

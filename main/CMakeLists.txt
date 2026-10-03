@@ -46,6 +46,7 @@ idf_component_register(
     "util/qmx_prompt_gate.c"
     "util/hosted_watchdog.c"
     "util/cat_restore.c"
+    "storage/sd_health.c"
     "util/freq_gridlines.c"
     "ft8_slot_gate.c"
     "util/net_guard.c"

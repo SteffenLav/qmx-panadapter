@@ -43,7 +43,8 @@
 #include "util/dma_owners.h"
 #include "util/task_stacks.h"   // on-demand stack headroom (#329)
 #include "util/format_freq.h"   // #302 self-test
-#include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
+#include "storage/sd_archive.h"
+#include "storage/sd_health.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "adif/cloudlog_upload.h" // cloudlog_upload_pending (#171)
@@ -1517,6 +1518,33 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "sd_check") == 0) {
+        /* Start the card health walk - reads every file, then a write/read-back
+         * of a known pattern. Slow by nature, so it runs on its own task and
+         * the browser polls /api/sd_check for progress. See storage/sd_health.h
+         * for what it can and cannot tell you (it detects; it never repairs). */
+        bool started = sd_health_start();
+        sd_health_report_t rep; sd_health_get(&rep);
+        char out[256];
+        snprintf(out, sizeof(out), "{\"ok\":%s,\"verdict\":\"%s\"}",
+                 started ? "true" : "false", rep.verdict);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
+    } else if (action && strcmp(action, "sd_check_cancel") == 0) {
+        sd_health_cancel();
+    } else if (action && strcmp(action, "reboot_tab5") == 0) {
+        /* The web equivalent of the drawer's Restart button. esp_restart() runs
+         * the registered shutdown handlers, so the card and the USB host are
+         * released first - which a power pull cannot do. */
+        ESP_LOGW(TAG, "restart requested from the web UI");
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        vTaskDelay(pdMS_TO_TICKS(400));
+        esp_restart();
+        return ESP_OK;
     } else if (action && strcmp(action, "sd_eject") == 0) {
         /* ⭐ PUT THE CARD DOWN SO IT CAN BE TAKEN OUT SAFELY.
          *
@@ -6175,6 +6203,43 @@ static const httpd_uri_t uri_shortcuts_post = {
     .uri = "/api/shortcuts", .method = HTTP_POST, .handler = shortcuts_post_handler,
 };
 
+/* GET /api/sd_check - progress and findings for the card health walk. Polled
+ * by the browser while it runs: the walk reads every file, so on a full card
+ * it takes minutes and has to be able to say what it is doing. */
+static esp_err_t sd_check_handler(httpd_req_t *req)
+{
+    sd_health_report_t r;
+    sd_health_get(&r);
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return httpd_resp_send_500(req);
+    cJSON_AddStringToObject(o, "state",
+        r.state == SD_HEALTH_RUNNING ? "running" :
+        r.state == SD_HEALTH_DONE    ? "done"    :
+        r.state == SD_HEALTH_FAILED  ? "failed"  : "idle");
+    cJSON_AddNumberToObject(o, "files",       r.files_seen);
+    cJSON_AddNumberToObject(o, "dirs",        r.dirs_seen);
+    cJSON_AddNumberToObject(o, "bytes_read",  (double)r.bytes_read);
+    cJSON_AddNumberToObject(o, "read_errors", r.read_errors);
+    cJSON_AddNumberToObject(o, "fragments",   r.suspect_names);
+    cJSON_AddBoolToObject  (o, "write_ok",    r.write_verify_ok);
+    cJSON_AddBoolToObject  (o, "write_run",   r.write_verify_run);
+    cJSON_AddNumberToObject(o, "total_bytes", (double)r.total_bytes);
+    cJSON_AddNumberToObject(o, "free_bytes",  (double)r.free_bytes);
+    cJSON_AddStringToObject(o, "current",     r.current);
+    cJSON_AddStringToObject(o, "verdict",     r.verdict);
+    char *body = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!body) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, body);
+    free(body);
+    return ESP_OK;
+}
+
+static const httpd_uri_t uri_sd_check = {
+    .uri = "/api/sd_check", .method = HTTP_GET, .handler = sd_check_handler,
+};
+
 static const httpd_uri_t uri_settings_get = {
     .uri = "/api/settings", .method = HTTP_GET, .handler = settings_get_handler,
 };
@@ -6627,6 +6692,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_memory_get);
     httpd_register_uri_handler(s_server, &uri_memory_post);
     httpd_register_uri_handler(s_server, &uri_settings_get);
+    httpd_register_uri_handler(s_server, &uri_sd_check);
     httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_shortcuts_get);
     httpd_register_uri_handler(s_server, &uri_shortcuts_post);
