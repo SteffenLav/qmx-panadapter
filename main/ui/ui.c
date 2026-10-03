@@ -2993,8 +2993,26 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // is the broken promise this whole function exists to prevent.
 #define DRAWER_SEC_OUTPWR     45
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
-// size array indexed by an enum will be overrun" section. IDs are 0..45.
-#define N_DRAWER_SECTIONS     46
+// size array indexed by an enum will be overrun" section. IDs are 0..46.
+//
+// ⚠ THIS WARNING WAS HERE AND I WALKED PAST IT, 2026-10-03. DRAWER_SEC_REBOOT
+// was added as 46 against a bound of 46, so every drawer build wrote one past
+// the end of all three arrays. It did not fault at the write - it corrupted
+// whatever followed, and LVGL died later walking a garbage object pointer:
+//
+//   Guru Meditation Error: Core 0 panic'ed (Load access fault)
+//   task: taskLVGL   core 0   after 60.367 s   MTVAL=0x00170031
+//   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
+//
+// A comment cannot stop this on its own, so the assert below now does.
+#define N_DRAWER_SECTIONS     47
+
+/* Catches the mistake above at COMPILE time instead of as a crash minutes into
+ * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
+ * add one and this will tell you immediately if you forgot. */
+_Static_assert(DRAWER_SEC_REBOOT  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_SDEJECT < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
