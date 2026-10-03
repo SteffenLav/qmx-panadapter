@@ -288,7 +288,7 @@ Choose **Off** to tune exactly where you tap (asked for by Samuel W7STF). The
 grid exists because SSB stations sit on whole kilohertz and the ones that stray
 are usually at the half, so landing on a round number is normally what you want —
 but it is a preference, and now it is one you can set. CW keeps its own 10 Hz
-grid, AM and FM their 1 kHz, and tap-to-RIT overrides all of them, because an
+grid, AM its 1 kHz, and tap-to-RIT overrides all of them, because an
 offset onto one caller's tone needs resolution rather than tidiness.
 
 **Distance in Miles** — show distances in miles instead of kilometres, in the FT8

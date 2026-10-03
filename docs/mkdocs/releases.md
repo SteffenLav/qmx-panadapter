@@ -17,7 +17,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ **SD Files on the web page is temporarily not working.** It shows an empty folder or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally - only the web view is affected. Use the card in a PC until this is fixed.
 
-⚠ Audio still breaks up with a web page open. **AM and FM produce no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)*.
+⚠ Audio still breaks up with a web page open. **AM produces no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)*.
 
 ## Previous Releases
 

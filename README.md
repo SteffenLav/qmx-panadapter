@@ -1203,7 +1203,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
   receive is close; transmit needs a different route, because the QDX has no equivalent of
   the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
 - **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
-- **AM audio.** The demodulator handles CW, USB and LSB; AM and FM are silent, so an AM
+- **AM audio.** The demodulator handles CW, USB and LSB; AM is silent, so an AM
   station means putting the radio in USB *(Samuel W7STF)*. The signal path already
   produces what AM needs, so this is a small job - the work is in the levels, not the
   demodulation.

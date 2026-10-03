@@ -35,7 +35,7 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 !!! note "Which modes produce audio"
 
-    **CW, CW-R, USB and LSB only.** **AM and FM are silent** — there is no AM
+    **CW, CW-R, USB and LSB only.** **AM is silent** — there is no AM
     or FM demodulator yet, so listening to an AM station means putting the
     radio in USB.
 
@@ -129,7 +129,7 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 | DiGi | No | No |
 | AM, FM | No | No |
 
-So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi, AM and FM there is no audio at all yet — nothing is broken if you hear silence in those.
+So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi and AM there is no audio at all yet — nothing is broken if you hear silence in those.
 
 ## Known Limitations
 
