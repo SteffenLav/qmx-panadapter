@@ -1481,6 +1481,20 @@ static void sd_archive_task(void *arg)
          * and anything else keeps retrying on the slow cadence. A card
          * reseated, or one that finally settles after an abrupt reset, is
          * picked up instead of needing a reboot to be noticed. */
+        /* ⛔ THE DOT FOLLOWS THE CARD, NOT THE DECISION TO STOP LOOKING.
+         *
+         * ui_set_sd_state(UI_SD_NONE) used to live inside the give-up branch
+         * below, which was the only path that ran when no card mounted - so
+         * darkening the dot came free. Narrowing that branch to the memory
+         * case (so probing continues) took the dot with it, and the operator
+         * caught it within the hour: "the dot was green all the time - even
+         * with the old card out for 45 sec".
+         *
+         * A green dot with no card in the slot is worse than no dot at all.
+         * It is set here, from the state itself, every pass. */
+        if (!s_mounted)
+            ui_set_sd_state(UI_SD_NONE);
+
         if (wifi_on && !s_mounted && s_last_mount_err == ESP_ERR_NO_MEM) {
             // ⭐ THE OTHER ANOMALY: reaching here a second time means s_parked
             // was false again, and nothing in this file ever clears it.
