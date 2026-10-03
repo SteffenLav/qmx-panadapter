@@ -1517,6 +1517,28 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "sd_eject") == 0) {
+        /* ⭐ PUT THE CARD DOWN SO IT CAN BE TAKEN OUT SAFELY.
+         *
+         * Pulling a mounted card is the same mid-transaction removal that an
+         * abrupt reset performs, and that is what costs five failed mount
+         * attempts on the NEXT boot - measured 2026-10-03, and it is the card
+         * you are about to take somewhere else that pays for it.
+         *
+         * prepare_for_flash does this too, but it also releases the USB host,
+         * which means a QMX power cycle for what should be a card swap. This
+         * is the SD half on its own.
+         *
+         * ⚠ After swapping, RESET the Tab5 rather than waiting: the hot-insert
+         * retry runs on MOUNT_RETRY_MS, which is five minutes.
+         *
+         *   {"action":"sd_eject"} */
+        ESP_LOGW(TAG, "sd_eject: unmounting on request - safe to remove the card");
+        sd_archive_shutdown();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"mounted\":false}");
+        return ESP_OK;
     } else if (action && strcmp(action, "prepare_for_flash") == 0) {
         /* ⛔ CLOSES THE ONE GAP THE SHUTDOWN HANDLERS CANNOT.
          *
