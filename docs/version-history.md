@@ -4289,3 +4289,20 @@ Audio and binaural CW remain a **declared beta**.
 ⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. **AM and FM produce no audio at all** *(Samuel W7STF)* — the demodulator handles CW, USB and LSB only, so listening to an AM station means putting the radio in USB; I have looked at what AM needs and it is a small job rather than a large one, but it is not started. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)*.
 
 Audio and binaural CW remain a **declared beta**.
+
+### v1.16.11 - 2026-10-03
+
+**The WiFi link no longer dies when the co-processor hands over a full queue, and the microSD card can be ejected safely.**
+
+- ⭐ **WiFi no longer dies on a busy network, and the cause was my own safety check** *(Randy N4OPI, Bryan N0LUF)*. The Tab5 talks to its WiFi co-processor over a four-wire bus, and when that chip has data waiting it says how much. I had put a guard in that path to refuse an impossibly large amount — a sensible-looking precaution. It was set at 24,576 bytes, and a genuinely full queue is 25,942. So every time the network got busy enough to fill the queue, the guard refused the read **and advanced the counter anyway**, as if the data had been taken. From that moment the Tab5 and the co-processor disagreed about how far through the stream they were, and they never recovered. The link was dead until a reboot. Reproduced here on the bench with a flood of traffic: before the fix the link died and stayed dead; after it, 2,029 of those full queues were handled with no deaths at all.
+- ⭐ **The WiFi co-processor is no longer power-cycled over a reading that never happened.** The health check that decides a link is wedged could count a failed read as a bad answer rather than as no answer, so a unit that was perfectly healthy could have its WiFi chip restarted underneath it. It now only acts on a reply it actually received.
+- **The microSD card is let go of before anything resets the Tab5.** A reset pulls the rug out from under the card mid-transaction, and the card keeps that confusion across the reset — there is no way to power it down separately, so it stays unreachable until the whole unit is powered off. That is why a card could take several attempts to mount after an update, or not come back at all. The Tab5 now releases the card first, on a firmware restart and ahead of an update.
+- **Eject microSD and Restart the Tab5, in the settings drawer.** Eject puts the card down cleanly so you can pull it out without losing what was being written; it tells you when it is safe in a window you have to close, not a message that fades while you are looking at the card slot. Restart is a clean reboot from the screen instead of the power button.
+- **The SD symbol follows the card, not the Tab5's patience.** It went grey when the Tab5 stopped retrying, which looked like the card had gone away when it had not.
+- **Fixed a crash that could take the screen down about a minute after boot.** A new entry in the settings drawer was written one past the end of its list.
+
+⚠ **SD Files on the web page is temporarily not working.** It shows an empty folder or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally — only the web browser view is affected. Use the card in a PC until this is fixed.
+
+⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. **AM and FM produce no audio at all** *(Samuel W7STF)* — the demodulator handles CW, USB and LSB only, so listening to an AM station means putting the radio in USB. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)*.
+
+Audio and binaural CW remain a **declared beta**.

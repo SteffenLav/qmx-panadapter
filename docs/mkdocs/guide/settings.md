@@ -591,6 +591,11 @@ The Tab5 works perfectly well without one. With a card in, you also get:
 - **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
 - **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
 
+!!! warning "SD Files is temporarily not working (v1.16.11)"
+    It shows an empty folder, or says a file is missing, on a card that is fine.
+    Your files are on the card and the Tab5 reads and writes them normally - only
+    this web view is affected. Use the card in a PC until it is fixed.
+
 A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
 
 **After inserting the SD card your Tab5 needs a restart.**
@@ -630,6 +635,23 @@ sooner.
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
+
+### Taking the card out, and restarting the Tab5 (new in v1.16.11)
+
+Two buttons in the settings drawer:
+
+- **Eject microSD** finishes whatever is being written, closes the card and
+  tells you when it is safe to pull it out. The confirmation stays on screen
+  until you close it, so you can look at the card slot without missing it.
+  Pulling the card without ejecting risks losing the last thing written to it.
+- **Restart the Tab5** reboots cleanly from the screen instead of the power
+  button. The card is released first.
+
+The card is now also released automatically before a firmware update. Before
+v1.16.11 a reset caught the card mid-transaction, and because the Tab5 cannot
+power the card down on its own the card stayed confused until the whole unit was
+powered off - which is why a card could take several attempts to mount after an
+update, or not come back at all.
 
 ### Restoring the log from the card
 

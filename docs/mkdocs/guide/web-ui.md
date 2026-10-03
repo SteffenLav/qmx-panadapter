@@ -400,6 +400,11 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: the `qrz_key`, `eqsl_user` and `eqsl_pass` lines are in there in plain text, and an edited file uploaded back takes effect on the next upload with no restart. Note it holds your WiFi password in plain text too, so treat the file accordingly
 - **Config upload ↑** — restore settings from a backup file
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
+
+!!! warning "SD Files is temporarily not working (v1.16.11)"
+    It shows an empty folder, or says a file is missing, on a card that is fine.
+    Your files are on the card and the Tab5 reads and writes them normally - only
+    this web view is affected. Use the card in a PC until it is fixed.
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
 **Miscellaneous ▲** also carries **Prepare for flashing** — closes the USB host cleanly before you unplug the radio or reflash the Tab5, so the QMX is not left half-open.
