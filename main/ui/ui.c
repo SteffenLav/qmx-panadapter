@@ -3079,8 +3079,16 @@ static const drawer_item_t GRP_NETWORK[] = {
     // hiding it behind Advanced would hide the escape hatch from exactly the
     // operator who needs it.
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
-    { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
+    /* ⛔ ORDER HERE IS WHAT THE OPERATOR SEES - the build order below does not
+     * decide it, this table does, and I got that wrong once already. He asked
+     * for the card check "right below the WiFi Setup button"; it was third.
+     *
+     * Use DHCP sits between them on paper only: it is built ONLY when a static
+     * address is configured, so on an ordinary DHCP unit it does not exist and
+     * Check IS the next thing under WiFi setup. When a static address IS set,
+     * that escape hatch keeps the position its own comment argues for. */
     { DRAWER_SEC_SDCHECK, "Check the microSD card", true },
+    { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
     { DRAWER_SEC_REBOOT,  "Restart the Tab5", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
