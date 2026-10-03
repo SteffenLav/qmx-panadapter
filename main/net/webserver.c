@@ -1518,10 +1518,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         }
         ft8_screen_view_request_override(what);
     } else if (action && strcmp(action, "wifi_kill_c6") == 0) {
-        /* ⛔ DEV HOOK - kills the WiFi co-processor so the hosted-link
-         * recovery can be tested against a really dead C6 rather than
-         * waiting for a field report. See wifi.c. WiFi will go down and stay
-         * down for about three minutes before the watchdog acts. */
+        /* ⛔ DEV HOOK, AND IT NEEDS SAYING OUT LOUD TO WORK.
+         *
+         * This takes WiFi down and it does not come back without a restart,
+         * so it must not be reachable by a stray tap, a browser replaying a
+         * request, or anyone idly probing /api/cmd on the LAN. The confirm
+         * string is the gate: nobody types it by accident, and it keeps the
+         * hook usable on a shipping unit, which matters - if a fault ever
+         * needs reproducing on an operator's own Tab5, asking them to post
+         * one curl is far better than building them a special firmware.
+         *
+         *   {"action":"wifi_kill_c6","confirm":"yes-kill-wifi"} */
+        const char *cfm = cJSON_GetStringValue(cJSON_GetObjectItem(root, "confirm"));
+        if (!cfm || strcmp(cfm, "yes-kill-wifi") != 0) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "wifi_kill_c6 takes WiFi down until the Tab5 is restarted - "
+                "repeat with {\"confirm\":\"yes-kill-wifi\"} if that is what you want");
+            return ESP_FAIL;
+        }
         wifi_debug_kill_c6();
     } else if (action && strcmp(action, "band_scan_restore_test") == 0) {
         /* ⛔ DEV HOOK, and the only way the band-scan restore has ever run.

@@ -1,5 +1,6 @@
 #include "wifi.h"
-#include "util/hosted_watchdog.h"   // when a dead C6 gets power-cycled
+#include "util/hosted_watchdog.h"   // when the link is declared dead
+#include "ui.h"                       // ui_toast_ms - the operator has to be told
 #include "settings.h"
 #include "net/mdns_svc.h"   // qmx.local, announced once we have an IP
 #include <stdbool.h>
@@ -802,36 +803,42 @@ static hosted_wd_t s_hosted_wd;
  * the esp_hosted init-fail patch exists to undo. Each step logs and the next is
  * tried regardless; if the whole sequence fails, the streak simply builds again
  * and the attempt counter stops it for good. */
+/* ⛔ THIS NO LONGER POWER-CYCLES THE C6, AND THAT IS THE FIX.
+ *
+ * It used to: esp_wifi_stop(), drop the rail, raise it, esp_hosted_init(),
+ * esp_wifi_start(). The first time it ever ran against a real dead link -
+ * Bryan N0LUF, v1.16.10 - it failed, and the log says why:
+ *
+ *   relink: esp_wifi_stop: ESP_FAIL
+ *   M5STACK_TAB5: set_wifi_power_enable: 0
+ *   sdmmc_io_rw_extended: sdmmc_send_cmd returned 0x107      x many
+ *   H_SDIO_DRV: sdio_get_tx_buffer_num: err: 263             x many
+ *   relink: esp_wifi_start failed: ESP_FAIL
+ *
+ * The rail is dropped while the SDIO transport is still up and still polling
+ * the slave, so the driver spins on errors against hardware that is no longer
+ * powered. The ordered teardown that would avoid it is esp_hosted_deinit(),
+ * and that is ESP_ERROR_CHECK throughout - on a slave already believed dead
+ * those abort the device, turning "WiFi is down" into "the device reboots",
+ * which is strictly worse than the fault.
+ *
+ * ⭐ AND THE REASON IT EXISTED IS GONE. The link was dying because our own
+ * SDIO drain advanced its byte counter past data it had never read - see
+ * sdio_drv.c, fixed and measured 2026-10-03. The recovery was treating a
+ * symptom of our own bug.
+ *
+ * So this now reports and stands down rather than acting. A restart genuinely
+ * does fix it - Bryan's own restart brought WiFi straight back - and that is
+ * the operator's call to make, not something to do under their hands while
+ * they are working a QSO. */
 static void hosted_relink(void)
 {
-    esp_err_t e;
-
-    s_wifi_started = false;
-    e = esp_wifi_stop();
-    if (e != ESP_OK) ESP_LOGW(TAG, "relink: esp_wifi_stop: %s", esp_err_to_name(e));
-
-    bsp_set_wifi_power_enable(false);
-    vTaskDelay(pdMS_TO_TICKS(300));
-    bsp_set_wifi_power_enable(true);
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    extern esp_err_t esp_hosted_init(void);
-    e = esp_hosted_init();
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "relink: esp_hosted_init failed: %s - giving this attempt up",
-                 esp_err_to_name(e));
-        return;
-    }
-
-    e = esp_wifi_start();
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "relink: esp_wifi_start failed: %s", esp_err_to_name(e));
-        return;
-    }
-    s_wifi_started = true;
-    e = esp_wifi_connect();
-    if (e != ESP_OK) ESP_LOGW(TAG, "relink: esp_wifi_connect: %s", esp_err_to_name(e));
-    ESP_LOGW(TAG, "relink: C6 power-cycled and WiFi restarted - waiting for the association");
+    ESP_LOGE(TAG, "the hosted WiFi link is not answering and cannot be revived "
+                  "in place - restart the Tab5 to bring WiFi back. (Your QMX "
+                  "will need a power cycle after the restart, as always.)");
+    ui_toast_ms("WiFi has stopped answering and cannot be restarted on its own. "
+                "Restart the Tab5 to bring it back - your QMX will need a power "
+                "cycle afterwards.", 15000);
 }
 
 /* ⛔ DELIBERATE TEST ENTRY POINT - kills the WiFi co-processor for real.
@@ -1033,8 +1040,7 @@ static void wifi_task(void *arg)
                 break;
             case HOSTED_WD_RELINK:
                 ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
-                              "(~%d s) - power-cycling the C6 and re-linking "
-                              "(attempt %d/%d)",
+                              "(~%d s) - reporting it (attempt %d/%d)",
                          HOSTED_WD_FAILS_BEFORE_RELINK,
                          HOSTED_WD_FAILS_BEFORE_RELINK * 30,
                          s_hosted_wd.relink_count, HOSTED_WD_MAX_RELINKS);
