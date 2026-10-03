@@ -2862,8 +2862,8 @@ function adifImportMessage(j) {
               Math.round(d.bytes_read / 1048576) + " MB read\n\n" +
               "Unreadable files: " + d.read_errors + "\n" +
               "Recovered fragments: " + d.fragments + "\n" +
-              "Write-and-read-back: " + (d.write_run ? (d.write_ok ? "passed" : "FAILED")
-                                                     : "not run") + "\n\n" + d.verdict);
+              "Write-and-read-back: " + (!d.write_done ? "could not run"
+                                                       : (d.write_ok ? "passed" : "FAILED")) + "\n\n" + d.verdict);
       }, 1500);
     });
   })();

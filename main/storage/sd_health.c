@@ -1,5 +1,6 @@
 #include "sd_health.h"
 #include "sd_archive.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
@@ -19,6 +20,10 @@ static const char *TAG = "sd_health";
 #define MAX_DEPTH          6
 #define PATTERN_BYTES  65536
 #define YIELD_EVERY   (256*1024)
+/* Enough headroom that the walk and the write test can both run. The SD
+ * driver needs 512 B of DMA memory per block moved; 24 KB leaves room for
+ * that plus whatever else is running. */
+#define SD_HEALTH_MIN_DMA  (24 * 1024)
 
 static sd_health_report_t s_rep;
 static volatile bool      s_cancel;
@@ -62,7 +67,14 @@ static void walk(const char *dir, uint8_t *buf, int depth)
 {
     if (depth > MAX_DEPTH || s_cancel) return;
     DIR *d = opendir(dir);
-    if (!d) { s_rep.read_errors++; return; }
+    if (!d) {
+        /* Failing to OPEN a directory is not a bad file - it is the check not
+         * working. Counting it as a read error made the verdict blame the card
+         * for the Tab5 being out of memory. */
+        if (depth == 0) s_rep.could_not_read = true;
+        else            s_rep.read_errors++;
+        return;
+    }
 
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
@@ -104,18 +116,30 @@ static void write_verify(uint8_t *buf)
     for (int i = 0; i < READ_CHUNK; i++) buf[i] = (uint8_t)(i * 7 + 13);
 
     FILE *f = fopen(path, "wb");
-    if (!f) { ESP_LOGE(TAG, "write-verify: cannot create the test file"); return; }
+    if (!f) {
+        /* Inconclusive, NOT a failure of the card: write_verify_done stays
+         * false and the verdict must not accuse anything. */
+        ESP_LOGE(TAG, "write-verify: cannot create the test file - the check could "
+                      "not run, which is NOT a verdict on the card");
+        return;
+    }
     size_t written = 0;
     while (written < PATTERN_BYTES) {
-        if (fwrite(buf, 1, READ_CHUNK, f) != READ_CHUNK) { fclose(f); unlink(path); return; }
+        if (fwrite(buf, 1, READ_CHUNK, f) != READ_CHUNK) {
+            ESP_LOGE(TAG, "write-verify: the write itself failed - inconclusive");
+            fclose(f); unlink(path); return;
+        }
         written += READ_CHUNK;
     }
     fflush(f);
     fsync(fileno(f));
     fclose(f);
 
+    /* Past here the data IS on the card, so a mismatch is the card's doing. */
+    s_rep.write_verify_done = true;
+
     f = fopen(path, "rb");
-    if (!f) { unlink(path); return; }
+    if (!f) { s_rep.write_verify_done = false; unlink(path); return; }
     uint8_t cmp[64];
     bool ok = true;
     size_t total = 0;
@@ -137,15 +161,35 @@ static void write_verify(uint8_t *buf)
 
 static void verdict(void)
 {
+    /* ⛔ NEVER ACCUSE A CARD THE CHECK COULD NOT TEST. The first version said
+     * "replace it" when the Tab5 had run out of DMA memory and nothing had been
+     * read or written at all - 0 files, 0 bytes, and a write that never
+     * happened. An instrument that reports its own failure as the subject's
+     * failure is worse than no instrument. */
+    if (s_rep.could_not_read || (s_rep.files_seen == 0 && !s_rep.write_verify_done)) {
+        snprintf(s_rep.verdict, sizeof(s_rep.verdict),
+                 "The check could not run - the card could not be read just now, most "
+                 "likely because memory was short. This says nothing about the card. "
+                 "Try again when the Tab5 is less busy.");
+        return;
+    }
+    if (!s_rep.write_verify_done) {
+        snprintf(s_rep.verdict, sizeof(s_rep.verdict),
+                 "Read %lu file(s) with %lu error(s). The write test could not be "
+                 "started, so nothing is known about whether the card stores what it "
+                 "accepts.",
+                 (unsigned long)s_rep.files_seen, (unsigned long)s_rep.read_errors);
+        return;
+    }
     if (s_rep.read_errors && !s_rep.write_verify_ok)
         snprintf(s_rep.verdict, sizeof(s_rep.verdict),
-                 "This card is failing: %lu file(s) unreadable and the write test did not "
-                 "come back. Copy what you want off it and replace it.",
+                 "This card is failing: %lu file(s) unreadable and the data written back "
+                 "did not match. Copy what you want off it and replace it.",
                  (unsigned long)s_rep.read_errors);
     else if (!s_rep.write_verify_ok)
         snprintf(s_rep.verdict, sizeof(s_rep.verdict),
-                 "The card accepted a write and did not give it back. That is how a "
-                 "counterfeit or worn-out card behaves. Replace it.");
+                 "The card stored a write and gave back something different. That is how "
+                 "a counterfeit or worn-out card behaves. Replace it.");
     else if (s_rep.read_errors)
         snprintf(s_rep.verdict, sizeof(s_rep.verdict),
                  "%lu file(s) would not read. The card still writes correctly, so copy "
@@ -206,6 +250,27 @@ bool sd_health_start(void)
                  "No card is mounted, so there is nothing to check.");
         return false;
     }
+    /* ⛔ DO NOT START A TEST THAT CANNOT FINISH. The SD driver wants a 512 B
+     * DMA-capable buffer for every block it moves, and on this board that pool
+     * is the scarce one - see the v1.16.9 SD fix. With it nearly empty the walk
+     * reads nothing, the test file cannot be created, and the result is an
+     * accusation against a healthy card (2026-10-03, exactly that). Refusing
+     * with a reason is the honest answer; the operator can retry when the
+     * device is quieter. */
+    size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    if (dma_free < SD_HEALTH_MIN_DMA) {
+        memset(&s_rep, 0, sizeof(s_rep));
+        s_rep.state = SD_HEALTH_FAILED;
+        snprintf(s_rep.verdict, sizeof(s_rep.verdict),
+                 "Not enough free memory to check the card right now (%u bytes of the "
+                 "kind the card driver needs, %u required). This says nothing about the "
+                 "card - try again when the Tab5 is less busy.",
+                 (unsigned)dma_free, (unsigned)SD_HEALTH_MIN_DMA);
+        ESP_LOGW(TAG, "refusing to start: DMA free %u < %u",
+                 (unsigned)dma_free, (unsigned)SD_HEALTH_MIN_DMA);
+        return false;
+    }
+
     memset(&s_rep, 0, sizeof(s_rep));
     s_rep.state = SD_HEALTH_RUNNING;
     s_cancel = false;

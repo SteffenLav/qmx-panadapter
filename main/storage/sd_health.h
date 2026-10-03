@@ -53,11 +53,20 @@ typedef struct {
     /* Findings. */
     uint32_t read_errors;      /* files that would not read to the end */
     uint32_t suspect_names;    /* FOUND.*, *.CHK, lost-chain leftovers */
-    bool     write_verify_ok;  /* the pattern came back byte-identical */
-    bool     write_verify_run;
+    /* ⛔ THREE OUTCOMES, NOT TWO. "Could not write the test file" is NOT "the
+     * card did not give the data back" - the first is inconclusive, the second
+     * is an accusation. Collapsing them told the operator to replace a healthy
+     * card because the Tab5 was out of DMA memory (2026-10-03). */
+    bool     write_verify_run;   /* the test was attempted at all */
+    bool     write_verify_done;  /* the write itself succeeded, so the compare means something */
+    bool     write_verify_ok;    /* the pattern came back byte-identical */
+    bool     could_not_read;     /* the card could not be enumerated - inconclusive */
     uint64_t total_bytes;
     uint64_t free_bytes;
-    char     verdict[160];     /* one sentence, for the operator */
+    char     verdict[320];     /* the plain-words answer. Wide enough that the
+                                * honest "this says nothing about the card"
+                                * wording is never truncated into something
+                                * that reads like a verdict. */
 } sd_health_report_t;
 
 /* Starts the walk on its own task. Returns false if a card is not mounted or a

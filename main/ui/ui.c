@@ -15420,7 +15420,8 @@ static void sdchk_tick_cb(lv_timer_t *t)
                  (unsigned long)r.files_seen, (unsigned long)r.dirs_seen,
                  (unsigned long long)(r.bytes_read / (1024 * 1024)),
                  (unsigned long)r.read_errors, (unsigned long)r.suspect_names,
-                 r.write_verify_run ? (r.write_verify_ok ? "passed" : "FAILED") : "not run",
+                 !r.write_verify_done ? "could not run"
+                                      : (r.write_verify_ok ? "passed" : "FAILED"),
                  r.verdict);
         lv_label_set_text(s_sdchk_btnlbl, "Close");
     }
