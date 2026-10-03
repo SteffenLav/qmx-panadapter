@@ -15280,13 +15280,90 @@ static void drawer_bt_restart_cb(lv_event_t *e)
 /* Unmount so the card can be taken out without the mid-transaction removal
  * that costs the NEXT boot five mount attempts. Same call the shutdown handler
  * and prepare_for_flash use. */
+/* ⛔ A TOAST WAS THE WRONG SHAPE FOR THIS. The operator, 2026-10-03: "the
+ * toast of how to restart the Tab5 afterwards is completely unreadable - make
+ * a window instead and a confirm button to push."
+ *
+ * He is right about more than the legibility. A toast fades on its own, and
+ * this message has to survive the operator looking away from the screen to
+ * physically swap a card - which is exactly when it disappears. It also has a
+ * second instruction after the swap, so it has to still be there afterwards.
+ * A window waits. */
+static lv_obj_t *s_sdeject_modal;
+
+static void sdeject_modal_close_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sdeject_modal) { lv_obj_del(s_sdeject_modal); s_sdeject_modal = NULL; }
+}
+
+static void sdeject_swallow_cb(lv_event_t *e) { (void)e; }
+
+static void sdeject_modal_show(void)
+{
+    if (s_sdeject_modal) return;
+    s_sdeject_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_sdeject_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_sdeject_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_sdeject_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_sdeject_modal, UI_OPA_MODAL_SCRIM, 0);
+    lv_obj_set_style_border_width(s_sdeject_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_sdeject_modal, 0, 0);
+    lv_obj_clear_flag(s_sdeject_modal, LV_OBJ_FLAG_SCROLLABLE);
+    /* Clickable and swallowing: a tap beside the panel must not dismiss the one
+     * instruction the operator needs AFTER they have put the new card in. */
+    lv_obj_add_flag(s_sdeject_modal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_sdeject_modal, sdeject_swallow_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *p = lv_obj_create(s_sdeject_modal);
+    lv_obj_set_size(p, 820, 420);
+    lv_obj_center(p);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(p, lv_color_hex(0x40C060), 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    lv_obj_set_style_radius(p, 10, 0);
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(p);
+    lv_label_set_text(t, "microSD unmounted");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(0x40C060), 0);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
+
+    lv_obj_t *b = lv_label_create(p);
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(b, 740);
+    lv_label_set_text(b,
+        "It is safe to take the card out now.\n\n"
+        "After you put the new one in, use \"Restart the Tab5\" rather than "
+        "waiting - a card inserted while the Tab5 is running is only looked "
+        "for every five minutes.");
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(b, lv_color_hex(0xE6E6E6), 0);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 20, 70);
+
+    lv_obj_t *ok = lv_btn_create(p);
+    lv_obj_set_size(ok, 220, 64);
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_set_style_bg_color(ok, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_radius(ok, 8, 0);
+    lv_obj_add_event_cb(ok, sdeject_modal_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ol = lv_label_create(ok);
+    lv_label_set_text(ol, "OK");
+    lv_obj_set_style_text_font(ol, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(ol, lv_color_hex(0xffffff), 0);
+    lv_obj_center(ol);
+
+    lv_obj_move_foreground(s_sdeject_modal);
+}
+
 static void drawer_sdeject_btn_cb(lv_event_t *e)
 {
     (void)e;
     sd_archive_shutdown();
-    ui_toast_ms("microSD unmounted - safe to remove. After swapping, restart "
-                "the Tab5 rather than waiting: a card put in while running is "
-                "only looked for every five minutes.", 12000);
+    drawer_close();
+    sdeject_modal_show();
 }
 
 /* ⛔ THE FIRST RESTART THIS DEVICE HAS EVER OFFERED. Until now the only way
