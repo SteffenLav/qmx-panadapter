@@ -100,3 +100,9 @@ int panadapter_wifi_scan_get(wifi_scan_ap_t *out, int max);
 #ifdef __cplusplus
 }
 #endif
+
+/* ⛔ DELIBERATE TEST ENTRY POINT - see wifi.c. Drops the WiFi co-processor's
+ * power rail so the hosted link dies for real, which is the only way the
+ * recovery path has ever been exercised on the bench. Reached from
+ * POST /api/cmd {"action":"wifi_kill_c6"}; nothing calls it in normal use. */
+void wifi_debug_kill_c6(void);

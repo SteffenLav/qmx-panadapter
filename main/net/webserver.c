@@ -1517,6 +1517,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "wifi_kill_c6") == 0) {
+        /* ⛔ DEV HOOK - kills the WiFi co-processor so the hosted-link
+         * recovery can be tested against a really dead C6 rather than
+         * waiting for a field report. See wifi.c. WiFi will go down and stay
+         * down for about three minutes before the watchdog acts. */
+        wifi_debug_kill_c6();
     } else if (action && strcmp(action, "band_scan_restore_test") == 0) {
         /* ⛔ DEV HOOK, and the only way the band-scan restore has ever run.
          *

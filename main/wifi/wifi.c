@@ -834,6 +834,37 @@ static void hosted_relink(void)
     ESP_LOGW(TAG, "relink: C6 power-cycled and WiFi restarted - waiting for the association");
 }
 
+/* ⛔ DELIBERATE TEST ENTRY POINT - kills the WiFi co-processor for real.
+ *
+ * Bryan N0LUF's hosted link dies on its own and the recovery has never been
+ * reproducible here, which is why 3567847 shipped with its recovery unproven -
+ * and when it finally ran on his unit in v1.16.10 it failed (esp_wifi_stop
+ * ESP_FAIL, an SDIO error storm after the rail dropped, esp_wifi_start
+ * ESP_FAIL). I said the condition could not be reproduced on the bench. That
+ * was wrong.
+ *
+ * Dropping the C6's power rail with the SDIO transport still up and still
+ * polling it puts the host in exactly the state his unit reaches: the slave is
+ * silent, every SDIO command fails, every RPC times out. The host cannot tell
+ * "lost power" from "stopped answering".
+ *
+ * ⚠ It is a NECESSARY condition, not an identical one: his C6 dies with a
+ * backlog of oversize frames behind it, this one dies clean. A recovery that
+ * cannot handle the clean case certainly cannot handle his.
+ *
+ * POST /api/cmd {"action":"wifi_kill_c6"}
+ *
+ * Nothing calls this in normal operation. The watchdog below then sees six
+ * probe failures over ~3 minutes and runs the REAL recovery. */
+void wifi_debug_kill_c6(void)
+{
+    ESP_LOGE(TAG, "TEST: dropping the C6 power rail - the hosted link will now "
+                  "die exactly as it does in the field. The watchdog should see "
+                  "%d probe failures over ~%d s and then re-link.",
+             HOSTED_WD_FAILS_BEFORE_RELINK, HOSTED_WD_FAILS_BEFORE_RELINK * 30);
+    bsp_set_wifi_power_enable(false);
+}
+
 static void wifi_task(void *arg)
 {
     ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
