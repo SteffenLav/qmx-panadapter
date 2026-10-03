@@ -45,8 +45,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "help_triage.h"
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "adif/adif_log.h"     // adif_log_band_for_freq() - which band the WSPR declared-power picker filters against
-#include "storage/sd_archive.h"
-#include "storage/sd_health.h"   // sd_archive_shutdown - the eject button
+#include "storage/sd_archive.h"   // sd_archive_shutdown - the eject button
 #include "wifi_config.h"
 #include "wifi.h"
 #include "tune_modal.h"
@@ -2874,7 +2873,6 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * it live - so the device offered no way to avoid the one thing that causes
  * the fault. Both now run the orderly teardown. */
 #define DRAWER_SEC_SDEJECT   42  /* unmount the card so it can be taken out */
-#define DRAWER_SEC_SDCHECK   48  /* read every file + write-verify the card */
 #define DRAWER_SEC_REBOOT    46  /* restart, running the SD + USB teardowns */
 #define DRAWER_SEC_TUNESNAP  41  /* #347: the tap-to-tune grid, or off */
 #define DRAWER_SEC_CWPROF    40  /* #359: apply a stored CW profile (centre +
@@ -3007,13 +3005,12 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     49
+#define N_DRAWER_SECTIONS     47
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
  * add one and this will tell you immediately if you forgot. */
 _Static_assert(DRAWER_SEC_REBOOT  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
-_Static_assert(DRAWER_SEC_SDCHECK < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_SDEJECT < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
@@ -3079,15 +3076,6 @@ static const drawer_item_t GRP_NETWORK[] = {
     // hiding it behind Advanced would hide the escape hatch from exactly the
     // operator who needs it.
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
-    /* ⛔ ORDER HERE IS WHAT THE OPERATOR SEES - the build order below does not
-     * decide it, this table does, and I got that wrong once already. He asked
-     * for the card check "right below the WiFi Setup button"; it was third.
-     *
-     * Use DHCP sits between them on paper only: it is built ONLY when a static
-     * address is configured, so on an ordinary DHCP unit it does not exist and
-     * Check IS the next thing under WiFi setup. When a static address IS set,
-     * that escape hatch keeps the position its own comment argues for. */
-    { DRAWER_SEC_SDCHECK, "Check the microSD card", true },
     { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
     { DRAWER_SEC_REBOOT,  "Restart the Tab5", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
@@ -3202,7 +3190,6 @@ static void drawer_set_mode(ui_mode_t mode);
 // build - see drawer_usedhcp_btn_cb for why that button has to exist (#307).
 static void drawer_usedhcp_btn_cb(lv_event_t *e);
 static void drawer_sdeject_btn_cb(lv_event_t *e);
-static void drawer_sdcheck_btn_cb(lv_event_t *e);
 static void drawer_reboot_btn_cb(lv_event_t *e);
 // Defined below, next to the mode switch that is its other caller.
 static void hide_panadapter_widgets_instant(void);
@@ -12752,24 +12739,6 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
-    /* Card health, directly under WiFi setup (operator's placement). Reads
-     * every file and then writes and reads back a known pattern - see
-     * storage/sd_health.h for why that pair is the test that matters and why
-     * neither of them can repair anything. */
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SDCHECK, y, 72);
-        lv_obj_t *btn = lv_btn_create(sec);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_add_event_cb(btn, drawer_sdcheck_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "Check microSD");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 72;
-    }
     // "Use DHCP" - built ONLY when a static address is configured, so on the
     // ordinary DHCP unit it does not exist at all and there is no gap to
     // reflow. That is why it is conditional rather than hidden: a hidden
@@ -15387,122 +15356,6 @@ static void sdeject_modal_show(void)
     lv_obj_center(ol);
 
     lv_obj_move_foreground(s_sdeject_modal);
-}
-
-/* ⛔ A PROGRESS WINDOW, NOT A TOAST - the walk reads every file and can run for
- * minutes on a full card, so it has to say what it is doing or it reads as a
- * hung device. Same lesson as the eject message. */
-static lv_obj_t *s_sdchk_modal, *s_sdchk_body, *s_sdchk_btn, *s_sdchk_btnlbl;
-static lv_timer_t *s_sdchk_timer;
-
-static void sdchk_close_cb(lv_event_t *e)
-{
-    (void)e;
-    sd_health_report_t r; sd_health_get(&r);
-    if (r.state == SD_HEALTH_RUNNING) { sd_health_cancel(); return; }
-    if (s_sdchk_timer) { lv_timer_del(s_sdchk_timer); s_sdchk_timer = NULL; }
-    if (s_sdchk_modal) { lv_obj_del(s_sdchk_modal); s_sdchk_modal = NULL; }
-    s_sdchk_body = s_sdchk_btn = s_sdchk_btnlbl = NULL;
-}
-
-static void sdchk_swallow_cb(lv_event_t *e) { (void)e; }
-
-static void sdchk_tick_cb(lv_timer_t *t)
-{
-    (void)t;
-    if (!s_sdchk_body) return;
-    sd_health_report_t r; sd_health_get(&r);
-    char buf[768];
-    if (r.state == SD_HEALTH_RUNNING) {
-        snprintf(buf, sizeof(buf),
-                 "Reading every file on the card.@@This is the test a file manager never "
-                 "does - it checks the data, not just the names.@@"
-                 "%lu files, %lu folders, %llu MB read@@%s",
-                 (unsigned long)r.files_seen, (unsigned long)r.dirs_seen,
-                 (unsigned long long)(r.bytes_read / (1024 * 1024)), r.current);
-        lv_label_set_text(s_sdchk_btnlbl, "Stop");
-    } else {
-        /* "Not checked" only appears when it is non-zero. A line reading
-         * "Not checked: 0" on every healthy run is noise that teaches the
-         * operator to stop reading the box. */
-        char skipped[64] = "";
-        if (r.unchecked_files)
-            snprintf(skipped, sizeof(skipped), "@Not checked (Tab5 was busy): %lu",
-                     (unsigned long)r.unchecked_files);
-        snprintf(buf, sizeof(buf),
-                 "%lu files, %lu folders, %llu MB read@@"
-                 "Unreadable files: %lu%s@Recovered fragments: %lu@"
-                 "Write-and-read-back: %s@@%s",
-                 (unsigned long)r.files_seen, (unsigned long)r.dirs_seen,
-                 (unsigned long long)(r.bytes_read / (1024 * 1024)),
-                 (unsigned long)r.read_errors, skipped,
-                 (unsigned long)r.suspect_names,
-                 !r.write_verify_done ? "could not run"
-                                      : (r.write_verify_ok ? "passed" : "FAILED"),
-                 r.verdict);
-        lv_label_set_text(s_sdchk_btnlbl, "Close");
-    }
-    for (char *q = buf; *q; q++) if (*q == '@') *q = (char)10;
-    lv_label_set_text(s_sdchk_body, buf);
-}
-
-static void drawer_sdcheck_btn_cb(lv_event_t *e)
-{
-    (void)e;
-    drawer_close();
-    if (s_sdchk_modal) return;
-    sd_health_start();   /* reports its own refusal through the window */
-
-    s_sdchk_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_sdchk_modal, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_pos(s_sdchk_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_sdchk_modal, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_sdchk_modal, UI_OPA_MODAL_SCRIM, 0);
-    lv_obj_set_style_border_width(s_sdchk_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_sdchk_modal, 0, 0);
-    lv_obj_clear_flag(s_sdchk_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_sdchk_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_sdchk_modal, sdchk_swallow_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *p = lv_obj_create(s_sdchk_modal);
-    lv_obj_set_size(p, 860, 480);
-    lv_obj_center(p);
-    lv_obj_set_style_bg_color(p, lv_color_hex(0x1c2128), 0);
-    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(p, lv_color_hex(0x8AB4F8), 0);
-    lv_obj_set_style_border_width(p, 2, 0);
-    lv_obj_set_style_radius(p, 10, 0);
-    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *t2 = lv_label_create(p);
-    lv_label_set_text(t2, "microSD card check");
-    lv_obj_set_style_text_font(t2, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(t2, lv_color_hex(0x8AB4F8), 0);
-    lv_obj_align(t2, LV_ALIGN_TOP_MID, 0, 8);
-
-    s_sdchk_body = lv_label_create(p);
-    lv_label_set_long_mode(s_sdchk_body, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_sdchk_body, 780);
-    lv_label_set_text(s_sdchk_body, "Starting...");
-    lv_obj_set_style_text_font(s_sdchk_body, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_sdchk_body, lv_color_hex(0xE6E6E6), 0);
-    lv_obj_align(s_sdchk_body, LV_ALIGN_TOP_LEFT, 20, 60);
-
-    s_sdchk_btn = lv_btn_create(p);
-    lv_obj_set_size(s_sdchk_btn, 220, 64);
-    lv_obj_align(s_sdchk_btn, LV_ALIGN_BOTTOM_MID, 0, -16);
-    lv_obj_set_style_bg_color(s_sdchk_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_radius(s_sdchk_btn, 8, 0);
-    lv_obj_add_event_cb(s_sdchk_btn, sdchk_close_cb, LV_EVENT_CLICKED, NULL);
-    s_sdchk_btnlbl = lv_label_create(s_sdchk_btn);
-    lv_label_set_text(s_sdchk_btnlbl, "Stop");
-    lv_obj_set_style_text_font(s_sdchk_btnlbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_sdchk_btnlbl, lv_color_hex(0xffffff), 0);
-    lv_obj_center(s_sdchk_btnlbl);
-
-    lv_obj_move_foreground(s_sdchk_modal);
-    s_sdchk_timer = lv_timer_create(sdchk_tick_cb, 500, NULL);
-    sdchk_tick_cb(NULL);
 }
 
 static void drawer_sdeject_btn_cb(lv_event_t *e)
