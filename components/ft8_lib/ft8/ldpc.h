@@ -14,7 +14,10 @@ extern "C"
 // ok == 87 means success.
 void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
 
-void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok);
+// stall_limit: abandon a candidate after that many iterations with no
+// improvement; 0 keeps the original "run every iteration" behaviour.
+// The measurement that set it is at the definition in ldpc.c.
+void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[], int* ok);
 
 #ifdef __cplusplus
 }

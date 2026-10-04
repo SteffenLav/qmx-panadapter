@@ -127,12 +127,43 @@ static int ldpc_check(uint8_t codeword[])
     return errors;
 }
 
-void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
+/* ⭐ stall_limit: give up after this many iterations with NO improvement in
+ * min_errors. 0 disables it and restores the original behaviour.
+ *
+ * The only other exit is SUCCESS (errors == 0), so without this a candidate
+ * that will never decode burns every one of max_iters. On a busy band most of
+ * the 140 candidates are exactly that, and they, not the decodes, are what
+ * dec_ms is spent on - measured 2026-10-04 at 0.13 ms for a failure against
+ * 0.02 ms for a success on the host bench.
+ *
+ * A candidate that is still converging keeps lowering min_errors, so it is
+ * never cut short. What a stall limit costs is the candidate that sits on a
+ * plateau and then breaks through late.
+ *
+ * Measured over the 35 ground-truth WAVs in test/wav_reference with
+ * test/ft8_decode_bench.c (cand=140, min score 5, 30 iters - the device's own
+ * settings), on top of the multi-symbol fallback already being off:
+ *
+ *     stall off   405 decodes   565.6 ms
+ *     stall 8     403 decodes   340.3 ms     <- chosen
+ *     stall 5     396 decodes   263.3 ms
+ *     stall 3     388 decodes   191.3 ms
+ *
+ * 8 costs 2 decodes in 405 (0.5%) for 40% of the time.
+ *
+ * ⛔ FT8 ONLY, and that is deliberate. The corpus is all FT8; FT4 uses a
+ * DIFFERENT parity matrix and is not measured here. An FT8-derived LDPC limit
+ * was applied to FT4 once before - FT8_LDPC_MAX_ITERS 30->15, 2026-06-29 -
+ * and it badly hurt FT4 decode, confirmed by a field report immediately after
+ * release. ftx_decode_candidate() passes 0 for FT4 until someone measures it
+ * with an FT4 corpus. */
+void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[], int* ok)
 {
     float tov[FTX_LDPC_N][3];
     float toc[FTX_LDPC_M][7];
 
     int min_errors = FTX_LDPC_M;
+    int last_improve = 0;
 
     // initialize message data
     for (int n = 0; n < FTX_LDPC_N; ++n)
@@ -168,6 +199,13 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
             {
                 break; // Found a perfect answer
             }
+            last_improve = iter;
+        }
+        else if (stall_limit > 0 && (iter - last_improve) >= stall_limit)
+        {
+            // No better guess for stall_limit iterations - this one is not
+            // going to converge, and the remaining iterations are pure cost.
+            break;
         }
 
         // Send messages from bits to check nodes

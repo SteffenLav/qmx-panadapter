@@ -56,6 +56,14 @@
 #define FT8_MULTI_SYMBOL_FALLBACK 0
 #endif
 
+/* Abandon an FT8 candidate after this many belief-propagation iterations with
+ * no improvement. The table of what each value costs in DECODES is at the
+ * bp_decode() definition in ldpc.c - do not change this without rerunning
+ * test/ft8_decode_bench.c over test/wav_reference. 0 disables it. */
+#ifndef FT8_LDPC_STALL_ITERS
+#define FT8_LDPC_STALL_ITERS 8
+#endif
+
 #if FT8_STAGE1_DIAG
 
 static FILE* g_diag_log = NULL;
@@ -622,8 +630,11 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     ftx_normalize_logl(log174);
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
-    bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
-    // ldpc_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+    /* ⛔ FT8 only - FT4 has a different parity matrix and no measured corpus
+     * here. See the stall_limit comment on bp_decode() in ldpc.c for why that
+     * caution is not theoretical. */
+    int stall_limit = (wf->protocol == FTX_PROTOCOL_FT8) ? FT8_LDPC_STALL_ITERS : 0;
+    bp_decode(log174, max_iterations, stall_limit, plain174, &status->ldpc_errors);
 
     int single_symbol_errors = status->ldpc_errors;
     int fallback_triggered = 0;
@@ -665,7 +676,7 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
         fallback_triggered = 1;
         ft8_extract_likelihood_multi(wf, cand, log174);
         ftx_normalize_logl(log174);
-        bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+        bp_decode(log174, max_iterations, stall_limit, plain174, &status->ldpc_errors);
         multi_symbol_errors = status->ldpc_errors;
     }
 #endif
