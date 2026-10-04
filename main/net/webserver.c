@@ -1,4 +1,5 @@
 #include "webserver.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "webserver_ws.h"
 #include "net/update_check.h"   // #218
 #include "net/ota_update.h"     // #218
@@ -6652,6 +6653,7 @@ esp_err_t webserver_start(void)
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");
+    MEM_LEDGER("httpd + ws start");   // DMA-pool bracket, 2026-10-04
     return ESP_OK;
 }
 

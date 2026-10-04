@@ -14,6 +14,7 @@
 // lighter than those, but it follows the same rule for the same reason.
 
 #include "spots.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "net/net_quiet.h"
 #include "net/bg_feed_gate.h"
 #include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
@@ -605,6 +606,12 @@ static void fetch_pota(void)
         ESP_LOGI(TAG, "POTA: %d spots (%u bytes)", n, (unsigned)len);
     }
     heap_caps_free(buf);
+    /* DMA-pool bracket (2026-10-04) - ONE-SHOT, see band_conditions.c.
+     * AFTER the free deliberately: the response body is ~36.6 KB and a mark
+     * taken while it is still held reads as a 36 KB loss that is about to be
+     * given back. The question is what the pool settles at, not what the
+     * parse peaks at. */
+    { static bool once; if (!once) { once = true; MEM_LEDGER("first POTA fetch"); } }
 }
 
 // Returns true when the fetch succeeded, so the caller can reset its backoff.

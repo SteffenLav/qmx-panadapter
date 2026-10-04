@@ -1,4 +1,5 @@
 #include "rigctld_server.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 
 #include <string.h>
 #include <stdlib.h>
@@ -312,6 +313,7 @@ static void listener_task(void *arg)
         return;
     }
     ESP_LOGI(TAG, "rigctld listening on tcp/%d", RIGCTLD_PORT);
+    MEM_LEDGER("rigctld listen");   // DMA-pool bracket, 2026-10-04
 
     for (;;) {
         struct sockaddr_in cli;

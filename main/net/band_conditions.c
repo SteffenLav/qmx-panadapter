@@ -8,6 +8,7 @@
 // this one's (util/psram_task.h).
 
 #include "band_conditions.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "wifi.h"
 #include "net/net_quiet.h"
 #include "storage/settings.h"
@@ -134,6 +135,11 @@ static void parse_and_store(const char *xml)
     ESP_LOGI(TAG, "SFI=%d A=%d K=%d SN=%d %s/%s day, %s/%s night",
              c.solar_flux, c.a_index, c.k_index, c.sunspots,
              c.day[0], c.day[1], c.night[0], c.night[1]);
+    /* DMA-pool bracket (2026-10-04) - ONE-SHOT. This fetch repeats on a
+     * timer; only the first one falls inside the 17.4-23.4 s window the
+     * 28 KB disappears in, and a repeating mark would be the periodic
+     * noise the ledger exists to avoid. */
+    { static bool once; if (!once) { once = true; MEM_LEDGER("band_cond fetch"); } }
 }
 
 static void poll_once(char *rx_buf)

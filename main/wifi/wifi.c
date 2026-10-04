@@ -1,4 +1,5 @@
 #include "wifi.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "util/hosted_watchdog.h"   // when the link is declared dead
 #include "ui.h"                       // ui_toast_ms - the operator has to be told
 #include "settings.h"
@@ -681,6 +682,10 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         }
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
+        /* DMA-pool bracket (2026-10-04). The pool is 36.6 KB at 17.4 s and
+         * 8.4 KB at 23.4 s - 28 KB goes inside this six-second window and
+         * nothing said to what. Association/DHCP is the first suspect. */
+        MEM_LEDGER("wifi got IP");
         s_retry_count = 0;
         s_roam_last_us = 0;         // this network works; allow an immediate roam next time
         xEventGroupSetBits(s_events, BIT_CONNECTED);
