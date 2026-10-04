@@ -49,6 +49,13 @@
 #define FT8_STAGE1_DIAG 0
 #endif
 
+/* Stage-1 multi-symbol second-chance decode. OFF - it cost half the decode time
+ * and recovered 0 of 405 decodes across test/wav_reference. The full measurement
+ * is written at its call site in ftx_decode_candidate(). */
+#ifndef FT8_MULTI_SYMBOL_FALLBACK
+#define FT8_MULTI_SYMBOL_FALLBACK 0
+#endif
+
 #if FT8_STAGE1_DIAG
 
 static FILE* g_diag_log = NULL;
@@ -154,9 +161,11 @@ static void heapify_up(ftx_candidate_t heap[], int heap_size);
 static void ftx_normalize_logl(float* log174);
 static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
 static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
+#if FT8_MULTI_SYMBOL_FALLBACK  /* off: see ftx_decode_candidate() */
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
 static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
                                           int num_bins, int bit_idx, float* log174);
+#endif
 
 static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
@@ -415,6 +424,9 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
 // Second-chance likelihood extraction: uses multi-symbol (n_syms=2) instead of single-symbol.
 // Only called if single-symbol bp_decode fails. Pairs consecutive data symbols to improve
 // coherent detection on weak/fading signals.
+// Compiled only when FT8_MULTI_SYMBOL_FALLBACK is on - see the measurement at
+// its one call site in ftx_decode_candidate().
+#if FT8_MULTI_SYMBOL_FALLBACK
 static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
 {
     const WF_ELEM_T* mag = get_cand_mag(wf, cand);
@@ -465,6 +477,7 @@ static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_ca
         }
     }
 }
+#endif  /* FT8_MULTI_SYMBOL_FALLBACK */
 
 static void ftx_normalize_logl(float* log174)
 {
@@ -616,12 +629,37 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     int fallback_triggered = 0;
     int multi_symbol_errors = 0;
 
-    // Save the original LLRs before multi-symbol extraction
-    float log174_single[FTX_LDPC_N];
-    if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
-        memcpy(log174_single, log174, sizeof(log174_single));
-    }
-
+    /* ⭐ STAGE-1 MULTI-SYMBOL FALLBACK - OFF, because it costs HALF the
+     * decode time and recovered NOTHING when it was finally measured.
+     *
+     * The second chance only ever runs when the single-symbol pass FAILED, and
+     * bp_decode() exits early only on success, so a hopeless candidate burns
+     * the full iteration count TWICE. On a busy band most of the 140
+     * candidates fail, so this doubles dec_ms on exactly the slots that cannot
+     * afford it.
+     *
+     * Measured 2026-10-04 on the 35 ground-truth WAVs in test/wav_reference
+     * (cand=140, min score 5, 30 iterations - the device's own settings),
+     * attenuated '_weak' copies included:
+     *
+     *     with fallback:     405 decodes, 1069.5 ms
+     *     without fallback:  405 decodes,  565.6 ms
+     *
+     * Not one decode in the corpus came from it, on any file, and the decoded
+     * text was identical file by file - so this is not a sensitivity trade.
+     *
+     * ⚠ What is NOT established: whether the idea is worthless or this
+     * implementation is simply broken. 0 of 405 is what a dead code path looks
+     * like as well as a useless one, and nobody has instrumented
+     * ft8_extract_likelihood_multi() itself. It is left here, switched off, for
+     * whoever answers that - not deleted.
+     *
+     * Why dec_ms matters: FT8 capture alone is ~13.2 s of a 15 s slot, so the
+     * whole reply window is 2260 ms into the NEXT slot. Randy N4OPI's busy 20 m
+     * slot, 2026-10-03: cap 13281 + stft 953 + dec 5441 = 19675 ms, i.e.
+     * 2415 ms past the deadline, so every reply waited a full 30 s cycle.
+     * Halving dec_ms is what brings that back inside the window. */
+#if FT8_MULTI_SYMBOL_FALLBACK
     // Second-chance decode: if single-symbol failed, retry with multi-symbol (FT8 only)
     if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
         fallback_triggered = 1;
@@ -630,6 +668,7 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
         bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
         multi_symbol_errors = status->ldpc_errors;
     }
+#endif
 
     if (status->ldpc_errors > 0)
     {
@@ -809,6 +848,7 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
     // printf("\n");
 }
 
+#if FT8_MULTI_SYMBOL_FALLBACK  /* both helpers serve the disabled fallback only */
 // Compute unnormalized log likelihood log(p(1) / p(0)) of bits corresponding to several FSK symbols at once
 // Helper: decode 2 consecutive symbols via coherent demodulation
 static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
@@ -909,6 +949,7 @@ static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_sy
         log174[bit_idx + i] = max_one - max_zero;
     }
 }
+#endif  /* FT8_MULTI_SYMBOL_FALLBACK */
 
 // Packs a string of bits each represented as a zero/non-zero byte in plain[],
 // as a string of packed bits starting from the MSB of the first byte of packed[]
