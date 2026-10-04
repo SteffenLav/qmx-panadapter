@@ -24,6 +24,21 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 1. Open the settings drawer and tap **Audio Settings** (just below SelfSpotter)
 2. Tick **RX Audio (speaker/headphone)**, then **Binaural CW (stereo separation)**
 
+!!! warning "Switching RX audio on needs a restart of the Tab5"
+
+    The audio hardware claims its memory during start-up, before the USB host
+    takes that pool, so it is started at boot or not at all. If you boot with
+    **RX Audio** off and tick it later, the setting is saved but you will hear
+    nothing until the Tab5 is restarted — it tells you so on screen when you
+    tick it. Your QMX will need a power cycle after that restart, as it does
+    after any Tab5 restart.
+
+!!! note "Which modes produce audio"
+
+    **CW, CW-R, USB and LSB only.** **AM is silent** — there is no AM
+    or FM demodulator yet, so listening to an AM station means putting the
+    radio in USB.
+
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
 ### On the Air
@@ -114,7 +129,7 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 | DiGi | No | No |
 | AM, FM | No | No |
 
-So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi, AM and FM there is no audio at all yet — nothing is broken if you hear silence in those.
+So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi and AM there is no audio at all yet — nothing is broken if you hear silence in those.
 
 ## Known Limitations
 

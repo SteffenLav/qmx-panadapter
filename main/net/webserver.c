@@ -1541,6 +1541,102 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "sd_eject") == 0) {
+        /* ⭐ PUT THE CARD DOWN SO IT CAN BE TAKEN OUT SAFELY.
+         *
+         * Pulling a mounted card is the same mid-transaction removal that an
+         * abrupt reset performs, and that is what costs five failed mount
+         * attempts on the NEXT boot - measured 2026-10-03, and it is the card
+         * you are about to take somewhere else that pays for it.
+         *
+         * prepare_for_flash does this too, but it also releases the USB host,
+         * which means a QMX power cycle for what should be a card swap. This
+         * is the SD half on its own.
+         *
+         * ⚠ After swapping, RESET the Tab5 rather than waiting: the hot-insert
+         * retry runs on MOUNT_RETRY_MS, which is five minutes.
+         *
+         *   {"action":"sd_eject"} */
+        ESP_LOGW(TAG, "sd_eject: unmounting on request - safe to remove the card");
+        sd_archive_shutdown();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"mounted\":false}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "prepare_for_flash") == 0) {
+        /* ⛔ CLOSES THE ONE GAP THE SHUTDOWN HANDLERS CANNOT.
+         *
+         * esp_register_shutdown_handler() covers every reboot the firmware
+         * initiates, and nothing else: esptool resets the chip from outside
+         * with no warning at all. So the USB teardown and the SD teardown both
+         * get skipped on exactly the reboot we perform most often - a reflash.
+         *
+         * The SD card is the one that cannot be put right afterwards. It keeps
+         * its own internal state across an SoC reset and the Tab5 has no
+         * software control of its power rail, so a card caught mid-transaction
+         * stays unreachable until the whole board is powered down. Measured on
+         * the bench 2026-10-03 across six reflashes in an afternoon: boot
+         * mounts needed 4 attempts, then 5, then more than 5 - the card was
+         * never corrupted, it was never let go of.
+         *
+         * So: ask for the teardown over the network FIRST, then reset the chip.
+         * tools/bench.ps1 does this before every flash. The device is left
+         * idle and running - this does NOT reboot - so if the flash never
+         * comes, a restart puts everything back. */
+        ESP_LOGW(TAG, "prepare_for_flash: releasing the SD card and the USB "
+                      "host so an external reset cannot catch them mid-transaction");
+        sd_archive_shutdown();
+        usb_shutdown_graceful();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"ready\":true}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "wifi_kill_c6") == 0) {
+        /* ⛔ DEV HOOK, AND IT NEEDS SAYING OUT LOUD TO WORK.
+         *
+         * This takes WiFi down and it does not come back without a restart,
+         * so it must not be reachable by a stray tap, a browser replaying a
+         * request, or anyone idly probing /api/cmd on the LAN. The confirm
+         * string is the gate: nobody types it by accident, and it keeps the
+         * hook usable on a shipping unit, which matters - if a fault ever
+         * needs reproducing on an operator's own Tab5, asking them to post
+         * one curl is far better than building them a special firmware.
+         *
+         *   {"action":"wifi_kill_c6","confirm":"yes-kill-wifi"} */
+        const char *cfm = cJSON_GetStringValue(cJSON_GetObjectItem(root, "confirm"));
+        if (!cfm || strcmp(cfm, "yes-kill-wifi") != 0) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "wifi_kill_c6 takes WiFi down until the Tab5 is restarted - "
+                "repeat with {\"confirm\":\"yes-kill-wifi\"} if that is what you want");
+            return ESP_FAIL;
+        }
+        wifi_debug_kill_c6();
+    } else if (action && strcmp(action, "band_scan_restore_test") == 0) {
+        /* ⛔ DEV HOOK, and the only way the band-scan restore has ever run.
+         *
+         * The restore (819fbd9, John W5JSS) fires only when the QMX's "Band
+         * config." menus move the dial, and on the bench QMX they do not -
+         * frequency and mode read identical before and after every scan - so
+         * the branch is unreachable here however many link-ups are watched.
+         * This calls the REAL restore with a "where the scan found it" of the
+         * caller's choosing: give it a frequency the radio is NOT on and the
+         * FA;/MD; writes go out and the dial moves.
+         *
+         * It is not a simulation of the restore, it IS the restore, which is
+         * the point - a simulation would prove the simulation.
+         *
+         *   {"action":"band_scan_restore_test","hz":14097000,"mode":"6"}
+         *
+         * No TX. Touches VFO A and the mode, nothing else. */
+        cJSON *hz_item = cJSON_GetObjectItem(root, "hz");
+        const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
+        if (!cJSON_IsNumber(hz_item)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "hz required");
+            return ESP_FAIL;
+        }
+        cat_band_scan_restore_test((uint32_t)hz_item->valuedouble, md ? md[0] : 0);
     } else if (action && strcmp(action, "clear_swr") == 0) {
         // The web equivalent of tapping the Tab5's own SWR-fault prompt
         // (Randy N4OPI: the web UI had no way to see the fault OR clear it).
@@ -4282,6 +4378,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(f, "excl_worked_before", c.ft8_filters.excl_worked_before);
     cJSON_AddBoolToObject(f, "excl_plain_cq",      c.ft8_filters.excl_plain_cq);
     cJSON_AddBoolToObject(f, "incl_cq_only",       c.ft8_filters.incl_cq_only);
+    cJSON_AddBoolToObject(f, "cq_show_others",     c.ft8_filters.cq_show_others);
     cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
     cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
     cJSON_AddBoolToObject(f, "cq_manual_pick",     c.ft8_filters.cq_manual_pick);
@@ -4802,6 +4899,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         BOOLF("excl_worked_before", excl_worked_before);
         BOOLF("excl_plain_cq",      excl_plain_cq);
         BOOLF("incl_cq_only",       incl_cq_only);
+        BOOLF("cq_show_others",     cq_show_others);
         BOOLF("skip_tx1",           skip_tx1);
         BOOLF("auto_pileup",        auto_pileup);
         BOOLF("cq_manual_pick",     cq_manual_pick);
@@ -5529,7 +5627,8 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     // The our-parity hide is deliberately NOT applied here - it exists because a
     // row frozen on screen for minutes is confusing on the Tab5's fixed-height
     // list; the browser shows an age column instead, which answers it honestly.
-    bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
+    bool hide_cq = (ft8_qso_cq_filter_active() && !qs.ft8_filters.cq_show_others)
+                   || qs.ft8_filters.excl_plain_cq;
 
     // Distance/bearing for the browser's own KM|BRG columns (Tony Abbey asked
     // for the distance the Tab5 already shows). Computed HERE, from the same

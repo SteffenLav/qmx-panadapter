@@ -1,4 +1,5 @@
 #include "cat.h"
+#include "util/cat_restore.h"   // what the band scan sends to undo itself
 
 #include <string.h>
 #include <stdarg.h>
@@ -130,7 +131,8 @@ static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 // further up this file, refuses a RIT offset while it is set - the two controls
 // are mutually exclusive (see that function).
 static bool     s_split_engaged = false;
-static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
+static volatile uint32_t s_poll_holds  = 0;      /* cat_hold_t bits - see cat.h */
+static volatile bool     s_poll_paused = false;  /* == (s_poll_holds != 0), read on the poll path */
 
 // Pending mode digit (Kenwood MD digit '1'-'9') requested from the LVGL thread.
 // 0 = nothing pending. Drained by the poll task to avoid a CDC race.
@@ -534,10 +536,37 @@ esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
     return ESP_OK;
 }
 
-void cat_poll_set_paused(bool paused)
+/* See cat.h for the measurement that made this a count instead of a flag. */
+static const char *hold_name(uint32_t mask)
 {
-    s_poll_paused = paused;
-    ESP_LOGI(TAG, "background poll %s", paused ? "PAUSED (TX burst owns the link)" : "resumed");
+    if (mask == 0)                                     return "nobody";
+    if (mask == CAT_HOLD_TX_BURST)                     return "a TX burst";
+    if (mask == CAT_HOLD_TIME_SYNC)                    return "the time sync";
+    return "a TX burst + the time sync";
+}
+
+void cat_poll_hold(cat_hold_t who)
+{
+    const uint32_t before = s_poll_holds;
+    s_poll_holds |= (uint32_t)who;
+    s_poll_paused = (s_poll_holds != 0);
+    if (s_poll_holds != before)
+        ESP_LOGI(TAG, "background poll HELD by %s", hold_name(s_poll_holds));
+}
+
+void cat_poll_release(cat_hold_t who)
+{
+    const uint32_t before = s_poll_holds;
+    s_poll_holds &= ~(uint32_t)who;
+    s_poll_paused = (s_poll_holds != 0);
+    if (s_poll_holds != before)
+        ESP_LOGI(TAG, "background poll released by %s - now held by %s",
+                 hold_name((uint32_t)who), hold_name(s_poll_holds));
+}
+
+bool cat_poll_held_by_other(cat_hold_t me)
+{
+    return (s_poll_holds & ~(uint32_t)me) != 0;
 }
 
 static void link_task(void *arg);
@@ -550,6 +579,30 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
 static esp_err_t try_open_qmx(void);
 static void process_cat_message(const char *msg, size_t len);
 static void diag_log_rx(const char *msg, size_t len);
+
+/* ⭐ "IS THE TAB5 EVEN LISTENING YET?" - see cat_host_is_up().
+ *
+ * Dennis WN4FLA and Gyula HA3HZ, 2026-09-30/10-01: the "Now turn on or reboot
+ * your QMX/+" overlay appears the instant the screen does, which is BEFORE this
+ * function has run. At that point the Tab5 has not opened the CDC host at all,
+ * so a QMX that is switched on and perfectly healthy is still reported as
+ * missing - the prompt is describing the Tab5's own start-up, not the radio.
+ *
+ * Measured on bench dev: cat_init() returns at 7,403 ms. Everything before that
+ * is the Tab5's own boot and nothing about the radio can be concluded from it.
+ *
+ * ⛔ DELIBERATELY NO SETTLE TIMER ON TOP. Once the host is open the prompt is
+ * legitimate again - the radio may genuinely be off, or still enumerating - and
+ * a fixed "wait N seconds more" would be inventing a number. The same bench
+ * shows 45 s between cat_init() and the first CAT answer when the QMX needed a
+ * power cycle, so any settle long enough to cover enumeration would be long
+ * enough to hide a genuinely dead radio. */
+static volatile bool s_cat_host_up;
+
+bool cat_host_is_up(void)
+{
+    return s_cat_host_up;
+}
 
 esp_err_t cat_init(void)
 {
@@ -595,6 +648,7 @@ err = cdc_acm_host_install(NULL);
 
     ESP_LOGI(TAG, "CAT link task started, waiting for QMX (VID=0x%04X PID=0x%04X)",
              QMX_VID, QMX_PID);
+    s_cat_host_up = true;
     return ESP_OK;
 }
 
@@ -2205,6 +2259,79 @@ static void poll_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* ⭐ PUT THE RADIO BACK WHERE THE BAND SCAN FOUND IT. Same contract as
+ * qmx_term.c's restore, and written the same way round: only act if it actually
+ * moved, so a radio the menus left alone is never written to.
+ *
+ * Sent directly rather than via cat_set_frequency_forced() / cat_request_mode():
+ * both of those route through poll_task, which does not exist yet at this point
+ * in link-up. The blocking write is the same one the scan itself uses, so if the
+ * scan could talk to the radio, so can this.
+ *
+ * ⛔ THE DECISION IS IN util/cat_restore.c, NOT HERE, because this branch cannot
+ * be reached on the bench: the band menus do not move this QMX's dial, so
+ * frequency and mode read identical before and after and nothing is ever
+ * restored. The save half is proven on hardware; this half is proven by
+ * test/cat_restore_harness.c and by the deliberate entry point below.
+ *
+ * ⚠ The WRITES have still never gone out after a real scan. */
+static void band_scan_restore(uint32_t pre_freq, char pre_mode_digit)
+{
+    const cat_restore_plan_t plan =
+        cat_restore_plan(pre_freq, pre_mode_digit, s_last_freq_hz, s_last_mode_digit);
+
+    if (plan.send_freq) {
+        char fa[20];
+        snprintf(fa, sizeof(fa), "FA%011lu;", (unsigned long)plan.freq_hz);
+        ESP_LOGW(TAG, "the band scan left the radio on %lu Hz - restoring %lu Hz",
+                 (unsigned long)s_last_freq_hz, (unsigned long)plan.freq_hz);
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fa,
+                                          strlen(fa), 200) == ESP_OK) {
+            s_last_freq_hz = plan.freq_hz;
+            ui_update_frequency(plan.freq_hz);
+        } else {
+            ESP_LOGW(TAG, "restore of %lu Hz could not be sent", (unsigned long)plan.freq_hz);
+        }
+    }
+
+    if (plan.send_mode) {
+        char md[8];
+        snprintf(md, sizeof(md), "MD%c;", plan.mode_digit);
+        ESP_LOGW(TAG, "the band scan left the radio in mode '%c' - restoring '%c'",
+                 s_last_mode_digit ? s_last_mode_digit : '?', plan.mode_digit);
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)md,
+                                          strlen(md), 200) != ESP_OK)
+            ESP_LOGW(TAG, "restore of mode '%c' could not be sent", plan.mode_digit);
+    }
+}
+
+/* ⛔ DELIBERATE TEST ENTRY POINT - the only way this restore has ever run.
+ *
+ * The bench QMX's band menus leave the dial where it was, so the restore branch
+ * is unreachable here no matter how many link-ups are watched. This runs the
+ * REAL function with a "where it was" the caller supplies, so a known-wrong
+ * value makes the radio move and the FA;/MD; writes can be seen on the dial and
+ * in the log. It does not simulate the restore - it IS the restore.
+ *
+ * POST /api/cmd {"action":"band_scan_restore_test","hz":<Hz>,"mode":"<digit>"}
+ *
+ * Nothing calls it in normal operation. It sends no TX and touches only VFO A
+ * and the mode. */
+void cat_band_scan_restore_test(uint32_t pre_freq, char pre_mode_digit)
+{
+    if (!s_cdc_dev) {
+        ESP_LOGW(TAG, "restore test: no CAT link");
+        return;
+    }
+    ESP_LOGW(TAG, "restore test: pretending the scan found %lu Hz mode '%c' "
+                  "(radio now reads %lu Hz mode '%c')",
+             (unsigned long)pre_freq,
+             (pre_mode_digit >= '1' && pre_mode_digit <= '9') ? pre_mode_digit : '?',
+             (unsigned long)s_last_freq_hz,
+             s_last_mode_digit ? s_last_mode_digit : '?');
+    band_scan_restore(pre_freq, pre_mode_digit);
+}
+
 static void link_task(void *arg)
 {
     while (1) {
@@ -2547,6 +2674,46 @@ static void link_task(void *arg)
             // first try once the menu is ready; keep some margin but don't
             // make the user stare at "---" for 10+ seconds.
             vTaskDelay(pdMS_TO_TICKS(2000));
+
+            /* ⛔ REMEMBER WHERE THE RADIO WAS - THE SCAN BELOW MOVES IT.
+             *
+             * The band scan walks the QMX's own "Band config." menus, and
+             * qmx_term.c's header already records what that costs: "leave the
+             * menus, and the radio is on 160 m whatever band it started on."
+             * qmx_term.c saves and restores frequency and mode around a menu
+             * visit for exactly this reason. This scan drives the same menus
+             * and restored nothing, so every CAT link-up quietly dumped the
+             * operator on 160 m in whatever mode the menus left behind.
+             *
+             * John W5JSS, 2026-10-01: his WSPR page was set to 20 m and his
+             * radio kept turning up on 1.837700 MHz in CW. His capture shows
+             * the menu pages streaming past - 80m/3573000, 60m/5358500,
+             * 40m/7074000, 30m/10136000, his own configured band centres -
+             * and his radio on 160 m afterwards. It was blamed on a CAT
+             * fault, then on his QMX's Virtual U3S beacon; it was neither,
+             * and he disabled a beacon that was innocent.
+             *
+             * Asked directly rather than read from cat_get_frequency(): this
+             * runs BEFORE poll_task starts, so the cached values are stale or
+             * empty. process_cat_message() fills them from the RX callback,
+             * which does not need the poll task. */
+            uint32_t pre_freq = 0;
+            char     pre_mode_digit = 0;
+            {
+                const char *q = "FA;MD;";
+                if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q,
+                                                  strlen(q), 200) == ESP_OK) {
+                    for (int wi = 0; wi < 25 && !s_last_freq_hz; wi++)
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    vTaskDelay(pdMS_TO_TICKS(60));   /* let MD land too */
+                }
+                pre_freq       = s_last_freq_hz;
+                pre_mode_digit = s_last_mode_digit;
+                ESP_LOGI(TAG, "band scan: radio is on %lu Hz mode '%c' - will restore after",
+                         (unsigned long)pre_freq,
+                         (pre_mode_digit >= '1' && pre_mode_digit <= '9') ? pre_mode_digit : '?');
+            }
+
             {
                 s_band_count = 0;
                 int consecutive_empty = 0;
@@ -2641,6 +2808,8 @@ static void link_task(void *arg)
                 }
                 ESP_LOGI(TAG, "Band list: %d bands found", s_band_count);
             }
+
+            band_scan_restore(pre_freq, pre_mode_digit);
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
 
@@ -2933,7 +3102,20 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
 {
     if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
 
-    cat_poll_set_paused(true);
+    /* ⛔ NOT WHILE A BURST IS KEYED. This was missing, and it is what let the
+     * RTC read clear a WSPR burst's hold 30 s into a 110.6 s transmission -
+     * see cat.h. cat_gps_tick_sync() has always had this check; this one
+     * never did, and the two run back to back. */
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) {
+        /* ⛔ SAY SO. A silent refusal reads exactly like a periodic pass that
+         * never ran, and "no lines during the burst" would then be evidence of
+         * nothing at all. This is the line that proves the guard was reached
+         * and did its job. */
+        ESP_LOGI(TAG, "QMX RTC read skipped - %s holds the link", hold_name(s_poll_holds));
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
     s_tm_resp_len = 0;
     esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 200);
     if (err == ESP_OK) {
@@ -2941,7 +3123,7 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
-    cat_poll_set_paused(false);
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
 
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "TM; query TX failed: 0x%x", err);
@@ -2990,9 +3172,12 @@ static bool parse_tm_resp(int *h, int *m, int *s)
 esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us)
 {
     if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
-    if (s_poll_paused)              return ESP_ERR_INVALID_STATE;  // FT8 TX / other op owns the pipe
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) {
+        ESP_LOGI(TAG, "GPS tick skipped - %s holds the link", hold_name(s_poll_holds));
+        return ESP_ERR_INVALID_STATE;   // a burst owns the pipe
+    }
 
-    cat_poll_set_paused(true);
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
     int       prev_sec      = -1;
     int64_t   prev_resp_us  = 0;
     int64_t   bracket_us    = 0;
@@ -3043,7 +3228,7 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         prev_resp_us = s_tm_resp_us;
     }
 
-    cat_poll_set_paused(false);
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
     if (result == ESP_OK)
         ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
                  *out_hour, *out_min, *out_sec,

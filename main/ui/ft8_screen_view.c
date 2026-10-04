@@ -1144,7 +1144,8 @@ static void rebuild_list(void)
     // While we're running our own CQ, hide other stations' CQ rows so replies
     // addressed to us aren't buried under unrelated CQ traffic. The "exclude
     // plain CQ" filter applies the same hide unconditionally.
-    bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
+    bool hide_cq = (ft8_qso_cq_filter_active() && !qs.ft8_filters.cq_show_others)
+                   || qs.ft8_filters.excl_plain_cq;
 
     // Also hide stations whose last decode landed on OUR TX parity while the
     // CQ run is active: we transmit over every slot we could hear them in, so

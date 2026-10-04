@@ -100,6 +100,31 @@ static int hz_to_slot(int hz)
     return s;
 }
 
+/* ⛔ THE OCCUPANCY ON SCREEN WENT STALE THE MOMENT THE PANEL OPENED.
+ *
+ * Randy N4OPI, 2026-10-02: "if I go to check for an open time slot, the TX Tone
+ * pop-up window doesn't update in real time, whereas in the WebUI if I keep the
+ * TX Tone panel open it will update at the end of each 15 second slot... I see
+ * the slots change in the background but have to close the popup and reopen it
+ * to get the latest slot utilization and make a fully informed selection."
+ *
+ * He is right and the cause was simple: refresh_view() ran on open and on a
+ * tap, and this file had no timer at all. The web UI polls, which is why it
+ * was right there and wrong here. Picking a tone off a frozen picture is
+ * exactly the decision this panel exists to get right.
+ *
+ * The one thing the tick must not do is wipe a message the operator is still
+ * reading: refresh_view() writes its own verdict for the selected slot, so the
+ * two one-off hints (the "nothing clearer nearby" scan result and an apply
+ * error) hold the tick off for a few seconds rather than being overwritten
+ * within one. */
+#define TONE_TICK_MS        1000
+#define HINT_HOLD_MS        4000
+static uint32_t s_hint_hold_until = 0;
+static lv_timer_t *s_tick = NULL;
+
+static void hint_hold(void) { s_hint_hold_until = lv_tick_get() + HINT_HOLD_MS; }
+
 static void hint_set(const char *msg, uint32_t colour)
 {
     if (!s_hint) return;
@@ -348,7 +373,18 @@ static void find_clear_cb(lv_event_t *e)
     // After set_sel, so it isn't overwritten by refresh_view()'s verdict - and
     // only when the scan genuinely had nowhere to go, which is the one case the
     // verdict alone wouldn't explain.
-    if (stuck) hint_set("Nothing clearer nearby - this is the best around here", 0xFFA040);
+    if (stuck) { hint_set("Nothing clearer nearby - this is the best around here", 0xFFA040); hint_hold(); }
+}
+
+/* Repaint from the live occupancy while the panel is open. Cheap: the same
+ * work the panel already does on every tap, once a second, and only while it
+ * is actually on screen. */
+static void tone_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_modal || lv_obj_has_flag(s_modal, LV_OBJ_FLAG_HIDDEN)) return;
+    if ((int32_t)(lv_tick_get() - s_hint_hold_until) < 0) return;
+    refresh_view();
 }
 
 static void hold_cb(lv_event_t *e)
@@ -375,6 +411,7 @@ static void apply_cb(lv_event_t *e)
             // Stay open - re-opening and re-picking would be worse.
             ESP_LOGW(TAG, "TX tone %d Hz rejected: %s", s_sel_hz, err);
             hint_set(err, 0xFF6020);
+            hint_hold();
             return;
         }
     }
@@ -746,7 +783,9 @@ void ft8_tone_modal_show(void)
     }
 
     hint_set("", UI_COLOR_TEXT_MUTED);
+    s_hint_hold_until = lv_tick_get();
     refresh_view();
+    if (!s_tick) s_tick = lv_timer_create(tone_tick_cb, TONE_TICK_MS, NULL);
     ui_kbd_set_buttons(s_apply_btn, s_cancel_btn);   // see modal_build()
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);

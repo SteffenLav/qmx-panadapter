@@ -45,7 +45,9 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "help_triage.h"
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "adif/adif_log.h"     // adif_log_band_for_freq() - which band the WSPR declared-power picker filters against
+#include "storage/sd_archive.h"   // sd_archive_shutdown - the eject button
 #include "wifi_config.h"
+#include "wifi.h"
 #include "tune_modal.h"
 #include "power_cal_modal.h"   // power_cal_voltage_for_dbm() - filters "Declared power" to achievable levels
 #include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
@@ -59,6 +61,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
 #include "util/wf_shift.h"
+#include "util/qmx_prompt_gate.h"   // WHEN the "turn on your QMX" prompt may appear
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -2873,6 +2876,15 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_USEDHCP   38  // "Use DHCP": the way back from a static IP that
                                  // made the web UI unreachable (#307). Built only
                                  // when a static address is actually configured.
+/* ⛔ THE TWO THINGS A TAB5 COULD NOT DO FOR ITSELF.
+ *
+ * Measured 2026-10-03: an abrupt reset leaves a mounted card mid-transaction,
+ * and the next boot then needs five or more mount attempts. The ONLY restart a
+ * user had was pulling power, and the only way to take a card out was to pull
+ * it live - so the device offered no way to avoid the one thing that causes
+ * the fault. Both now run the orderly teardown. */
+#define DRAWER_SEC_SDEJECT   42  /* unmount the card so it can be taken out */
+#define DRAWER_SEC_REBOOT    46  /* restart, running the SD + USB teardowns */
 #define DRAWER_SEC_TUNESNAP  41  /* #347: the tap-to-tune grid, or off */
 #define DRAWER_SEC_CWPROF    40  /* #359: apply a stored CW profile (centre +
                                   * which filter widths the radio offers). The
@@ -2997,10 +3009,29 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * Advanced-only: it is hardware configuration, not something an operating
  * session reaches for, and getting it wrong is an electrical question (pins
  * driven into a GPS transmitter) rather than a preference. */
-#define DRAWER_SEC_PORTA      46
+#define DRAWER_SEC_PORTA      47
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
-// size array indexed by an enum will be overrun" section. IDs are 0..46.
-#define N_DRAWER_SECTIONS     47
+// size array indexed by an enum will be overrun" section. IDs are 0..47.
+//
+// ⚠ THIS WARNING WAS HERE AND I WALKED PAST IT, 2026-10-03. DRAWER_SEC_REBOOT
+// was added as 46 against a bound of 46, so every drawer build wrote one past
+// the end of all three arrays. It did not fault at the write - it corrupted
+// whatever followed, and LVGL died later walking a garbage object pointer:
+//
+//   Guru Meditation Error: Core 0 panic'ed (Load access fault)
+//   task: taskLVGL   core 0   after 60.367 s   MTVAL=0x00170031
+//   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
+//
+// A comment cannot stop this on its own, so the assert below now does.
+#define N_DRAWER_SECTIONS     48
+
+/* Catches the mistake above at COMPILE time instead of as a crash minutes into
+ * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
+ * add one and this will tell you immediately if you forgot. */
+_Static_assert(DRAWER_SEC_REBOOT  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_SDEJECT < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3064,6 +3095,8 @@ static const drawer_item_t GRP_NETWORK[] = {
     // hiding it behind Advanced would hide the escape hatch from exactly the
     // operator who needs it.
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
+    { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
+    { DRAWER_SEC_REBOOT,  "Restart the Tab5", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     // Basic, not Advanced: it is off by default, so an operator who never finds
@@ -3179,6 +3212,8 @@ static void drawer_set_mode(ui_mode_t mode);
 // Defined next to the other restart-the-device callback, used up in the drawer
 // build - see drawer_usedhcp_btn_cb for why that button has to exist (#307).
 static void drawer_usedhcp_btn_cb(lv_event_t *e);
+static void drawer_sdeject_btn_cb(lv_event_t *e);
+static void drawer_reboot_btn_cb(lv_event_t *e);
 // Defined below, next to the mode switch that is its other caller.
 static void hide_panadapter_widgets_instant(void);
 static void apply_edge_grips_for_mode(ui_mode_t m);
@@ -4497,6 +4532,15 @@ static void cw_strip_init(void)
     lv_timer_create(cw_strip_tick_cb, 250, NULL);
 }
 
+/* Set from app_main once every subsystem is up - see the gate in
+ * qmx_wait_poll_cb(). Nothing may invite a QMX power-on before this. */
+static volatile bool s_boot_complete;
+
+void ui_notify_boot_complete(void)
+{
+    s_boot_complete = true;
+}
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
@@ -4553,7 +4597,47 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         }
         return;
     }
-    if (cat_is_ready()) {
+    /* ⛔⛔ THE PROMPT MUST NOT APPEAR UNTIL IT IS SAFE TO OBEY IT.
+     *
+     * This is the whole point of the fix, and gating on cat_host_is_up() alone
+     * missed it. Powering the QMX on while the Tab5 is still starting starves
+     * internal RAM FOR THE REST OF THE SESSION - measured on bench dev
+     * 2026-09-22: free_int 138 KB at ~7 s, 28 KB by 17.6 s, then flat at
+     * 15-20 KB with lblk 6-11 KB. The web server stops answering, the socket
+     * table exhausts, and a null-dereference panic becomes likely. It does not
+     * recover. The operator's own standing advice is "wait until the spectrum
+     * is running and WiFi shows a network".
+     *
+     * So a prompt that says "Now turn on or reboot your QMX/+" at 6.9 s is not
+     * merely premature, it is an instruction to damage the session - and the
+     * operator reported precisely that: "if i pc'ed the qmx too early ... it
+     * would wedge immediately".
+     *
+     * The gate is therefore the documented safe point, not an invented delay:
+     * app_main has finished (ui_notify_boot_complete), AND WiFi has a network
+     * or is switched off entirely. Dennis WN4FLA and Gyula HA3HZ reported the
+     * early appearance; this is what makes the prompt honest about both the
+     * radio AND the moment.
+     *
+     * ⛔ THE WIFI HALF LIVES IN util/qmx_prompt_gate.c AND IS NOT THE ONE-LINER
+     * IT LOOKS LIKE. Written here first as
+     *
+     *     !panadapter_wifi_is_enabled() || wifi_is_connected()
+     *
+     * it is false FOREVER on a unit whose WiFi never associates - no
+     * credentials yet, wrong password, out of range, portable - so the prompt
+     * never appeared at all for the operators least able to guess what to do.
+     * The bench could not have shown it: it associates every time. The gate
+     * therefore bounds the wait and latches once open; the reasoning and the
+     * measurements are in that file's header and in
+     * test/qmx_prompt_gate_harness.c, which fails against the version that
+     * shipped. */
+    static qmx_prompt_gate_t s_prompt_gate;
+    const bool safe_moment = qmx_prompt_gate_tick(
+        &s_prompt_gate, s_boot_complete,
+        (uint32_t)(esp_timer_get_time() / 1000),
+        panadapter_wifi_is_enabled(), wifi_is_connected());
+    if (!safe_moment || !cat_host_is_up() || cat_is_ready()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -12830,6 +12914,38 @@ static void drawer_build(void)
             y += 104;
         }
     }
+    /* Eject the card, and restart the Tab5. Together because they are the two
+     * halves of the same fault: both exist so an operator never has to pull a
+     * live card or pull the power. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SDEJECT, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_sdeject_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Eject microSD");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_REBOOT, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_reboot_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Restart the Tab5");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
@@ -15302,6 +15418,110 @@ static void drawer_bt_restart_cb(lv_event_t *e)
  * takes the ordinary DHCP path from the top, and this is a rare recovery, not a
  * hot path.
  */
+/* Unmount so the card can be taken out without the mid-transaction removal
+ * that costs the NEXT boot five mount attempts. Same call the shutdown handler
+ * and prepare_for_flash use. */
+/* ⛔ A TOAST WAS THE WRONG SHAPE FOR THIS. The operator, 2026-10-03: "the
+ * toast of how to restart the Tab5 afterwards is completely unreadable - make
+ * a window instead and a confirm button to push."
+ *
+ * He is right about more than the legibility. A toast fades on its own, and
+ * this message has to survive the operator looking away from the screen to
+ * physically swap a card - which is exactly when it disappears. It also has a
+ * second instruction after the swap, so it has to still be there afterwards.
+ * A window waits. */
+static lv_obj_t *s_sdeject_modal;
+
+static void sdeject_modal_close_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sdeject_modal) { lv_obj_del(s_sdeject_modal); s_sdeject_modal = NULL; }
+}
+
+static void sdeject_swallow_cb(lv_event_t *e) { (void)e; }
+
+static void sdeject_modal_show(void)
+{
+    if (s_sdeject_modal) return;
+    s_sdeject_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_sdeject_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_sdeject_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_sdeject_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_sdeject_modal, UI_OPA_MODAL_SCRIM, 0);
+    lv_obj_set_style_border_width(s_sdeject_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_sdeject_modal, 0, 0);
+    lv_obj_clear_flag(s_sdeject_modal, LV_OBJ_FLAG_SCROLLABLE);
+    /* Clickable and swallowing: a tap beside the panel must not dismiss the one
+     * instruction the operator needs AFTER they have put the new card in. */
+    lv_obj_add_flag(s_sdeject_modal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_sdeject_modal, sdeject_swallow_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *p = lv_obj_create(s_sdeject_modal);
+    lv_obj_set_size(p, 820, 420);
+    lv_obj_center(p);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(p, lv_color_hex(0x40C060), 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    lv_obj_set_style_radius(p, 10, 0);
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *t = lv_label_create(p);
+    lv_label_set_text(t, "microSD unmounted");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(0x40C060), 0);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
+
+    lv_obj_t *b = lv_label_create(p);
+    lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(b, 740);
+    lv_label_set_text(b,
+        "It is safe to take the card out now.\n\n"
+        "After you put the new one in, use \"Restart the Tab5\" rather than "
+        "waiting - a card inserted while the Tab5 is running is only looked "
+        "for every five minutes.");
+    lv_obj_set_style_text_font(b, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(b, lv_color_hex(0xE6E6E6), 0);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, 20, 70);
+
+    lv_obj_t *ok = lv_btn_create(p);
+    lv_obj_set_size(ok, 220, 64);
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_set_style_bg_color(ok, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_radius(ok, 8, 0);
+    lv_obj_add_event_cb(ok, sdeject_modal_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ol = lv_label_create(ok);
+    lv_label_set_text(ol, "OK");
+    lv_obj_set_style_text_font(ol, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(ol, lv_color_hex(0xffffff), 0);
+    lv_obj_center(ol);
+
+    lv_obj_move_foreground(s_sdeject_modal);
+}
+
+static void drawer_sdeject_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    sd_archive_shutdown();
+    drawer_close();
+    sdeject_modal_show();
+}
+
+/* ⛔ THE FIRST RESTART THIS DEVICE HAS EVER OFFERED. Until now the only way
+ * was pulling power, which is the abrupt reset that leaves the card
+ * mid-transaction - so the device forced the very fault we spent a day
+ * chasing. esp_restart() runs the registered shutdown handlers, which now
+ * include the SD teardown as well as USB. */
+static void drawer_reboot_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_toast_ms("Restarting - your QMX will need a power cycle afterwards, "
+                "as it does after any Tab5 restart.", 4000);
+    lv_timer_handler();
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+
 static void drawer_usedhcp_btn_cb(lv_event_t *e)
 {
     lv_obj_t *btn = lv_event_get_target(e);

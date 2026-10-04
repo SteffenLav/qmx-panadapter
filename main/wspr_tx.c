@@ -477,7 +477,7 @@ static void run_burst(const wspr_tx_request_t *req)
     // Exclusive use of the CDC-ACM link for the whole burst - see
     // ft8_tx.c's identical reasoning. Cooperative flag only, never
     // vTaskSuspend.
-    if (!s_burst_sim) cat_poll_set_paused(true);
+    if (!s_burst_sim) cat_poll_hold(CAT_HOLD_TX_BURST);
 
     int64_t t0 = esp_timer_get_time();
     sleep_until(t0, 0);
@@ -503,7 +503,7 @@ static void run_burst(const wspr_tx_request_t *req)
                       "NOTHING WAS TRANSMITTED this cycle");
         ui_toast_ms("WSPR did not transmit: the key-down command never reached "
                     "the radio (CAT link trouble). Nothing was sent.", 12000);
-        if (!s_burst_sim) cat_poll_set_paused(false);
+        if (!s_burst_sim) cat_poll_release(CAT_HOLD_TX_BURST);
         s_state = WSPR_TX_IDLE;
         return;
     }
@@ -577,7 +577,7 @@ static void run_burst(const wspr_tx_request_t *req)
     vTaskDelay(pdMS_TO_TICKS(WSPR_TX_ENVELOPE_SETTLE_MS));
     tx_cmd_critical(t0, "RX;");
 
-    if (!s_burst_sim) cat_poll_set_paused(false);
+    if (!s_burst_sim) cat_poll_release(CAT_HOLD_TX_BURST);
     /* ⭐ "complete" must not mean "every symbol went out" when it didn't. A
      * tone command lost mid-burst does not un-key the radio - the QMX keeps
      * transmitting the LAST tone it received until the next one arrives, so

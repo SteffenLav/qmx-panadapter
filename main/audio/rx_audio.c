@@ -2127,6 +2127,9 @@ void rx_audio_set_enabled(bool en)
 
 bool rx_audio_is_enabled(void) { return s_enabled; }
 
+/* On, but the codec was never opened for this session - see rx_audio.h. */
+bool rx_audio_restart_pending(void) { return s_enabled && !s_codec_ready; }
+
 void rx_audio_set_volume(uint8_t vol)
 {
     if (vol > 100) vol = 100;

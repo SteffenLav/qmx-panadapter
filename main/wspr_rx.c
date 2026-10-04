@@ -330,6 +330,11 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc)
  * leaving a third of FT8_PRE_CAP's 15 s in reserve. Being late is free here;
  * SLEEPING through a boundary is what costs a whole cycle. */
 #define WSPR_ARM_GRACE_MS      10000
+/* How long before the boundary wspr_tx_sched_task() reads the settings and runs
+ * the PA guard, so that at the boundary itself it has only to decide and arm.
+ * That task really does have an idle wait to do it in - which is exactly what
+ * the slot loop never had. */
+#define WSPR_PREP_LEAD_MS       3000
 
 /* The audio window sits between 1400 and 1600 Hz for a standard WSPR dial, but
  * the search is widened a little either side: the operator's dial calibration,
@@ -800,6 +805,7 @@ static SemaphoreHandle_t s_wf_mtx;
 
 static volatile bool s_run;
 static TaskHandle_t  s_task;
+static TaskHandle_t  s_tx_sched_task;   /* arms the burst on the UTC grid */
 /* ONE BUFFER PER WRITER. Capture and decode are separate tasks now and both
  * report progress; sharing a single static would tear the string. Composed on
  * read instead, which also makes the parallelism visible - "cap 45/120 | dec
@@ -1969,6 +1975,290 @@ static bool wspr_pa_guard_ready(const qmx_settings_t *ws)
     return cur >= 0 && (uint16_t)cur <= WSPR_PA_TARGET_X10;
 }
 
+/* ⭐ THE BURST IS ARMED FROM UTC, BY A TASK OF ITS OWN.
+ *
+ * ⛔ IT USED TO BE ARMED BY wspr_rx_task, AND THAT COULD NOT WORK. MEASURED on
+ * bench dev 2026-10-02, not reasoned:
+ *
+ *   cycle boundary: wait loop exited at +1418 ms (settings prep STILL AFTER THE BOUNDARY)
+ *   cycle 1790967000: capturing (armed +1425 ms)
+ *   cycle boundary: wait loop exited at +1702 ms (settings prep STILL AFTER THE BOUNDARY)
+ *   cycle boundary: wait loop exited at +1591 ms (settings prep STILL AFTER THE BOUNDARY)
+ *
+ * The capture's window is boundary-aligned by its backfill, so a capture ENDS
+ * on the next boundary; handing it to the decoder then costs ~1.4 s. The slot
+ * loop therefore arrives ~1.4-1.7 s into every cycle, finds itself inside
+ * WSPR_ARM_GRACE_MS, takes the grace path - where wait is 0 and the wait loop
+ * does not execute at all - and reaches the arm already past the 1000 ms
+ * key-down moment. Every cycle, structurally, for as long as the loop has a
+ * previous capture to hand off.
+ *
+ * ⚠ ecff9b9 tried to fix this by moving the settings read into "the last 3 s
+ * of the wait". There is no wait to move it into: the grace entry is the
+ * NORMAL path, not the exception its own fallback comment called it. The
+ * measurement above is that fallback running, every time. The whole hoist was
+ * dead code and the arm stayed late - which is why John W5JSS's beacon
+ * transmitted at :02 and never at :00.
+ *
+ * ⛔ So the arm cannot live downstream of the capture hand-off, and no amount
+ * of reordering inside that loop changes it. It lives here instead: a task
+ * that waits on the UTC grid and nothing else, prepares while it is idle, and
+ * arms within milliseconds of the boundary no matter what the receiver or the
+ * decoder are doing.
+ *
+ * ⛔ PRIORITY 5 IS ABOVE fft_task's 4, AND THAT IS DELIBERATE - it is the one
+ * place this file departs from CLAUDE.md's "core 1, under fft_task". A task
+ * that can be starved for a second is precisely the fault being fixed, and
+ * this one costs almost nothing to let run: it sleeps 50 ms at a time, reads
+ * settings once per cycle 3 s before the boundary, and does a few hundred
+ * microseconds of work at it. Core 1 as prescribed, with the other WSPR tasks.
+ *
+ * The receiver still stands itself down by asking wspr_tx_get_status() - it
+ * observes the burst now instead of deciding it. */
+static void wspr_tx_sched_task(void *arg)
+{
+    (void)arg;
+    qmx_settings_t ws;
+    bool    prepped    = false;
+    int64_t done_cycle = -1;
+
+    while (s_run) {
+        const int64_t t    = now_ms();
+        const int64_t cyc  = t / WSPR_CYCLE_MS;
+        const int64_t into = t % WSPR_CYCLE_MS;
+
+        /* Prepare while idle, which is what the hoist wanted and could not have
+         * here: this task really is doing nothing until the boundary. */
+        if (!prepped && (WSPR_CYCLE_MS - into) <= WSPR_PREP_LEAD_MS) {
+            settings_load_all(&ws);
+            wspr_pa_guard_update(&ws);
+            prepped = true;
+        }
+
+        if (cyc != done_cycle && into < WSPR_TX_START_OFFSET_MS) {
+            done_cycle = cyc;
+            /* First pass after start-up, or a cycle whose prep window was
+             * missed: read now rather than arm on a stale struct. */
+            if (!prepped) {
+                settings_load_all(&ws);
+                wspr_pa_guard_update(&ws);
+            }
+            prepped = false;
+
+            const int64_t cycle_utc = cyc * (WSPR_CYCLE_MS / 1000);
+
+            /* A burst still running from the previous cycle owns the radio. */
+            char busy[64];
+            if (wspr_tx_get_status(busy, sizeof(busy), NULL) != WSPR_TX_IDLE) {
+                ESP_LOGW(TAG, "cycle %lld: previous burst still running - not arming",
+                         (long long)cycle_utc);
+            } else {
+            /* ---- is THIS the cycle the schedule picked? --------------------
+             * The roll itself happened earlier (see roll_next_group_cycle) so that
+             * the TX button can count down to a real burst instead of to the next
+             * mere opportunity. All that is left here is to act on it, and to roll
+             * the following one - whether this cycle transmitted or not, so a held
+             * or refused burst moves the countdown on rather than leaving it at
+             * zero promising something that is not coming. */
+            const uint8_t sched_tx = ws.wspr_tx_cycles;
+            const uint8_t sched_rx = ws.wspr_rx_cycles ? ws.wspr_rx_cycles : 1;
+            const bool tx_possible = ws.wspr_tx_en && sched_tx > 0;
+            /* ⛔ THE RE-ANCHOR BRANCH THAT USED TO LIVE HERE IS GONE, AND THAT IS
+             * THE FIX. It re-based the schedule on the CURRENT cycle whenever the
+             * previous one had been overtaken - a stalled cycle, a clock step, a
+             * settings change - which moved every future transmission by however
+             * far things had slipped, permanently and silently. That is precisely
+             * how John W5JSS's beacon walked from the 0 and 2 minute marks to 2
+             * and 4 over a few hours.
+             *
+             * A UTC-anchored schedule has nothing to re-anchor: a missed cycle is
+             * simply a cycle that did not transmit, and the next one is back on the
+             * grid. The failure mode cannot occur, so the warning I added to report
+             * it has no meaning either and has gone with it.
+             *
+             * s_sched_duty is still tracked, but only to notice a settings change
+             * for the log - it no longer steers anything. */
+            if (!tx_possible) {
+                s_next_tx_cycle = -1;
+                s_sched_duty    = 0;
+            } else {
+                const uint8_t duty_now = (uint8_t)(sched_tx * 32u + sched_rx);
+                if (s_sched_duty != duty_now) {
+                    ESP_LOGI(TAG, "TX schedule now %u tx + %u rx = %u min, anchored to UTC",
+                             (unsigned)sched_tx, (unsigned)sched_rx,
+                             (unsigned)((sched_tx + sched_rx) * 2));
+                    s_sched_duty = duty_now;
+                }
+            }
+            /* ⭐ THE SCHEDULE IS ANCHORED TO UTC, not rolled from the last group.
+             *
+             * wspr_sched_is_tx_cycle() answers from the cycle index and the two
+             * counts alone, so it cannot drift, cannot accumulate error across a
+             * missed cycle or a clock step, and reads the same after a reboot as
+             * before it. John W5JSS's 2 tx + 8 rx now means minutes 0 and 2 of every
+             * twenty, permanently, which is what "2 tx + 8 rx = 20 min" always
+             * claimed. See wspr_sched.h for why the relative version drifted, and
+             * test/wspr_sched_harness.c for the properties that are actually
+             * checked - including that no setting can key the radio continuously.
+             *
+             * s_first_tx_forced is kept and is the ONE exception: switching
+             * transmitting on still gives a burst on the next cycle rather than
+             * making the operator wait for the grid, which could otherwise be most
+             * of a period away. It is a single shot and clears itself. */
+            const bool forced_now  = s_first_tx_forced && s_next_tx_cycle == cyc;
+            const bool tx_this_cycle = tx_possible &&
+                (forced_now || wspr_sched_is_tx_cycle(cyc, sched_tx, sched_rx));
+
+            if (tx_this_cycle) {
+                /* Both derived, not counted. A running counter was what could
+                 * disagree with the air after a missed cycle; the grid cannot. */
+                const uint8_t tx_n = sched_tx ? sched_tx : 1;
+                const uint8_t idx  = wspr_sched_burst_index(cyc, sched_tx, sched_rx);
+                s_burst_done = idx;                 /* kept for the UI only */
+                if (idx > 0 && idx < tx_n)
+                    ESP_LOGI(TAG, "transmit %u of %u in this group - next cycle too",
+                             (unsigned)idx, (unsigned)tx_n);
+            }
+            /* Point the countdown at the next real burst, every cycle, transmitted
+             * or not - so a held or refused burst moves it on instead of leaving it
+             * at zero promising something that is not coming. */
+            if (tx_possible)
+                s_next_tx_cycle = wspr_sched_next_tx_cycle(cyc + 1, sched_tx, sched_rx);
+
+            /* Ask the radio about split every cycle while transmit is enabled. The
+             * answer lands a poll or two later and is judged at the NEXT burst, so
+             * this costs one short query and never blocks - the same
+             * request-early-judge-later shape the PA voltage read uses. */
+            if (tx_possible) cat_request_split_read();
+
+            if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {
+                /* Loud, and only while it is actually holding something up. */
+                /* -1 means "not answered yet", and printing that as tenths gave
+                 * "0.-1 V" on the very first run of this line. Say which it is. */
+                int16_t pav = cat_get_pa_voltage_x10();
+                char pavs[24];
+                if (pav < 0) snprintf(pavs, sizeof(pavs), "not answered yet");
+                else         snprintf(pavs, sizeof(pavs), "%d.%d V", pav / 10, pav % 10);
+                ESP_LOGW(TAG, "cycle %lld: holding TX - the finals guard has not "
+                              "confirmed the PA is turned down yet (radio says %s, "
+                              "target %u.%u V)",
+                         (long long)cycle_utc, pavs,
+                         (unsigned)(WSPR_PA_TARGET_X10 / 10),
+                         (unsigned)(WSPR_PA_TARGET_X10 % 10));
+                /* The next cycle was rolled above, before this hold was known.
+                 * Keep FORCING it while the burst being held is the guaranteed
+                 * first one, or a hold silently demotes it to a duty-cycle coin
+                 * toss - which is the wait the operator explicitly asked not to
+                 * have. Only a guard hold gets this treatment: it clears itself
+                 * within a cycle or two. */
+                if (s_first_tx_forced) s_next_tx_cycle = cyc + 1;
+            } else if (tx_this_cycle) {
+                wspr_tx_request_t req;
+                char err[80] = "";
+                /* ⛔ NEVER BEACON IN SPLIT.
+                 *
+                 * WSPR is transmitted on the dial frequency by definition, and the
+                 * spot published to wsprnet carries that frequency. In split the
+                 * radio keys VFO B while FA; still reports A, so every spot is a
+                 * measurement of somewhere the signal never was - published to a
+                 * global database, unattended, for hours. That is the same rule as
+                 * never fabricating a signal report, with a wider blast radius.
+                 *
+                 * John W5JSS, 2026-09-18: his WSPR was not being spotted at all,
+                 * and it started working the moment he "cleared the B VFO display".
+                 * The QMX's dual-VFO state is not clearable over CAT (only MU; or a
+                 * power cycle - see the CAT notes), so the firmware cannot fix this
+                 * for him even if it wanted to.
+                 *
+                 * ⛔ AND IT DELIBERATELY DOES NOT TRY. cw_split_maintain() refuses
+                 * to clear a split it did not set - "an operator running their own
+                 * split has not asked us to interfere" - and changing mode does not
+                 * repeal that. So this refuses the burst and says why, which costs
+                 * one cycle and leaves the radio exactly as the operator left it.
+                 *
+                 * ⚠ -1 is "not answered yet" and must NOT refuse: grounding the
+                 * beacon because the radio was slow to reply would be a worse fault
+                 * than the one being prevented. */
+                /* ⛔ TOO LATE TO KEY IN THIS CYCLE MEANS SKIP IT, NEVER SLIDE.
+                 *
+                 * wspr_tx_arm() targets "the next even UTC minute", so arming more
+                 * than WSPR_TX_START_OFFSET_MS into a cycle does not transmit in
+                 * THIS cycle - it transmits in the NEXT one, whatever the schedule
+                 * says that cycle is for. At the end of a group that is a RECEIVE
+                 * cycle, so the beacon keys off its own UTC grid and the spot goes
+                 * to wsprnet saying otherwise. John W5JSS, 2026-10-01: a spot at
+                 * :16 against a 2 tx + 8 rx schedule that only permits :00 and :02.
+                 *
+                 * The prep hoist above should keep this from ever firing. It stays
+                 * because a missed slot is a cycle that did not transmit - which is
+                 * exactly what the UTC-anchored design already tolerates - and an
+                 * unscheduled transmission is not tolerable at all. */
+                const int64_t into_now = now_ms() % WSPR_CYCLE_MS;
+                if (into_now > WSPR_TX_START_OFFSET_MS) {
+                    ESP_LOGW(TAG, "cycle %lld: TX slot missed by %lld ms (key-down is "
+                                  "at %d ms) - skipping this cycle rather than "
+                                  "transmitting in the next one, which the schedule "
+                                  "may not allow",
+                             (long long)cycle_utc,
+                             (long long)(into_now - WSPR_TX_START_OFFSET_MS),
+                             WSPR_TX_START_OFFSET_MS);
+                } else if (cat_get_split_state() == 1 && !cat_cw_tx_offset_engaged()) {
+                    ESP_LOGE(TAG, "TX skipped: the radio is in SPLIT, so a burst would go "
+                                  "out on VFO B and every spot would name the wrong "
+                                  "frequency. Clear split on the radio (VFO A only) - "
+                                  "the Tab5 cannot do it over CAT.");
+                    set_status("TX held - radio is in SPLIT, clear VFO B");
+                } else if (!ws.my_callsign[0] || !ws.my_grid[0]) {
+                    ESP_LOGW(TAG, "TX skipped: callsign/grid not set");
+                /* ⭐ A NEW TONE FOR EVERY BURST - see WSPR_TX_RANDOM_SPAN_HZ. This
+                 * passed WSPR_TX_DEFAULT_FREQ_HZ unconditionally, so every unit
+                 * running this firmware beaconed on the same 6 Hz of a 200 Hz
+                 * sub-band and collided with itself worldwide. */
+                } else if (!wspr_tx_build_request(ws.my_callsign, ws.my_grid,
+                                                  ws.wspr_tx_dbm, wspr_tx_pick_tone_hz(),
+                                                  &req, err, sizeof(err))) {
+                    ESP_LOGW(TAG, "TX skipped: %s", err);
+                } else if (!wspr_tx_arm(&req, err, sizeof(err))) {
+                    ESP_LOGW(TAG, "TX arm refused: %s", err);
+                } else {
+                    /* ⭐ THE ARM OFFSET IS THE WHOLE FIX, SO IT IS IN THE LOG.
+                     *
+                     * John W5JSS's fault was the arm being reached 2,106 ms into a
+                     * cycle whose key-down moment is at WSPR_TX_START_OFFSET_MS,
+                     * which silently aimed the burst at the NEXT cycle. Nothing
+                     * said so: the only visible evidence was his beacon turning up
+                     * at :02 and never at :00, four cycles later. Printing the
+                     * number makes the on-air check a grep rather than an
+                     * inference from which minutes were spotted. Anything at or
+                     * under WSPR_TX_START_OFFSET_MS transmits in THIS cycle.
+                     *
+                     * Read AFTER the arm, not at the guard above: that bounds the
+                     * real offset from above, which is the safe direction to be
+                     * wrong in. */
+                    const int64_t armed_at = now_ms() % WSPR_CYCLE_MS;
+                    ESP_LOGW(TAG, "TX armed for THIS cycle at +%lld ms of %d ms "
+                                  "allowed: %s %s %d dBm (group %u tx + %u rx = %u min)",
+                             (long long)armed_at, WSPR_TX_START_OFFSET_MS,
+                             ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
+                             (unsigned)sched_tx, (unsigned)sched_rx,
+                             (unsigned)((sched_tx + sched_rx) * 2u));
+                }
+                /* Cleared however this turned out. A build failure or a missing
+                 * callsign is a configuration problem that will not fix itself,
+                 * so re-forcing every cycle would just key the radio at 100% duty
+                 * on a station that cannot legally identify. */
+                s_first_tx_forced = false;
+            }
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    ESP_LOGI(TAG, "TX schedule task exiting");
+    s_tx_sched_task = NULL;
+    vTaskDelete(NULL);
+}
+
 static void wspr_rx_task(void *arg)
 {
     (void)arg;
@@ -2111,6 +2401,15 @@ static void wspr_rx_task(void *arg)
                      ? 0 : (WSPR_CYCLE_MS - into);
         set_status("waiting %llds", (long long)(wait / 1000));
         s_wait_secs = (int)((wait + 999) / 1000);
+
+        /* ⛔ THE SETTINGS READ AND THE ARM USED TO BE HERE, AND BOTH HAVE GONE
+         * TO wspr_tx_sched_task(). ecff9b9 moved the settings read into "the
+         * last 3 s of the wait" to get the arm inside its 1000 ms window; the
+         * measurement says there is no wait to move anything into. This loop
+         * arrives ~1.4-1.8 s into every cycle (the previous capture ends on the
+         * boundary and its hand-off to the decoder costs that much), so `wait`
+         * is 0 and the body below never runs on a normal cycle. See that task's
+         * header for the numbers. */
         while (s_run && wait > 0) {
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
             vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
@@ -2130,6 +2429,24 @@ static void wspr_rx_task(void *arg)
         s_wait_secs = -1;
         if (!s_run) break;
 
+        /* How late the slot loop arrives, kept because it is the number that
+         * explained John W5JSS's beacon.
+         *
+         * Measured on bench dev 2026-10-02: +1418, +1591, +1702, +1842 ms,
+         * versus +0 ms on the first cycle after boot. A capture's window is
+         * boundary-aligned by its backfill, so it ENDS on the next boundary,
+         * and handing it to the decoder costs ~1.4 s - which is where the loop
+         * then is. It takes the grace path every time, so the wait loop below
+         * does not execute at all on a normal cycle.
+         *
+         * ⭐ THIS NO LONGER COSTS THE TRANSMITTER ANYTHING: the arm moved to
+         * wspr_tx_sched_task(), which waits on the UTC grid instead of on this
+         * loop. It costs the RECEIVER nothing either and never did - the
+         * pre-ring backfills the gap sample-exactly (#376). It is logged so
+         * that a change in it is visible, not because it is a fault. */
+        ESP_LOGI(TAG, "cycle boundary: slot loop arrived at +%lld ms",
+                 (long long)(now_ms() % WSPR_CYCLE_MS));
+
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
         last_cycle_idx = now_ms() / WSPR_CYCLE_MS;
 
@@ -2142,25 +2459,22 @@ static void wspr_rx_task(void *arg)
          * forever.
          *
          * ⚠ ORDER MATTERS, and it is the opposite of what it first looks.
-         * The obvious design is "roll at the top of cycle N, arm for N+1",
-         * and it is WRONG here - measured, not reasoned: this loop reaches
-         * the top of a cycle exactly ON the even minute, and
-         * wspr_tx_arm() then treats THAT minute as its slot. The burst
-         * started 1000 ms after the arm, i.e. WSPR_TX_START_OFFSET_MS, in
-         * the same cycle. So the arm is for THIS cycle, and the receiver
-         * stand-down has to come AFTER it, not before.
+         * The obvious design is "roll at the top of cycle N, arm for N+1", and
+         * it is WRONG - measured, not reasoned: wspr_tx_arm() targets the next
+         * even UTC minute, so an arm placed at the top of a cycle is an arm for
+         * THAT cycle, with key-down WSPR_TX_START_OFFSET_MS later.
+         *
+         * ⛔ That is now wspr_tx_sched_task()'s problem, not this loop's, and
+         * the rule it encodes is why that task exists rather than a simpler
+         * "arm one cycle ahead". What remains here is the consequence: the
+         * receiver stand-down reads the burst that task armed, so it has to
+         * come after it in time - which it does, because this loop does not
+         * reach the boundary until well over a second past it.
          *
          * Getting this backwards is invisible in simulation - the sim
          * synthesizes its window instead of capturing, so nothing clashes -
          * and live would have spent 120 s capturing our own 110 s
          * transmission. */
-        qmx_settings_t ws;
-        settings_load_all(&ws);
-
-        /* Turn the PA down before any burst can be armed, and put it back as
-         * soon as transmitting is switched off. Edge-triggered inside. */
-        wspr_pa_guard_update(&ws);
-
         char txtext[64];
 
         /* A burst still running from the previous cycle owns the radio. */
@@ -2175,163 +2489,6 @@ static void wspr_rx_task(void *arg)
             continue;
         }
 
-        /* ---- is THIS the cycle the schedule picked? --------------------
-         * The roll itself happened earlier (see roll_next_group_cycle) so that
-         * the TX button can count down to a real burst instead of to the next
-         * mere opportunity. All that is left here is to act on it, and to roll
-         * the following one - whether this cycle transmitted or not, so a held
-         * or refused burst moves the countdown on rather than leaving it at
-         * zero promising something that is not coming. */
-        const uint8_t sched_tx = ws.wspr_tx_cycles;
-        const uint8_t sched_rx = ws.wspr_rx_cycles ? ws.wspr_rx_cycles : 1;
-        const bool tx_possible = ws.wspr_tx_en && sched_tx > 0;
-        /* ⛔ THE RE-ANCHOR BRANCH THAT USED TO LIVE HERE IS GONE, AND THAT IS
-         * THE FIX. It re-based the schedule on the CURRENT cycle whenever the
-         * previous one had been overtaken - a stalled cycle, a clock step, a
-         * settings change - which moved every future transmission by however
-         * far things had slipped, permanently and silently. That is precisely
-         * how John W5JSS's beacon walked from the 0 and 2 minute marks to 2
-         * and 4 over a few hours.
-         *
-         * A UTC-anchored schedule has nothing to re-anchor: a missed cycle is
-         * simply a cycle that did not transmit, and the next one is back on the
-         * grid. The failure mode cannot occur, so the warning I added to report
-         * it has no meaning either and has gone with it.
-         *
-         * s_sched_duty is still tracked, but only to notice a settings change
-         * for the log - it no longer steers anything. */
-        if (!tx_possible) {
-            s_next_tx_cycle = -1;
-            s_sched_duty    = 0;
-        } else {
-            const uint8_t duty_now = (uint8_t)(sched_tx * 32u + sched_rx);
-            if (s_sched_duty != duty_now) {
-                ESP_LOGI(TAG, "TX schedule now %u tx + %u rx = %u min, anchored to UTC",
-                         (unsigned)sched_tx, (unsigned)sched_rx,
-                         (unsigned)((sched_tx + sched_rx) * 2));
-                s_sched_duty = duty_now;
-            }
-        }
-        /* ⭐ THE SCHEDULE IS ANCHORED TO UTC, not rolled from the last group.
-         *
-         * wspr_sched_is_tx_cycle() answers from the cycle index and the two
-         * counts alone, so it cannot drift, cannot accumulate error across a
-         * missed cycle or a clock step, and reads the same after a reboot as
-         * before it. John W5JSS's 2 tx + 8 rx now means minutes 0 and 2 of every
-         * twenty, permanently, which is what "2 tx + 8 rx = 20 min" always
-         * claimed. See wspr_sched.h for why the relative version drifted, and
-         * test/wspr_sched_harness.c for the properties that are actually
-         * checked - including that no setting can key the radio continuously.
-         *
-         * s_first_tx_forced is kept and is the ONE exception: switching
-         * transmitting on still gives a burst on the next cycle rather than
-         * making the operator wait for the grid, which could otherwise be most
-         * of a period away. It is a single shot and clears itself. */
-        const bool forced_now  = s_first_tx_forced && s_next_tx_cycle == last_cycle_idx;
-        const bool tx_this_cycle = tx_possible &&
-            (forced_now || wspr_sched_is_tx_cycle(last_cycle_idx, sched_tx, sched_rx));
-
-        if (tx_this_cycle) {
-            /* Both derived, not counted. A running counter was what could
-             * disagree with the air after a missed cycle; the grid cannot. */
-            const uint8_t tx_n = sched_tx ? sched_tx : 1;
-            const uint8_t idx  = wspr_sched_burst_index(last_cycle_idx, sched_tx, sched_rx);
-            s_burst_done = idx;                 /* kept for the UI only */
-            if (idx > 0 && idx < tx_n)
-                ESP_LOGI(TAG, "transmit %u of %u in this group - next cycle too",
-                         (unsigned)idx, (unsigned)tx_n);
-        }
-        /* Point the countdown at the next real burst, every cycle, transmitted
-         * or not - so a held or refused burst moves it on instead of leaving it
-         * at zero promising something that is not coming. */
-        if (tx_possible)
-            s_next_tx_cycle = wspr_sched_next_tx_cycle(last_cycle_idx + 1, sched_tx, sched_rx);
-
-        /* Ask the radio about split every cycle while transmit is enabled. The
-         * answer lands a poll or two later and is judged at the NEXT burst, so
-         * this costs one short query and never blocks - the same
-         * request-early-judge-later shape the PA voltage read uses. */
-        if (tx_possible) cat_request_split_read();
-
-        if (tx_this_cycle && !wspr_pa_guard_ready(&ws)) {
-            /* Loud, and only while it is actually holding something up. */
-            /* -1 means "not answered yet", and printing that as tenths gave
-             * "0.-1 V" on the very first run of this line. Say which it is. */
-            int16_t pav = cat_get_pa_voltage_x10();
-            char pavs[24];
-            if (pav < 0) snprintf(pavs, sizeof(pavs), "not answered yet");
-            else         snprintf(pavs, sizeof(pavs), "%d.%d V", pav / 10, pav % 10);
-            ESP_LOGW(TAG, "cycle %lld: holding TX - the finals guard has not "
-                          "confirmed the PA is turned down yet (radio says %s, "
-                          "target %u.%u V)",
-                     (long long)cycle_utc, pavs,
-                     (unsigned)(WSPR_PA_TARGET_X10 / 10),
-                     (unsigned)(WSPR_PA_TARGET_X10 % 10));
-            /* The next cycle was rolled above, before this hold was known.
-             * Keep FORCING it while the burst being held is the guaranteed
-             * first one, or a hold silently demotes it to a duty-cycle coin
-             * toss - which is the wait the operator explicitly asked not to
-             * have. Only a guard hold gets this treatment: it clears itself
-             * within a cycle or two. */
-            if (s_first_tx_forced) s_next_tx_cycle = last_cycle_idx + 1;
-        } else if (tx_this_cycle) {
-            wspr_tx_request_t req;
-            char err[80] = "";
-            /* ⛔ NEVER BEACON IN SPLIT.
-             *
-             * WSPR is transmitted on the dial frequency by definition, and the
-             * spot published to wsprnet carries that frequency. In split the
-             * radio keys VFO B while FA; still reports A, so every spot is a
-             * measurement of somewhere the signal never was - published to a
-             * global database, unattended, for hours. That is the same rule as
-             * never fabricating a signal report, with a wider blast radius.
-             *
-             * John W5JSS, 2026-09-18: his WSPR was not being spotted at all,
-             * and it started working the moment he "cleared the B VFO display".
-             * The QMX's dual-VFO state is not clearable over CAT (only MU; or a
-             * power cycle - see the CAT notes), so the firmware cannot fix this
-             * for him even if it wanted to.
-             *
-             * ⛔ AND IT DELIBERATELY DOES NOT TRY. cw_split_maintain() refuses
-             * to clear a split it did not set - "an operator running their own
-             * split has not asked us to interfere" - and changing mode does not
-             * repeal that. So this refuses the burst and says why, which costs
-             * one cycle and leaves the radio exactly as the operator left it.
-             *
-             * ⚠ -1 is "not answered yet" and must NOT refuse: grounding the
-             * beacon because the radio was slow to reply would be a worse fault
-             * than the one being prevented. */
-            if (cat_get_split_state() == 1 && !cat_cw_tx_offset_engaged()) {
-                ESP_LOGE(TAG, "TX skipped: the radio is in SPLIT, so a burst would go "
-                              "out on VFO B and every spot would name the wrong "
-                              "frequency. Clear split on the radio (VFO A only) - "
-                              "the Tab5 cannot do it over CAT.");
-                set_status("TX held - radio is in SPLIT, clear VFO B");
-            } else if (!ws.my_callsign[0] || !ws.my_grid[0]) {
-                ESP_LOGW(TAG, "TX skipped: callsign/grid not set");
-            /* ⭐ A NEW TONE FOR EVERY BURST - see WSPR_TX_RANDOM_SPAN_HZ. This
-             * passed WSPR_TX_DEFAULT_FREQ_HZ unconditionally, so every unit
-             * running this firmware beaconed on the same 6 Hz of a 200 Hz
-             * sub-band and collided with itself worldwide. */
-            } else if (!wspr_tx_build_request(ws.my_callsign, ws.my_grid,
-                                              ws.wspr_tx_dbm, wspr_tx_pick_tone_hz(),
-                                              &req, err, sizeof(err))) {
-                ESP_LOGW(TAG, "TX skipped: %s", err);
-            } else if (!wspr_tx_arm(&req, err, sizeof(err))) {
-                ESP_LOGW(TAG, "TX arm refused: %s", err);
-            } else {
-                ESP_LOGW(TAG, "TX armed for THIS cycle: %s %s %d dBm "
-                              "(group %u tx + %u rx = %u min)",
-                         ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
-                         (unsigned)sched_tx, (unsigned)sched_rx,
-                         (unsigned)((sched_tx + sched_rx) * 2u));
-            }
-            /* Cleared however this turned out. A build failure or a missing
-             * callsign is a configuration problem that will not fix itself,
-             * so re-forcing every cycle would just key the radio at 100% duty
-             * on a station that cannot legally identify. */
-            s_first_tx_forced = false;
-        }
 
         /* Re-read AFTER the arm - see the ordering note above.
          *
@@ -2845,6 +3002,20 @@ bool wspr_rx_start(void)
     if (!s_task) {
         ESP_LOGE(TAG, "could not create the slot-loop task");
         s_run = false;   /* stands the decode task down too */
+        ui_mode_set(UI_MODE_PANADAPTER);
+        return false;
+    }
+
+    /* ⛔ THE ARM LIVES HERE, NOT IN THE SLOT LOOP - see the header on
+     * wspr_tx_sched_task() for the measurement that moved it, and for why its
+     * priority is above fft_task's when nothing else here is. 16 KB because
+     * settings_load_all() puts a multi-kilobyte struct on this stack. */
+    s_tx_sched_task = psram_task_create_reapable(wspr_tx_sched_task, "wspr_txsch",
+                               16384, NULL, tskIDLE_PRIORITY + 5, 1);
+    if (!s_tx_sched_task) {
+        ESP_LOGE(TAG, "could not create the TX schedule task - "
+                      "transmitting would key off the UTC grid, so WSPR stops here");
+        s_run = false;   /* stands the other two down too */
         ui_mode_set(UI_MODE_PANADAPTER);
         return false;
     }

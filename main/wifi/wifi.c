@@ -1,4 +1,6 @@
 #include "wifi.h"
+#include "util/hosted_watchdog.h"   // when the link is declared dead
+#include "ui.h"                       // ui_toast_ms - the operator has to be told
 #include "settings.h"
 #include "net/mdns_svc.h"   // qmx.local, announced once we have an IP
 #include <stdbool.h>
@@ -779,6 +781,97 @@ static void ensure_sta_netif(void)
 }
 
 // Init runs in its own task so app_main is not blocked --------------
+/* Hosted-link watchdog state. The thresholds and the counting live in
+ * util/hosted_watchdog.c, because a bench unit never trips this: the probe
+ * succeeds every 30 s here, so a clean soak proves nothing about the bounds,
+ * and the fault itself has only ever been seen in Bryan N0LUF's capture.
+ * test/hosted_watchdog_harness.c exercises the decision on the host. The
+ * recovery below still has not run against a real wedge. */
+static hosted_wd_t s_hosted_wd;
+
+/* Power-cycle the C6 and bring the hosted transport back up.
+ *
+ * ⛔ THE ORDER MATTERS AND IS THE SAME ONE BOOT USES: stop WiFi, drop the
+ * co-processor's power rail, pause, raise it, re-init hosted, then start WiFi
+ * and reconnect. bsp_set_wifi_power_enable() is the same call wifi_task() makes
+ * at start-up, so this is not a new way of bringing the C6 up - it is the
+ * existing one, run again.
+ *
+ * ⚠ esp_wifi_stop()/start() are deliberately NOT ESP_ERROR_CHECK'd here. Every
+ * one of them talks to a co-processor we already believe is dead, so a failure
+ * is the expected case and must not abort the device - that is the same mistake
+ * the esp_hosted init-fail patch exists to undo. Each step logs and the next is
+ * tried regardless; if the whole sequence fails, the streak simply builds again
+ * and the attempt counter stops it for good. */
+/* ⛔ THIS NO LONGER POWER-CYCLES THE C6, AND THAT IS THE FIX.
+ *
+ * It used to: esp_wifi_stop(), drop the rail, raise it, esp_hosted_init(),
+ * esp_wifi_start(). The first time it ever ran against a real dead link -
+ * Bryan N0LUF, v1.16.10 - it failed, and the log says why:
+ *
+ *   relink: esp_wifi_stop: ESP_FAIL
+ *   M5STACK_TAB5: set_wifi_power_enable: 0
+ *   sdmmc_io_rw_extended: sdmmc_send_cmd returned 0x107      x many
+ *   H_SDIO_DRV: sdio_get_tx_buffer_num: err: 263             x many
+ *   relink: esp_wifi_start failed: ESP_FAIL
+ *
+ * The rail is dropped while the SDIO transport is still up and still polling
+ * the slave, so the driver spins on errors against hardware that is no longer
+ * powered. The ordered teardown that would avoid it is esp_hosted_deinit(),
+ * and that is ESP_ERROR_CHECK throughout - on a slave already believed dead
+ * those abort the device, turning "WiFi is down" into "the device reboots",
+ * which is strictly worse than the fault.
+ *
+ * ⭐ AND THE REASON IT EXISTED IS GONE. The link was dying because our own
+ * SDIO drain advanced its byte counter past data it had never read - see
+ * sdio_drv.c, fixed and measured 2026-10-03. The recovery was treating a
+ * symptom of our own bug.
+ *
+ * So this now reports and stands down rather than acting. A restart genuinely
+ * does fix it - Bryan's own restart brought WiFi straight back - and that is
+ * the operator's call to make, not something to do under their hands while
+ * they are working a QSO. */
+static void hosted_relink(void)
+{
+    ESP_LOGE(TAG, "the hosted WiFi link is not answering and cannot be revived "
+                  "in place - restart the Tab5 to bring WiFi back. (Your QMX "
+                  "will need a power cycle after the restart, as always.)");
+    ui_toast_ms("WiFi has stopped answering and cannot be restarted on its own. "
+                "Restart the Tab5 to bring it back - your QMX will need a power "
+                "cycle afterwards.", 15000);
+}
+
+/* ⛔ DELIBERATE TEST ENTRY POINT - kills the WiFi co-processor for real.
+ *
+ * Bryan N0LUF's hosted link dies on its own and the recovery has never been
+ * reproducible here, which is why 3567847 shipped with its recovery unproven -
+ * and when it finally ran on his unit in v1.16.10 it failed (esp_wifi_stop
+ * ESP_FAIL, an SDIO error storm after the rail dropped, esp_wifi_start
+ * ESP_FAIL). I said the condition could not be reproduced on the bench. That
+ * was wrong.
+ *
+ * Dropping the C6's power rail with the SDIO transport still up and still
+ * polling it puts the host in exactly the state his unit reaches: the slave is
+ * silent, every SDIO command fails, every RPC times out. The host cannot tell
+ * "lost power" from "stopped answering".
+ *
+ * ⚠ It is a NECESSARY condition, not an identical one: his C6 dies with a
+ * backlog of oversize frames behind it, this one dies clean. A recovery that
+ * cannot handle the clean case certainly cannot handle his.
+ *
+ * POST /api/cmd {"action":"wifi_kill_c6"}
+ *
+ * Nothing calls this in normal operation. The watchdog below then sees six
+ * probe failures over ~3 minutes and runs the REAL recovery. */
+void wifi_debug_kill_c6(void)
+{
+    ESP_LOGE(TAG, "TEST: dropping the C6 power rail - the hosted link will now "
+                  "die exactly as it does in the field. The watchdog should see "
+                  "%d probe failures over ~%d s and then re-link.",
+             HOSTED_WD_FAILS_BEFORE_RELINK, HOSTED_WD_FAILS_BEFORE_RELINK * 30);
+    bsp_set_wifi_power_enable(false);
+}
+
 static void wifi_task(void *arg)
 {
     ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
@@ -900,6 +993,67 @@ static void wifi_task(void *arg)
             ESP_LOGI(TAG, "online; UTC %04d-%02d-%02d %02d:%02d:%02d",
                      tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
                      tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+        }
+
+        /* ⭐ HOSTED-LINK WATCHDOG - the C6 can stop answering and never come
+         * back, and until now only a full reboot fixed it.
+         *
+         * Bryan N0LUF, 2026-10-01, captured on the SD card WHILE the WiFi was
+         * dead (the web download cannot work once it is - Michael KZ4LY made
+         * that point and he was right):
+         *
+         *   W H_SDIO_DRV: SDIO RX oversize: len=19838 host_cnt=.. slave_reg=..
+         *      - draining to recover            x183 in NINE SECONDS
+         *   W rpc_core: Timeout waiting for Resp for Req[0x126]   x61, forever
+         *
+         * The oversize drain (tools/patches/apply_esp_hosted_sdio_recovery.ps1)
+         * does advance the host counter correctly - host_cnt tracks the previous
+         * slave_reg every time - but the slave ran 10-20 KB further ahead on
+         * each pass, 20 times a second, and then went silent altogether. So the
+         * link does not merely desynchronise, it dies, and draining cannot fix
+         * a dead link however long it runs. ⛔ Its "recovered" line has never
+         * appeared in ANY capture, here or on the bench.
+         *
+         * 0x126 is WifiStaGetApInfo, which is exactly what
+         * esp_wifi_sta_get_ap_info() issues - so the same call that was timing
+         * out in his log is the cheapest possible probe for the condition.
+         *
+         * ⛔ BOUNDED, AND DELIBERATELY SLOW. CLAUDE.md records the FT8 respawn
+         * watchdog firing ~390 times and degrading the device it was rescuing.
+         * This needs SIX consecutive failures (~3 minutes, since the loop is
+         * 30 s) before it acts, and it acts at most WIFI_RELINK_MAX times in a
+         * session. A momentary RPC hiccup must not power-cycle the radio.
+         *
+         * ⚠ NOT YET SEEN TO RESCUE A REAL WEDGE. The condition has only been
+         * observed in Bryan's log, never reproduced on the bench, so this path
+         * has never run against the fault it is written for. */
+        {
+            const bool watching = (b & BIT_CONNECTED) && !s_wifi_user_disabled;
+            wifi_ap_record_t probe;
+            const bool probe_ok = watching &&
+                                  esp_wifi_sta_get_ap_info(&probe) == ESP_OK;
+
+            switch (hosted_wd_tick(&s_hosted_wd, watching, probe_ok)) {
+            case HOSTED_WD_RECOVERED:
+                ESP_LOGI(TAG, "hosted link answered again after %d missed probe(s)",
+                         s_hosted_wd.last_missed);
+                break;
+            case HOSTED_WD_RELINK:
+                ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
+                              "(~%d s) - reporting it (attempt %d/%d)",
+                         HOSTED_WD_FAILS_BEFORE_RELINK,
+                         HOSTED_WD_FAILS_BEFORE_RELINK * 30,
+                         s_hosted_wd.relink_count, HOSTED_WD_MAX_RELINKS);
+                hosted_relink();
+                break;
+            case HOSTED_WD_EXHAUSTED:
+                ESP_LOGE(TAG, "hosted link is dead and %d re-link attempt(s) did "
+                              "not bring it back - stopping, a reboot is needed",
+                         HOSTED_WD_MAX_RELINKS);
+                break;
+            case HOSTED_WD_NOTHING:
+                break;
+            }
         }
     }
 }

@@ -4,6 +4,32 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.16.11** - 2026-10-03
+
+**The WiFi link no longer dies when the co-processor hands over a full queue, and the microSD card can be ejected safely.**
+
+- ⭐ **WiFi no longer dies on a busy network, and the cause was my own safety check** *(Randy N4OPI, Bryan N0LUF)*. A guard in the path to the WiFi co-processor refused any transfer over 24,576 bytes - and a genuinely full queue is 25,942. Every busy moment hit it, the read was refused, and the counter advanced as if the data had been taken. The two sides then disagreed about the stream position and never recovered; the link was dead until a reboot. Reproduced on the bench with a traffic flood: before, dead and staying dead; after, 2,029 full queues handled with no deaths.
+- ⭐ **The WiFi co-processor is no longer power-cycled over a reading that never happened.** The wedge check could count a failed read as a bad answer instead of no answer, restarting the WiFi chip on a healthy unit.
+- **The microSD card is let go of before anything resets the Tab5.** A reset caught the card mid-transaction, and the card keeps that confusion across the reset - which is why it could take several attempts to mount after an update, or not come back until the unit was powered off.
+- **Eject microSD and Restart the Tab5, in the settings drawer.** Eject tells you when it is safe in a window you close yourself, not a message that fades while you are looking at the card slot.
+- **The SD symbol follows the card, not the Tab5's patience.** It went grey when the Tab5 stopped retrying, which looked like the card had gone.
+- **Fixed a crash that could take the screen down about a minute after boot.**
+
+⚠ **SD Files on the web page is temporarily not working.** It shows an empty folder or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally - only the web view is affected. Use the card in a PC until this is fixed.
+
+⚠ Audio still breaks up with a web page open. **AM produces no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)*.
+
+## Previous Releases
+
+### v1.16.10 - 2026-10-02
+
+Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for *(John W5JSS)*. The band scan now saves and restores frequency and mode; WSPR arming moved to its own clock-driven task (5-49 ms into the cycle instead of 1,437). The time sync no longer interrupts a transmission. Show CQs in my run filter *(Randy N4OPI)*; live TX tone panel; RX audio switch says it needs a restart *(Samuel W7STF)*; hosted WiFi relink *(Bryan N0LUF)*.
+
+### v1.16.9 - 2026-09-30
+
+With WiFi on, SD card writes no longer stop about 30 seconds after boot *(Gyula HA3HZ, Randy N4OPI)* - a fault that had stood under ⚠ for five releases. RX audio's 24 KB buffer sat in the one kind of memory the SD driver competes for; moved to external memory. Confirmed in the field on three units.
+
+
 **v1.16.8** - 2026-09-29
 
 **Static IP finally does what it says, a screenshot that doesn't tear, WSPR that doesn't lie about transmitting, and FT8 that doesn't forget a pileup mid-QSO.**
@@ -16,7 +42,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ SD writes can still stop about 30 seconds after boot with WiFi on. Audio still breaks up with a web page open. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)* - a real request, not attempted this cycle.
 
-## Previous Releases
 
 **v1.16.7** - 2026-09-26
 
@@ -30,8 +55,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - Also: refused transmissions appear on screen, the top bar follows a WSPR retune, the date editor steps in months and years *(John Dusek)*, the speaker turns **on** if the headphone detector cannot be read and the auto-mute can be switched off *(Samuel W7STF)*.
 
 ⚠ SD writes can still stop about 30 seconds after boot with WiFi on - a separate shortage, confirmed again and untouched here.
-
-## Previous Releases
 
 **v1.16.6** — 2026-09-25
 
@@ -956,7 +979,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.8.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.9.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

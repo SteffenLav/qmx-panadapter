@@ -1325,6 +1325,25 @@ static bool wspr_band_uncalibrated(void)
  * page straight back to normal without another tap. */
 static bool s_tx_wanted_uncal;
 
+/* ⭐ THE DIAL MISMATCH IS NOW ON THE SCREEN, NOT ONLY IN THE LOG.
+ *
+ * The detection below has existed since 2026-09-08 and its own comment says
+ * the silence was the part that made it hard to see - but it only ever called
+ * ESP_LOGW, so the operator still saw nothing. John W5JSS, 2026-09-30: his QMX
+ * was running its own Virtual U3S beacon, which walked the radio 160/80/60/30/
+ * 20 m underneath this page while the page stayed on 20 m. The firmware then
+ * correctly refused TX because the radio really was on 160 m, and he read that
+ * as a bug because the page said 20 m. Four `dial MISMATCH` lines were in his
+ * capture and none of them were anywhere he would look.
+ *
+ * Shown REGARDLESS of s_tx_wanted_uncal, unlike the calibration notice: a
+ * mismatch is not a transmit problem. It mislabels received spots on wsprnet,
+ * so it matters just as much to someone who only listens.
+ *
+ * 0 = no mismatch. Written by the detector, read by the renderer. */
+static uint32_t s_mismatch_radio_hz;
+static uint32_t s_mismatch_page_hz;
+
 static void tx_toggle_cb(lv_event_t *e)
 {
     (void)e;
@@ -1336,10 +1355,33 @@ static void tx_toggle_cb(lv_event_t *e)
         /* Leave wspr_tx_en alone: the switch stays OFF, the button keeps
          * reading TX OFF, and no countdown starts. */
         s_tx_wanted_uncal = true;
-        ESP_LOGW(TAG, "TX not switched on: %s is not calibrated, so the declared "
-                      "power cannot be backed - run Calibrate Power on this band",
-                 adif_log_band_for_freq(cat_get_frequency()));
-        ui_toast("Not calibrated on this band - run Calibrate Power");
+        /* ⭐ NAME BOTH BANDS WHEN THEY DISAGREE (John W5JSS, 2026-09-30).
+         * "Immediately, I got a warning that the band is not calibrated, but
+         * it is." It was - on the band his PAGE showed. The refusal named the
+         * band the RADIO was on, which his QMX's own beacon had moved to, and
+         * naming only one of the two is what made a correct refusal read as a
+         * fault. */
+        {
+            const char *rb = adif_log_band_for_freq(cat_get_frequency());
+            if (s_mismatch_radio_hz && s_mismatch_page_hz) {
+                const char *pb = adif_log_band_for_freq(s_mismatch_page_hz);
+                ESP_LOGW(TAG, "TX not switched on: the radio is on %s and %s is not "
+                              "calibrated. This page is set to %s - the radio has been "
+                              "tuned away from it, so calibrate %s or bring the radio "
+                              "back to %s",
+                         rb ? rb : "?", rb ? rb : "?", pb ? pb : "?",
+                         rb ? rb : "?", pb ? pb : "?");
+                char t[96];
+                snprintf(t, sizeof(t), "Radio is on %s, not %s - %s is not calibrated",
+                         rb ? rb : "?", pb ? pb : "?", rb ? rb : "?");
+                ui_toast(t);
+            } else {
+                ESP_LOGW(TAG, "TX not switched on: %s is not calibrated, so the declared "
+                              "power cannot be backed - run Calibrate Power on this band",
+                         rb ? rb : "?");
+                ui_toast("Not calibrated on this band - run Calibrate Power");
+            }
+        }
         return;
     }
     s_tx_wanted_uncal = false;
@@ -2673,6 +2715,8 @@ void wspr_screen_view_tick(void)
              * exactly that, 2 ms after the push line. */
             if (cat_now && want && have && have != want &&
                 esp_timer_get_time() > s_dial_settle_us) {
+                s_mismatch_radio_hz = have;
+                s_mismatch_page_hz  = want;
                 if (have != s_last_mismatch) {
                     s_last_mismatch = have;
                     /* John W5JSS, 2026-09-26: "I don't understand what
@@ -2692,6 +2736,8 @@ void wspr_screen_view_tick(void)
                 }
             } else {
                 s_last_mismatch = 0;
+                s_mismatch_radio_hz = 0;
+                s_mismatch_page_hz  = 0;
             }
         }
     }
@@ -2971,6 +3017,41 @@ void wspr_screen_view_tick(void)
             else
                 ps_s[0] = '\0';
 
+            /* ⛔ A DIAL MISMATCH OUTRANKS BOTH LINES ABOVE.
+             *
+             * While the radio is not where this page thinks it is, the PA
+             * voltage and the calibration notice both describe a band the
+             * operator is not on - which is exactly how John W5JSS read
+             * "160M is not calibrated" as wrong while his page showed 20 m.
+             * Say where the radio actually is instead, in both lines. */
+            bool mism = false;
+            if (s_mismatch_radio_hz && s_mismatch_page_hz) {
+                const char *rb = wspr_band_name_for_dial(s_mismatch_radio_hz);
+                const char *pb = wspr_band_name_for_dial(s_mismatch_page_hz);
+                char rbuf[16], pbuf[16];
+                if (rb && rb[0]) snprintf(rbuf, sizeof(rbuf), "%sm", rb);
+                else snprintf(rbuf, sizeof(rbuf), "%lu.%03lu MHz",
+                              (unsigned long)(s_mismatch_radio_hz / 1000000UL),
+                              (unsigned long)((s_mismatch_radio_hz % 1000000UL) / 1000UL));
+                /* The page dial comes from our own band list, so a name is
+                 * almost always available; "?" keeps the line short in the
+                 * case where the operator has tuned off a standard dial. */
+                if (pb && pb[0]) snprintf(pbuf, sizeof(pbuf), "%sm", pb);
+                else             snprintf(pbuf, sizeof(pbuf), "?");
+                /* ⛔ ONE LINE EACH, AND KEEP THEM SHORT. Seen on the glass
+                 * 2026-10-01: the radio was on 14.000000 MHz, which is not a
+                 * standard WSPR dial, so rbuf fell back to the long
+                 * "14.000 MHz" form - "RADIO IS ON 14.000 MHz" wrapped onto a
+                 * second line and landed on top of the line below it. The two
+                 * labels are stacked at a fixed pitch and neither can grow.
+                 * "tap here to free it" (19 chars) is the known-good width on
+                 * this pane; both of these now stay inside it. */
+                snprintf(pa_s, sizeof(pa_s), "RADIO: %s", rbuf);
+                snprintf(ps_s, sizeof(ps_s), "PAGE: %s - misfiled", pbuf);
+                pa_col = 0xFFA040;      /* amber: wrong, but nothing is broken */
+                mism = true;
+            }
+
             if (strcmp(lv_label_get_text(s_lbl_txi), pa_s) != 0)
                 lv_label_set_text(s_lbl_txi, pa_s);
             lv_obj_set_style_text_color(s_lbl_txi, lv_color_hex(pa_col), 0);
@@ -2980,6 +3061,7 @@ void wspr_screen_view_tick(void)
             /* Cyan is the MEASURED-power colour; the uncalibrated notice is not
              * a measurement, so it takes the warning colour instead. */
             lv_obj_set_style_text_color(s_lbl_txi2,
+                mism  ? lv_color_hex(0xFFA040) :
                 uncal ? lv_color_hex(0xFF4010) : lv_palette_main(LV_PALETTE_CYAN), 0);
         }
 

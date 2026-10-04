@@ -69,6 +69,11 @@ Tap the **Options** button to open the Options modal:
 - **Exclude if contains** — hide any call matching these substrings
 - **Exclude worked before** — skip calls you've already logged QSOs with
 - **Show only CQ callers** — hide replies, show only CQ messages
+- **Show CQs in my run** — off by default. While you are running your own CQ, other
+  stations' plain CQ calls are hidden so that replies addressed to you are not buried
+  under unrelated traffic. Turn this on to keep seeing them, so you can spot a station
+  worth breaking off for during your listening slot. It changes the list only; it does
+  not change who the robot or Auto-work-pileup will answer
 - **Skip TX1** — when you pounce a station, open with your signal report straight away instead of the grid exchange, for a quicker QSO (falls back to the normal grid exchange if the station has dropped out of the decode list)
 - **Allow grey-listing** — off by default. A station that times out two of your pounces in a row is set aside: the robot and Auto-work-pileup skip it, its decode row turns **violet**, and tapping it offers to clear it from the grey-list instead of opening the TX dialog. Handy on a busy band where one station simply never comes back. The list is held in memory only and forgotten at power-off
 - **Auto-reply priority** — Strongest SNR, Weakest SNR, Most distant grid

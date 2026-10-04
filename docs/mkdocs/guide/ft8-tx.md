@@ -370,6 +370,11 @@ Your transmit tone is chosen for you by default — the nearest clear 50 Hz slot
 
 **Both time windows, always** (asked for by Roy KI0ER). The strip is **two rows — EVEN above, ODD below**, marked `E` and `O` in the same blue/orange the slot countdown uses. Two stations only collide if they transmit in the *same* window, and only you know which window you are about to pounce into — so both pictures are on screen **before** you choose, not after a transmission has fixed your window. Your white marker sits on your own window's row once one is locked (both rows until then), and your partner's pink sits in *their* window. The picker's full-size strip is split the same way, and its verdict says where your pick stands: *"Clear in EVEN — busy in ODD"*.
 
+The picker **repaints every second while it is open**, so the occupancy you are choosing
+against is the live picture rather than a snapshot taken when you tapped the button.
+If it has just told you something in words, that message stays on screen for a few
+seconds rather than being overwritten by the next repaint.
+
 In the picker:
 
 | Control | What it does |

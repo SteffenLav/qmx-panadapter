@@ -1078,7 +1078,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // vTaskSuspend, which risks deadlocking on the driver's internal
         // mutex if the poll task is suspended mid-transfer. Not needed in
         // sim mode - nothing here touches the CDC link.
-        if (!sim) cat_poll_set_paused(true);
+        if (!sim) cat_poll_hold(CAT_HOLD_TX_BURST);
 
         int64_t t0 = esp_timer_get_time();
         // DT-follow-partner: shift the burst to land on the partner's beat when
@@ -1352,7 +1352,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         }
 #endif
 
-        if (!sim) cat_poll_set_paused(false);
+        if (!sim) cat_poll_release(CAT_HOLD_TX_BURST);
 
         ESP_LOGI(TAG, "TX burst %s%s: '%s' (%lld ms on-air)",
                  sim ? "[SIM] " : "", aborted ? "ABORTED" : "complete", req->display_text,

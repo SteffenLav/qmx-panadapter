@@ -12,7 +12,11 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.8.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.11.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.** Reading your QMX's band list means walking the radio's own **Band config.** menus, and leaving those menus drops the radio on 160 m in whatever mode they left behind — on every CAT link-up, to everyone, for as long as the band list has existed *(John W5JSS)*. Frequency and mode are now saved before the scan and put back after it. ⭐ The second one cost him more: with more than one transmit cycle in a WSPR group, the first cycle never went out, and the burst it missed **slid into the next cycle** — which at the end of a group is a receive cycle, so the beacon keyed off its own schedule and published that to wsprnet. The arming was being done by the receive loop, which arrives about a second and a half into every cycle while key-down has to happen within one. It now runs in a task of its own that waits on the clock and nothing else: **5 to 49 ms** into the cycle on the bench instead of 1,437, both cycles of a group transmitting, receive cycles silent. Also: the five-minutely clock read no longer takes the CAT link away from a burst in progress; the screenshot link opens in a tab again *(John W5JSS)*; the "turn on your QMX" prompt waits until it is safe to obey *(Dennis WN4FLA, Gyula HA3HZ)*; other stations' CQ calls can stay visible while you run your own CQ, and the TX tone panel updates while you watch it *(Randy N4OPI)*; and switching RX audio on mid-session now tells you it needs a restart *(Samuel W7STF)*.
+>
+> **With WiFi on, SD card writes no longer stop about 30 seconds after boot.** This had been listed under ⚠ as a known fault for five releases, with the SD symbol ending up crossed out. v1.16.4 proved the card was innocent without finding what was starving it. Both halves are answered now *(Gyula HA3HZ, Randy N4OPI)*. The card's driver needs a small block of memory that hardware can transfer directly to and from, and it needs one for **every 512-byte block it moves** — asking for it part of the way through the transfer, after the card has already begun sending. A failed request drops the chip-select with the card mid-block, and from there the two are out of step, every later command returns nonsense, and after five failures the Tab5 unmounts the card. One momentary shortage costs you the card for the whole session, which is why a restart clears it and why it looks random. ⭐ The memory was going to **RX audio** — about 29 KB of it, and 24 KB was a buffer I had put in exactly the memory the card driver was competing for, with no need to be there. Moved out to external memory, where 14 MB sits spare. My own bench never showed this because I had RX audio switched off; with it on and the old buffer in place the card failed in **40 seconds** with **87 bytes** of that memory left. Turning RX audio off is no longer the price of a working card.
 >
 > **v1.16.8 makes static IP and preferred network genuinely reliable.** ⭐ Randy N4OPI spent several days field-testing one build after another so this could actually be nailed down — each round turned up a real, distinct bug hiding under the last one: the reset buttons erasing the wrong settings partition, a config import leaving the static address bound to nothing, a settings save re-triggering static-IP logic that hadn't changed, and — the one that took longest to find — switching networks from the web UI killing the very HTTP connection that asked for the switch. It works now, confirmed on his bench: switching networks or setting a static address no longer needs a reboot, and an address never follows you onto the wrong network. Also this release: **screenshots download as PNG and no longer tear**, **WSPR no longer reports "transmitted" on a burst where the radio was never keyed**, and **FT8's re-send-to-a-partner-who-never-heard-you now tracks up to four partners at once instead of one** — the exact shape of a real pileup.
 >
@@ -38,7 +42,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.8.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.11.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -559,6 +563,11 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
 
+> ⚠ **Temporarily not working in v1.16.11.** It shows an empty folder, or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally — only this web view is affected. Use the card in a PC until it is fixed.
+
+
+**Eject microSD and Restart the Tab5 (new in v1.16.11).** Both are in the settings drawer. **Eject microSD** finishes the write in progress, closes the card and tells you when it is safe to pull it out — in a window that stays until you close it, not a message that fades while you are looking at the card slot. **Restart the Tab5** reboots cleanly from the screen. The card is also released automatically before a firmware update: before v1.16.11 a reset caught the card mid-transaction and, since the Tab5 cannot power the card down on its own, it stayed unreachable until the whole unit was powered off.
+
 **Remote QMX power-cycle relay (v1.10.9, sequenced in this release).** **Miscellaneous ▲ → Remote relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header). Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. **Pulse** fires a single pulse for the chosen duration and level — since PWR_ON is a toggle, this turns the QMX off *or* back on with no way to tell which from the LAN. **Power-cycle QMX** runs the whole sequence instead: off-pulse, wait, on-pulse, wait, then checks over CAT and tells you "QMX responded" or "no response from QMX". Scriptable as `POST /api/cmd {"action":"gpio_pulse", ...}` (single pulse) or `{"action":"gpio_power_cycle", "pin":53, "level":1, "ms":1000}` (the full sequence).
 
 **Building the interface — Randy N4OPI's design**, published here with his permission. Two components and a connector, plus one modification inside the radio.
@@ -784,6 +793,7 @@ The web UI has the same panel behind its own **Options** button, shown only in F
 - **Include 1 / Include 2** — if either field has text, only messages containing one of its terms are eligible. Space- or comma-separated (e.g. `POTA SOTA` or `JA, VK`), matched against the *whole* decoded message text so POTA/SOTA tags, grid squares, country prefixes, `/P` suffixes etc. all work.
 - **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped even if they'd otherwise match.
 - **Exclude plain CQ callers** — hides bare `CQ ...` rows so only replies and exchanges remain visible.
+- **Show CQs in my run** — off by default. While you run your own CQ, other stations' plain `CQ ...` rows are hidden so replies addressed to you are not buried. Turn this on to keep seeing them, so an interesting station calling CQ in your listening slot is something you can break off and work. Display only — it does not change who the robot or Auto-work-pileup answers.
 - **Exclude worked-before** — hides callsigns already worked **on the current band** (per-band, from your ADIF log) from the list and from CQ-run auto-replies; the same station on a different band is treated as not worked.
 - **Skip TX1** — when you pounce a station, open with your signal report instead of the grid exchange for a quicker QSO (falls back to the grid exchange if the station has aged out of the decode list).
 - **Allow grey-listing** — off by default. When enabled, a station that times out two of your pounces in a row is set aside: the robot and Auto-work-pileup skip it, its decode row turns violet, and tapping it offers to clear it rather than opening the TX dialog. Useful on a busy band where one station simply never comes back. The list lives in RAM only and is forgotten at power-off.
@@ -812,7 +822,7 @@ The left pane shows a persistent status line below the slot countdown:
 
 Your transmit tone is chosen automatically — the nearest clear 50 Hz slot to 1500 Hz, scanned against the stations currently decoded. From v1.3.3 you can both **see** it and **change** it.
 
-The **TX nnnn Hz** button in the FT8 left pane always shows it — to the right of the `TXCQ` parity button — and tapping it opens the picker. A **mini occupancy strip** under the slot countdown shows the same picture at a glance. (Before v1.3.4 this was a chip that appeared only while a CQ or QSO was running, and the tone was also repeated on the TX status line.)
+The **TX nnnn Hz** button in the FT8 left pane always shows it — to the right of the `TXCQ` parity button — and tapping it opens the picker. The picker repaints every second while it is open (v1.16.10), so you are choosing against the live occupancy rather than a snapshot taken when you tapped it. A **mini occupancy strip** under the slot countdown shows the same picture at a glance. (Before v1.3.4 this was a chip that appeared only while a CQ or QSO was running, and the tone was also repeated on the TX status line.)
 
 | Control | What it does |
 |---------|--------------|
@@ -1181,24 +1191,23 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.15.0 is here.** Next on the bench:
+**v1.16.11 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
-- **Binaural CW audio.** Asked for by Roy KI0ER, and shaped by Don N2VGU and Michael KZ4LY: a stereo sound stage so two stations a few tens of hertz apart land in different places in your head, with the **stage width a setting** rather than a fixed angle. The DSP is small — the Tab5 already receives I and Q separately — but it needs the Tab5's own audio output path, which is the same rework the CW page waits on.
-
-  Uwe DL8UG pointed at the KX2's "AFX MD Delay" — Elecraft's own quasi-stereo mode, a fixed delay on one channel applied to the whole receive audio, sold on *reducing operating fatigue* rather than separating signals. It's a genuinely different, much cheaper technique (no I/Q phase math, just a delay line) that solves comfort, not the "which station is where" separation the stage-width idea above targets. Worth keeping as a candidate first step or a companion to the real thing, not a replacement for it.
-- **Tab5 audio output rework.** The blocker under both of the above: the output task must not run at all in FT8/FT4 (Michael KZ4LY's suggestion), since merely existing at a higher priority than the FFT consumer cost decode yield.
 
 ### Longer term
 
 - **CW decoder.** Goertzel-based, text scrolling under the spectrum. The QMX already does this internally — question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
-- **Tab5 speaker / headphone audio.** Demodulated CW/SSB passband audio out of the Tab5's own jack, so the operator can monitor without the QMX's audio path.
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of
   the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
 - **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
+- **AM audio.** The demodulator handles CW, USB and LSB; AM is silent, so an AM
+  station means putting the radio in USB *(Samuel W7STF)*. The signal path already
+  produces what AM needs, so this is a small job - the work is in the levels, not the
+  demodulation.
 - **DSP polish.** Noise reduction, auto-notch.
 
 ---

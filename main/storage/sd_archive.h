@@ -136,3 +136,23 @@ void sd_archive_instr_get(sd_archive_instr_t *out);
 #ifdef __cplusplus
 }
 #endif
+
+/* ⛔ PUT THE CARD DOWN BEFORE THE SoC RESETS.
+ *
+ * Registered with esp_register_shutdown_handler(), so it runs on every reboot
+ * the firmware itself initiates - an OTA, a settings or network reset, the
+ * Reboot button - with the scheduler still up.
+ *
+ * It CANNOT cover esptool, which resets the chip from outside with no warning
+ * (usb_shutdown.c's handler says the same about USB). That gap is what
+ * {"action":"prepare_for_flash"} exists to close: ask for the teardown over
+ * the network first, then reset the chip.
+ *
+ * ⚠ This is NOT about dirty data. Every write here is already
+ * open/append/fflush/fsync/close per burst, so there is nothing buffered to
+ * lose. It is about leaving the CARD idle: a card reset mid-transaction keeps
+ * its own internal state across an SoC reset, and the Tab5 has no software
+ * control of the card's power rail, so nothing can clear it afterwards -
+ * measured on the bench 2026-10-03, where boot mounts needed 4, then 5, then
+ * more than 5 attempts over successive reflashes until a full power-down. */
+void sd_archive_shutdown(void);

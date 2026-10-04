@@ -49,6 +49,27 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
    - Check the QMX's own **System Config -> IQ Mode** setting is enabled
 3. On firmware older than v0.19.3, this failure was silent — only visible in the diagnostic log as `QMX IQ mode NOT confirmed`. Updating is the simplest fix.
 
+### The radio jumps to 160 m whenever the Tab5 connects (fixed in v1.16.10)
+
+**On v1.16.9 and earlier, every CAT link-up moved your radio.** To show you a band
+list, the Tab5 reads it out of the QMX's own **Band config.** menus — and leaving
+those menus drops the radio on 160 m, in whatever mode the menus left behind. The
+Tab5 did not put it back. It happened on every connection, to everyone.
+
+What it looks like: you set up on 20 m, the Tab5 connects, and the radio is on
+1.837700 MHz in CW. If you run WSPR or a beacon it is worse than an annoyance —
+you transmit on a band you did not choose.
+
+**Update to v1.16.10**, which saves the frequency and mode before the scan and puts
+them back afterwards, and only if the scan actually moved them.
+
+!!! note "It is easy to blame the wrong thing"
+
+    This was reported as a dead CAT link, and then blamed on the radio's Virtual
+    U3S beacon — both wrong, and one operator switched off a beacon that was
+    innocent. The giveaway is in the timing: the band menus flick past in well
+    under two seconds, far faster than any beacon schedule.
+
 ### QMX loses CAT connection after 1–2 minutes
 
 **Symptoms:** Frequency/mode/BW stop updating, FT8 can't transmit.
@@ -237,7 +258,7 @@ This is a firmware limitation, not a fault in your setup, and it is being worked
 4. If still failing, try `http://192.168.1.50:80` explicitly
 5. Restart the Tab5
 
-### The SD dot stays yellow (v1.16.3)
+### The SD dot stays yellow, or the card crosses itself out (fixed in v1.16.9)
 
 **Symptoms:** A card is in the slot and the **SD** dot is yellow rather than green, and stays that way while the Tab5 is clearly busy.
 
@@ -246,18 +267,18 @@ This is a firmware limitation, not a fault in your setup, and it is being worked
 **Causes:**
 
 1. **Nothing to write.** On a very quiet session there may genuinely be nothing due, and yellow is then correct and harmless. The diagnostic log normally writes every 30 seconds, so this is uncommon.
-2. **WiFi has taken the memory the card driver needs.** This is the common one. With WiFi on, the DMA-capable memory pool collapses shortly after start-up — measured on a bench unit at 58 KB free / 31 KB largest block when the card mounted, and 83 B / 20 B seventy seconds later — and every attempt to open a file on the card then fails. Your start-up backup still lands; nothing after it does.
+2. **The card driver was starved of memory — fixed in v1.16.9.** This was the common one, and on v1.16.8 and earlier it is what you are almost certainly seeing. **Update to v1.16.9.** If you cannot yet, switching **RX audio** off restores the card, at the cost of the speaker and headphone audio.
 3. **A genuinely failing card or slot.** Rarer. The log will show mount-level errors (CRC, invalid response) rather than write failures.
 
 **Fix:**
 
-1. **If you need the card written reliably, run with WiFi off** (which is the normal POTA/SOTA case anyway) — mirroring is continuous and flawless there.
-2. With WiFi on, **restart the Tab5 when you want the session's QSOs on the card**. The start-up backup is complete and always succeeds.
+1. **Update to v1.16.9**, which fixes cause 2. Reseating, reformatting or replacing the card has never helped anybody and will not help here.
+2. If you are staying on an older release, either switch **RX audio** off, or run with WiFi off (the normal POTA/SOTA case), where mirroring is continuous and flawless.
 3. To tell cause 2 from cause 3, download the diagnostic log and look for `SDFAIL[slowopen] err=0x5` with a low `DMA free=` figure (cause 2) versus mount-time errors (cause 3).
 
-> Cause 2 is known, measured and **not yet fixed**. It is not your card.
+> Cause 2 is fixed in v1.16.9. It was never your card.
 
-**What is actually happening (established v1.16.4).** The card is never the
+**What is actually happening (established v1.16.4, fixed v1.16.9).** The card is never the
 problem in cause 2. The diagnostic log now shows the two lines together, in the
 same millisecond:
 
@@ -275,6 +296,12 @@ truth.
 The memory is spoken for by the audio path: v1.16.4's start-up ledger (see
 below) shows the audio output stage alone taking 46.5 KB of it. **This is why
 reformatting, reseating or replacing the card has never helped anybody.**
+
+**v1.16.9 fixes it.** 24 KB of that audio total was a buffer sitting in exactly
+the memory the card driver competes for, with no need to be there; it now
+lives in external memory, where 14 MB is spare. Measured on the bench: with the
+old buffer in place and RX audio on, the card failed 40 seconds after boot with
+**87 bytes** of that memory left. With it moved, the same unit keeps writing.
 
 ### Reading the start-up memory ledger (v1.16.4)
 

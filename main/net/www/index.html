@@ -1274,7 +1274,7 @@
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
-        <a href="/ss.bmp" id="ss-link" target="_blank" title="Downloads as PNG - most apps and forums won't take a .bmp">Tab5 screenshot</a>
+        <a href="/ss.bmp" id="ss-link" target="_blank" title="Opens in a new tab straight away - quickest way to just look at the screen">Tab5 screenshot</a> <a href="#" id="ss-save" title="Saves a PNG file - slower, but the format forums and apps accept">(save PNG)</a>
         <a href="#" id="reboot-link" title="Restart the Tab5 now. Receiving stops for about ten seconds. Until now this was only reachable after a firmware update.">Reboot the Tab5</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
@@ -4274,6 +4274,8 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.excl_worked_before", "bool", "Exclude stations worked before", "Per band - the same call on another band is still new"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
+  ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",
+   "While you run CQ, other stations' CQ rows are hidden so replies to you are not buried. Turn this on to keep seeing them in your listening slot"],
   ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
   ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
   ["FT8 filters", "filters.cq_manual_pick",     "bool", "Pick callers myself", "Running CQ: a caller waits in the pile-up until you tap them. The exchange itself is still automatic. Overrides Auto-work the pileup"],
@@ -7903,53 +7905,96 @@ document.addEventListener("keypress", (e) => {
   }
 })();
 
-/* Tab5 screenshot: convert to PNG client-side before saving.
-   Steffen OZ1LAV, 2026-09-26: "the bmp file cannot be used many places - i
-   need a png file." The device serves plain uncompressed BMP on purpose - no
-   PNG/zlib encoder on an embedded target - so the conversion happens here
-   instead. Every browser can decode BMP through a plain <img>, so this needs
-   no BMP parser: load it into an <img>, draw it to a canvas, re-export as
-   PNG. Falls back to the old inline-BMP behaviour (plain navigation to the
-   href) if anything here fails, so a screenshot is never worse than before. */
-const ssLink = document.getElementById("ss-link");
-if (ssLink) {
-  ssLink.addEventListener("click", (e) => {
+/* Tab5 screenshot: converted to PNG client-side, then EITHER shown in a tab or
+   saved to a file.
+
+   The device serves plain uncompressed BMP on purpose - there is no PNG/zlib
+   encoder on an embedded target - so the conversion happens here. Every browser
+   decodes BMP through a plain <img>, so no BMP parser is needed: load it into an
+   <img>, draw to a canvas, re-export as PNG.
+
+   Two affordances, because the two uses are genuinely different:
+     "Tab5 screenshot"  opens it in a new tab   - John W5JSS, 2026-10-01: "my
+                        typical short-term need [is] to see what's on the
+                        display... I recall it as being much faster, which is
+                        nice when the event is only a few seconds long."
+     "(save)"           downloads the .png file - Steffen OZ1LAV, 2026-09-26:
+                        "the bmp file cannot be used many places - i need a png"
+
+   ⛔ THE TAB IS OPENED SYNCHRONOUSLY, INSIDE THE CLICK. window.open() called
+   later, from the async callback, is treated as an unrequested pop-up and
+   blocked by default in every current browser - which is what made "open in a
+   tab" look impossible once the PNG conversion became asynchronous. Open the
+   blank tab first, then point it at the blob when it is ready.
+
+   Both paths fall back to plain navigation to /ss.bmp if anything fails, so a
+   screenshot is never worse than before. */
+function ssGrabPng(onReady, onFail) {
+  (async () => {
+    try {
+      const resp = await fetch("/ss.bmp", { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const bmpUrl = URL.createObjectURL(await resp.blob());
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext("2d").drawImage(img, 0, 0);
+        URL.revokeObjectURL(bmpUrl);
+        c.toBlob((pngBlob) => {
+          if (!pngBlob) { onFail(); return; }
+          onReady(URL.createObjectURL(pngBlob));
+        }, "image/png");
+      };
+      img.onerror = () => { URL.revokeObjectURL(bmpUrl); onFail(); };
+      img.src = bmpUrl;
+    } catch (err) { onFail(); }
+  })();
+}
+
+function ssStamp() {
+  const now = new Date(), pad = (n) => String(n).padStart(2, "0");
+  return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}` +
+         `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}` +
+         `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+}
+
+/* ⛔ THE TAB LINK IS A PLAIN ANCHOR, AND THAT IS THE FAST PATH - MEASURED.
+ *
+ * An earlier version of this fix opened a blank tab and filled it with the
+ * converted PNG. Timed against the real device, 2026-10-02:
+ *
+ *     fetch  7,712 ms   1,843,266 B   <- the raw BMP over WiFi
+ *     decode     3 ms
+ *     encode    59 ms     126,912 B   <- the PNG conversion
+ *
+ * The conversion is 62 ms; the DOWNLOAD is 7.7 s, because /ss.bmp is an
+ * uncompressed framebuffer and the device has no zlib to compress it with. So
+ * waiting for the whole blob before showing anything left the operator looking
+ * at a blank tab for seven seconds - strictly WORSE than the plain navigation
+ * it replaced, which renders the bitmap progressively as it arrives. John
+ * W5JSS asked for the tab back because it was "much faster"; he was right, and
+ * the fast part was the progressive render, not the format.
+ *
+ * So: the tab is a plain <a target="_blank"> with no JavaScript at all, and the
+ * PNG conversion lives only on "(save PNG)", where waiting is expected. */
+
+const ssSave = document.getElementById("ss-save");
+if (ssSave) {
+  ssSave.addEventListener("click", (e) => {
     e.preventDefault();
-    (async () => {
-      const fallback = () => window.open(ssLink.href, "_blank");
-      try {
-        const resp = await fetch("/ss.bmp", { cache: "no-store" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const bmpBlob = await resp.blob();
-        const bmpUrl = URL.createObjectURL(bmpBlob);
-        const img = new Image();
-        img.onload = () => {
-          const c = document.createElement("canvas");
-          c.width = img.naturalWidth;
-          c.height = img.naturalHeight;
-          c.getContext("2d").drawImage(img, 0, 0);
-          URL.revokeObjectURL(bmpUrl);
-          c.toBlob((pngBlob) => {
-            if (!pngBlob) { fallback(); return; }
-            const now = new Date(), pad = (n) => String(n).padStart(2, "0");
-            const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}` +
-                          `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}` +
-                          `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(pngBlob);
-            a.download = `qmx-shot-${stamp}.png`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-          }, "image/png");
-        };
-        img.onerror = () => { URL.revokeObjectURL(bmpUrl); fallback(); };
-        img.src = bmpUrl;
-      } catch (err) {
-        fallback();
-      }
-    })();
+    ssGrabPng(
+      (pngUrl) => {
+        const a = document.createElement("a");
+        a.href = pngUrl;
+        a.download = `qmx-shot-${ssStamp()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(pngUrl), 10000);
+      },
+      () => { window.open("/ss.bmp", "_blank"); });
   });
 }
 

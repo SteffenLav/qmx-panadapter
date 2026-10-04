@@ -47,6 +47,21 @@ void rx_audio_preopen(void);
 void rx_audio_set_enabled(bool en);
 bool rx_audio_is_enabled(void);
 
+/* ⛔ TRUE WHEN THE SWITCH IS ON AND IS DOING NOTHING.
+ *
+ * The ES8388/I2S codec is opened once at boot, and only when the saved enable
+ * flag was already set - it has to claim its DMA RAM before the USB host takes
+ * that pool, so it cannot be opened later in the session. Turning RX audio on
+ * afterwards therefore sets the flag, logs "restart required", and produces no
+ * sound at all until the next boot.
+ *
+ * Samuel W7STF, 2026-10-02: booted with audio off, used the radio for 15
+ * minutes, turned audio on and heard nothing - "I had to reboot the Tab5 and
+ * QMX/+ for audio to work. This is not the way it's supposed to be switched
+ * on/off, is it?" The behaviour was right and the UI was silent about it,
+ * which is the part that was wrong. Ask this after enabling and say so. */
+bool rx_audio_restart_pending(void);
+
 // Output volume, 0..100 (persisted to NVS).
 void rx_audio_set_volume(uint8_t vol_0_100);
 uint8_t rx_audio_get_volume(void);

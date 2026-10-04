@@ -18,6 +18,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_app_desc.h"   // esp_app_get_description() for the README version stamp
 
+#include "esp_system.h"       // esp_register_shutdown_handler
 #include "bsp/m5stack_tab5.h"   // bsp_sdcard_init / bsp_sdcard_deinit
 
 #include "diag_log.h"
@@ -889,6 +890,23 @@ static void park_snapshot(void)
                   "for Save-offline / web file browser", SLOW_LOG_MS / 1000);
 }
 
+/* The reason the LAST mount attempt failed. The post-boot give-up is limited
+ * to ESP_ERR_NO_MEM, which is the only failure retrying cannot help. */
+static esp_err_t s_last_mount_err = ESP_OK;
+
+static void unmount(const char *why);
+
+/* See the header. Leaves the card idle so an SoC reset cannot catch it
+ * mid-transaction; safe to call when nothing is mounted. */
+void sd_archive_shutdown(void)
+{
+    if (s_log_file) { fflush(s_log_file); fsync(fileno(s_log_file)); }
+    if (s_mounted) unmount("shutdown");
+    else if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
+}
+
+static void sd_shutdown_handler(void) { sd_archive_shutdown(); }
+
 static void unmount(const char *why)
 {
     // === TEMP INSTRUMENT (#282): "SD card unmounted" said nothing about which
@@ -946,6 +964,9 @@ static void sd_space_report_once(void)
 static void sd_fail_diag(const char *where, int err)
 {
     static int n = 0;
+    /* Recorded for the post-boot give-up, which must apply to ESP_ERR_NO_MEM
+     * and nothing else - see the branch that reads it. */
+    if (where && strcmp(where, "mount") == 0) s_last_mount_err = (esp_err_t)err;
     if (n++ >= SD_FAIL_DIAG_MAX) return;
     sd_space_report_once();
     ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
@@ -1064,6 +1085,7 @@ static bool try_mount(void)
     }
 
     s_mounted = true;
+    s_last_mount_err = ESP_OK;
     s_instr.mount_ok++;
     /* Mounting wrote README.txt (and the snapshot is about to write qso.adi and
      * qmx-config.txt), so this IS a demonstrated-good write - stamp it, or the
@@ -1444,10 +1466,36 @@ static void sd_archive_task(void *arg)
             continue;
         }
 
-        // WiFi on and the boot window closed without a mount: further probes are
-        // futile (they fail 0x101 ESP_ERR_NO_MEM regardless of the card), and
-        // retrying every 10 s forever is pure log noise. Stop cleanly instead.
-        if (wifi_on && !s_mounted) {
+        /* ⛔ "FURTHER PROBES ARE FUTILE" IS TRUE FOR ONE FAILURE MODE ONLY.
+         *
+         * It was written for 0x101 (ESP_ERR_NO_MEM) - DMA exhaustion, where
+         * retrying really is pointless because the memory is gone for the
+         * session. It then swallowed a different fault entirely: a card that
+         * answers nothing at init (0x103/0x104/0x108 from send_if_cond and
+         * sdmmc_io_reset), which has nothing to do with memory - measured on
+         * the bench 2026-10-03 with 77 KB of DMA free and a 40 KB largest
+         * block at every failed attempt.
+         *
+         * That card was recoverable; the code had simply stopped asking. So
+         * the give-up is now limited to the memory case it was written for,
+         * and anything else keeps retrying on the slow cadence. A card
+         * reseated, or one that finally settles after an abrupt reset, is
+         * picked up instead of needing a reboot to be noticed. */
+        /* ⛔ THE DOT FOLLOWS THE CARD, NOT THE DECISION TO STOP LOOKING.
+         *
+         * ui_set_sd_state(UI_SD_NONE) used to live inside the give-up branch
+         * below, which was the only path that ran when no card mounted - so
+         * darkening the dot came free. Narrowing that branch to the memory
+         * case (so probing continues) took the dot with it, and the operator
+         * caught it within the hour: "the dot was green all the time - even
+         * with the old card out for 45 sec".
+         *
+         * A green dot with no card in the slot is worse than no dot at all.
+         * It is set here, from the state itself, every pass. */
+        if (!s_mounted)
+            ui_set_sd_state(UI_SD_NONE);
+
+        if (wifi_on && !s_mounted && s_last_mount_err == ESP_ERR_NO_MEM) {
             // ⭐ THE OTHER ANOMALY: reaching here a second time means s_parked
             // was false again, and nothing in this file ever clears it.
             if (s_parked) {
@@ -1648,6 +1696,15 @@ void sd_archive_init(void)
                   "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");
     return;
 #endif
+    /* Put the card down on any reboot WE initiate. Cannot cover esptool - see
+     * the header, and {"action":"prepare_for_flash"} for that gap. */
+    {
+        esp_err_t e = esp_register_shutdown_handler(sd_shutdown_handler);
+        if (e != ESP_OK)
+            ESP_LOGW(TAG, "could not register the SD shutdown handler: %s",
+                     esp_err_to_name(e));
+    }
+
     s_sd_mutex = xSemaphoreCreateMutex();
     // 6144 -> 12288: a qmx_settings_t local in this file (gs). CONFIRMED
     // crashing this task on hardware 2026-09-14 (Stack protection fault,
