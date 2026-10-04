@@ -981,6 +981,68 @@ static void sd_fail_diag(const char *where, int err)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
 }
 
+/* ---- DMA ballast, so a REMOUNT is still possible when the pool is empty ----
+ *
+ * MEASURED 2026-10-04 on bench dev. Once WiFi, the web server, NimBLE and the
+ * QMX are all up, MALLOC_CAP_DMA ends the boot at ~400 B free with a ~176 B
+ * largest block (see the per-consumer accounting in commits 34bd189/672fd8a:
+ * httpd + ws_push ~21.6 KB, the QMX attach ~7 KB, NimBLE ~5.2 KB). At that
+ * point sdmmc_card_init() cannot get its 64-byte buffers:
+ *
+ *   E heapwatch: ALLOC FAILED: 64 B caps=0x8 in task 'sd_archive'
+ *   E heapwatch: ALLOC FAILED: 64 B caps=0x8 in task 'httpd'
+ *   W sd_arch: SDFAIL[slowopen] err=0x5 | DMA free=359 lblk=144
+ *
+ * There are exactly three 64-byte MALLOC_CAP_DMA sites in the card-init path,
+ * and sizeof(sdmmc_switch_func_rsp_t) is exactly 64:
+ *   sdmmc_check_ssr()              esp_dma_capable_calloc(1, SD_SSR_SIZE)
+ *   sdmmc_select_driver_strength() heap_caps_calloc(1, sizeof(rsp), CAP_DMA)
+ *   sdmmc_select_current_limit()   heap_caps_calloc(1, sizeof(rsp), CAP_DMA)
+ * ⚠ Identified by READING the IDF source, not by catching the failure: the
+ * heap_watch callback reports the allocator's name, not the call site, and the
+ * failure did not reproduce in the session that instrument was flashed for.
+ * The 64-byte match is exact at all three, but it is inference.
+ *
+ * This is the problem the comments at "can never be remounted" below have
+ * described for weeks. The fix is not to free memory - the consumers above are
+ * all legitimate - it is to keep a contiguous block in hand from BOOT, when
+ * the pool still holds ~138 KB, and lend it back for the duration of a mount.
+ *
+ * ⛔ The scarce thing is a CONTIGUOUS BLOCK, not free bytes. At the moment of
+ * failure there were 359 free bytes but the largest block was 144 B, so even
+ * a 64-byte request could fail on fragmentation alone. Releasing one block we
+ * allocated early guarantees a contiguous region of this size.
+ *
+ * ⚠ RISK, stated because it is real: holding this from boot lowers the pool
+ * for everyone else by the same amount. The consumers that matter take fixed
+ * sizes and take them BEFORE the pool bottoms out (NimBLE at ~19 s with 8-13
+ * KB still free), so 1 KB should not displace any of them - but if something
+ * starts failing that did not before, this is the first thing to suspect.
+ * Keep it small, and keep it one constant. */
+#define SD_DMA_BALLAST_BYTES 1024
+
+static void *s_dma_ballast;
+
+static void sd_ballast_take(const char *why)
+{
+    if (s_dma_ballast) return;
+    s_dma_ballast = heap_caps_malloc(SD_DMA_BALLAST_BYTES, MALLOC_CAP_DMA);
+    if (!s_dma_ballast) {
+        /* Not fatal: without it we are exactly where we were before. */
+        ESP_LOGW(TAG, "DMA ballast: could not take %d B at %s (free=%u lblk=%u)",
+                 (int)SD_DMA_BALLAST_BYTES, why,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    }
+}
+
+static void sd_ballast_lend(void)
+{
+    if (!s_dma_ballast) return;
+    heap_caps_free(s_dma_ballast);
+    s_dma_ballast = NULL;
+}
+
 static bool try_mount(void)
 {
     size_t pre_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -991,14 +1053,21 @@ static bool try_mount(void)
     s_instr.mount_enter++;
     ESP_LOGW(TAG, "INSTR mount() entered (mounted=%d parked=%d file=%p)",
              (int)s_mounted, (int)s_parked, (void *)s_log_file);
+    /* Lend the ballast to sdmmc_card_init() for the duration of the mount, and
+     * take it back on BOTH paths - see sd_ballast_take() above. The window is
+     * the bsp_sdcard_init() call and nothing else, so nothing outside the
+     * mount can take the block in between. */
+    sd_ballast_lend();
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
     if (err != ESP_OK) {
         sd_fail_diag("mount", (int)err);
         // Leave the slot in a clean state so the next probe can retry (a failed
         // mount can leave the BSP's card handle dangling otherwise).
         bsp_sdcard_deinit(SD_MOUNT_POINT);
+        sd_ballast_take("after a failed mount");
         return false;
     }
+    sd_ballast_take("after a successful mount");
 
     size_t post_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t post_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -1700,6 +1769,12 @@ void sd_archive_init(void)
                   "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");
     return;
 #endif
+    /* Take the ballast HERE, not lazily, and BELOW the soft-disable guard - a
+     * disabled build never mounts, so it must not hold the block for ever.
+     * This runs at ~7 s with the DMA pool still at ~138 KB; by 20 s it is
+     * under 10 KB and by 40 s under 1 KB, so there is no later moment at which
+     * a 1 KB contiguous block can be had. */
+    sd_ballast_take("sd_archive_init");
     /* Put the card down on any reboot WE initiate. Cannot cover esptool - see
      * the header, and {"action":"prepare_for_flash"} for that gap. */
     {
