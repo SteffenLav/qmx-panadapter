@@ -72,10 +72,22 @@ static volatile uint32_t s_fail_count;
 static volatile uint32_t s_fail_size;
 static volatile uint32_t s_fail_caps;
 static char              s_fail_task[configMAX_TASK_NAME_LEN];
+static const char       *s_fail_fn;   /* IDF passes the calling function - see below */
 
 static void heap_watch_failed_alloc(size_t size, uint32_t caps, const char *fn)
 {
-    (void)fn;
+    /* ⭐ KEEP fn (2026-10-04). It used to be discarded, and that cost a whole
+     * investigation: with the DMA pool at 423 B the web file browser returns an
+     * empty folder - Randy N4OPI's symptom - and this callback reported only
+     * "64 B caps=0x8 in task 'httpd'". The TASK is not the CALLER, and reading
+     * the IDF sdmmc/sdspi sources did not turn up any per-transaction 64-byte
+     * allocation, so the site could not be named and therefore could not be
+     * given a reserved block.
+     *
+     * IDF hands the calling function's name in here for free. It is a pointer
+     * to a string literal in rodata, so storing it costs nothing and cannot
+     * dangle. */
+    s_fail_fn   = fn;
     s_fail_size = (uint32_t)size;
     s_fail_caps = caps;
     /* pcTaskGetName on the CURRENT handle is safe from a task; from an ISR it
@@ -259,9 +271,10 @@ static void heap_watch_task(void *arg)
         /* Report allocation failures from the task, never from the callback. */
         uint32_t fails = s_fail_count;
         if (fails != seen_fails) {
-            ESP_LOGE(TAG, "ALLOC FAILED: %u B caps=0x%08x in task '%s' "
+            ESP_LOGE(TAG, "ALLOC FAILED: %u B caps=0x%08x in task '%s' from %s() "
                           "(%u failure(s) so far, internal free now %u B)",
                      (unsigned)s_fail_size, (unsigned)s_fail_caps, s_fail_task,
+                     s_fail_fn ? s_fail_fn : "?",
                      (unsigned)fails, (unsigned)free);
             seen_fails = fails;
         }
