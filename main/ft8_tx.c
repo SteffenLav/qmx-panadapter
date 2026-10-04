@@ -914,8 +914,27 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
     unlock();
 
     if (fire) {
-        ESP_LOGI(TAG, "slot @%lldms: armed request '%s' matches - going ACTIVE",
-                 (long long)slot_start_ms, out->display_text);
+        /* ⭐ HOW LATE ARE WE, EXACTLY. Randy N4OPI, 2026-10-04: two stations
+         * emailed him that his transmissions were 2 and 2.5 s late, which he
+         * had never had in ten years on a PC. Part of that is the late-fire
+         * rescue doing its job, but nobody had measured the BASELINE - what a
+         * plain CQ, with nothing to wait for, costs between the boundary and
+         * the first symbol.
+         *
+         * ⛔ Measure it HERE, from the same clock that defines slot_start_ms.
+         * The first attempt derived it by cross-referencing the decode task's
+         * "slot N UTC x" line against this one, and that is wrong: the decode
+         * runs a slot BEHIND the capture, so those two anchors are ~15 s apart
+         * and the subtraction silently produced a plausible number. One
+         * gettimeofday() against the boundary we were handed cannot drift that
+         * way. */
+        struct timeval tvn;
+        gettimeofday(&tvn, NULL);
+        int64_t now_ms = (int64_t)tvn.tv_sec * 1000 + tvn.tv_usec / 1000;
+        ESP_LOGI(TAG, "slot @%lldms: armed request '%s' matches - going ACTIVE "
+                      "(+%lld ms into the slot)",
+                 (long long)slot_start_ms, out->display_text,
+                 (long long)(now_ms - slot_start_ms));
     }
     return fire;
 }
@@ -1101,6 +1120,21 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             }
         }
         sleep_until(t0, 0);       // wait for the (boundary+follow) start; no-op when follow==0
+        /* ⭐ THE SECOND HALF OF THE SAME QUESTION (see "going ACTIVE" above).
+         * That line says how late the slot loop REACHED the TX check; this one
+         * says how late the radio is actually keyed. The difference between the
+         * two is everything this function does in between - the poll hold, the
+         * DT-follow shift and sleep_until. Without both points, a baseline of
+         * ~0.9 s cannot be attributed to either, and attributing it to the
+         * wrong one is how the first estimate went wrong. */
+        {
+            struct timeval tvk;
+            gettimeofday(&tvk, NULL);
+            int64_t key_ms = (int64_t)tvk.tv_sec * 1000 + tvk.tv_usec / 1000;
+            int     per_ms = is_ft4 ? 7500 : 15000;
+            ESP_LOGI(TAG, "key down at +%lld ms into the slot", 
+                     (long long)(key_ms % per_ms));
+        }
         tx_cmd(t0, sim, "TX;");   // key down - radio's own envelope shaping
 
         // Live power/SWR: fire ONE non-blocking PC;SW; once the PA has settled
