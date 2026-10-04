@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "ft8_test.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"   // mem_ledger settling marks
 #include "nvs_flash.h"
 #include "lvgl.h"
 #include "bsp/m5stack_tab5.h"
@@ -104,6 +105,66 @@ static const char *TAG = "main";
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+
+/* SETTLING MARKS (2026-10-04).
+ *
+ * WHY: the ledger above stopped at rx_audio_init, about 9 s into the boot,
+ * with the DMA pool at 26 KB. Randy N4OPI's v1.16.11 diag then shows it at
+ * 13.5 KB by t=17 s and 5.8 KB by t=197 s, and the session that failed was at
+ * 2.5 KB - at which point an SD sector read cannot get its 512 B and the web
+ * file browser answers "file not found" for a file that is on the card.
+ *
+ * Twenty kilobytes therefore go AFTER the last ledger line, and nothing in the
+ * log says to what. audio.c's 60 s HEAP line gives the curve but no
+ * attribution; the per-stage ledger gives attribution but stops too early.
+ * These marks close the gap: the per-subsystem marks added in app_main cover
+ * the remaining init, and these timed ones cover the part no call site owns -
+ * WiFi association, the first web client, the FT8 engine reaching steady
+ * state. The next field diag should name the consumer instead of posing the
+ * question.
+ *
+ * One-shot chain rather than a periodic timer: three lines total, then it is
+ * gone. It costs nothing and cannot itself become the drain. */
+static void mem_ledger_settle_cb(void *arg);
+
+static const int64_t MEM_LEDGER_SETTLE_S[] = { 30, 120, 600 };
+
+static void mem_ledger_settle_cb(void *arg)
+{
+    size_t i = (size_t)(uintptr_t)arg;
+    char stage[32];
+    snprintf(stage, sizeof(stage), "T+%llds settled",
+             (long long)MEM_LEDGER_SETTLE_S[i]);
+    MEM_LEDGER(stage);
+
+    if (++i >= sizeof(MEM_LEDGER_SETTLE_S) / sizeof(MEM_LEDGER_SETTLE_S[0]))
+        return;
+
+    const esp_timer_create_args_t a = {
+        .callback = mem_ledger_settle_cb,
+        .arg = (void *)(uintptr_t)i,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "memledger",
+    };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK) {
+        esp_timer_start_once(t, (MEM_LEDGER_SETTLE_S[i] - MEM_LEDGER_SETTLE_S[i - 1])
+                                * 1000000LL);
+    }
+}
+
+static void mem_ledger_start_settling_marks(void)
+{
+    const esp_timer_create_args_t a = {
+        .callback = mem_ledger_settle_cb,
+        .arg = (void *)(uintptr_t)0,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "memledger",
+    };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK)
+        esp_timer_start_once(t, MEM_LEDGER_SETTLE_S[0] * 1000000LL);
+}
 
 
 /* ⭐ cJSON OUT OF INTERNAL RAM (2026-09-26).
@@ -598,6 +659,7 @@ void app_main(void)
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
     gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
+    MEM_LEDGER("cpu_stats + gpio_relay");
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     /* Only now may the "Now turn on or reboot your QMX/+" prompt appear.
@@ -630,6 +692,7 @@ void app_main(void)
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
+    MEM_LEDGER("net/spot subsystems");
     /* ⛔ RESTORE THE MODE BEFORE THE SELF-TESTS, NOT AFTER THEM.
      *
      * It used to sit below the four calls that follow, and two of those
@@ -656,6 +719,7 @@ void app_main(void)
      * audio, dsp and cat. Late is fine - the page is already correct and fills
      * as data arrives. */
     ui_apply_saved_mode_start();
+    MEM_LEDGER("ui_apply_saved_mode");
 
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
@@ -666,6 +730,7 @@ void app_main(void)
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is
     // down, so it's harmless on offline/POTA units.
     update_check_start();
+    MEM_LEDGER("selftests + update_check");
 
     // #218: confirm this image so the bootloader stops treating it as on trial.
     // With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE a freshly OTA'd firmware boots
@@ -674,5 +739,8 @@ void app_main(void)
     // came up, which is the only working definition of "this image is fine"
     // available from inside it. No-op on a cable-flashed image.
     ota_update_mark_valid();
+
+    MEM_LEDGER("app_main exit");
+    mem_ledger_start_settling_marks();
 }
 
