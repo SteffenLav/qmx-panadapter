@@ -101,7 +101,14 @@ static const char *TAG = "main";
  * gone. It costs nothing and cannot itself become the drain. */
 static void mem_ledger_settle_cb(void *arg);
 
-static const int64_t MEM_LEDGER_SETTLE_S[] = { 30, 120, 600 };
+/* DENSIFIED 2026-10-04. {30,120,600} was too coarse to see the second step.
+ * Commit 34bd189 named the big one - httpd + ws_push_task, 21580 B at ~16.4 s
+ * - but two boots the same afternoon then ended at 763 B and at 4863 B from
+ * the same window, and the ~7 KB that separates them falls between the
+ * btmouse NimBLE line (~19.7 s) and the first mark at 30 s. Nothing looked
+ * there. These eight points bracket it at 4-5 s intervals through the step
+ * and then thin out, still one-shot, still gone after the last one. */
+static const int64_t MEM_LEDGER_SETTLE_S[] = { 22, 26, 30, 35, 40, 60, 120, 600 };
 
 static void mem_ledger_settle_cb(void *arg)
 {
