@@ -189,6 +189,16 @@ static bool copy_file(const char *src, const char *dst)
         if (fwrite(buf, 1, n, out) != n) { ok = false; break; }
         total += n;
     }
+    /* ⛔ A READ ERROR LOOKS EXACTLY LIKE EOF to this loop (fread returns 0 for
+     * both), so without this the mirror reports success having copied PART of
+     * the file - and what is mirrored here is qso.adi, the station log. A
+     * backup that is silently short is worse than no backup, because it is
+     * trusted. The write side was already checked; the read side was not. */
+    if (ferror(in)) {
+        ESP_LOGW(TAG, "read error on %s after %u bytes - NOT claiming %s was mirrored",
+                 src, (unsigned)total, dst);
+        ok = false;
+    }
     fclose(in);
     if (fclose(out) != 0) ok = false;
     if (ok) ESP_LOGI(TAG, "mirrored %s (%u bytes)", dst, (unsigned)total);

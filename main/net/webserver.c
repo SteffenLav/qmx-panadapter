@@ -2830,6 +2830,16 @@ static size_t stream_file_part(httpd_req_t *req, const char *path, esp_err_t *er
         *err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
         total += n;
     }
+    /* fread() returns 0 for a read error exactly as it does for EOF, so
+     * without this the caller concatenates a SHORT file and still terminates
+     * the download cleanly. Measured on the file browser's copy of this loop,
+     * 2026-10-04: 1336320 of 1725818 bytes delivered, no error anywhere. */
+    if (*err == ESP_OK && ferror(f)) {
+        ESP_LOGE(TAG, "stream %s: READ error after %u bytes - failing the "
+                      "download rather than concatenating a short file",
+                 path, (unsigned)total);
+        *err = ESP_FAIL;
+    }
     fclose(f);
     return total;
 }
@@ -2948,6 +2958,14 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         size_t n;
         while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
             err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+        /* Same as stream_file_part(): a read error is indistinguishable from
+         * EOF here, and this one serves the ADIF LOG - a silently short
+         * export is a backup that restores fewer QSOs than it should. */
+        if (err == ESP_OK && ferror(f)) {
+            ESP_LOGE(TAG, "adif export: READ error - failing rather than "
+                          "serving a truncated log");
+            err = ESP_FAIL;
+        }
     } else {
         // Line-wise so each record can be tested. The header line is always
         // emitted - an ADIF file without one is rejected by most loggers even

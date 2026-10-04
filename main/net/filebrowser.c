@@ -243,6 +243,27 @@ static esp_err_t download_handler(httpd_req_t *req)
         size_t n;
         while ((n = fread(buf, 1, FB_IO_BUF, f)) > 0 && err == ESP_OK)
             err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+        /* ⛔ fread() RETURNS 0 FOR A READ ERROR AND FOR EOF ALIKE, so the loop
+         * above cannot tell "file finished" from "the card failed". Without
+         * this check err stays ESP_OK, the chunked terminator below is sent,
+         * and the browser is handed a SHORT FILE THAT LOOKS WHOLE - the exact
+         * hazard the note below describes for send failures, on the half
+         * nobody checked.
+         *
+         * MEASURED 2026-10-04 on bench dev, one ordinary download, no stress:
+         *   E sdmmc_cmd: sdmmc_read_sectors_dma: ... returned 0x101
+         *   E heapwatch: ALLOC FAILED: 512 B caps=0x8 in task 'httpd'
+         * and the client received 1336320 of 1725818 bytes with no error
+         * anywhere - not in the log, not in the response. The SD read failed
+         * because the bounce path could not get its 512 B from a DMA pool at
+         * 2355 B; that is a separate problem, but it must not be able to
+         * produce a silent truncation. The files reachable here include the
+         * ADIF log and its backups. */
+        if (err == ESP_OK && ferror(f)) {
+            ESP_LOGE(TAG, "download %s: READ error after %ld bytes - aborting rather "
+                          "than serving a truncated file", name, ftell(f));
+            err = ESP_FAIL;
+        }
         fclose(f);
         /* Only terminate the chunked body if it actually completed. The
          * terminator on a failed transfer hands the browser a short file that
