@@ -145,6 +145,8 @@ idf_component_register(
         "adif/lotw_upload.c"
         "rtc/rtc.c"
         "time_sync/time_sync.c"
+        "unit_gps/nmea_parse.c"
+        "unit_gps/unit_gps.c"
         "keyboard/tab5_keyboard.c"
     INCLUDE_DIRS
         "."
@@ -161,6 +163,7 @@ idf_component_register(
         "net"
         "rtc"
         "time_sync"
+        "unit_gps"
         "adif"
         "keyboard"
     REQUIRES

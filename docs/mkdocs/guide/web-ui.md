@@ -417,6 +417,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
 - **Reboot the Tab5** (new in v1.16.2) — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
+- **Port mode** (new in v1.17) — chooses what owns PORT.A, the same connector the relay below uses: **Relay** or **Unit GPS v1.1**. It sits directly above the relay row because it decides whether that row can do anything. Switching is applied live through the same sequencer the Tab5 drawer uses, so both screens always agree; a refusal comes back as `refused: PORT.A mode not changed: a relay pulse or power cycle is running, or the Unit GPS UART failed to start`, and the row snaps back to what the device is actually in. When **Unit GPS** owns the port the whole relay row greys out with the reason in its tooltip. See [Settings ▸ Port mode](settings.md#port-mode-port-a) and [Unit GPS Time Source](time-sync.md#unit-gps-time-source-port-a).
 - **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 
     !!! warning "Experimenter feature — you fit the connector yourself"
@@ -435,6 +436,14 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
         LOW, which for an active-Low setting meant the relay was held **closed**
         from power-on until the first pulse released it *(Randy N4OPI)*.
         Changing the active level re-applies the resting level immediately.
+
+        !!! warning "Not while Port mode is Unit GPS (new in v1.17)"
+            The relay and the Unit GPS v1.1 are **the same two pins**, so only
+            one of them can be plugged in. With Port mode on **Unit GPS** the
+            row above is greyed, `gpio_pulse` and `gpio_power_cycle` answer
+            `PORT.A is in Unit GPS mode`, and nothing is driven — including the
+            pins resting. Switch back to **Relay** first (and unplug the GPS).
+            See [Port mode](settings.md#port-mode-port-a).
 - **Keyboard shortcuts** — assign what the Tab5's snap-on keyboard does (see below)
 - **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
 - **Reset WiFi** — clear just the WiFi/network state

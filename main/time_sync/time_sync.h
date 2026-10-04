@@ -5,12 +5,13 @@
 
 // Which source last disciplined the system clock.
 typedef enum {
-    TIME_SOURCE_NONE,    // no sync yet (boot state)
-    TIME_SOURCE_RTC,     // Tab5 RX8130CE supercap RTC
-    TIME_SOURCE_QMX,     // QMX TM; (offline / POTA fallback)
-    TIME_SOURCE_SNTP,    // internet NTP via WiFi
-    TIME_SOURCE_MANUAL,  // manual entry
-    TIME_SOURCE_FT8,     // derived from FT8 signal timing (sub-second precision)
+    TIME_SOURCE_NONE,     // no sync yet (boot state)
+    TIME_SOURCE_RTC,      // Tab5 RX8130CE supercap RTC
+    TIME_SOURCE_QMX,      // QMX TM; (offline / POTA fallback)
+    TIME_SOURCE_SNTP,     // internet NTP via WiFi
+    TIME_SOURCE_MANUAL,   // manual entry
+    TIME_SOURCE_FT8,      // derived from FT8 signal timing (sub-second precision)
+    TIME_SOURCE_UNIT_GPS, // Unit GPS v1.1 on PORT.A (NMEA RMC, satellite UTC+date)
 } time_sync_source_t;
 
 // Returns the source that last applied a time update (the last WRITER).
@@ -37,22 +38,57 @@ int64_t time_sync_get_ft8_offset_ms(void);
 // Global time-sync orchestrator.
 //
 // Sync priorities (highest first):
+//   0. Unit GPS v1.1 on PORT.A (live = LOCKED and inside its freshness
+//      window) - a satellite clock with the FULL DATE, offline-capable, and
+//      ranked above everything else while it is live
 //   1. QMX/QMX+ GPS-disciplined time (TM; when GPS locked — re-syncs on GPS lock events)
 //   2. Tab5 RX8130CE RTC (supercap-backed, applied immediately at boot)
 //   3. SNTP/WiFi (accurate, but defers to QMX when QMX has recently synced)
 //   4. QMX/QMX+ any clock (crystal oscillator, used when offline / no GPS)
 //   5. Manual input (rare POTA use via time_sync_set_manual)
 //
-// GPS lock detection: the QMX CAT protocol does not expose a GPS status command.
-// Until detected, all QMX TM; time is treated as potentially GPS-disciplined —
-// SNTP does not override the system clock when QMX has synced in the last 5 min.
-// Any accepted sync writes through to the RX8130CE so the clock persists across
-// power-off (30-40 h supercap retention).
+// The effective (displayed) authority is computed in time_sync.c's
+// time_sync_get_effective_source(): live Unit GPS > live QMX-GPS > SNTP > the
+// last writer. That is the single place the ranking lives - do not restate it
+// here, this header's numbering predates several of the rules and has been
+// stale before (see time_sync_notify_qmx's own comment).
+//
+// GPS lock detection (QMX path): the QMX CAT protocol does not expose a GPS
+// status command. Until detected, all QMX TM; time is treated as potentially
+// GPS-disciplined — SNTP does not override the system clock when QMX has
+// synced in the last 5 min. The Unit GPS path needs no detection: its NMEA
+// status byte IS the lock bit.
+//
+// Any accepted sync writes through to the RX8130CE so the clock persists
+// across power-off (30-40 h supercap retention).
 //
 // Call time_sync_init() once after display_init() (I2C bus must be up).
 
 // Init: bring up RTC (priority 2), apply to system clock if valid, spawn sync task.
 void time_sync_init(i2c_master_bus_handle_t bus);
+
+// Priority 0: Unit GPS v1.1 (NMEA RMC on PORT.A). Builds UTC from the FULL
+// civil date and time the sentence carries - never from get_date_anchor() -
+// so the DATE comes from the satellite and s_date_verified follows it.
+//
+// flip_us is the esp_timer stamp of the sentence that carried the N->N+1
+// second edge (0 when this sentence carries no edge, e.g. the first lock), and
+// frac_us is the sentence's own fractional second. Together they phase-align
+// the clock to the second boundary the same way apply_gps_tick() does for a
+// QMX+ tick; with neither, the apply is whole-second and says so.
+//
+// An online SNTP disagreement is LOGGED with its delta, never used as a veto:
+// RMC's status byte is a real lock indication, where SNTP agreement was only
+// ever an inference. Returns true when the time was applied.
+bool time_sync_notify_unit_gps(int year, int mon, int mday,
+                               int h, int m, int s,
+                               uint32_t frac_us, int64_t flip_us);
+
+// Live Unit GPS as a time reference: pipeline LOCKED and inside
+// UNIT_GPS_FRESH_MS (a single freshness window, owned by the unit_gps module -
+// this is a wrapper, not a second opinion). False whenever Port mode is not
+// unit_gps, because the module is then OFF.
+bool time_sync_unit_gps_is_live(void);
 
 // Priority 3: called from the SNTP callback with the validated UTC epoch.
 // Always writes to RTC + NVS; only updates system clock when QMX has not synced

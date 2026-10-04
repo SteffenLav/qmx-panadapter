@@ -4,18 +4,50 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 
 ### 1. Time Sources (Priority Order)
 
-1. **GPS-disciplined QMX** (auto-detected) — phase-locked to the GPS second, ~10 ms, works offline
-2. **WiFi + SNTP** (if available) — ~10 ms, re-syncs every ~1 hour
-3. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
-4. **FT8/FT4-derived** — offline fallback only (ignored while GPS/SNTP is up)
-5. **Manual set** — enter time manually via the settings drawer
+1. **Unit GPS v1.1 on PORT.A** (if selected in Settings -> Device -> Port mode) — satellite UTC **including the full date**, phase-locked to the second, works offline
+2. **GPS-disciplined QMX** (auto-detected) — phase-locked to the GPS second, ~10 ms, works offline
+3. **WiFi + SNTP** (if available) — ~10 ms, re-syncs every ~1 hour
+4. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
+5. **FT8/FT4-derived** — offline fallback only (ignored while GPS/SNTP is up)
+6. **Manual set** — enter time manually via the settings drawer
 
-GPS and SNTP are the two accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual).
+GPS and SNTP are the accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual). The Unit GPS outranks the others while it has a fresh lock — see [Unit GPS Time Source](#unit-gps-time-source-port-a).
+
+!!! note "Both GPS sources show `UTC(GPS)`"
+
+    A Unit GPS and a GPS-disciplined QMX are both GPS, so the clock suffix is
+    the same word for both. Which one you have is told apart by the **GPS
+    indicator** on the bottom bar (see [Bottom Bar Time Display](#7-bottom-bar-time-display))
+    and by the apply lines in the log, not by a different suffix.
+
+### Unit GPS Time Source (PORT.A)
+
+With **Settings -> Device -> Port mode** set to *Unit GPS v1.1*, the M5Stack Unit GPS on PORT.A disciplines the clock. It is the only offline source that brings the **date** with it, so it answers the "Is today's date right?" question by itself.
+
+| | |
+|---|---|
+| **What it needs** | Port mode = *Unit GPS v1.1*, the Unit GPS plugged into PORT.A, sky view for the antenna |
+| **What it gives** | UTC time and the **full date**, from the satellite's RMC sentence |
+| **Priority** | Highest, while it has a fresh lock (see the table above) |
+| **Date** | Verified automatically on every accepted fix — the modal does not appear |
+| **Accuracy** | Phase-locked to the second; no measured figure is documented yet, and none will be until it has been measured against a reference on hardware |
+
+The bottom-bar **GPS indicator** — one GPS symbol, coloured by state, the same construction as the Bluetooth glyph beside it — shows what the *receiver* is doing, which is a different question from the clock suffix (which shows who is *disciplining* the clock). The colour is the whole message:
+
+| Symbol | Meaning |
+|---|---|
+| **amber** | Running, no fresh fix yet — antenna unplugged, indoors, or still acquiring |
+| **green** | Locked: a fresh fix, and this is the clock's authority |
+| **red** | Had a lock, it has gone stale (cable out, sky lost) — the clock falls back to whatever else is live |
+| *(hidden)* | Port mode is **Relay** — there is no receiver to describe |
+
+Locking takes 30 s to a few minutes from cold with a clear sky. **Switch the mode before plugging the GPS in** (enable-then-plug); see [Settings](settings.md) for why.
 
 ### 2. Offline (POTA / Portable)
 
 If you're operating **without WiFi** (POTA, portable, SOTA):
 
+0. **Best: take a Unit GPS.** With Port mode set to *Unit GPS v1.1*, the satellite gives you time **and the date** with no internet, no RTC remembered from home and no question to answer — see [Unit GPS Time Source](#unit-gps-time-source-port-a). Everything below is what to do when you have no Unit GPS.
 1. **Set the Tab5 RTC before you leave home** (settings -> Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
@@ -54,6 +86,11 @@ No internet needed — FT8 timing works offline.
     needed and tap **This date is right**. If WiFi comes up while the question
     is on screen, it closes by itself. QSOs are still logged if you do not
     answer — nothing is ever held back.
+
+    The **Unit GPS on PORT.A is the exception**: its sentences carry the
+    satellite date, so the date is verified by the fix itself and the question
+    never has to be asked. See
+    [Unit GPS Time Source](#unit-gps-time-source-port-a).
 
     The **Set and Sync the Clock** window also shows the date on its second
     line, marked *(unverified)* when it has not been checked. Tap that line to
@@ -178,7 +215,7 @@ The center of the bottom bar shows the current UTC time and which source is acti
 
 | Indicator | Meaning | Updates |
 |---|---|---|
-| **UTC(GPS)** | GPS-disciplined QMX, auto-detected, phase-locked to the GPS second (~10 ms) | Every 5 min |
+| **UTC(GPS)** | GPS: either the Unit GPS on PORT.A, or a GPS-disciplined QMX (auto-detected, phase-locked to the GPS second, ~10 ms) | every fix / every 5 min |
 | **UTC(NTP)** | WiFi + SNTP | ~1 hour |
 | **UTC(FT4)** / **UTC(FT8)** | FT4/FT8-derived offline sync | Continuous (when decoding, offline only) |
 | **UTC(RTC)** | Tab5 supercap RTC | At boot |
@@ -186,7 +223,9 @@ The center of the bottom bar shows the current UTC time and which source is acti
 | **UTC(QMX)** | Non-GPS QMX RTC fallback (offline only) | Every 5 min |
 | **UTC** | Fallback (no sync source) | — |
 
-The suffix tells you at a glance which source is **currently in charge** (the active authority, not merely the last one that wrote the clock). A GPS-disciplined QMX (`UTC(GPS)`) and WiFi/SNTP (`UTC(NTP)`) are both accurate — if you see either, you're set. If you're off-grid you'll see `UTC(FT8)`/`UTC(FT4)` (on-air digital activity), `UTC(QMX)` (non-GPS QMX clock), or `UTC(RTC)` (the supercap RTC you set before leaving home).
+The suffix tells you at a glance which source is **currently in charge** (the active authority, not merely the last one that wrote the clock). A GPS source (`UTC(GPS)`) and WiFi/SNTP (`UTC(NTP)`) are both accurate — if you see either, you're set. If you're off-grid you'll see `UTC(FT8)`/`UTC(FT4)` (on-air digital activity), `UTC(QMX)` (non-GPS QMX clock), or `UTC(RTC)` (the supercap RTC you set before leaving home).
+
+At the right-hand end of the bar, just left of the Bluetooth glyph, sits the **GPS indicator** when Port mode is *Unit GPS v1.1*: one GPS symbol, coloured by state, with no words beside it — the Bluetooth glyph's construction. It reports the **receiver**, not the clock: amber while it is acquiring, green when locked, red when a lock has gone stale. The suffix only says `UTC(GPS)` when the symbol is green — the two never disagree, because the suffix is derived from the same lock the symbol shows.
 
 ### 8. Slot Timing
 
@@ -208,6 +247,7 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 
 | Source | Accuracy | Updates | Works Offline? |
 |---|---|---|---|
+| **Unit GPS (PORT.A)** | phase-locked to the second — no measured figure documented yet | every fix (1 Hz) | Yes (plus the **date**) |
 | **QMX GPS** | ~10 ms (auto-detected, tick phase-lock) | every 5 min | Yes (if QMX has GPS) |
 | **SNTP** | ±10 ms | ~1 hour | No |
 | **RTC** | ±1 min | at boot | Yes (30–40 h) |

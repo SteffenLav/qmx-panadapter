@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "util/format_freq.h"   // #302: g_freq_style, applied on set
 #include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
+#include "unit_gps/unit_gps.h"  // PORT.A's other backend - the mode sequencer below
 #include "ui.h"                 // CW_CENTER_* - the grid the radio accepts (#359)
 #include "sd_archive.h"
 
@@ -152,6 +153,7 @@ static const char *TAG = "settings";
 #define KEY_RELAY_PIN      "relay_pin"
 #define KEY_RELAY_LEVEL    "relay_lvl"
 #define KEY_RELAY_MS       "relay_ms"
+#define KEY_PORT_A_MODE    "port_a_mode"
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
@@ -222,7 +224,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 127, 32 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 134, 25 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -415,7 +417,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
 #define DIRTY_RXA_AGCOFF      131  /* AGC bypass */
 #define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones */
-#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for; 26 spare */
+#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for */
+#define DIRTY_PORT_A_MODE  134  /* PORT.A owner: relay | unit_gps, one field */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -453,6 +456,8 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
     DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_HP_MUTE,
     DIRTY_WIFI_STATIC_SSID,
+    DIRTY_PORT_A_MODE,   /* config_io_export() prints port_a_mode; the import
+                          * must land in the same mode the file left behind */
 };
 
 // ---- Module state ------------------------------------------------------
@@ -710,6 +715,8 @@ static void flush_task(void *arg)
             nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap.gpio_relay_level ? 1 : 0);
             nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap.gpio_relay_ms);
         }
+        if (dirty_test(&dirty_local, DIRTY_PORT_A_MODE))
+            nvs_set_u8(s_nvs, KEY_PORT_A_MODE, snap.port_a_mode);
         if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
@@ -964,6 +971,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->gpio_relay_pin   = DEF_RELAY_PIN;
     out->gpio_relay_level = DEF_RELAY_LEVEL;
     out->gpio_relay_ms    = DEF_RELAY_MS;
+    /* Absent key == relay. This is the upgrade guarantee: a board that has
+     * never heard of the Unit GPS boots with both pins driven exactly as they
+     * were before the setting existed (task 2.4's READ BACK check). */
+    out->port_a_mode      = PORT_A_MODE_RELAY;
     out->freq_sep_style   = 0;   /* #302: the punctuation the Tab5 has always
                                     shown - a stored preference is the only
                                     thing that changes it, so nobody sees a
@@ -1281,6 +1292,13 @@ static void load_from_nvs(qmx_settings_t *out)
         out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
         out->gpio_relay_level = (rl != 0);
         if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+    }
+    {
+        // 0 when the key was never written, so "no key" and "relay" are the
+        // same value on purpose - see port_a_mode_normalize().
+        uint8_t pm = 0;
+        nvs_get_u8(s_nvs, KEY_PORT_A_MODE, &pm);
+        out->port_a_mode = port_a_mode_normalize(pm);
     }
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
@@ -3451,6 +3469,87 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
     if (level) *level = s_pending.gpio_relay_level;
     if (ms)    *ms    = s_pending.gpio_relay_ms;
     xSemaphoreGive(s_mutex);
+}
+
+uint8_t settings_get_port_a_mode(void)
+{
+    // RELAY is the answer before settings_init(): the boot branch and the
+    // gpio_relay refusals both read this, and "relay" is the only mode that
+    // matches hardware nobody has configured yet.
+    if (!s_ready) return PORT_A_MODE_RELAY;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t mode = s_pending.port_a_mode;
+    xSemaphoreGive(s_mutex);
+    return port_a_mode_normalize(mode);
+}
+
+/* Move the RAM copy of the mode on its own, so the sequencer can order that
+ * step precisely against the backend switch while NVS stays last. */
+static void set_mode_ram(uint8_t mode)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.port_a_mode = mode;
+    xSemaphoreGive(s_mutex);
+}
+
+bool settings_set_port_a_mode(uint8_t mode)
+{
+    if (!s_ready) return false;
+    mode = port_a_mode_normalize(mode);
+
+    uint8_t cur = settings_get_port_a_mode();
+    if (mode == cur) return true;   // already there - nothing to hand over
+
+    /* 3.1: refuse rather than hand the port over mid-pulse. The pulse's
+     * release callback would fire after the switch and drive a pin the other
+     * backend now owns, and a power cycle is a multi-second sequence that
+     * cannot be interrupted safely. The refusal is logged because the operator
+     * sees only "it did not change". */
+    if (gpio_relay_busy() || gpio_relay_power_cycle_status() == GPIO_PC_RUNNING) {
+        ESP_LOGW(TAG, "port mode refused: a relay pulse or power cycle is running "
+                      "(stays %s)", port_a_mode_str(cur));
+        return false;
+    }
+
+    if (mode == PORT_A_MODE_UNIT_GPS) {
+        /* 3.2: release FIRST, then bring the UART up. Configuring UART1 onto
+         * pins an output driver is still holding would put the GPS's TX into a
+         * driven pad for the duration. */
+        if (!gpio_relay_release()) {
+            ESP_LOGE(TAG, "port mode: could not release GPIO53/54 - staying %s",
+                     port_a_mode_str(cur));
+            return false;
+        }
+        if (!unit_gps_start()) {
+            /* Roll back: no UART means no mode change at all, and the pins go
+             * back to exactly what they were - the relay's stored polarity.
+             * RAM still says relay here, so gpio_relay_init() is allowed to
+             * drive. */
+            gpio_relay_init();
+            ESP_LOGE(TAG, "port mode: Unit GPS UART failed to start - rolled back to %s",
+                     port_a_mode_str(cur));
+            return false;
+        }
+        set_mode_ram(mode);
+        ESP_LOGI(TAG, "port mode: relay -> unit_gps (pins released, UART1 up)");
+    } else {
+        /* 3.3: stop the UART, then re-drive. gpio_relay_init() refuses while
+         * the RAM mode says unit_gps - which is the guard that stops an
+         * accidental call driving pins the UART owns - so the mode is moved
+         * first and only then the pins. The init's own READ BACK log is the
+         * evidence that both pads are driven again. */
+        unit_gps_stop();
+        set_mode_ram(PORT_A_MODE_RELAY);
+        gpio_relay_init();
+        ESP_LOGI(TAG, "port mode: unit_gps -> relay (UART stopped, pins driven)");
+    }
+
+    /* NVS LAST, after the metal already matches: a reset in between leaves a
+     * board that boots into the mode the pins are actually in, which is the
+     * only consistent answer. */
+    mark_dirty(DIRTY_PORT_A_MODE);
+    settings_flush();
+    return true;
 }
 
 void settings_set_resmon_en(bool v)

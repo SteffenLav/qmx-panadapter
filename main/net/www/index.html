@@ -890,6 +890,15 @@
      its neighbours. */
   #gpio-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.3rem;
               padding: 0.35rem 0.6rem; font-size: 0.78rem; color: #9aa4b2; }
+  #port-mode-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.6rem;
+              padding: 0.45rem 0.6rem 0.15rem; font-size: 0.78rem; color: #9aa4b2; }
+  #port-mode-row label { display: inline-flex; align-items: center; gap: 0.25rem;
+              cursor: pointer; }
+  #port-mode-row input { accent-color: var(--accent); }
+  #port-mode-result { color: var(--dim); }
+  /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
+     applicable - greyed and inert, with its tooltip swapped for the reason. */
+  #gpio-row.port-off { opacity: 0.5; }
   #gpio-row select, #gpio-row input { font: inherit; background: #1f2937;
     color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
     padding: 0.15rem 0.3rem; }
@@ -1280,6 +1289,19 @@
              row rather than the link+subrow "Change ..." pattern the upload
              credentials use. -->
         <a href="#" id="qrz-lookup-creds-link" title="Username and password for QRZ.com's Callsign Lookup (XML) service - used to place the skimmers that heard your own CQ (RBN self-spotting) at their real station position on the spot map. Without this they show at a rough country centroid instead.">Set QRZ Callbook login</a>
+        <!-- PORT.A owner. ONE control for one connector: the remote relay and
+             the Unit GPS v1.1 are the same two pins (G53/G54), so they are
+             mutually exclusive by hardware and the setting only says which
+             cable is plugged in. It sits ABOVE the relay row because it is
+             what decides whether that row can do anything - when Unit GPS
+             owns the port the relay row greys out rather than offering a
+             pulse the device would refuse with "PORT.A is in Unit GPS mode". -->
+        <div id="port-mode-row" title="PORT.A (HY2.0-4P) carries either the remote power-cycle relay OR the M5Stack Unit GPS v1.1 - never both: they are the same two pins.&#10;&#10;Switching is live: the pins are handed over straight away. Leave the GPS unplugged while this is on Relay - relay mode drives the pins, and driving them into the GPS's own transmitter is how you damage it.&#10;&#10;The Unit GPS also disciplines the clock (satellite UTC + date), so this mode is what makes FT8 work with no internet.">
+          <span>Port mode:</span>
+          <label><input type="radio" name="port-a-mode" value="relay" checked> Relay</label>
+          <label><input type="radio" name="port-a-mode" value="unit_gps"> Unit GPS v1.1</label>
+          <span id="port-mode-result"></span>
+        </div>
         <!-- Remote QMX power cycle (Randy N4OPI): a Tab5 firmware upgrade
              wedges the QMX (#74) and needs a manual power cycle, which
              defeats doing the upgrade remotely. Pulses one of two GPIO pins
@@ -2786,6 +2808,67 @@ function adifImportMessage(j) {
       } catch (err) {
         alert("No answer from the Tab5 - it may already have closed the link.");
       } finally { link.textContent = prev; }
+    });
+  })();
+
+  /* PORT.A mode: relay vs Unit GPS v1.1 (see #port-mode-row above).
+     The device decides - this control only asks, and /api/status tells the
+     page what actually happened. That matters because the setter is a
+     sequencer that can REFUSE (a relay pulse in flight, or the Unit GPS UART
+     failing to start); a page that optimistically drew the new mode would
+     show a setting the board is not in, and the next poll would fight it. */
+  (function () {
+    const wrap = document.getElementById("port-mode-row");
+    if (!wrap) return;
+    // Same reason as #gpio-row below: the document-level "click anywhere
+    // closes the menu" handler would close the menu on the first radio click.
+    wrap.addEventListener("click", (e) => e.stopPropagation());
+    const out = document.getElementById("port-mode-result");
+    const relayRow = document.getElementById("gpio-row");
+    const relayTitle = relayRow ? relayRow.getAttribute("title") || "" : "";
+    const relayWhy = "PORT.A is in Unit GPS mode - the UART owns GPIO53/54, so the remote relay cannot fire. Switch Port mode back to Relay first.";
+
+    function setPort(mode) {
+      const isUnit = mode === "unit_gps";
+      wrap.querySelectorAll('input[name="port-a-mode"]').forEach((r) => {
+        r.checked = r.value === mode;
+      });
+      if (!relayRow) return;
+      relayRow.classList.toggle("port-off", isUnit);
+      relayRow.querySelectorAll("select,input,button").forEach((el) => { el.disabled = isUnit; });
+      relayRow.setAttribute("title", isUnit ? relayWhy : relayTitle);
+    }
+
+    // Called from the 1 Hz status tick with /api/status's "port" object.
+    window.applyPortStatus = function (port) {
+      if (!port || typeof port.mode !== "string") return;
+      setPort(port.mode);
+    };
+
+    wrap.querySelectorAll('input[name="port-a-mode"]').forEach((r) => {
+      r.addEventListener("change", async function () {
+        const want = r.value;
+        out.textContent = "applying…";
+        try {
+          const res = await fetch("/api/settings", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ port_a_mode: want })
+          });
+          if (res.ok) {
+            out.textContent = want === "unit_gps" ? "Unit GPS owns PORT.A" : "Relay owns PORT.A";
+            setPort(want);           // the device accepted it
+          } else {
+            // Refused (or the UART failed to start): say why and let the next
+            // status poll put the radios back to the truth rather than
+            // guessing it here.
+            const txt = await res.text().catch(() => "");
+            out.textContent = "refused: " + (txt || ("HTTP " + res.status));
+          }
+        } catch (err) {
+          out.textContent = "no answer from the Tab5";
+        }
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      });
     });
   })();
 
@@ -6756,6 +6839,9 @@ async function tick() {
     const lotwLink = document.getElementById("lotw-link");
     if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
     if (typeof s.gpio_pc === "string" && window.applyGpioPc) window.applyGpioPc(s.gpio_pc);
+    // PORT.A mode + Unit GPS pipeline: always sent (mode is never absent), so
+    // the radios and the relay row's grey-out follow the DEVICE, not the page.
+    if (s.port && window.applyPortStatus) window.applyPortStatus(s.port);
     /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
        reads freqSepStyle at call time, so live text follows by itself - but the
        WSPR band picker and the FT8 preset list are composed once behind a

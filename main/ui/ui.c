@@ -2557,6 +2557,17 @@ static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and 
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
 static lv_obj_t *s_bot_sd_slash = NULL; /* diagonal stroke over the SD dot+label when NO card is in */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
+static lv_obj_t *s_bot_gps_label = NULL;   /* LV_SYMBOL_GPS - the ONLY thing shown, colour = state */
+static volatile int8_t s_gps_chip_want = -1;  /* intent from status_task, applied on the LVGL thread */
+
+/* Anchor the GPS symbol immediately left of the BT glyph - the anchor of the
+ * right-hand chain. Creation, the 1 Hz wifi layout pass and every state change
+ * all come through here, so the three can never disagree about where it sits. */
+static void gps_status_place(void)
+{
+    if (!s_bot_gps_label || !s_bot_bt) return;
+    lv_obj_align_to(s_bot_gps_label, s_bot_bt, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+}
 // Desired microSD-dot state, set by ui_set_sd_active() (called from the
 // sd_archive task) and reconciled on the LVGL thread in sim_border_keepalive_cb.
 // -1 = unknown/untouched, 0 = hide, 1 = show. The old code did the lv_obj flag
@@ -2980,9 +2991,16 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 // drawer_sec_visible()'s own header) - a bright control that does nothing
 // is the broken promise this whole function exists to prevent.
 #define DRAWER_SEC_OUTPWR     45
+/* PORT.A owner (relay | Unit GPS v1.1). Two values, one cable, so it is a
+ * dropdown rather than a checkbox - a checkbox would leave "both" expressible
+ * in the operator's head while only one of them is real. Filed under Device,
+ * Advanced-only: it is hardware configuration, not something an operating
+ * session reaches for, and getting it wrong is an electrical question (pins
+ * driven into a GPS transmitter) rather than a preference. */
+#define DRAWER_SEC_PORTA      46
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
-// size array indexed by an enum will be overrun" section. IDs are 0..45.
-#define N_DRAWER_SECTIONS     46
+// size array indexed by an enum will be overrun" section. IDs are 0..46.
+#define N_DRAWER_SECTIONS     47
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3100,6 +3118,10 @@ static const drawer_item_t GRP_SPECTRUM[] = {
      * and the transmit offset, not a drawing setting like everything else here. */
 };
 static const drawer_item_t GRP_DEVICE[] = {
+    /* First in the group: it decides what the connector below the settings is
+     * wired to, and Battery care is a question you ask after the hardware is
+     * right. Advanced-only (basic = false) - see DRAWER_SEC_PORTA. */
+    { DRAWER_SEC_PORTA, "Port mode (relay / Unit GPS)", false },
     { DRAWER_SEC_CHARGE, "Battery care", false },
 };
 
@@ -3408,6 +3430,8 @@ static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
+static lv_obj_t *s_dropdown_porta    = NULL;  // PORT.A owner: relay / Unit GPS
+static lv_obj_t *s_lbl_porta_warn    = NULL;  // the electrical warning under it
 static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
 static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
 // "Restart now", shown only while the setting and the running radio disagree.
@@ -3522,6 +3546,8 @@ static void drawer_dropdown_freqsep_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
+static void drawer_dropdown_port_a_mode_cb(lv_event_t *e);
+static void porta_warn_refresh(uint8_t mode);
 static void drawer_dropdown_swrlim_cb(lv_event_t *e);
 static void drawer_spotmode_cb(lv_event_t *e)
 {
@@ -3900,6 +3926,28 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
             if (s_bot_sd_slash) {
                 if (no_card) lv_obj_clear_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
                 else         lv_obj_add_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+    /* Unit GPS status - the same record-then-reconcile split as the SD dot,
+     * for the same reason: status_task sets the intent from its own task, and
+     * LVGL objects are touched only here. Only on a CHANGE, because an
+     * identical style set still forces an invalidate/redraw (see the SD block
+     * above). One GPS symbol, coloured by state - the same construction as the
+     * Bluetooth glyph beside it, which never carries a word either. */
+    if (s_bot_gps_label) {
+        static int8_t s_gps_applied = -1;
+        if (s_gps_chip_want != s_gps_applied) {
+            s_gps_applied = s_gps_chip_want;
+            if (s_gps_applied < 0) {
+                lv_obj_add_flag(s_bot_gps_label, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                uint32_t col = s_gps_applied == 0 ? 0xE0A020     // amber LISTENING/DEVICE
+                             : s_gps_applied == 1 ? 0x30D030     // green LOCKED
+                                                  : 0xE04020;    // red LOST
+                lv_obj_set_style_text_color(s_bot_gps_label, lv_color_hex(col), 0);
+                lv_obj_clear_flag(s_bot_gps_label, LV_OBJ_FLAG_HIDDEN);
+                gps_status_place();
             }
         }
     }
@@ -4822,6 +4870,17 @@ void ui_set_sd_state(ui_sd_state_t st)
 void ui_set_sd_active(bool active)
 {
     ui_set_sd_state(active ? UI_SD_MIRRORING : UI_SD_NONE);
+}
+
+// Record the Unit GPS indicator's state from status_task (1 Hz, off the LVGL
+// thread). Intent only - sim_border_keepalive_cb() does the lv_label/lv_obj
+// work, the same split ui_set_sd_state() uses: LVGL objects are not thread
+// safe, and the alternative (display_lock from a background task) was measured
+// as a real cost on this board.
+void ui_set_unit_gps_chip(int state)
+{
+    if (state < -1 || state > 2) state = -1;
+    s_gps_chip_want = (int8_t)state;
 }
 
 // lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
@@ -5952,6 +6011,25 @@ static void build_bottom_bar(lv_obj_t *parent)
         lv_obj_set_style_text_color(s_bot_wifi_ip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(s_bot_wifi_ip, font, 0);
         lv_obj_set_style_text_align(s_bot_wifi_ip, LV_TEXT_ALIGN_RIGHT, 0);
+
+        /* Unit GPS status, in the right-hand icon zone: ONE symbol -
+         * LV_SYMBOL_GPS - coloured by state, with no words at all. That is the
+         * Bluetooth glyph's construction (a symbol, colour carries the state),
+         * which keeps the bar's right-hand end a row of icons rather than a row
+         * of sentences.
+         *
+         * This side of the bar is laid out measured-from-the-edge (IP -> SSID
+         * -> fan -> BT -> this), and ui_set_bottom_wifi() reserves this
+         * symbol's width out of the SSID budget, so a long SSID pushes the
+         * whole chain left instead of letting anything reach the centered
+         * clock. Hidden entirely in relay mode - describing a receiver that is
+         * not configured is noise (see ui_set_unit_gps_chip). */
+        s_bot_gps_label = lv_label_create(bar);
+        lv_label_set_text(s_bot_gps_label, LV_SYMBOL_GPS);
+        lv_obj_set_style_text_font(s_bot_gps_label, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(s_bot_gps_label, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_add_flag(s_bot_gps_label, LV_OBJ_FLAG_HIDDEN);
+        gps_status_place();
     }
 }
 
@@ -9430,6 +9508,9 @@ static void reposition_diag_dot(void)
     if (s_bot_sd_slash && s_bot_diag_dot) {
         lv_obj_align_to(s_bot_sd_slash, s_bot_diag_dot, LV_ALIGN_LEFT_MID, -4, 0);
     }
+    // The GPS symbol is not part of this group either: it belongs to
+    // the right-hand chain instead - see its creation block, and
+    // ui_set_bottom_wifi() which lays that chain out from the edge.
 }
 
 void ui_set_bottom_left(const char *text)
@@ -9798,6 +9879,24 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
         lv_coord_t ssid_right = bar_w - (a[0] ? ip_w + 20 : 0);
 
         lv_coord_t avail = ssid_right - (s_bot_wifi_min_x + UI_WIFI_FAN_W + 10);
+
+        /* Reserve the GPS symbol's slot OUT of that budget while it is showing.
+         * The chain below runs IP -> SSID -> fan -> BT -> symbol, so that
+         * symbol is the leftmost thing on this side: without the reservation a
+         * long SSID pushes BT (and then the symbol) left until they sit on the
+         * centered clock. Same rule the SSID budget itself exists for - this
+         * zone gives way, never the clock. */
+        lv_coord_t bt_w = 0;
+        if (s_bot_bt) {
+            lv_obj_update_layout(s_bot_bt);
+            bt_w = lv_obj_get_width(s_bot_bt);
+        }
+        lv_coord_t gps_w = 0;
+        if (s_bot_gps_label && !lv_obj_has_flag(s_bot_gps_label, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_update_layout(s_bot_gps_label);
+            gps_w = lv_obj_get_width(s_bot_gps_label);
+        }
+        if (gps_w) avail -= (bt_w + gps_w + 40);   // 10+10 gaps, plus slack
         if (avail < 60) avail = 60;                    // never collapse to nothing
         // +2 px: LONG_DOT ellipsises a box that fits its text exactly.
         lv_coord_t txt_w = lv_txt_get_width(s, strlen(s), font, 0) + 2;
@@ -9810,9 +9909,10 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
         // BT glyph sits left of the fan, in the same measured-from-the-right
         // chain, so it never collides when a long SSID pushes everything left.
         if (s_bot_bt) {
-            lv_obj_update_layout(s_bot_bt);
-            lv_coord_t bt_w = lv_obj_get_width(s_bot_bt);
             lv_obj_set_pos(s_bot_bt, fan_cx - UI_WIFI_FAN_W / 2 - 10 - bt_w, 0);
+            // ...and the GPS symbol closes that chain, hard left of BT - the
+            // same place every other bottom-bar indicator keeps its state.
+            if (gps_w) gps_status_place();
         }
         lv_obj_set_width(s_bot_wifi_ip, ip_w + 2);
         lv_obj_set_pos(s_bot_wifi_ip, bar_w - ip_w - 2, 0);
@@ -12492,6 +12592,46 @@ static void drawer_build(void)
         lv_obj_align(s_slider_charge_limit_pct, LV_ALIGN_TOP_LEFT, 0, 96);
         lv_obj_add_event_cb(s_slider_charge_limit_pct, drawer_slider_charge_limit_pct_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 136;
+    }
+
+    /* PORT.A owner: the remote power-cycle relay or the Unit GPS v1.1 (see
+     * DRAWER_SEC_PORTA). The warning under the dropdown is the requirement
+     * that the exclusivity is readable AT the moment of change, not in a
+     * manual - relay mode drives both pins, and driving them into a GPS that
+     * is still transmitting is how the unit gets damaged. It rewrites itself
+     * with the mode, so it always describes what is true now. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_PORTA, y, 164);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Port mode (PORT.A)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_porta = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_porta,
+                                "Relay (remote power-cycle)\nUnit GPS v1.1");
+        lv_obj_set_size(s_dropdown_porta, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_porta, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_porta, &lv_font_montserrat_28, 0);
+        {
+            uint8_t mode = settings_get_port_a_mode();
+            lv_dropdown_set_selected(s_dropdown_porta,
+                                     mode == PORT_A_MODE_UNIT_GPS ? 1 : 0);
+        }
+        lv_obj_add_event_cb(s_dropdown_porta, drawer_dropdown_port_a_mode_cb,
+                            LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_porta, drawer_dropdown_cmap_open_cb,
+                            LV_EVENT_CLICKED, NULL);
+
+        s_lbl_porta_warn = lv_label_create(sec);
+        lv_obj_set_style_text_color(s_lbl_porta_warn, lv_color_hex(0xFFA040), 0);
+        lv_obj_set_style_text_font(s_lbl_porta_warn, &lv_font_montserrat_20, 0);
+        lv_obj_set_width(s_lbl_porta_warn, DRAWER_W - 32);
+        lv_label_set_long_mode(s_lbl_porta_warn, LV_LABEL_LONG_WRAP);
+        lv_obj_align(s_lbl_porta_warn, LV_ALIGN_TOP_LEFT, 0, 100);
+        porta_warn_refresh(settings_get_port_a_mode());
+        y += 164;
     }
 
     // Display brightness section (moved up under Battery care, operator
@@ -15217,6 +15357,47 @@ static void drawer_dropdown_bpregion_cb(lv_event_t *e)
     // Refresh the strip right away for the current VFO.
     if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
     ESP_LOGI(TAG, "band-plan region set: %u", idx);
+}
+
+/* The warning that travels with the Port mode choice. It describes what is
+ * true NOW rather than what the operator just picked, so it is also the
+ * recovery path after a refusal. */
+static void porta_warn_refresh(uint8_t mode)
+{
+    if (!s_lbl_porta_warn) return;
+    if (mode == PORT_A_MODE_UNIT_GPS) {
+        lv_label_set_text(s_lbl_porta_warn,
+            "Unit GPS owns PORT.A: the remote relay cannot fire while this is "
+            "selected, and the GPS disciplines the clock (UTC + date) so FT8 "
+            "works with no internet.");
+    } else {
+        lv_label_set_text(s_lbl_porta_warn,
+            "Relay drives both pins. Unplug the Unit GPS before choosing "
+            "Relay - never leave it plugged in while these pins are driven.");
+    }
+}
+
+/* The sequencer can refuse (a relay pulse in flight, or the Unit GPS UART
+ * failing to start), and a dropdown that keeps the rejected value would show
+ * a port owner the board does not have. So the list is put back to what the
+ * device actually reports, and the toast says why. */
+static void drawer_dropdown_port_a_mode_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t want = lv_dropdown_get_selected(dd) == 1 ? PORT_A_MODE_UNIT_GPS
+                                                     : PORT_A_MODE_RELAY;
+    if (!settings_set_port_a_mode(want)) {
+        uint8_t cur = settings_get_port_a_mode();
+        lv_dropdown_set_selected(dd, cur == PORT_A_MODE_UNIT_GPS ? 1 : 0);
+        porta_warn_refresh(cur);
+        ui_toast("Port mode not changed - a relay pulse is running, or the Unit GPS did not start");
+        ESP_LOGW(TAG, "port mode refused: wanted %s", port_a_mode_str(want));
+        return;
+    }
+    porta_warn_refresh(want);
+    ui_toast(want == PORT_A_MODE_UNIT_GPS ? "Unit GPS owns PORT.A"
+                                          : "Relay owns PORT.A");
+    ESP_LOGI(TAG, "port mode: %s", port_a_mode_str(want));
 }
 
 static void drawer_slider_wf_black_cb(lv_event_t *e)
