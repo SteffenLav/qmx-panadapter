@@ -4744,8 +4744,23 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_pskreporter_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))
         settings_set_resmon_en(cJSON_IsTrue(it));
+    /* ⛔ THE SAME HALF-WIRING AS tx_tone_hz BELOW - and it sat three lines
+     * away from that fix for ten days.
+     *
+     * This wrote NVS, answered {"ok":true}, and ft8_tx_pick_tone_hz() went on
+     * reading the module's own s_tone_hold, which nobody had told. Measured on
+     * the bench 2026-10-04: hold was set false over /api/settings, the call
+     * returned ok, and the very next CQ still logged "TX tone held at 300 Hz -
+     * no clear-slot scan" - onto a tone the firmware had ITSELF just reported
+     * as 52/52 slots busy from 10 stations. The operator sees Saved, sees no
+     * change, and has no way to tell the setting never arrived.
+     *
+     * ⭐ The 2026-09-24 fix below carried a comment naming this exact defect
+     * class and fixed only the key that had been reported. Fixing the instance
+     * and not the class cost a second bench session. ft8_tx_set_tone_hold()
+     * persists it too, so the settings_set_ call is no longer needed here. */
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "tx_tone_hold")))
-        settings_set_tx_tone_hold(cJSON_IsTrue(it));
+        ft8_tx_set_tone_hold(cJSON_IsTrue(it));
     /* ⛔ THE STORED TONE AND THE LIVE TONE ARE TWO DIFFERENT THINGS.
      *
      * Found on the bench 2026-09-24 while setting up an FT8 test: this wrote
@@ -4776,10 +4791,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         }
         settings_set_tx_tone_hz((uint16_t)hz);
     }
+    /* Same class as tx_tone_hold above, swept 2026-10-04. Both of these are
+     * READ from a ui.c static (s_cw_pitch_hz via ui_get_cw_pitch_hz(),
+     * s_cw_cal_hz at the touch-tune sum), so persisting alone changed nothing
+     * until the next boot. ui_set_* persists too, so this is not a double
+     * write.
+     * ⚠ ui_set_cw_pitch_hz() also sends MMCW to the radio. That is the point -
+     * it is exactly what the Tab5's own control does, and "applied" has to mean
+     * the same thing on both surfaces. Neither function touches LVGL, so both
+     * are safe on this HTTP task. */
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_pitch_hz")))
-        settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
+        ui_set_cw_pitch_hz((uint16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
-        settings_set_cw_cal_hz((int16_t)it->valuedouble);
+        ui_set_cw_cal_hz((int16_t)it->valuedouble);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tune_snap_hz")))
         settings_set_tune_snap_hz((uint16_t)it->valuedouble);   /* #347 - the setter clamps to the offered values */
 
