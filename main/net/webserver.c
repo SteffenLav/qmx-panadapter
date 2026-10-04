@@ -1836,6 +1836,20 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true}");
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
+    } else if (action && strcmp(action, "band_stub") == 0) {
+        /* TEMP TEST STUB - dev only, RAM only, cleared by a reboot. Pretends
+         * the radio reports a SHORT band list, so the band-filtering fix can
+         * be seen working on a bench whose QMX+ reports all 12 bands.
+         *   {"action":"band_stub","names":"160,80,60,40,30,20"}
+         *   {"action":"band_stub"}                      <- clears it */
+        const char *names = cJSON_GetStringValue(cJSON_GetObjectItem(root, "names"));
+        int n = cat_band_stub_set(names);
+        cJSON_Delete(root);
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"stubbed\":%d}", n);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        return ESP_OK;
     } else if (action && strcmp(action, "stack_hwm") == 0) {
         /* TEMP INSTRUMENT 2026-10-04 - dev only, on demand, costs nothing.
          *

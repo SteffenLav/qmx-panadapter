@@ -120,8 +120,54 @@ static bool s_qmx_gps_source_internal = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
+/* === TEMP TEST STUB (2026-10-04, Brian WA6JFK). DELETE WITH THE DIAGNOSIS. ===
+ *
+ * The fix for "the browser offers bands the radio does not have" cannot be
+ * tested on this bench: the QMX+ here reports all 12 bands, so filtered and
+ * unfiltered produce an identical dropdown. This pretends the radio has a
+ * SHORT band list so the difference becomes visible.
+ *
+ * ⛔ RAM ONLY, NEVER NVS, and cleared by any reboot. A persisted band stub
+ * would be indistinguishable from a radio fault later, and the whole point of
+ * this fix is that a wrong band list is hard to spot.
+ *
+ * Set with {"action":"band_stub","names":"160,80,60,40,30,20"}; an empty or
+ * absent "names" clears it and the real list comes back. */
+static cat_band_entry_t s_band_stub[CAT_MAX_BANDS];
+static int              s_band_stub_count = -1;   /* <0 = inactive */
+
+int cat_band_stub_set(const char *csv)
+{
+    if (!csv || !*csv) {
+        s_band_stub_count = -1;
+        ESP_LOGW(TAG, "BAND STUB CLEARED - the real radio band list is back");
+        return -1;
+    }
+    char tmp[128];
+    snprintf(tmp, sizeof(tmp), "%s", csv);
+    int n = 0;
+    for (char *tok = strtok(tmp, ","); tok && n < CAT_MAX_BANDS; tok = strtok(NULL, ",")) {
+        while (*tok == ' ') tok++;
+        char *e = tok + strlen(tok);
+        while (e > tok && (e[-1] == ' ' || e[-1] == 'm' || e[-1] == 'M')) *--e = 0;
+        if (!*tok) continue;
+        snprintf(s_band_stub[n].name, sizeof(s_band_stub[n].name), "%s", tok);
+        /* center_hz is left 0: nothing in the filtering path reads it, and a
+         * made-up centre would be a second lie to debug later. */
+        s_band_stub[n].center_hz = 0;
+        n++;
+    }
+    s_band_stub_count = n;
+    ESP_LOGW(TAG, "BAND STUB ACTIVE: %d band(s) - the radio's real list is HIDDEN", n);
+    return n;
+}
+
 const cat_band_entry_t *cat_get_band_list(int *out_count)
 {
+    if (s_band_stub_count >= 0) {          /* TEMP TEST STUB - see above */
+        if (out_count) *out_count = s_band_stub_count;
+        return s_band_stub;
+    }
     if (out_count) *out_count = s_band_count;
     return s_band_list;
 }
