@@ -179,6 +179,15 @@ PATCHES = [
      "#define FF_FS_EXFAT\t1",
      "microSD cards larger than 32 GB (exFAT) will not mount"),
 
+    ("apply_fatfs_dma_aligned_alloc.ps1", "idf",
+     "components/fatfs/port/freertos/ffsystem.c",
+     "QMX_FF_MEMALLOC_DMA_ALIGNED",
+     "FatFs hands the SDMMC driver an unaligned sector window, so EVERY "
+     "metadata read (stat/readdir/opendir/f_open) takes the bounce path and "
+     "allocates a 512 B MALLOC_CAP_DMA block per sector; once the DMA pool is "
+     "low that fails and the card reads back as empty or 'file not found' "
+     "while it is perfectly healthy (Randy N4OPI, v1.16.11)"),
+
     ("apply_mqtt_client_psram_task.ps1", "idf",
      "components/mqtt/esp-mqtt/mqtt_client.c",
      "PATCHED (qmx-panadapter, 2026-09-10)",

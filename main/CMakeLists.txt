@@ -87,6 +87,7 @@ idf_component_register(
         "storage/config_io.c"
         "storage/mem_channels.c"
         "storage/sd_archive.c"
+        "storage/sd_io_buf.c"
         "wifi/wifi.c"
         "util/usb_shutdown.c"
         "net/mdns_svc.c"

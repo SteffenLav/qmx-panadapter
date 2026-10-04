@@ -1,4 +1,5 @@
 #include "sd_archive.h"
+#include "sd_io_buf.h"   // SD_IO_ALIGNED / sd_io_buf_alloc - DMA-clean transfer buffers
 
 #include <stdio.h>
 #include <string.h>
@@ -178,7 +179,10 @@ static bool copy_file(const char *src, const char *dst)
         fclose(in);
         return false;
     }
-    static char buf[2048];
+    // SD_IO_ALIGNED: an unaligned buffer sends every fread/fwrite below down
+    // the SDMMC bounce path, which allocates 512 B of MALLOC_CAP_DMA per
+    // sector and fails when the DMA pool is low. See storage/sd_io_buf.h.
+    static char buf[2048] SD_IO_ALIGNED;
     size_t n, total = 0;
     bool ok = true;
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
@@ -397,7 +401,7 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 // sites).
 static void mirror_cw(void)
 {
-    char buf[512];
+    char buf[512] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     // PEEK, not take: the bytes stay queued until the write below actually
     // lands, so a transient I/O error (measured on this board - the same
     // SD-vs-WiFi-SDIO contention #153 documents) delays the transcript
@@ -616,7 +620,7 @@ static bool mirror_diag(void)
     // the #153 cadence, in 4 KB pieces with the stream paused - which is the
     // safe path, not the one that has to be raced.
     #define MIRROR_DIAG_MAX_CHUNKS 4      // 16 KB per burst, ~1 burst per 3 s
-    static char buf[DIAG_CHUNK];
+    static char buf[DIAG_CHUNK] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     for (int chunk = 0; chunk < MIRROR_DIAG_MAX_CHUNKS; chunk++) {
         uint64_t next = s_diag_cursor;
         size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
@@ -783,7 +787,7 @@ static int64_t s_mount_retry_last_us = 0;
 #define SLOW_DRAIN_MAX_CHUNKS 16            // <= 64 KB inside one open
 static bool mirror_diag_slow(void)
 {
-    static char buf[DIAG_CHUNK];
+    static char buf[DIAG_CHUNK] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     uint64_t next = s_diag_cursor;
     size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
     if (got == 0) return true;              // nothing new; not a failure
@@ -1783,7 +1787,8 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
         ESP_LOGI(TAG, "ADIF restore: %s not on the card", path);
     } else {
         size_t len = (size_t)st.st_size;
-        buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        // Aligned, not plain PSRAM: this is a whole-file fread off the card.
+        buf = sd_io_buf_alloc(len + 1);
         if (!buf) {
             ESP_LOGE(TAG, "ADIF restore: out of memory for %u bytes", (unsigned)len);
         } else {
@@ -1795,7 +1800,7 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
             if (got != len) {
                 ESP_LOGE(TAG, "ADIF restore: read %u of %u bytes - card error",
                          (unsigned)got, (unsigned)len);
-                free(buf);
+                sd_io_buf_free(buf);
                 buf = NULL;
             } else {
                 buf[len] = '\0';

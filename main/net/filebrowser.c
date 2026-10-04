@@ -2,6 +2,7 @@
 #include "webserver_ws.h"          // webserver_ws_set_paused
 #include "dsp.h"                    // dsp_set_transfer_quiet
 #include "storage/sd_archive.h"     // sd_archive_is_mounted / _lock / _unlock
+#include "storage/sd_io_buf.h"      // sd_io_buf_alloc - DMA-aligned transfer buffer
 
 #include "esp_log.h"
 #include "cJSON.h"
@@ -16,6 +17,10 @@
 static const char *TAG = "files";
 
 #define FB_ROOT "/sdcard"
+
+// Transfer buffer for download/upload. A whole number of 512 B sectors, so the
+// length passed to FatFs is DMA-alignment-clean as well as the address.
+#define FB_IO_BUF 4096
 
 // ---------------------------------------------------------------------------
 // The browser page. Self-contained (no external assets). All HTML attributes
@@ -221,12 +226,22 @@ static esp_err_t download_handler(httpd_req_t *req)
 
     FILE *f = fopen(fs, "r");
     esp_err_t err = ESP_OK;
+    // Aligned so FatFs can DMA whole sectors straight into it. A stack buffer
+    // is only 16-byte aligned, which sends every read down the SDMMC bounce
+    // path and its per-call 512 B DMA allocation - the allocation that fails
+    // on a low DMA pool and made this handler answer "not found" for a file
+    // that was on the card. See main/storage/sd_io_buf.h.
+    char *buf = f ? sd_io_buf_alloc(FB_IO_BUF) : NULL;
+    if (f && !buf) {
+        fclose(f);
+        f = NULL;
+        err = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+    }
     if (!f) {
-        err = httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "open failed");
+        if (err == ESP_OK) err = httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "open failed");
     } else {
-        char buf[2048];
         size_t n;
-        while ((n = fread(buf, 1, sizeof buf, f)) > 0 && err == ESP_OK)
+        while ((n = fread(buf, 1, FB_IO_BUF, f)) > 0 && err == ESP_OK)
             err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
         fclose(f);
         /* Only terminate the chunked body if it actually completed. The
@@ -243,6 +258,7 @@ static esp_err_t download_handler(httpd_req_t *req)
         }
     }
 
+    sd_io_buf_free(buf);
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
     sd_archive_unlock();
@@ -264,27 +280,40 @@ static esp_err_t upload_handler(httpd_req_t *req)
 
     FILE *f = fopen(fs, "w");
     esp_err_t err = ESP_OK;
+    // One deferred failure reason instead of sending an error here. The old
+    // shape sent 500 "create failed" from inside this block and then fell
+    // through to the tail, which saw err == ESP_OK (httpd_resp_send_err
+    // returns ESP_OK on a successful send) and appended {"ok":true} to the
+    // same response. Found while aligning the buffer, fixed in the same pass.
+    const char *fail = NULL;
+    // Aligned for the same reason as the download path - see sd_io_buf.h.
+    char *buf = f ? sd_io_buf_alloc(FB_IO_BUF) : NULL;
     if (!f) {
-        err = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "create failed");
+        fail = "create failed";
+    } else if (!buf) {
+        fclose(f);
+        f = NULL;
+        unlink(fs);
+        fail = "out of memory";
     } else {
-        char buf[2048];
         int remaining = req->content_len;
         while (remaining > 0) {
             int r = httpd_req_recv(req, buf,
-                                   sizeof buf < (size_t)remaining ? sizeof buf : (size_t)remaining);
+                                   FB_IO_BUF < (size_t)remaining ? FB_IO_BUF : (size_t)remaining);
             if (r <= 0) { err = ESP_FAIL; break; }
             if (fwrite(buf, 1, r, f) != (size_t)r) { err = ESP_FAIL; break; }
             remaining -= r;
         }
         fclose(f);
-        if (err != ESP_OK) unlink(fs);
+        if (err != ESP_OK) { unlink(fs); fail = "write failed"; }
     }
 
+    sd_io_buf_free(buf);
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
     sd_archive_unlock();
 
-    if (err != ESP_OK) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed");
+    if (fail) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, fail);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
