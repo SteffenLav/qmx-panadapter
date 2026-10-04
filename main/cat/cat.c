@@ -120,7 +120,13 @@ static bool s_qmx_gps_source_internal = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
-/* === TEMP TEST STUB (2026-10-04, Brian WA6JFK). DELETE WITH THE DIAGNOSIS. ===
+/* === BAND-LIST TEST STUB (2026-10-04, Brian WA6JFK). KEPT DELIBERATELY. ===
+ *
+ * ⛔ NOT a temp instrument - do NOT delete it at a cleanup. It was written to
+ * test one fix and kept on purpose (operator's decision, 2026-10-04), because
+ * it is the ONLY way to exercise a short-band radio on this bench and the bug
+ * class it tests has now recurred three times. Nothing here is on a hot path:
+ * one `>= 0` compare in cat_get_band_list().
  *
  * The fix for "the browser offers bands the radio does not have" cannot be
  * tested on this bench: the QMX+ here reports all 12 bands, so filtered and

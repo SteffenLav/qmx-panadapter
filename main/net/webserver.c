@@ -1837,7 +1837,8 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
     } else if (action && strcmp(action, "band_stub") == 0) {
-        /* TEMP TEST STUB - dev only, RAM only, cleared by a reboot. Pretends
+        /* BAND-LIST TEST STUB - KEPT, not temp (see cat.c). RAM only,
+         * cleared by a reboot. Pretends
          * the radio reports a SHORT band list, so the band-filtering fix can
          * be seen working on a bench whose QMX+ reports all 12 bands.
          *   {"action":"band_stub","names":"160,80,60,40,30,20"}

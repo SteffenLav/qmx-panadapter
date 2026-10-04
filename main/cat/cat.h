@@ -511,7 +511,8 @@ const cat_band_entry_t *cat_get_band_list(int *out_count);
  * screens have always filtered, the web server did not. */
 bool cat_radio_has_band(const char *name);
 
-/* === TEMP TEST STUB - delete with the diagnosis (Brian WA6JFK, 2026-10-04).
+/* === BAND-LIST TEST STUB (Brian WA6JFK, 2026-10-04). KEPT DELIBERATELY -
+ * not a temp instrument, do not delete it at a cleanup; see the note in cat.c.
  * Pretend the radio reports only these bands, e.g. "160,80,60,40,30,20".
  * RAM only, cleared by a reboot. NULL or "" restores the real list.
  * Returns the number of bands now stubbed, or -1 when cleared. */
