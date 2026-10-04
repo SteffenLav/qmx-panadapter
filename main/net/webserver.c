@@ -790,6 +790,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                 const ft8_preset_t *pl = ft8_preset_list(k == 1, &n);
                 cJSON *arr = cJSON_AddArrayToObject(root, k ? "ft4_presets" : "ft8_presets");
                 for (int i = 0; i < n; i++) {
+                    /* ⛔ ONLY BANDS THE RADIO HAS (Brian WA6JFK, 2026-10-04).
+                     * The Tab5's own column does this already
+                     * (build_preset_column: "renders only the bands that
+                     * appear in the live CAT band list"); this list did not,
+                     * so the browser offered 12/10/6 m on a radio without
+                     * them and set_band then sent an FA the QMX cannot
+                     * tune. */
+                    if (!cat_radio_has_band(pl[i].band)) continue;
                     cJSON *o = cJSON_CreateObject();
                     cJSON_AddStringToObject(o, "band", pl[i].band);
                     cJSON_AddNumberToObject(o, "hz",   (double)pl[i].freq_hz);
@@ -4826,7 +4834,16 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             char *e = tok + strlen(tok);
             while (e > tok && (e[-1] == ' ' || e[-1] == 'm' || e[-1] == 'M')) *--e = 0;
             for (int i = 0; i < nb && i < 16; i++)
-                if (strcasecmp(tok, bl[i].name) == 0) { mask |= (uint16_t)(1u << i); break; }
+                if (strcasecmp(tok, bl[i].name) == 0) {
+                    /* A name the radio does not have is ignored, not set -
+                     * the Tab5 cannot tick such a band at all, so accepting
+                     * it here would let the browser arm a hop to a band that
+                     * can never be tuned. The bit index stays an index into
+                     * the FULL table either way (wspr_bands_available returns
+                     * indices into it), so the mask stays compatible. */
+                    if (cat_radio_has_band(bl[i].name)) mask |= (uint16_t)(1u << i);
+                    break;
+                }
         }
         settings_set_wspr_hop_mask(mask);
         settings_set_wspr_hop_en(__builtin_popcount(mask) > 1);
@@ -5529,6 +5546,9 @@ static esp_err_t wspr_handler(httpd_req_t *req)
             const wspr_band_t *bl = wspr_bands(&nb);
             cJSON *arr = cJSON_AddArrayToObject(root, "bands");
             for (int i = 0; i < nb; i++) {
+                /* Same rule as the FT8 presets above and as the Tab5's
+                 * wspr_bands_available() - the radio's list, not ours. */
+                if (!cat_radio_has_band(bl[i].name)) continue;
                 cJSON *o = cJSON_CreateObject();
                 cJSON_AddStringToObject(o, "band",  bl[i].name);
                 /* No "label": it was a hardcoded second copy of the dial that

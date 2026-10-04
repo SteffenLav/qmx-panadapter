@@ -125,6 +125,40 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
     if (out_count) *out_count = s_band_count;
     return s_band_list;
 }
+
+/* Does the RADIO have this band? (2026-10-04, Brian WA6JFK.)
+ *
+ * WHY THIS IS A SHARED PREDICATE AND NOT THREE COPIES OF THE TEST:
+ * every Tab5 screen already filters its band buttons against the live CAT
+ * band list - ft8_screen_view.c's build_preset_column() walks it by name,
+ * wspr_screen_view.c's wspr_bands_available() does the same - and the web
+ * server did not. It served static tables straight to the browser, so the
+ * page offered bands the radio does not have, and picking one sent an FA for
+ * a frequency the QMX cannot tune. Brian reported 6 m / 10 m / 12 m from the
+ * web UI landing on a frequency nowhere near the band.
+ *
+ * ⛔ nradio == 0 MEANS "CAT HAS NOT TOLD US YET", NOT "NO BANDS". It must
+ * allow everything, exactly as wspr_bands_available() already does - the band
+ * list arrives seconds after the browser can first ask, and filtering against
+ * an empty list would serve an empty dropdown and read as a worse bug than
+ * the one being fixed. Same rule as the CW filter widths at webserver.c:4428,
+ * where "the radio did not say" means show all eight.
+ *
+ * This is the third browser-vs-Tab5 asymmetry of the same shape, after
+ * Samuel W7STF's set_mode and set_freq. The others were a dropped call; this
+ * one is a missing filter. */
+bool cat_radio_has_band(const char *name)
+{
+    if (!name || !*name) return false;
+    int n = 0;
+    const cat_band_entry_t *b = cat_get_band_list(&n);
+    if (n <= 0 || !b) return true;        /* not known yet - allow all */
+    /* .name is a fixed char array in cat_band_entry_t, never a pointer, so
+     * there is nothing to null-check here - GCC 12+ rejects the attempt. */
+    for (int i = 0; i < n; i++)
+        if (strcmp(b[i].name, name) == 0) return true;
+    return false;
+}
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 // True only while WE hold the radio in split for the CW transmit offset. Lives
 // here rather than beside cw_split_maintain() because cat_request_rit_hz(),

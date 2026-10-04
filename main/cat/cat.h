@@ -505,6 +505,12 @@ typedef struct {
  */
 const cat_band_entry_t *cat_get_band_list(int *out_count);
 
+/* True when the radio reports this band by name, OR when CAT has not reported
+ * its band list yet (then everything is allowed - see the note in cat.c).
+ * Every list of bands offered to a USER must pass through this; the Tab5
+ * screens have always filtered, the web server did not. */
+bool cat_radio_has_band(const char *name);
+
 /**
  * @brief Set the QMX's onboard real-time clock (time-of-day only, no date).
  *
