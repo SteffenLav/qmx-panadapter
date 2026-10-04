@@ -1903,6 +1903,14 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     strncpy(s_target, caller, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
     int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
+    /* Remember WHERE they answered from. We stay on our own tone (above), but
+     * the decode reorder in ft8_test.c needs the PARTNER's tone to front-load
+     * their next message on a crowded band. scan_for_response() refreshes this
+     * every slot the partner is heard, but only from the NEXT exchange step
+     * onward - without this line the first step after the answer has no hint,
+     * and ft8_qso_get_priority_freq() used to refuse CQ-run outright on the
+     * (false) grounds that the tone was never tracked at all. */
+    if (caller_freq > 0) s_partner_freq_hz = caller_freq;
     unlock();
 
     // A station just answered our CQ - if they're off the band's beat, follow it.
@@ -3909,9 +3917,26 @@ bool ft8_qso_get_priority_freq(int *freq_hz_out)
     // optimisation never fired. Measured 2026-07-28: partner at 1200 Hz, our
     // burst at 1450 Hz, hint 1450, ±25 Hz window 1425–1475.
     //
-    // CQ-run is still skipped: there the answering station's tone isn't
-    // tracked after the initial answer, so we'd have no reliable hint anyway.
-    if (from_cq) return false;
+    // ⛔ CQ-RUN USED TO BE SKIPPED HERE, on the grounds that "the answering
+    // station's tone isn't tracked after the initial answer, so we'd have no
+    // reliable hint anyway". That was wrong: scan_for_response() refreshes
+    // s_partner_freq_hz from the decode table EVERY slot the partner is heard
+    // (see the store around ft8_qso.c:718), on the CQ-run path as much as the
+    // pounce path. The only genuinely unhinted moment is the first answer to
+    // our CQ - we cannot know who will call - and cqrun_answer() now records
+    // the caller's tone at exactly that moment.
+    //
+    // The exclusion mattered: auto-answer IS CQ-run, so the whole
+    // front-load-the-partner optimisation never ran for the operators using
+    // it. Gyula HA3HZ, 2026-10-04: an exchange failed twice on a packed band
+    // because the reply did not go out in time - the same complaint the early
+    // advance was built for in September, on the one path it did not cover.
+    //
+    // `from_cq` is now read only for the comment above; the state test and the
+    // freq<=0 guard below are what gate this. A hint we do not have is still
+    // refused, which is the behaviour that matters - a WRONG hint front-loads
+    // whatever happens to sit at that frequency.
+    (void)from_cq;
     if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73)
         return false;
     // Unknown tone must mean "no hint" — a wrong hint is worse than none,

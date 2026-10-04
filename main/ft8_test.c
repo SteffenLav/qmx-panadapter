@@ -1452,7 +1452,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
     int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
 
-    // "Let the others wait": if we're mid pounce-exchange, the message we
+    // "Let the others wait": if we're mid-exchange (pounce OR CQ-run - the
+    // CQ-run exclusion was removed 2026-10-04, see ft8_qso_get_priority_freq),
+    // the message we
     // actually need is the partner's, at a known tone — move any candidate
     // near it to the FRONT of cands[] (still strongest-first within each
     // partition) so it's one of the very first picks on whichever core
