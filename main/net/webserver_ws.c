@@ -610,6 +610,12 @@ static void ws_push_task(void *arg)
     }
 }
 
+unsigned webserver_ws_push_stack_headroom(void)
+{
+    if (!s_push_task) return 0;
+    return (unsigned)(uxTaskGetStackHighWaterMark(s_push_task) * sizeof(StackType_t));
+}
+
 esp_err_t webserver_ws_start(httpd_handle_t server)
 {
     if (!server) return ESP_ERR_INVALID_ARG;

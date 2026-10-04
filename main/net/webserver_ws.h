@@ -39,6 +39,12 @@ void webserver_ws_stats(uint32_t *sessions, uint32_t *takeovers,
  */
 void webserver_ws_set_paused(bool paused);
 
+/* Stack headroom of ws_push_task, in bytes, or 0 if it is not running.
+ * TEMP INSTRUMENT 2026-10-04 - httpd + ws_push_task together cost ~21.6 KB of
+ * the DMA-capable pool (commit 34bd189) and the two task stacks are 14336 B
+ * of that. Before cutting either, measure what they actually use. */
+unsigned webserver_ws_push_stack_headroom(void);
+
 // Is the stream currently paused? Read-only.
 //
 // The pause is a plain boolean shared by ~29 call sites, so a caller that

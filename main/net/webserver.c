@@ -1828,6 +1828,37 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true}");
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
+    } else if (action && strcmp(action, "stack_hwm") == 0) {
+        /* TEMP INSTRUMENT 2026-10-04 - dev only, on demand, costs nothing.
+         *
+         * httpd + ws_push_task cost 21.6-23.1 KB of the DMA-capable pool
+         * (34bd189, measured over three boots), and 14336 B of that is just
+         * the two task stacks: config.stack_size = 10240 here and 4096 for
+         * ws_push_task. Both numbers were chosen, not measured against a
+         * loaded server.
+         *
+         * This handler RUNS ON THE httpd TASK, so uxTaskGetStackHighWaterMark
+         * (NULL) is exactly the figure wanted - no task-walk, no interrupts
+         * off, no cyan blink. Exercise the UI first (the file browser and a
+         * big response are the deep paths), then ask.
+         *
+         * ⛔ Headroom is a WATERMARK: it only reports paths already taken. A
+         * big number here does not license a cut until the deep paths have
+         * actually run in that session. */
+        cJSON_Delete(root);
+        unsigned httpd_free = (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+        unsigned ws_free    = webserver_ws_push_stack_headroom();
+        ESP_LOGW(TAG, "STACK HWM: httpd task %u B free of %u B configured; "
+                      "ws_push %u B free of 4096 B",
+                 httpd_free, (unsigned)10240, ws_free);
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "{\"ok\":true,\"httpd_free\":%u,\"httpd_size\":10240,"
+                 "\"ws_push_free\":%u,\"ws_push_size\":4096}",
+                 httpd_free, ws_free);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        return ESP_OK;
     } else if (action && strcmp(action, "dma_owners") == 0) {
         // TEMP INSTRUMENT (#283) - dev only. Names the task holding the
         // MALLOC_CAP_DMA bytes. ⛔ Walks the heap with interrupts off, so it is
