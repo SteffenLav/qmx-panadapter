@@ -357,3 +357,29 @@ CONFIG_LV_FONT_MONTSERRAT_26=y
 # different places because esp-mqtt exposes them that way.
 CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
 CONFIG_MQTT_USE_CORE_1=y
+
+# FatFs sector buffers OUT OF the FATFS/FIL structs (2026-10-04).
+#
+# Off by default, FatFs declares `BYTE win[FF_MAX_SS]` inline inside FATFS and
+# `BYTE buf[FF_MAX_SS]` inline inside FIL. Those are the buffers it hands
+# straight to the SDMMC driver, and the driver DMAs into a buffer only when it
+# satisfies lcm(dma_alignment 4, cacheline) - 128 bytes in PSRAM here
+# (CONFIG_CACHE_L2_CACHE_LINE_SIZE=128), 64 in internal RAM. An inline array
+# sits at a fixed OFFSET inside its struct, so no amount of aligning the
+# allocation helps: measured on the bench 2026-10-04, the window landed at
+# 0x491e58e0, which is 96 bytes past a 128 boundary.
+#
+# A buffer that misses the alignment sends every read down sdmmc_read_sectors'
+# bounce path, which heap_caps_malloc's one 512 B MALLOC_CAP_DMA block PER
+# SECTOR. On this board the DMA pool settles at a few hundred bytes, so that
+# allocation fails and the card reads back as an empty folder or a missing
+# file while it is perfectly healthy - Randy N4OPI's v1.16.11 report, and
+# reproduced here before the fix.
+#
+# With this on, win and buf are separate ff_memalloc() allocations, and
+# tools/patches/apply_fatfs_dma_aligned_alloc.ps1 makes ff_memalloc return
+# them 128-byte aligned. The two go together: either alone does nothing.
+#
+# Costs one 512 B PSRAM allocation per mount and per open file, and saves the
+# same 512 B of INTERNAL DMA memory being taken and released per sector.
+CONFIG_FATFS_USE_DYN_BUFFERS=y

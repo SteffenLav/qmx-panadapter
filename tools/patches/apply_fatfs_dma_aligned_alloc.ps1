@@ -49,6 +49,15 @@
     heap_caps_aligned_alloc (heap_caps_aligned_free is a deprecated alias for
     heap_caps_free).
 
+    ⛔ THIS PATCH DOES NOTHING ON ITS OWN. FatFs declares the window as
+    `BYTE win[FF_MAX_SS]` INSIDE the FATFS struct unless FF_USE_DYN_BUFFER is
+    set, and an inline array sits at a fixed OFFSET - measured on the bench
+    2026-10-04, aligning the allocation still left the window at 0x491e58e0,
+    96 bytes past a 128 boundary, and every read still bounced.
+    CONFIG_FATFS_USE_DYN_BUFFERS=y in sdkconfig.defaults is the other half: it
+    makes win and buf separate ff_memalloc() allocations, which this patch then
+    aligns. Neither works without the other.
+
     This does NOT cover buffers the application passes to fread/fwrite - those
     are aligned at their own call sites in main/.
 

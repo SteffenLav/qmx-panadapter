@@ -557,7 +557,19 @@ function Cmd-StandDown {
 
 function Invoke-Idf {
     param($reg, [string] $tree, [string[]] $idfArgs)
-    if (-not $env:IDF_PATH) { & $reg.idf_export | Out-Null }
+    # ⛔ Same stderr trap as the idf.py call below, one layer up. export.ps1
+    # prints "Activating ESP-IDF 5.4" on STDERR, and under the script-level
+    # "Stop" preference Windows PowerShell 5.1 turns that into a
+    # NativeCommandError that aborts the whole command. `bench flash dev` died
+    # here on 2026-10-04 having already asked the board to release the SD card
+    # and already bounced the capture - so it looked like a flash that had
+    # started. It had not written a byte.
+    if (-not $env:IDF_PATH) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try { & $reg.idf_export 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevEap }
+        if (-not $env:IDF_PATH) { throw "ESP-IDF activation did not set IDF_PATH ($($reg.idf_export))." }
+    }
     Push-Location $tree
     try {
         # Out-Host, NOT a bare call. Anything idf.py writes to stdout otherwise

@@ -32,10 +32,20 @@
 // right bytes, when the allocation happens to succeed. It is needed so that SD
 // I/O stops depending on the state of the DMA pool.
 //
-// FatFs's own buffers (fs->win, fp->buf) are fixed separately, in the IDF
-// tree: tools/patches/apply_fatfs_dma_aligned_alloc.ps1. That patch covers
-// metadata reads (stat/readdir/opendir/f_open); this header covers the bulk
-// data buffers the application passes to fread/fwrite.
+// FatFs's own buffers (fs->win, fp->buf) are fixed separately, by TWO things
+// that only work together:
+//   - CONFIG_FATFS_USE_DYN_BUFFERS=y in sdkconfig.defaults, which moves them
+//     out of the FATFS/FIL structs. Inline, they sit at a fixed OFFSET inside
+//     the struct and no amount of aligning the allocation reaches them.
+//   - tools/patches/apply_fatfs_dma_aligned_alloc.ps1, which makes the
+//     resulting ff_memalloc() return them 128-byte aligned.
+// Those cover metadata reads (stat/readdir/opendir/f_open); this header covers
+// the bulk data buffers the application passes to fread/fwrite.
+//
+// VERIFIED on bench dev 2026-10-04: with both halves in, zero bounce-path
+// entries and zero DMA allocation failures across a boot, and the web file
+// browser listed and downloaded with the DMA pool at 2935 B (largest block
+// 2688 B) - a state that returned an empty folder and a 404 before.
 
 #pragma once
 
