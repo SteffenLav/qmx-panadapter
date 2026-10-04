@@ -1479,6 +1479,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             }
         }
         memcpy(cands, reordered, (size_t)n_cand * sizeof(cands[0]));
+        /* ⭐ SAY SO. Without this the reorder is invisible: it mutates a local
+         * array and nothing downstream names it, so the only evidence was the
+         * ARRIVAL TIME of "early advance", which is indirect and cannot
+         * distinguish "the hint fired and found nothing" from "the hint never
+         * fired at all". That is exactly the gap that let the CQ-run exclusion
+         * in ft8_qso_get_priority_freq() sit unnoticed from September to
+         * 2026-10-04: auto-answer IS CQ-run, so the front-loading never ran for
+         * the operators using it, and no log said so.
+         * np == 0 is a real and useful reading - it means we had a hint and the
+         * partner was not in this slot's candidate list. Once per slot, and only
+         * while a QSO is actually running. */
+        ESP_LOGI(TAG, "decode reorder: partner hint %d Hz +/-25 - promoted %d of "
+                      "%d candidate(s) to the front",
+                 priority_freq_hz, np, n_cand);
     }
 
     // Slot noise floor for SNR: one powf sweep over the whole waterfall, shared
