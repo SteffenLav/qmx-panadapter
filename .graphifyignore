@@ -1,0 +1,38 @@
+# What the graphify knowledge graph should not read.
+# gitignore syntax. Merged on top of .gitignore, and can only exclude further -
+# it cannot re-include something .gitignore already dropped.
+#
+# build/ and managed_components/ are already pruned by graphify itself, so they
+# are not listed here.
+
+# ---- Test audio -------------------------------------------------------------
+# graphify classifies .wav as "video" and would send all 114 of them (46.9 MB)
+# through Whisper transcription. They are FT8/WSPR reference captures, not
+# speech: the transcript would be noise, and the run would cost real time for
+# nothing.
+*.wav
+
+# ---- Malformed directory ----------------------------------------------------
+# A path-join bug somewhere wrote test\wav_reference into a directory whose
+# name is a mangled absolute path. The name is NOT ascii: the colon is U+F03A,
+# a private-use stand-in Windows uses when a real colon cannot be stored, so
+# git shows it as "C\357\200\272devqmx-panadapter...". A literal ascii pattern
+# does not match it - the leading wildcard is what makes this work.
+# 27 tracked files, all test audio and its .txt sidecars. Also present in
+# qmx-panadapter-p4. Excluded here rather than deleted: removing tracked files
+# is a separate decision.
+*devqmx-panadaptertestwav_reference/
+
+# ---- Test fixture corpora ---------------------------------------------------
+# Reference captures and their per-slot .txt sidecars: 130 .txt files that are
+# decoder output, not prose. They would dominate the LLM extraction pass
+# without describing any part of the design. The test CODE stays in the graph.
+test/20m_busy/
+test/wav/
+test/wav_reference/
+test/wav_reference_full/
+
+# ---- Certificates -----------------------------------------------------------
+# graphify already skips these as sensitive; named here so the intent is
+# recorded rather than relying on its heuristic.
+*.pem
