@@ -161,8 +161,40 @@ static TaskHandle_t   s_push_task = NULL;
 // out, the WS sends back up with EAGAIN). Paused = behave like idle.
 static volatile bool s_ws_paused = false;
 
+/* ⭐ HOW LONG IS THE SPECTRUM ACTUALLY OFF? Sam W7STF and Bryan N0LUF,
+ * 2026-10-04/05: a web waterfall that stalls, and "short pauses every 2-3
+ * rows".
+ *
+ * Measured from Bryan's logs first: the background feeds pause this stream at
+ * a MEDIAN OF 34 s apart (466 intervals), and POTA alone pulls ~48 KB about
+ * every 61 s with SOTA ~26 KB a few seconds behind. What his log cannot say is
+ * how LONG each pause lasts, and that is the number that decides whether this
+ * is invisible, his jitter, or his multi-minute stall.
+ *
+ * ⛔ The absence of evidence that found this: "ws: tx N fps" appears 7067
+ * times in a bench capture and ZERO times in ~5 hours of his. That line prints
+ * after a successful send once a 60 s window closes, and the window is reset by
+ * every pause - so pauses more often than 60 s make it unprintable. A silent
+ * instrument read exactly like a healthy quiet system.
+ *
+ * Logged only when a browser was actually watching, because a pause nobody saw
+ * cost nobody anything. */
 void webserver_ws_set_paused(bool paused)
 {
+    static TickType_t paused_at;
+    static bool       watched;
+
+    if (paused && !s_ws_paused) {
+        paused_at = xTaskGetTickCount();
+        watched   = (s_session_active && s_ws_fd >= 0);
+    } else if (!paused && s_ws_paused && watched) {
+        unsigned ms = (unsigned)((xTaskGetTickCount() - paused_at) *
+                                 portTICK_PERIOD_MS);
+        /* ~3 frames at the 100 ms push period - below that nobody can see it. */
+        if (ms >= 300)
+            ESP_LOGI(TAG, "spectrum stream was paused %u ms (%u frames lost)",
+                     ms, ms / WS_PUSH_PERIOD_MS);
+    }
     s_ws_paused = paused;
 }
 
