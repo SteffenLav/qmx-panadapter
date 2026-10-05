@@ -39,6 +39,21 @@ static volatile uint32_t s_frames;
  * "pixels requested", a load proxy, not an exact blit figure. O(1) per event. */
 static volatile uint64_t s_inval_px;
 
+/* Render DURATION, to separate "the draw is slow" from "the drawer was
+ * blocked". Frame spacing alone cannot tell those apart, and they want opposite
+ * fixes - the same reason dec_ms had to be split into search/main/join before
+ * the FT8 decode could be understood. */
+static volatile int64_t  s_refr_start_us;
+static volatile uint32_t s_refr_max_us;
+static volatile uint64_t s_refr_sum_us;
+static volatile uint32_t s_refr_n;
+
+static void disp_refr_start_cb(lv_event_t *e)
+{
+    (void)e;
+    s_refr_start_us = esp_timer_get_time();
+}
+
 /* ⭐ FRAME SPACING, NOT FRAME RATE. Steffen, 2026-10-05: the Tab5 is "jaggy all
  * the time" while the web waterfall looks smooth - and the web runs SLOWER.
  * Measured the same minute: Tab5 12.2 fps mean (10.9-13.0), web exactly 10.0.
@@ -70,6 +85,12 @@ static void disp_refr_ready_cb(lv_event_t *e)
 
     static int64_t last_us;
     int64_t now = esp_timer_get_time();
+    if (s_refr_start_us) {
+        uint32_t rd = (uint32_t)(now - s_refr_start_us);
+        if (rd > s_refr_max_us) s_refr_max_us = rd;
+        s_refr_sum_us += rd;
+        s_refr_n++;
+    }
     if (last_us) {
         uint32_t dt = (uint32_t)(now - last_us);
         if (dt < s_fr_min_us) s_fr_min_us = dt;
@@ -93,6 +114,11 @@ void display_frame_spacing(display_frame_spacing_t *out)
     out->max_us  = s_fr_max_us;
     out->mean_us = n ? (uint32_t)(s_fr_sum_us / n) : 0;
     out->late    = s_fr_late;
+    out->draw_mean_us = s_refr_n ? (uint32_t)(s_refr_sum_us / s_refr_n) : 0;
+    out->draw_max_us  = s_refr_max_us;
+    s_refr_max_us = 0;
+    s_refr_sum_us = 0;
+    s_refr_n      = 0;
     s_fr_min_us = UINT32_MAX;
     s_fr_max_us = 0;
     s_fr_sum_us = 0;
@@ -145,14 +171,45 @@ unsigned display_fps_x10(void)
 static lv_display_t *s_disp = NULL;
 static bool s_flipped = false;   // false = normal landscape (90), true = upside-down (270)
 
+static volatile int64_t s_lock_at_us;
+static const char *volatile s_lock_owner;
+
+/* ⭐ WHO HOLDS THE DISPLAY LOCK, AND FOR HOW LONG.
+ *
+ * 54 call sites in main/ take this, and LVGL cannot render while any of them
+ * holds it - so a long hold shows up as a LATE FRAME and nothing else. This
+ * project already lost an evening to a display_lock priority inversion
+ * (USB audio loss), so "something held it too long" is not a hypothesis here,
+ * it is a repeat.
+ *
+ * The holder names itself for free: pcTaskGetName() at lock time costs a
+ * pointer read. Reported only above the threshold, so a healthy system is
+ * silent and the log does not become another periodic walk. */
+#define DISPLAY_LOCK_LOUD_MS 60
+
 bool display_lock(uint32_t timeout_ms)
 {
-    return bsp_display_lock(timeout_ms);
+    bool ok = bsp_display_lock(timeout_ms);
+    if (ok) {
+        s_lock_at_us = esp_timer_get_time();
+        s_lock_owner = pcTaskGetName(NULL);
+    }
+    return ok;
 }
 
 void display_unlock(void)
 {
+    int64_t     at    = s_lock_at_us;
+    const char *owner = s_lock_owner;
+    s_lock_at_us = 0;
     bsp_display_unlock();
+    if (at) {
+        uint32_t held_ms = (uint32_t)((esp_timer_get_time() - at) / 1000);
+        if (held_ms >= DISPLAY_LOCK_LOUD_MS)
+            ESP_LOGW(TAG, "display lock held %u ms by '%s' - LVGL could not "
+                          "render for that long", (unsigned)held_ms,
+                     owner ? owner : "?");
+    }
 }
 
 void display_set_brightness(int percent)
@@ -372,6 +429,7 @@ esp_err_t display_init(lv_display_t **out_disp)
         ESP_LOGE(TAG, "bsp_display_start_with_config failed");
         return ESP_FAIL;
     }
+    lv_display_add_event_cb(s_disp, disp_refr_start_cb, LV_EVENT_REFR_START, NULL);
     lv_display_add_event_cb(s_disp, disp_refr_ready_cb, LV_EVENT_REFR_READY, NULL);
     lv_display_add_event_cb(s_disp, disp_inval_area_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 

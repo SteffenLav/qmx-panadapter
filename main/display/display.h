@@ -47,6 +47,8 @@ typedef struct {
     uint32_t mean_us;
     uint32_t max_us;
     uint32_t late;     /* intervals over ~2x nominal */
+    uint32_t draw_mean_us; /* REFR_START -> REFR_READY: how long the draw took */
+    uint32_t draw_max_us;
 } display_frame_spacing_t;
 void display_frame_spacing(display_frame_spacing_t *out);
 

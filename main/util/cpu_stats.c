@@ -62,13 +62,16 @@ static void cpu_stats_task(void *arg)
                 display_frame_spacing_t fs;
                 display_frame_spacing(&fs);
                 ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s "
-                              "| frame ms min %u mean %u max %u late %u/%u",
+                              "| frame ms min %u mean %u max %u late %u/%u "
+                              "| draw ms mean %u max %u",
                          (unsigned long)(p0 / 10), (unsigned long)(p0 % 10),
                          (unsigned long)(p1 / 10), (unsigned long)(p1 % 10),
                          f10 / 10, f10 % 10, kpx,
                          (unsigned)(fs.min_us / 1000), (unsigned)(fs.mean_us / 1000),
                          (unsigned)(fs.max_us / 1000),
-                         (unsigned)fs.late, (unsigned)fs.n);
+                         (unsigned)fs.late, (unsigned)fs.n,
+                         (unsigned)(fs.draw_mean_us / 1000),
+                         (unsigned)(fs.draw_max_us / 1000));
             }
         }
         prev_idle0 = i0;
