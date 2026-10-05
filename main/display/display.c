@@ -150,6 +150,7 @@ static const int16_t s_inval_band_y[INVAL_BANDS + 1] = { 0, 60, 260, 292, 662, 6
 static volatile uint64_t s_inval_band_px[INVAL_BANDS];
 static volatile uint32_t s_inval_n;        /* events, to separate "big" from "often" */
 static volatile uint32_t s_inval_max_px;   /* largest single request */
+static volatile uint32_t s_inval_band_n[INVAL_BANDS];  /* requests per band: big vs often */
 
 static void disp_inval_area_cb(lv_event_t *e)
 {
@@ -173,6 +174,7 @@ static void disp_inval_area_cb(lv_event_t *e)
     for (int i = 0; i < INVAL_BANDS; i++) {
         if (mid >= s_inval_band_y[i] && mid < s_inval_band_y[i + 1]) {
             s_inval_band_px[i] += (uint64_t)px;
+            s_inval_band_n[i]++;
             break;
         }
     }
@@ -189,7 +191,11 @@ void display_inval_bands(display_inval_bands_t *out)
     for (int i = 0; i < INVAL_BANDS; i++) {
         uint64_t px = s_inval_band_px[i];
         s_inval_band_px[i] = 0;
-        if (out) out->kpx_per_s[i] = dt ? (unsigned)((px * 1000000ULL) / (uint64_t)dt / 1000ULL) : 0;
+        if (out) {
+            out->kpx_per_s[i] = dt ? (unsigned)((px * 1000000ULL) / (uint64_t)dt / 1000ULL) : 0;
+            out->reqs[i] = s_inval_band_n[i];
+        }
+        s_inval_band_n[i] = 0;
     }
     if (out) {
         out->events = s_inval_n;

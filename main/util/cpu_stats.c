@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "display.h"
+#include "ui.h"          // ui_bandplan_call_counts
 #include "esp_timer.h"
 
 #include "psram_task.h"
@@ -84,6 +85,15 @@ static void cpu_stats_task(void *arg)
                          ib.kpx_per_s[0], ib.kpx_per_s[1], ib.kpx_per_s[2],
                          ib.kpx_per_s[3], ib.kpx_per_s[4], ib.kpx_per_s[5],
                          ib.events, ib.max_px / 1000);
+
+                /* The band plan's share, resolved into a call rate. bp_calls is
+                 * every path into update_bandplan_strip, bp_poll only the
+                 * unconditional defensive refresh from cat's poll_task. */
+                unsigned bp_calls = 0, bp_poll = 0;
+                ui_bandplan_call_counts(&bp_calls, &bp_poll);
+                ESP_LOGI(TAG, "bandplan: %u repaints (%u from CAT poll) | "
+                              "bp reqs %u = %ukpx/s",
+                         bp_calls, bp_poll, ib.reqs[4], ib.kpx_per_s[4]);
             }
         }
         prev_idle0 = i0;

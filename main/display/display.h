@@ -62,6 +62,7 @@ unsigned display_inval_kpx_per_s(void);
  * layout #defines. */
 typedef struct {
     unsigned kpx_per_s[6];
+    unsigned reqs[6];   /* requests per band - separates "big" from "often" */
     unsigned events;    /* invalidation requests in the window */
     unsigned max_px;    /* largest single request; 921600 means full screen */
 } display_inval_bands_t;

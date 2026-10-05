@@ -5224,8 +5224,37 @@ static void build_label_bar(lv_obj_t *parent)
 // clear of the strip's own 0x101418 background so the row still reads as present.
 #define BANDPLAN_OOB_COLOR 0x353B42
 
+/* ⭐ HOW OFTEN DOES THIS ACTUALLY RUN.
+ *
+ * The band plan is a static 22 px strip (28160 px) and the invalidation
+ * attribution (4681820) charged it 2.0 Mpx/s - 20% of everything, about 71
+ * full-strip repaints per second against a ~14 fps display. One call performs
+ * 31 invalidating LVGL operations, each of set_pos/set_size invalidating the
+ * old area AND the new one, so the rate matters: the arithmetic implies ~36
+ * calls/s, ui_refresh_bandplan_strip()'s comment implies the CAT FA poll rate
+ * (~10 Hz), and the RX<- FA log lines are too sparse to count. Those disagree,
+ * and the fix differs depending on which is true, so count the calls instead
+ * of arguing about them.
+ *
+ * Two counters, because they want different fixes: `calls` is every path, and
+ * `poll` is only the unconditional defensive refresh from cat's poll_task. If
+ * poll dominates, the fix is a change check there; if it does not, something
+ * in the touch/zoom paths is repainting far more than anyone intended. Two
+ * increments, O(1). */
+static volatile uint32_t s_bp_calls;
+static volatile uint32_t s_bp_calls_poll;
+
+void ui_bandplan_call_counts(unsigned *calls, unsigned *from_poll)
+{
+    if (calls)     *calls     = s_bp_calls;
+    if (from_poll) *from_poll = s_bp_calls_poll;
+    s_bp_calls = 0;
+    s_bp_calls_poll = 0;
+}
+
 static void update_bandplan_strip(uint32_t freq_hz)
 {
+    s_bp_calls++;
     if (!s_bandplan_obj) return;
     const int W_BP = DISPLAY_H_RES;
 
@@ -8135,6 +8164,7 @@ void ui_refresh_freq_label(uint32_t freq_hz)
 // racing the properly-locked calls from the LVGL thread.
 void ui_refresh_bandplan_strip(uint32_t freq_hz)
 {
+    s_bp_calls_poll++;
     if (display_lock(100)) {
         update_bandplan_strip(freq_hz);
         display_unlock();

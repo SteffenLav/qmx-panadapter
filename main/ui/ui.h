@@ -203,6 +203,12 @@ bool ui_update_line_tappable(void);
  * is not one of those two - /api/settings does. */
 void ui_sync_wf_rate_controls(void);
 
+/* Band-plan repaint counts since the previous call, then reset. `calls` counts
+ * every path into update_bandplan_strip(); `from_poll` counts only the
+ * unconditional refresh reached from cat's poll_task. Diagnostic for the strip's
+ * 20% share of invalidated pixels - see the comment above update_bandplan_strip. */
+void ui_bandplan_call_counts(unsigned *calls, unsigned *from_poll);
+
 void ui_set_resource_monitor_text(const char *text);
 
 // Dev-only: toggle the resource-monitor overlay's visibility. Not a user
