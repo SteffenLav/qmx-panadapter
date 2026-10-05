@@ -540,9 +540,64 @@ esp_err_t display_init(lv_display_t **out_disp)
     // giving it near-top priority cannot starve the CPU - it just guarantees
     // the panel never misses a fetch window. 12 of 15: high, but below max in
     // case something ever genuinely needs the last word.
-    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 12, 12);
-    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 12, 12);
-    ESP_LOGI(TAG, "DSI DW-GDMA AXI QoS priority raised (12/15, rd+wr, both masters)");
+    /* ⭐ 15/15, not 12/15, since 2026-10-06. The comment above chose 12 to keep
+     * something in reserve "in case something ever genuinely needs the last
+     * word". Something does: the operator sees the SAME dropped-frame blank on
+     * every waterfall row shift ("super short black screen then the carpet
+     * again"), at 3 rows/s and at 30, and it predates this session (verified by
+     * reproducing it on c5474b2).
+     *
+     * A row shift is the largest PSRAM burst this board runs: 474 kpx redrawn
+     * through LVGL's software 90-degree rotation, which traverses the strip
+     * COLUMN by column out of PSRAM, ~20 strips per shift, into a framebuffer
+     * that is itself PSRAM while the DSI fetches from it continuously. Exactly
+     * the starvation this QoS field exists to prevent - same fault class as the
+     * cyan flash, different trigger.
+     *
+     * ⚠ TESTED, AND IT IS NOT THE FIX. Operator at 15/15: "blink is probably a
+     * little bit less - but it is definitely still there". Treat that as
+     * suggestive and UNMEASURED, not as confirmation: DSI starvation is at most
+     * a contributor. Kept anyway because the reserve it gives up was itself
+     * speculative ("in case something ever genuinely needs the last word") and
+     * the DSI fetch is the one client that must never miss a window - bounded
+     * at ~110 MB/s of a >600 MB/s budget, as the note above measured.
+     *
+     * ⛔ Do not read this line as the blink's fix, and do not try a third
+     * priority value - the lever is nearly exhausted and what remains is
+     * structural. See the note below. */
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 15, 15);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 15, 15);
+    ESP_LOGI(TAG, "DSI DW-GDMA AXI QoS priority raised (15/15, rd+wr, both masters)");
+
+    /* ⛔ OPEN BUG: THE WATERFALL BLANKS FOR ONE FRAME ON EVERY ROW SHIFT.
+     *
+     * Operator, 2026-10-06: "the whole carpet kind of blinking - not flashing -
+     * but like super short black screen then the carpet again", every row shift
+     * or every second one. PRE-EXISTING: reproduced on c5474b2 with none of
+     * this session's work present. Independent of the row rate (3 rows/s and
+     * 30 both do it).
+     *
+     * Ruled out by test, not by argument:
+     *   - the per-row lv_canvas_set_buffer() teardown, which drops the image
+     *     cache twice and re-sets the source every row (removed in 86bf5d6 -
+     *     the blink did not change)
+     *   - DSI arbiter starvation as the SOLE cause (this QoS line - at most a
+     *     small improvement)
+     *
+     * What is left is how a frame reaches the panel. This display runs partial
+     * draw buffers + double buffering + LVGL SOFTWARE rotation into a PSRAM
+     * framebuffer that the DSI reads continuously - and this BSP cannot avoid
+     * tearing in that configuration at all: m5stack_tab5.c forces
+     * `.sw_rotate = false` under CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR, with the
+     * comment "Avoid tearing is not supported for SW rotation". So the panel
+     * can latch a framebuffer region while it is still being rewritten, and a
+     * row shift rewrites the entire 1280x370 carpet as ~11 strips.
+     *
+     * ⚠ MEASURE FIRST. Time the flush callback and count strips per row
+     * shift; do not reach for CONFIG_BSP_DISPLAY_LVGL_FULL_REFRESH on reasoning
+     * alone - it costs MORE PSRAM traffic, which is the opposite direction to
+     * what the QoS result hints at, and it forces a full rebuild. Two
+     * hypotheses have already been spent here without a measurement. */
 
     // Start dark, not bsp_display_backlight_on() (=100% immediately): the
     // panel powers up with garbage/white framebuffer content that's visible
