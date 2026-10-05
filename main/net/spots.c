@@ -18,7 +18,6 @@
 #include "net/net_quiet.h"
 #include "net/bg_feed_gate.h"
 #include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
-#include "webserver_ws.h"     // webserver_ws_set_paused
 #include "wifi.h"             // wifi_is_connected
 #include "storage/settings.h"
 #include "util/psram_task.h"
@@ -577,13 +576,39 @@ static int http_get_json(const char *url, char **buf_out)
              app ? app->version : "dev");
     esp_http_client_set_header(client, "User-Agent", ua);
 
-    // Same courtesy the uploads pay: keep the spectrum stream off the link
-    // while the transfer runs (see the LoTW note in CLAUDE.md).
-    webserver_ws_set_paused(true);
+    /* ⛔ NO webserver_ws_set_paused() HERE - IT WAS THE WATERFALL STALL.
+     *
+     * The pause exists for an OUTBOUND TLS CONNECT on a user-initiated
+     * transfer (QRZ/eQSL upload, ADIF/diag download, OTA): those stall the
+     * shared SDIO->C6 link both ways, they are rare, and the operator asked
+     * for them, so a frozen waterfall for a second costs nothing.
+     *
+     * This fetch is neither rare nor asked for. It runs forever, and the
+     * courtesy was copied here from the uploads - then copied onward from here
+     * into psk_rx.c, wspr_self.c and update_check.c, each citing the last.
+     *
+     * Measured on bench dev 2026-10-05 with a browser watching
+     * (ws: "spectrum stream was paused N ms"):
+     *
+     *     13 pauses in 6.2 min - min 562, median 874, p90 1778, max 1817 ms
+     *     15509 ms dead = 4.2% of wall-clock, up to 18 frames lost in one go
+     *
+     * Cleanly bimodal, and the arithmetic names this function: POTA is ~48 KB
+     * about every 61 s and SOTA ~26 KB behind it, which at the link's measured
+     * median 32.5 KB/s is 1.5 s and 0.8 s - against 1.8 s and 0.6-0.9 s
+     * observed. Reported independently by Sam W7STF ("why should audio freeze
+     * the display") and Bryan N0LUF ("jittery, short pauses every 2-3 rows").
+     *
+     * ⭐ And the trade is bad on its own numbers. #232 measured the stream at
+     * 1026 B x 10 fps against a link whose median is 32.5 KB/s - 13%. Pausing
+     * buys this fetch at most 13% (~0.2 s of 1.8 s) and costs the operator
+     * every frame of it, twice a minute, all day.
+     *
+     * ⚠ What is NOT claimed: that the pause is useless everywhere. The
+     * user-initiated sites keep it, deliberately. */
     esp_err_t err = esp_http_client_perform(client);
     int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
     esp_http_client_cleanup(client);
-    webserver_ws_set_paused(false);
 
     if (status != 200 || ctx.len == 0) {
         ESP_LOGW(TAG, "GET failed (status=%d err=0x%x) %s", status, err, url);

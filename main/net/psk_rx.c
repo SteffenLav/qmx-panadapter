@@ -20,7 +20,6 @@
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "wifi/wifi.h"
-#include "webserver_ws.h"
 #include "util/psram_task.h"
 
 #include "esp_log.h"
@@ -287,13 +286,12 @@ static void fetch_once(const char *mycall)
     // asks that clients be attributable.
     esp_http_client_set_header(client, "User-Agent", "qmx-panadapter (github.com/SteffenLav/qmx-panadapter)");
 
-    // Same courtesy the spot fetcher and the uploads pay - keep the spectrum
-    // stream off this link while the transfer runs.
-    webserver_ws_set_paused(true);
+    /* No webserver_ws_set_paused() - periodic background fetch, same reason as
+     * net/spots.c, where the measurement is. The pause is for user-initiated
+     * transfers only. */
     esp_err_t err = esp_http_client_perform(client);
     int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
     esp_http_client_cleanup(client);
-    webserver_ws_set_paused(false);
 
     if (status == 200) {
         int n = parse_body(buf);

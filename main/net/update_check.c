@@ -5,7 +5,6 @@
 #include "update_check.h"
 #include "ui/reader_view.h"
 #include "wifi/wifi.h"
-#include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
 #include "net/ota_update.h"
 #include "net/net_quiet.h"
@@ -260,9 +259,11 @@ static bool do_check(void)
         } else {
             ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
             s_last_github_us = now;
-            webserver_ws_set_paused(true);        // 48 KB: this one yields
+            /* No pause, even at 48 KB - periodic background fetch, same reason
+             * as net/spots.c where the measurement is. This one is also the
+             * RARE path (only when latest.json has already failed), so it was
+             * never a big contributor; removed for the class, not the cost. */
             status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
-            webserver_ws_set_paused(false);
             if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
         }
     }
