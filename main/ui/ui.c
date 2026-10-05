@@ -6026,8 +6026,42 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_RELEASED, NULL);
+    /* ⭐ THE BUFFER IS POINTED AT ONCE, HERE, AND NEVER AGAIN.
+     *
+     * The scroll used to call lv_canvas_set_buffer() on EVERY row to move the
+     * view window. Read what that function actually does (lv_canvas.c):
+     *
+     *     lv_image_cache_drop(src);
+     *     lv_image_set_src(obj, canvas->draw_buf);
+     *     lv_image_cache_drop(canvas->draw_buf);
+     *
+     * Two cache drops and a full set_src per row, to change nothing but a
+     * pointer - and the operator sees the result: "the whole carpet kind of
+     * blinking ... like super short black screen then the carpet again",
+     * every row shift or every second one, at 3 rows/s AND at 30. The
+     * waterfall's own background is 0x000010, i.e. that black.
+     *
+     * Corroboration before changing anything: the spectrum and label canvases
+     * set their buffers ONCE at build and neither of them blinks. Only the one
+     * that re-points per row does. The symptom also predates all of tonight's
+     * work - verified by flashing c5474b2 and reproducing it there.
+     *
+     * So the canvas now owns the ENTIRE 2x-height buffer for the whole session,
+     * and the view window is chosen with lv_image_set_offset_y(), which is a
+     * field write plus an invalidate - no cache drop, no set_src. */
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
-                         WF_CANVAS_W, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+                         WF_CANVAS_W, WATERFALL_H * 2, LV_COLOR_FORMAT_RGB565);
+    /* set_buffer sized the object to the SOURCE (2x tall). Clamp it back to one
+     * screenful, which is what makes the offset a window rather than a scroll
+     * of an oversized object. */
+    lv_obj_set_size(s_wf_canvas, WF_CANVAS_W, WATERFALL_H);
+    /* ⛔ TOP_LEFT, because the default is LV_IMAGE_ALIGN_CENTER and with a
+     * source taller than the object that centres the content - the offset would
+     * then be measured from a moving origin. TOP_LEFT is 1, below
+     * LV_IMAGE_ALIGN_AUTO_TRANSFORM, so offsets stay honoured (lv_image.c
+     * refuses them only for STRETCH and TILE). */
+    lv_image_set_inner_align(s_wf_canvas, LV_IMAGE_ALIGN_TOP_LEFT);
+    lv_image_set_offset_y(s_wf_canvas, 0);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
@@ -9651,11 +9685,14 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     memcpy(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes + (size_t)s_wf_view_x * 2,
            rgb565_row, vis_bytes);
 
-    // Point the canvas at the WATERFALL_H window starting at s_wf_head.
-    // Newest row sits at view row 0 (top), oldest at view row WATERFALL_H-1 (bottom).
-    lv_canvas_set_buffer(s_wf_canvas,
-                         s_wf_canvas_buf + s_wf_head * row_bytes,
-                         WF_CANVAS_W, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+    /* Move the WATERFALL_H window to start at s_wf_head - newest row at view
+     * row 0 (top), oldest at WATERFALL_H-1 (bottom), exactly as before. The
+     * content is shifted UP by s_wf_head, hence the negative offset, so source
+     * row s_wf_head lands on the object's first row.
+     *
+     * This replaces a per-row lv_canvas_set_buffer(); see the long comment at
+     * the build site for why that was costing a black frame. */
+    lv_image_set_offset_y(s_wf_canvas, -(int32_t)s_wf_head);
 
     // FT8-sync-vs-SNTP-only slot-boundary overlay - panadapter-mode-only
     // diagnostic, gated on the "FT8 sync lines" drawer checkbox
