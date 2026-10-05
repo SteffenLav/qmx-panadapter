@@ -126,13 +126,78 @@ void display_frame_spacing(display_frame_spacing_t *out)
     s_fr_late   = 0;
 }
 
+/* ⭐ WHICH PANEL IS ASKING FOR THE PIXELS.
+ *
+ * The total alone named nothing, and the arithmetic said the total was the
+ * wrong size: at 10 rows/s the waterfall canvas (1280x370) and the spectrum
+ * (1280x200) together account for ~7.3 Mpx/s, which matches the LOW readings -
+ * but the same screen at the SAME rate also reads 16-20 Mpx/s, i.e. about 1.5
+ * whole screens per frame. Something other than the two big canvases is
+ * invalidating roughly 10 Mpx/s and nothing had looked at it.
+ *
+ * So the pixels are bucketed by where they land. Attribution by y is enough
+ * because this screen is six stacked full-width panels, and it stays O(1) per
+ * event - one compare chain, no walk (the cyan-flash rule applies here too).
+ *
+ * ⛔ THE BAND EDGES MIRROR ui.c's LAYOUT #defines and cannot include them
+ * (display.c is below the UI, not above it). If the panel heights change there,
+ * these move or the attribution lies. They are asserted against DISPLAY_V_RES
+ * at init, which catches a total that stops adding up but not a redistribution.
+ * Bands, in ui.c's terms: TOP_BAR_H 60, SPECTRUM_H 200, LABEL_BAR_H 32,
+ * WATERFALL_H 370, BANDPLAN_H 22, BOTTOM_BAR_H 36. */
+#define INVAL_BANDS 6
+static const int16_t s_inval_band_y[INVAL_BANDS + 1] = { 0, 60, 260, 292, 662, 684, 720 };
+static volatile uint64_t s_inval_band_px[INVAL_BANDS];
+static volatile uint32_t s_inval_n;        /* events, to separate "big" from "often" */
+static volatile uint32_t s_inval_max_px;   /* largest single request */
+
 static void disp_inval_area_cb(lv_event_t *e)
 {
     const lv_area_t *a = (const lv_area_t *)lv_event_get_param(e);
     if (!a) return;
     int32_t w = a->x2 - a->x1 + 1;
     int32_t h = a->y2 - a->y1 + 1;
-    if (w > 0 && h > 0) s_inval_px += (uint64_t)w * (uint64_t)h;
+    if (w <= 0 || h <= 0) return;
+    uint32_t px = (uint32_t)w * (uint32_t)h;
+    s_inval_px += (uint64_t)px;
+    s_inval_n++;
+    if (px > s_inval_max_px) s_inval_max_px = px;
+
+    /* Charged to the band holding the request's MIDPOINT. A request spanning a
+     * boundary is charged whole to one band rather than split: splitting would
+     * need a loop per event, and the question here is "who asks", for which the
+     * midpoint is unambiguous enough. Full-screen requests therefore land in
+     * the waterfall band - which is why s_inval_max_px is printed beside it,
+     * since a 921600 px max is the tell for exactly that case. */
+    int32_t mid = a->y1 + h / 2;
+    for (int i = 0; i < INVAL_BANDS; i++) {
+        if (mid >= s_inval_band_y[i] && mid < s_inval_band_y[i + 1]) {
+            s_inval_band_px[i] += (uint64_t)px;
+            break;
+        }
+    }
+}
+
+/* Thousands of invalidated pixels per second per band since the previous call,
+ * plus the event count and the largest single request. Same windowing as
+ * display_inval_kpx_per_s() - the caller's cadence sets the window. */
+void display_inval_bands(display_inval_bands_t *out)
+{
+    static int64_t last_us;
+    int64_t now = esp_timer_get_time();
+    int64_t dt  = (last_us && now > last_us) ? (now - last_us) : 0;
+    for (int i = 0; i < INVAL_BANDS; i++) {
+        uint64_t px = s_inval_band_px[i];
+        s_inval_band_px[i] = 0;
+        if (out) out->kpx_per_s[i] = dt ? (unsigned)((px * 1000000ULL) / (uint64_t)dt / 1000ULL) : 0;
+    }
+    if (out) {
+        out->events = s_inval_n;
+        out->max_px = s_inval_max_px;
+    }
+    s_inval_n = 0;
+    s_inval_max_px = 0;
+    last_us = now;
 }
 
 // Thousands of invalidated pixels per second since the previous call.
@@ -428,6 +493,12 @@ esp_err_t display_init(lv_display_t **out_disp)
     if (!s_disp) {
         ESP_LOGE(TAG, "bsp_display_start_with_config failed");
         return ESP_FAIL;
+    }
+    /* The mirrored band table must at least still cover the panel. */
+    if (s_inval_band_y[INVAL_BANDS] != DISPLAY_V_RES) {
+        ESP_LOGE(TAG, "inval band table ends at %d but DISPLAY_V_RES is %d - "
+                      "attribution by band is WRONG until this is fixed",
+                 (int)s_inval_band_y[INVAL_BANDS], (int)DISPLAY_V_RES);
     }
     lv_display_add_event_cb(s_disp, disp_refr_start_cb, LV_EVENT_REFR_START, NULL);
     lv_display_add_event_cb(s_disp, disp_refr_ready_cb, LV_EVENT_REFR_READY, NULL);

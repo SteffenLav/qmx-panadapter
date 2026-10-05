@@ -72,6 +72,18 @@ static void cpu_stats_task(void *arg)
                          (unsigned)fs.late, (unsigned)fs.n,
                          (unsigned)(fs.draw_mean_us / 1000),
                          (unsigned)(fs.draw_max_us / 1000));
+
+                /* Second line, same window: WHERE those pixels were asked for.
+                 * The total on the line above swings 6-20 Mpx/s on an
+                 * unchanged screen, and the two big canvases cannot account
+                 * for the high end - so this names the panel. */
+                display_inval_bands_t ib;
+                display_inval_bands(&ib);
+                ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"
+                              " | reqs %u max %ukpx",
+                         ib.kpx_per_s[0], ib.kpx_per_s[1], ib.kpx_per_s[2],
+                         ib.kpx_per_s[3], ib.kpx_per_s[4], ib.kpx_per_s[5],
+                         ib.events, ib.max_px / 1000);
             }
         }
         prev_idle0 = i0;

@@ -56,3 +56,14 @@ void display_frame_spacing(display_frame_spacing_t *out);
 // together with the fps figure: frames say how OFTEN, this says how MUCH.
 unsigned display_inval_kpx_per_s(void);
 
+/* Invalidated pixels split by panel, so the total names a culprit instead of
+ * just a size. Bands, top to bottom: top bar, spectrum, label bar, waterfall,
+ * band plan, bottom bar. See the band table in display.c - it MIRRORS ui.c's
+ * layout #defines. */
+typedef struct {
+    unsigned kpx_per_s[6];
+    unsigned events;    /* invalidation requests in the window */
+    unsigned max_px;    /* largest single request; 921600 means full screen */
+} display_inval_bands_t;
+void display_inval_bands(display_inval_bands_t *out);
+
