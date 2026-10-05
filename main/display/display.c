@@ -151,6 +151,14 @@ static volatile uint64_t s_inval_band_px[INVAL_BANDS];
 static volatile uint32_t s_inval_n;        /* events, to separate "big" from "often" */
 static volatile uint32_t s_inval_max_px;   /* largest single request */
 static volatile uint32_t s_inval_band_n[INVAL_BANDS];  /* requests per band: big vs often */
+/* Requests covering (almost) the WHOLE panel. These showed up as max 921kpx in
+ * some windows and nothing had attributed them; a full-screen invalidate is
+ * ~2 waterfall canvases of work in one frame, so whether it happens twice a
+ * session or twice a second is the difference between ignoring it and chasing
+ * it. 90% rather than 100% so a screen-sized request that is one pixel short
+ * still counts. */
+#define INVAL_FULLSCREEN_PX  ((uint32_t)DISPLAY_H_RES * DISPLAY_V_RES * 9u / 10u)
+static volatile uint32_t s_inval_full_n;
 
 static void disp_inval_area_cb(lv_event_t *e)
 {
@@ -163,6 +171,7 @@ static void disp_inval_area_cb(lv_event_t *e)
     s_inval_px += (uint64_t)px;
     s_inval_n++;
     if (px > s_inval_max_px) s_inval_max_px = px;
+    if (px >= INVAL_FULLSCREEN_PX) s_inval_full_n++;
 
     /* Charged to the band holding the request's MIDPOINT. A request spanning a
      * boundary is charged whole to one band rather than split: splitting would
@@ -198,11 +207,13 @@ void display_inval_bands(display_inval_bands_t *out)
         s_inval_band_n[i] = 0;
     }
     if (out) {
-        out->events = s_inval_n;
-        out->max_px = s_inval_max_px;
+        out->events     = s_inval_n;
+        out->max_px     = s_inval_max_px;
+        out->fullscreen = s_inval_full_n;
     }
     s_inval_n = 0;
     s_inval_max_px = 0;
+    s_inval_full_n = 0;
     last_us = now;
 }
 
@@ -244,6 +255,7 @@ static bool s_flipped = false;   // false = normal landscape (90), true = upside
 
 static volatile int64_t s_lock_at_us;
 static const char *volatile s_lock_owner;
+static const char *volatile s_lock_site;   /* __func__ of the caller - see display.h */
 
 /* ⭐ WHO HOLDS THE DISPLAY LOCK, AND FOR HOW LONG.
  *
@@ -258,28 +270,34 @@ static const char *volatile s_lock_owner;
  * silent and the log does not become another periodic walk. */
 #define DISPLAY_LOCK_LOUD_MS 60
 
-bool display_lock(uint32_t timeout_ms)
+#undef display_lock
+bool display_lock_tagged(uint32_t timeout_ms, const char *site)
 {
     bool ok = bsp_display_lock(timeout_ms);
     if (ok) {
         s_lock_at_us = esp_timer_get_time();
         s_lock_owner = pcTaskGetName(NULL);
+        s_lock_site  = site;
     }
     return ok;
 }
+/* Restore the macro for the rest of this file, so display.c's own callers tag
+ * themselves exactly like everyone else's. */
+#define display_lock(t) display_lock_tagged((t), __func__)
 
 void display_unlock(void)
 {
     int64_t     at    = s_lock_at_us;
     const char *owner = s_lock_owner;
+    const char *site  = s_lock_site;
     s_lock_at_us = 0;
     bsp_display_unlock();
     if (at) {
         uint32_t held_ms = (uint32_t)((esp_timer_get_time() - at) / 1000);
         if (held_ms >= DISPLAY_LOCK_LOUD_MS)
-            ESP_LOGW(TAG, "display lock held %u ms by '%s' - LVGL could not "
-                          "render for that long", (unsigned)held_ms,
-                     owner ? owner : "?");
+            ESP_LOGW(TAG, "display lock held %u ms by '%s' in %s() - LVGL could "
+                          "not render for that long", (unsigned)held_ms,
+                     owner ? owner : "?", site ? site : "?");
     }
 }
 

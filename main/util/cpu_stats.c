@@ -85,6 +85,11 @@ static void cpu_stats_task(void *arg)
                          ib.kpx_per_s[0], ib.kpx_per_s[1], ib.kpx_per_s[2],
                          ib.kpx_per_s[3], ib.kpx_per_s[4], ib.kpx_per_s[5],
                          ib.events, ib.max_px / 1000);
+                if (ib.fullscreen) {
+                    ESP_LOGW(TAG, "inval: %u FULL-SCREEN requests this window "
+                                  "(%u kpx each = ~2 waterfall canvases of work)",
+                             ib.fullscreen, (unsigned)(DISPLAY_H_RES * DISPLAY_V_RES / 1000));
+                }
 
                 /* The band plan's share, resolved into a call rate. bp_calls is
                  * every path into update_bandplan_strip, bp_poll only the

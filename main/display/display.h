@@ -12,7 +12,15 @@
 esp_err_t display_init(lv_display_t **out_disp);
 
 // Thread-safe LVGL access (wrappers around BSP)
-bool display_lock(uint32_t timeout_ms);
+/* Takes the LVGL/display lock. The task name alone was not enough to act on:
+ * "held 90 ms by 'status'" says which thread, not which of the dozen ui_*
+ * entry points that thread calls was holding it. __func__ at the call site
+ * costs a pointer, so every one of the 54 existing call sites now reports
+ * itself with no edit - the macro below rewrites them all.
+ *
+ * ⛔ display.c must #undef this before defining display_lock_tagged. */
+bool display_lock_tagged(uint32_t timeout_ms, const char *site);
+#define display_lock(t) display_lock_tagged((t), __func__)
 void display_unlock(void);
 
 // Set LCD backlight brightness, 0..100 %.
@@ -63,7 +71,8 @@ unsigned display_inval_kpx_per_s(void);
 typedef struct {
     unsigned kpx_per_s[6];
     unsigned reqs[6];   /* requests per band - separates "big" from "often" */
-    unsigned events;    /* invalidation requests in the window */
+    unsigned events;      /* invalidation requests in the window */
+    unsigned fullscreen;  /* of those, requests covering >=90% of the panel */
     unsigned max_px;    /* largest single request; 921600 means full screen */
 } display_inval_bands_t;
 void display_inval_bands(display_inval_bands_t *out);
