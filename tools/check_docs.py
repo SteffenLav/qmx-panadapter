@@ -31,13 +31,20 @@ The checks
    printable guide somehow - either the PDF builder injects it, or README has a
    section of its own on the subject. A page in neither is invisible to anyone
    reading the PDF.
-3. DUPLICATE COVERAGE (warning). Headings that exist in BOTH README and the
+3. BROKEN PDF LINKS (error). The user-guide PDF is versioned in its filename and
+   the builder deletes every older one, so any link that spells out a version
+   dies at the next release. Found 2026-10-05: docs/mkdocs/releases.md still
+   pointed at v1.16.9 four releases on - a 404 on the site's "User Guide PDF"
+   button. build_userguide_pdf.ps1 now rewrites those links itself; this check
+   is the net under a hand-edit.
+4. DUPLICATE COVERAGE (warning). Headings that exist in BOTH README and the
    mkdocs tree are the drift surface: two texts, one topic, and no mechanism
    keeping them honest with each other. Fewer is better.
 
 Run standalone for the full report:  python tools/check_docs.py
 """
 
+import io
 import os
 import re
 import sys
@@ -226,6 +233,29 @@ ACCEPTED_OVERLAP = {
 }
 
 
+def check_pdf_links():
+    """Every versioned user-guide PDF link must resolve to a file that exists."""
+    errors = []
+    for base, _dirs, files in os.walk(MKDOCS_DIR):
+        for fn in files:
+            if not fn.endswith(".md"):
+                continue
+            path = os.path.join(base, fn)
+            try:
+                with io.open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in re.finditer(r"QMX-Panadapter-UserGuide-v[\d.]+\.pdf", text):
+                target = os.path.join(MKDOCS_DIR, m.group(0))
+                if not os.path.isfile(target):
+                    rel = os.path.relpath(path, REPO).replace(os.sep, "/")
+                    line = text.count(os.linesep[-1], 0, m.start()) + 1
+                    errors.append("%s:%d links %s - no such file"
+                                  % (rel, line, m.group(0)))
+    return errors
+
+
 def check_duplicate_coverage():
     """Topics described in both trees - where drift happens."""
     if not os.path.isfile(README):
@@ -251,6 +281,7 @@ def check_duplicate_coverage():
 def run(verbose=True):
     """Returns (errors, warnings). Errors should fail a docs build."""
     errors = check_forward_looking()
+    bad_links = check_pdf_links()
     missing = check_pdf_coverage()
     dupes = check_duplicate_coverage()
 
@@ -259,6 +290,10 @@ def run(verbose=True):
             print("check_docs: FORWARD-LOOKING TEXT (%d):" % len(errors))
             for e in errors:
                 print("  " + e)
+        if bad_links:
+            print("check_docs: BROKEN PDF LINKS (%d):" % len(bad_links))
+            for b in bad_links:
+                print("  " + b)
         if missing:
             print("check_docs: NOT IN THE PDF (%d):" % len(missing))
             for w in missing:
@@ -267,10 +302,10 @@ def run(verbose=True):
             print("check_docs: described in BOTH trees (%d) - drift surface:" % len(dupes))
             for d in dupes:
                 print("  " + d)
-        if not (errors or missing or dupes):
+        if not (errors or bad_links or missing or dupes):
             print("check_docs: clean")
 
-    return errors, missing + dupes
+    return errors + bad_links, missing + dupes
 
 
 if __name__ == "__main__":

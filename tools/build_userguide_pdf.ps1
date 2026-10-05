@@ -516,4 +516,31 @@ $newReadmeText = [regex]::Replace(
 )
 [System.IO.File]::WriteAllText($readme, $newReadmeText, $utf8NoBom)
 
+# --- keep the published site's copy and its links current ----
+# Why this exists: this script used to rewrite README.md ONLY, and deleted every
+# old versioned PDF from docs/. The site's own copy under docs/mkdocs/ and the
+# links pointing at it were left to be updated by hand at release time. The copy
+# got done; the links did not. Found 2026-10-05: docs/mkdocs/releases.md still
+# linked QMX-Panadapter-UserGuide-v1.16.9.pdf, four releases after that file was
+# deleted - a 404 on the published "User Guide PDF" button. Every release that
+# leaves a versioned link behind creates another one, so fix the generator, not
+# the link.
+$mkdocsDir = Join-Path $docsDir "mkdocs"
+if (Test-Path $mkdocsDir) {
+    Get-ChildItem -Path $mkdocsDir -Filter "QMX-Panadapter-UserGuide-v*.pdf" -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+    Copy-Item $pdfOut (Join-Path $mkdocsDir $pdfName) -Force
+
+    # Links inside docs/mkdocs/ are relative to that folder, so they carry no
+    # "docs/" prefix - a different pattern from the README rewrite above.
+    Get-ChildItem -Path $mkdocsDir -Filter *.md -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $orig = Get-Content -Raw -Encoding UTF8 $_.FullName
+        $updated = [regex]::Replace($orig, 'QMX-Panadapter-UserGuide-v[\d.]+\.pdf', $pdfName)
+        if ($updated -ne $orig) {
+            [System.IO.File]::WriteAllText($_.FullName, $updated, $utf8NoBom)
+            Write-Host "  relinked PDF in $($_.FullName.Substring($repoRoot.Length + 1))"
+        }
+    }
+}
+
 Write-Host "✅ Wrote $pdfOut with nested chapter.subsection numbering and clickable TOC"
