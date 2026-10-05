@@ -2018,6 +2018,7 @@ void ui_set_zoom(float zoom, int pan_bins)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
+static bool multitouch_lockout_active(void);   // defined with the gesture code below
 /* BLE keystroke queue - see ui_kbd_feed() for why keys are not applied on the
  * caller's task. Declared here because ui_init() creates it. */
 typedef struct { char text[12]; uint8_t mods; } kbd_q_ev_t;
@@ -2453,6 +2454,9 @@ static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
+static lv_obj_t *s_wf_rate_strip = NULL;  // left-edge waterfall rate slider (build_wf_rate_slider)
+static lv_obj_t *s_wf_rate_grip  = NULL;
+static lv_obj_t *s_wf_rate_lbl   = NULL;
 // Band-plan strip: a coloured CW/Digi/Phone reference bar for the current band,
 // drawn full-band (proportional) with a marker at the VFO position. Up to 6
 // segments per band (coarse plan); a small pool of reusable child rects+labels.
@@ -5741,6 +5745,206 @@ static void update_freq_axis_labels(uint32_t center_hz)
     }
 }
 
+/* ===== Waterfall rate: the left-edge slider and the one step table =====
+ *
+ * Operator, 2026-10-05: the Tab5 is "jaggy all the time" while the web
+ * waterfall, which runs SLOWER, looks smooth. Frame spacing (2289010) showed
+ * the rate is not the complaint - mean 83-91 ms but min 2-3 and max 298-336,
+ * about one frame in three over 2x late. The waterfall is ~21 ms of a ~64 ms
+ * draw, and every row push invalidates the canvas, so dropping rows removes
+ * work rather than moving it.
+ *
+ * WARNING: THIS IS A COST CONTROL, NOT A CONFIRMED FIX. cc1cb17's lock-holder
+ * instrument has not been read on the bench yet. If the late frames turn out
+ * to be a BLOCKED drawer (something holding display_lock) rather than a slow
+ * draw, fewer rows will not help and this is the wrong lever. It is worth
+ * having either way - "fit more history on screen" was always a reasonable
+ * thing to want - but do not record it as the stutter's fix until the
+ * instrument says so.
+ *
+ * ONE AXIS, ONE SETTING. A 1..4x "Speed" dropdown already existed, itself a
+ * generalisation of the FT8-sync-lines diagnostic's private 1x/3x switch, and
+ * its own comment says it was widened "instead of building a second
+ * mechanism". A slider in rows/s beside a multiplier in x would have been two
+ * controls for one axis, so the multiplier BECAME rows/s (settings.h) and both
+ * surfaces - this slider and that dropdown - drive the same stored value. The
+ * table below is the only list of steps on the Tab5; index.html holds the web
+ * copy and the two must be changed together. */
+static const uint8_t WF_RATE_STEPS[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40 };
+#define WF_RATE_NSTEPS  (sizeof(WF_RATE_STEPS) / sizeof(WF_RATE_STEPS[0]))
+
+/* The strip sits just INBOARD of the left edge-swipe zone, not in it: that zone
+ * is full-height, always-on-top and owns swipe-right to switch Panadapter<->FT8
+ * (build_edge_swipe_strips), and the right edge is the drawer's. The only free
+ * edge real estate is therefore x = EDGE_SWIPE_ZONE_PX onward, and only over
+ * the waterfall's own height.
+ *
+ * Cost: the leftmost WF_RATE_STRIP_W px of waterfall stop being tap-to-tune -
+ * 2.8% of the width, at the edge of the view. The spectrum above it is
+ * untouched, so there is still a full-width surface to tune on. */
+#define WF_RATE_STRIP_X  EDGE_SWIPE_ZONE_PX
+#define WF_RATE_STRIP_W  36
+#define WF_RATE_GRIP_H   120
+
+static uint8_t wf_rate_step_index(uint8_t rows)
+{
+    /* Nearest step, so a value that arrived from the web or a config file (any
+     * 1..40, not just a step) still lands the grip somewhere honest. */
+    uint8_t best = 0;
+    int best_d = 255;
+    for (uint8_t i = 0; i < WF_RATE_NSTEPS; i++) {
+        int d = (int)WF_RATE_STEPS[i] - (int)rows;
+        if (d < 0) d = -d;
+        if (d < best_d) { best_d = d; best = i; }
+    }
+    return best;
+}
+
+static void wf_rate_place_grip(uint8_t idx)
+{
+    if (!s_wf_rate_grip) return;
+    /* Top of the strip is the fastest step, matching the direction a
+     * waterfall's own time axis runs - newest at the top. */
+    int travel = WATERFALL_H - WF_RATE_GRIP_H;
+    int slot   = (int)WF_RATE_NSTEPS - 1;
+    if (slot < 1) slot = 1;
+    if (travel < 0) travel = 0;
+    int y = travel - (travel * (int)idx) / slot;
+    lv_obj_align(s_wf_rate_grip, LV_ALIGN_TOP_LEFT, 0, y);
+}
+
+static void wf_rate_show_readout(uint8_t rows, bool show)
+{
+    if (!s_wf_rate_lbl) return;
+    if (!show) { lv_obj_add_flag(s_wf_rate_lbl, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_label_set_text_fmt(s_wf_rate_lbl, "%u rows/s", (unsigned)rows);
+    lv_obj_clear_flag(s_wf_rate_lbl, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Keep BOTH surfaces in step with the stored value. Called by this slider, by
+ * the drawer dropdown and by /api/settings - a change made in the browser used
+ * to leave the Tab5's own control showing the old number until a reboot, which
+ * is the same class of bug as applying a setting without storing it. */
+void ui_sync_wf_rate_controls(void)
+{
+    uint8_t rows = settings_get_wf_rows_per_s();
+    if (rows < 1 || rows > 40) rows = 10;
+    uint8_t idx = wf_rate_step_index(rows);
+    /* Both touched objects are LVGL, and the only caller outside this file is
+     * /api/settings on the httpd task - so take the lock here rather than at
+     * that call site, and every future caller is safe by default. The lock is
+     * recursive, so the two LVGL-task callbacks that call wf_rate_place_grip()
+     * directly are unaffected. Same reasoning as reader_view_open_help() from
+     * the same handler and ui_toast() from the decode task. */
+    if (!display_lock(500)) return;
+    wf_rate_place_grip(idx);
+    if (s_dropdown_wf_speed) lv_dropdown_set_selected(s_dropdown_wf_speed, (uint32_t)idx);
+    display_unlock();
+}
+
+static void wf_rate_strip_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        wf_rate_show_readout(0, false);
+        return;
+    }
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev || !s_wf_rate_strip) return;
+    /* The same two-finger straggler guard tap-to-tune uses: this strip is
+     * inside the waterfall, where a two-finger blank leaves a finger behind. */
+    if (multitouch_lockout_active()) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_area_t a;
+    lv_obj_get_coords(s_wf_rate_strip, &a);
+    int h = (int)a.y2 - (int)a.y1 + 1;
+    if (h < 2) return;
+    int y = (int)p.y - (int)a.y1;
+    if (y < 0) y = 0;
+    if (y > h - 1) y = h - 1;
+
+    /* Top = fastest. Rounded, not truncated, so every step owns an equal band
+     * of travel and both ends are reachable. */
+    int slot = (int)WF_RATE_NSTEPS - 1;
+    int idx  = slot - ((y * slot * 2 + (h - 1)) / (2 * (h - 1)));
+    if (idx < 0) idx = 0;
+    if (idx > slot) idx = slot;
+    uint8_t rows = WF_RATE_STEPS[idx];
+
+    wf_rate_place_grip((uint8_t)idx);
+    wf_rate_show_readout(rows, true);
+    lv_obj_align(s_wf_rate_lbl, LV_ALIGN_TOP_LEFT,
+                 WF_RATE_STRIP_X + WF_RATE_STRIP_W + 8,
+                 (y > 14) ? (y - 14) : 0);
+
+    /* Apply AND store, every time - the drawer dropdown's callback does the
+     * same, and storing alone leaves the live waterfall on the old value until
+     * reboot. settings_set_* returns early when the value has not changed, so
+     * dragging across a step does not write NVS per pixel. */
+    render_set_waterfall_rows_per_s(rows);
+    settings_set_wf_rows_per_s(rows);
+    if (s_dropdown_wf_speed) lv_dropdown_set_selected(s_dropdown_wf_speed, (uint32_t)idx);
+}
+
+/* Built as a CHILD of s_waterfall_obj, deliberately. The waterfall is hidden,
+ * shown and slid sideways at five sites (mode switches and the slide
+ * animations); a child rides all of that for free, where a sibling would have
+ * to be hidden and moved at every one of them - and would be forgotten at the
+ * sixth. Created last so it is topmost: LVGL hit-tests a parent's children in
+ * REVERSE creation order, the same reason s_bp_catch is built after the
+ * waterfall. Being its own CLICKABLE object is also what keeps touch_event_cb
+ * from ever seeing these touches, so nothing here can retune the radio. */
+static void build_wf_rate_slider(void)
+{
+    if (!s_waterfall_obj) return;
+
+    lv_obj_t *strip = lv_obj_create(s_waterfall_obj);
+    lv_obj_remove_style_all(strip);
+    lv_obj_set_size(strip, WF_RATE_STRIP_W, WATERFALL_H);
+    lv_obj_set_pos(strip, WF_RATE_STRIP_X, 0);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(strip, UI_FLAG_NOT_HOT);   // a track you drag, like the band-plan strip
+    lv_obj_add_event_cb(strip, wf_rate_strip_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(strip, wf_rate_strip_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(strip, wf_rate_strip_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(strip, wf_rate_strip_cb, LV_EVENT_PRESS_LOST, NULL);
+    s_wf_rate_strip = strip;
+
+    /* The same 4x120 breathing grip as the two edge-swipe strips, so it reads
+     * as the same kind of affordance - but this one MOVES, because it shows a
+     * value as well as inviting a drag. */
+    lv_obj_t *grip = lv_obj_create(strip);
+    lv_obj_set_size(grip, 4, WF_RATE_GRIP_H);
+    lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(grip, 0, 0);
+    lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_set_style_shadow_width(grip, 0, 0);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+    grip_start_breathing(grip);
+    s_wf_rate_grip = grip;
+
+    /* Readout, only while dragging. A child of the waterfall rather than of the
+     * strip so it can sit beside a 36 px strip without being clipped by it. */
+    s_wf_rate_lbl = lv_label_create(s_waterfall_obj);
+    lv_label_set_text(s_wf_rate_lbl, "");
+    lv_obj_set_style_text_color(s_wf_rate_lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_text_font(s_wf_rate_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_wf_rate_lbl, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_wf_rate_lbl, LV_OPA_50, 0);   // readable over a busy waterfall
+    lv_obj_set_style_pad_hor(s_wf_rate_lbl, 4, 0);
+    lv_obj_clear_flag(s_wf_rate_lbl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_wf_rate_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_wf_rate_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    wf_rate_place_grip(wf_rate_step_index(settings_get_wf_rows_per_s()));
+}
+
 // ==== Waterfall region (placeholder gradient from Phase 1) ====
 static void build_waterfall(lv_obj_t *parent)
 {
@@ -5858,6 +6062,10 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    // LAST, so it is topmost among the waterfall children and wins the
+    // overlap against the canvas and the two overlay markers.
+    build_wf_rate_slider();
 }
 
 // ==== Bottom status bar ====
@@ -13619,28 +13827,34 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
-        // Waterfall scroll speed (operator, 2026-09-16: "is wf speed always
-        // the same or where do i set it?" - it was, RENDER_PERIOD_MS is a
-        // compile-time #define). render_set_waterfall_speed_mult() already
-        // existed as the removed FT8-sync-lines diagnostic's private 1x/3x
-        // switch (render.c) - generalised into 1x..4x and given a real
-        // setting instead of building a second mechanism.
+        // Waterfall rate (operator, 2026-09-16: "is wf speed always the same
+        // or where do i set it?" - it was, RENDER_PERIOD_MS is a compile-time
+        // #define). render_set_waterfall_speed_mult() already existed as the
+        // removed FT8-sync-lines diagnostic's private 1x/3x switch (render.c) -
+        // generalised into 1x..4x and given a real setting instead of building
+        // a second mechanism.
+        //
+        // 2026-10-05: the unit became ROWS PER SECOND so the same one axis can
+        // go slower as well as faster (the operator wanted slower, to cut the
+        // waterfall's share of the frame draw). The left-edge slider over the
+        // waterfall is the other surface onto this identical stored value -
+        // WF_RATE_STEPS is the shared step table, and this list must stay in
+        // the same order as it.
         lv_obj_t *speed_lbl = lv_label_create(sec);
-        lv_label_set_text(speed_lbl, "Speed");
+        lv_label_set_text(speed_lbl, "Rate");
         lv_obj_set_style_text_color(speed_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(speed_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(speed_lbl, LV_ALIGN_TOP_LEFT, 0, 280);
         s_dropdown_wf_speed = lv_dropdown_create(sec);
         lv_dropdown_set_options(s_dropdown_wf_speed,
-                                "1x (10 rows/s)\n2x (20 rows/s)\n3x (30 rows/s)\n4x (40 rows/s)");
+                                "1 row/s\n2 rows/s\n3 rows/s\n4 rows/s\n5 rows/s\n"
+                                "6 rows/s\n7 rows/s\n8 rows/s\n9 rows/s\n10 rows/s (normal)\n"
+                                "20 rows/s\n30 rows/s\n40 rows/s");
         lv_obj_set_size(s_dropdown_wf_speed, DRAWER_W - 32, 50);
         lv_obj_align(s_dropdown_wf_speed, LV_ALIGN_TOP_LEFT, 0, 316);
         lv_obj_set_style_text_font(s_dropdown_wf_speed, &lv_font_montserrat_28, 0);
-        {
-            uint8_t mult = wcfg.wf_speed_mult;
-            if (mult < 1 || mult > 4) mult = 1;
-            lv_dropdown_set_selected(s_dropdown_wf_speed, mult - 1);
-        }
+        lv_dropdown_set_selected(s_dropdown_wf_speed,
+                                 (uint32_t)wf_rate_step_index(wcfg.wf_rows_per_s));
         lv_obj_add_event_cb(s_dropdown_wf_speed, drawer_dropdown_wf_speed_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_speed, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
@@ -15474,10 +15688,15 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
 
 static void drawer_dropdown_wf_speed_cb(lv_event_t *e)
 {
-    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
-    uint8_t mult = idx + 1;   // dropdown is 0-based ("1x"=idx 0), the setting is the multiplier itself
-    render_set_waterfall_speed_mult(mult);
-    settings_set_wf_speed_mult(mult);
+    /* The dropdown index IS the WF_RATE_STEPS index - the option list is built
+     * from that table and in its order, so there is no second mapping here to
+     * drift out of step with it. */
+    uint32_t idx = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx >= WF_RATE_NSTEPS) idx = WF_RATE_NSTEPS - 1;
+    uint8_t rows = WF_RATE_STEPS[idx];
+    render_set_waterfall_rows_per_s(rows);
+    settings_set_wf_rows_per_s(rows);
+    wf_rate_place_grip((uint8_t)idx);   // the edge slider shows the same value
 }
 
 // Spur suppression. Live DSP path AND stored value, like the IQ balance switch -

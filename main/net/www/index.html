@@ -4240,9 +4240,9 @@ const SET_FIELDS = [
   /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
      this page can reach. All three were Tab5-only for no reason anyone could
      name - the rest of their own group was already here. */
-  ["Radio & display", "display.wf_speed_mult", "sel", "Waterfall speed",
-     "How fast the waterfall scrolls. Faster spreads a signal out in time; slower fits more history on screen. The spectrum and S-meter are unaffected",
-     [["1","Normal"],["2","2x"],["3","3x"],["4","4x"]]],
+  ["Radio & display", "display.wf_rows_per_s", "sel", "Waterfall rate",
+     "Waterfall rows per second. Faster spreads a signal out in time; slower fits more history on screen and costs the Tab5 less to draw. The spectrum and S-meter are unaffected",
+     [["1","1 row/s"],["2","2 rows/s"],["3","3 rows/s"],["4","4 rows/s"],["5","5 rows/s"],["6","6 rows/s"],["7","7 rows/s"],["8","8 rows/s"],["9","9 rows/s"],["10","10 rows/s (normal)"],["20","20 rows/s"],["30","30 rows/s"],["40","40 rows/s"]]],
   /* ⛔ "My QMX has GPS" IS NOT HERE, AND MUST NOT COME BACK. GPS is DETECTED,
      not declared - time_sync.c compares the radio's own second tick against
      SNTP - and the Tab5's drawer dropped this checkbox on 2026-07-19 when that

@@ -67,7 +67,7 @@
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
-#include "render.h"            // render_set_waterfall_speed_mult - same group
+#include "render.h"            // render_set_waterfall_rows_per_s - same group
 #include "ft8_pileup.h"        // pileup list - /api/decodes
 #include "ft8_greylist.h"      // grey-list viewer - /api/decodes + greylist_clear
 #include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
@@ -4593,7 +4593,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(d, "wf_window",      c.wf_window);
     /* Added 2026-09-18: it was a Tab5-drawer setting only, while every other
        waterfall control on the same drawer row was already here. */
-    cJSON_AddNumberToObject(d, "wf_speed_mult",  c.wf_speed_mult);
+    cJSON_AddNumberToObject(d, "wf_rows_per_s",  c.wf_rows_per_s);
     cJSON_AddNumberToObject(d, "colormap",       c.colormap_idx);
     cJSON_AddNumberToObject(d, "brightness",     c.brightness_pct);
     cJSON_AddNumberToObject(d, "sleep_min",      c.display_sleep_min);
@@ -5118,14 +5118,26 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             render_waterfall_set_floor_blend((float)pct / 100.0f);
             settings_set_wf_floor_blend((uint8_t)pct);
         }
-        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_speed_mult"))) {
+        /* Waterfall rate, rows/s. "wf_speed_mult" is still accepted because
+           saved config files and any older client speak it - a 1..4x multiplier
+           is 10..40 rows/s, so the conversion is exact and no caller breaks. */
+        int wf_rows = -1;
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_rows_per_s"))) {
+            wf_rows = (int)v->valuedouble;
+        } else if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_speed_mult"))) {
             int m = (int)v->valuedouble;
             if (m < 1) m = 1;
             if (m > 4) m = 4;
+            wf_rows = m * 10;
+        }
+        if (wf_rows >= 0) {
+            if (wf_rows < 1)  wf_rows = 1;
+            if (wf_rows > 40) wf_rows = 40;
             /* Apply AND store, same as every slider in this block - storing
                alone leaves the live waterfall on the old value until reboot. */
-            render_set_waterfall_speed_mult((uint8_t)m);
-            settings_set_wf_speed_mult((uint8_t)m);
+            render_set_waterfall_rows_per_s((uint8_t)wf_rows);
+            settings_set_wf_rows_per_s((uint8_t)wf_rows);
+            ui_sync_wf_rate_controls();
         }
         if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_window"))) {
             uint8_t idx = (uint8_t)v->valuedouble; if (idx > 2) idx = 0;

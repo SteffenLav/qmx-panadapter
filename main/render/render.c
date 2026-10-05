@@ -48,17 +48,20 @@ void render_set_ema_alpha(float alpha)
     ESP_LOGI("render", "EMA alpha = %.2f", (double)alpha);
 }
 
-// Operator-facing waterfall speed setting (was the FT8-sync-lines diagnostic's
-// private s_wf_2x, which the removed drawer toggle used to drive - same
-// mechanism, generalised to 1..4x and given its own setting. See render.h.
-static volatile uint8_t s_wf_mult = 1;
+// Operator-facing waterfall rate, in rows per second. Started life as the
+// FT8-sync-lines diagnostic's private s_wf_2x, became a 1..4x drawer
+// multiplier, and is now rows/s so it can go DOWN as well as up - which is
+// what it was actually asked for. See render.h.
+#define WF_ROWS_NOMINAL (1000 / RENDER_PERIOD_MS)   /* 10 rows/s at 1x */
+static volatile uint8_t s_wf_rows = WF_ROWS_NOMINAL;
+static uint16_t s_wf_acc;   /* render_task only - no other task touches it */
 
-void render_set_waterfall_speed_mult(uint8_t mult)
+void render_set_waterfall_rows_per_s(uint8_t rows)
 {
-    if (mult < 1) mult = 1;
-    if (mult > 4) mult = 4;
-    s_wf_mult = mult;
-    ESP_LOGI("render", "waterfall speed: %ux", mult);
+    if (rows < 1)  rows = 1;
+    if (rows > 40) rows = 40;
+    s_wf_rows = rows;
+    ESP_LOGI("render", "waterfall rate: %u rows/s", rows);
 }
 
 
@@ -121,6 +124,9 @@ static void render_task(void *arg)
             // instead of blending new frames into a minutes-old picture.
             s_smoothed_init = false;
             s_wf_smoothed_init = false;
+            // Same reasoning for the row accumulator: a part-accumulated row
+            // from before the overlay is not owed to the operator now.
+            s_wf_acc = 0;
         }
 
         if (have_spectrum) {
@@ -186,13 +192,21 @@ static void render_task(void *arg)
         }
 
         if (have_spectrum) {
-            render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
-            // Faster-than-1x: push (mult - 1) MORE rows immediately, same
-            // spectrum content - there is no fresher sample within this
-            // period, so this scrolls the picture faster without touching
-            // the spectrum/S-meter cadence above, which stays at 10 Hz.
-            uint8_t mult = s_wf_mult;
-            for (uint8_t i = 1; i < mult; i++) {
+            /* One accumulator covers the whole 1..40 rows/s range, instead of
+             * a fast branch and a slow branch that could disagree: add the
+             * rate each period and emit a row for every whole 10 that have
+             * accumulated. At 10 that is exactly one row per tick (today's
+             * behaviour, bit for bit), at 40 four, at 1 one row every tenth
+             * tick. Non-multiples land evenly rather than in bursts - 3
+             * rows/s gives 10,3,3,3,10,... ticks apart, never 3 rows then a
+             * second of nothing.
+             *
+             * ⛔ The accumulator is reset when the panadapter is not visible
+             * (see the else branch), so returning from an overlay cannot dump
+             * a backlog of rows in one frame. */
+            s_wf_acc += s_wf_rows;
+            while (s_wf_acc >= WF_ROWS_NOMINAL) {
+                s_wf_acc -= WF_ROWS_NOMINAL;
                 render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
             }
         }

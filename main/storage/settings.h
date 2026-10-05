@@ -249,7 +249,15 @@ typedef struct {
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
-    uint8_t  wf_speed_mult;   // waterfall scroll speed, 1..4x the normal 10 rows/s (default 1)
+    /* Waterfall scroll rate in ROWS PER SECOND, 1..40, default 10.
+     * Was wf_speed_mult, a 1..4x multiplier over a fixed 10 rows/s. The
+     * operator asked to go the OTHER way - slower, to cut the waterfall's
+     * share of the frame draw - and a multiplier cannot express that, so the
+     * unit became rows/s and the one axis now covers both ends. A second
+     * control for the same axis would have been the wrong answer; see the
+     * drawer comment that already made that call once.
+     * NVS migrates the old key automatically (settings.c, KEY_WF_SPEED). */
+    uint8_t  wf_rows_per_s;
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -674,7 +682,7 @@ void settings_set_wf_black_db(float db);
 void settings_set_wf_contrast_db(float db);
 void settings_set_wf_floor_blend(uint8_t pct);
 void settings_set_wf_window(uint8_t idx);
-void settings_set_wf_speed_mult(uint8_t mult);
+void settings_set_wf_rows_per_s(uint8_t rows);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
@@ -691,6 +699,10 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
 uint8_t settings_get_wspr_rx_cycles(void);
+/* Waterfall rows/s. Narrow because ui_sync_wf_rate_controls() is called from
+ * the httpd task on /api/settings, and a qmx_settings_t on that stack is the
+ * fault this header warns about four times over. */
+uint8_t settings_get_wf_rows_per_s(void);
 uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may

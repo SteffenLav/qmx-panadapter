@@ -622,7 +622,7 @@ void app_main(void)
     render_waterfall_set_contrast_db(cfg->wf_contrast_db);
     render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
     dsp_set_window(cfg->wf_window);
-    render_set_waterfall_speed_mult(cfg->wf_speed_mult);
+    render_set_waterfall_rows_per_s(cfg->wf_rows_per_s);
     if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
     cfg = NULL;
 

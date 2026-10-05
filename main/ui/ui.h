@@ -198,6 +198,11 @@ bool ui_update_line_tappable(void);
 
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
+/* Re-point the waterfall-rate controls (the left-edge slider and the drawer
+ * dropdown) at the stored value. Call after changing it from anywhere that
+ * is not one of those two - /api/settings does. */
+void ui_sync_wf_rate_controls(void);
+
 void ui_set_resource_monitor_text(const char *text);
 
 // Dev-only: toggle the resource-monitor overlay's visibility. Not a user
