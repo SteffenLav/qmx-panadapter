@@ -5243,28 +5243,155 @@ static void build_label_bar(lv_obj_t *parent)
  * increments, O(1). */
 static volatile uint32_t s_bp_calls;
 static volatile uint32_t s_bp_calls_poll;
+static volatile uint32_t s_bp_skipped;   /* gated out - see update_bandplan_strip */
+/* Segment colours are cached by segment TYPE; this sentinel is the "out of
+ * band" pseudo-type, which no real bp_seg_t type uses. */
+#define BP_TYPE_CACHE_OOB  0xFEu
 
-void ui_bandplan_call_counts(unsigned *calls, unsigned *from_poll)
+void ui_bandplan_call_counts(unsigned *calls, unsigned *from_poll, unsigned *skipped)
 {
     if (calls)     *calls     = s_bp_calls;
     if (from_poll) *from_poll = s_bp_calls_poll;
+    if (skipped)   *skipped   = s_bp_skipped;
     s_bp_calls = 0;
     s_bp_calls_poll = 0;
+    s_bp_skipped = 0;
 }
+
+/* ⭐ WRITE ONLY WHAT MOVED.
+ *
+ * Every lv_obj_set_pos/set_size here invalidates the OLD rectangle and the NEW
+ * one, and this function performed 31 of them per call against objects that
+ * had usually not moved at all. Measured (c9d6170): ~26 invalidation requests
+ * per repaint, ~303 kpx to redraw a 28,160 px strip - 10.8x the strip's own
+ * area - and 2.0 Mpx/s in total, 20% of everything the display invalidated.
+ *
+ * Two things fix that, and both are below:
+ *   1. bp_set_x / bp_set_w write only when the value actually changed, and
+ *      nothing writes y or height any more - every object in this strip sits at
+ *      y 0 with height BANDPLAN_H, so set_pos/set_size were writing two
+ *      constants per object per tick and invalidating for them.
+ *   2. The whole function returns early when none of its INPUTS changed (the
+ *      gate below), which is the parked-dial case and was all 67 of the 67
+ *      repaints in the measurement.
+ *
+ * The caches are static and this runs only under display_lock, so there is no
+ * second writer to race. */
+/* ⛔ These are initialised to BP_GEOM_NONE in the same place as the type cache,
+ * for the same reason and NOT because 0 looked wrong: x = 0 is a REAL position
+ * (segment 0 sits there), so a zero-initialised x cache claims segment 0 is
+ * already placed and the first paint skips placing it. Same class of bug as the
+ * BP_CW == 0 colour collision below; found by sweeping for it rather than by
+ * seeing it fail. The widths happen to be safe at 0 since no segment is ever
+ * 0 px wide, but they are initialised too - relying on that is one refactor
+ * away from the same silent skip. */
+#define BP_GEOM_NONE ((int16_t)-32768)
+static int16_t bp_cx[BANDPLAN_MAX_SEG], bp_cw[BANDPLAN_MAX_SEG];
+static int16_t bp_lx[BANDPLAN_MAX_SEG], bp_lw[BANDPLAN_MAX_SEG];
+static int16_t bp_spanx = BP_GEOM_NONE, bp_spanw = BP_GEOM_NONE;
+static int16_t bp_pbx   = BP_GEOM_NONE, bp_pbw   = BP_GEOM_NONE;
+static int16_t bp_knobx = BP_GEOM_NONE, bp_knobw = BP_GEOM_NONE;
+static int16_t bp_markx = BP_GEOM_NONE;
+/* ⛔ 0xFF, NOT 0. This cache holds a bp_seg_type_t, and BP_CW IS 0 - so a
+ * static array starting at zero reads as "every segment is already CW", and the
+ * first paint skips setting the colour on exactly the CW blocks. That shipped
+ * to the bench and the operator saw it immediately: "corrupted the CW part of
+ * the band-plan". A sentinel must be a value the real type can never take. */
+#define BP_TYPE_CACHE_NONE 0xFFu
+static uint8_t bp_seg_type_c[BANDPLAN_MAX_SEG];
+static bool    bp_type_c_init = false;
+static bool    bp_caches_valid = false;
+
+static inline void bp_set_x(lv_obj_t *o, int16_t *cache, int x)
+{
+    if (!o || *cache == (int16_t)x) return;
+    *cache = (int16_t)x;
+    lv_obj_set_x(o, x);
+}
+static inline void bp_set_w(lv_obj_t *o, int16_t *cache, int w)
+{
+    if (!o || *cache == (int16_t)w) return;
+    *cache = (int16_t)w;
+    lv_obj_set_width(o, w);
+}
+
+/* ⛔ THE GATE IS ON THE INPUTS, NOT THE DRAWN RESULT.
+ *
+ * This function is pure with respect to the fields below: the same inputs
+ * always produce the same strip. Comparing inputs is therefore equivalent to
+ * comparing the output, and it is honest in a way that caching the output is
+ * not - if a new input is ever added and NOT added here, the gate goes stale
+ * silently. So: anything read below that can change the picture belongs in
+ * this struct. The compiler will not tell you.
+ *
+ * ⚠ The boot race this function's defensive caller was added for still works.
+ * If the very first call is dropped (ui_refresh_bandplan_strip's display_lock
+ * times out), nothing is applied and nothing is stored, so `valid` stays false
+ * and the next poll paints. The gate can only ever skip a repaint that would
+ * have been pixel-identical to the one already on screen. */
+typedef struct {
+    bool     valid;
+    uint32_t freq_hz;
+    uint8_t  reg;
+    uint8_t  n;
+    uint32_t band_lo, band_hi;
+    float    zoom;
+    int32_t  pan_hz;
+    int32_t  pb_lo_hz, pb_hi_hz;
+    bool     dragging;
+} bp_inputs_t;
+static bp_inputs_t s_bp_last_in;
 
 static void update_bandplan_strip(uint32_t freq_hz)
 {
     s_bp_calls++;
     if (!s_bandplan_obj) return;
+    if (!bp_type_c_init) {
+        memset(bp_seg_type_c, BP_TYPE_CACHE_NONE, sizeof bp_seg_type_c);
+        for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+            bp_cx[i] = bp_cw[i] = bp_lx[i] = bp_lw[i] = BP_GEOM_NONE;
+        }
+        bp_type_c_init = true;
+    }
     const int W_BP = DISPLAY_H_RES;
 
-    qmx_settings_t s;
-    settings_load_all(&s);
+    /* Narrow getter instead of settings_load_all(). It returns exactly the two
+     * fields wanted here - bandplan_region and my_grid - and this function is
+     * reached from cat's poll_task (stack 4096 B) 6.7 times a second, where a
+     * ~1 KB qmx_settings_t copy is the fault settings.h warns about in four
+     * separate places. Reusing spots_lane's getter rather than adding a second
+     * one that reads the same two fields. */
+    uint8_t  region_cfg = 0;
+    char     grid[8];
+    settings_get_spots_lane(&region_cfg, NULL, grid, sizeof grid);
     bandplan_region_t reg =
-        bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+        bandplan_effective_region((bandplan_region_t)region_cfg, grid);
 
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(freq_hz, reg, &segs);
+
+    /* Collect every input, then bail if none of them moved. All arithmetic,
+     * no LVGL - the cost this is protecting against is the invalidation. */
+    bp_inputs_t in;
+    memset(&in, 0, sizeof in);
+    in.valid    = true;
+    in.freq_hz  = freq_hz;
+    in.reg      = (uint8_t)reg;
+    in.n        = (uint8_t)((n > 0 && n <= BANDPLAN_MAX_SEG) ? n : 0);
+    in.band_lo  = in.n ? segs[0].lo_hz     : 0;
+    in.band_hi  = in.n ? segs[n - 1].hi_hz : 0;
+    in.zoom     = s_zoom_factor;
+    in.pan_hz   = (int32_t)(s_bp_dragging ? s_bp_preview_pan_hz
+                                          : ui_get_pan_offset_hz());
+    in.dragging = s_bp_dragging;
+    compute_passband_edges_hz(&in.pb_lo_hz, &in.pb_hi_hz);
+
+    if (s_bp_last_in.valid && bp_caches_valid &&
+        memcmp(&in, &s_bp_last_in, sizeof in) == 0) {
+        s_bp_skipped++;
+        return;
+    }
+    s_bp_last_in = in;
     if (n <= 0 || n > BANDPLAN_MAX_SEG) {
         // Not inside a known amateur band. The strip used to vanish entirely;
         // Samuel W7STF asked for it to stay, and he is right - an empty row reads
@@ -5279,15 +5406,18 @@ static void update_bandplan_strip(uint32_t freq_hz)
             lv_obj_add_flag(s_bp_seg[i],     LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_set_pos(s_bp_seg[0], 0, 0);
-        lv_obj_set_size(s_bp_seg[0], W_BP, BANDPLAN_H);
-        lv_obj_set_style_bg_color(s_bp_seg[0], lv_color_hex(BANDPLAN_OOB_COLOR), 0);
+        bp_set_x(s_bp_seg[0], &bp_cx[0], 0);
+        bp_set_w(s_bp_seg[0], &bp_cw[0], W_BP);
+        if (bp_seg_type_c[0] != BP_TYPE_CACHE_OOB) {
+            bp_seg_type_c[0] = BP_TYPE_CACHE_OOB;
+            lv_obj_set_style_bg_color(s_bp_seg[0], lv_color_hex(BANDPLAN_OOB_COLOR), 0);
+        }
         lv_obj_clear_flag(s_bp_seg[0], LV_OBJ_FLAG_HIDDEN);
 
         lv_label_set_text(s_bp_seg_lbl[0],
                           s_bp_dragging ? "" : "Out of band  -  drag to tune");
-        lv_obj_set_pos(s_bp_seg_lbl[0], 0, 0);
-        lv_obj_set_size(s_bp_seg_lbl[0], W_BP, BANDPLAN_H);
+        bp_set_x(s_bp_seg_lbl[0], &bp_lx[0], 0);
+        bp_set_w(s_bp_seg_lbl[0], &bp_lw[0], W_BP);
         // Same rule the in-band labels follow: never while the strip is being
         // dragged, so this does not fight touch_event_cb's fade.
         if (s_bp_dragging) lv_obj_add_flag(s_bp_seg_lbl[0], LV_OBJ_FLAG_HIDDEN);
@@ -5302,10 +5432,11 @@ static void update_bandplan_strip(uint32_t freq_hz)
         // that makes this row worth its height out of band, and it is also what
         // makes the gesture discoverable at all.
         if (s_bp_knob && !s_bp_dragging) {
-            lv_obj_set_size(s_bp_knob, BP_OOB_KNOB_W_PX, BANDPLAN_H);
-            lv_obj_set_pos(s_bp_knob, W_BP / 2 - BP_OOB_KNOB_W_PX / 2, 0);
+            bp_set_w(s_bp_knob, &bp_knobw, BP_OOB_KNOB_W_PX);
+            bp_set_x(s_bp_knob, &bp_knobx, W_BP / 2 - BP_OOB_KNOB_W_PX / 2);
             lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
         }
+        bp_caches_valid = true;
         // Nothing to reset when we come back in band: the in-band path below
         // rewrites segment 0's position, size, colour and label every tick.
         return;
@@ -5326,10 +5457,15 @@ static void update_bandplan_strip(uint32_t freq_hz)
         int x0 = (int)((double)(segs[i].lo_hz - band_lo) / span * W);
         int x1 = (int)((double)(segs[i].hi_hz - band_lo) / span * W);
         int w  = x1 - x0; if (w < 1) w = 1;
-        lv_obj_set_pos(s_bp_seg[i], x0, 0);
-        lv_obj_set_size(s_bp_seg[i], w, BANDPLAN_H);
-        lv_obj_set_style_bg_color(s_bp_seg[i],
-                                  lv_color_hex(bandplan_seg_color(segs[i].type)), 0);
+        bp_set_x(s_bp_seg[i], &bp_cx[i], x0);
+        bp_set_w(s_bp_seg[i], &bp_cw[i], w);
+        /* Colour follows the segment TYPE, so re-setting it on an unchanged
+         * segment is a pure invalidation for an identical pixel. */
+        if (bp_seg_type_c[i] != (uint8_t)segs[i].type) {
+            bp_seg_type_c[i] = (uint8_t)segs[i].type;
+            lv_obj_set_style_bg_color(s_bp_seg[i],
+                                      lv_color_hex(bandplan_seg_color(segs[i].type)), 0);
+        }
         lv_obj_clear_flag(s_bp_seg[i], LV_OBJ_FLAG_HIDDEN);
 
         // Label only when the block is wide enough to hold the text legibly,
@@ -5337,8 +5473,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         // it for the duration and fades it back in on release - don't
         // fight that here every tick).
         lv_label_set_text(s_bp_seg_lbl[i], bandplan_seg_label(segs[i].type));
-        lv_obj_set_pos(s_bp_seg_lbl[i], x0, 0);
-        lv_obj_set_size(s_bp_seg_lbl[i], w, BANDPLAN_H);
+        bp_set_x(s_bp_seg_lbl[i], &bp_lx[i], x0);
+        bp_set_w(s_bp_seg_lbl[i], &bp_lw[i], w);
         if (w >= 56 && !s_bp_dragging) {
             lv_obj_clear_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -5368,8 +5504,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         if (sx1 > W) sx1 = W;
         int sw = sx1 - sx0;
         if (sw < 1) sw = 1;
-        lv_obj_set_pos(s_bp_span, sx0, 0);
-        lv_obj_set_size(s_bp_span, sw, BANDPLAN_H);
+        bp_set_x(s_bp_span, &bp_spanx, sx0);
+        bp_set_w(s_bp_span, &bp_spanw, sw);
         lv_obj_clear_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_bp_span);
 
@@ -5377,8 +5513,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         // (this same span rect), so the framed box the user slides along the
         // strip is exactly the window shown on the spectrum/waterfall.
         if (s_bp_knob) {
-            lv_obj_set_pos(s_bp_knob, sx0, 0);
-            lv_obj_set_size(s_bp_knob, sw, BANDPLAN_H);
+            bp_set_x(s_bp_knob, &bp_knobx, sx0);
+            bp_set_w(s_bp_knob, &bp_knobw, sw);
             lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
         }
     }
@@ -5403,8 +5539,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         // block. Floor it to a legible minimum, same idea as the VFO
         // marker's fixed 3px width below.
         if (pw < 6) pw = 6;
-        lv_obj_set_pos(s_bp_passband, px0, 0);
-        lv_obj_set_size(s_bp_passband, pw, BANDPLAN_H);
+        bp_set_x(s_bp_passband, &bp_pbx, px0);
+        bp_set_w(s_bp_passband, &bp_pbw, pw);
         // Never while actively dragging - hidden for the duration, faded
         // back in on release (see the seg-label comment above).
         if (!s_bp_dragging) lv_obj_clear_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
@@ -5415,7 +5551,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
         int mx = (int)((double)((int64_t)freq_hz - band_lo) / span * W);
         if (mx < 0)     mx = 0;
         if (mx > W - 3) mx = W - 3;
-        lv_obj_set_pos(s_bp_marker, mx, 0);
+        bp_set_x(s_bp_marker, &bp_markx, mx);
         lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_bp_marker);
     }
@@ -5425,6 +5561,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
     if (s_bp_knob && !lv_obj_has_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_move_foreground(s_bp_knob);
     }
+    bp_caches_valid = true;
 }
 
 /* ⭐ THE BAND-PLAN KNOB MOVES THE WINDOW, NOT THE DIAL.
@@ -10135,7 +10272,13 @@ static void touch_event_cb(lv_event_t *e)
                 int kx = half + off_px - BP_OOB_KNOB_W_PX / 2;
                 if (kx < 0) kx = 0;
                 if (kx > DISPLAY_H_RES - BP_OOB_KNOB_W_PX) kx = DISPLAY_H_RES - BP_OOB_KNOB_W_PX;
-                lv_obj_set_pos(s_bp_knob, kx, 0);
+                /* Through the cached setter, not lv_obj_set_pos: this is a
+                 * SECOND writer of the knob's x, and update_bandplan_strip now
+                 * skips writes that match its cache. A raw write here would
+                 * leave that cache claiming a position the knob no longer has,
+                 * and the next correction back to the cached value would be
+                 * skipped as a no-op - the knob would stick. */
+                bp_set_x(s_bp_knob, &bp_knobx, kx);
                 lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
             }
             if (s_freq_label) {
@@ -10218,8 +10361,9 @@ static void touch_event_cb(lv_event_t *e)
                 // later, which at ~13 fps is the difference between a spring and
                 // a glitch.
                 if (s_bp_knob) {
-                    lv_obj_set_pos(s_bp_knob,
-                                   DISPLAY_H_RES / 2 - BP_OOB_KNOB_W_PX / 2, 0);
+                    /* Cached setter - same reason as the drag site above. */
+                    bp_set_x(s_bp_knob, &bp_knobx,
+                             DISPLAY_H_RES / 2 - BP_OOB_KNOB_W_PX / 2);
                 }
                 s_stroll_active = false;
                 s_hide_passband_now = true;

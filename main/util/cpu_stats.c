@@ -89,11 +89,11 @@ static void cpu_stats_task(void *arg)
                 /* The band plan's share, resolved into a call rate. bp_calls is
                  * every path into update_bandplan_strip, bp_poll only the
                  * unconditional defensive refresh from cat's poll_task. */
-                unsigned bp_calls = 0, bp_poll = 0;
-                ui_bandplan_call_counts(&bp_calls, &bp_poll);
-                ESP_LOGI(TAG, "bandplan: %u repaints (%u from CAT poll) | "
+                unsigned bp_calls = 0, bp_poll = 0, bp_skip = 0;
+                ui_bandplan_call_counts(&bp_calls, &bp_poll, &bp_skip);
+                ESP_LOGI(TAG, "bandplan: %u repaints (%u from CAT poll, %u gated) | "
                               "bp reqs %u = %ukpx/s",
-                         bp_calls, bp_poll, ib.reqs[4], ib.kpx_per_s[4]);
+                         bp_calls, bp_poll, bp_skip, ib.reqs[4], ib.kpx_per_s[4]);
             }
         }
         prev_idle0 = i0;
