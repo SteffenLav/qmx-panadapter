@@ -39,10 +39,65 @@ static volatile uint32_t s_frames;
  * "pixels requested", a load proxy, not an exact blit figure. O(1) per event. */
 static volatile uint64_t s_inval_px;
 
+/* ⭐ FRAME SPACING, NOT FRAME RATE. Steffen, 2026-10-05: the Tab5 is "jaggy all
+ * the time" while the web waterfall looks smooth - and the web runs SLOWER.
+ * Measured the same minute: Tab5 12.2 fps mean (10.9-13.0), web exactly 10.0.
+ * So the rate is not the complaint; a rate that high cannot look choppy unless
+ * the frames are unevenly SPACED.
+ *
+ * The web push is clocked by vTaskDelayUntil, so its rows land every 100 ms
+ * whatever else happens. An LVGL frame lands whenever core 0 gets round to it,
+ * and core 0 idles at ~11%. Same approximate rate, different spacing, and the
+ * eye reads spacing.
+ *
+ * The existing fps figure CANNOT show this: cpu_stats averages over 10 s, which
+ * is exactly where millisecond-scale spacing goes to hide. Hence the interval
+ * itself.
+ *
+ * O(1) per frame - a subtract and a few compares, no division, no walk. The
+ * rule at the top of this block applies to this callback too. */
+static volatile uint32_t s_fr_min_us = UINT32_MAX;
+static volatile uint32_t s_fr_max_us;
+static volatile uint64_t s_fr_sum_us;
+static volatile uint32_t s_fr_n;
+static volatile uint32_t s_fr_late;    /* intervals over FRAME_LATE_US */
+#define FRAME_LATE_US 150000u          /* ~2x the nominal 83 ms at 12 fps */
+
 static void disp_refr_ready_cb(lv_event_t *e)
 {
     (void)e;
     s_frames++;
+
+    static int64_t last_us;
+    int64_t now = esp_timer_get_time();
+    if (last_us) {
+        uint32_t dt = (uint32_t)(now - last_us);
+        if (dt < s_fr_min_us) s_fr_min_us = dt;
+        if (dt > s_fr_max_us) s_fr_max_us = dt;
+        if (dt > FRAME_LATE_US) s_fr_late++;
+        s_fr_sum_us += dt;
+        s_fr_n++;
+    }
+    last_us = now;
+}
+
+/* Frame-interval spread since the previous call, then reset. All microseconds.
+ * n == 0 means no frames were rendered in the window - a real reading, not an
+ * error (the display can be idle). */
+void display_frame_spacing(display_frame_spacing_t *out)
+{
+    if (!out) return;
+    uint32_t n = s_fr_n;
+    out->n       = n;
+    out->min_us  = (n && s_fr_min_us != UINT32_MAX) ? s_fr_min_us : 0;
+    out->max_us  = s_fr_max_us;
+    out->mean_us = n ? (uint32_t)(s_fr_sum_us / n) : 0;
+    out->late    = s_fr_late;
+    s_fr_min_us = UINT32_MAX;
+    s_fr_max_us = 0;
+    s_fr_sum_us = 0;
+    s_fr_n      = 0;
+    s_fr_late   = 0;
 }
 
 static void disp_inval_area_cb(lv_event_t *e)

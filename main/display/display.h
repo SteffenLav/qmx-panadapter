@@ -38,6 +38,18 @@ bool display_is_flipped(void);
 // by eye, which is not something eyes can do.
 unsigned display_fps_x10(void);
 
+/* Frame-INTERVAL spread, which is what "jaggy" actually means - see the long
+ * comment at disp_refr_ready_cb(). fps alone cannot show it: a 10 s average
+ * hides the millisecond spacing. Reading it resets the window. */
+typedef struct {
+    uint32_t n;        /* intervals measured in this window */
+    uint32_t min_us;
+    uint32_t mean_us;
+    uint32_t max_us;
+    uint32_t late;     /* intervals over ~2x nominal */
+} display_frame_spacing_t;
+void display_frame_spacing(display_frame_spacing_t *out);
+
 // Thousands of invalidated pixels per second since the previous call. Read
 // together with the fps figure: frames say how OFTEN, this says how MUCH.
 unsigned display_inval_kpx_per_s(void);

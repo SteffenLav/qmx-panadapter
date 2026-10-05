@@ -53,10 +53,22 @@ static void cpu_stats_task(void *arg)
                 // safe on a periodic path (see the cyan-flash rule in CLAUDE.md).
                 unsigned f10  = display_fps_x10();
                 unsigned kpx  = display_inval_kpx_per_s();
-                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s",
+                /* Frame SPACING on the same line as the rate, because the two
+                 * disagree and only the spacing matches what the operator sees:
+                 * the Tab5 renders FASTER than the web waterfall (12.2 vs 10.0
+                 * fps, measured 2026-10-05) and looks worse. A mean near the
+                 * nominal with a large max is jitter; a mean that is simply
+                 * long is a slow renderer. Same O(1) counter read as the rest. */
+                display_frame_spacing_t fs;
+                display_frame_spacing(&fs);
+                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s "
+                              "| frame ms min %u mean %u max %u late %u/%u",
                          (unsigned long)(p0 / 10), (unsigned long)(p0 % 10),
                          (unsigned long)(p1 / 10), (unsigned long)(p1 % 10),
-                         f10 / 10, f10 % 10, kpx);
+                         f10 / 10, f10 % 10, kpx,
+                         (unsigned)(fs.min_us / 1000), (unsigned)(fs.mean_us / 1000),
+                         (unsigned)(fs.max_us / 1000),
+                         (unsigned)fs.late, (unsigned)fs.n);
             }
         }
         prev_idle0 = i0;
