@@ -17,6 +17,7 @@
 #include "battery.h"
 #include "bsp_info.h"
 #include "gpio_relay.h"
+#include "unit_gps.h"      // PORT.A's other owner - see the branch before time_sync_init()
 #include "cat.h"
 #include "cw_decode.h"
 #include "audio.h"
@@ -365,6 +366,22 @@ void app_main(void)
     // Initialise INA226 battery monitor (shares main I2C bus with PI4IO)
     battery_init(bsp_i2c_get_handle());
 
+    /* PORT.A, immediately before time_sync_init().
+     *
+     * ONE setting decides which backend owns GPIO53/54, and it branches here
+     * rather than twice, early enough for both: the Unit GPS case needs its
+     * UART up and its pipeline reporting before the time-sync task starts
+     * reading the clock authority, and the relay case needs its pins driven
+     * from boot rather than left floating for the rest of it. */
+    if (settings_get_port_a_mode() == PORT_A_MODE_UNIT_GPS) {
+        if (!unit_gps_start()) {
+            ESP_LOGE(TAG, "Unit GPS UART failed to start - PORT.A left idle; "
+                          "switch Port mode back to relay to drive the relay pins");
+        }
+    } else {
+        gpio_relay_init();   // GPIO53/54 remote relay pulse - see gpio_relay.h
+    }
+
     // Init RX8130CE supercap RTC and apply stored time to system clock.
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());
@@ -639,8 +656,12 @@ void app_main(void)
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
-    gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
-    MEM_LEDGER("cpu_stats + gpio_relay");
+    /* gpio_relay_init() USED TO BE HERE. It moved up to the PORT.A branch
+     * before time_sync_init() when the Unit GPS landed (#15): one setting
+     * decides which backend owns GPIO53/54, and the relay case needs its
+     * pins driven from boot rather than left floating. The ledger label
+     * lost its "+ gpio_relay" with it. */
+    MEM_LEDGER("cpu_stats");
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     /* Only now may the "Now turn on or reboot your QMX/+" prompt appear.

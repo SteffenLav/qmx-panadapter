@@ -82,6 +82,7 @@
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "gpio_relay.h"        // gpio_pulse - remote relay for a QMX power cycle
+#include "unit_gps/unit_gps.h" // /api/status port.gps - the PORT.A pipeline state
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
 /* Defined by the lv_event.c guard in managed_components/ (#329,
@@ -887,7 +888,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         // these two labels "can never disagree" - they had already diverged,
         // which is the argument for deriving the string in ONE place.
         time_sync_source_t ts = time_sync_get_effective_source();
-        const char *tsn = ts == TIME_SOURCE_SNTP   ? "NTP"
+        const char *tsn = ts == TIME_SOURCE_UNIT_GPS ? "GPS"
+                        : ts == TIME_SOURCE_SNTP   ? "NTP"
                         : ts == TIME_SOURCE_QMX    ? (time_sync_qmx_gps_confirmed() ? "GPS" : "QMX")
                         : ts == TIME_SOURCE_RTC    ? "RTC"
                         : ts == TIME_SOURCE_FT8    ? "FT8"
@@ -940,6 +942,28 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(relay, "level", rlevel ? 1 : 0);
             cJSON_AddNumberToObject(relay, "ms", rms);
             cJSON_AddItemToObject(root, "relay", relay);
+        }
+        /* PORT.A: two facts that must never be conflated. "mode" is what the
+         * CABLE is (relay or unit_gps); "gps" is what the receiver is doing,
+         * and is only present when the mode says there is a receiver at all -
+         * a relay board reporting gps.state "OFF" would read as a fault the
+         * operator cannot fix, because they never chose Unit GPS. */
+        {
+            cJSON *port = cJSON_CreateObject();
+            bool is_unit_gps = cfg.port_a_mode == PORT_A_MODE_UNIT_GPS;
+            cJSON_AddStringToObject(port, "mode", is_unit_gps ? "unit_gps" : "relay");
+            if (is_unit_gps) {
+                cJSON *gps = cJSON_CreateObject();
+                cJSON_AddStringToObject(gps, "state", unit_gps_state_name(unit_gps_state()));
+                /* UINT32_MAX means "no fix has ever been accepted this
+                 * session"; sent as the number it is, because the browser's
+                 * rule is the firmware's rule (age < UNIT_GPS_FRESH_MS) and
+                 * inventing a second spelling of "never" invites a second
+                 * freshness test. */
+                cJSON_AddNumberToObject(gps, "age_ms", (double)unit_gps_age_ms());
+                cJSON_AddItemToObject(port, "gps", gps);
+            }
+            cJSON_AddItemToObject(root, "port", port);
         }
 
         // Band-plan for the current band — whole-band strip on the web UI,
@@ -4697,6 +4721,20 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
+
+    /* PORT.A mode. This is the sequencer, not a plain store: it hands the pins
+     * between the relay and the Unit GPS UART, and it can REFUSE (a pulse in
+     * flight, or the UART failing to start). A refusal is a 400 carrying the
+     * reason, because the page has already drawn what the operator asked for
+     * and only a real answer tells it to go back. */
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "port_a_mode")))) {
+        if (!settings_set_port_a_mode(port_a_mode_parse(s))) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "PORT.A mode not changed: a relay pulse or power cycle is running, or the Unit GPS UART failed to start");
+            return ESP_FAIL;
+        }
+    }
 
     // #221 API AUDIT: the settings below had NO route at all - not here, not via
     // a dedicated endpoint - so anything driving the device over HTTP (a script,

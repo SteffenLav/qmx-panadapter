@@ -291,7 +291,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
-- [Time sync](#time-sync) — WiFi/SNTP, Tab5 RTC, POTA/offline use
+- [Time sync](#time-sync) — Unit GPS on PORT.A, WiFi/SNTP, Tab5 RTC, POTA/offline use
 - [Settings](#settings) — every drawer control, group by group
 - [WSPR](#wspr) — two-minute propagation beacon: where your signal actually goes
 - [Radio menus](#radio-menus) — the QMX's own menu system on the Tab5
@@ -919,6 +919,7 @@ The Tab5 needs accurate UTC for FT8 slot timing. Sources in priority order (high
 
 | Source | When applied |
 |--------|-------------|
+| **Unit GPS (PORT.A)** | M5Stack Unit GPS v1.1, selected under **Settings ▸ Device ▸ Port mode** — satellite UTC **including the full date**, offline, ranked above every other source while it has a fresh lock |
 | **SNTP (WiFi)** | Always authoritative whenever WiFi is connected and has synced at least once — sets system clock, Tab5 RTC, and NVS |
 | **Tab5 RTC** | RX8130CE supercap-backed (~30–40 h retention) — applied at boot before QMX or WiFi are available |
 | **QMX `TM;`** | Offline fallback only — applied when WiFi is down or has never synced (field/POTA with no WiFi) |

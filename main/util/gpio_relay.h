@@ -26,8 +26,7 @@ extern "C" {
 
 // Call once at boot, AFTER settings_init(). Configures both whitelisted pins
 // as outputs resting on the INACTIVE side of the stored polarity - open-relay
-// is the safe default, and a contact closure must require a deliberate pulse.
-//
+// is the safe default, and a contact closure must require a deliberate pulse.//
 // ⛔ This used to rest both pins at a fixed LOW, which for an operator who had
 // chosen active LOW meant the relay was held CLOSED from boot until the first
 // pulse released it (Randy N4OPI, 2026-09-06). "Resting" is a statement about
@@ -40,6 +39,17 @@ void gpio_relay_init(void);
 // Safe mid-pulse: it retargets where the pulse RETURNS to rather than cutting
 // it short.
 void gpio_relay_set_polarity(bool active_level);
+
+// Give PORT.A up: both pins become plain inputs - no drive, no pulls - which
+// is what "hi-Z" means here and the only state in which a UART can own them
+// without fighting an output driver. This is the first half of the Port-mode
+// sequencer's relay -> unit_gps handoff; the UART is
+// brought up by the caller AFTER this returns.
+//
+// Refuses (false) while a pulse or power cycle is in flight - a handoff
+// mid-pulse would leave the pulse's release callback driving a pin the UART
+// now owns. Idempotent: calling it with the pins already released is a no-op.
+bool gpio_relay_release(void);
 
 // Drive `pin` (53 or 54 ONLY) to `level` for `ms`, then return it to the
 // opposite level. Runs asynchronously via a one-shot timer - never blocks

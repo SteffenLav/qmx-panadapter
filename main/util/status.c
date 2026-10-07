@@ -9,6 +9,7 @@
 #include "diag_log.h"
 #include "ft8_test.h"
 #include "settings.h"
+#include "unit_gps.h"        // the bottom-bar Unit GPS chip - pipeline state
 #include "bsp/m5stack_tab5.h"
 #include "sd_archive.h"
 #include "esp_heap_caps.h"
@@ -465,6 +466,11 @@ static void status_task(void *arg)
         // a stray manual/FT8 nudge doesn't leave the label stuck on FT8 while
         // SNTP/GPS is really in charge.
         switch (time_sync_get_effective_source()) {
+            // Unit GPS on PORT.A. Reaches this switch only when it is LIVE
+            // (LOCKED inside the freshness window) - get_effective_source()
+            // will not return it otherwise - so the GPS claim can never be
+            // made from mode alone or from a stale lock.
+            case TIME_SOURCE_UNIT_GPS: clk_suffix = " UTC(GPS)"; break;
             case TIME_SOURCE_SNTP:   clk_suffix = " UTC(NTP)"; break;
             // QMX source: GPS when auto-detected as GPS-disciplined, else the
             // plain-QMX RTC (naive offline fallback).
@@ -524,6 +530,24 @@ static void status_task(void *arg)
             }
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
+        /* The Unit GPS chip. It answers "what is the RECEIVER doing", which is
+         * a different question from the suffix's "who is disciplining the
+         * clock" - and it hides itself in relay mode, where there is no
+         * receiver to describe at all (spec: the chip is never shown when
+         * Port mode is relay). */
+        {
+            unit_gps_state_t st = unit_gps_state();
+            if (settings_get_port_a_mode() != PORT_A_MODE_UNIT_GPS ||
+                st == UNIT_GPS_OFF) {
+                ui_set_unit_gps_chip(-1);
+            } else if (st == UNIT_GPS_LOCKED) {
+                ui_set_unit_gps_chip(1);
+            } else if (st == UNIT_GPS_LOST) {
+                ui_set_unit_gps_chip(2);
+            } else {
+                ui_set_unit_gps_chip(0);   // LISTENING or DEVICE - acquiring
+            }
+        }
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
         // Bluetooth, next to it. "Started" and "a mouse is on the other end"
         // are separate facts and the glyph shows both.

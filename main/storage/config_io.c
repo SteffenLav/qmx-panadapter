@@ -106,6 +106,12 @@ char *config_io_export(size_t *out_len)
     APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
     APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
     APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
+    /* Strings, not the raw enum: a backup file is read by hand as often as by
+       this importer, and "relay"/"unit_gps" says which cable is plugged in
+       where 1 would not. Written AFTER the relay triplet so the file reads in
+       the order the importer applies it - though the importer buffers the mode
+       anyway, because an edited file has no such order. */
+    APP("port_a_mode        = %s\n", port_a_mode_str(c.port_a_mode));
     /* #302: 0 = 14.074.000, 1 = 14,074,000 */
     APP("freq_sep_style     = %u\n", (unsigned)c.freq_sep_style);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
@@ -341,6 +347,12 @@ int config_io_import(char *text)
     char    act_ref[16];
     bool    act_touched = false;
     snprintf(act_ref, sizeof act_ref, "%s", cur.act_ref);
+    /* The port owner is buffered like the pairs above, and applied LAST: the
+       mode decides whether the relay triplet drives pins at all, so reading it
+       before the wiring it supersedes would hand the port to whichever half of
+       the file happened to come first. */
+    uint8_t port_mode = cur.port_a_mode;
+    bool    port_touched = false;
 
     section_t sec = SEC_NONE;
     int applied = 0;
@@ -446,6 +458,10 @@ int config_io_import(char *text)
                 else if (!strcasecmp(key, "relay_active_high")) rl  = to_bool(val);
                 else                                            rms = (uint16_t)atoi(val);
                 settings_set_gpio_relay(rp, rl, rms);
+            }
+            else if (!strcasecmp(key, "port_a_mode")) {
+                port_mode    = port_a_mode_parse(val);
+                port_touched = true;
             }
             else if (!strcasecmp(key, "freq_sep_style"))    settings_set_freq_sep_style((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
@@ -660,6 +676,10 @@ int config_io_import(char *text)
     if (known_touched) settings_wifi_known_set_all(known, known_n);
     if (kp_touched)  settings_set_freq_kp_pos(kp_dx, kp_dy);
     if (act_touched) settings_set_activation(act_type, act_ref);
+    /* Dead last, after every key it governs: this is the sequencer call, and it
+       either hands PORT.A to the UART or re-drives the relay pins depending on
+       the mode. */
+    if (port_touched) settings_set_port_a_mode(port_mode);
     settings_flush();
     /* The RX-audio keys above are STORED by their setters but not heard: the
      * DSP holds its own live copies. Without this a restored backup shows the

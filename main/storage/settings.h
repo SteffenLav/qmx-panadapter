@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>   // size_t (settings_get_activation_ref)
+#include <strings.h>  // strcasecmp, for port_a_mode_parse below
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +22,47 @@ typedef enum {
     FT8_ROBOT_PRI_WEAKEST   = 1,  // lowest SNR first (help the weak ones / ragchew DX hunt)
     FT8_ROBOT_PRI_DISTANT   = 2,  // greatest great-circle distance from our grid (DX)
 } ft8_robot_priority_t;
+
+// PORT.A (HY2.0-4P) ownership. ONE field, because the connector has one cable
+// and two would be free to disagree: the remote power-cycle relay drives
+// GPIO53/54 from boot, the Unit GPS v1.1 talks UART on exactly those pins, and
+// nothing physical can tell us which is plugged in (no cable detect). Absent
+// NVS key means relay, so an upgrade never moves a
+// pin. 2 is reserved for a future Grove accessory so this enum never has to be
+// renumbered underneath a persisted value.
+typedef enum {
+    PORT_A_MODE_RELAY    = 0,  // relay harness owns the pins (default)
+    PORT_A_MODE_UNIT_GPS = 1,  // Unit GPS v1.1 UART owns the pins
+} port_a_mode_t;
+
+/* The mode's string form and its sanity rule, as static inline rather than as
+ * functions in settings.c: config_io needs the strings, settings.c needs the
+ * rule, and test/port_a_mode_harness.c needs BOTH without linking NVS (which
+ * is the only thing settings.c cannot do on a host). A round-trip that has to
+ * boot a device to be checked is a round-trip nobody checks. */
+static inline const char *port_a_mode_str(uint8_t mode)
+{
+    return mode == PORT_A_MODE_UNIT_GPS ? "unit_gps" : "relay";
+}
+
+/* Anything that is not a mode this build implements resolves to relay: 2 is a
+ * reserved Grove slot, the rest is NVS noise. The default of an ABSENT key is
+ * the same value (0), so "no key", "corrupt key" and "operator chose relay"
+ * are one answer - the pins stay driven the way they were before this setting
+ * existed. */
+static inline uint8_t port_a_mode_normalize(uint8_t raw)
+{
+    return raw == PORT_A_MODE_UNIT_GPS ? PORT_A_MODE_UNIT_GPS : PORT_A_MODE_RELAY;
+}
+
+/* Decode half of the config-file round trip. Anything that is not exactly
+ * "unit_gps" (case-insensitive) means relay, so a hand-edited backup can only
+ * ever select between the two cables, never a third state. */
+static inline uint8_t port_a_mode_parse(const char *val)
+{
+    return (val && strcasecmp(val, "unit_gps") == 0) ? PORT_A_MODE_UNIT_GPS
+                                                     : PORT_A_MODE_RELAY;
+}
 
 typedef struct {
     bool incl_en[2];
@@ -596,6 +638,10 @@ typedef struct {
     uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
     bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
     uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
+    // Who owns PORT.A. Kept next to the relay triplet because it is the switch
+    // that turns those three off: mode != relay means the pin/level/ms are
+    // still stored (a future switch back must restore them) but drive nothing.
+    uint8_t  port_a_mode;       // port_a_mode_t: 0=relay (default), 1=unit_gps
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -1130,6 +1176,21 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
 // settings_load_all() - that is a multi-kilobyte struct and this is read from
 // the web handler; see the task-stack notes in CLAUDE.md.
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
+
+// PORT.A ownership mode (port_a_mode_t). Narrow getter for gpio_relay.c's
+// refusals, main.c's boot branch and /api/status - all of them sit on stacks
+// that must not carry a qmx_settings_t. Returns PORT_A_MODE_RELAY before
+// settings_init(), so a caller running early sees the safe answer.
+//
+// The setter is the LIVE MODE SEQUENCER, and it is the
+// ONLY way the mode changes: it refuses while a relay pulse or power cycle is
+// in flight, hands the pins between the two backends, rolls back if the new
+// backend cannot start, and writes NVS only once the hardware already matches.
+// Returns false when the mode did NOT change (refusal, or a failed UART
+// start), so the UI can say so instead of showing a setting that is not real.
+// Callers must not write s_pending.port_a_mode directly.
+uint8_t settings_get_port_a_mode(void);
+bool    settings_set_port_a_mode(uint8_t mode);
 
 /* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a
  * multi-hundred-byte struct and CLAUDE.md records four crash-loops from doing

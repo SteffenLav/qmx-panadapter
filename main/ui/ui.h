@@ -231,6 +231,20 @@ void ui_set_sd_state(ui_sd_state_t st);
 // Back-compat shim: true -> UI_SD_MIRRORING, false -> UI_SD_NONE.
 void ui_set_sd_active(bool active);
 
+// Bottom-bar Unit GPS status: ONE symbol - LV_SYMBOL_GPS - coloured by state,
+// with no text beside it (the Bluetooth glyph's construction: the colour is the
+// whole message).
+//   -1 = hidden (Port mode is relay, or the module is OFF)
+//    0 = amber   LISTENING / DEVICE - running, no fresh fix
+//    1 = green   LOCKED
+//    2 = red     LOST - was locked, went stale
+// It reports the RECEIVER, never the clock authority: the suffix next to the
+// clock already says UTC(GPS) only when this module is the live source, so two
+// widgets answering the same question two ways is exactly what this separation
+// avoids. Called from status_task (1 Hz, off the LVGL thread) - it records the
+// intent and sim_border_keepalive_cb() applies it.
+void ui_set_unit_gps_chip(int state);
+
 // Persistent top-of-screen red banner shown whenever the QMX never confirmed
 // IQ mode (see cat_get_iq_mode_confirmed()) - without it the spectrum will
 // appear mirrored/shifted. Called from cat.c's link_task after the Q9 1;/Q9;
