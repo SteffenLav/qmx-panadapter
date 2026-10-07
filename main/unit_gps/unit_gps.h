@@ -9,10 +9,15 @@
  * test - and two freshness clocks that disagree would be a known failure
  * mode: both read THIS one.
  *
- * The pins (RX GPIO54, TX GPIO53) are shared with the remote power-cycle
- * relay. Whoever drives them is decided by the Port mode setting, not here -
- * see util/gpio_relay.c and settings_set_port_a_mode(). This module is only
- * ever started when the mode says the cable is a GPS.
+ * The pins are shared with the remote power-cycle relay. The Port mode
+ * setting decides which module drives them; this module does not (see
+ * util/gpio_relay.c and settings_set_port_a_mode()). The mode starts
+ * this module only when the cable is a GPS. RX is GPIO54, with the
+ * pull-up ON. TX is not connected to a pin (UART_PIN_NO_CHANGE). An
+ * idle TX line stays HIGH. GPIO53 is one of the relay pins, and an
+ * active-high relay treats HIGH as its active level. So a relay
+ * harness left plugged in while in GPS mode would hold the radio in
+ * power-cycle. Version 1 never transmits, and the pin stays at hi-Z.
  */
 
 #include <stdbool.h>

@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 
 #include "time_sync.h"    // time_sync_notify_unit_gps() - the ONE crossing call
+#include "util/psram_task.h"
 
 static const char *TAG = "unit_gps";
 
@@ -20,15 +21,29 @@ static const char *TAG = "unit_gps";
  * RX = GPIO54 with a pull-up. The port is a flying lead: an unplugged RX that
  * floats is read as random transitions, which would paint DEVICE forever and
  * make "no module attached" indistinguishable from "module present, no fix".
- * TX = GPIO53, left idle (mark) - v1 sends no configuration to the receiver,
- * so this side never transmits (CASIC config commands are a non-goal). */
+ *
+ * TX is not connected to a pin (UART_PIN_NO_CHANGE). This is deliberate.
+ * An idle UART TX line stays HIGH (mark). The default relay pin is 53,
+ * so the relay harness reads the level of GPIO53. An active-high relay
+ * treats HIGH as its active level. A HIGH level on GPIO53 energizes the
+ * harness. The harness then holds the radio in power-cycle. The
+ * developer's words: "leaving the relay harness plugged in while in GPS
+ * mode would hold the radio in power-cycle." The code must not route
+ * TX, whatever the stored polarity says. Version 1 never transmits, so
+ * nothing is lost by the unrouted TX. The sequencer has released GPIO53
+ * to hi-Z, and the TX signal does not drive it (qmx-panadapter
+ * developer review, 2026-10-04). */
 #define UNIT_GPS_UART_NUM    UART_NUM_1
 #define UNIT_GPS_RX_GPIO     GPIO_NUM_54
-#define UNIT_GPS_TX_GPIO     GPIO_NUM_53
 #define UNIT_GPS_BAUD        115200
 
 #define UNIT_GPS_TASK_STACK  4096
 #define UNIT_GPS_TASK_PRIO   5
+/* Core 1. Not tskNO_AFFINITY, and not core 0. Core 0 of this board is
+ * busy: taskLVGL uses about 74% of it, plus audio_task and the USB
+ * paths. Background UART polling belongs on core 1 with the other
+ * non-UI work. */
+#define UNIT_GPS_TASK_CORE   1
 #define UNIT_GPS_READ_MS     100   // wake at 10 Hz: cheap, and it bounds state-change latency
 #define UNIT_GPS_LINE_MAX    128
 
@@ -166,7 +181,12 @@ static void unit_gps_task(void *arg)
     }
 
     s_task = NULL;
-    vTaskDelete(NULL);
+    /* Never call vTaskDelete() for this task. It is created with
+     * psram_task_create_reapable(), so its stack is ours to free and
+     * FreeRTOS will not free it (#279). psram_task_park() stops the
+     * task and keeps it to the side. The next unit_gps_start() deletes
+     * the task and frees its stack (psram_task_reap()). */
+    psram_task_park();
 }
 
 bool unit_gps_start(void)
@@ -191,7 +211,12 @@ bool unit_gps_start(void)
         ESP_LOGE(TAG, "uart_param_config failed: 0x%x", e);
         return false;
     }
-    e = uart_set_pin(UNIT_GPS_UART_NUM, UNIT_GPS_TX_GPIO, UNIT_GPS_RX_GPIO,
+    /* TX = UART_PIN_NO_CHANGE: the TX signal does not go to a pin (see
+     * the comment on UNIT_GPS_UART_NUM). An idle TX line is HIGH. A
+     * relay harness left plugged in while in GPS mode would hold the
+     * radio in power-cycle. GPIO53 stays at hi-Z after the sequencer
+     * releases it. */
+    e = uart_set_pin(UNIT_GPS_UART_NUM, UART_PIN_NO_CHANGE, UNIT_GPS_RX_GPIO,
                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "uart_set_pin failed: 0x%x", e);
@@ -211,15 +236,25 @@ bool unit_gps_start(void)
     s_logged_state = UNIT_GPS_OFF;
     s_running = true;
 
-    if (xTaskCreate(unit_gps_task, "unit_gps", UNIT_GPS_TASK_STACK, NULL,
-                    UNIT_GPS_TASK_PRIO, &s_task) != pdPASS) {
+    /* Reap the task that parked at the last stop, before this start.
+     * The task ends at every unit_gps -> relay change. Only this path
+     * returns its PSRAM stack (#279). wspr_rx works the same way. */
+    psram_task_reap();
+
+    /* The stack is in PSRAM, because internal RAM is the scarce
+     * resource on this board. The task is pinned to core 1
+     * (UNIT_GPS_TASK_CORE). It is created "reapable" because this task
+     * ends; see the psram_task_park() note in unit_gps_task(). */
+    s_task = psram_task_create_reapable(unit_gps_task, "unit_gps", UNIT_GPS_TASK_STACK,
+                                        NULL, UNIT_GPS_TASK_PRIO, UNIT_GPS_TASK_CORE);
+    if (!s_task) {
         ESP_LOGE(TAG, "receive task could not be created");
         s_running = false;
         uart_driver_delete(UNIT_GPS_UART_NUM);
         return false;
     }
 
-    ESP_LOGI(TAG, "UART1 up: RX=GPIO54 (pull-up) TX=GPIO53 idle, %d 8N1 - pipeline LISTENING",
+    ESP_LOGI(TAG, "UART1 up: RX=GPIO54 (pull-up) TX unrouted, %d 8N1 - pipeline LISTENING",
              UNIT_GPS_BAUD);
     return true;
 }
@@ -229,8 +264,10 @@ void unit_gps_stop(void)
     if (!s_running) return;    // idempotent
 
     s_stop_req = true;
-    /* The task reads with a 100 ms timeout and checks the flag each pass, so
-     * it is gone within one pass; the wait is for that, not for more data. */
+    /* The task reads with a 100 ms timeout and checks the flag on each
+     * pass, so it clears s_task and calls psram_task_park() within one
+     * pass. The wait is for that and not for more data. The next
+     * unit_gps_start() frees the stack of the parked task. */
     for (int i = 0; i < 200 && s_task != NULL; i++) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
