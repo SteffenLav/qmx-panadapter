@@ -3367,11 +3367,11 @@ esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
     }
 
     cat_poll_hold(CAT_HOLD_TIME_SYNC);
-    int       prev_sec     = -1;
+    int       prev_tod     = -1;        /* seconds of day, not just SS */
     int64_t   prev_resp_us = 0;
     int64_t   bracket_us   = 0;
     int64_t   last_seen    = 0;
-    int       polls = 0, parses = 0;
+    int       polls = 0, parses = 0, rejected = 0;
     esp_err_t result       = ESP_ERR_TIMEOUT;
     int64_t   start        = esp_timer_get_time();
 
@@ -3388,27 +3388,63 @@ esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
         if (s_gp_resp_us == last_seen) continue;
         last_seen = s_gp_resp_us;
         parses++;
-        if (prev_sec >= 0 && s != prev_sec) {
-            *out_y = y; *out_mo = mo; *out_d = d;
-            *out_h = h; *out_mi = mi; *out_s = s;
-            bracket_us   = s_gp_resp_us - prev_resp_us;
-            *out_flip_us = prev_resp_us + bracket_us / 2;
-            result = ESP_OK;
-            break;
+
+        /* ⭐ A FLIP IS AN ADVANCE OF EXACTLY ONE SECOND. ANYTHING ELSE IS A
+         * CORRUPT REPLY, AND THIS IS THE ONLY PLACE THAT CAN TELL.
+         *
+         * Measured 2026-10-07: one GP reply carried a second NINE seconds out
+         * of place, between two correct replies 6 ms apart. The field passed
+         * cat_gps_gp_parse() because 00-60 is a valid second - a range check
+         * cannot see it. Landing on a flip, it would have set the clock 9 s
+         * wrong, which for FT8 is worse than no sync at all.
+         *
+         * The sequence is the discriminator: replies here are 6-20 ms apart,
+         * so a genuine boundary always advances the time-of-day by exactly +1.
+         * Comparing SECONDS OF DAY rather than the SS field also catches
+         * corruption in the hour and minute, which SS alone never would.
+         *
+         * A rejected reply resets the bracket rather than just being skipped:
+         * its arrival stamp cannot be used as the "before" side of a boundary
+         * when the reading itself is not trusted. The cost is a missed tick,
+         * retried 5 minutes later. The cost of the alternative is a wrong
+         * clock that nothing downstream questions. */
+        int tod = h * 3600 + mi * 60 + s;
+        if (prev_tod >= 0) {
+            int step = tod - prev_tod;
+            if (step < 0) step += 86400;          /* midnight */
+            if (step == 1) {
+                *out_y = y; *out_mo = mo; *out_d = d;
+                *out_h = h; *out_mi = mi; *out_s = s;
+                bracket_us   = s_gp_resp_us - prev_resp_us;
+                *out_flip_us = prev_resp_us + bracket_us / 2;
+                result = ESP_OK;
+                break;
+            }
+            if (step != 0) {
+                rejected++;
+                ESP_LOGW(TAG, "GP reply rejected: %02d:%02d:%02d jumps %d s from "
+                              "%02d:%02d:%02d in %lld ms - corrupt, not a boundary",
+                         h, mi, s, step, prev_tod / 3600, (prev_tod / 60) % 60,
+                         prev_tod % 60, (long long)((s_gp_resp_us - prev_resp_us) / 1000));
+                prev_tod     = -1;                /* distrust the bracket too */
+                prev_resp_us = 0;
+                continue;
+            }
         }
-        prev_sec     = s;
+        prev_tod     = tod;
         prev_resp_us = s_gp_resp_us;
     }
 
     cat_poll_release(CAT_HOLD_TIME_SYNC);
     if (result == ESP_OK) {
         ESP_LOGI(TAG, "GP tick: %04d-%02d-%02d %02d:%02d:%02d boundary caught "
-                      "(bracket %lld ms, polls %d/%d)",
+                      "(bracket %lld ms, polls %d/%d, %d rejected)",
                  *out_y, *out_mo, *out_d, *out_h, *out_mi, *out_s,
-                 (long long)(bracket_us / 1000), parses, polls);
+                 (long long)(bracket_us / 1000), parses, polls, rejected);
     } else {
-        ESP_LOGW(TAG, "GP tick: no second flip in 1.3 s (polls %d, parsed %d) - "
-                      "no fix, or this radio answers GP differently", polls, parses);
+        ESP_LOGW(TAG, "GP tick: no second flip in 1.3 s (polls %d, parsed %d, "
+                      "%d rejected) - no fix, or this radio answers GP differently",
+                 polls, parses, rejected);
     }
     return result;
 }
@@ -3479,6 +3515,10 @@ esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *ou
             out->n++;
         }
 
+        /* ⚠ NO +1 GUARD HERE, DELIBERATELY. cat_gps_gp_sync() rejects any step
+         * that is not exactly one second; this is the instrument that FOUND
+         * that defect, and an instrument that filters cannot show it again.
+         * A step_ms far from 1000 in the output is the symptom to look for. */
         if (prev_ss >= 0 && s != prev_ss && out->nflip < CAT_GP_PROBE_FLIPS) {
             int64_t mid_us = prev_us + (arrival_us - prev_us) / 2;
             /* Where the system clock was at that same instant. */
@@ -3527,9 +3567,10 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
     }
 
     cat_poll_hold(CAT_HOLD_TIME_SYNC);
-    int       prev_sec      = -1;
+    int       prev_tod      = -1;       /* seconds of day - see the GP version */
     int64_t   prev_resp_us  = 0;
     int64_t   bracket_us    = 0;
+    int       rejected      = 0;
     esp_err_t result        = ESP_ERR_TIMEOUT;
     int64_t   start         = esp_timer_get_time();
 
@@ -3554,7 +3595,25 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         if (!parse_tm_resp(&h, &m, &s)) continue;
         if (s_tm_resp_us == last_seen) continue;   // same arrival, not a new reading
         last_seen = s_tm_resp_us;
-        if (prev_sec >= 0 && s != prev_sec) {          // the tick
+        /* ⭐ EXACTLY +1 SECOND, OR IT IS NOT A BOUNDARY. The corrupt reply was
+         * caught on GP (nine seconds out of place between two correct ones
+         * 6 ms apart), but nothing makes TM; immune: it is the same radio, the
+         * same link, and parse_tm_resp() range-checks the same way. Swept here
+         * rather than waiting to be bitten. See cat_gps_gp_sync() for the
+         * measurement and for why a rejected reply drops the bracket. */
+        int tod  = h * 3600 + m * 60 + s;
+        int step = (prev_tod >= 0) ? (tod - prev_tod) : 0;
+        if (step < 0) step += 86400;                  // midnight
+        if (prev_tod >= 0 && step != 0 && step != 1) {
+            rejected++;
+            ESP_LOGW(TAG, "TM reply rejected: %02d:%02d:%02d jumps %d s from "
+                          "%02d:%02d:%02d - corrupt, not a boundary",
+                     h, m, s, step, prev_tod / 3600, (prev_tod / 60) % 60, prev_tod % 60);
+            prev_tod     = -1;
+            prev_resp_us = 0;
+            continue;
+        }
+        if (prev_tod >= 0 && step == 1) {             // the tick
             /* ⭐ MIDPOINT, NOT THE ARRIVAL - 2026-09-23.
              *
              * This used to hand back s_tm_resp_us, the arrival of the reading
@@ -3586,15 +3645,16 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
             result = ESP_OK;
             break;
         }
-        prev_sec     = s;
+        prev_tod     = tod;
         prev_resp_us = s_tm_resp_us;
     }
 
     cat_poll_release(CAT_HOLD_TIME_SYNC);
     if (result == ESP_OK) {
-        ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
+        ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, "
+                      "+/-%lld ms, %d rejected)",
                  *out_hour, *out_min, *out_sec,
-                 (long long)(bracket_us / 1000), (long long)(bracket_us / 2000));
+                 (long long)(bracket_us / 1000), (long long)(bracket_us / 2000), rejected);
     }
     else
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
