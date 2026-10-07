@@ -296,6 +296,7 @@ void time_sync_notify_sntp(time_t utc)
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
     s_date_verified = true;
+    settings_set_date_src(DATE_SRC_SNTP);
     push_to_qmx(utc);
 }
 
@@ -311,6 +312,67 @@ void time_sync_dev_force_date_unverified(void)
     ESP_LOGW(TAG, "DEV: date forced to unverified (ignores SNTP until answered)");
 }
 
+/* ⭐ THE SUPERCAP RTC SAYING "valid" IS NOT THE SAME AS THE DATE BEING RIGHT.
+ *
+ * royord, #18, 2026-10-07: he flashed the M5 UserDemo (whose default RTC date
+ * is 1901, and he nudged it to 1904), then flashed this firmware back. The RTC
+ * reported valid, so boot marked the date verified and the question was never
+ * asked - the firmware was certain about a date that was over a century out.
+ *
+ * rtc_is_valid() only means the supercap never browned out. It says nothing
+ * about WHO wrote the value, and another firmware writing the RTC leaves our
+ * NVS record untouched. So the RTC is believed only when our own record backs
+ * it up, on all three counts:
+ *
+ *   1. We recorded a date source we trust (SNTP, a GPS fix, or the operator
+ *      reading it off the screen). A fresh flash has none - it asks, which is
+ *      the right default.
+ *   2. The RTC has not gone BACKWARDS past that record. This is what catches
+ *      royord: our record held a 2026 time, the RTC came up in 1904.
+ *   3. It has not run so far past the record that nobody has watched it. A
+ *      Tab5 that sat in a drawer for months gets asked once - which is Don
+ *      WB0LQW's original fault (two days off, two days wrong in the log), just
+ *      at a longer scale.
+ *
+ * The cost of a false NO is one question. The cost of a false YES is a day of
+ * QSOs logged under the wrong date, which has now happened twice to real
+ * operators. The asymmetry decides every judgement call here.
+ */
+#define DATE_TRUST_MAX_UNATTENDED_S  (30LL * 24 * 3600)
+
+static bool rtc_date_is_trustworthy(time_t rtc_now)
+{
+    const uint8_t src = settings_get_date_src();
+    if (src != DATE_SRC_OPERATOR && src != DATE_SRC_SNTP &&
+        src != DATE_SRC_QMX_GPS  && src != DATE_SRC_UNIT_GPS) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: no recorded source (src=%u)", (unsigned)src);
+        return false;
+    }
+
+    const int64_t last = (int64_t)settings_get_last_unix_time();
+    if (last == 0) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: source %u but no recorded time", (unsigned)src);
+        return false;
+    }
+
+    const int64_t now = (int64_t)rtc_now;
+    if (now < last) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: clock went BACKWARDS %lld s past our "
+                      "own record - something else wrote this RTC",
+                 (long long)(last - now));
+        return false;
+    }
+    if (now - last > DATE_TRUST_MAX_UNATTENDED_S) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: %lld days since our last record",
+                 (long long)((now - last) / 86400));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "RTC date trusted: src=%u, %lld s since our record",
+             (unsigned)src, (long long)(now - last));
+    return true;
+}
+
 bool time_sync_date_verified(void)
 {
     if (s_dev_force_unverified) return s_date_verified;
@@ -321,6 +383,7 @@ void time_sync_confirm_date(void)
 {
     if (!s_date_verified) ESP_LOGI(TAG, "date confirmed by the operator");
     s_date_verified = true;
+    settings_set_date_src(DATE_SRC_OPERATOR);
     s_dev_force_unverified = false;
 }
 
@@ -345,6 +408,7 @@ bool time_sync_set_date(int year, int mon, int mday)
     write_to_rtc_and_nvs(utc, "date");
     s_date_verified = true;
     s_dev_force_unverified = false;
+    settings_set_date_src(DATE_SRC_OPERATOR);
     ESP_LOGI(TAG, "date set by the operator: %04d-%02d-%02d (time of day kept)", year, mon, mday);
     return true;
 }
@@ -718,7 +782,11 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     } else if (rtc_is_valid()) {
         if (rtc_apply_to_system()) {
             s_source = TIME_SOURCE_RTC;
-            s_date_verified = true;   // the supercap held, so the date is the one it kept
+            /* ⛔ WAS: s_date_verified = true, "the supercap held, so the date is
+             * the one it kept". The supercap holding only means nobody cut the
+             * power - it does not mean the value is ours. See
+             * rtc_date_is_trustworthy() above and royord, #18. */
+            s_date_verified = rtc_date_is_trustworthy(time(NULL));
         } else {
             ESP_LOGW(TAG, "RTC read failed despite valid flag");
         }

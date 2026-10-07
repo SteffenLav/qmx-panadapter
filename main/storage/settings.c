@@ -46,6 +46,7 @@ static const char *TAG = "settings";
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
 #define KEY_LAST_TIME  "last_time"
+#define KEY_DATE_SRC   "date_src"   /* who last set the DATE - date_src_t */
 #define KEY_CQ_MSG0    "cq_msg0"
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"
@@ -416,7 +417,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
 #define DIRTY_RXA_AGCOFF      131  /* AGC bypass */
 #define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones */
-#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for; 26 spare */
+#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for */
+#define DIRTY_DATE_SRC        134  /* date provenance byte; 25 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -571,6 +573,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
         if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
         if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
+        if (dirty_test(&dirty_local, DIRTY_DATE_SRC))   nvs_set_u8(s_nvs,  KEY_DATE_SRC,  snap.date_src);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
@@ -845,6 +848,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->brightness_pct = DEF_BRIGHTNESS;
     out->last_ui_mode = DEF_LAST_MODE;
     out->last_unix_time = 0;
+    out->date_src       = 0;   /* nobody we trust - the date gets questioned */
     out->cq_msg[0][0] = '\0';
     out->cq_msg[1][0] = '\0';
     out->cq_msg[2][0] = '\0';
@@ -1002,6 +1006,9 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
     nvs_get_u8(s_nvs, KEY_LAST_MODE, &out->last_ui_mode);
     nvs_get_u32(s_nvs, KEY_LAST_TIME, &out->last_unix_time);
+    /* Absent on an upgrade from a build before this existed, which leaves it
+     * 0 and makes the first boot ask once. That is the safe direction. */
+    nvs_get_u8(s_nvs, KEY_DATE_SRC, &out->date_src);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -1556,6 +1563,19 @@ void settings_set_last_unix_time(uint32_t unix_sec)
     s_pending.last_unix_time = unix_sec;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_LAST_TIME);
+}
+
+void settings_set_date_src(uint8_t src)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.date_src == src) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.date_src = src;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DATE_SRC);
 }
 
 void settings_set_my_callsign(const char *call)
@@ -2706,6 +2726,15 @@ uint32_t settings_get_last_unix_time(void)
     if (!s_ready) return 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     uint32_t v = s_pending.last_unix_time;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint8_t settings_get_date_src(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.date_src;
     xSemaphoreGive(s_mutex);
     return v;
 }

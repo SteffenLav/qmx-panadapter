@@ -203,6 +203,12 @@ typedef struct {
      * shipped dark should not have been sticky across a reboot. */
     uint8_t  last_ui_mode;
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
+    /* WHO last set the DATE - a date_src_t from time_sync.h, 0 = nobody we
+     * trust. Stored beside last_unix_time because the pair is what makes the
+     * supercap RTC believable at boot: a time alone cannot say where it came
+     * from, and another firmware writing the RTC leaves our record untouched.
+     * See rtc_date_is_trustworthy() in time_sync.c (royord, #18). */
+    uint8_t  date_src;
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
@@ -727,6 +733,10 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
  * stack of 4 KB or less asks for the fields it needs, never the whole struct.
  */
 uint32_t settings_get_last_unix_time(void);
+/* Narrow accessors for the date-provenance byte - see date_src in the struct.
+ * Narrow on purpose: time_sync runs on small stacks and must not take the
+ * ~1 KB qmx_settings_t copy. */
+uint8_t  settings_get_date_src(void);
 void     settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
@@ -1094,6 +1104,7 @@ void settings_set_last_ui_mode(uint8_t mode);
 // "last known date" anchor so the QMX RTC time-of-day (no date) can be
 // turned into a full timestamp when SNTP is unavailable (e.g. POTA).
 void settings_set_last_unix_time(uint32_t unix_sec);
+void settings_set_date_src(uint8_t src);
 
 // Battery care (debounced flush): when enabled, charging is cut once the
 // battery reaches charge_limit_pct and resumed with a hysteresis gap below

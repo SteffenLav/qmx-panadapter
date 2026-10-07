@@ -74,6 +74,24 @@ bool time_sync_notify_qmx(int h, int m, int s);
 // operator confirming/setting it. False when the date was pasted from the
 // last-known timestamp because the RTC ran down offline (Don WB0LQW's POTA log
 // two days behind). ui/date_confirm_modal.c asks while this is false.
+/* WHO set the date, persisted in NVS beside the time itself.
+ *
+ * This is NOT time_source_t. That one says where the current TIME came from and
+ * changes minute to minute; this says whether the DATE on the clock descends
+ * from something that actually knows the date, and it has to survive a power
+ * cycle - which is the whole point.
+ *
+ * Numbers are on-flash values. Never renumber, only append.
+ * 4 is reserved for the Unit GPS on PORT.A (ericmoritz, #15) so that branch
+ * does not have to renumber when it lands. */
+typedef enum {
+    DATE_SRC_NONE     = 0,   /* nobody we trust - ask the operator */
+    DATE_SRC_OPERATOR = 1,   /* they read it off the screen and confirmed it */
+    DATE_SRC_SNTP     = 2,   /* internet */
+    DATE_SRC_QMX_GPS  = 3,   /* a QMX+ with a GPS fix */
+    DATE_SRC_UNIT_GPS = 4,   /* reserved: M5Stack Unit GPS on PORT.A (#15) */
+} date_src_t;
+
 bool time_sync_date_verified(void);
 // The operator says the date shown is right.
 void time_sync_confirm_date(void);
