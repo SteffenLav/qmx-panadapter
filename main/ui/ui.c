@@ -12346,6 +12346,16 @@ void ui_toast_ms(const char *msg, uint32_t ms)
         lv_obj_set_style_border_width(s_toast, 1, 0);
         lv_obj_set_style_border_color(s_toast, lv_color_hex(UI_COLOR_BORDER), 0);
         lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_CLICKABLE);  // never intercept touches
+        /* ⭐ WRAP, OR A LONG TOAST IS SILENTLY CUT OFF AT BOTH SCREEN EDGES.
+         * An LVGL label with no width sizes to its content on ONE line. The
+         * RX-audio restart notice is 160 characters, so Samuel W7STF saw the
+         * middle of it and nothing else (v1.16.11). This is the widget's
+         * fault, not that message's: every long toast had it, and shortening
+         * one string would have left the next one to be reported again.
+         * 70% of the panel keeps it clear of the drawer and the edges. */
+        lv_obj_set_width(s_toast, LV_PCT(70));
+        lv_label_set_long_mode(s_toast, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(s_toast, LV_TEXT_ALIGN_CENTER, 0);
     }
     lv_label_set_text(s_toast, msg);
     lv_obj_align(s_toast, LV_ALIGN_CENTER, 0, 0);
