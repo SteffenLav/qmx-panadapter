@@ -134,6 +134,7 @@ static lv_obj_t   *s_lbl_ss   = NULL;
 static lv_obj_t   *s_hint_ss  = NULL;  // dynamic FT8/FT4 status below SS digits
 static lv_obj_t   *s_hint_top = NULL;  // top one-line hint, mentions the active sub-mode
 static lv_obj_t   *s_numpad   = NULL;
+static lv_obj_t   *s_lbl_date_row = NULL;   // the tappable date row (see build)
 static lv_timer_t *s_timer    = NULL;
 
 // ---------------------------------------------------------------------------
@@ -435,10 +436,13 @@ static void set_top_hint(void)
     time_t now = time(NULL);
     struct tm tm; gmtime_r(&now, &tm);
     char tb[120];
-    snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\nDate %04d-%02d-%02d UTC%s - tap to change",
-             active_source_label(), tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             time_sync_date_verified() ? "" : " (unverified)");
+    snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually", active_source_label());
     lv_label_set_text(s_hint_top, tb);
+
+    snprintf(tb, sizeof(tb), LV_SYMBOL_EDIT "  %04d-%02d-%02d UTC%s",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             time_sync_date_verified() ? "" : "  (unverified)");
+    if (s_lbl_date_row) lv_label_set_text(s_lbl_date_row, tb);
 }
 
 static void date_line_cb(lv_event_t *e) { (void)e; date_confirm_modal_show(); }
@@ -639,13 +643,25 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_modal, cancel_cb, LV_EVENT_CLICKED, NULL);
 
-    // Main panel — 640 × 296, centred 108 px above screen centre
-    // so the 128 px numpad fits below with 8 px gap without clipping.
-    // Screen centre 360 - 108 = 252 → top 252-148=104, bottom 252+148=400.
-    // Numpad: top 408, bottom 536 < 720 ✓
+    /* ⛔ 640 x 316 PUT THE DATE LINE UNDER THE HH/MM BOXES (2026-10-07).
+     *
+     * Inner was 600 x 276. The hint is TWO lines - the clock line and the date
+     * line - starting at y 42, so at font 22 it ran to y~96, and the boxes
+     * started at BY=85. The date line, which is the only way into manual date
+     * entry, was printed behind them and half visible in muted grey.
+     *
+     * Now 700 x 392 (inner 660 x 352), and the date line is its own bordered,
+     * tappable row instead of the second line of a grey subtitle:
+     *     title    0..40    (font 32)
+     *     clock   48..75    (font 22, one line, muted - it IS just a caption)
+     *     DATE    86..138   (row 500x52, bordered, amber, tappable)
+     *     boxes  152..268   (BH 116)
+     *     Save/Cancel 278..339
+     * Numpad is aligned OUT_BOTTOM of this panel, so it follows: screen centre
+     * 360 - 116 = 244 -> panel 48..440, numpad 448..576 < 720 OK */
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 640, 316);
-    lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, -108);
+    lv_obj_set_size(s_panel, 700, 392);
+    lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, -116);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
@@ -665,24 +681,46 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    // One-line hint (text fixed up to the active FT8/FT4 sub-mode each time
-    // the modal is shown - see ft8_time_modal_show())
+    // Clock caption - what the time is coming from. Not tappable: tapping is
+    // done on the HH/MM boxes themselves, which is what the text says.
     lv_obj_t *hint = lv_label_create(s_panel);
     lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(hint, 600);
-    lv_obj_set_pos(hint, 0, 42);
-    lv_obj_add_flag(hint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(hint, 6);
-    lv_obj_add_event_cb(hint, date_line_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(hint, 660);
+    lv_obj_set_pos(hint, 0, 48);
     s_hint_top = hint;
 
-    // HH : MM : SS boxes — font_48 for digits, BY=85
-    // Box w=182, colon gap 17 px → 3×182 + 2×17 = 580 ≤ 600 ✓
+    /* The date row. It used to be the second line of the caption above and
+     * nobody could tell it was a control - royord went looking for manual date
+     * entry and reported it missing. A bordered row in the date's own amber
+     * reads as a button, and it is the entry point to date_confirm_modal. */
+    lv_obj_t *drow = lv_obj_create(s_panel);
+    lv_obj_set_size(drow, 500, 52);
+    lv_obj_set_pos(drow, (660 - 500) / 2, 86);
+    lv_obj_set_style_bg_color(drow, lv_color_hex(0x232c36), 0);
+    lv_obj_set_style_bg_opa(drow, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(drow, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_border_width(drow, 2, 0);
+    lv_obj_set_style_radius(drow, 8, 0);
+    lv_obj_set_style_pad_all(drow, 0, 0);
+    lv_obj_clear_flag(drow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(drow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(drow, 8);
+    lv_obj_add_event_cb(drow, date_line_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_date_row = lv_label_create(drow);
+    lv_obj_set_style_text_color(s_lbl_date_row, lv_color_hex(0xFFC864), 0);
+    lv_obj_set_style_text_font(s_lbl_date_row, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_lbl_date_row);
+    /* The label must not swallow taps meant for the row. */
+    lv_obj_add_flag(s_lbl_date_row, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+    // HH : MM : SS boxes — font_48 for digits.
+    // Group is 2*202 + 182 = 586 wide; inner is now 660, so x starts at 37 to
+    // centre it. BY=152 clears the date row above, which ends at 138.
     // Box h=116: digit (font_48 ≈ 56 px) centred -10, hint at bottom -6.
-    const int BW = 182, BH = 116, BY = 85;
-    const int x_hh = 0, x_c1 = 185, x_mm = 202, x_c2 = 387, x_ss = 404;
+    const int BW = 182, BH = 116, BY = 152;
+    const int x_hh = 37, x_c1 = 222, x_mm = 239, x_c2 = 424, x_ss = 441;
 
     // HH
     s_box_hh = make_box(s_panel, x_hh, BY, BW, BH);
@@ -750,12 +788,12 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_hint_ss, &lv_font_montserrat_18, 0);
     lv_obj_align(s_hint_ss, LV_ALIGN_BOTTOM_MID, 0, -6);
 
-    // Apply + Cancel — right under the boxes (y = BY+BH+8 = 70+116+8 = 194)
-    const int ABY = BY + BH + 8;
+    // Apply + Cancel — right under the boxes (y = BY+BH+10 = 278)
+    const int ABY = BY + BH + 10;
     lv_obj_t *save_b = lv_btn_create(s_panel);
     {
         lv_obj_t *b = save_b;
-        lv_obj_set_size(b, 292, 61);
+        lv_obj_set_size(b, 322, 61);
         lv_obj_set_pos(b, 0, ABY);
         lv_obj_set_style_bg_color(b, lv_color_hex(0x1e6028), 0);
         lv_obj_set_style_radius(b, 8, 0);
@@ -771,8 +809,8 @@ static void modal_build(void)
     lv_obj_t *cancel_b = lv_btn_create(s_panel);
     {
         lv_obj_t *b = cancel_b;
-        lv_obj_set_size(b, 292, 61);
-        lv_obj_set_pos(b, 308, ABY);
+        lv_obj_set_size(b, 322, 61);
+        lv_obj_set_pos(b, 338, ABY);
         lv_obj_set_style_bg_color(b, lv_color_hex(0x962020), 0);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_border_width(b, 0, 0);

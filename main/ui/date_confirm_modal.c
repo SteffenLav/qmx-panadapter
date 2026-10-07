@@ -146,15 +146,35 @@ static void build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_modal, swallow_cb, LV_EVENT_CLICKED, NULL);
 
+    /* ⛔ GEOMETRY IS LOAD-BEARING HERE, and it was wrong until 2026-10-07.
+     *
+     * At 760x470 with pad 24 the content box is 712x422, centre y 211. The
+     * "why" paragraph wrapped to two lines ending at y~105 and the year
+     * buttons started at y 63 - so the explanation was printed UNDER the
+     * buttons and the operator read half a sentence in muted grey. His words:
+     * "the feature is shoe-horned in with weak letters".
+     *
+     * The rows below are laid out with explicit gaps and the arithmetic is
+     * written down, because the previous version had none and nothing caught
+     * the overlap. Content box is now 864 x 564, centre y 282:
+     *     title   0..40      (font 32)
+     *     why    48..106     (font 24, two lines)
+     *     year  132..196     (centre -118, h 64)
+     *     mth   205..269     (centre  -45, h 64)
+     *     day   274..370     (centre  +40, h 96)
+     *     date  252..312     (centre   0,  font 48 - horizontally between the
+     *                         button columns, 504 px of clear space)
+     *     OK    480..564     (bottom, h 84)
+     * If you change a font or a height, redo the sums. */
     lv_obj_t *p = lv_obj_create(s_modal);
-    lv_obj_set_size(p, 760, 470);
+    lv_obj_set_size(p, 920, 620);
     lv_obj_center(p);
     lv_obj_set_style_bg_color(p, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(p, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_border_width(p, 2, 0);
     lv_obj_set_style_radius(p, 10, 0);
-    lv_obj_set_style_pad_all(p, 24, 0);
+    lv_obj_set_style_pad_all(p, 28, 0);
     lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(p);
@@ -167,24 +187,26 @@ static void build(void)
     lv_label_set_text(why, "The Tab5 was off too long to keep its clock, and there is no "
                            "internet to check the date. QSOs are logged with this date.");
     lv_label_set_long_mode(why, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(why, 700);
+    lv_obj_set_width(why, 800);
     lv_obj_set_style_text_align(why, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(why, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(why, &lv_font_montserrat_22, 0);
-    lv_obj_align(why, LV_ALIGN_TOP_MID, 0, 50);
+    /* Not UI_COLOR_TEXT_MUTED: this paragraph is the reason the window exists,
+     * and muted grey on a dark panel read as decoration. */
+    lv_obj_set_style_text_color(why, lv_color_hex(0xB8C4D0), 0);
+    lv_obj_set_style_text_font(why, &lv_font_montserrat_24, 0);
+    lv_obj_align(why, LV_ALIGN_TOP_MID, 0, 48);
 
-    lv_obj_t *minus = make_btn(p, "- day", 0x2a3a4a, 150, 90, minus_cb);
-    lv_obj_align(minus, LV_ALIGN_LEFT_MID, 0, 20);
+    lv_obj_t *minus = make_btn(p, "- day", 0x2a3a4a, 180, 96, minus_cb);
+    lv_obj_align(minus, LV_ALIGN_LEFT_MID, 0, 40);
     /* Coarse steps above the day buttons - see minus_mon_cb(). */
-    lv_obj_t *minus_mo = make_btn(p, "- mth", 0x24303c, 150, 60, minus_mon_cb);
-    lv_obj_align(minus_mo, LV_ALIGN_LEFT_MID, 0, -50);
-    lv_obj_t *minus_yr = make_btn(p, "- year", 0x24303c, 150, 60, minus_yr_cb);
+    lv_obj_t *minus_mo = make_btn(p, "- mth", 0x24303c, 180, 64, minus_mon_cb);
+    lv_obj_align(minus_mo, LV_ALIGN_LEFT_MID, 0, -45);
+    lv_obj_t *minus_yr = make_btn(p, "- year", 0x24303c, 180, 64, minus_yr_cb);
     lv_obj_align(minus_yr, LV_ALIGN_LEFT_MID, 0, -118);
-    lv_obj_t *plus = make_btn(p, "+ day", 0x2a3a4a, 150, 90, plus_cb);
-    lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 20);
-    lv_obj_t *plus_mo = make_btn(p, "+ mth", 0x24303c, 150, 60, plus_mon_cb);
-    lv_obj_align(plus_mo, LV_ALIGN_RIGHT_MID, 0, -50);
-    lv_obj_t *plus_yr = make_btn(p, "+ year", 0x24303c, 150, 60, plus_yr_cb);
+    lv_obj_t *plus = make_btn(p, "+ day", 0x2a3a4a, 180, 96, plus_cb);
+    lv_obj_align(plus, LV_ALIGN_RIGHT_MID, 0, 40);
+    lv_obj_t *plus_mo = make_btn(p, "+ mth", 0x24303c, 180, 64, plus_mon_cb);
+    lv_obj_align(plus_mo, LV_ALIGN_RIGHT_MID, 0, -45);
+    lv_obj_t *plus_yr = make_btn(p, "+ year", 0x24303c, 180, 64, plus_yr_cb);
     lv_obj_align(plus_yr, LV_ALIGN_RIGHT_MID, 0, -118);
 
     s_lbl_date = lv_label_create(p);
@@ -193,10 +215,10 @@ static void build(void)
     lv_obj_align(s_lbl_date, LV_ALIGN_CENTER, 0, 0);
     s_lbl_day = lv_label_create(p);
     lv_obj_set_style_text_color(s_lbl_day, lv_color_hex(0xE0E0E0), 0);
-    lv_obj_set_style_text_font(s_lbl_day, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_day, LV_ALIGN_CENTER, 0, 50);
+    lv_obj_set_style_text_font(s_lbl_day, &lv_font_montserrat_28, 0);
+    lv_obj_align(s_lbl_day, LV_ALIGN_CENTER, 0, 52);
 
-    lv_obj_t *ok = make_btn(p, LV_SYMBOL_OK "  This date is right", 0x1e6028, 460, 76, ok_cb);
+    lv_obj_t *ok = make_btn(p, LV_SYMBOL_OK "  This date is right", 0x1e6028, 520, 84, ok_cb);
     lv_obj_align(ok, LV_ALIGN_BOTTOM_MID, 0, 0);
     ui_kbd_set_buttons(ok, NULL);   // Enter = confirm
 }
