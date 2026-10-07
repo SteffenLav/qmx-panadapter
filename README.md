@@ -12,7 +12,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.11.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.16.12.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > **Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.** Reading your QMX's band list means walking the radio's own **Band config.** menus, and leaving those menus drops the radio on 160 m in whatever mode they left behind — on every CAT link-up, to everyone, for as long as the band list has existed *(John W5JSS)*. Frequency and mode are now saved before the scan and put back after it. ⭐ The second one cost him more: with more than one transmit cycle in a WSPR group, the first cycle never went out, and the burst it missed **slid into the next cycle** — which at the end of a group is a receive cycle, so the beacon keyed off its own schedule and published that to wsprnet. The arming was being done by the receive loop, which arrives about a second and a half into every cycle while key-down has to happen within one. It now runs in a task of its own that waits on the clock and nothing else: **5 to 49 ms** into the cycle on the bench instead of 1,437, both cycles of a group transmitting, receive cycles silent. Also: the five-minutely clock read no longer takes the CAT link away from a burst in progress; the screenshot link opens in a tab again *(John W5JSS)*; the "turn on your QMX" prompt waits until it is safe to obey *(Dennis WN4FLA, Gyula HA3HZ)*; other stations' CQ calls can stay visible while you run your own CQ, and the TX tone panel updates while you watch it *(Randy N4OPI)*; and switching RX audio on mid-session now tells you it needs a restart *(Samuel W7STF)*.
 >
@@ -42,7 +42,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.11.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.12.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -212,10 +212,18 @@ version than the one you are running. It opens at the chapter for the screen you
 warning banners are tappable, and a **Need guidance?** panel lets you pick your symptom
 in plain words. See [Getting help](#getting-help).
 
-**Time, with or without a network** — SNTP when WiFi is up *(needs WiFi)*, the Tab5's own
-supercap-backed RTC across power-off, the QMX's clock as an offline fallback, GPS
-detected and phase-locked automatically if your QMX has one, and a manual set-and-sync
-panel. FT8/FT4 timing also self-corrects from the decoded band consensus when offline.
+**Time and date, with or without a network** — SNTP when WiFi is up *(needs WiFi)*, the
+Tab5's own supercap-backed RTC across power-off, the QMX's clock as an offline fallback,
+GPS detected and phase-locked automatically if your QMX has one, and a manual
+set-and-sync panel. FT8/FT4 timing also self-corrects from the decoded band consensus
+when offline.
+
+**A GPS of your own** *(new in v1.16.12)* — Plug an **M5Stack Unit GPS v1.1** into PORT.A
+and set **Settings ▸ Device ▸ Port mode** to *Unit GPS v1.1*: the satellite gives you UTC
+**and the full date**, offline, with nothing to answer. Contributed by Eric
+(@ericmoritz). A GPS-equipped QMX+ on radio firmware 1.04_004 or later now hands over
+the date too, so that route is also complete offline. The date itself is no longer taken
+on trust from a running clock — see [Time sync](#time-sync).
 
 **Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
 panadapter shows the Morse the radio is decoding, with an estimate of the sending
@@ -562,9 +570,6 @@ With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is 
 The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Files ▲ → Diagnostic download ↓** for the diagnostic logs, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
-
-> ⚠ **Temporarily not working in v1.16.11.** It shows an empty folder, or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally — only this web view is affected. Use the card in a PC until it is fixed.
-
 
 **Eject microSD and Restart the Tab5 (new in v1.16.11).** Both are in the settings drawer. **Eject microSD** finishes the write in progress, closes the card and tells you when it is safe to pull it out — in a window that stays until you close it, not a message that fades while you are looking at the card slot. **Restart the Tab5** reboots cleanly from the screen. The card is also released automatically before a firmware update: before v1.16.11 a reset caught the card mid-transaction and, since the Tab5 cannot power the card down on its own, it stayed unreachable until the whole unit was powered off.
 
@@ -920,13 +925,16 @@ The Tab5 needs accurate UTC for FT8 slot timing. Sources in priority order (high
 | Source | When applied |
 |--------|-------------|
 | **Unit GPS (PORT.A)** | M5Stack Unit GPS v1.1, selected under **Settings ▸ Device ▸ Port mode** — satellite UTC **including the full date**, offline, ranked above every other source while it has a fresh lock |
+| **GPS-equipped QMX+** | Auto-detected, no setting. Phase-locked to the radio's GPS second (~10 ms, drift-free) and, on radio firmware 1.04_004 and later, carrying **the date** as well — so an offline QMX+ with a sky view answers the date question by itself. As good as SNTP; re-locks every 5 minutes |
 | **SNTP (WiFi)** | Always authoritative whenever WiFi is connected and has synced at least once — sets system clock, Tab5 RTC, and NVS |
-| **Tab5 RTC** | RX8130CE supercap-backed (~30–40 h retention) — applied at boot before QMX or WiFi are available |
-| **QMX `TM;`** | Offline fallback only — applied when WiFi is down or has never synced (field/POTA with no WiFi) |
+| **Tab5 RTC** | RX8130CE supercap-backed (~30–40 h retention) — applied at boot before QMX or WiFi are available, and only when this firmware's own record agrees with it (see below) |
+| **QMX `TM;`** (no GPS) | Offline fallback only — applied when WiFi is down or has never synced (field/POTA with no WiFi) |
 | **FT8 signal timing** | Sub-second correction from the decoded signal population's average timing, auto-applied continuously every slot while FT8 is decoding (damped, so a noisy single slot can't yank the clock) — deliberately tracks who you're actually trying to work, not absolute GPS/NTP truth. A manual one-shot version is also available via the **Sync Time** modal (see below) |
 | **Manual** | Full HH:MM override in the **Sync Time** modal — for rare POTA sessions with neither WiFi nor QMX clock |
 
-Each accepted sync writes through to the RX8130CE so the clock persists across power-off. The Tab5 also polls `TM;` every 5 minutes in the background to catch QMX GPS lock events.
+Each accepted sync writes through to the RX8130CE so the clock persists across power-off. The Tab5 also polls the radio every 5 minutes in the background to catch QMX GPS lock events.
+
+**The date is checked separately from the time, and the supercap clock is not taken on trust.** Every source above except the two GPS ones gives a time of day only, so a perfectly set clock can still log under the wrong day. The Tab5 asks **"Is today's date right?"** about a minute after it starts when it cannot establish the date itself. The RX8130CE still running is *not* proof: it says the battery held, not who last wrote it, and another firmware flashed onto the same Tab5 can leave a date decades out with the battery perfectly healthy. The clock is believed only when this firmware's own record backs it up, has not gone backwards, and is recent enough that somebody has plausibly been watching.
 
 **For POTA / no-WiFi use:** uncheck **WiFi initiated** in the settings drawer. Time comes from the QMX on USB connect (or the supercap RTC if the Tab5 was recently synced). FT8 slot timing will be accurate from either source.
 
@@ -1191,7 +1199,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.16.11 is here.** Next on the bench:
+**v1.16.12 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

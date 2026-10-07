@@ -123,11 +123,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.16.11 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.16.12 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.11** keeps the WiFi link alive on a busy network and lets you eject the microSD card safely; **v1.16.10** stops the Tab5 moving your radio to 160 m every time it connects, and makes WSPR transmit in the cycle it was scheduled for rather than sliding into a receive cycle; **v1.16.9** fixes SD card writes stopping about 30 seconds after boot with WiFi on - a fault that stood under ⚠ for five releases; **v1.16.8** finally makes static IP and preferred network fully reliable - no more reboot needed, no more following you onto the wrong network.
+and in daily use. **Audio on the Tab5 is new in v1.16.0 and is a beta** — see below. **v1.16.12** adds a GPS receiver of the Tab5's own on PORT.A, takes the date from a GPS-equipped QMX+ as well, and stops trusting the supercap clock about what day it is; **v1.16.11** keeps the WiFi link alive on a busy network and lets you eject the microSD card safely; **v1.16.10** stops the Tab5 moving your radio to 160 m every time it connects, and makes WSPR transmit in the cycle it was scheduled for rather than sliding into a receive cycle; **v1.16.9** fixes SD card writes stopping about 30 seconds after boot with WiFi on - a fault that stood under ⚠ for five releases; **v1.16.8** finally makes static IP and preferred network fully reliable - no more reboot needed, no more following you onto the wrong network.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -297,7 +297,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.11.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.16.12.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

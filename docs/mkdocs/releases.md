@@ -4,22 +4,31 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.16.11** - 2026-10-03
+**v1.16.12** - 2026-10-08
 
-**The WiFi link no longer dies when the co-processor hands over a full queue, and the microSD card can be ejected safely.**
+**The Tab5 can take its time and its date from a GPS receiver of its own, and the date it logs under is no longer taken on trust.**
 
-- ⭐ **WiFi no longer dies on a busy network, and the cause was my own safety check** *(Randy N4OPI, Bryan N0LUF)*. A guard in the path to the WiFi co-processor refused any transfer over 24,576 bytes - and a genuinely full queue is 25,942. Every busy moment hit it, the read was refused, and the counter advanced as if the data had been taken. The two sides then disagreed about the stream position and never recovered; the link was dead until a reboot. Reproduced on the bench with a traffic flood: before, dead and staying dead; after, 2,029 full queues handled with no deaths.
-- ⭐ **The WiFi co-processor is no longer power-cycled over a reading that never happened.** The wedge check could count a failed read as a bad answer instead of no answer, restarting the WiFi chip on a healthy unit.
-- **The microSD card is let go of before anything resets the Tab5.** A reset caught the card mid-transaction, and the card keeps that confusion across the reset - which is why it could take several attempts to mount after an update, or not come back until the unit was powered off.
-- **Eject microSD and Restart the Tab5, in the settings drawer.** Eject tells you when it is safe in a window you close yourself, not a message that fades while you are looking at the card slot.
-- **The SD symbol follows the card, not the Tab5's patience.** It went grey when the Tab5 stopped retrying, which looked like the card had gone.
-- **Fixed a crash that could take the screen down about a minute after boot.**
+- ⭐ **A GPS receiver on the Tab5 itself, contributed by Eric (@ericmoritz)** *(#15)*. Plug an M5Stack Unit GPS v1.1 into PORT.A, set **Settings -> Device -> Port mode** to *Unit GPS v1.1*, and the satellite gives you UTC **and the full date** offline, with no question to answer. A GPS symbol on the bottom bar shows what the receiver is doing.
+- ⭐ **A GPS-equipped QMX+ now hands over the date as well as the time.** On radio firmware 1.04_004 and later the Tab5 asks the GPS receiver directly instead of reading the radio's clock, so an offline QMX+ with a sky view also answers the date question by itself - and whether your radio has a GPS is settled by the radio's own answer rather than inferred from a clock that agrees with ours.
+- ⭐ **I was overwriting the clock of GPS-equipped radios and then holding it against them** *(#174)*. The push left the radio about a second slow, which is the very disagreement the GPS test looks for, so it failed again and pushed again. Only a power cycle of the radio escaped it.
+- ⭐ **"Is today's date right?" is fixed in three ways** *(royord, #18)*. The supercap clock still running is no longer taken as the date being right - it says the battery held, not who wrote it, and another firmware can leave a date a century out. The question no longer closes itself when **you** opened it to change the date. And both clock windows drew text underneath their own buttons.
+- **SD Files on the web page works again** - the fault listed under ⚠ in v1.16.11. A read that could not get the memory it needed came back short and the browser was handed a truncated file as though it were whole.
+- **The waterfall is smoother, and its speed is set in rows per second** (1 to 40, in the drawer). The band-plan strip was redrawing 6.7 times a second to produce an identical picture - 20% of all the drawing the Tab5 did.
+- **The web waterfall no longer stalls** - it was stopped 4.2% of the time, by my own code rather than the network.
+- **Three settings the browser saved but never applied**: TX tone hold, CW pitch and CW calibration.
+- **The web page no longer offers bands your radio does not have** *(Brian WA6JFK)*.
+- **FT8 decoding is about twice as fast on a busy band**, and answers a caller faster during a CQ run.
+- **Long messages on screen are no longer cut off** *(Samuel W7STF)*, and the RX-audio restart warning is now a window you dismiss rather than one that fades.
 
-⚠ **SD Files on the web page is temporarily not working.** It shows an empty folder or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally - only the web view is affected. Use the card in a PC until this is fixed.
+⚠ **A Module GPS v2.1 on the 30-pin bus is in the code and has never been run on hardware.** No control on screen, API only. The Unit GPS on PORT.A is the one that has been used.
 
-⚠ Audio still breaks up with a web page open. **AM produces no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live band view, unlike WSJT-X *(Samuel W7STF)*.
+⚠ The waterfall blanks for one frame each time it scrolls a row, which reads as a flicker *(Bryan N0LUF)*. Audio still breaks up with a web page open. **AM produces no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing between cycles *(Samuel W7STF)*.
 
 ## Previous Releases
+
+### v1.16.11 - 2026-10-03
+
+The WiFi link no longer dies when the co-processor hands over a full queue *(Randy N4OPI, Bryan N0LUF)* - a guard of mine refused a genuinely full queue and advanced the counter anyway, so the Tab5 and the co-processor lost track of each other for good. The microSD card is released before any reset, and **Eject microSD** and **Restart the Tab5** are in the settings drawer.
 
 ### v1.16.10 - 2026-10-02
 
@@ -979,7 +988,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.11.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.12.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

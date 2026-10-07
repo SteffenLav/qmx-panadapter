@@ -263,9 +263,13 @@ The same control is in the web UI's **Miscellaneous** menu, above the remote rel
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
 
-**Waterfall scroll speed** — 1× to 4× (default 1×). How many rows the waterfall
-advances per render, independent of the spectrum and S-meter update rate, which
-stay unchanged either way.
+**Waterfall rate** — in **rows per second**, default 10. The steps are 1 to 10,
+then 20, 30 and 40. Before v1.16.12 this was a 1× to 4× multiplier over a fixed
+10 rows/s, which could only go *faster*; slower is what was actually wanted,
+both to put more history on one screen and to cut the waterfall's share of the
+drawing work. The spectrum and S-meter update rate is unchanged either way.
+
+The same control is in the browser, and the two lists match.
 
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.
@@ -613,11 +617,6 @@ The Tab5 works perfectly well without one. With a card in, you also get:
 - **A grab-and-go station backup.** Your QSO log, every setting, your WiFi details and your LoTW certificate and key, mirrored automatically. Move the card to another Tab5 and your station comes with it, with no computer involved.
 - **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
 - **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
-
-!!! warning "SD Files is temporarily not working (v1.16.11)"
-    It shows an empty folder, or says a file is missing, on a card that is fine.
-    Your files are on the card and the Tab5 reads and writes them normally - only
-    this web view is affected. Use the card in a PC until it is fixed.
 
 A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
 
