@@ -3296,9 +3296,16 @@ static bool parse_tm_resp(int *h, int *m, int *s)
  * a real radio. The date and time are unambiguous: the last 14 characters
  * before the semicolon, YYYYMMDDHHMMSS.
  *
- * ⚠ UNKNOWN, NEEDS A BENCH TEST: what GP returns with NO FIX. The manual does
- * not say. Until that is known, a reply that does not parse is treated as "no
- * GPS answer" and the caller falls back - it is never treated as a time.
+ * WITH NO FIX THE RADIO ANSWERS `GP;` - the bare command, no data. Measured
+ * 2026-10-07 with the antenna off the bench QMX+: 40 polls, 40 empty replies,
+ * nothing parsed. At 3 characters it does not even pass the length gate in the
+ * RX handler, so it never reaches s_gp_resp; cat_gps_gp_sync() times out after
+ * 1.3 s and the caller falls back to TM;. The manual does not say this.
+ *
+ * So the range checks below are not what stands between us and a bad time on a
+ * fix-less radio - nothing arrives to check. They are there for a reply that
+ * DOES arrive and is wrong, which has been seen once (see the exactly-one-
+ * second guard in cat_gps_gp_sync()).
  */
 bool cat_gps_gp_parse(const char *resp, size_t len,
                       int *y, int *mo, int *d, int *h, int *mi, int *s)
