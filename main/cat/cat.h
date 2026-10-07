@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdint.h>
 
 /**
  * @brief Initialize CAT subsystem.
@@ -199,11 +200,46 @@ bool cat_get_iq_mode_confirmed(void);
 // answer, which is why it exists: the alternative - inferring GPS from the
 // clock agreeing with ours - can be satisfied by a clock WE set. False on
 // firmware that does not report the item, so it only ever ADDS certainty.
-/* GPS date+time straight from the receiver, not from the radio's own clock -
- * see cat_gps_gp_sync() in cat.c for the measurement that made this necessary.
+/* GPS DATE straight from the receiver. It also returns a time and a bracketed
+ * second boundary, but that boundary measures ~1 s LATE (the receiver reports
+ * the previous second) - so callers take the date and the GPS verdict from
+ * here and leave the clock PHASE to cat_gps_tick_sync(). The measurement is in
+ * apply_qmx_gp() in time_sync.c.
  * ESP_ERR_NOT_SUPPORTED on firmware older than 1.04_004. */
 esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
                           int *out_h, int *out_mi, int *out_s, int64_t *out_flip_us);
+
+/* GP; characterisation burst - the instrument behind /api/cmd {"action":
+ * "gp_probe"}. Reads only: no clock is set and nothing is written. Holds the
+ * CAT poll for the whole `secs` (clamped to 1..10).
+ *
+ * It exists because two things about GP are measured, not assumed: whether its
+ * time field advances at 1 Hz at all (one bench attempt saw 60 distinct
+ * replies hold the same second for 1.3 s), and how late its second boundary
+ * is against SNTP (one bench apply landed 399 ms behind). See
+ * cat_gps_gp_probe() in cat.c. */
+#define CAT_GP_PROBE_MAX    192
+#define CAT_GP_PROBE_FLIPS  12
+typedef struct {
+    int     n;                              /* distinct GP readings captured  */
+    int     polls;                          /* GP; sent                       */
+    int     nflip;                          /* second changes seen            */
+    int16_t t_ms[CAT_GP_PROBE_MAX];         /* arrival, ms from burst start   */
+    uint8_t ss[CAT_GP_PROBE_MAX];           /* the second it reported         */
+    int16_t flip_t_ms[CAT_GP_PROBE_FLIPS];  /* bracket midpoint, ms from start*/
+    uint8_t flip_ss[CAT_GP_PROBE_FLIPS];    /* the second it flipped TO       */
+    int16_t bracket_ms[CAT_GP_PROBE_FLIPS]; /* uncertainty of that midpoint   */
+    int16_t step_ms[CAT_GP_PROBE_FLIPS];    /* gap since the previous flip    */
+    int16_t delta_ms[CAT_GP_PROBE_FLIPS];   /* SNTP minus GP; + means GP late */
+} cat_gp_probe_t;
+
+/* secs 1..10; gap_ms 0..500 is the pause between polls - a knob because the
+ * probe can PERTURB what it measures: at ~6 ms between polls the measured lag
+ * moved (634-649 ms, then 788-869 ms over repeated bursts), which is what a
+ * saturated CAT task in the radio would look like. use_tm asks TM; instead of
+ * GP; through the identical code, so the two sources are compared on one
+ * timebase rather than across two different measurements. */
+esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *out);
 
 /* Exposed for the host harness: parses the trailing YYYYMMDDHHMMSS of a GP
  * reply and range-checks it. Deliberately ignores the coordinate fields. */

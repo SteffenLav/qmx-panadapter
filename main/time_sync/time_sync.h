@@ -106,13 +106,17 @@ void time_sync_notify_sntp(time_t utc);
 // changed.
 bool time_sync_notify_qmx(int h, int m, int s);
 
-// One attempt at reading the QMX+'s GPS RECEIVER over CAT (GP;), which carries
-// the DATE as well as the time and does not free-run the way the radio's own
-// clock does (measured at 445 ppm, 2026-10-07). Applies it on success - clock,
-// RTC, NVS, date provenance - and returns true. Blocks up to ~1.3 s while it
-// brackets a second boundary, and holds the CAT poll for that time. Returns
-// false immediately on firmware older than 1.04_004, and after the full
-// timeout on a radio with the command but no fix; callers fall back to TM;.
+// One attempt at reading the QMX+'s GPS RECEIVER over CAT (GP;). It settles
+// two things the radio's own clock cannot: the DATE (TM; never carried one)
+// and whether this radio HAS a GPS (the receiver's answer, not our inference
+// from a clock we may have set ourselves).
+//
+// It does NOT set the clock phase, except when there is no usable clock at all
+// or the satellite disagrees about the day - GP's second boundary measures
+// ~1 s late, and the TM tick is an order of magnitude better. Callers must
+// still run the TM path for the time. Blocks up to ~1.3 s and holds the CAT
+// poll for that time. False on firmware older than 1.04_004 (immediately) or
+// a radio with no fix (after the timeout).
 bool time_sync_try_qmx_gp(void);
 
 // Is the DATE trustworthy? True after SNTP, a surviving Tab5 RTC, or the

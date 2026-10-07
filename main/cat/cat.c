@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>   // isxdigit - validating the UI; unique id
+#include <sys/time.h>  // gettimeofday - the GP probe compares against SNTP
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -3337,14 +3338,21 @@ bool cat_gps_gp_parse(const char *resp, size_t len,
  * satellites and the correct UT time, while TM; walked away from UTC at a
  * steady 445 ppm - 134 ms per 5-minute tick, over five consecutive ticks. The
  * radio sets its internal clock from GPS at power-on and then free-runs, and
- * TM; reports that internal clock. GP reports the RECEIVER. So for a radio that
- * has a GPS, this is the right question to ask, and TM; never was.
+ * TM; reports that internal clock. GP reports the RECEIVER, and carries the
+ * DATE, which TM; never did.
  *
- * GP carries whole seconds only, so it does not give the phase by itself. It is
- * polled in the same tight loop and the instant the SS field CHANGES is the
- * second boundary, bracketed between the last two replies and taken at the
- * midpoint - identical reasoning to the TM path, including why the midpoint and
- * not the arrival. It also carries the DATE, which TM; never did.
+ * ⛔ BUT GP IS NOT THE BETTER CLOCK, WHICH IS WHAT THIS COMMENT FIRST CLAIMED.
+ * Measured the same evening against the PC clock, three runs: GP's second
+ * boundary is 863-998 ms LATE while TM;'s is within ~100 ms. The receiver
+ * reports the PREVIOUS second - ordinary NMEA behaviour. Applying GP as a
+ * boundary left the bench Tab5 1.25 s slow. So the 445 ppm free-run above is
+ * real and is still the reason GP exists, but it is paid for in the 5-minute
+ * re-lock, not by replacing the phase source. apply_qmx_gp() in time_sync.c
+ * holds the measurement and uses this for the DATE and the GPS verdict only.
+ *
+ * The bracketing below is unchanged and still correct for what it measures:
+ * the instant GP's SS field CHANGES, taken at the midpoint of the two replies
+ * that straddle it. That instant is simply ~1 s behind the UTC second.
  */
 esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
                           int *out_h, int *out_mi, int *out_s, int64_t *out_flip_us)
@@ -3403,6 +3411,108 @@ esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
                       "no fix, or this radio answers GP differently", polls, parses);
     }
     return result;
+}
+
+/* ⭐ CHARACTERISE GP; ON DEMAND - the instrument, not another 5-minute wait.
+ *
+ * cat_gps_gp_sync() answers "what time is it" and stops at the first boundary.
+ * This answers the two questions that one cannot:
+ *
+ *   1. DOES GP ADVANCE AT 1 Hz? Measured 2026-10-07 on the bench QMX+: one
+ *      sync attempt made 78 polls, parsed 60 replies, and saw NO second change
+ *      in 1.3 s. Sixty distinct arrivals reporting the same second is not a
+ *      clock being read - it is a value being held. So the "flip" we catch may
+ *      be the radio refreshing its copy, not the true UTC boundary.
+ *   2. HOW LATE IS THE FLIP? The same boot applied a GP time 399 ms behind
+ *      SNTP - the same order as the TM; bias the midpoint fix removed. A fixed
+ *      lag can be compensated; a random one means the phase claim must go.
+ *
+ * It polls as fast as the link allows for `secs` seconds and hands back every
+ * distinct arrival, so the step pattern is visible rather than averaged. No
+ * clock is set and nothing is written - it only reads.
+ *
+ * delta_ms, per flip: the system clock (SNTP) minus the instant GP says the
+ * second began. POSITIVE means GP's boundary arrived LATE.
+ */
+esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    out->n = 0; out->polls = 0; out->nflip = 0;
+    if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
+    if (!use_tm && !cat_qmx_fw_at_least(1, 4, 4)) return ESP_ERR_NOT_SUPPORTED;
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) return ESP_ERR_INVALID_STATE;
+    if (secs < 1) secs = 1;
+    if (secs > 10) secs = 10;   /* it holds the CAT poll for the whole burst */
+    if (gap_ms < 0)   gap_ms = 0;
+    if (gap_ms > 500) gap_ms = 500;
+
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
+    const int64_t start     = esp_timer_get_time();
+    int64_t       last_seen = 0;
+    int           prev_ss   = -1;
+    int64_t       prev_us   = 0;
+
+    while (esp_timer_get_time() - start < (int64_t)secs * 1000000LL) {
+        if (gap_ms > 0) vTaskDelay(pdMS_TO_TICKS(gap_ms));
+        if (use_tm) s_tm_resp_len = 0; else s_gp_resp_len = 0;
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev,
+                (const uint8_t *)(use_tm ? "TM;" : "GP;"), 3, 100) != ESP_OK)
+            break;
+        out->polls++;
+        for (int i = 0; i < 25 && (use_tm ? s_tm_resp_len : s_gp_resp_len) == 0; i++)
+            vTaskDelay(pdMS_TO_TICKS(2));
+        int y, mo, d, h, mi, s;
+        int64_t arrival_us;
+        if (use_tm) {
+            if (!parse_tm_resp(&h, &mi, &s)) continue;
+            arrival_us = s_tm_resp_us;
+        } else {
+            if (!cat_gps_gp_parse(s_gp_resp, s_gp_resp_len, &y, &mo, &d, &h, &mi, &s)) continue;
+            arrival_us = s_gp_resp_us;
+        }
+        if (arrival_us == last_seen) continue;        /* one arrival, one reading */
+        last_seen = arrival_us;
+
+        if (out->n < CAT_GP_PROBE_MAX) {
+            out->t_ms[out->n] = (int16_t)((arrival_us - start) / 1000);
+            out->ss[out->n]   = (uint8_t)s;
+            out->n++;
+        }
+
+        if (prev_ss >= 0 && s != prev_ss && out->nflip < CAT_GP_PROBE_FLIPS) {
+            int64_t mid_us = prev_us + (arrival_us - prev_us) / 2;
+            /* Where the system clock was at that same instant. */
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            int64_t sys_at_mid_us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec
+                                    - (esp_timer_get_time() - mid_us);
+            int  sys_ss   = (int)((sys_at_mid_us / 1000000LL) % 60);
+            int  frac_ms  = (int)((sys_at_mid_us % 1000000LL) / 1000);
+            int  dsec     = sys_ss - s;
+            if (dsec >  30) dsec -= 60;
+            if (dsec < -30) dsec += 60;
+            int k = out->nflip++;
+            out->flip_t_ms[k]   = (int16_t)((mid_us - start) / 1000);
+            out->flip_ss[k]     = (uint8_t)s;
+            out->bracket_ms[k]  = (int16_t)((arrival_us - prev_us) / 1000);
+            out->delta_ms[k]    = (int16_t)(dsec * 1000 + frac_ms);
+            /* Gap since the PREVIOUS flip - 1000 ms if GP really ticks at 1 Hz. */
+            out->step_ms[k]     = (k > 0) ? (int16_t)(out->flip_t_ms[k] - out->flip_t_ms[k - 1]) : 0;
+        }
+        prev_ss = s;
+        prev_us = arrival_us;
+    }
+
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
+    ESP_LOGI(TAG, "%s probe: %d s, gap %d ms, %d polls, %d readings, %d flips",
+             use_tm ? "TM" : "GP", secs, gap_ms, out->polls, out->n, out->nflip);
+    for (int k = 0; k < out->nflip; k++) {
+        ESP_LOGI(TAG, "probe flip %d: ss=%02u at %d ms (bracket %d ms, step %d ms, "
+                      "SNTP-GP %+d ms)",
+                 k, out->flip_ss[k], out->flip_t_ms[k],
+                 out->bracket_ms[k], out->step_ms[k], out->delta_ms[k]);
+    }
+    return (out->n > 0) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 // Pauses the poll for the whole burst and blocks up to ~1.3 s (enough to span

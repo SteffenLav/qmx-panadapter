@@ -875,14 +875,11 @@ static bool wait_for_sntp(uint32_t timeout_ms)
 static bool set_time_from_qmx_rtc(bool *out_applied)
 {
     int h, m, s;
-    /* A QMX+ with a GPS answers GP; with the DATE as well as the time, taken
-     * from the receiver rather than from the radio's free-running clock. That
-     * removes the "stale date" caveat above entirely, and offline is exactly
-     * where it matters, so ask for it before falling back to TM;. */
-    if (time_sync_try_qmx_gp()) {
-        if (out_applied) *out_applied = true;
-        return true;
-    }
+    /* A QMX+ with a GPS answers GP; with the DATE, which removes the "stale
+     * date" caveat above - and offline is exactly where that matters. It does
+     * NOT give the time: GP's second boundary measures ~1 s late, so the clock
+     * still comes from TM; below. See apply_qmx_gp() in time_sync.c. */
+    time_sync_try_qmx_gp();
     if (cat_query_qmx_time(&h, &m, &s) != ESP_OK) return false;
     bool applied = time_sync_notify_qmx(h, m, s);
     if (out_applied) *out_applied = applied;

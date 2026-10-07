@@ -1806,6 +1806,63 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
+    } else if (action && strcmp(action, "gp_sync") == 0) {
+        /* Dev: run the CAT GP time path NOW instead of waiting out the 5-minute
+         * periodic pass. The offset of a GPS source against SNTP is a SERIES,
+         * not a sample, and at one tick per 5 minutes a series is half an hour. */
+        bool ok = time_sync_try_qmx_gp();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        char out[64];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"applied\":%s}", ok ? "true" : "false");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
+    } else if (action && strcmp(action, "gp_probe") == 0) {
+        /* Dev: characterise GP; itself - does its time field advance at 1 Hz,
+         * and how late is its second boundary. Reads only; sets no clock.
+         * Optional "secs" (1..10, default 4). See cat_gps_gp_probe(). */
+        cJSON *sj = cJSON_GetObjectItem(root, "secs");
+        cJSON *gj = cJSON_GetObjectItem(root, "gap_ms");
+        cJSON *tj = cJSON_GetObjectItem(root, "tm");
+        int  secs   = cJSON_IsNumber(sj) ? sj->valueint : 4;
+        int  gap_ms = cJSON_IsNumber(gj) ? gj->valueint : 0;
+        bool use_tm = cJSON_IsTrue(tj);
+        cJSON_Delete(root);
+        cat_gp_probe_t *pr = calloc(1, sizeof(*pr));
+        if (!pr) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"); return ESP_FAIL; }
+        esp_err_t perr = cat_gps_gp_probe(secs, gap_ms, use_tm, pr);
+
+        cJSON *res = cJSON_CreateObject();
+        cJSON_AddBoolToObject(res, "ok", perr == ESP_OK);
+        cJSON_AddNumberToObject(res, "err", perr);
+        cJSON_AddStringToObject(res, "src", use_tm ? "TM" : "GP");
+        cJSON_AddNumberToObject(res, "gap_ms", gap_ms);
+        cJSON_AddNumberToObject(res, "polls", pr->polls);
+        cJSON_AddNumberToObject(res, "readings", pr->n);
+        /* Every reading, so a held value is visible instead of averaged away. */
+        cJSON *rd = cJSON_AddArrayToObject(res, "t_ms");
+        cJSON *ss = cJSON_AddArrayToObject(res, "ss");
+        for (int i = 0; i < pr->n; i++) {
+            cJSON_AddItemToArray(rd, cJSON_CreateNumber(pr->t_ms[i]));
+            cJSON_AddItemToArray(ss, cJSON_CreateNumber(pr->ss[i]));
+        }
+        cJSON *fl = cJSON_AddArrayToObject(res, "flips");
+        for (int k = 0; k < pr->nflip; k++) {
+            cJSON *f = cJSON_CreateObject();
+            cJSON_AddNumberToObject(f, "t_ms",       pr->flip_t_ms[k]);
+            cJSON_AddNumberToObject(f, "ss",         pr->flip_ss[k]);
+            cJSON_AddNumberToObject(f, "bracket_ms", pr->bracket_ms[k]);
+            cJSON_AddNumberToObject(f, "step_ms",    pr->step_ms[k]);
+            cJSON_AddNumberToObject(f, "delta_ms",   pr->delta_ms[k]);
+            cJSON_AddItemToArray(fl, f);
+        }
+        free(pr);
+        char *txt = cJSON_PrintUnformatted(res);
+        cJSON_Delete(res);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+        free(txt);
+        return ESP_OK;
     } else if (action && strcmp(action, "update_check") == 0) {
         // Force the periodic check to run now rather than waiting out the
         // interval. Makes "did the release land?" answerable in seconds
