@@ -6,12 +6,12 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.16.12** - 2026-10-08
 
-**The Tab5 can take its time and its date from a GPS receiver of its own, and the date it logs under is no longer taken on trust.**
+**GPS time and date from a receiver on PORT.A or from a QMX+'s own GPS, and a check on the date before it is trusted.**
 
 - ⭐ **A GPS receiver on the Tab5 itself, contributed by Eric (@ericmoritz)** *(#15)*. Plug an M5Stack Unit GPS v1.1 into PORT.A, set **Settings -> Device -> Port mode** to *Unit GPS v1.1*, and the satellite gives you UTC **and the full date** offline, with no question to answer. A GPS symbol on the bottom bar shows what the receiver is doing.
 - ⭐ **A GPS-equipped QMX+ now hands over the date as well as the time.** On radio firmware 1.04_004 and later the Tab5 asks the GPS receiver directly instead of reading the radio's clock, so an offline QMX+ with a sky view also answers the date question by itself - and whether your radio has a GPS is settled by the radio's own answer rather than inferred from a clock that agrees with ours.
-- ⭐ **I was overwriting the clock of GPS-equipped radios and then holding it against them** *(#174)*. The push left the radio about a second slow, which is the very disagreement the GPS test looks for, so it failed again and pushed again. Only a power cycle of the radio escaped it.
-- ⭐ **"Is today's date right?" is fixed in three ways** *(royord, #18)*. The supercap clock still running is no longer taken as the date being right - it says the battery held, not who wrote it, and another firmware can leave a date a century out. The question no longer closes itself when **you** opened it to change the date. And both clock windows drew text underneath their own buttons.
+- ⭐ **The Tab5 no longer sets the clock of a radio that has its own GPS** *(#174)*. The push left the radio about a second slow, which is the very disagreement the GPS test looks for, so it failed again and pushed again. Only a power cycle of the radio escaped it.
+- ⭐ **Three faults in the date check** *(royord, #18)*. The supercap clock still running is no longer taken as the date being right - it says the battery held, not who wrote it, and another firmware can leave a date a century out. The question no longer closes itself when **you** opened it to change the date. And both clock windows drew text underneath their own buttons.
 - **SD Files on the web page works again** - the fault listed under ⚠ in v1.16.11. A read that could not get the memory it needed came back short and the browser was handed a truncated file as though it were whole.
 - **The waterfall is smoother, and its speed is set in rows per second** (1 to 40, in the drawer). The band-plan strip was redrawing 6.7 times a second to produce an identical picture - 20% of all the drawing the Tab5 did.
 - **The web waterfall no longer stalls** - it was stopped 4.2% of the time, by my own code rather than the network.
