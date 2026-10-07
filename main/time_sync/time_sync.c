@@ -822,6 +822,110 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
     return true;
 }
 
+/* ⭐ APPLY A CAT `GP` TICK - THE RECEIVER'S OWN TIME, WITH THE DATE.
+ *
+ * This is not apply_gps_tick() with extra fields. The two answer different
+ * questions:
+ *
+ *   TM;  reports the radio's INTERNAL clock. It is set from GPS at power-on
+ *        and then free-runs. Measured on Steffen's QMX+ 2026-10-07: it walked
+ *        away from UTC at 445 ppm, +134 ms per 5-minute tick over five
+ *        consecutive ticks, while the radio's own GPS viewer showed a 3D fix
+ *        on 14 satellites. So apply_gps_tick() has to WORK OUT whether that
+ *        clock is GPS-disciplined, by agreeing tightly with SNTP - and has to
+ *        refuse its own agreement when we were the ones who set it.
+ *   GP;  reports the GPS RECEIVER. Nothing we do can write it. A reply that
+ *        parses IS the satellite answer, so there is no provenance to infer,
+ *        no SNTP needed, and it works offline on the first try.
+ *
+ * That is why there is no tight-agreement test here, no s_qmx_time_pushed
+ * guard, and no fallback to "not GPS": a parsed GP reply confirms the radio
+ * has a GPS outright. A disagreement with SNTP is logged and the satellite is
+ * applied anyway - the same rule the Unit-GPS path uses, for the same reason.
+ *
+ * GP also carries the DATE, which TM; never did. That is what closes the
+ * offline half of royord's #18: a radio with no internet still knows the day.
+ *
+ * ⚠ What GP returns with NO FIX is not known - the manual does not say. The
+ * range checks in cat_gps_gp_parse() are the whole defence: a reply that does
+ * not parse is "no answer", never a time, and the caller falls back to TM.
+ */
+static bool apply_qmx_gp_tick(int y, int mo, int d, int h, int mi, int s, int64_t flip_us)
+{
+    struct tm tm_utc = {0};
+    tm_utc.tm_year = y - 1900;
+    tm_utc.tm_mon  = mo - 1;
+    tm_utc.tm_mday = d;
+    tm_utc.tm_hour = h;
+    tm_utc.tm_min  = mi;
+    tm_utc.tm_sec  = s;
+    tm_utc.tm_isdst = 0;
+    time_t t = mktime(&tm_utc);   // IDF runs UTC, so mktime == timegm
+    if (t < 0) {
+        ESP_LOGW(TAG, "QMX-GP date/time did not convert - ignoring");
+        return false;
+    }
+
+    /* flip_us is the midpoint of the bracket around the second boundary, so
+     * UTC was exactly t.000 at that esp_timer stamp. Carry it forward. */
+    int64_t carry_us = esp_timer_get_time() - flip_us;
+    if (carry_us < 0) carry_us = 0;
+    int64_t utc_now_us = (int64_t)t * 1000000LL + carry_us;
+    time_t  utc_now    = (time_t)(utc_now_us / 1000000LL);
+
+    if (!epoch_is_sane((int64_t)utc_now)) {
+        ESP_LOGW(TAG, "QMX-GP time out of range (%lld) - ignoring", (long long)utc_now);
+        return false;
+    }
+
+    if (wifi_is_connected() && wifi_time_is_valid()) {
+        struct timeval sys;
+        gettimeofday(&sys, NULL);
+        int64_t sys_us = (int64_t)sys.tv_sec * 1000000LL + sys.tv_usec;
+        int64_t d_ms   = llabs(utc_now_us - sys_us) / 1000;
+        if (d_ms > UNIT_GPS_SNTP_WARN_MS) {
+            ESP_LOGW(TAG, "QMX-GP off SNTP by %lld ms - applying the satellite anyway",
+                     (long long)d_ms);
+        }
+    }
+
+    struct timeval tv = { .tv_sec  = utc_now,
+                          .tv_usec = (suseconds_t)(utc_now_us % 1000000LL) };
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(utc_now, "QMX-GP");
+    s_ft8_cum_offset_ms = 0;        // hard sync: any prior FT8 nudge is baked in
+
+    s_date_verified = true;         // the DATE came from the satellite
+    settings_set_date_src(DATE_SRC_QMX_GPS);
+    set_qmx_gps_confirmed(true);    // the radio answered GP - it HAS a GPS
+    s_source = TIME_SOURCE_QMX;
+
+    ESP_LOGI(TAG, "Time set from QMX-GP: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC "
+                  "phase-locked (%lld ms since flip)",
+             y, mo, d, h, mi, s, (int)(tv.tv_usec / 1000), (long long)(carry_us / 1000));
+    return true;
+}
+
+/* One attempt at the GP path, for every caller that wants satellite time from
+ * the radio. Costs up to ~1.3 s while it brackets a second boundary, and holds
+ * the CAT poll for that long.
+ *
+ * Returns false - cheaply - on a radio older than 1.04_004 (GP does not exist),
+ * and after the full 1.3 s on a radio that has the command but no fix. Both
+ * callers then fall back to the TM; path they used before.
+ *
+ * On firmware 1.04_004 and later GP; reports the GPS RECEIVER: with the date,
+ * and with no free-run error. See apply_qmx_gp_tick() for why that makes the
+ * whole provenance question below unnecessary.
+ */
+bool time_sync_try_qmx_gp(void)
+{
+    int y, mo, d, h, mi, s;
+    int64_t flip_us;
+    if (cat_gps_gp_sync(&y, &mo, &d, &h, &mi, &s, &flip_us) != ESP_OK) return false;
+    return apply_qmx_gp_tick(y, mo, d, h, mi, s, flip_us);
+}
+
 // True once qmx_sync_once() has made its FIRST determination for the current
 // QMX - no longer gates whether detection retries (see the 2026-09-23 fix
 // note below), only whether push_to_qmx() has already seeded a non-GPS
@@ -864,6 +968,14 @@ static void qmx_sync_once(void)
     int h, m, s;
     int64_t flip_us;
     bool sntp_up = wifi_is_connected() && wifi_time_is_valid();
+
+    /* ⭐ ASK THE RECEIVER FIRST, NOT THE RADIO'S CLOCK. Everything below this
+     * line exists to work out whether TM;'s internal clock can be trusted;
+     * when GP answers, that question does not need asking. */
+    if (time_sync_try_qmx_gp()) {
+        s_qmx_detect_done = true;   // settled, and not by inference
+        return;
+    }
 
     // --- Auto-detect (needs SNTP to compare against), retried every periodic
     // pass until confirmed. push_to_qmx() still fires only on the very first

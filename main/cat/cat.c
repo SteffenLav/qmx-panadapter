@@ -3362,6 +3362,7 @@ esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
     int       prev_sec     = -1;
     int64_t   prev_resp_us = 0;
     int64_t   bracket_us   = 0;
+    int64_t   last_seen    = 0;
     int       polls = 0, parses = 0;
     esp_err_t result       = ESP_ERR_TIMEOUT;
     int64_t   start        = esp_timer_get_time();
@@ -3374,6 +3375,10 @@ esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
         for (int i = 0; i < 25 && s_gp_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(2));
         int y, mo, d, h, mi, s;
         if (!cat_gps_gp_parse(s_gp_resp, s_gp_resp_len, &y, &mo, &d, &h, &mi, &s)) continue;
+        /* One arrival read twice would give a false 1-2 ms bracket - see the
+         * same guard in cat_gps_tick_sync(). */
+        if (s_gp_resp_us == last_seen) continue;
+        last_seen = s_gp_resp_us;
         parses++;
         if (prev_sec >= 0 && s != prev_sec) {
             *out_y = y; *out_mo = mo; *out_d = d;
@@ -3418,30 +3423,26 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
     esp_err_t result        = ESP_ERR_TIMEOUT;
     int64_t   start         = esp_timer_get_time();
 
-    /* TEMP INSTRUMENT 2026-10-07 - the GPS tick is accepted on exactly 1 poll
-     * in 5 and is ~750-1050 ms out on the other 4, with nothing in between.
-     * The reported bracket is 1-2 ms, which two CAT round trips cannot be, so
-     * the suspicion is that two loop passes read ONE arrival: s_tm_resp_len is
-     * zeroed here, the async RX handler refills it AND stamps s_tm_resp_us, and
-     * a reply landing outside the 50 ms window gets consumed by the next pass.
-     * That would make the midpoint a whole poll interval wrong, intermittently.
-     * These counters make a reused arrival visible instead of averaged away. */
-    int     polls      = 0;    /* TM; sent */
-    int     parses     = 0;    /* replies parsed */
-    int     reused     = 0;    /* same arrival stamp seen twice in a row */
+    /* ⭐ ONE ARRIVAL MUST NOT BE READ TWICE. s_tm_resp_len is zeroed below, the
+     * async RX handler refills it AND stamps s_tm_resp_us, and a reply landing
+     * after this pass's 50 ms wait is still sitting there when the next pass
+     * looks. Taken as a second reading it yields a 1-2 ms "bracket", which two
+     * CAT round trips cannot be, and the midpoint is then a whole poll interval
+     * wrong. Instrumented 2026-10-07 after the tick was accepted on exactly 1
+     * poll in 5; the sawtooth itself turned out to be our own clock push
+     * (676031f), but the reuse is real, so the stamp is checked rather than
+     * assumed. The same guard is in cat_gps_gp_sync(). */
     int64_t last_seen  = 0;
 
     while (esp_timer_get_time() - start < 1300000) {   // ~1.3 s cap: spans any 1 s boundary
         s_tm_resp_len = 0;
         if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 100) != ESP_OK)
             break;
-        polls++;
         // Wait briefly for the async RX handler to stamp + fill the response.
         for (int i = 0; i < 25 && s_tm_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(2));
         int h, m, s;
         if (!parse_tm_resp(&h, &m, &s)) continue;
-        parses++;
-        if (s_tm_resp_us == last_seen) reused++;   /* TEMP INSTRUMENT */
+        if (s_tm_resp_us == last_seen) continue;   // same arrival, not a new reading
         last_seen = s_tm_resp_us;
         if (prev_sec >= 0 && s != prev_sec) {          // the tick
             /* ⭐ MIDPOINT, NOT THE ARRIVAL - 2026-09-23.
@@ -3484,20 +3485,6 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
                  *out_hour, *out_min, *out_sec,
                  (long long)(bracket_us / 1000), (long long)(bracket_us / 2000));
-        /* TEMP INSTRUMENT - see the block at the top of this function.
-         * polls vs parses says how many sends got no reply inside the window;
-         * reused says how many passes consumed an arrival already counted;
-         * the two endpoint stamps are relative to the loop start, so the real
-         * spacing of the bracketing replies is visible, not just their
-         * difference. A healthy tick: parses == polls, reused == 0, and the
-         * endpoints one poll interval apart. */
-        ESP_LOGW(TAG, "GPS tick DIAG: polls=%d parses=%d reused=%d | prev@%lld ms "
-                      "cur@%lld ms (spacing %lld ms) | loop %lld ms",
-                 polls, parses, reused,
-                 (long long)((prev_resp_us - start) / 1000),
-                 (long long)((s_tm_resp_us - start) / 1000),
-                 (long long)((s_tm_resp_us - prev_resp_us) / 1000),
-                 (long long)((esp_timer_get_time() - start) / 1000));
     }
     else
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
