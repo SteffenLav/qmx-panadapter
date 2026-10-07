@@ -12372,6 +12372,96 @@ void ui_toast_ms(const char *msg, uint32_t ms)
     display_unlock();
 }
 
+/* ⭐ A NOTICE THE OPERATOR HAS TO DISMISS, NOT A TOAST THAT TIMES OUT.
+ *
+ * A toast is right for "that worked". It is wrong for anything the operator
+ * must ACT on, because it leaves on its own whether or not anybody read it.
+ * Samuel W7STF spent fifteen minutes finding out that switching RX audio on
+ * does nothing until a restart - the firmware did tell him, in a 12-second
+ * toast he either missed or saw clipped.
+ *
+ * Scrim swallows touches, so the message cannot be dismissed by a stray tap on
+ * whatever is behind it - only the OK button closes it. Built once and reused:
+ * the next "you must do something about this" message gets a dialog instead of
+ * another toast nobody reads.
+ */
+static lv_obj_t *s_notice      = NULL;
+static lv_obj_t *s_notice_body = NULL;
+
+static void notice_ok_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_notice) lv_obj_add_flag(s_notice, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void notice_swallow_cb(lv_event_t *e) { (void)e; }
+
+void ui_notice(const char *title, const char *msg)
+{
+    if (!msg) return;
+    // Same cross-thread rule as ui_toast_ms() above - see its comment.
+    if (!display_lock(100)) return;
+
+    if (!s_notice) {
+        s_notice = lv_obj_create(lv_screen_active());
+        lv_obj_set_size(s_notice, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_pos(s_notice, 0, 0);
+        lv_obj_set_style_bg_color(s_notice, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_notice, UI_OPA_MODAL_SCRIM, 0);
+        lv_obj_set_style_border_width(s_notice, 0, 0);
+        lv_obj_set_style_radius(s_notice, 0, 0);
+        lv_obj_set_style_pad_all(s_notice, 0, 0);
+        lv_obj_remove_flag(s_notice, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(s_notice, notice_swallow_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *card = lv_obj_create(s_notice);
+        lv_obj_set_width(card, 780);                 // 1280 panel - comfortable measure
+        lv_obj_set_height(card, LV_SIZE_CONTENT);
+        lv_obj_center(card);
+        lv_obj_set_style_bg_color(card, lv_color_hex(0x1a1f24), 0);
+        lv_obj_set_style_border_color(card, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(card, 2, 0);
+        lv_obj_set_style_radius(card, 12, 0);
+        lv_obj_set_style_pad_all(card, 28, 0);
+        lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+        lv_obj_t *t = lv_label_create(card);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(t, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_pad_bottom(t, 14, 0);
+        lv_obj_set_user_data(s_notice, t);           // title, refreshed per call
+
+        s_notice_body = lv_label_create(card);
+        lv_obj_set_width(s_notice_body, LV_PCT(100));
+        lv_label_set_long_mode(s_notice_body, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_font(s_notice_body, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(s_notice_body, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_align(s_notice_body, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_bottom(s_notice_body, 24, 0);
+
+        lv_obj_t *ok = lv_btn_create(card);
+        lv_obj_set_size(ok, 220, 64);
+        lv_obj_set_style_bg_color(ok, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(ok, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(ok, 2, 0);
+        lv_obj_set_style_radius(ok, 8, 0);
+        lv_obj_add_event_cb(ok, notice_ok_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *ol = lv_label_create(ok);
+        lv_obj_set_style_text_font(ol, &lv_font_montserrat_28, 0);
+        lv_label_set_text(ol, LV_SYMBOL_OK "  OK");
+        lv_obj_center(ol);
+    }
+
+    lv_label_set_text((lv_obj_t *)lv_obj_get_user_data(s_notice), title ? title : "");
+    lv_label_set_text(s_notice_body, msg);
+    lv_obj_move_foreground(s_notice);     // above the drawer and any open modal
+    lv_obj_remove_flag(s_notice, LV_OBJ_FLAG_HIDDEN);
+
+    display_unlock();
+}
+
 // Build the drawer once. Hidden off-screen on the right initially.
 /* CW PROFILES (#359, Uwe DL8UG). Four buttons; a tap applies that profile to
  * the radio.

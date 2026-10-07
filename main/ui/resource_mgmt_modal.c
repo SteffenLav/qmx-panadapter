@@ -285,10 +285,16 @@ static void audio_cb(lv_event_t *e)
      * boot or not at all (rx_audio.h), so switching audio on mid-session is
      * silently inert - Samuel W7STF spent fifteen minutes and a reboot finding
      * that out. The firmware knew the whole time and only told the log. */
+    /* ⛔ A DIALOG, NOT A TOAST. The operator has to DO something about this -
+     * restart the Tab5 - and a toast leaves after 12 s whether it was read or
+     * not. Samuel W7STF lost fifteen minutes to exactly that. */
     if (on && rx_audio_restart_pending())
-        ui_toast_ms("RX audio is on, but it needs a restart of the Tab5 to take "
-                    "effect - the audio hardware is only started at boot. "
-                    "Your QMX will need a power cycle after that, as always.", 12000);
+        ui_notice("Restart needed",
+                  "RX audio is switched on, but it will not play until the Tab5 "
+                  "is restarted. The audio hardware can only be started at boot, "
+                  "before USB and WiFi claim the memory it needs.\n\n"
+                  "Your QMX will need a power cycle after that restart, as it "
+                  "does after any Tab5 restart.");
     refresh_gating();
 }
 
