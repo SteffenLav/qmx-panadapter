@@ -200,6 +200,10 @@ bool cat_get_iq_mode_confirmed(void);
 // clock agreeing with ours - can be satisfied by a clock WE set. False on
 // firmware that does not report the item, so it only ever ADDS certainty.
 bool cat_qmx_gps_source_internal(void);
+/* False until the radio has actually answered the GPS-source question. Callers
+ * that would CHANGE the radio's state on the strength of "no GPS" must wait for
+ * this, because "no" and "not yet" are otherwise indistinguishable. */
+bool cat_qmx_gps_source_known(void);
 /**
  * @brief True once VOX has been confirmed OFF (Q3; readback == 0) for the
  * current connection. The panadapter keys the QMX via CAT (TX;/TA;/RX;), never

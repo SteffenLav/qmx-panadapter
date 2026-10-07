@@ -207,11 +207,45 @@ static const char *trusted_source_name(void)
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
 // better time than anything the Tab5 carries). Never called when the QMX is
 // the *source* of the sync — only when Tab5 has a better clock.
+/* ⛔ NEVER OVERWRITE A GPS RADIO'S CLOCK. Steffen's QMX+ sat at "not GPS" for
+ * hours, 2026-10-07, and this function is why.
+ *
+ * The only gate used to be s_qmx_gps_confirmed - OUR OWN inference, from the
+ * tick agreeing with SNTP. That makes a trap with no exit: detection fails for
+ * any reason, so we push; cat_set_qmx_time() carries whole seconds only, so a
+ * clock reading 19:16:01.9 pushes :01 and leaves the radio nearly a second
+ * slow; the next tick is a second out and fails the test; so we push again.
+ * The log caught it in one line - the radio's own GPS said 19:16:02 and we
+ * wrote 19:16:01 into it. Nothing recovers from that except a power cycle,
+ * because only then does the QMX drop its software clock and let its GPS
+ * re-discipline it. That is exactly what the operator saw: power-cycle the
+ * radio and it reads GPS immediately.
+ *
+ * So the gate is now the RADIO'S OWN STATEMENT that a GPS is permanently
+ * fitted, which it answers from its own menu and which no inference of ours can
+ * poison. And "it has not answered yet" is held separately from "it said no",
+ * because they used to be the same false - and the first push goes out ~19 s
+ * after boot on the SNTP notify, before the MM query has landed at ~21-51 s.
+ *
+ * ⚠ The whole-second truncation is still there for radios we DO push to. It can
+ * leave any QMX up to a second slow. Not fixed here: doing it properly means
+ * measuring the CAT write latency and aligning to a boundary, and this change
+ * is about the radios we should never have been writing to at all. */
 static void push_to_qmx(time_t utc)
 {
     if (!cat_is_ready()) return;
     if (s_qmx_gps_confirmed) {
         ESP_LOGD(TAG, "QMX is GPS-disciplined — skipping Tab5→QMX time push");
+        return;
+    }
+    if (!cat_qmx_gps_source_known()) {
+        ESP_LOGI(TAG, "Tab5→QMX time push deferred - radio has not said yet "
+                      "whether it has a GPS fitted");
+        return;
+    }
+    if (cat_qmx_gps_source_internal()) {
+        ESP_LOGI(TAG, "QMX reports a permanent GPS - NOT pushing our time to it, "
+                      "whatever our own detection currently thinks");
         return;
     }
     struct tm tm_utc;

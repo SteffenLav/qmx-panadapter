@@ -117,6 +117,11 @@ static int  s_rx_vfo_mode = -1;
 // link-up from its GPS & Ser. Ports menu. False until asked, and false on any
 // firmware that does not report the item - the safe direction (#174).
 static bool s_qmx_gps_source_internal = false;
+/* Has the radio ANSWERED the GPS-source question yet? Distinct from the answer
+ * itself: "no permanent GPS" and "not asked yet" are both false, and treating
+ * them the same is what let us overwrite a GPS radio's clock in the first ~20 s
+ * of a session, before the query had landed. See push_to_qmx() in time_sync.c. */
+static bool s_qmx_gps_source_known = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
@@ -513,6 +518,7 @@ void cat_query_af_gain(void)
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
+bool cat_qmx_gps_source_known(void)    { return s_qmx_gps_source_known; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 const char *cat_get_qmx_uid(void) { return s_qmx_uid; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
@@ -2735,11 +2741,16 @@ static void link_task(void *arg)
                          * meaning. Anything else (Paddle port) means no permanent
                          * GPS, which is the safe default. */
                         s_qmx_gps_source_internal = (strstr(s_mm_resp, "Internal") != NULL);
+                        s_qmx_gps_source_known    = true;
                         ESP_LOGI(TAG, "QMX GPS source: %s%s", s_mm_resp + 2,
                                  s_qmx_gps_source_internal ? "  (permanent GPS)" : "");
                     } else {
                         /* Older firmware may not have the item at all. Not an
-                         * error, and not a reason to claim anything either way. */
+                         * error, and not a reason to claim anything either way -
+                         * but it IS an answer: this radio will never tell us, so
+                         * stop deferring the time push on its account. */
+                        s_qmx_gps_source_internal = false;
+                        s_qmx_gps_source_known    = true;
                         ESP_LOGI(TAG, "GPS source not reported by this firmware - "
                                       "falling back to clock-agreement detection");
                     }
@@ -3270,14 +3281,31 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
     esp_err_t result        = ESP_ERR_TIMEOUT;
     int64_t   start         = esp_timer_get_time();
 
+    /* TEMP INSTRUMENT 2026-10-07 - the GPS tick is accepted on exactly 1 poll
+     * in 5 and is ~750-1050 ms out on the other 4, with nothing in between.
+     * The reported bracket is 1-2 ms, which two CAT round trips cannot be, so
+     * the suspicion is that two loop passes read ONE arrival: s_tm_resp_len is
+     * zeroed here, the async RX handler refills it AND stamps s_tm_resp_us, and
+     * a reply landing outside the 50 ms window gets consumed by the next pass.
+     * That would make the midpoint a whole poll interval wrong, intermittently.
+     * These counters make a reused arrival visible instead of averaged away. */
+    int     polls      = 0;    /* TM; sent */
+    int     parses     = 0;    /* replies parsed */
+    int     reused     = 0;    /* same arrival stamp seen twice in a row */
+    int64_t last_seen  = 0;
+
     while (esp_timer_get_time() - start < 1300000) {   // ~1.3 s cap: spans any 1 s boundary
         s_tm_resp_len = 0;
         if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 100) != ESP_OK)
             break;
+        polls++;
         // Wait briefly for the async RX handler to stamp + fill the response.
         for (int i = 0; i < 25 && s_tm_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(2));
         int h, m, s;
         if (!parse_tm_resp(&h, &m, &s)) continue;
+        parses++;
+        if (s_tm_resp_us == last_seen) reused++;   /* TEMP INSTRUMENT */
+        last_seen = s_tm_resp_us;
         if (prev_sec >= 0 && s != prev_sec) {          // the tick
             /* ⭐ MIDPOINT, NOT THE ARRIVAL - 2026-09-23.
              *
@@ -3315,10 +3343,25 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
     }
 
     cat_poll_release(CAT_HOLD_TIME_SYNC);
-    if (result == ESP_OK)
+    if (result == ESP_OK) {
         ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught (bracket %lld ms, +/-%lld ms)",
                  *out_hour, *out_min, *out_sec,
                  (long long)(bracket_us / 1000), (long long)(bracket_us / 2000));
+        /* TEMP INSTRUMENT - see the block at the top of this function.
+         * polls vs parses says how many sends got no reply inside the window;
+         * reused says how many passes consumed an arrival already counted;
+         * the two endpoint stamps are relative to the loop start, so the real
+         * spacing of the bracketing replies is visible, not just their
+         * difference. A healthy tick: parses == polls, reused == 0, and the
+         * endpoints one poll interval apart. */
+        ESP_LOGW(TAG, "GPS tick DIAG: polls=%d parses=%d reused=%d | prev@%lld ms "
+                      "cur@%lld ms (spacing %lld ms) | loop %lld ms",
+                 polls, parses, reused,
+                 (long long)((prev_resp_us - start) / 1000),
+                 (long long)((s_tm_resp_us - start) / 1000),
+                 (long long)((s_tm_resp_us - prev_resp_us) / 1000),
+                 (long long)((esp_timer_get_time() - start) / 1000));
+    }
     else
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
     return result;
