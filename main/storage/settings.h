@@ -642,6 +642,11 @@ typedef struct {
     // that turns those three off: mode != relay means the pin/level/ms are
     // still stored (a future switch back must restore them) but drive nothing.
     uint8_t  port_a_mode;       // port_a_mode_t: 0=relay (default), 1=unit_gps
+    /* Module GPS v2.1 on the M-Bus, RX on GPIO2. Independent of port_a_mode:
+     * that one arbitrates PORT.A between the relay and a Unit GPS, and this
+     * receiver is on neither of those pins. Default 0 so an upgrade changes
+     * nothing. */
+    uint8_t  gnss_mbus_en;
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -1190,6 +1195,11 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
 // start), so the UI can say so instead of showing a setting that is not real.
 // Callers must not write s_pending.port_a_mode directly.
 uint8_t settings_get_port_a_mode(void);
+
+/* M-Bus GNSS receiver (Module GPS v2.1 on GPIO2). Narrow accessors - time_sync
+ * and main run on small stacks and must not copy qmx_settings_t. */
+bool settings_get_gnss_mbus_en(void);
+void settings_set_gnss_mbus_en(bool en);
 bool    settings_set_port_a_mode(uint8_t mode);
 
 /* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a

@@ -382,6 +382,28 @@ void app_main(void)
         gpio_relay_init();   // GPIO53/54 remote relay pulse - see gpio_relay.h
     }
 
+    /* ⭐ M-Bus GNSS, and it is NOT an else of the branch above.
+     *
+     * The Module GPS v2.1 (M5Stack M003-V21) mounts on the 30-pin bus on the
+     * back and its RX lands on GPIO2, so it shares nothing with PORT.A: the
+     * relay can keep G53/G54 and the receiver still works. Same AT6668 silicon
+     * and the same NMEA at 115200 8N1 as the PORT.A unit, so it is the same
+     * driver with a different pin - see unit_gps_start_on().
+     *
+     * Running both at once is refused inside the driver (one UART, one parser),
+     * which is why this is a plain if and not an else-if: the operator can have
+     * the setting on while PORT.A is also in GPS mode, and what they get is a
+     * log line saying which one won, not a silently rebound pin. */
+    if (settings_get_gnss_mbus_en()) {
+        if (unit_gps_start_on(UNIT_GPS_MBUS_RX_GPIO)) {
+            ESP_LOGI(TAG, "Module GPS v2.1 started on the M-Bus (GPIO%d)",
+                     UNIT_GPS_MBUS_RX_GPIO);
+        } else {
+            ESP_LOGE(TAG, "M-Bus GNSS failed to start on GPIO%d",
+                     UNIT_GPS_MBUS_RX_GPIO);
+        }
+    }
+
     // Init RX8130CE supercap RTC and apply stored time to system clock.
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());

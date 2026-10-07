@@ -1915,6 +1915,30 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
         dma_owners_report();
         return ESP_OK;
+    } else if (action && strcmp(action, "gnss_mbus") == 0) {
+        /* Module GPS v2.1 on the M-Bus (GPIO2). Applied live AND stored, so it
+         * survives a reboot without one being needed to turn it on:
+         *   {"action":"gnss_mbus","on":true}
+         * Starting is refused if PORT.A already owns the one GNSS instance -
+         * the driver says so in the log and the reply carries the result. */
+        cJSON *jo = cJSON_GetObjectItem(root, "on");
+        bool on = (jo && (cJSON_IsTrue(jo) || (cJSON_IsNumber(jo) && jo->valueint)));
+        bool ok = true;
+        if (on) {
+            ok = unit_gps_start_on(UNIT_GPS_MBUS_RX_GPIO);
+        } else {
+            unit_gps_stop();
+        }
+        if (ok) settings_set_gnss_mbus_en(on);
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"ok\":%s,\"gnss_mbus\":%s,\"rx_gpio\":%d}",
+                 ok ? "true" : "false", (ok && on) ? "true" : "false",
+                 UNIT_GPS_MBUS_RX_GPIO);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        return ESP_OK;
     } else if (action && strcmp(action, "gfx_exp") == 0) {
         // TEMP (#285) dev only: choose where the LVGL draw buffers live and how
         // tall each strip is, then reboot so display_init() picks it up. Stored

@@ -48,6 +48,7 @@ static const char *TAG = "settings";
 #define KEY_LAST_MODE  "last_mode"
 #define KEY_LAST_TIME  "last_time"
 #define KEY_DATE_SRC   "date_src"   /* who last set the DATE - date_src_t */
+#define KEY_GNSS_MBUS  "gnss_mbus"  /* Module GPS v2.1 on the M-Bus (GPIO2) */
 #define KEY_CQ_MSG0    "cq_msg0"
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"
@@ -426,6 +427,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
  * runtime bitmap indices only - nothing on flash carries them, the NVS KEY
  * strings do - so renumbering here costs nothing. 24 spare. */
 #define DIRTY_PORT_A_MODE     135  /* PORT.A owner: relay | unit_gps (#15) */
+#define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable; 23 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -583,6 +585,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
         if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
         if (dirty_test(&dirty_local, DIRTY_DATE_SRC))   nvs_set_u8(s_nvs,  KEY_DATE_SRC,  snap.date_src);
+        if (dirty_test(&dirty_local, DIRTY_GNSS_MBUS))  nvs_set_u8(s_nvs,  KEY_GNSS_MBUS, snap.gnss_mbus_en);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
@@ -860,6 +863,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->last_ui_mode = DEF_LAST_MODE;
     out->last_unix_time = 0;
     out->date_src       = 0;   /* nobody we trust - the date gets questioned */
+    out->gnss_mbus_en   = 0;   /* no M-Bus receiver unless the operator says so */
     out->cq_msg[0][0] = '\0';
     out->cq_msg[1][0] = '\0';
     out->cq_msg[2][0] = '\0';
@@ -1024,6 +1028,7 @@ static void load_from_nvs(qmx_settings_t *out)
     /* Absent on an upgrade from a build before this existed, which leaves it
      * 0 and makes the first boot ask once. That is the safe direction. */
     nvs_get_u8(s_nvs, KEY_DATE_SRC, &out->date_src);
+    nvs_get_u8(s_nvs, KEY_GNSS_MBUS, &out->gnss_mbus_en);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -2759,6 +2764,26 @@ uint8_t settings_get_date_src(void)
     uint8_t v = s_pending.date_src;
     xSemaphoreGive(s_mutex);
     return v;
+}
+
+bool settings_get_gnss_mbus_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = (s_pending.gnss_mbus_en != 0);
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_gnss_mbus_en(bool en)
+{
+    if (!s_ready) return;
+    uint8_t v = en ? 1 : 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gnss_mbus_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gnss_mbus_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GNSS_MBUS);
 }
 
 void settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out)

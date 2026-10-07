@@ -34,7 +34,8 @@ static const char *TAG = "unit_gps";
  * to hi-Z, and the TX signal does not drive it (qmx-panadapter
  * developer review, 2026-10-04). */
 #define UNIT_GPS_UART_NUM    UART_NUM_1
-#define UNIT_GPS_RX_GPIO     GPIO_NUM_54
+#define UNIT_GPS_RX_GPIO     GPIO_NUM_54   /* PORT.A default - see unit_gps_start_on() */
+static int s_rx_gpio = UNIT_GPS_RX_GPIO;    /* whichever pin this run is bound to */
 #define UNIT_GPS_BAUD        115200
 
 #define UNIT_GPS_TASK_STACK  4096
@@ -191,7 +192,21 @@ static void unit_gps_task(void *arg)
 
 bool unit_gps_start(void)
 {
-    if (s_running) return true;    // idempotent
+    return unit_gps_start_on(UNIT_GPS_RX_GPIO);
+}
+
+bool unit_gps_start_on(int rx_gpio)
+{
+    if (s_running) {
+        /* Idempotent on the SAME pin, refused on a different one: there is one
+         * UART and one parser, and silently rebinding would leave the caller
+         * believing it had a second receiver. */
+        if (rx_gpio == s_rx_gpio) return true;
+        ESP_LOGE(TAG, "GNSS already running on GPIO%d - refusing to also start "
+                      "on GPIO%d (one receiver at a time)", s_rx_gpio, rx_gpio);
+        return false;
+    }
+    s_rx_gpio = rx_gpio;
 
     /* Order matters: params and pins first, driver last. uart_driver_install()
      * refuses to run twice, so clear any driver a previous, partially-failed
@@ -216,7 +231,7 @@ bool unit_gps_start(void)
      * relay harness left plugged in while in GPS mode would hold the
      * radio in power-cycle. GPIO53 stays at hi-Z after the sequencer
      * releases it. */
-    e = uart_set_pin(UNIT_GPS_UART_NUM, UART_PIN_NO_CHANGE, UNIT_GPS_RX_GPIO,
+    e = uart_set_pin(UNIT_GPS_UART_NUM, UART_PIN_NO_CHANGE, s_rx_gpio,
                      UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "uart_set_pin failed: 0x%x", e);
@@ -229,7 +244,7 @@ bool unit_gps_start(void)
     }
     /* RX pull-up, after the pin is routed to the UART: without it a disconnected
      * lead floats and the line looks like traffic. */
-    gpio_set_pull_mode(UNIT_GPS_RX_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)s_rx_gpio, GPIO_PULLUP_ONLY);
 
     s_stop_req = false;
     s_prev_sec = -1;

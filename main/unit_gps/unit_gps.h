@@ -49,7 +49,41 @@ typedef enum {
 // Bring the UART up (idempotent - a second call is a no-op) and start the
 // receive task. Returns false only when the UART itself could not be
 // configured, so the Port-mode sequencer can roll the pins back to the relay.
+/* Start on PORT.A (GPIO54) - the M5Stack Unit GPS v1.1, ericmoritz' original
+ * target. Equivalent to unit_gps_start_on(UNIT_GPS_PORTA_RX_GPIO). */
 bool unit_gps_start(void);
+
+/* ⭐ Start on an arbitrary RX pin, for a receiver that is not on PORT.A.
+ *
+ * Steffen's Module GPS v2.1 (M5Stack M003-V21) is the same AT6668 silicon
+ * behind an ATGM336H-6N can, same NMEA 0183 4.1 at 115200 8N1, so the parser
+ * and this driver are unchanged - only the pin differs. It mounts on the 30-pin
+ * M-Bus on the back rather than PORT.A, so it does NOT contend with the relay
+ * at all and port_a_mode does not apply to it: relay and GPS can both run.
+ *
+ * ⛔ ONE RECEIVER AT A TIME. There is a single UART_NUM_1 and a single parser
+ * state machine, so a second start is refused rather than quietly rebinding the
+ * pin and leaving the caller thinking it won.
+ */
+bool unit_gps_start_on(int rx_gpio);
+
+/* RX pin for a Module GPS v2.1 on the M-Bus with its TXD DIP switch at
+ * position 5.
+ *
+ * ⚠ DERIVED, NOT DOCUMENTED. The module's silkscreen tabulates CORE, CORE2,
+ * CORES3 and HP135 - there is no Tab5 column. The switches select M-BUS PIN
+ * POSITIONS, so the Core column inverts onto the Tab5's own bus table:
+ * TXD switch 5 is Core G0, which is M-Bus position 21, which on the Tab5 is
+ * GPIO2. Position 21 was chosen over the alternatives because GPIO2 is a plain
+ * GPIO used nowhere in this firmware or the BSP, and it avoids both the
+ * strapping pins (switch 1 -> G37) and the pins the Tab5 names PC_TX/PC_RX as
+ * if it intends to drive them (switch 2 -> G6).
+ *
+ * The RXD switches should all be left OFF: this driver is receive-only and
+ * passes UART_PIN_NO_CHANGE for TX, so the Tab5 never talks to the receiver.
+ */
+#define UNIT_GPS_PORTA_RX_GPIO   54
+#define UNIT_GPS_MBUS_RX_GPIO     2
 
 // Release the UART and end the receive task (idempotent). Safe to call when
 // never started; returns once the task has parked.
