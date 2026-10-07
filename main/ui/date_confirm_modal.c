@@ -4,7 +4,9 @@
 // (- day / + day), because the realistic error is "the day I last used it", a
 // few days back, and two taps beat typing a date on glass at a park table. The
 // only way out is to say the date is right, which is the whole point - but a
-// later SNTP sync closes it without asking, since the internet then knows.
+// later SNTP sync closes the AUTOMATIC question without asking, since the
+// internet then knows. A window the operator opened themselves is never closed
+// for them - see s_operator_opened in the .c (royord, #18).
 
 #include "date_confirm_modal.h"
 #include "ui_theme.h"
@@ -28,6 +30,24 @@ static lv_obj_t *s_lbl_day = NULL;
 static int       s_offset_days = 0;   // what the operator has stepped to, relative to the clock
 static bool      s_asked_this_boot = false;
 
+/* ⛔ WHO OPENED IT DECIDES WHETHER IT MAY CLOSE ITSELF (royord, #18).
+ *
+ * The automatic nag is a question nobody asked for, so SNTP arriving answers it
+ * and it goes away - that part was right. But the same self-close ran for a
+ * window the OPERATOR had just opened from the Set-the-Clock date line, and it
+ * does not take a slow SNTP to kill that one: with WiFi already up
+ * time_sync_date_verified() is ALREADY true, so the very next 1 Hz tick shut it.
+ *
+ * Reported as "it flashes up the menu and then almost immediately clears it",
+ * and he was right - manual date entry existed and could not be held open. His
+ * repro: flash the M5 UserDemo (which leaves the RTC at a nonsense date), flash
+ * this firmware, FT8 > Options > Set and Sync the Clock, open the date line.
+ *
+ * So the flag is about PROVENANCE, not state. Do not replace it with a test on
+ * date_verified or on which screen is up - those are exactly the facts that are
+ * the same in both cases. */
+static bool      s_operator_opened = false;
+
 bool date_confirm_modal_is_open(void)
 {
     return s_modal && !lv_obj_has_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
@@ -46,6 +66,7 @@ static void refresh(void)
 static void close_modal(void)
 {
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+    s_operator_opened = false;
 }
 
 static void minus_cb(lv_event_t *e) { (void)e; s_offset_days--; refresh(); }
@@ -180,22 +201,39 @@ static void build(void)
     ui_kbd_set_buttons(ok, NULL);   // Enter = confirm
 }
 
-void date_confirm_modal_show(void)
+static void show_modal(bool by_operator)
 {
     build();
     s_offset_days = 0;
     refresh();
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
+    s_operator_opened = by_operator;
+    /* Kept for BOTH paths, as it always was: having shown the window once is
+     * what the once-per-boot nag counts, however it got on screen. */
     s_asked_this_boot = true;
-    ESP_LOGW(TAG, "date not verified - asking the operator");
+    if (by_operator) {
+        ESP_LOGI(TAG, "date window opened by the operator - it stays until dismissed");
+    } else {
+        ESP_LOGW(TAG, "date not verified - asking the operator");
+    }
+}
+
+void date_confirm_modal_show(void)
+{
+    /* Every caller of this is an operator action - the Set-the-Clock date line
+     * (ft8_time_modal.c) and the web UI. The automatic nag goes through
+     * show_modal(false) from the tick below. */
+    show_modal(true);
 }
 
 void date_confirm_modal_tick(void)
 {
     if (date_confirm_modal_is_open()) {
-        // The internet arrived while the question was up: it knows the date.
-        if (time_sync_date_verified()) {
+        /* The internet arrived while OUR OWN question was up: it knows the date,
+         * so stop asking. A window the operator opened is theirs - it closes
+         * when they say the date is right, and not before. */
+        if (time_sync_date_verified() && !s_operator_opened) {
             ESP_LOGI(TAG, "date verified by SNTP while asking - closing");
             close_modal();
         } else {
@@ -206,5 +244,5 @@ void date_confirm_modal_tick(void)
     if (s_asked_this_boot || time_sync_date_verified()) return;
     if (esp_timer_get_time() < (int64_t)ASK_AFTER_UPTIME_S * 1000000) return;
     if (time(NULL) < 1700000000) return;   // no date at all yet - nothing to confirm
-    date_confirm_modal_show();
+    show_modal(false);
 }
