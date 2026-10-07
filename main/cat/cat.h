@@ -199,6 +199,17 @@ bool cat_get_iq_mode_confirmed(void);
 // answer, which is why it exists: the alternative - inferring GPS from the
 // clock agreeing with ours - can be satisfied by a clock WE set. False on
 // firmware that does not report the item, so it only ever ADDS certainty.
+/* GPS date+time straight from the receiver, not from the radio's own clock -
+ * see cat_gps_gp_sync() in cat.c for the measurement that made this necessary.
+ * ESP_ERR_NOT_SUPPORTED on firmware older than 1.04_004. */
+esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
+                          int *out_h, int *out_mi, int *out_s, int64_t *out_flip_us);
+
+/* Exposed for the host harness: parses the trailing YYYYMMDDHHMMSS of a GP
+ * reply and range-checks it. Deliberately ignores the coordinate fields. */
+bool cat_gps_gp_parse(const char *resp, size_t len,
+                      int *y, int *mo, int *d, int *h, int *mi, int *s);
+
 bool cat_qmx_gps_source_internal(void);
 /* False until the radio has actually answered the GPS-source question. Callers
  * that would CHANGE the radio's state on the strength of "no GPS" must wait for

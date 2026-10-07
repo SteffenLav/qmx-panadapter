@@ -72,6 +72,16 @@ static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
 static size_t s_tm_resp_len = 0;
 static volatile int64_t s_tm_resp_us = 0;  // esp_timer time the TM response landed (GPS-tick sync)
+
+/* GP reply: "GP+DD.DDDDDD+DDD.DDDDDD+YYYYMMDDHHMMSS;" - 39 chars nominal, but
+ * the length is NOT asserted. The sign convention changed under us once
+ * already (the 1.04_004 manual says longitude EAST is negative; QRP Labs later
+ * fixed that as a bug and this bench runs 1_04_010), so anything that depends
+ * on the width or the signs of the coordinate fields is a hostage. Only the
+ * trailing 14 digits are parsed, and they are what we came for. */
+static char   s_gp_resp[48] = {0};
+static size_t s_gp_resp_len = 0;
+static volatile int64_t s_gp_resp_us = 0;
 static char   s_pc_resp[16] = {0};  // last PC (power output) response
 static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
@@ -1017,6 +1027,17 @@ static void process_cat_message(const char *msg, size_t len)
         }
         ui_update_passband_width(hz);
         s_cat_ready = true;
+        return;
+    }
+    /* GP response: GPS coordinates + date + time, straight from the receiver
+     * rather than from the radio's own clock. That distinction is the whole
+     * point - see cat_gps_gp_sync(). Accepted on the prefix and a plausible
+     * length only; the fields are picked apart in cat_gps_gp_parse(). */
+    if (len >= 16 && len < sizeof(s_gp_resp) && msg[0] == 'G' && msg[1] == 'P') {
+        s_gp_resp_us  = esp_timer_get_time();
+        s_gp_resp_len = len;
+        memcpy(s_gp_resp, msg, len);
+        s_gp_resp[len] = '\0';
         return;
     }
     // TM response: "TMhhmmss;" - 9 chars, real-time-clock time-of-day.
@@ -3263,6 +3284,122 @@ static bool parse_tm_resp(int *h, int *m, int *s)
 // phase-locks the
 // system clock to that beat instead of the naive whole-second apply, giving
 // roughly +/-(one TM round-trip) accuracy - drift-free and WiFi-independent.
+/* ⭐ PARSE ONLY WHAT WE CAME FOR.
+ *
+ * Documented format (CAT manual 1.04_004 p3):
+ *     GP+DD.DDDDDD+DDD.DDDDDD+YYYYMMDDHHMMSS;
+ * The coordinate fields are deliberately NOT parsed here. The manual states
+ * that longitude EAST is negative, QRP Labs later fixed that sign as a bug,
+ * and the bench radio is on 1_04_010 - so the sign convention of those fields
+ * is version-dependent and nothing should depend on it until it is measured on
+ * a real radio. The date and time are unambiguous: the last 14 characters
+ * before the semicolon, YYYYMMDDHHMMSS.
+ *
+ * ⚠ UNKNOWN, NEEDS A BENCH TEST: what GP returns with NO FIX. The manual does
+ * not say. Until that is known, a reply that does not parse is treated as "no
+ * GPS answer" and the caller falls back - it is never treated as a time.
+ */
+bool cat_gps_gp_parse(const char *resp, size_t len,
+                      int *y, int *mo, int *d, int *h, int *mi, int *s)
+{
+    if (!resp || len < 16) return false;
+    if (resp[0] != 'G' || resp[1] != 'P') return false;
+
+    /* Drop the terminator if the caller kept it. */
+    if (resp[len - 1] == ';') len--;
+    if (len < 16) return false;
+
+    const char *dt = resp + len - 14;           /* YYYYMMDDHHMMSS */
+    for (int i = 0; i < 14; i++) {
+        if (dt[i] < '0' || dt[i] > '9') return false;
+    }
+    #define D2(p) ((dt[p] - '0') * 10 + (dt[(p) + 1] - '0'))
+    *y  = D2(0) * 100 + D2(2);
+    *mo = D2(4);
+    *d  = D2(6);
+    *h  = D2(8);
+    *mi = D2(10);
+    *s  = D2(12);
+    #undef D2
+
+    /* A GPS that has no fix can still answer with zeros or garbage. Range-check
+     * rather than trust: a wrong date from here would be worse than none, since
+     * the whole reason for using GP is that it is the TRUSTWORTHY source. */
+    if (*y < 2024 || *y > 2099) return false;
+    if (*mo < 1 || *mo > 12 || *d < 1 || *d > 31) return false;
+    if (*h > 23 || *mi > 59 || *s > 60) return false;
+    return true;
+}
+
+/* ⭐ THE SAME BRACKETING TRICK AS cat_gps_tick_sync(), BUT ON GP INSTEAD OF TM.
+ *
+ * 2026-10-07, measured on Steffen's QMX+: its GPS viewer showed a 3D fix on 14
+ * satellites and the correct UT time, while TM; walked away from UTC at a
+ * steady 445 ppm - 134 ms per 5-minute tick, over five consecutive ticks. The
+ * radio sets its internal clock from GPS at power-on and then free-runs, and
+ * TM; reports that internal clock. GP reports the RECEIVER. So for a radio that
+ * has a GPS, this is the right question to ask, and TM; never was.
+ *
+ * GP carries whole seconds only, so it does not give the phase by itself. It is
+ * polled in the same tight loop and the instant the SS field CHANGES is the
+ * second boundary, bracketed between the last two replies and taken at the
+ * midpoint - identical reasoning to the TM path, including why the midpoint and
+ * not the arrival. It also carries the DATE, which TM; never did.
+ */
+esp_err_t cat_gps_gp_sync(int *out_y, int *out_mo, int *out_d,
+                          int *out_h, int *out_mi, int *out_s, int64_t *out_flip_us)
+{
+    if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
+    /* GP arrived in 1.04_004. Older radios answer with an error, and asking
+     * them repeatedly in a 1.3 s loop is not free. */
+    if (!cat_qmx_fw_at_least(1, 4, 4)) return ESP_ERR_NOT_SUPPORTED;
+    if (cat_poll_held_by_other(CAT_HOLD_TIME_SYNC)) {
+        ESP_LOGI(TAG, "GP tick skipped - %s holds the link", hold_name(s_poll_holds));
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    cat_poll_hold(CAT_HOLD_TIME_SYNC);
+    int       prev_sec     = -1;
+    int64_t   prev_resp_us = 0;
+    int64_t   bracket_us   = 0;
+    int       polls = 0, parses = 0;
+    esp_err_t result       = ESP_ERR_TIMEOUT;
+    int64_t   start        = esp_timer_get_time();
+
+    while (esp_timer_get_time() - start < 1300000) {
+        s_gp_resp_len = 0;
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"GP;", 3, 100) != ESP_OK)
+            break;
+        polls++;
+        for (int i = 0; i < 25 && s_gp_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(2));
+        int y, mo, d, h, mi, s;
+        if (!cat_gps_gp_parse(s_gp_resp, s_gp_resp_len, &y, &mo, &d, &h, &mi, &s)) continue;
+        parses++;
+        if (prev_sec >= 0 && s != prev_sec) {
+            *out_y = y; *out_mo = mo; *out_d = d;
+            *out_h = h; *out_mi = mi; *out_s = s;
+            bracket_us   = s_gp_resp_us - prev_resp_us;
+            *out_flip_us = prev_resp_us + bracket_us / 2;
+            result = ESP_OK;
+            break;
+        }
+        prev_sec     = s;
+        prev_resp_us = s_gp_resp_us;
+    }
+
+    cat_poll_release(CAT_HOLD_TIME_SYNC);
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "GP tick: %04d-%02d-%02d %02d:%02d:%02d boundary caught "
+                      "(bracket %lld ms, polls %d/%d)",
+                 *out_y, *out_mo, *out_d, *out_h, *out_mi, *out_s,
+                 (long long)(bracket_us / 1000), parses, polls);
+    } else {
+        ESP_LOGW(TAG, "GP tick: no second flip in 1.3 s (polls %d, parsed %d) - "
+                      "no fix, or this radio answers GP differently", polls, parses);
+    }
+    return result;
+}
+
 // Pauses the poll for the whole burst and blocks up to ~1.3 s (enough to span
 // one second boundary). ESP_OK only if a flip was caught. Bails if another op
 // already owns the CDC pipe (FT8 TX pauses the same poll flag).
