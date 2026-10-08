@@ -30,14 +30,15 @@ instruction. Ask, or wait for the word.
 
 **What to do instead:** say what is ready and what is unverified, and stop.
 
-## ⛔⛔ CRITICAL: THE QMX NEVER SURVIVES A FLASH
+## ⛔⛔ CRITICAL: THE QMX NEVER SURVIVES A FLASH — OR ANY TAB5 RESET
 
-**Every flash with the radio attached wedges the QMX** (#74). It ALWAYS needs a manual power cycle by the operator afterwards. No exceptions. See [full rule](../../../memory/project_qmx_flash_wedge.md).
+**Every flash OR reboot with the radio attached wedges the QMX** (#74). It ALWAYS needs a manual power cycle by the operator afterwards. No exceptions, and `{"action":"reboot"}` is not the cheaper option. See [full rule](../../../memory/project_qmx_flash_wedge.md).
 
 Standing rule:
-1. Before flashing with radio attached: announce it needs a power cycle
-2. After flashing: **ask** if they've power-cycled — never infer
-3. If audio flows, they fixed it — don't credit the firmware
+1. Before flashing or rebooting with the radio attached: mention once that it needs a power cycle
+2. Never infer that it survived. He almost always power-cycles unprompted, so assume HE is the reason it is alive
+3. If audio flows, he fixed it — don't credit the firmware
+4. ⛔ **NEVER tell him to hold off, skip or defer the power cycle.** No reading licenses it — not pairs/s, not `/api/status`, not CAT answering. They describe the state, never how it got there. If he has offered to power-cycle, the answer is "yes, do it". ⚠ 2026-10-08: he said "flash it and I'll power-cycle", and I opened with "hold off — audio is already flowing, so the QMX may not need it". He had almost certainly already done it.
 
 ## ⛔ FOUR boards share this machine — resolve by BENCH NAME
 
