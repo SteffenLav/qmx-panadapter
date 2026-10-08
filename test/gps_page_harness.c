@@ -219,11 +219,44 @@ static void test_qmx_source_keeps_its_rows(void)
     expect_row(lines, 9,  "Tot sats", "-");
     expect_row(lines, 10, "Avg SNR",  "-");
     expect_row(lines, 4, "Grid", "JO65FR");      /* this one it CAN fill */
-    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_QMX), "QMX") != NULL,
-          "QMX title should name the radio: \"%s\"\n", gps_page_title(GPS_PAGE_SRC_QMX));
-    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_MODULE), "Module") != NULL,
-          "module title should name the module: \"%s\"\n",
-          gps_page_title(GPS_PAGE_SRC_MODULE));
+    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_QMX, -1), "QMX") != NULL,
+          "QMX title should name the radio: \"%s\"\n",
+          gps_page_title(GPS_PAGE_SRC_QMX, -1));
+}
+
+/* ⛔ THE TITLE NAMES THE PORT, AND MUST NOT CLAIM A VERSION.
+ *
+ * It read "Module v2.1 on the M-Bus" for every Tab5-side receiver, hardcoded -
+ * including a Unit GPS v1.1 on PORT.A, which is a different module on a
+ * different connector. GPS_PAGE_SRC_MODULE covers both, so the source alone
+ * cannot say which, and nothing read a version from the hardware.
+ *
+ * The version is NOT recoverable: the baud rate does not discriminate, because
+ * the v2.1's ATGM336H-6N defaults to 9600 and runs at 115200 on this bench. So
+ * these checks pin the port AND assert the absence of a version number - the
+ * second half is the one that would catch someone helpfully putting it back. */
+static void test_title_names_the_port_not_a_version(void)
+{
+    const char *porta = gps_page_title(GPS_PAGE_SRC_MODULE, UNIT_GPS_PORTA_RX_GPIO);
+    const char *mbus  = gps_page_title(GPS_PAGE_SRC_MODULE, UNIT_GPS_MBUS_RX_GPIO);
+
+    CHECK(strstr(porta, "PORT.A") != NULL, "PORT.A title: \"%s\"\n", porta);
+    CHECK(strstr(mbus,  "M-Bus")  != NULL, "M-Bus title: \"%s\"\n", mbus);
+    CHECK(strcmp(porta, mbus) != 0, "the two ports must not share a title\n");
+
+    CHECK(strstr(porta, "v2.1") == NULL && strstr(mbus, "v2.1") == NULL,
+          "no title may claim v2.1 - nothing checks it\n");
+    CHECK(strstr(porta, "v1.1") == NULL && strstr(mbus, "v1.1") == NULL,
+          "no title may claim v1.1 either\n");
+
+    /* A pin we do not recognise still says which line is being read - the one
+     * thing a mis-wired receiver needs to show. */
+    const char *odd = gps_page_title(GPS_PAGE_SRC_MODULE, 7);
+    CHECK(strstr(odd, "GPIO7") != NULL, "unknown pin should print itself: \"%s\"\n", odd);
+
+    /* And the QMX never acquires a port, whatever pin is passed. */
+    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_QMX, UNIT_GPS_MBUS_RX_GPIO), "M-Bus") == NULL,
+          "the QMX receiver has no Tab5 port\n");
 }
 
 static void test_no_fix_says_so(void)
@@ -270,6 +303,7 @@ int main(int argc, char **argv)
     test_sky_quadrants();
     test_qmx_source_keeps_its_rows();
     test_no_fix_says_so();
+    test_title_names_the_port_not_a_version();
 
     if (argc > 1 && strcmp(argv[1], "--dump") == 0) dump();
 

@@ -140,7 +140,11 @@ static void repaint(void)
     else                            fill_from_qmx(info);
     gps_page_render(info, src, lines, marks, &n_marks);
 
-    if (s_title) lv_label_set_text(s_title, gps_page_title(src));
+    /* The pin names the port in the title. Read live rather than cached: the
+     * driver can be rebound to the other port at runtime (unit_gps_start_on),
+     * and a title describing the port it used to be on would be exactly the
+     * mislabel this replaced. */
+    if (s_title) lv_label_set_text(s_title, gps_page_title(src, unit_gps_rx_gpio()));
 
     /* Blank the cells a marker occupies before setting the row text, then draw
      * each marker as its own coloured label on top. The row keeps the plot's

@@ -31,8 +31,16 @@ typedef enum {
     GPS_PAGE_SRC_QMX,         /* the radio's own receiver, over CAT */
 } gps_page_src_t;
 
-/* One line of the title, naming the source. Never "GPS" alone. */
-const char *gps_page_title(gps_page_src_t src);
+/* One line of the title, naming the source. Never "GPS" alone.
+ *
+ * `rx_gpio` is the pin the receiver is bound to (unit_gps_rx_gpio()), and it
+ * names the PORT - PORT.A or the M-Bus. Ignored for GPS_PAGE_SRC_QMX.
+ *
+ * ⛔ It does NOT name a hardware version, deliberately. This used to read
+ * "Module v2.1 on the M-Bus" for every Tab5-side receiver, including a Unit
+ * GPS v1.1 on PORT.A, and nothing checked. The port is known; the version is
+ * not, and the baud rate does not reveal it. */
+const char *gps_page_title(gps_page_src_t src, int rx_gpio);
 
 #define GPS_PAGE_MAX_MARKERS UNIT_GPS_MAX_SATS
 

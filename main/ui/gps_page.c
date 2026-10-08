@@ -40,12 +40,38 @@ const char *unit_gps_constellation(const char talker[3])
     return "?";
 }
 
-const char *gps_page_title(gps_page_src_t src)
+const char *gps_page_title(gps_page_src_t src, int rx_gpio)
 {
     /* Never just "GPS". Two receivers, two antennas, two failure modes, and
-     * only one of them survives the radio being unplugged. */
-    return (src == GPS_PAGE_SRC_QMX) ? "GPS  -  QMX internal receiver"
-                                     : "GPS  -  Module v2.1 on the M-Bus";
+     * only one of them survives the radio being unplugged.
+     *
+     * ⛔ IT USED TO SAY "Module v2.1 on the M-Bus", HARDCODED, and that was
+     * wrong for half the hardware this driver supports. GPS_PAGE_SRC_MODULE
+     * covers Eric's Unit GPS v1.1 on PORT.A as well as the Module GPS v2.1 on
+     * the M-Bus - the header still says so - and nothing read a version from
+     * anything. A Unit GPS was labelled as a module on a bus it was not
+     * plugged into.
+     *
+     * ⭐ So name the PORT, which is a fact we hold: the driver records the pin
+     * it bound to (unit_gps_rx_gpio()). The version is NOT recoverable - the
+     * baud rate does not discriminate, because the v2.1's ATGM336H-6N defaults
+     * to 9600 and runs at 115200 on this bench - so it is not claimed. */
+    if (src == GPS_PAGE_SRC_QMX) return "GPS  -  QMX internal receiver";
+
+    switch (rx_gpio) {
+    case UNIT_GPS_PORTA_RX_GPIO: return "GPS  -  receiver on PORT.A";
+    case UNIT_GPS_MBUS_RX_GPIO:  return "GPS  -  receiver on the M-Bus";
+    default: break;
+    }
+
+    /* An unrecognised pin is still worth printing: it says which line is being
+     * read, which is the one thing a mis-wired receiver needs to show. Static
+     * because this function returns a literal everywhere else and the caller
+     * does not own the string; it is only ever written from the LVGL thread's
+     * repaint and the harness. */
+    static char other[40];
+    snprintf(other, sizeof(other), "GPS  -  receiver on GPIO%d", rx_gpio);
+    return other;
 }
 
 void gps_page_grid(double lat_deg, double lon_deg, char out[7])
