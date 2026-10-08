@@ -825,6 +825,21 @@ static void reinit_pool_if_mode_changed(void)
                  ftx_protocol_name(want));
         free_monitor_objects();
     }
+
+    /* Clear the list AGAIN, here, where the new protocol actually begins.
+     *
+     * ft8_op_mode_set() already cleared it the moment the operator tapped, and
+     * that clear is still right - it is what makes the screen respond at once.
+     * But it happens on the LVGL thread while a slot is in flight on the decode
+     * task, so a row published in the gap between the two survives it. The
+     * decode task's own mid-slot check (see decode_candidate_range) stops the
+     * bulk - it was ~30 rows on the bench - and this closes the last
+     * candidate-wide window rather than leaving one stale station behind.
+     *
+     * Idempotent and cheap, and it runs exactly once per sub-mode change: this
+     * point is only reached when s_pool_proto actually moved. */
+    ft8_screen_clear();
+    ft8_pileup_clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -1295,6 +1310,41 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
          * Costs the final slot's decodes on the way out, which is precisely
          * what the operator asked for by leaving. */
         if (!s_ft8_running) break;
+
+        /* ⛔ THE OPERATOR CHANGED SUB-MODE WHILE THIS SLOT WAS IN FLIGHT.
+         *
+         * Abandon it. The audio in this monitor was captured under the old
+         * protocol and is being decoded under it, so every row it would
+         * publish describes a band the new engine cannot hear - and
+         * ft8_op_mode_set() has ALREADY cleared the list by now, so these rows
+         * land in a list the operator just watched empty.
+         *
+         * Measured on the bench 2026-10-08: tapping the JS8 preset at t=973.6 s
+         * cleared the list, and the slot already running then published ~30 FT8
+         * stations into it between 975.8 s and 978.3 s - the new pool was not
+         * built until 979.3 s. On the glass that reads as JS8 decoding FT8
+         * traffic. Worse than cosmetic: those rows are tappable, which is a
+         * pounce at a station we cannot hear on this timing, exactly the hazard
+         * ft8_op_mode_set()'s own clear comment says it exists to prevent.
+         *
+         * Breaking rather than skipping the publish, for two reasons: there is
+         * no point spending core time on a result that is going to be dropped,
+         * and reinit_pool_if_mode_changed() waits up to POOL_REBUILD_WAIT_MS
+         * for this decode to drain before it may free the pool - so giving up
+         * early makes the rebuild land sooner, not later.
+         *
+         * The timing samples go with it, deliberately: they describe a slot
+         * measured on the old protocol's block size, and the auto-sync leash
+         * has no business integrating those. */
+        if (mon->wf.protocol != proto_for_mode()) {
+            ESP_LOGW(TAG, "sub-mode changed mid-slot - dropping this %s slot's decodes "
+                          "(%d attempted, %d decoded so far)",
+                     ftx_protocol_name(mon->wf.protocol), out->n_attempted, out->n_decoded);
+            out->n_decoded = 0;
+            out->n_timing  = 0;
+            break;
+        }
+
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
         }
