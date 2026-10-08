@@ -99,7 +99,14 @@ def main():
             nfail += 1
             continue
 
-        r = subprocess.run([str(exe)], cwd=ROOT, env=env,
+        # stdin=DEVNULL, deliberately. country_shorten_harness reads lines
+        # from stdin and stops at EOF; with stdin inherited it blocks until
+        # the 300 s timeout whenever the parent's stdin stays open - which is
+        # every background run. It passed from an interactive shell and hung
+        # from a backgrounded one, twice on 2026-10-08, and the difference was
+        # never the harness. Any future harness that reads stdin gets EOF
+        # immediately rather than hanging the whole suite.
+        r = subprocess.run([str(exe)], cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=300)
         if r.returncode == 0:
             print(f"  {name:<26} pass")
