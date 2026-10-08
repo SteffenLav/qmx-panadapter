@@ -317,3 +317,88 @@ R4.
   [`main/ft8_tx.c`](../main/ft8_tx.c) (absolute-timer burst pattern),
   [`main/audio/audio.c`](../main/audio/audio.c) (ring buffer),
   [`main/dsp/dsp.c`](../main/dsp/dsp.c) (FFT/spectrum, for tuning aid).
+
+---
+
+## Update 2026-10-08 — three things have changed since this was written
+
+Agreed order with the operator: **JS8 Normal QSOs first, JS8 chat second, RTTY
+alongside/after.** This section revises the estimate above rather than
+replacing it; the physical-layer and Baudot sections are unchanged and still
+correct.
+
+### 1. R3 (keyboard driver) is DONE — remove it from the estimate
+
+This document budgeted a phase for "first physical keyboard, first non-display
+I2C peripheral". That work shipped:
+
+- `main/keyboard/tab5_keyboard.c` drives the snap-on keyboard (SKU A164,
+  STM32F030C8T6 at I2C **0x6D**) in **String mode**, so the STM32 does the
+  keymap and shift/symbol layers and hands back ready ASCII with a modifier
+  byte. The host needs no row/col table.
+- The I2C bus-sharing worry is settled: the keyboard has its **own bus**
+  (SDA=GPIO0, SCL=GPIO1), separate from touch and the IO expander.
+- A Bluetooth HID keyboard also works (`bt_hid_keyboard_active()`, #273), so
+  RTTY text entry has two input routes already, not none.
+
+RTTY still needs a text-input buffer and a send/edit UI, but that is UI work on
+top of a working driver rather than a new I/O subsystem.
+
+### 2. R4's host side is measured — the gate is now ONLY the radio
+
+This document called the 22 ms bit period "~7x tighter than FT8" and the single
+biggest unknown. Half of that is now answered, measured on bench dev
+2026-10-07:
+
+- A CAT command **with its reply** completes in **~6.3 ms** (947 polls in 6.0 s,
+  a `GP;` probe burst). A TX tone command is fire-and-forget with no reply, so
+  it is cheaper than that.
+- `CONFIG_FREERTOS_HZ=1000`, so `sleep_until()` has 1 ms granularity. A 22 ms
+  bit period is well inside it.
+- FT4 already ships at **48 ms/symbol** over this same path.
+
+So the host has roughly **3.5x headroom** at 45.45 baud. **What remains unknown
+is entirely the QMX's own behaviour**: whether its synthesiser retunes cleanly
+when `TA<freq>;` arrives every 22 ms continuously while keyed, and whether its
+CAT parser keeps up at ~45 commands/s. FT8 gives the radio 160 ms to settle per
+step; RTTY would give it 22 ms, unbroken, for the whole over.
+
+This matters more for RTTY than for FT8 because **RTTY has no FEC**. FT8
+tolerates a bad symbol; a glitched RTTY shift is a corrupted character, and the
+transient lands inside the 170 Hz occupied bandwidth rather than in a gap.
+
+### 3. The R4 bench test, defined
+
+Equipment is not a constraint — the operator has two QMXes, three Tab5s, an
+antenna, dummy loads, several PCs, multiple SDRs, and IC-705 / FTDX-3000D /
+remote Flex receivers.
+
+1. QMX into a **dummy load**, `MD6` (Digi), keyed with `TX;`.
+2. Send `TA<freq>;` alternating mark/space at 22 ms from a bench harness —
+   no Baudot yet, just a square alternation, then a known Baudot test
+   sentence ("RYRYRY..." is the traditional one for exactly this reason).
+3. Capture the RF with an SDR and measure: does each tone actually reach its
+   frequency within the 22 ms slot, how long is the transition, and is there
+   energy outside the 170 Hz shift during it.
+4. In parallel, decode the same transmission with **fldigi or MMTTY on a shack
+   PC** — a real RTTY decoder is the honest arbiter of whether the signal is
+   copyable, rather than our own judgement of a waterfall.
+
+**This is a go/no-go gate and it is cheap.** Half a day, no new firmware
+beyond a throwaway harness, and it decides whether R5 is worth writing at all.
+Do it before any RTTY TX code exists.
+
+⚠ Do NOT validate RTTY TX by decoding it with our own future RTTY RX. Two
+halves of one implementation share their mistakes — the same reason JS8 needs a
+real JS8Call counterpart rather than a second Tab5.
+
+### Revised estimate
+
+| | Old | Revised | Why |
+|---|---|---|---|
+| RX-only | 3.5–4 sessions | **2.5–3 sessions** | R3 keyboard work is already done |
+| Full RX+TX | 6.5–8.5 sessions | **5–7 sessions**, gated on R4 | same, plus the host timing question is closed |
+
+**RX-only remains the right first deliverable.** It is self-contained, it has
+abundant live signals to test against, and it is useful on its own as an RTTY
+monitor even if the R4 gate closes and TX never happens.
