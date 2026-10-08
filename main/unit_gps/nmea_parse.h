@@ -80,6 +80,22 @@ typedef struct {
 // has nothing, which is exactly what a status window must be able to show.
 bool nmea_parse_gga(const char *line, nmea_gga_t *out);
 
+typedef struct {
+    int   fix_type;   /* 1 = no fix, 2 = 2D, 3 = 3D - the radio's "Fix" row */
+    int   n_used;     /* PRNs listed as used in the solution (0..12) */
+    int   used[12];   /* those PRNs. The sky plot marks them differently from
+                       * the merely-in-view ones, so the list has to be kept,
+                       * not just counted. */
+    float pdop;       /* <0 when absent */
+    float hdop;
+    float vdop;
+} nmea_gsa_t;
+
+/* Parse one $xxGSA. This is the ONLY source of the 2D/3D distinction: GGA's
+ * quality field says fix or no fix and nothing about dimensionality, and the
+ * QMX's own GPS viewer prints "3D" on that row. */
+bool nmea_parse_gsa(const char *line, nmea_gsa_t *out);
+
 #define NMEA_GSV_SATS_PER_MSG 4
 
 typedef struct {

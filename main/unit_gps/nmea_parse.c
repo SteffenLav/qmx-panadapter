@@ -382,3 +382,41 @@ bool nmea_parse_gsv(const char *line, nmea_gsv_t *out)
     *out = v;
     return true;
 }
+
+
+bool nmea_parse_gsa(const char *line, nmea_gsa_t *out)
+{
+    if (!out) return false;
+
+    char buf[NMEA_MAX_LINE];
+    if (!prep_line(line, buf, sizeof(buf))) return false;
+
+    char *fld[NMEA_MAX_FIELDS];
+    int   nf = split_fields(buf, fld, NMEA_MAX_FIELDS);
+    if (!body_is(fld[0], "GSA")) return false;
+
+    /* GSA: 1=mode (M/A), 2=fix type, 3..14=PRNs used, 15=PDOP, 16=HDOP,
+     * 17=VDOP. NMEA 4.10 appends a system ID; ignored. */
+    if (nf < 3) return false;
+
+    nmea_gsa_t g = { 0 };
+    g.pdop = g.hdop = g.vdop = -1.0f;
+
+    int ft = opt_int(fld[2]);
+    if (ft < 1 || ft > 3) return false;   /* blank or out of range: not usable */
+    g.fix_type = ft;
+
+    for (int i = 3; i <= 14 && i < nf; i++) {
+        if (fld[i][0] == '\0') continue;    /* an unused slot, not an error */
+        int prn = opt_int(fld[i]);
+        if (prn == -2) return false;
+        if (prn > 0 && g.n_used < 12) g.used[g.n_used++] = prn;
+    }
+
+    if (nf > 15 && fld[15][0] != '\0') g.pdop = (float)strtod(fld[15], NULL);
+    if (nf > 16 && fld[16][0] != '\0') g.hdop = (float)strtod(fld[16], NULL);
+    if (nf > 17 && fld[17][0] != '\0') g.vdop = (float)strtod(fld[17], NULL);
+
+    *out = g;
+    return true;
+}

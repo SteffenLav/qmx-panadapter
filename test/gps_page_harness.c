@@ -1,0 +1,279 @@
+/* Host test for the GPS page layout (main/ui/gps_page.c).
+ *
+ * Build (from the repo root):
+ *   gcc -O2 -Wall -I main -I main/unit_gps -o gps_page_harness \
+ *       test/gps_page_harness.c main/ui/gps_page.c -lm && ./gps_page_harness
+ *
+ * WHY. The page has to look like the QMX's own "Hardware tests | GPS viewer",
+ * which was captured off the bench on 2026-10-08 - so the reference is an
+ * exact column layout, not a judgement. The failures this catches are all
+ * PLAUSIBLE-LOOKING ones:
+ *
+ *  - A latitude printed as decimal degrees instead of degrees and decimal
+ *    minutes. 55.714487 and "55 42.869" are the same place; 55 42.869 read as
+ *    decimal degrees is 200 km away, and nothing on screen says which it is.
+ *  - A grid square one square out. JO65FR and JO65FQ both look right.
+ *  - A satellite drawn in the wrong quadrant, because azimuth was treated as
+ *    a clock face or the plot's x and y radii were made equal on a character
+ *    cell that is twice as tall as it is wide.
+ *  - The QMX-source page quietly hiding the rows the radio cannot fill,
+ *    instead of showing them empty, which would make it a different page.
+ *
+ * It renders with no LVGL, no driver and no clock, so it runs anywhere.
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "ui/gps_page.h"
+
+static int g_fail = 0;
+
+#define CHECK(cond, ...) do {                       \
+    if (!(cond)) { g_fail++;                        \
+        printf("  FAIL: "); printf(__VA_ARGS__);    \
+        printf("   [%s:%d]\n", __FILE__, __LINE__); \
+    }                                               \
+} while (0)
+
+/* The bench's own fix, 2026-10-08, as the QMX viewer printed it:
+ *   Grid      JO65FR
+ *   Latitude  55 42.869013 N
+ *   Longitude 12 28.290529 E
+ * 55 deg 42.869013 min = 55.714484 deg; 12 deg 28.290529 min = 12.471509 deg.
+ */
+#define BENCH_LAT 55.714483550
+#define BENCH_LON 12.471508817
+
+static void fill(unit_gps_info_t *in)
+{
+    memset(in, 0, sizeof(*in));
+    in->valid    = true;
+    in->fix_type = 3;
+    in->has_time = true;
+    in->year = 2026; in->mon = 10; in->mday = 8;
+    in->hour = 16;   in->min = 38; in->sec  = 19;
+    in->has_pos = true;
+    in->lat_deg = BENCH_LAT;
+    in->lon_deg = BENCH_LON;
+    in->has_alt = true;
+    in->alt_m   = 15.222f;
+    in->fix_sats = 14;
+    in->tot_sats = 20;
+    in->avg_snr  = 28;
+
+    struct { int prn, el, az, snr; const char *t; bool used; } s[] = {
+        { 13, 84, 241, 31, "GP", true  },
+        { 12, 78, 239, 30, "GP", true  },
+        { 24, 47, 147, 31, "GP", false },
+        { 25, 46, 255, 24, "GP", false },
+        { 19, 36,  57, 28, "GP", true  },
+        { 38, -1,  -1, -1, "GP", false },   /* in view, nothing else reported */
+        { 40, 81, 112, -1, "GB", false },   /* Beidou, in view but not tracked */
+    };
+    in->n_sats = (int)(sizeof(s) / sizeof(s[0]));
+    for (int i = 0; i < in->n_sats; i++) {
+        in->sat[i].prn      = (uint8_t)s[i].prn;
+        in->sat[i].elev_deg = (int8_t)s[i].el;
+        in->sat[i].azim_deg = (int16_t)s[i].az;
+        in->sat[i].snr_db   = (int8_t)s[i].snr;
+        in->sat[i].talker[0] = s[i].t[0];
+        in->sat[i].talker[1] = s[i].t[1];
+        in->sat[i].talker[2] = '\0';
+        in->sat[i].used      = s[i].used;
+    }
+}
+
+// The value column must sit where the QMX puts it, or the two pages read as
+// two designs rather than one page with two sources.
+static void expect_row(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                       int row, const char *label, const char *value)
+{
+    CHECK(strncmp(lines[row], label, strlen(label)) == 0,
+          "row %d should start \"%s\", got \"%.20s\"\n", row, label, lines[row]);
+    CHECK(strncmp(lines[row] + 10, value, strlen(value)) == 0,
+          "row %d column 10 should be \"%s\", got \"%.20s\"\n",
+          row, value, lines[row] + 10);
+}
+
+static void test_left_column(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    fill(&in);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+
+    expect_row(lines, 0, "Validity",  "A");
+    expect_row(lines, 1, "Fix",       "3D");
+    expect_row(lines, 2, "UT date",   "08-OCT-26");
+    expect_row(lines, 3, "UT time",   "16:38:19");
+    expect_row(lines, 4, "Grid",      "JO65FR");
+    expect_row(lines, 5, "Latitude",  "55 42.869");
+    expect_row(lines, 6, "Longitude", "12 28.290");
+    expect_row(lines, 7, "Altitude",  "15.222");
+    expect_row(lines, 8, "Fix sats",  "14");
+    expect_row(lines, 9, "Tot sats",  "20");
+    expect_row(lines, 10, "Avg SNR",  "28");
+}
+
+/* Degrees and decimal MINUTES. A decimal-degrees number in this field is read
+ * as degrees-and-minutes by eye and is wrong by a factor of 1.667 in the
+ * fraction - plausible on a map, and silent. */
+static void test_latlon_is_degrees_minutes(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    fill(&in);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    CHECK(strstr(lines[5], "55 42.869013 N") != NULL,
+          "latitude should be \"55 42.869013 N\", got \"%.30s\"\n", lines[5] + 10);
+    CHECK(strstr(lines[6], "12 28.290529 E") != NULL,
+          "longitude should be \"12 28.290529 E\", got \"%.30s\"\n", lines[6] + 10);
+
+    // Southern and western hemispheres must show S and W, not a minus sign.
+    in.lat_deg = -33.8688;
+    in.lon_deg = 151.2093;
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    CHECK(strstr(lines[5], " S") != NULL, "negative latitude should read S\n");
+    CHECK(strstr(lines[5], "-") == NULL, "latitude should not carry a minus\n");
+    in.lon_deg = -58.3816;
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    CHECK(strstr(lines[6], " W") != NULL, "negative longitude should read W\n");
+}
+
+static void test_grid(void)
+{
+    char g[7];
+    // The bench, as the QMX itself reported it.
+    gps_page_grid(BENCH_LAT, BENCH_LON, g);
+    CHECK(strcmp(g, "JO65FR") == 0, "bench grid \"%s\", expected JO65FR\n", g);
+
+    // Two published references, to catch a field/square/subsquare mix-up.
+    gps_page_grid(0.0, 0.0, g);
+    CHECK(strncmp(g, "JJ00", 4) == 0, "0,0 grid \"%s\", expected JJ00aa\n", g);
+    gps_page_grid(-33.8688, 151.2093, g);   // Sydney
+    CHECK(strncmp(g, "QF56", 4) == 0, "Sydney grid \"%s\", expected QF56\n", g);
+}
+
+static void test_sat_table(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    fill(&in);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+
+    CHECK(strncmp(lines[12], " 13 84 241 31  GPS", 18) == 0,
+          "sat row 0 \"%.20s\"\n", lines[12]);
+    /* A satellite with no elevation/azimuth/SNR keeps its columns BLANK, as
+     * the QMX does - printing 0 or -1 would read as a real measurement. */
+    CHECK(strncmp(lines[17], " 38            GPS", 18) == 0,
+          "sat row with nothing reported \"%.20s\"\n", lines[17]);
+    CHECK(strstr(lines[18], "Beidou") != NULL,
+          "constellation should spell out Beidou, got \"%.24s\"\n", lines[18]);
+}
+
+/* Azimuth 0 is NORTH and at the TOP; 90 is east and to the right. Getting this
+ * wrong draws a correct-looking sky with every satellite in the wrong place. */
+static void test_sky_quadrants(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    memset(&in, 0, sizeof(in));
+    in.n_sats = 4;
+    const int az[4] = { 0, 90, 180, 270 };
+    for (int i = 0; i < 4; i++) {
+        in.sat[i].prn = (uint8_t)(11 + i);
+        in.sat[i].elev_deg = 10;             /* near the rim */
+        in.sat[i].azim_deg = (int16_t)az[i];
+        in.sat[i].snr_db = 20;
+        in.sat[i].talker[0] = 'G'; in.sat[i].talker[1] = 'P';
+    }
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+
+    int row[4] = { -1, -1, -1, -1 };
+    for (int r = 0; r < GPS_PAGE_ROWS; r++) {
+        for (int i = 0; i < 4; i++) {
+            char want[4];
+            snprintf(want, sizeof(want), "%d", 11 + i);
+            const char *p = strstr(lines[r] + 28, want);
+            if (p && row[i] < 0) row[i] = r;
+        }
+    }
+    CHECK(row[0] >= 0 && row[0] < 4, "azimuth 0 should be near the TOP, row %d\n", row[0]);
+    CHECK(row[2] > 17, "azimuth 180 should be near the BOTTOM, row %d\n", row[2]);
+    CHECK(row[1] >= 9 && row[1] <= 13, "azimuth 90 should be mid-height, row %d\n", row[1]);
+    CHECK(row[3] >= 9 && row[3] <= 13, "azimuth 270 should be mid-height, row %d\n", row[3]);
+}
+
+/* The QMX page must keep the rows it cannot fill, showing them empty. Hiding
+ * them would make it a different page, which is exactly what the operator
+ * asked to avoid. */
+static void test_qmx_source_keeps_its_rows(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    fill(&in);
+    gps_page_render(&in, GPS_PAGE_SRC_QMX, lines);
+
+    expect_row(lines, 8,  "Fix sats", "-");
+    expect_row(lines, 9,  "Tot sats", "-");
+    expect_row(lines, 10, "Avg SNR",  "-");
+    expect_row(lines, 4, "Grid", "JO65FR");      /* this one it CAN fill */
+    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_QMX), "QMX") != NULL,
+          "QMX title should name the radio: \"%s\"\n", gps_page_title(GPS_PAGE_SRC_QMX));
+    CHECK(strstr(gps_page_title(GPS_PAGE_SRC_MODULE), "Module") != NULL,
+          "module title should name the module: \"%s\"\n",
+          gps_page_title(GPS_PAGE_SRC_MODULE));
+}
+
+static void test_no_fix_says_so(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    memset(&in, 0, sizeof(in));
+    in.has_time = true;
+    in.year = 2026; in.mon = 10; in.mday = 8;
+    in.hour = 16; in.min = 0; in.sec = 0;
+    in.avg_snr = -1;
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+
+    expect_row(lines, 0, "Validity", "V");
+    expect_row(lines, 4, "Grid", "-");
+    /* NOT 0 0: a position of zero is a real place in the Atlantic, and a page
+     * that shows it cannot be told from one that has a fix there. */
+    CHECK(strstr(lines[5], "0 0.000000") == NULL,
+          "no position must not render as 0,0: \"%.30s\"\n", lines[5] + 10);
+}
+
+static void dump(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    fill(&in);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    printf("\n--- rendered page ---\n");
+    for (int r = 0; r < GPS_PAGE_ROWS; r++) {
+        const char *l = lines[r];
+        int end = GPS_PAGE_COLS;
+        while (end > 0 && l[end - 1] == ' ') end--;
+        printf("%02d|%.*s\n", r, end, l);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    printf("gps_page harness\n");
+    test_left_column();
+    test_latlon_is_degrees_minutes();
+    test_grid();
+    test_sat_table();
+    test_sky_quadrants();
+    test_qmx_source_keeps_its_rows();
+    test_no_fix_says_so();
+
+    if (argc > 1 && strcmp(argv[1], "--dump") == 0) dump();
+
+    if (g_fail) { printf("\nFAILURES ABOVE\n"); return 1; }
+    printf("\nALL PASS\n");
+    return 0;
+}

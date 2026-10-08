@@ -312,6 +312,32 @@ static void test_sentence_type_isolation(void)
     CHECK(!nmea_parse_gsv(rmc, &v), "GSV parser must reject an RMC\n");
 }
 
+
+/* GSA is the ONLY source of the 2D/3D distinction. GGA's quality field says
+ * fix or no fix and nothing about dimensionality, and the QMX's own GPS viewer
+ * prints "3D" on that row - so without GSA that row would be the one reading
+ * "-" on our page. */
+static void test_gsa(void)
+{
+    nmea_gsa_t g;
+    const char *line = "$GPGSA,A,3,04,05,,09,12,,,24,,,,,2.5,1.3,2.1*39";
+    CHECK(nmea_parse_gsa(line, &g), "GSA should parse\n");
+    CHECK(g.fix_type == 3, "fix_type %d, expected 3 (3D)\n", g.fix_type);
+    // Empty PRN slots are unused channels, not errors, and must not be counted.
+    CHECK(g.n_used == 5, "n_used %d, expected 5\n", g.n_used);
+    CHECK(g.hdop > 1.29f && g.hdop < 1.31f, "hdop %.2f, expected 1.3\n", (double)g.hdop);
+}
+
+static void test_gsa_no_fix(void)
+{
+    nmea_gsa_t g;
+    const char *line = "$GPGSA,A,1,,,,,,,,,,,,,,,*1E";
+    CHECK(nmea_parse_gsa(line, &g), "GSA with no fix should parse\n");
+    CHECK(g.fix_type == 1, "fix_type %d, expected 1 (no fix)\n", g.fix_type);
+    CHECK(g.n_used == 0, "n_used %d, expected 0\n", g.n_used);
+    CHECK(g.pdop < 0.0f, "absent PDOP should stay negative\n");
+}
+
 int main(void)
 {
     printf("unit_gps NMEA harness\n\n");
@@ -331,6 +357,8 @@ int main(void)
     test_gsv_short_last();
     test_gsv_per_talker();
     test_sentence_type_isolation();
+    test_gsa();
+    test_gsa_no_fix();
 
     printf("\n%s\n", g_fail ? "FAILURES ABOVE" : "ALL PASS");
     return g_fail ? 1 : 0;

@@ -141,6 +141,55 @@ uint32_t unit_gps_rx_lines(void);
 #define UNIT_GPS_PORTA_RX_GPIO   54
 #define UNIT_GPS_MBUS_RX_GPIO    38
 
+/* ---- Status snapshot, for the GPS page --------------------------------
+ *
+ * Everything the QMX's own "Hardware tests | GPS viewer" page shows, so the
+ * two pages can be the same page with a different source. Fed by GGA, GSA and
+ * GSV; the clock still reads RMC and only RMC.
+ *
+ * ⛔ None of this is a time source. A GGA carries a time of day with NO DATE.
+ */
+
+#define UNIT_GPS_MAX_SATS 32
+
+typedef struct {
+    uint8_t prn;
+    int8_t  elev_deg;  /* -1 when the receiver did not say */
+    int16_t azim_deg;  /* -1 when the receiver did not say */
+    int8_t  snr_db;    /* -1 = in view but NOT TRACKED, which is a real state */
+    char    talker[3]; /* "GP", "GL", "GA", "GB", "GQ" */
+    bool    used;      /* listed by GSA as being IN the position solution */
+} unit_gps_sat_t;
+
+typedef struct {
+    unit_gps_state_t state;
+    uint32_t age_ms;       /* since the last ACCEPTED fix; UINT32_MAX = never */
+
+    bool     valid;        /* RMC status byte was 'A' */
+    int      fix_type;     /* 0 not reported, 1 none, 2 = 2D, 3 = 3D (GSA) */
+
+    bool     has_time;
+    int      year, mon, mday, hour, min, sec;
+
+    bool     has_pos;
+    double   lat_deg, lon_deg;
+
+    bool     has_alt;
+    float    alt_m;
+
+    int      fix_sats;     /* in the solution (GGA) */
+    int      tot_sats;     /* in view, summed over talkers (GSV) */
+    int      avg_snr;      /* mean over TRACKED satellites; -1 when none */
+    float    hdop;         /* <0 when not reported */
+
+    int            n_sats;
+    unit_gps_sat_t sat[UNIT_GPS_MAX_SATS];
+} unit_gps_info_t;
+
+/* Copy the current snapshot. Safe while the receive task is running: the
+ * driver swaps under a lock, so a reader never sees half a GSV burst. */
+void unit_gps_get_info(unit_gps_info_t *out);
+
 // Release the UART and end the receive task (idempotent). Safe to call when
 // never started; returns once the task has parked.
 void unit_gps_stop(void);
