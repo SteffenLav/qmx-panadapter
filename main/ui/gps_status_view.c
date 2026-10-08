@@ -2,6 +2,7 @@
 #include "gps_page.h"
 #include "ui.h"
 #include "ui_theme.h"
+#include "qmx_term_view.h"
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -131,6 +132,10 @@ static void repaint(void)
     char             (*lines)[GPS_PAGE_COLS + 1] = s_scratch->lines;
     int n_marks = 0;
 
+    /* Only the module reaches here - the QMX source is handed to the radio's
+     * own viewer at open time. fill_from_qmx() stays for the GPS_PAGE_SRC_QMX
+     * layout the harness still checks, and for the day CAT grows a satellite
+     * command. */
     if (src == GPS_PAGE_SRC_MODULE) unit_gps_get_info(info);
     else                            fill_from_qmx(info);
     gps_page_render(info, src, lines, marks, &n_marks);
@@ -222,6 +227,25 @@ void gps_status_view_open(void)
          * clock, not a button, and a complaint for a tap they may not have
          * meant is noise. */
         return;
+    }
+
+    /* ⭐ The QMX source is the RADIO'S OWN GPS VIEWER, not a page of ours.
+     *
+     * Over CAT the radio gives position and time and nothing else - no
+     * satellites, no SNR, no fix type - so a page drawn here would be three
+     * rows of data and eight of dashes. Its own viewer has all of it, and the
+     * Tab5 can already render that screen. So this hands over to the terminal
+     * view, titled "GPS - QMX internal receiver".
+     *
+     * ⚠ That takes the radio into its menus and stops the panadapter while it
+     * is open. It is the same trip the operator would make by hand, and the
+     * only data path there is. */
+    {
+        gps_page_src_t which;
+        if (source_now(&which) && which == GPS_PAGE_SRC_QMX) {
+            qmx_term_view_open_gps();
+            return;
+        }
     }
 
     s_scratch = heap_caps_calloc(1, sizeof(*s_scratch), MALLOC_CAP_SPIRAM);

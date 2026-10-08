@@ -54,6 +54,23 @@ bool qmx_term_is_open(void);
  * between columns in a TABLE is correct behaviour - do not "fix" that. */
 bool qmx_term_key(const char *name);
 
+/* Walk to a menu item by its TEXT and select it.
+ *
+ * Screen-driven, exactly like the exit walk: find the row containing `label`,
+ * step ONE key at a time toward the reverse-video selection, re-read, and
+ * press Enter when they meet. A fixed key count would break the moment a menu
+ * gains an item or the radio starts somewhere else.
+ *
+ * ⛔ IT PRESSES ENTER. Only ever call it with a label you are certain of:
+ * "Hardware tests" is a submenu, but its siblings include SWR sweep, LPF sweep
+ * and PA mod. test, which KEY THE TRANSMITTER. The walk uses arrows alone
+ * until the selection is on the named row, so a label that is not on screen
+ * returns false without pressing anything.
+ *
+ * Blocks for up to a couple of seconds. Call it from a worker task, never from
+ * the LVGL task. */
+bool qmx_term_select(const char *label);
+
 /* Borrow the screen for reading. Returns NULL when no session is open (or the
  * lock could not be had), otherwise a pointer that stays valid until the
  * matching unlock - which the caller MUST make, promptly, because the USB RX

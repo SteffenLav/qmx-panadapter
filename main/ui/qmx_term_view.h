@@ -9,6 +9,12 @@
 #include <stdbool.h>
 
 void qmx_term_view_open(void);
+
+/* Open on the radio's own GPS viewer, titled as the QMX's receiver. This is
+ * the QMX side of the GPS page - see the note at the definition for why it is
+ * the radio's screen rather than a drawing of our own, and for what a terminal
+ * session costs. */
+void qmx_term_view_open_gps(void);
 void qmx_term_view_close(void);
 bool qmx_term_view_is_open(void);
 
