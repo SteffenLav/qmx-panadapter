@@ -787,10 +787,20 @@ static esp_err_t status_handler(httpd_req_t *req)
         char q[96];
         if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK &&
             httpd_query_key_value(q, "presets", (char[4]){0}, 4) == ESP_OK) {
-            for (int k = 0; k < 2; k++) {
+            /* One array per sub-mode. JS8's is sent only when the protocol is
+             * implemented, so a build that cannot do JS8 does not offer it -
+             * the same rule the Tab5's own column follows. */
+            static const struct { ft8_op_mode_t mode; const char *key; } kPresetSets[] = {
+                { FT8_OP_MODE_FT8, "ft8_presets" },
+                { FT8_OP_MODE_FT4, "ft4_presets" },
+                { FT8_OP_MODE_JS8, "js8_presets" },
+            };
+            for (unsigned k = 0; k < sizeof(kPresetSets)/sizeof(kPresetSets[0]); k++) {
+                if (kPresetSets[k].mode == FT8_OP_MODE_JS8 &&
+                    !ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) continue;
                 int n = 0;
-                const ft8_preset_t *pl = ft8_preset_list(k == 1, &n);
-                cJSON *arr = cJSON_AddArrayToObject(root, k ? "ft4_presets" : "ft8_presets");
+                const ft8_preset_t *pl = ft8_preset_list(kPresetSets[k].mode, &n);
+                cJSON *arr = cJSON_AddArrayToObject(root, kPresetSets[k].key);
                 for (int i = 0; i < n; i++) {
                     /* ⛔ ONLY BANDS THE RADIO HAS (Brian WA6JFK, 2026-10-04).
                      * The Tab5's own column does this already
@@ -1499,18 +1509,34 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // the Preset button, which made every FT4 test need the operator.
         //   {"action":"set_ft8_mode","mode":"ft4"}                 keep frequency
         //   {"action":"set_ft8_mode","mode":"ft8","freq_hz":14074000}
+        //   {"action":"set_ft8_mode","mode":"js8"}                 keep frequency
         const char *m  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
         cJSON      *fz = cJSON_GetObjectItem(root, "freq_hz");
-        bool ft4 = (m && (strcasecmp(m, "ft4") == 0));
-        bool ok  = (m && (ft4 || strcasecmp(m, "ft8") == 0));
+        ft8_op_mode_t mode = FT8_OP_MODE_FT8;
+        bool ok = false;
+        if (m && strcasecmp(m, "ft8") == 0)      { mode = FT8_OP_MODE_FT8; ok = true; }
+        else if (m && strcasecmp(m, "ft4") == 0) { mode = FT8_OP_MODE_FT4; ok = true; }
+        else if (m && strcasecmp(m, "js8") == 0) {
+            /* Refused HERE as well as in ft8_op_mode_set(), so the caller gets
+             * a reason instead of {"ok":true} followed by nothing happening. */
+            ok = ftx_protocol_is_implemented(FTX_PROTOCOL_JS8);
+            mode = FT8_OP_MODE_JS8;
+            if (!ok) {
+                cJSON_Delete(root);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req,
+                    "{\"ok\":false,\"error\":\"JS8 is not implemented in this build\"}");
+                return ESP_OK;
+            }
+        }
         if (ok) {
             ft8_screen_view_request_preset(
-                cJSON_IsNumber(fz) ? (uint32_t)fz->valuedouble : 0, ft4);
+                cJSON_IsNumber(fz) ? (uint32_t)fz->valuedouble : 0, mode);
         }
         cJSON_Delete(root);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
-                                   : "{\"ok\":false,\"error\":\"mode must be ft8 or ft4\"}");
+                                   : "{\"ok\":false,\"error\":\"mode must be ft8, ft4 or js8\"}");
         return ESP_OK;
     } else if (action && strcmp(action, "cq_start") == 0) {
         // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out

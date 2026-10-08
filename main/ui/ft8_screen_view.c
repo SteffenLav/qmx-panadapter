@@ -1323,9 +1323,23 @@ static volatile int s_web_override_pending;
 // repaints two labels, and it must run on taskLVGL. Same deferral as the CQ and
 // override requests: the HTTP task leaves a request, the 1 Hz timer performs it.
 // Packed rather than two variables so a half-applied request cannot be drained.
-static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src);   // defined below
+/* The protocol a sub-mode means. ft8_test.c's ft8_op_mode_protocol() answers
+ * for the mode we are IN; this answers for one we are about to ask for, which
+ * is what the log lines below need. */
+static inline ftx_protocol_t mode_protocol(ft8_op_mode_t m)
+{
+    switch (m) {
+    case FT8_OP_MODE_FT4: return FTX_PROTOCOL_FT4;
+    case FT8_OP_MODE_JS8: return FTX_PROTOCOL_JS8;
+    default:              return FTX_PROTOCOL_FT8;
+    }
+}
+
+static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *src);   // defined below
 static volatile uint32_t s_web_preset_hz  = 0;    // 0 = nothing pending
-static volatile bool     s_web_preset_ft4 = false;
+/* The sub-mode a deferred web preset asked for. Was a bool, which could not
+ * hold JS8 and put it on the FT8 branch. */
+static volatile ft8_op_mode_t s_web_preset_mode = FT8_OP_MODE_FT8;
 // The OUTCOME OF THE LAST BROWSER COMMAND - not a description of the current
 // state, which is what it looked like to Randy N4OPI: "'Busy: working KA3PMW'
 // never clears until a new QSO is initiated", and the same for "QSO cancelled"
@@ -1404,15 +1418,15 @@ void ft8_screen_view_request_reply(const char *call)
     s_web_reply_pending = true;
 }
 
-// #221: ask for an FT8/FT4 preset from the API. freq_hz of 0 means "keep the
+// #221: ask for a sub-mode preset from the API. freq_hz of 0 means "keep the
 // current frequency, only change sub-mode".
 // Defined further down, beside the preset tables it reads - those tables belong
 // with the preset UI, and this is used by the API drain above them.
-static uint32_t calling_freq_for(bool ft4, uint32_t near_hz);
+static uint32_t calling_freq_for(ft8_op_mode_t mode, uint32_t near_hz);
 
-void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
+void ft8_screen_view_request_preset(uint32_t freq_hz, ft8_op_mode_t mode)
 {
-    s_web_preset_ft4 = ft4;
+    s_web_preset_mode = mode;
     s_web_preset_hz  = freq_hz ? freq_hz : 1;   // 1 = sentinel for "current freq"
 }
 
@@ -1641,7 +1655,7 @@ static void t_clock_cb(lv_timer_t *t)
     // failure mode this deferral must never have.
     if (s_web_preset_hz) {
         uint32_t hz  = s_web_preset_hz;
-        bool     ft4 = s_web_preset_ft4;
+        ft8_op_mode_t mode = s_web_preset_mode;
         s_web_preset_hz = 0;                    // consume before acting
         if (hz == 1) {
             // Sentinel: keep the dial where it is. With the radio off or not yet
@@ -1668,17 +1682,17 @@ static void t_clock_cb(lv_timer_t *t)
             // Tab5's own Preset list has always set both together; this makes
             // the API agree with it. A band with no standard frequency for that
             // protocol keeps the current dial rather than jumping bands.
-            uint32_t want = calling_freq_for(ft4, hz);
+            uint32_t want = calling_freq_for(mode, hz);
             if (want && want != hz) {
                 ESP_LOGW(TAG, "API preset: %s calling frequency on this band is %lu Hz",
-                         ft4 ? "FT4" : "FT8", (unsigned long)want);
+                         ftx_protocol_name(mode_protocol(mode)), (unsigned long)want);
                 hz = want;
             }
         }
         if (hz) {
             ESP_LOGW(TAG, "API: switching to %s on %lu Hz",
-                     ft4 ? "FT4" : "FT8", (unsigned long)hz);
-            apply_freq_preset(hz, ft4, "api");
+                     ftx_protocol_name(mode_protocol(mode)), (unsigned long)hz);
+            apply_freq_preset(hz, mode, "api");
         } else {
             ESP_LOGE(TAG, "API preset ignored: no frequency from the radio and none stored");
         }
@@ -2695,6 +2709,42 @@ static const ft8_band_freq_t FT4_BAND_FREQS[] = {
 #define N_FT4_BAND_FREQS (sizeof(FT4_BAND_FREQS) / sizeof(FT4_BAND_FREQS[0]))
 #endif
 
+/* JS8Call's own default dial frequencies (USB), JS8Call 2.3.1. Same radio data
+ * mode as FT8 and FT4, so picking one sends no CAT mode change either.
+ *
+ * ⚠ TWO OF THESE ARE ALSO FT4 FREQUENCIES: 17 m 18.104 and 6 m 50.318 are
+ * shared exactly. That breaks the rule the browser's preset control relied on -
+ * "work out the mode from the frequency chosen, they share none" - so the mode
+ * is now sent explicitly instead of inferred. Nothing may go back to inferring
+ * it from the dial. */
+static const ft8_band_freq_t JS8_BAND_FREQS[] = {
+    { "160", 1842000  },
+    { "80",  3578000  },
+    { "40",  7078000  },
+    { "30",  10130000 },
+    { "20",  14078000 },
+    { "17",  18104000 },
+    { "15",  21078000 },
+    { "12",  24922000 },
+    { "10",  28078000 },
+    { "6",   50318000 },
+};
+#define N_JS8_BAND_FREQS (sizeof(JS8_BAND_FREQS) / sizeof(JS8_BAND_FREQS[0]))
+
+/* One table per sub-mode, asked for by sub-mode. Replaces the `bool ft4` that
+ * ran through this file: a bool cannot hold three modes, and every place it was
+ * read put JS8 on the FT8 branch. */
+static const ft8_band_freq_t *band_freqs_for(ft8_op_mode_t mode, int *out_n)
+{
+    switch (mode) {
+#if !FT4_MODE_DISABLED
+    case FT8_OP_MODE_FT4: *out_n = (int)N_FT4_BAND_FREQS; return FT4_BAND_FREQS;
+#endif
+    case FT8_OP_MODE_JS8: *out_n = (int)N_JS8_BAND_FREQS; return JS8_BAND_FREQS;
+    default:              *out_n = (int)N_FT8_BAND_FREQS; return FT8_BAND_FREQS;
+    }
+}
+
 /* One accessor over both tables, so the web dropdown is built from the very
  * numbers the Tab5 tunes to. ft8_preset_t is layout-identical to
  * ft8_band_freq_t on purpose - the cast keeps the tables where they are and
@@ -2705,39 +2755,59 @@ _Static_assert(sizeof(ft8_preset_t) == sizeof(ft8_band_freq_t) &&
                "ft8_preset_t must stay layout-identical to ft8_band_freq_t - the "
                "accessor below casts between them so the web and the Tab5 read ONE table");
 
-const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count)
+const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count)
 {
-/* ⛔ #if !, NOT #ifndef. FT4_MODE_DISABLED is DEFINED AS 0 when FT4 is enabled
- * (ft8_test.h), so `#ifndef` is false and this branch was compiled OUT of every
- * build since it was written - the accessor returned the FT8 table for both
- * arguments.
- *
- * Every other guard on this symbol - two in ft8_test.c and three in this file -
- * spells it `#if FT4_MODE_DISABLED` / `#if !FT4_MODE_DISABLED` and is correct.
- * This was the single odd one out, which is why the fault was invisible on the
- * Tab5 (its own picker uses the tables through the guards at 2431/2613 and
- * shows the right FT4 frequencies) and showed up only in the browser, whose
- * dropdown is built from THIS accessor: /api/status?presets=1 served the FT8
- * frequencies under "ft4_presets", identical to the FT8 list.
- *
- * It also broke mode switching from the browser, and did so silently: the page
- * decides FT8 vs FT4 by asking which list the chosen frequency is in, and with
- * two identical lists the answer was always FT4 (Randy N4OPI: "only frequency
- * change - window stay on mode FT4 both places"). */
-#if !FT4_MODE_DISABLED
-    if (ft4) { if (out_count) *out_count = (int)N_FT4_BAND_FREQS;
-               return (const ft8_preset_t *)FT4_BAND_FREQS; }
-#else
-    (void)ft4;
-#endif
-    if (out_count) *out_count = (int)N_FT8_BAND_FREQS;
-    return (const ft8_preset_t *)FT8_BAND_FREQS;
+    /* One table, chosen by sub-mode - band_freqs_for() is the same selector the
+     * Tab5's own columns use, so the browser and the glass cannot disagree.
+     *
+     * ⚠ THIS FUNCTION USED TO SELECT WITH ITS OWN #if AND GOT IT WRONG:
+     * `#ifndef FT4_MODE_DISABLED` instead of `#if !`. The symbol is DEFINED AS 0
+     * when FT4 is enabled, so the FT4 branch was compiled out of every build and
+     * /api/status?presets=1 served the FT8 frequencies under "ft4_presets". It
+     * was invisible on the Tab5, whose picker reads the tables directly, and
+     * showed up only in the browser - and it broke mode switching there too,
+     * because the page then decided FT8 vs FT4 from which list the frequency
+     * was in and always got FT4 (Randy N4OPI: "only frequency change - window
+     * stay on mode FT4 both places").
+     *
+     * ⛔ The page no longer infers the mode from the frequency at all - JS8
+     * shares 17 m 18.104 and 6 m 50.318 with FT4 - so that inference must not
+     * come back. The mode travels with the request. */
+    int n = 0;
+    const ft8_band_freq_t *t = band_freqs_for(mode, &n);
+    if (out_count) *out_count = n;
+    return (const ft8_preset_t *)t;
 }
 
 // Cyan accent used for everything FT4: the dropdown's FT4 column header and the
 // "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
 // UI_COLOR_ACCENT_GOLD.
 #define FT4_ACCENT_HEX 0x00B4FF
+// Magenta for JS8. Picked to be unmistakable against both gold and cyan at a
+// glance across the room - the mode label is the only thing on the screen that
+// says which protocol is about to be transmitted.
+#define JS8_ACCENT_HEX 0xE040FB
+
+// The accent and the label for a sub-mode, in ONE place each. The colour and
+// the text used to be written as a ternary at every site, which is how a third
+// mode ends up looking like FT8 in some of them.
+static uint32_t mode_accent_hex(ft8_op_mode_t mode)
+{
+    switch (mode) {
+    case FT8_OP_MODE_FT4: return FT4_ACCENT_HEX;
+    case FT8_OP_MODE_JS8: return JS8_ACCENT_HEX;
+    default:              return UI_COLOR_ACCENT_GOLD;
+    }
+}
+
+static const char *mode_label(ft8_op_mode_t mode)
+{
+    switch (mode) {
+    case FT8_OP_MODE_FT4: return "MODE: FT4";
+    case FT8_OP_MODE_JS8: return "MODE: JS8";
+    default:              return "MODE: FT8";
+    }
+}
 
 static lv_obj_t *s_ft8_freq_popup = NULL;
 
@@ -2758,10 +2828,10 @@ static void ft8_freq_popup_close(void)
 // function - it is the only path that retunes, clears the decode list and
 // persists the frequency together - but not to which of its three call sites,
 // so the next question could not be answered from the log he had already sent.
-static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
+static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *src)
 {
     ESP_LOGW(TAG, "freq preset: %lu Hz %s (from %s)",
-             (unsigned long)freq_hz, ft4 ? "FT4" : "FT8", src ? src : "?");
+             (unsigned long)freq_hz, ftx_protocol_name(mode_protocol(mode)), src ? src : "?");
     ft8_freq_popup_close();
 
     /* Did this preset actually move anything? Read BEFORE the retune below.
@@ -2771,8 +2841,8 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
      * stack, this runs on taskLVGL (~8 KB), and ft8_robot_stand_down() below
      * already puts one there - see the task-stack rule in CLAUDE.md. */
     const uint32_t dial_hz = cat_get_frequency();
-    const bool     was_ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
-    const bool     moved   = (dial_hz && dial_hz != freq_hz) || (ft4 != was_ft4);
+    const ft8_op_mode_t was_mode = ft8_op_mode_get();
+    const bool     moved   = (dial_hz && dial_hz != freq_hz) || (mode != was_mode);
 
     // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
     // goes through even if the sticky-settings restore just fired a freq write.
@@ -2804,7 +2874,7 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     // sub-mode itself is already persisted via ft8_op_mode_set() below.)
     settings_set_ft8_freq_hz(freq_hz);
 
-    ft8_op_mode_set(ft4 ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8);
+    ft8_op_mode_set(mode);
     // FT4 TX is always forced through the simulation interlock (see ft8_tx.c's
     // FT4 SAFETY note) regardless of the drawer's general sim-mode toggle, so
     // the breathing red border must track the sub-mode too, not just that
@@ -2812,10 +2882,14 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
     ui_refresh_sim_mode_indicator();
     ft8_screen_clear();  // flush stale decodes from previous mode/band
     if (s_lbl_mode) {
-        lv_label_set_text(s_lbl_mode, ft4 ? "MODE: FT4" : "MODE: FT8");
-        lv_obj_set_style_text_color(s_lbl_mode,
-                                    ft4 ? lv_color_hex(FT4_ACCENT_HEX)
-                                        : lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        /* Read back from the engine rather than from `mode`: ft8_op_mode_set()
+         * is allowed to REFUSE (an unimplemented protocol), and a label that
+         * showed what was asked for rather than what took effect is exactly the
+         * "screen says JS8 while FT8 goes out" failure that refusal exists to
+         * prevent. */
+        const ft8_op_mode_t now = ft8_op_mode_get();
+        lv_label_set_text(s_lbl_mode, mode_label(now));
+        lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(mode_accent_hex(now)), 0);
     }
 
     // Optimistically update both labels without waiting for the FA poll.
@@ -2832,7 +2906,14 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
 
 static void ft8_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false, "ft8 preset row");
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e),
+                      FT8_OP_MODE_FT8, "ft8 preset row");
+}
+
+static void js8_freq_preset_cb(lv_event_t *e)
+{
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e),
+                      FT8_OP_MODE_JS8, "js8 preset row");
 }
 
 #if !FT4_MODE_DISABLED
@@ -2841,10 +2922,10 @@ static void ft8_freq_preset_cb(lv_event_t *e)
 // 60 m). Nearest-entry rather than a band-label lookup: the tables are MHz
 // apart, so nearest is unambiguous, and the 5 % guard is what stops a band
 // without an entry silently jumping to the next band up.
-static uint32_t calling_freq_for(bool ft4, uint32_t near_hz)
+static uint32_t calling_freq_for(ft8_op_mode_t mode, uint32_t near_hz)
 {
-    const ft8_band_freq_t *tbl = ft4 ? FT4_BAND_FREQS : FT8_BAND_FREQS;
-    int n = ft4 ? (int)N_FT4_BAND_FREQS : (int)N_FT8_BAND_FREQS;
+    int n = 0;
+    const ft8_band_freq_t *tbl = band_freqs_for(mode, &n);
     if (!near_hz) return 0;
     uint32_t best = 0, best_d = 0xFFFFFFFFu;
     for (int i = 0; i < n; i++) {
@@ -2858,7 +2939,8 @@ static uint32_t calling_freq_for(bool ft4, uint32_t near_hz)
 
 static void ft4_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true, "ft4 preset row");
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e),
+                      FT8_OP_MODE_FT4, "ft4 preset row");
 }
 #endif
 
@@ -2881,12 +2963,16 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
                                const ft8_band_freq_t *table, size_t table_n,
                                const cat_band_entry_t *bands, int band_count,
                                uint32_t cur_hz, lv_event_cb_t row_cb,
-                               bool is_ft4_col)
+                               ft8_op_mode_t col_mode)
 {
     // A row is "selected" only in the column matching the current sub-mode -
-    // so the gold highlight appears once across both columns, on the band the
+    // so the gold highlight appears once across ALL columns, on the band the
     // radio is actually on in the active mode.
-    bool col_is_active_mode = (is_ft4_col == (ft8_op_mode_get() == FT8_OP_MODE_FT4));
+    //
+    // ⚠ This was `is_ft4_col == (mode == FT4)`, an equality between two bools.
+    // With three columns that reads TRUE for the FT8 column whenever the mode
+    // is JS8, so the highlight would have appeared in the wrong column.
+    bool col_is_active_mode = (col_mode == ft8_op_mode_get());
     // Pre-count the rows that will actually be drawn (CAT reports bands we have
     // no dial freq for; those are skipped) so the panel is sized exactly and
     // doesn't force a needless scroll.
@@ -3004,28 +3090,54 @@ static void ft8_freq_popup_open(void)
     s_ft8_freq_popup = ov;
 
     uint32_t cur_hz = cat_get_frequency();
-    const int top_y  = MID_Y + 8;          // both columns top-aligned
+    const int top_y  = MID_Y + 8;          // all columns top-aligned
+    const int col_w  = 240;
+    const int col_gap = 20;
 
-    // FT8 column (gold header) at the left, FT4 column (cyan header) to its
-    // right. FT4 = same radio data mode, different slot timing.
-    int h_ft8 = build_preset_column(ov, LEFT_W, top_y, "FT8", 0xFFDD00,
-                                    FT8_BAND_FREQS, N_FT8_BAND_FREQS,
-                                    bands, band_count, cur_hz, ft8_freq_preset_cb, false);
+    /* One column per sub-mode, left to right: FT8 (gold), FT4 (cyan), JS8
+     * (magenta). All three share the QMX's USB/DiGi data mode, so a tap in any
+     * of them sends no CAT mode change - only the dial and the Tab5-side
+     * sub-mode move.
+     *
+     * Three columns at 240 + 20 start at x = 320 and end at 1100, inside
+     * MID_W (1280). A fourth would not fit and would need a different layout,
+     * not a smaller gap. */
+    int total = 0;
+    int col = 0;
+
+    total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
+                                 "FT8", 0xFFDD00,
+                                 FT8_BAND_FREQS, N_FT8_BAND_FREQS,
+                                 bands, band_count, cur_hz, ft8_freq_preset_cb,
+                                 FT8_OP_MODE_FT8);
+    col++;
     // FT4 soft-disabled (see FT4_MODE_DISABLED in ft8_test.h) - skip building
     // the column entirely so it's invisible, not just inert; ft8_op_mode_set()
     // would coerce a tap to FT8 anyway, but a visible-but-nonfunctional
     // column would look broken rather than "never there".
-    int h_ft4 = 0;
 #if !FT4_MODE_DISABLED
-    const int col_w  = 240;
-    const int col_gap = 20;
-    h_ft4 = build_preset_column(ov, LEFT_W + col_w + col_gap, top_y, "FT4", FT4_ACCENT_HEX,
-                                FT4_BAND_FREQS, N_FT4_BAND_FREQS,
-                                bands, band_count, cur_hz, ft4_freq_preset_cb, true);
+    total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
+                                 "FT4", FT4_ACCENT_HEX,
+                                 FT4_BAND_FREQS, N_FT4_BAND_FREQS,
+                                 bands, band_count, cur_hz, ft4_freq_preset_cb,
+                                 FT8_OP_MODE_FT4);
+    col++;
 #endif
+    /* The JS8 column is built only when the protocol is actually implemented,
+     * for the same reason FT4's is skipped when disabled: ft8_op_mode_set()
+     * refuses an unimplemented mode, and a column whose rows silently did
+     * nothing would read as broken rather than as absent. */
+    if (ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+        total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
+                                     "JS8", JS8_ACCENT_HEX,
+                                     JS8_BAND_FREQS, N_JS8_BAND_FREQS,
+                                     bands, band_count, cur_hz, js8_freq_preset_cb,
+                                     FT8_OP_MODE_JS8);
+        col++;
+    }
 
-    if (h_ft8 == 0 && h_ft4 == 0) {
-        ESP_LOGW(TAG, "FT8 freq dropdown: no bands with a known FT8/FT4 freq");
+    if (total == 0) {
+        ESP_LOGW(TAG, "FT8 freq dropdown: no bands with a known calling frequency");
         ft8_freq_popup_close();
     }
 }
@@ -3082,11 +3194,9 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_lbl_mode = lv_label_create(s_left_pane);
     // Reflect the current FT8/FT4 sub-mode flag (not always FT8) so the label
     // stays truthful if the screen is rebuilt while FT4 is selected.
-    bool init_ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
-    lv_label_set_text(s_lbl_mode, init_ft4 ? "MODE: FT4" : "MODE: FT8");
-    lv_obj_set_style_text_color(s_lbl_mode,
-                                init_ft4 ? lv_color_hex(FT4_ACCENT_HEX)
-                                         : lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    const ft8_op_mode_t init_mode = ft8_op_mode_get();
+    lv_label_set_text(s_lbl_mode, mode_label(init_mode));
+    lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(mode_accent_hex(init_mode)), 0);
     lv_obj_set_style_text_font(s_lbl_mode, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_lbl_mode, 0, 0);
 

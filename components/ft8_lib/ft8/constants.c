@@ -433,13 +433,21 @@ const char* ftx_protocol_name(ftx_protocol_t protocol)
 
 bool ftx_protocol_is_implemented(ftx_protocol_t protocol)
 {
-    /* ⛔ JS8 is NOT. The codec (J1) and the message layer (J2) exist and are
-     * host-tested, but decode.c cannot extract its likelihoods - its post-LDPC
-     * half is bound to FT8's 91-bit payload and CRC-14, while JS8 is 87 bits,
-     * CRC-12 and a column permutation - and ft8_tx.c cannot build its tones.
+    /* JS8 Normal is implemented as of J5: js8_decode_candidate() in decode.c
+     * (its own post-LDPC half - 87 bits, CRC-12, colorder), js8_encode() for
+     * the tones, js8_text.c for the message text both ways, and the QSO ladder
+     * and UI reach it through ft8_op_mode_protocol().
      *
-     * Returning false here is what stops a JS8 selection from quietly
-     * behaving as FT8. Flip it when decode.c and ft8_tx.c have real branches,
-     * not before. */
-    return protocol == FTX_PROTOCOL_FT4 || protocol == FTX_PROTOCOL_FT8;
+     * ⛔ WHAT THIS DOES NOT CLAIM. No JS8 frame of ours has been decoded by
+     * another station. The tone path is bit-exact against JS8Call's own
+     * genjs8.f90 (tools/js8_tone_arbiter.py, 64 of 64) and the LDPC against
+     * encode174.f90, but the message layer and the command vocabulary were
+     * checked only against values computed from the published formulas. A real
+     * JS8Call station is the arbiter for those - never a second Tab5, which
+     * would share our mistakes exactly.
+     *
+     * Submodes Fast/Turbo/Slow/Ultra are each a different physical layer and
+     * are NOT implemented; only Normal is. */
+    return protocol == FTX_PROTOCOL_FT4 || protocol == FTX_PROTOCOL_FT8 ||
+           protocol == FTX_PROTOCOL_JS8;
 }

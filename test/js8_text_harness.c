@@ -182,15 +182,51 @@ static void test_cq_detection(void)
     CHECK(strncmp(out, "CQ ", 3) != 0, "a heartbeat must not read as a CQ: '%s'\n", out);
 }
 
-/* "CQ DX" and friends carry nothing JS8 can hold. Dropping the suffix keeps the
- * CQ valid; refusing it would silence the operator for no gain. */
-static void test_cq_suffix_is_dropped_not_refused(void)
+/* ⛔ THE OPERATOR'S CQ TEXT IS FREE-FORM, and the qualifier comes BEFORE the
+ * callsign: the Call CQ presets in ft8_cq_modal.c are hand-edited and read
+ * "CQ DX OZ1LAV JO65", "CQ POTA OZ1LAV". Taking the second token as the
+ * callsign - which is what the first version of this file did - transmits a CQ
+ * from a station called "DX". JS8 has no field for the qualifier, so it is
+ * dropped; the callsign and the locator are what survive. */
+static void test_cq_qualifier_before_the_callsign(void)
 {
-    uint8_t frame[JS8_FRAME_BYTES];
-    char out[JS8_TEXT_MAX];
-    CHECK(js8_text_to_frame("CQ OZ1LAV POTA", frame, NULL), "CQ with a suffix packs\n");
-    CHECK(js8_frame_to_text(frame, out, sizeof(out)), "renders\n");
-    CHECK(strcmp(out, "CQ OZ1LAV") == 0, "got '%s', expected 'CQ OZ1LAV'\n", out);
+    struct { const char* in; const char* want; } cases[] = {
+        { "CQ OZ1LAV JO65",      "CQ OZ1LAV JO65" },
+        { "CQ OZ1LAV",           "CQ OZ1LAV"      },
+        { "CQ DX OZ1LAV JO65",   "CQ OZ1LAV JO65" },
+        { "CQ POTA OZ1LAV",      "CQ OZ1LAV"      },
+        { "CQ FD OZ1LAV JO65",   "CQ OZ1LAV JO65" },
+        { "CQ OZ1LAV POTA",      "CQ POTA"        },  /* see below */
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        uint8_t frame[JS8_FRAME_BYTES];
+        char out[JS8_TEXT_MAX];
+        if (!js8_text_to_frame(cases[i].in, frame, NULL))
+        {
+            /* The last case has no callsign in the last position and no digit
+             * in "POTA", so it must be REFUSED rather than produce a CQ from
+             * "POTA". Recorded as a refusal, not as a wrong string. */
+            CHECK(strcmp(cases[i].in, "CQ OZ1LAV POTA") == 0,
+                  "'%s' should have packed\n", cases[i].in);
+            continue;
+        }
+        CHECK(strcmp(cases[i].in, "CQ OZ1LAV POTA") != 0,
+              "'CQ OZ1LAV POTA' must be refused - the last token is not a call\n");
+        CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render '%s'\n", cases[i].in);
+        CHECK(strcmp(out, cases[i].want) == 0,
+              "'%s' -> '%s', expected '%s'\n", cases[i].in, out, cases[i].want);
+    }
+}
+
+/* A CQ with no callsign at all must not pack. The 50-bit codec is plain
+ * alphanumeric and refuses almost nothing, so without an explicit test for
+ * "looks like a callsign" these go out as a CQ from a word. */
+static void test_cq_without_a_callsign_is_refused(void)
+{
+    expect_refused("CQ DX", "no callsign, just a qualifier");
+    expect_refused("CQ POTA", "no callsign, just a qualifier");
+    expect_refused("CQ CQ", "no callsign at all");
 }
 
 /* The report formatter's range is JS8's, not FT8's. Using FT8's would throw
@@ -250,7 +286,8 @@ int main(void)
     test_grid_opening_is_refused();
     test_other_refusals();
     test_cq_detection();
-    test_cq_suffix_is_dropped_not_refused();
+    test_cq_qualifier_before_the_callsign();
+    test_cq_without_a_callsign_is_refused();
     test_report_range();
     test_compound_frames_refuse();
     test_unmapped_command_is_spelled();

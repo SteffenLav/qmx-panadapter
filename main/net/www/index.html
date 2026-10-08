@@ -3574,16 +3574,22 @@ async function sendCmd(payload) {
   sel.addEventListener("change", async () => {
     const hz = parseInt(sel.value, 10);
     if (!hz) return;
-    const ft4 = !!(window.__ft8Presets &&
-                   window.__ft8Presets.ft4.some(p => p.hz === hz));
+    /* ⛔ THE MODE COMES FROM THE OPTION, NOT FROM THE FREQUENCY. This used to
+       search the FT4 list for the chosen hz, which worked only while no two
+       sub-modes shared a dial frequency. JS8 shares TWO with FT4 - 17 m 18.104
+       and 6 m 50.318 are identical - so picking JS8 on either band would have
+       switched the radio to FT4 instead, on the right frequency, which is the
+       hardest kind of wrong to notice. */
+    const opt = sel.selectedOptions && sel.selectedOptions[0];
+    const mode = (opt && opt.dataset && opt.dataset.mode) || "ft8";
     /* Optimistically, like the wheel: the readout and the marker move now and
        the poll confirms, rather than the control looking dead for a second. */
     lastFreqHz = hz;
     document.getElementById("vfo").textContent = fmtHz(hz);
-    /* set_ft8_mode already exists and already does all of this - retune, FT4
-       switch, stale-decode clear. Adding an ft8_preset action would have been a
-       second door onto the same room. */
-    await sendCmd({ action: "set_ft8_mode", mode: ft4 ? "ft4" : "ft8", freq_hz: hz });
+    /* set_ft8_mode already exists and already does all of this - retune,
+       sub-mode switch, stale-decode clear. Adding an ft8_preset action would
+       have been a second door onto the same room. */
+    await sendCmd({ action: "set_ft8_mode", mode: mode, freq_hz: hz });
   });
 })();
 
@@ -4549,7 +4555,10 @@ async function ft8LoadPresets() {
     const d = await r.json();
     if (!d.ft8_presets) return;
     ft8PresetsLoaded = true;
-    window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [] };
+    /* js8_presets is absent on a build without JS8, and an absent list simply
+       means no JS8 group is offered. */
+    window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [],
+                            js8: d.js8_presets || [] };
     ft8FillPresets();
   } catch (e) { /* offline - the control just stays empty rather than lying */ }
 }
@@ -4571,7 +4580,8 @@ function ft8FillPresets() {
      offered. Two <optgroup>s mirror the Tab5's own picker, which shows FT8 and
      FT4 side by side in two columns. */
   const groups = [["FT8", window.__ft8Presets.ft8],
-                  ["FT4", window.__ft8Presets.ft4]];
+                  ["FT4", window.__ft8Presets.ft4],
+                  ["JS8", window.__ft8Presets.js8]];
   for (const [label, list] of groups) {
     if (!list || !list.length) continue;
     const g = document.createElement("optgroup");
@@ -4579,12 +4589,14 @@ function ft8FillPresets() {
     for (const p of list) {
       const o = document.createElement("option");
       o.value = String(p.hz);
+      /* The sub-mode travels WITH the option - see the change handler. */
+      o.dataset.mode = label.toLowerCase();
       o.textContent = p.band + " m  " + (p.hz / 1e6).toFixed(3);
       /* Mark the one we are already on, so the control reads as a position and
          not just a jump list. Both mode AND frequency have to match, or the
-         same band in the other mode can look selected. */
-      const inFt4 = (lastMode || "").toUpperCase().indexOf("FT4") >= 0 || ft8IsFt4();
-      if (Math.abs(p.hz - lastFreqHz) < 500 && (label === "FT4") === inFt4)
+         same band in another mode can look selected - and with JS8 sharing two
+         frequencies with FT4, two options can carry the same hz. */
+      if (Math.abs(p.hz - lastFreqHz) < 500 && label === ft8Proto())
         o.selected = true;
       g.appendChild(o);
     }
@@ -4596,8 +4608,10 @@ function ft8FillPresets() {
 /* The device's own answer (/api/status ft8.proto), not a scan of the status
    text - that only ever said FT4 while something was being transmitted, so the
    preset list quietly believed FT8 the rest of the time. */
-function ft8IsFt4() {
-  return lastFtProto === "FT4";
+/* "FT8", "FT4" or "JS8" - the device's own word for what it is running. Used
+   anywhere a two-way FT8/FT4 test would put JS8 on the FT8 branch. */
+function ft8Proto() {
+  return (lastFtProto === "FT4" || lastFtProto === "JS8") ? lastFtProto : "FT8";
 }
 
 /* ==========================================================================
@@ -6533,7 +6547,7 @@ async function tick() {
          either, and mirroring it was the whole request. Hidden rather than
          emptied, so the grid row collapses instead of leaving a gap. */
       const want = screen === "wspr" ? "MODE: WSPR"
-                 : screen === "ft8"  ? "MODE: " + (ft8IsFt4() ? "FT4" : "FT8")
+                 : screen === "ft8"  ? "MODE: " + ft8Proto()
                                      : "";
       if (mb && mb.textContent !== want) {
         mb.textContent = want;

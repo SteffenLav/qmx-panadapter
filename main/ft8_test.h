@@ -134,14 +134,16 @@ uint32_t ft8_get_timing_seq(void);
 typedef enum {
     FT8_OP_MODE_FT8 = 0,
     FT8_OP_MODE_FT4 = 1,
-    /* ⛔ NOT USABLE YET. The codec (J1) and the message layer (J2) are built
-     * and host-tested, but decode.c cannot extract JS8's likelihoods and
-     * ft8_tx.c cannot build its tones - see ftx_protocol_is_implemented().
+    /* JS8 "Normal" (submode A). Selectable as of J5: its own decode branch,
+     * its own tone encoder, its own message text both ways, and the QSO ladder
+     * reaches it through ft8_op_mode_protocol().
      *
-     * It exists here so the selector, the settings field and the slot loop are
-     * in place and provably three-way, rather than being retrofitted later
-     * onto code that assumes two. ft8_op_mode_set() REFUSES it while the
-     * protocol is unimplemented, so no path can reach the radio with it. */
+     * ⛔ NOT VERIFIED ON THE AIR. No JS8 frame of ours has been decoded by
+     * another station - see ftx_protocol_is_implemented()'s note for exactly
+     * what is proven and by what.
+     *
+     * ft8_op_mode_set() still refuses any sub-mode the build cannot do, which
+     * is the gate that kept this one out before it worked. */
     FT8_OP_MODE_JS8 = 2,
 } ft8_op_mode_t;
 

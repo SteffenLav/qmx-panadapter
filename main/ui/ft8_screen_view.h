@@ -1,5 +1,6 @@
 #pragma once
 #include "lvgl.h"
+#include "ft8_test.h"   // ft8_op_mode_t - the sub-mode these take and return
 
 // Step 4c.2 v0.10: FT8 screen LVGL view.
 //
@@ -38,12 +39,16 @@ void ft8_screen_view_request_refresh(void);
 // only raises a flag that the FT8 view's 1 Hz timer drains on the LVGL thread, since
 // the QSO state machine belongs to that task. Ignored, with a log line, if FT8 mode
 // is not up - there would be nothing to transmit on.
-/* The conventional FT8/FT4 calling frequencies, so the WEB can offer the same
- * list the Tab5 does instead of keeping a second copy that drifts. One table,
- * one set of numbers - the rule pan_view.h states for geometry applies just as
- * well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31). */
+/* The conventional FT8/FT4/JS8 calling frequencies, so the WEB can offer the
+ * same list the Tab5 does instead of keeping a second copy that drifts. One
+ * table, one set of numbers - the rule pan_view.h states for geometry applies
+ * just as well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31).
+ *
+ * ⚠ JS8 SHARES TWO FREQUENCIES WITH FT4 - 17 m 18.104 and 6 m 50.318 are
+ * identical. Nothing may work out the sub-mode from the dial frequency; the
+ * mode travels with the request. */
 typedef struct { const char *band; uint32_t freq_hz; } ft8_preset_t;
-const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count);
+const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count);
 
 void ft8_screen_view_request_cq(void);
 
@@ -65,10 +70,10 @@ void ft8_screen_view_request_reply(const char *call);
 // request cannot key the radio minutes later.
 void ft8_screen_view_request_override(int what);
 
-// #221: switch FT8/FT4 (and optionally retune) from the API. Deferred to the
+// #221: switch sub-mode (and optionally retune) from the API. Deferred to the
 // LVGL task, because the switch also retunes the radio, clears stale decodes
 // and repaints labels. freq_hz 0 keeps the current frequency.
-void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4);
+void ft8_screen_view_request_preset(uint32_t freq_hz, ft8_op_mode_t mode);
 const char *ft8_screen_view_get_web_reply_result(void);
 
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.

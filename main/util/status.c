@@ -462,6 +462,9 @@ static void status_task(void *arg)
         bool time_valid = tm_utc.tm_year > 100;  // sane only after sync (year > 2000)
 
         const char *clk_suffix;
+        // Scoped with clk_suffix because ui_set_bottom_clock() is called at the
+        // end of the same block - the buffer must outlive the pointer.
+        char clk_suffix_buf[16];
         // Effective (current-authority) source, not the last one-off writer - so
         // a stray manual/FT8 nudge doesn't leave the label stuck on FT8 while
         // SNTP/GPS is really in charge.
@@ -485,10 +488,13 @@ static void status_task(void *arg)
             case TIME_SOURCE_RTC:    clk_suffix = " UTC(RTC)"; break;
             case TIME_SOURCE_MANUAL: clk_suffix = " UTC(MAN)"; break;
             case TIME_SOURCE_FT8:
-                // Marked "FT8" historically, but the sync can come from either
-                // protocol's slot timing now that FT4's offset calc is fixed -
-                // label it by the sub-mode actually active, not the constant name.
-                clk_suffix = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? " UTC(FT4)" : " UTC(FT8)";
+                // Marked "FT8" historically, but the sync can come from ANY
+                // sub-mode's slot timing - label it by the one actually active,
+                // not by the constant's name. Was a two-way ternary and so said
+                // "UTC(FT8)" while synced from JS8; ft8_op_mode_name() is the
+                // one spelling of the sub-mode (ft8_test.h).
+                snprintf(clk_suffix_buf, sizeof(clk_suffix_buf), " UTC(%s)", ft8_op_mode_name());
+                clk_suffix = clk_suffix_buf;
                 break;
             default:                 clk_suffix = " UTC";      break;
         }

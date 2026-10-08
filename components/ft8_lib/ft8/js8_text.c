@@ -192,20 +192,64 @@ bool js8_text_to_frame(const char* text, uint8_t frame[JS8_FRAME_BYTES], uint8_t
     {
         js8_heartbeat_t hb;
         memset(&hb, 0, sizeof(hb));
-        snprintf(hb.call, sizeof(hb.call), "%s", b);
         hb.is_cq = (a[0] == 'C');
         hb.bits3 = 0; /* "CQ CQ CQ" / the plain HB wording */
-        /* FT8 CQs carry other things in this position - "CQ DX", "CQ POTA" -
-         * and JS8's Heartbeat has no field for them. Only a locator is kept;
-         * anything else is dropped rather than refused, because the CQ itself
-         * is still valid without it. */
-        if (js8_text_rest_is_grid(rest))
+
+        /* ⛔ THE SECOND TOKEN IS NOT ALWAYS THE CALLSIGN. The operator's CQ
+         * text is free-form and routinely carries a qualifier first:
+         * "CQ DX OZ1LAV JO65", "CQ POTA OZ1LAV". Taking token 2 would have
+         * transmitted a CQ from a station called "DX".
+         *
+         * So: walk the tokens after the lead, drop a trailing locator, and the
+         * callsign is what is left at the end. A qualifier JS8 has no field for
+         * is dropped, which is the same loss the CQ-suffix case already
+         * documents. */
+        char toks[6][16];
+        int ntok = 0;
+        snprintf(toks[ntok++], sizeof(toks[0]), "%s", b);
         {
-            /* Exactly 4 characters by the predicate's own test; copied rather
-             * than snprintf'd so the 5-byte field is provably not truncated. */
-            memcpy(hb.grid, rest, 4);
-            hb.grid[4] = '\0';
+            const char* p = rest;
+            while (*p && ntok < (int)(sizeof(toks) / sizeof(toks[0])))
+            {
+                while (*p == ' ') p++;
+                const char* st = p;
+                while (*p && *p != ' ') p++;
+                size_t len = (size_t)(p - st);
+                if (len == 0) break;
+                if (len >= sizeof(toks[0])) return false;
+                memcpy(toks[ntok], st, len);
+                toks[ntok][len] = '\0';
+                ntok++;
+            }
         }
+
+        if (ntok > 1 && js8_text_rest_is_grid(toks[ntok - 1]))
+        {
+            memcpy(hb.grid, toks[ntok - 1], 4);
+            hb.grid[4] = '\0';
+            ntok--;
+        }
+        if (ntok < 1) return false;
+
+        /* The remaining last token must look like a callsign - at least one
+         * digit and one letter. Without this, "CQ DX" with no callsign at all
+         * packs happily and goes out as a CQ from "DX": the 50-bit codec is
+         * alphanumeric and refuses almost nothing. */
+        {
+            bool has_digit = false, has_alpha = false;
+            for (const char* c = toks[ntok - 1]; *c; c++)
+            {
+                if (*c >= '0' && *c <= '9') has_digit = true;
+                else if ((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z')) has_alpha = true;
+            }
+            if (!has_digit || !has_alpha) return false;
+        }
+        /* Copied with an explicit length check rather than snprintf'd: a
+         * truncated callsign is a DIFFERENT station, so it must refuse, not
+         * shorten. (It also lets the compiler see the bound.) */
+        size_t call_len = strlen(toks[ntok - 1]);
+        if (call_len == 0 || call_len >= sizeof(hb.call)) return false;
+        memcpy(hb.call, toks[ntok - 1], call_len + 1);
         return js8_pack_heartbeat(&hb, frame);
     }
 
