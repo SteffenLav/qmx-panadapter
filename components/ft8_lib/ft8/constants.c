@@ -438,13 +438,19 @@ bool ftx_protocol_is_implemented(ftx_protocol_t protocol)
      * the tones, js8_text.c for the message text both ways, and the QSO ladder
      * and UI reach it through ft8_op_mode_protocol().
      *
-     * ⛔ WHAT THIS DOES NOT CLAIM. No JS8 frame of ours has been decoded by
-     * another station. The tone path is bit-exact against JS8Call's own
-     * genjs8.f90 (tools/js8_tone_arbiter.py, 64 of 64) and the LDPC against
-     * encode174.f90, but the message layer and the command vocabulary were
-     * checked only against values computed from the published formulas. A real
-     * JS8Call station is the arbiter for those - never a second Tab5, which
-     * would share our mistakes exactly.
+     * ⭐ RECEIVE IS PROVEN ON AIR (2026-10-08, 40 m 7.078): real JS8Call
+     * traffic decoded - 9A3SWO's heartbeat six times, and a Directed SNR frame
+     * carrying a portable callsign. That settles the Costas sync, LDPC(174,87),
+     * colorder, the payload layout, BOTH callsign codecs, packGrid, packNum and
+     * - the one link that had no arbiter at all - the CRC-12 engine, since
+     * js8_check_payload_crc() recomputes and compares.
+     *
+     * ⛔ TRANSMIT IS NOT PROVEN. No JS8 frame of ours has been decoded by
+     * anyone. The tone path is bit-exact against JS8Call's own genjs8.f90
+     * (tools/js8_tone_arbiter.py, 64 of 64), so the odds are good, but "they
+     * can decode us" has never been observed. Only a real JS8Call station
+     * settles it - never a second Tab5, which would share our mistakes
+     * exactly.
      *
      * Submodes Fast/Turbo/Slow/Ultra are each a different physical layer and
      * are NOT implemented; only Normal is. */
