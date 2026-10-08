@@ -45,6 +45,30 @@ extern "C"
 #define FTX_LDPC_N_BYTES ((FTX_LDPC_N + 7) / 8) ///< Number of whole bytes needed to store 174 bits (full message)
 #define FTX_LDPC_K_BYTES ((FTX_LDPC_K + 7) / 8) ///< Number of whole bytes needed to store 91 bits (payload + CRC only)
 
+/* Largest M over every code the decoder is built with. FT8/FT4 use (174,91),
+ * M=83. JS8 Normal uses (174,87), M=87 - a different code, not a different
+ * rate of the same one. bp_decode() sizes its working arrays by this so the
+ * stack frame does not depend on which protocol is being decoded. */
+#define FTX_LDPC_M_MAX (87)
+
+/* A parity-check code, as the belief-propagation decoder needs it.
+ *
+ * ldpc.c used to name kFTX_LDPC_Nm/Mn/Num_rows directly, which bound the
+ * engine to FT8's (174,91) code. The loops were already generic over the
+ * dimensions; only the table SYMBOLS were fixed. Passing the tables in is what
+ * lets a second code share the engine. N is 174 for every code here, so it
+ * stays a compile-time constant. */
+typedef struct
+{
+    int M;                   ///< Number of parity checks (rows)
+    const uint8_t (*Nm)[7];  ///< [M][7]  bit indices of each check, 1-based; 0 pads a short row
+    const uint8_t (*Mn)[3];  ///< [FTX_LDPC_N][3] check indices of each bit, 1-based
+    const uint8_t* Num_rows; ///< [M] number of used entries in the matching Nm row
+} ftx_ldpc_code_t;
+
+/// The (174,91) code used by FT8 and FT4.
+extern const ftx_ldpc_code_t kFTX_LDPC_code_174_91;
+
 // Define CRC parameters
 #define FT8_CRC_POLYNOMIAL ((uint16_t)0x2757u) ///< CRC-14 polynomial without the leading (MSB) 1
 #define FT8_CRC_WIDTH      (14)

@@ -390,3 +390,10 @@ const uint8_t kFTX_LDPC_Num_rows[FTX_LDPC_M] = {
     6, 6, 6, 7, 7, 6, 6, 7, 6, 6, 6, 6, 6, 6, 6, 7,
     6, 6, 6
 };
+
+const ftx_ldpc_code_t kFTX_LDPC_code_174_91 = {
+    .M = FTX_LDPC_M,
+    .Nm = kFTX_LDPC_Nm,
+    .Mn = kFTX_LDPC_Mn,
+    .Num_rows = kFTX_LDPC_Num_rows,
+};

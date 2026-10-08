@@ -17,14 +17,21 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-static int ldpc_check(uint8_t codeword[]);
+static int ldpc_check(const ftx_ldpc_code_t* code, uint8_t codeword[]);
 static float fast_tanh(float x);
 static float fast_atanh(float x);
 
 // codeword is 174 log-likelihoods.
 // plain is a return value, 174 ints, to be 0 or 1.
 // max_iters is how hard to try.
-// ok == 87 means success.
+// *ok is the number of UNSATISFIED parity checks, so 0 means success. (The
+// upstream comment here said "ok == 87 means success", which is the opposite
+// of what the code returns.)
+//
+// Nothing in this project calls this - decode.c uses bp_decode(). It is kept
+// only to stay close to upstream ft8_lib, and it is FT8-only on purpose: its
+// two float[M][N] working arrays are ~58 kB EACH on the stack, which is not
+// something to carry onto the device for a second protocol.
 void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
 {
     float m[FTX_LDPC_M][FTX_LDPC_N]; // ~60 kB
@@ -68,7 +75,7 @@ void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
             plain[i] = (l > 0) ? 1 : 0;
         }
 
-        int errors = ldpc_check(plain);
+        int errors = ldpc_check(&kFTX_LDPC_code_174_91, plain);
 
         if (errors < min_errors)
         {
@@ -108,16 +115,16 @@ void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
 // returns the number of parity errors.
 // 0 means total success.
 //
-static int ldpc_check(uint8_t codeword[])
+static int ldpc_check(const ftx_ldpc_code_t* code, uint8_t codeword[])
 {
     int errors = 0;
 
-    for (int m = 0; m < FTX_LDPC_M; ++m)
+    for (int m = 0; m < code->M; ++m)
     {
         uint8_t x = 0;
-        for (int i = 0; i < kFTX_LDPC_Num_rows[m]; ++i)
+        for (int i = 0; i < code->Num_rows[m]; ++i)
         {
-            x ^= codeword[kFTX_LDPC_Nm[m][i] - 1];
+            x ^= codeword[code->Nm[m][i] - 1];
         }
         if (x != 0)
         {
@@ -159,10 +166,16 @@ static int ldpc_check(uint8_t codeword[])
  * with an FT4 corpus. */
 void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[], int* ok)
 {
-    float tov[FTX_LDPC_N][3];
-    float toc[FTX_LDPC_M][7];
+    bp_decode_code(&kFTX_LDPC_code_174_91, codeword, max_iters, stall_limit, plain, ok);
+}
 
-    int min_errors = FTX_LDPC_M;
+void bp_decode_code(const ftx_ldpc_code_t* code, float codeword[], int max_iters, int stall_limit,
+                    uint8_t plain[], int* ok)
+{
+    float tov[FTX_LDPC_N][3];
+    float toc[FTX_LDPC_M_MAX][7];
+
+    int min_errors = code->M;
     int last_improve = 0;
 
     // initialize message data
@@ -188,7 +201,7 @@ void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[]
         }
 
         // Check to see if we have a codeword (check before we do any iter)
-        int errors = ldpc_check(plain);
+        int errors = ldpc_check(code, plain);
 
         if (errors < min_errors)
         {
@@ -209,16 +222,16 @@ void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[]
         }
 
         // Send messages from bits to check nodes
-        for (int m = 0; m < FTX_LDPC_M; ++m)
+        for (int m = 0; m < code->M; ++m)
         {
-            for (int n_idx = 0; n_idx < kFTX_LDPC_Num_rows[m]; ++n_idx)
+            for (int n_idx = 0; n_idx < code->Num_rows[m]; ++n_idx)
             {
-                int n = kFTX_LDPC_Nm[m][n_idx] - 1;
+                int n = code->Nm[m][n_idx] - 1;
                 // for each (n, m)
                 float Tnm = codeword[n];
                 for (int m_idx = 0; m_idx < 3; ++m_idx)
                 {
-                    if ((kFTX_LDPC_Mn[n][m_idx] - 1) != m)
+                    if ((code->Mn[n][m_idx] - 1) != m)
                     {
                         Tnm += tov[n][m_idx];
                     }
@@ -232,12 +245,12 @@ void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[]
         {
             for (int m_idx = 0; m_idx < 3; ++m_idx)
             {
-                int m = kFTX_LDPC_Mn[n][m_idx] - 1;
+                int m = code->Mn[n][m_idx] - 1;
                 // for each (n, m)
                 float Tmn = 1.0f;
-                for (int n_idx = 0; n_idx < kFTX_LDPC_Num_rows[m]; ++n_idx)
+                for (int n_idx = 0; n_idx < code->Num_rows[m]; ++n_idx)
                 {
-                    if ((kFTX_LDPC_Nm[m][n_idx] - 1) != n)
+                    if ((code->Nm[m][n_idx] - 1) != n)
                     {
                         Tmn *= toc[m][n_idx];
                     }
