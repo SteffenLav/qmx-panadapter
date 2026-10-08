@@ -37,6 +37,18 @@ static const char *TAG = "unit_gps";
 #define UNIT_GPS_RX_GPIO     GPIO_NUM_54   /* PORT.A default - see unit_gps_start_on() */
 static int s_rx_gpio = UNIT_GPS_RX_GPIO;    /* whichever pin this run is bound to */
 #define UNIT_GPS_BAUD        115200
+static int s_baud = UNIT_GPS_BAUD;          /* whichever rate this run is using */
+
+/* ⭐ TEMPORARY INSTRUMENT, 2026-10-08. The Module GPS v2.1 on the M-Bus went
+ * to LISTENING and stayed there. LISTENING means "running, no WELL-FORMED
+ * NMEA", so it cannot tell a dead pin from bytes arriving at the wrong baud -
+ * the DIP-switch-to-GPIO mapping is derived rather than documented, and this
+ * driver's 115200 comes from the Unit GPS v1.1 while the ATGM336H-6N on the
+ * v2.1 defaults to 9600. Both candidates read identically through the state
+ * machine. This counts raw bytes and prints a sample, which separates them.
+ * Remove it once the receiver is known good. */
+static volatile uint32_t s_rx_bytes;        /* raw bytes since this start */
+static volatile uint32_t s_rx_lines;        /* newline-terminated lines seen */
 
 #define UNIT_GPS_TASK_STACK  4096
 #define UNIT_GPS_TASK_PRIO   5
@@ -142,15 +154,27 @@ static void unit_gps_task(void *arg)
     uint8_t buf[64];
     char    line[UNIT_GPS_LINE_MAX];
     size_t  line_len = 0;
+    uint8_t sample[16];
+    int     sample_len = 0;
+    uint32_t last_report_ms = 0;
+    uint32_t last_bytes = 0;
 
     while (!s_stop_req) {
         int n = uart_read_bytes(UNIT_GPS_UART_NUM, buf, sizeof(buf),
                                 pdMS_TO_TICKS(UNIT_GPS_READ_MS));
         if (n > 0) {
+            s_rx_bytes += (uint32_t)n;
+            /* TEMPORARY INSTRUMENT: keep the first slice of the first read, so
+             * the log can show what is on the wire even when nothing parses. */
+            if (!sample_len) {
+                sample_len = (n < (int)sizeof(sample)) ? n : (int)sizeof(sample);
+                memcpy(sample, buf, (size_t)sample_len);
+            }
             for (int i = 0; i < n; i++) {
                 char c = (char)buf[i];
                 if (c == '\r') continue;
                 if (c == '\n') {
+                    s_rx_lines++;
                     if (line_len) {
                         line[line_len] = '\0';
                         on_rmc_line(line, esp_timer_get_time());
@@ -161,6 +185,35 @@ static void unit_gps_task(void *arg)
                 } else {
                     line_len = 0;   // over-long: not an NMEA sentence, drop it
                 }
+            }
+        }
+
+        /* TEMPORARY INSTRUMENT: every 2 s while nothing has parsed yet, say
+         * how many raw bytes arrived and show the first ones. Three outcomes,
+         * three different causes:
+         *   0 bytes            - nothing on the pin: wrong GPIO, or no power.
+         *   bytes, 0 lines     - wrong baud: framing noise, no newlines.
+         *   bytes and lines    - right pin and baud, parser or checksum issue.
+         * It stops reporting once a sentence has been accepted. */
+        if (!s_have_sentence) {
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - last_report_ms >= 2000u) {
+                last_report_ms = now_ms;
+                char hex[16 * 3 + 1];
+                char asc[16 + 1];
+                int  hp = 0;
+                for (int i = 0; i < sample_len; i++) {
+                    hp += snprintf(hex + hp, sizeof(hex) - (size_t)hp, "%02X ", sample[i]);
+                    asc[i] = (sample[i] >= 0x20 && sample[i] < 0x7F) ? (char)sample[i] : '.';
+                }
+                hex[hp > 0 ? hp - 1 : 0] = '\0';
+                asc[sample_len] = '\0';
+                ESP_LOGW(TAG, "no NMEA yet on GPIO%d @ %d: %u bytes total "
+                              "(+%u in 2 s), %u lines, first bytes [%s] \"%s\"",
+                         s_rx_gpio, s_baud, (unsigned)s_rx_bytes,
+                         (unsigned)(s_rx_bytes - last_bytes), (unsigned)s_rx_lines,
+                         hex, asc);
+                last_bytes = s_rx_bytes;
             }
         }
 
@@ -197,6 +250,11 @@ bool unit_gps_start(void)
 
 bool unit_gps_start_on(int rx_gpio)
 {
+    return unit_gps_start_on_baud(rx_gpio, UNIT_GPS_BAUD);
+}
+
+bool unit_gps_start_on_baud(int rx_gpio, int baud)
+{
     if (s_running) {
         /* Idempotent on the SAME pin, refused on a different one: there is one
          * UART and one parser, and silently rebinding would leave the caller
@@ -207,6 +265,9 @@ bool unit_gps_start_on(int rx_gpio)
         return false;
     }
     s_rx_gpio = rx_gpio;
+    s_baud    = (baud > 0) ? baud : UNIT_GPS_BAUD;
+    s_rx_bytes = 0;
+    s_rx_lines = 0;
 
     /* Order matters: params and pins first, driver last. uart_driver_install()
      * refuses to run twice, so clear any driver a previous, partially-failed
@@ -214,7 +275,7 @@ bool unit_gps_start_on(int rx_gpio)
     uart_driver_delete(UNIT_GPS_UART_NUM);
 
     uart_config_t cfg = {
-        .baud_rate  = UNIT_GPS_BAUD,
+        .baud_rate  = s_baud,
         .data_bits  = UART_DATA_8_BITS,
         .parity     = UART_PARITY_DISABLE,
         .stop_bits  = UART_STOP_BITS_1,
@@ -269,8 +330,11 @@ bool unit_gps_start_on(int rx_gpio)
         return false;
     }
 
-    ESP_LOGI(TAG, "UART1 up: RX=GPIO54 (pull-up) TX unrouted, %d 8N1 - pipeline LISTENING",
-             UNIT_GPS_BAUD);
+    /* Print the pin this run actually bound, not the PORT.A default. The old
+     * line said GPIO54 unconditionally and read as a measurement while being
+     * a constant - it claimed 54 during the whole M-Bus test on GPIO2. */
+    ESP_LOGI(TAG, "UART1 up: RX=GPIO%d (pull-up) TX unrouted, %d 8N1 - pipeline LISTENING",
+             s_rx_gpio, s_baud);
     return true;
 }
 
@@ -299,3 +363,9 @@ void unit_gps_stop(void)
     s_logged_state  = UNIT_GPS_OFF;
     ESP_LOGI(TAG, "stopped - pipeline OFF, UART released");
 }
+
+/* Instrument readouts - see the TEMPORARY INSTRUMENT note at s_rx_bytes. */
+int unit_gps_rx_gpio(void)       { return s_rx_gpio; }
+int unit_gps_baud(void)          { return s_baud; }
+uint32_t unit_gps_rx_bytes(void) { return s_rx_bytes; }
+uint32_t unit_gps_rx_lines(void) { return s_rx_lines; }

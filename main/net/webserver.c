@@ -966,6 +966,27 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON_AddItemToObject(root, "port", port);
         }
 
+        /* M-Bus GNSS (Module GPS v2.1). It does not use port_a_mode, so it
+         * cannot live inside "port" - and until 2026-10-08 it was reported
+         * NOWHERE, which is the day it first went on hardware and the serial
+         * log was the only readout. Present only while the receiver is
+         * running, so a bench with no module attached says nothing rather
+         * than showing a fault the operator cannot act on.
+         *
+         * rx_bytes and rx_lines are the TEMPORARY INSTRUMENT from
+         * unit_gps.c: 0 bytes means nothing on the pin, bytes with 0 lines
+         * means the wrong baud. Drop them with the instrument. */
+        if (unit_gps_running()) {
+            cJSON *g = cJSON_CreateObject();
+            cJSON_AddStringToObject(g, "state", unit_gps_state_name(unit_gps_state()));
+            cJSON_AddNumberToObject(g, "age_ms", (double)unit_gps_age_ms());
+            cJSON_AddNumberToObject(g, "rx_gpio", unit_gps_rx_gpio());
+            cJSON_AddNumberToObject(g, "baud", unit_gps_baud());
+            cJSON_AddNumberToObject(g, "rx_bytes", (double)unit_gps_rx_bytes());
+            cJSON_AddNumberToObject(g, "rx_lines", (double)unit_gps_rx_lines());
+            cJSON_AddItemToObject(root, "gnss", g);
+        }
+
         // Band-plan for the current band — whole-band strip on the web UI,
         // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
         // a known amateur band (e.g. way off-band). Sent every status poll (no
@@ -1978,20 +1999,38 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          *   {"action":"gnss_mbus","on":true}
          * Starting is refused if PORT.A already owns the one GNSS instance -
          * the driver says so in the log and the reply carries the result. */
+        /* ⭐ TEMPORARY, 2026-10-08: optional "gpio" and "baud" so the DIP
+         * positions and 9600/115200 can be swept from here instead of one
+         * flash per attempt. Neither is stored - only the on/off flag is -
+         * so a reboot returns to the compiled-in GPIO2 @ 115200. Remove both
+         * with the instrument in unit_gps.c once the receiver is known good.
+         *   {"action":"gnss_mbus","on":true,"gpio":2,"baud":9600} */
         cJSON *jo = cJSON_GetObjectItem(root, "on");
+        cJSON *jg = cJSON_GetObjectItem(root, "gpio");
+        cJSON *jb = cJSON_GetObjectItem(root, "baud");
         bool on = (jo && (cJSON_IsTrue(jo) || (cJSON_IsNumber(jo) && jo->valueint)));
+        int  gpio = (jg && cJSON_IsNumber(jg)) ? jg->valueint : UNIT_GPS_MBUS_RX_GPIO;
+        int  baud = (jb && cJSON_IsNumber(jb)) ? jb->valueint : 0;
         bool ok = true;
         if (on) {
-            ok = unit_gps_start_on(UNIT_GPS_MBUS_RX_GPIO);
+            /* Restarting on a different pin or rate has to stop first: the
+             * driver refuses a second start rather than silently rebinding,
+             * which would leave a sweep reporting success on the old pin. */
+            if (unit_gps_running() &&
+                (gpio != unit_gps_rx_gpio() ||
+                 (baud > 0 && baud != unit_gps_baud()))) {
+                unit_gps_stop();
+            }
+            ok = unit_gps_start_on_baud(gpio, baud);
         } else {
             unit_gps_stop();
         }
         if (ok) settings_set_gnss_mbus_en(on);
-        char buf[128];
+        char buf[160];
         snprintf(buf, sizeof(buf),
-                 "{\"ok\":%s,\"gnss_mbus\":%s,\"rx_gpio\":%d}",
+                 "{\"ok\":%s,\"gnss_mbus\":%s,\"rx_gpio\":%d,\"baud\":%d}",
                  ok ? "true" : "false", (ok && on) ? "true" : "false",
-                 UNIT_GPS_MBUS_RX_GPIO);
+                 unit_gps_rx_gpio(), unit_gps_baud());
         cJSON_Delete(root);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, buf);

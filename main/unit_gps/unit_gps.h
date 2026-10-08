@@ -67,17 +67,54 @@ bool unit_gps_start(void);
  */
 bool unit_gps_start_on(int rx_gpio);
 
-/* RX pin for a Module GPS v2.1 on the M-Bus with its TXD DIP switch at
- * position 5.
+/* ⭐ TEMPORARY, 2026-10-08. Start on an arbitrary pin AND an arbitrary baud
+ * rate, so the Module GPS v2.1 can be swept from /api/cmd without a flash per
+ * attempt. 115200 here is inherited from the Unit GPS v1.1; the ATGM336H-6N on
+ * the v2.1 defaults to 9600, and the pipeline state cannot tell a wrong baud
+ * from a wrong pin - both sit at LISTENING. baud <= 0 means the default.
+ * Fold this back into unit_gps_start_on() once the receiver is known good. */
+bool unit_gps_start_on_baud(int rx_gpio, int baud);
+
+/* Instrument readouts for /api/status, valid whatever the Port mode is. */
+int      unit_gps_rx_gpio(void);
+int      unit_gps_baud(void);
+uint32_t unit_gps_rx_bytes(void);
+uint32_t unit_gps_rx_lines(void);
+
+/* RX pin for a Module GPS v2.1 on the M-Bus.
  *
- * ⚠ DERIVED, NOT DOCUMENTED. The module's silkscreen tabulates CORE, CORE2,
- * CORES3 and HP135 - there is no Tab5 column. The switches select M-BUS PIN
- * POSITIONS, so the Core column inverts onto the Tab5's own bus table:
- * TXD switch 5 is Core G0, which is M-Bus position 21, which on the Tab5 is
- * GPIO2. Position 21 was chosen over the alternatives because GPIO2 is a plain
- * GPIO used nowhere in this firmware or the BSP, and it avoids both the
- * strapping pins (switch 1 -> G37) and the pins the Tab5 names PC_TX/PC_RX as
- * if it intends to drive them (switch 2 -> G6).
+ * ⛔ THE ORIGINAL DERIVATION HERE WAS WRONG. It said "TXD switch 5 is Core G0,
+ * which is M-Bus position 21, which on the Tab5 is GPIO2". Core G0 is position
+ * 24, not 21. Position 21 on the Core is G12, which is TXD switch 4. The
+ * conclusion (GPIO2) and the premise (switch 5) named two different switches,
+ * and the docs page said so plainly - it was never checked.
+ *
+ * Redone 2026-10-08 against M5Stack's own published M-Bus tables
+ * (docs.m5stack.com /en/core/Tab5 and /en/core/Basic). The module's silkscreen
+ * tabulates CORE, CORE2, CORES3 and HP135 and has no Tab5 column; the switches
+ * select M-BUS PIN POSITIONS, so the Core column converts through the position:
+ *
+ *   TXD sw | Core pin | M-Bus pos | Tab5 pin
+ *   -------+----------+-----------+------------------------------
+ *      1   | G1  TXD0 |    14     | G37  (also the Tab5's OWN TXD0)
+ *      2   | G17 TXD2 |    16     | G6   (PC_TX)
+ *      3   | G15      |    23     | G47
+ *      4   | G12      |    21     | G2   <- what this macro selects
+ *      5   | G0       |    24     | G35
+ *
+ * ⛔ NEVER LISTEN ON G37. It is the Tab5's own UART0 TX, so the console output
+ * comes back as a few hundred bytes a second with newlines in it. During the
+ * 2026-10-08 bring-up it looked exactly like a receiver had been found; the
+ * byte sample (5B 52 42 ... "[RB") is a misframed ANSI colour escape from our
+ * own log, not NMEA.
+ *
+ * GPIO2 is kept as the default because it is a plain GPIO used nowhere in this
+ * firmware or the BSP. It corresponds to TXD switch 4.
+ *
+ * ⚠ UNVERIFIED ON HARDWARE. 2026-10-08, module fitted, EXT5V_EN set by
+ * bsp_io_expander_pi4ioe_init(): ZERO bytes on G2 and on G35, and nothing on
+ * G6/G47/G48/G51/G16 either. Either the module was not transmitting or the
+ * table above is still wrong. Do not treat it as confirmed.
  *
  * The RXD switches should all be left OFF: this driver is receive-only and
  * passes UART_PIN_NO_CHANGE for TX, so the Tab5 never talks to the receiver.
