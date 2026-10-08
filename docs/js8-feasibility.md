@@ -49,6 +49,53 @@ loop itself is proven correct against CRC-12/DECT's published check value
 (0xF5B for "123456789"), so an error could only be in the polynomial or the
 augmentation, not the arithmetic. A real JS8Call station settles it.
 
+## J2 is built and verified on the host (2026-10-08)
+
+`components/ft8_lib/ft8/js8_message.{h,c}` with `test/js8_message_harness.c`.
+A whole QSO fits in the two frame types, and both round-trip end to end
+through J1's LDPC - message to frame to payload to codeword, decoded back with
+eight bits flipped.
+
+**The Directed layout below is WRONG.** The real ones, from `varicode.cpp`:
+
+```
+Directed   [3][28][28][5][8]  = 72
+           flag=3, from, to, cmd%32, then ONE byte:
+           portable_from<<7 | portable_to<<6 | packNum(num)
+
+Heartbeat  [3][50][11][8]     = 72
+           flag=0, packAlphaNumeric50(call), then a 16-bit value split 11/5
+           across the last two fields: bit 15 = CQ (else HB), bits 14..0 =
+           packGrid or 0x7FFF for none. The low 3 bits of the last byte are
+           the CQ/HB wording index.
+```
+
+So `cmd` is a 5-bit index and the number lives in its own byte - the note's
+"cmd(5) + portable_from(1) + portable_to(1) + num(6)" named the right fields
+in the wrong shape, and the 3-bit frame-type flag is the frame's FIRST field,
+not something outside it.
+
+⛔ **No independent arbiter exists for this layer.** J1 could be checked
+against JS8Call's own Fortran under gfortran; `varicode.cpp` is Qt C++ and the
+repository ships no test vectors, so the harness's reference values were
+computed in Python from the published formulas. That catches a transcription
+slip, not a misreading - both readings are mine. Only a real JS8Call station
+settles it.
+
+⛔ **Southern grids lose a square, and we keep it that way.** `packGrid`
+truncates a float latitude toward zero instead of flooring, so QF56 comes back
+QF57 and AA00 comes back AA01 - in JS8Call too, verified against the formulas.
+Correcting it would put every southern station one square away from what the
+network shows.
+
+Other things the source settled: `/P` is stripped into one bit, so `OZ1LAV`
+and `OZ1LAV/P` pack to the same 28 bits; the callsign permutation rule keeps
+the LAST padding that fits the six-character grammar (`" K1ABC"` packs,
+`"K1ABC "` does not); and `packNum` reserves 0 for "no number", so it is
+distinct from a report of 0 dB.
+
+---
+
 ### Five things the scoping pass got wrong or did not record
 
 1. **Bit order inside the 75-bit message is the reverse of what is written
