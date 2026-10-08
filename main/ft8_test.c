@@ -59,6 +59,7 @@
 #include "ft8/decode.h"
 #include "ft8/constants.h"
 #include "ft8/encode.h"
+#include "ft8/js8_text.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
@@ -574,8 +575,10 @@ static void free_capture_pool(void)
     s_pool_proto = -1;
 }
 
-// Map the FT8/FT4 sub-mode flag to a decoder protocol.
-static inline ftx_protocol_t proto_for_mode(void)
+// Map the sub-mode flag to a decoder protocol. ONE copy: the QSO ladder and
+// the TX builders ask through ft8_op_mode_protocol() rather than repeating the
+// switch - see the note in ft8_test.h.
+ftx_protocol_t ft8_op_mode_protocol(void)
 {
     switch (ft8_op_mode_get())
     {
@@ -583,6 +586,11 @@ static inline ftx_protocol_t proto_for_mode(void)
     case FT8_OP_MODE_JS8: return FTX_PROTOCOL_JS8;
     default:              return FTX_PROTOCOL_FT8;
     }
+}
+
+static inline ftx_protocol_t proto_for_mode(void)
+{
+    return ft8_op_mode_protocol();
 }
 
 // Free just the monitor objects (keep s_cap_scratch, which is protocol-agnostic
@@ -1139,6 +1147,48 @@ static float ft8_estimate_snr_db(const monitor_t *mon, const ftx_candidate_t *ca
 // Decode pipeline - called only from ft8_decode_task (+ its core-0 helper)
 // ---------------------------------------------------------------------------
 
+/* Render a decoded message as the one line of text everything above here
+ * speaks: the decode list, the filters, the pileup, worked-before, the ADIF
+ * log and the whole QSO ladder.
+ *
+ * ⭐ THIS IS WHERE JS8 JOINS, and it joins here rather than inside the ladder
+ * on purpose. ft8_qso.c decides an exchange from split_msg3()'s third field,
+ * and none of its ~3900 lines are about a wire format. A JS8 frame rendered
+ * into the same "<to> <from> <rest>" shape therefore drives all of it
+ * unchanged. The mapping itself lives in js8_text.c, with a host harness.
+ *
+ * The offsets are FT8's field map for highlighting. Nothing reads them today
+ * (both call sites write and discard), so the JS8 branch leaves them cleared
+ * rather than inventing field positions - if a caller ever starts reading
+ * them, an empty map is a visible gap, not a wrong one. */
+static bool decode_msg_to_text(const ftx_message_t *msg, ftx_protocol_t proto,
+                               char *text, size_t text_len,
+                               ftx_message_offsets_t *off)
+{
+    if (proto == FTX_PROTOCOL_JS8) {
+        memset(off, 0, sizeof(*off));
+        off->offsets[0] = -1;        // the terminator this struct documents
+        /* js8_decode_candidate() leaves the 9-byte varicode frame in
+         * msg->payload (10 bytes), so the frame is read straight out of it.
+         *
+         * Rendered into a full-width buffer first and then length-checked,
+         * because FTX_MAX_MESSAGE_LENGTH (35) is FT8's limit and a JS8 line can
+         * be longer: two 11-character calls plus a spelled-out command reaches
+         * 37. Truncating it would put a DIFFERENT message on the screen and in
+         * the log, so one that does not fit is dropped instead. */
+        char full[JS8_TEXT_MAX];
+        if (!js8_frame_to_text(msg->payload, full, sizeof(full))) return false;
+        if (strlen(full) >= text_len) {
+            ESP_LOGW(TAG, "JS8 decode too long for the row (%u): '%s'",
+                     (unsigned)strlen(full), full);
+            return false;
+        }
+        snprintf(text, text_len, "%s", full);
+        return true;
+    }
+    return ftx_message_decode(msg, ft8_hash_if(), text, off) == FTX_MESSAGE_RC_OK;
+}
+
 // Decode candidates [start, n_cand) with the given stride, recording each
 // successful decode and collecting its timing sample into *out. Reentrant: it
 // reads only the (const) waterfall and writes to its own result struct plus the
@@ -1254,7 +1304,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
-        if (ftx_message_decode(&msg, ft8_hash_if(), text, &off) == FTX_MESSAGE_RC_OK) {
+        if (decode_msg_to_text(&msg, mon->wf.protocol, text, sizeof(text), &off)) {
             out->n_decoded++;
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the

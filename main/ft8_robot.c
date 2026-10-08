@@ -256,8 +256,17 @@ void ft8_robot_tick(int64_t slot_sec)
     int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
+    // ⭐ JS8 has no grid opening at all - a Directed frame has no locator field
+    // - so the opening message IS the report (see ft8_qso.c's `js8` note and
+    // js8_text.c). Passing NULL here would build nothing JS8 can send.
+    char rpt[8];
+    const char *extra = NULL;
+    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+        ft8_qso_fmt_report(t->last_snr_db, rpt, sizeof(rpt));
+        extra = rpt;
+    }
     if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, t->call, reply_freq_hz,
-                              t->last_utc, NULL, &req, err, sizeof(err))) {
+                              t->last_utc, extra, &req, err, sizeof(err))) {
         ESP_LOGW(TAG, "robot build_request(%s) failed: %s", t->call, err);
         return;
     }

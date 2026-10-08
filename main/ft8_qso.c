@@ -32,7 +32,8 @@
 #include "ft8_greylist.h"
 #include "ft8_hound.h"  // Fox/Hound (DXpedition) rules - see the s_hound_active notes
 #include "ft8_tx.h"
-#include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
+#include "ft8_test.h"   // ft8_op_mode_get()/ft8_op_mode_protocol() - sub-mode, for ADIF MODE
+#include "ft8/js8_text.h"  // js8_fmt_report(), and why JS8 has no grid opening
 #include "ft8_status.h"
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
@@ -502,6 +503,14 @@ static bool split_msg3(const char *text, char *tok1, size_t cap1,
 // Format a coarse SNR into an FT8 report token: "-07", "+02", "-15".
 static void fmt_report(int snr_db, char *out, size_t len)
 {
+    /* JS8 carries the report in packNum, which covers -30..+31 - WIDER than
+     * FT8's -24..+15 at both ends. Clamping a JS8 report to FT8's range would
+     * log and transmit a number the frame could have carried exactly, so the
+     * range is a protocol fact and lives with the protocol (js8_text.c). */
+    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+        js8_fmt_report(snr_db, out, len);
+        return;
+    }
     if (snr_db < RPT_MIN_DB) snr_db = RPT_MIN_DB;
     if (snr_db > RPT_MAX_DB) snr_db = RPT_MAX_DB;
     snprintf(out, len, "%+03d", snr_db);
@@ -571,7 +580,12 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
     // Pounce from the same modal stays consistent. Field Day keeps grid TX1
     // (the FD exchange replaces the report step entirely). Field-reported by
     // the operator: Transmit on a CQ row sent TX1 despite Skip-TX1 checked.
-    if (!fd_mode && qs.ft8_filters.skip_tx1) {
+    //
+    // ⭐ JS8 takes this branch ALWAYS, toggle or not: a Directed frame has no
+    // locator field, so the grid opening has no JS8 form at all (js8_text.c).
+    // Report-first is not a shortcut there, it is the protocol.
+    if (!fd_mode && (qs.ft8_filters.skip_tx1 ||
+                     ft8_op_mode_protocol() == FTX_PROTOCOL_JS8)) {
         fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf));
         extra = extra_buf;
     }
@@ -1598,6 +1612,19 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     char             first_rpt[8] = "";   // filled from a real measurement below before any use
     bool             skip_applied = false;
 
+    /* ⭐ JS8 HAS NO GRID STEP, so report-first is not a preference there - it is
+     * the only opening that exists. A Directed frame carries [from][to][cmd]
+     * [num] and nothing shaped like a locator, so "<them> <me> JO65" has no
+     * frame at all (js8_text.c refuses it, and ft8_tx.c refuses to encode it).
+     *
+     * That makes JS8 behave as if Skip TX1 were on - which is lucky, because
+     * that path already exists, is already the CQ-run ladder, and is already
+     * what cqrun_answer() uses for its own first reply. The ONE difference is
+     * the fallback: when the target is not in the decode table we have no
+     * measured SNR, and FT8 falls back to a grid TX1. JS8 cannot, so it
+     * refuses the pounce instead of arming something unsendable. */
+    const bool js8 = (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8);
+
     // A REPLY whose third field is already a signal report ("+NN"/"-NN" in
     // extra_field) was deliberately built report-first — the pileup modal
     // does this, because a pileup entry called US (we're the CQ-side
@@ -1661,12 +1688,19 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         first_rpt[pre_rpt_len - 1] = '\0';
         start_state  = FT8_QSO_WAIT_RR73;
         skip_applied = true;
+    } else if (js8 && hound) {
+        /* Cannot happen today - ft8_hound_enabled() is an FT8 mode and JS8 has
+         * no Fox/Hound protocol - but the two branches below both assume one of
+         * them won, so say which one rather than letting the order decide. */
+        ESP_LOGW(TAG, "Fox/Hound has no JS8 form - refusing %s", tx1_req->target_call);
+        if (err) snprintf(err, err_len, "Fox/Hound is FT8 only");
+        return false;
     } else if (qs.ft8_filters.skip_tx1 && hound) {
         // Skip TX1 vetoed - see the note above. Say so, or this looks like the
         // toggle being ignored at random.
         ESP_LOGI(TAG, "Skip TX1 ignored for %s: a Fox needs the standard "
                       "grid -> report -> R-report exchange", tx1_req->target_call);
-    } else if (qs.ft8_filters.skip_tx1) {
+    } else if (qs.ft8_filters.skip_tx1 || js8) {
         // The decode-table snapshot is ~11 KB (FT8_CALL_TABLE_SIZE * sizeof(
         // ft8_call_t)) and MUST NOT be a stack local here: ft8_qso_start() runs
         // on the LVGL event-callback's small (~8 KB) task stack when a pounce is
@@ -1704,13 +1738,30 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
                                          first_rpt, &req_to_arm, build_err, sizeof(build_err))) {
                     start_state  = FT8_QSO_WAIT_ROGER;
                     skip_applied = true;
+                } else if (js8) {
+                    ESP_LOGW(TAG, "JS8: report-first build failed (%s) - refusing", build_err);
+                    if (err) snprintf(err, err_len, "%s", build_err);
+                    return false;
                 } else {
                     ESP_LOGW(TAG, "skip_tx1: build failed (%s) - falling back to grid TX1", build_err);
                 }
+            } else if (js8) {
+                /* No measured SNR means no opening message exists in JS8.
+                 * Refusing is the honest answer: the operator taps again once
+                 * the station has been heard in a live slot. */
+                ESP_LOGW(TAG, "JS8: %s not in decode table - no report to open with",
+                         tx1_req->target_call);
+                if (err) snprintf(err, err_len, "%s not heard yet - JS8 opens with a report",
+                                  tx1_req->target_call);
+                return false;
             } else {
                 ESP_LOGW(TAG, "skip_tx1: %s not in decode table - falling back to grid TX1",
                          tx1_req->target_call);
             }
+        } else if (js8) {
+            ESP_LOGW(TAG, "JS8: snapshot alloc failed - refusing (no grid fallback exists)");
+            if (err) snprintf(err, err_len, "Out of memory");
+            return false;
         } else {
             ESP_LOGW(TAG, "skip_tx1: snapshot alloc failed - falling back to grid TX1");
         }

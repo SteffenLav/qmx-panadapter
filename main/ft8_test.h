@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "ft8/message.h"
+#include "ft8/constants.h"   // ftx_protocol_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -146,6 +147,12 @@ typedef enum {
 
 void          ft8_op_mode_set(ft8_op_mode_t m);
 ft8_op_mode_t ft8_op_mode_get(void);
+
+/* The current sub-mode as a decoder/encoder protocol. Public because the QSO
+ * ladder and the TX builders need the same answer the slot engine uses, and a
+ * second copy of the mapping is exactly the three-way-ternary problem J3 swept
+ * out of 14 places. */
+ftx_protocol_t ft8_op_mode_protocol(void);
 
 // Slot period in ms for the current sub-mode (15000 FT8 and JS8, 7500 FT4).
 // Single

@@ -25,6 +25,8 @@
 
 #include "ft8/message.h"
 #include "ft8/encode.h"
+#include "ft8/js8.h"
+#include "ft8/js8_text.h"
 
 #include "cat/cat.h"
 #include "storage/settings.h"
@@ -73,9 +75,12 @@ static const char *TAG = "ft8_tx";
 
 // Protocol of the currently-selected FT8/FT4 sub-mode, for build-time use
 // (the request itself then carries this in req->protocol - see ft8_tx.h).
+// ⚠ This was a two-way ternary and therefore built JS8 requests as FT8 ones -
+// the same class J3 swept out of 14 other places. One mapping now, in
+// ft8_test.c.
 static inline ftx_protocol_t cur_proto(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+    return ft8_op_mode_protocol();
 }
 
 // Encode to the tone alphabet matching `proto` - ft8_lib exposes separate
@@ -85,6 +90,53 @@ static inline void encode_tones(const uint8_t *payload, uint8_t *tones, ftx_prot
 {
     if (proto == FTX_PROTOCOL_FT4) ft4_encode(payload, tones);
     else                           ft8_encode(payload, tones);
+}
+
+/* Fill req->tones for a message whose rendered line is `text`.
+ *
+ * ⭐ FT8 AND JS8 ENCODE FROM DIFFERENT THINGS, and this is the one place that
+ * says so. FT8/FT4 encode from the three fields through the 77-bit packer;
+ * JS8's frames are a different shape entirely, so it encodes from the LINE,
+ * via js8_text.c. Keeping FT8 on its own path rather than re-parsing its text
+ * leaves the 77-bit encoder and its hash handling exactly as they were.
+ *
+ * ⛔ A JS8 refusal is NOT a failure to be smoothed over. The FT8 ladder opens
+ * a pounce with "<them> <me> <grid>" and JS8 has no Directed grid step, so that
+ * line has no frame - see js8_text.c. The caller must send a report instead;
+ * inventing something for it would key the radio with a message no JS8Call
+ * station answers. The error text says which line was refused so the operator
+ * sees it rather than a silent non-arm. */
+static bool encode_request_tones(ft8_tx_request_t *req, const char *text,
+                                 const char *call_to, const char *my_call,
+                                 const char *third,
+                                 char *out_err, size_t out_err_len)
+{
+    if (req->protocol == FTX_PROTOCOL_JS8) {
+        uint8_t frame[JS8_FRAME_BYTES];
+        uint8_t itype = 0;
+        if (!js8_text_to_frame(text, frame, &itype)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' has no JS8 form", text);
+            ESP_LOGW(TAG, "JS8 encode refused: '%s'", text);
+            return false;
+        }
+        js8_encode(frame, itype, req->tones);
+        return true;
+    }
+
+    ftx_message_t msg;
+    // hash_if: lets pack28 encode a NONSTANDARD target call (PJ4/K1ABC etc.)
+    // as its 22-bit hash instead of failing outright - the partner's decoder
+    // resolves their own hash trivially. NULL was why replying to special
+    // calls never even armed ("Can't encode message").
+    ftx_message_rc_t rc = ftx_message_encode_std(&msg, ft8_hash_if(), call_to, my_call, third);
+    if (rc != FTX_MESSAGE_RC_OK) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Can't encode message (rc=%d)", (int)rc);
+        return false;
+    }
+    encode_tones(msg.payload, req->tones, req->protocol);
+    return true;
 }
 
 // CQ audio-frequency auto-selection scan parameters.
@@ -536,20 +588,6 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
         return false;
     }
 
-    // Encode now — never at burst time. Errors surface here in the UI, not
-    // mid-burst where there's nothing we can do about them.
-    ftx_message_t msg;
-    // hash_if: lets pack28 encode a NONSTANDARD target call (PJ4/K1ABC etc.)
-    // as its 22-bit hash instead of failing outright - the partner's decoder
-    // resolves their own hash trivially. NULL was why replying to special
-    // calls never even armed ("Can't encode message").
-    ftx_message_rc_t rc = ftx_message_encode_std(&msg, ft8_hash_if(), call_to, s.my_callsign, third);
-    if (rc != FTX_MESSAGE_RC_OK) {
-        if (out_err) snprintf(out_err, out_err_len,
-                              "Can't encode message (rc=%d)", (int)rc);
-        return false;
-    }
-
     // Slot parity: REPLY/ROGER_RPT/73 all fire on the slot opposite to when
     // the target last transmitted (target_last_utc). CQ fires on any slot
     // unless the caller overrides use_parity+want_even_slot afterwards.
@@ -562,9 +600,16 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
     out_req->protocol       = cur_proto();
     out_req->want_even_slot = needs_parity ? !slot_is_even(target_last_utc, out_req->protocol) : false;
     out_req->use_parity     = needs_parity && (target_last_utc != 0);
-    encode_tones(msg.payload, out_req->tones, out_req->protocol);
+    // Render first, then encode: JS8 encodes FROM the line (see
+    // encode_request_tones), and the line is also what the operator reads.
     snprintf(out_req->display_text, sizeof(out_req->display_text),
              "%s %s %s", call_to, s.my_callsign, third);
+    // Encode now — never at burst time. Errors surface here in the UI, not
+    // mid-burst where there's nothing we can do about them.
+    if (!encode_request_tones(out_req, out_req->display_text,
+                              call_to, s.my_callsign, third, out_err, out_err_len)) {
+        return false;
+    }
     if (extra) strncpy(out_req->extra_field, extra, sizeof(out_req->extra_field) - 1);
 
     static const char * const kind_names[] = { "reply", "CQ", "roger-rpt", "73" };
@@ -590,6 +635,17 @@ bool ft8_tx_build_request_fd(ft8_tx_kind_t kind,
 
     if (kind != FT8_TX_KIND_REPLY && kind != FT8_TX_KIND_ROGER_RPT) {
         if (out_err) snprintf(out_err, out_err_len, "Bad kind for Field Day message");
+        return false;
+    }
+    /* ⛔ The FD exchange is an FT8 message type (0.3/0.4) and this builder
+     * forces FTX_PROTOCOL_FT8 below. For FT4 that is harmless - the operator
+     * gets an FT8 burst on an FT8-length slot. For JS8 it is NOT: the slot
+     * engine is decoding JS8, so the burst would be unintelligible to the
+     * JS8 stations the operator believes they are working, and to us. Refuse,
+     * rather than transmit an FT8 frame under a JS8 label. */
+    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Field Day has no JS8 message - switch to FT8");
         return false;
     }
     if (!target_call || !target_call[0]) {
@@ -669,6 +725,52 @@ bool ft8_tx_build_request_text(const char *message_text,
         message_text = trimmed;
     }
 
+    out_req->kind          = FT8_TX_KIND_CQ;
+    out_req->audio_freq_hz = audio_freq_hz;
+    out_req->use_parity    = false;
+    out_req->want_even_slot = false;
+    out_req->protocol      = cur_proto();
+    snprintf(out_req->display_text, sizeof(out_req->display_text), "%s", message_text);
+
+    /* JS8 has its own round-trip guard, and it is a stronger one: the frame
+     * carries exactly the fields js8_text.c renders, so text -> frame -> text
+     * is an identity for everything with a JS8 form. The one documented
+     * exception is a CQ suffix ("CQ POTA OZ1LAV" -> "CQ OZ1LAV"), which JS8's
+     * Heartbeat has no field for - the same class of loss FT8's guard already
+     * permits for tokens the 77-bit packer drops. */
+    if (out_req->protocol == FTX_PROTOCOL_JS8) {
+        uint8_t frame[JS8_FRAME_BYTES];
+        uint8_t itype = 0;
+        if (!js8_text_to_frame(message_text, frame, &itype)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' has no JS8 form", message_text);
+            ESP_LOGW(TAG, "JS8 encode refused: '%s'", message_text);
+            return false;
+        }
+        char seen[JS8_TEXT_MAX] = "";
+        if (!js8_frame_to_text(frame, seen, sizeof(seen))) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would not survive transmission", message_text);
+            ESP_LOGW(TAG, "JS8 round-trip guard: '%s' packed but will not render", message_text);
+            return false;
+        }
+        if (strcmp(message_text, seen) != 0) {
+            qmx_settings_t s;
+            settings_load_all(&s);
+            if (!ft8_msg_roundtrip_ok(message_text, seen, s.my_callsign)) {
+                if (out_err) snprintf(out_err, out_err_len,
+                                      "'%s' would go out as '%s' - not transmitted",
+                                      message_text, seen);
+                ESP_LOGW(TAG, "JS8 round-trip guard REFUSED: '%s' -> '%s'",
+                         message_text, seen);
+                return false;
+            }
+        }
+        js8_encode(frame, itype, out_req->tones);
+        ESP_LOGI(TAG, "built JS8 text: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
+        return true;
+    }
+
     ftx_message_t msg;
     ftx_message_rc_t rc = ftx_message_encode(&msg, ft8_hash_if(), message_text);
     if (rc != FTX_MESSAGE_RC_OK) {
@@ -705,13 +807,7 @@ bool ft8_tx_build_request_text(const char *message_text,
         }
     }
 
-    out_req->kind          = FT8_TX_KIND_CQ;
-    out_req->audio_freq_hz = audio_freq_hz;
-    out_req->use_parity    = false;
-    out_req->want_even_slot = false;
-    out_req->protocol      = cur_proto();
     encode_tones(msg.payload, out_req->tones, out_req->protocol);
-    snprintf(out_req->display_text, sizeof(out_req->display_text), "%s", message_text);
 
     ESP_LOGI(TAG, "built text CQ: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
     return true;
