@@ -81,46 +81,65 @@ int      unit_gps_baud(void);
 uint32_t unit_gps_rx_bytes(void);
 uint32_t unit_gps_rx_lines(void);
 
-/* RX pin for a Module GPS v2.1 on the M-Bus.
+/* RX pin for a Module GPS v2.1 on the M-Bus: GPIO38, the Tab5's M-Bus RXD0
+ * (bus pin 13), with the module's DIP switch 6 ON.
  *
- * ⛔ THE ORIGINAL DERIVATION HERE WAS WRONG. It said "TXD switch 5 is Core G0,
- * which is M-Bus position 21, which on the Tab5 is GPIO2". Core G0 is position
- * 24, not 21. Position 21 on the Core is G12, which is TXD switch 4. The
- * conclusion (GPIO2) and the premise (switch 5) named two different switches,
- * and the docs page said so plainly - it was never checked.
+ * MEASURED 2026-10-08 on the dev bench: DEVICE within seconds, ~530 bytes/s,
+ * well-formed NMEA parsing continuously.
  *
- * Redone 2026-10-08 against M5Stack's own published M-Bus tables
- * (docs.m5stack.com /en/core/Tab5 and /en/core/Basic). The module's silkscreen
- * tabulates CORE, CORE2, CORES3 and HP135 and has no Tab5 column; the switches
- * select M-BUS PIN POSITIONS, so the Core column converts through the position:
+ * ⛔ THE SILKSCREEN GROUPS ARE NAMED FROM THE HOST'S SIDE, NOT THE MODULE'S.
+ * The module's data OUTPUT is selected by the group the silkscreen labels
+ * "RXD" - it drives the host's receive line. Switch 6 is the first of that
+ * group. The "TXD" group drives the host's transmit line and is of no use to
+ * a receive-only driver.
  *
- *   TXD sw | Core pin | M-Bus pos | Tab5 pin
- *   -------+----------+-----------+------------------------------
- *      1   | G1  TXD0 |    14     | G37  (also the Tab5's OWN TXD0)
- *      2   | G17 TXD2 |    16     | G6   (PC_TX)
- *      3   | G15      |    23     | G47
- *      4   | G12      |    21     | G2   <- what this macro selects
- *      5   | G0       |    24     | G35
+ * This comment used to say the opposite: set TXD switch 5, leave every RXD
+ * switch off. That guaranteed silence whatever else was tried, and it cost an
+ * afternoon on the bench - every one of the sixteen signal GPIOs on the Tab5
+ * M-Bus was swept and all were dead, because nothing was driving any of them.
+ * The answer came from dmatking/m5stack-tab5-gps, which runs the same module
+ * on the same board and wrote it down: "DIP switch 6 (not the TXD-labeled
+ * group as the silkscreen suggests - verified empirically after the labeled
+ * group produced nothing)".
  *
- * ⛔ NEVER LISTEN ON G37. It is the Tab5's own UART0 TX, so the console output
- * comes back as a few hundred bytes a second with newlines in it. During the
- * 2026-10-08 bring-up it looked exactly like a receiver had been found; the
- * byte sample (5B 52 42 ... "[RB") is a misframed ANSI colour escape from our
- * own log, not NMEA.
+ * The earlier derivation also had an arithmetic error, recorded so it is not
+ * repeated: it said "TXD switch 5 is Core G0, which is M-Bus position 21,
+ * which on the Tab5 is GPIO2". Core G0 is position 24; position 21 is G12,
+ * which is switch 4. The premise and the conclusion named different switches.
  *
- * GPIO2 is kept as the default because it is a plain GPIO used nowhere in this
- * firmware or the BSP. It corresponds to TXD switch 4.
+ * The full position map, from M5Stack's published M-Bus tables for the Tab5
+ * and the Basic (docs.m5stack.com /en/core/Tab5 and /en/core/Basic). The
+ * module's switch rows carry the Core pin; the Core pin gives the bus
+ * position; the position gives the Tab5 pin:
  *
- * ⚠ UNVERIFIED ON HARDWARE. 2026-10-08, module fitted, EXT5V_EN set by
- * bsp_io_expander_pi4ioe_init(): ZERO bytes on G2 and on G35, and nothing on
- * G6/G47/G48/G51/G16 either. Either the module was not transmitting or the
- * table above is still wrong. Do not treat it as confirmed.
+ *   sw | group | Core pin | M-Bus pos | Tab5 pin
+ *   ---+-------+----------+-----------+---------------------------
+ *    1 |  TXD  | G1  TXD0 |    14     | G37  ⛔ the Tab5's OWN console TX
+ *    2 |  TXD  | G17 TXD2 |    16     | G6
+ *    3 |  TXD  | G15      |    23     | G47
+ *    4 |  TXD  | G12      |    21     | G2
+ *    5 |  TXD  | G0       |    24     | G35
+ *    6 |  RXD  | G3  RXD0 |    13     | G38  <- this one, the module's output
+ *    7 |  RXD  | G16 RXD2 |    15     | G7
+ *    8 |  RXD  | G13      |    22     | G48
+ *    9 |  RXD  | G34      |    26     | G51
+ *   10 |  RXD  | G35      |     2     | G16
  *
- * The RXD switches should all be left OFF: this driver is receive-only and
- * passes UART_PIN_NO_CHANGE for TX, so the Tab5 never talks to the receiver.
+ * ⛔ NEVER LISTEN ON G37. It is the Tab5's own UART0 TX, so the console
+ * output comes back as a few hundred bytes a second WITH NEWLINES IN IT, and
+ * during the bring-up it read exactly like a receiver had been found. The
+ * byte sample gives it away: 5B 52 42 ... "[RB" is a misframed ANSI colour
+ * escape from our own log, not NMEA.
+ *
+ * The baud is 115200 8N1, which is the module's documented default - the same
+ * rate the Unit GPS v1.1 uses, so no change was needed there.
+ *
+ * The other RXD switches should stay OFF, and all five TXD switches too: this
+ * driver is receive-only and passes UART_PIN_NO_CHANGE for TX, so the Tab5
+ * never talks to the receiver.
  */
 #define UNIT_GPS_PORTA_RX_GPIO   54
-#define UNIT_GPS_MBUS_RX_GPIO     2
+#define UNIT_GPS_MBUS_RX_GPIO    38
 
 // Release the UART and end the receive task (idempotent). Safe to call when
 // never started; returns once the task has parked.

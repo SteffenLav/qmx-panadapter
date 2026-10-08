@@ -50,20 +50,25 @@ Locking takes 30 s to a few minutes from cold with a clear sky. **Switch the mod
     A **Module GPS v2.1 (M5Stack M003-V21)** stacked on the 30-pin bus is
     handled by the same driver as the Unit GPS — it is the same AT6668
     receiver, and the only difference is which pin the data arrives on
-    (GPIO2). **Nothing about it has been verified on hardware**, there is no
-    control for it on screen, and it is switched on over the API only:
+    (GPIO38). The receiver has now been run on hardware and delivers NMEA, but
+    there is still no control for it on screen: it is switched on over the API
+    only:
 
     ```
     POST /api/cmd   {"action":"gnss_mbus","on":true}
     ```
 
-    Set TXD DIP switch 5 on the module and leave every RXD switch off — the
-    driver only ever listens. Being on the 30-pin bus, it does not conflict
-    with the PORT.A relay, so both can be fitted at once.
+    **Set DIP switch 6 on the module — the first switch of the group the
+    silkscreen labels "RXD" — and leave every other switch off.** The groups
+    are named from the host's side, not the module's: the module's data output
+    drives the host's *receive* line, so it is the RXD group that selects it.
+    The TXD group produces nothing at all.
 
-    Use the **Unit GPS on PORT.A** if you want a receiver that has actually
-    been used. This note exists so the option is not a secret, not because it
-    is ready.
+    Being on the 30-pin bus, it does not conflict with the PORT.A relay, so
+    both can be fitted at once.
+
+    A fix has not yet been seen on this receiver, only valid NMEA. Use the
+    **Unit GPS on PORT.A** if you want one that has been used in anger.
 
 
 ### 2. Offline (POTA / Portable)

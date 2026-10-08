@@ -1994,7 +1994,8 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         dma_owners_report();
         return ESP_OK;
     } else if (action && strcmp(action, "gnss_mbus") == 0) {
-        /* Module GPS v2.1 on the M-Bus (GPIO2). Applied live AND stored, so it
+        /* Module GPS v2.1 on the M-Bus (GPIO38, DIP switch 6). Applied live AND
+         * stored, so it
          * survives a reboot without one being needed to turn it on:
          *   {"action":"gnss_mbus","on":true}
          * Starting is refused if PORT.A already owns the one GNSS instance -
