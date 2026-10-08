@@ -170,6 +170,148 @@ static void test_empty_fields_real_device(void)
     CHECK(r.year == 2026 && r.mday == 3, "void sentence lost its date field");
 }
 
+
+/* ---------------------------------------------------------------------------
+ * Position, GGA and GSV - added 2026-10-08 for the GPS status window.
+ *
+ * None of this feeds the clock. It exists so an operator can see WHY a
+ * receiver is not locking, which on 2026-10-08 cost an afternoon with no
+ * instrument at all. The traps below are the ones that produce a plausible
+ * wrong answer rather than a visible failure.
+ * ------------------------------------------------------------------------ */
+
+/* NMEA packs DEGREES AND MINUTES into one number: 4807.038 is 48 deg
+ * 7.038 min = 48.1173, NOT 4807.038 degrees and NOT 48.07038. Reading it as a
+ * plain decimal is the classic bug and it puts the station in the wrong
+ * country while every other field still looks right. */
+static void test_rmc_position(void)
+{
+    nmea_rmc_t r;
+    const char *line =
+        "$GPRMC,123548.400,A,4807.038,N,01131.000,E,0.0,000.0,230326,,*0A";
+    CHECK(nmea_parse_rmc(line, &r), "RMC with position should parse\n");
+    CHECK(r.has_pos, "position should be present\n");
+    CHECK(r.lat_deg > 48.1172 && r.lat_deg < 48.1174,
+          "lat %.6f, expected ~48.1173 (48 deg 7.038 min)\n", r.lat_deg);
+    CHECK(r.lon_deg > 11.5166 && r.lon_deg < 11.5168,
+          "lon %.6f, expected ~11.51667 (11 deg 31.000 min)\n", r.lon_deg);
+}
+
+// S and W must come back NEGATIVE. A sign error is invisible in the numbers.
+static void test_rmc_position_south_west(void)
+{
+    nmea_rmc_t r;
+    const char *line =
+        "$GPRMC,123548.00,A,3345.6789,S,15112.3456,W,0.0,000.0,230326,,*30";
+    CHECK(nmea_parse_rmc(line, &r), "S/W position should parse\n");
+    CHECK(r.has_pos, "S/W position should be present\n");
+    CHECK(r.lat_deg < -33.76 && r.lat_deg > -33.77,
+          "lat %.6f, expected ~-33.7613\n", r.lat_deg);
+    CHECK(r.lon_deg < -151.20 && r.lon_deg > -151.21,
+          "lon %.6f, expected ~-151.2058\n", r.lon_deg);
+}
+
+/* A receiver with no fix sends RMC with the position columns EMPTY. That
+ * sentence must still parse - it is what the DEVICE state is built on - and
+ * it must report has_pos false rather than a position of 0,0, which is a real
+ * place in the Atlantic. */
+static void test_rmc_no_position(void)
+{
+    nmea_rmc_t r;
+    const char *line = "$GNRMC,101112.00,V,,,,,0.01,,031026,,,A,V*0D";
+    CHECK(nmea_parse_rmc(line, &r), "void RMC with empty position should parse\n");
+    CHECK(!r.valid, "status V should be valid=false\n");
+    CHECK(!r.has_pos, "empty position must NOT report has_pos\n");
+}
+
+static void test_gga(void)
+{
+    nmea_gga_t g;
+    const char *line =
+        "$GPGGA,123548.400,4807.038,N,01131.000,E,1,09,0.94,545.4,M,46.9,M,,*6C";
+    CHECK(nmea_parse_gga(line, &g), "GGA should parse\n");
+    CHECK(g.quality == 1, "quality %d, expected 1\n", g.quality);
+    CHECK(g.sats_used == 9, "sats_used %d, expected 9\n", g.sats_used);
+    CHECK(g.hdop > 0.93f && g.hdop < 0.95f, "hdop %.2f, expected 0.94\n", (double)g.hdop);
+    CHECK(g.has_alt && g.alt_m > 545.0f && g.alt_m < 546.0f,
+          "alt %.1f, expected 545.4\n", (double)g.alt_m);
+    CHECK(g.hour == 12 && g.min == 35 && g.sec == 48, "GGA time wrong\n");
+}
+
+/* Quality 0 is a SUCCESSFUL parse. "The receiver has nothing" is the single
+ * most useful thing a status window can say, and rejecting the sentence makes
+ * it indistinguishable from a receiver that is not talking at all - which is
+ * precisely the ambiguity this window exists to remove. */
+static void test_gga_no_fix(void)
+{
+    nmea_gga_t g;
+    const char *line = "$GPGGA,123548.400,,,,,0,00,,,M,,M,,*75";
+    CHECK(nmea_parse_gga(line, &g), "GGA with no fix should still parse\n");
+    CHECK(g.quality == 0, "quality %d, expected 0\n", g.quality);
+    CHECK(g.sats_used == 0, "sats_used %d, expected 0\n", g.sats_used);
+    CHECK(g.hdop < 0.0f, "absent HDOP should be negative, got %.2f\n", (double)g.hdop);
+    CHECK(!g.has_alt, "absent altitude must not be reported\n");
+}
+
+static void test_gsv(void)
+{
+    nmea_gsv_t v;
+    const char *line =
+        "$GPGSV,3,1,11,03,03,111,00,04,15,270,17,06,01,010,,13,06,292,00*72";
+    CHECK(nmea_parse_gsv(line, &v), "GSV should parse\n");
+    CHECK(strcmp(v.talker, "GP") == 0, "talker '%s', expected GP\n", v.talker);
+    CHECK(v.msg_num == 1 && v.msg_total == 3, "msg %d/%d, expected 1/3\n",
+          v.msg_num, v.msg_total);
+    CHECK(v.in_view == 11, "in_view %d, expected 11\n", v.in_view);
+    CHECK(v.n_sats == 4, "n_sats %d, expected 4\n", v.n_sats);
+    CHECK(v.sat[0].prn == 3 && v.sat[0].snr_db == 0,
+          "sat0 prn %d snr %d, expected 3/0\n", v.sat[0].prn, v.sat[0].snr_db);
+    /* A BLANK SNR means in view but not tracked. Folding it to 0 would hide a
+     * sky full of untracked satellites, which is what a bad antenna or a
+     * missing ground plane looks like. */
+    CHECK(v.sat[2].prn == 6 && v.sat[2].snr_db == -1,
+          "blank SNR must stay -1, got prn %d snr %d\n",
+          v.sat[2].prn, v.sat[2].snr_db);
+}
+
+// A short last sentence in a burst carries fewer than four satellites.
+static void test_gsv_short_last(void)
+{
+    nmea_gsv_t v;
+    const char *line = "$GPGSV,3,3,11,22,42,067,42*48";
+    CHECK(nmea_parse_gsv(line, &v), "short final GSV should parse\n");
+    CHECK(v.n_sats == 1, "n_sats %d, expected 1\n", v.n_sats);
+    CHECK(v.sat[0].prn == 22 && v.sat[0].snr_db == 42, "sat0 wrong\n");
+}
+
+/* in_view is PER TALKER. A multi-constellation receiver sends one burst per
+ * constellation, each with its own in_view, so a total needs the LATEST of
+ * each - never a running sum over arriving sentences, which counts the same
+ * constellation once per sentence in its burst. */
+static void test_gsv_per_talker(void)
+{
+    nmea_gsv_t v;
+    const char *line = "$GLGSV,2,1,05,65,28,180,33,66,45,090,,,,,,,,,*6B";
+    CHECK(nmea_parse_gsv(line, &v), "GLONASS GSV should parse\n");
+    CHECK(strcmp(v.talker, "GL") == 0, "talker '%s', expected GL\n", v.talker);
+    CHECK(v.in_view == 5, "in_view %d, expected 5 (this talker only)\n", v.in_view);
+}
+
+static void test_sentence_type_isolation(void)
+{
+    nmea_rmc_t r;
+    nmea_gga_t g;
+    nmea_gsv_t v;
+    const char *gga = "$GPGGA,123548.400,,,,,0,00,,,M,,M,,*75";
+    const char *rmc = "$GNRMC,101112.00,V,,,,,0.01,,031026,,,A,V*0D";
+
+    // Each parser takes ONLY its own sentence. A GGA reaching the RMC path
+    // would hand time_sync a time of day with no date.
+    CHECK(!nmea_parse_rmc(gga, &r), "RMC parser must reject a GGA\n");
+    CHECK(!nmea_parse_gga(rmc, &g), "GGA parser must reject an RMC\n");
+    CHECK(!nmea_parse_gsv(rmc, &v), "GSV parser must reject an RMC\n");
+}
+
 int main(void)
 {
     printf("unit_gps NMEA harness\n\n");
@@ -180,6 +322,15 @@ int main(void)
     test_flip();
     test_checksum();
     test_empty_fields_real_device();
+    test_rmc_position();
+    test_rmc_position_south_west();
+    test_rmc_no_position();
+    test_gga();
+    test_gga_no_fix();
+    test_gsv();
+    test_gsv_short_last();
+    test_gsv_per_talker();
+    test_sentence_type_isolation();
 
     printf("\n%s\n", g_fail ? "FAILURES ABOVE" : "ALL PASS");
     return g_fail ? 1 : 0;

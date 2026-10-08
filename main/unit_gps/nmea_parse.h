@@ -25,6 +25,9 @@ typedef struct {
     uint32_t frac_us;   // fractional seconds as microseconds (0 when the
                         // sentence carries none - many GPSes send hhmmss only)
     bool     valid;     // status field was 'A' (ACTIVE); false for 'V'
+    bool     has_pos;   // latitude/longitude fields were present and in range
+    double   lat_deg;   // signed degrees, + north (RMC fields 3/4)
+    double   lon_deg;   // signed degrees, + east  (RMC fields 5/6)
 } nmea_rmc_t;
 
 // Verify a whole line's "*HH" checksum. Returns false for a line with no
@@ -48,3 +51,55 @@ bool nmea_parse_rmc(const char *line, nmea_rmc_t *out);
 // backwards is not an edge - stamping a flip on those would phase-align the
 // clock to a moment that never happened.
 bool nmea_second_flipped(int prev_sec, int cur_sec);
+
+/* ---- GGA and GSV: what a STATUS DISPLAY needs, and nothing the clock uses --
+ *
+ * The clock path reads RMC only, and deliberately: its status byte is the lock
+ * bit and its date is the full civil date. These two add the numbers an
+ * operator needs when a receiver is NOT locking - how many satellites it can
+ * see, how strong they are, and what kind of fix it thinks it has. Added
+ * 2026-10-08, when an afternoon was spent on a receiver that turned out to be
+ * wired to nothing, with no instrument to say so.
+ *
+ * ⛔ Nothing here feeds time_sync. A GGA carries a time of day with NO DATE,
+ * and letting it near the clock is how a receiver silently sets the wrong day.
+ */
+
+typedef struct {
+    int   hour, min, sec;   // time of day only - GGA carries NO date
+    int   quality;          // 0 invalid, 1 GPS, 2 DGPS, 4 RTK fix, 5 RTK float, 6 dead reckoning
+    int   sats_used;        // satellites in the position solution
+    float hdop;             // horizontal dilution of precision; <0 when absent
+    float alt_m;            // antenna altitude above mean sea level
+    bool  has_alt;
+} nmea_gga_t;
+
+// Parse one $xxGGA. Same contract as nmea_parse_rmc(): a line that is not a
+// well-formed GGA with a good checksum returns false and leaves *out alone.
+// quality 0 (no fix) is a SUCCESSFUL parse - the receiver is reporting that it
+// has nothing, which is exactly what a status window must be able to show.
+bool nmea_parse_gga(const char *line, nmea_gga_t *out);
+
+#define NMEA_GSV_SATS_PER_MSG 4
+
+typedef struct {
+    char talker[3];   // "GP" GPS, "GL" GLONASS, "GA" Galileo, "GB"/"BD" BeiDou, "GQ" QZSS
+    int  msg_num;     // 1-based index of this sentence
+    int  msg_total;   // sentences in this constellation's burst
+    int  in_view;     // satellites in view FOR THIS TALKER - not a running total
+    int  n_sats;      // how many of the four slots below this sentence filled
+    struct {
+        int  prn;
+        int  elev_deg;   // -1 when the field was blank
+        int  azim_deg;   // -1 when the field was blank
+        int  snr_db;     // 0..99; -1 when blank, which means "not tracked"
+    } sat[NMEA_GSV_SATS_PER_MSG];
+} nmea_gsv_t;
+
+/* Parse one $xxGSV.
+ *
+ * ⚠ in_view is PER TALKER. A receiver doing GPS + GLONASS + Galileo sends
+ * three separate bursts, each with its own in_view, and adding the latest of
+ * each is the only way to a total. Summing every GSV as it arrives counts the
+ * same constellation several times over - once per sentence in its burst. */
+bool nmea_parse_gsv(const char *line, nmea_gsv_t *out);
