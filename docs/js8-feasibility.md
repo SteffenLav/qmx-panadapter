@@ -298,7 +298,12 @@ needs its clamp range adjusted to JS8's `-30..+31` (vs FT8's wider range).
 
 ---
 
-## Out of scope (Tier 2)
+## Out of scope for Tier 1 (superseded 2026-10-08 — see the full-feature plan below)
+
+⚠ **This list was the Tier-1 exclusion set, and it is no longer the project's
+scope decision.** Everything in it except Turbo now has a phase and an argued
+position in **Full-feature plan** at the end of this document. Kept because it
+records what was deliberately left out of the first pass, and why.
 
 JS8Call's actual size (113 KB `JS8.cpp`, 69 KB `varicode.cpp`) is dominated by features
 that don't fit a panadapter's FT8-style UI:
@@ -315,7 +320,11 @@ that don't fit a panadapter's FT8-style UI:
 
 ---
 
-## Phased plan & effort estimates
+## Phased plan & effort estimates — Tier 1, J1–J6
+
+✅ **J1–J5 are shipped and J6 is the only one outstanding.** This table is the
+original estimate, kept as the record; the state of each phase is in the status
+table under **Full-feature plan** below.
 
 Sized against this project's actual FT8 delivery arc (`v0.10.0-beta1` → `v0.15.1`,
 2026-06-05 → 2026-06-11: 6 calendar days / ~6 version bumps, ~6500 lines across
@@ -334,7 +343,11 @@ codec+app+UI, including a fair amount of unrelated panadapter UI work).
 
 ---
 
-## Risks (in order)
+## Risks (in order) — Tier 1
+
+✅ Risk 1 is retired: the LDPC was checked against JS8Call's own `encode174.f90`
+(8 of 8 codewords) and then confirmed by real traffic. Risk 2 still stands for
+transmit. The current risk list is under **Full-feature plan** below.
 
 1. **LDPC(174,87) table transcription** (J1) — a transcription error looks identical to
    "never decodes," indistinguishable from a sync/Costas bug without a known-good
@@ -356,3 +369,273 @@ codec+app+UI, including a fair amount of unrelated panadapter UI work).
   decode.{h,c}, encode.{h,c}, ldpc.{h,c}, message.{h,c}, crc.{h,c}), and the app layer in
   [`main/ft8_qso.c`](../main/ft8_qso.c), [`main/ft8_test.c`](../main/ft8_test.c),
   [`main/ft8_tx.c`](../main/ft8_tx.c).
+
+---
+
+# Full-feature plan (written 2026-10-08, after J1–J5 shipped)
+
+Everything above this line is the record of getting JS8 Normal working. This
+section plans the rest of JS8 — every feature the reference implementation has —
+and argues the order rather than listing it.
+
+## Where we are
+
+| | State |
+|---|---|
+| Codec core, LDPC(174,87), CRC-12, colorder | done, `2b66e884` / `8d8f5568` |
+| `FrameHeartbeat` + `FrameDirected` pack/unpack | done, `9ac400ad` |
+| Three-way protocol selector | done, `8ed2a9ab` |
+| Decode path | done, `7f42fb57` |
+| TX tone path, bit-exact vs `genjs8.f90` 64/64 | done, `69ebedb9` |
+| QSO ladder, joined at the text seam | done, `d6ff5c1e` |
+| UI, selectable, three-column preset picker | done, `03410a4a` |
+| **Receive proven on air** | **done 2026-10-08** — 9A3SWO heartbeat ×6, one Directed SNR, 40 m 7.078 |
+| **Transmit proven on air** | **NOT DONE. Nobody has decoded a frame of ours.** |
+
+## The two facts that decide the order
+
+Neither is a preference. Both were measured.
+
+### 1. The transmit ceiling is the CAT command rate
+
+`ft8_tx.c` keys the QMX by sending one `TA<freq>;` CDC write per symbol and
+sleeping to the next symbol boundary (`sleep_until`, `ft8_tx.c:1297`). There is
+no waveform generation anywhere in this project — the QMX's own synthesiser makes
+the tone, and we steer it.
+
+A CDC write is bounded at **50 ms** (stated three times in `ft8_tx.c`, and the
+reason FT4's 48 ms symbol period cannot fit a mid-burst PWR query). Tone spacing
+and symbol period are reciprocal in JS8, so each submode's spacing fixes its
+symbol period:
+
+| Submode | Cycle | Tone spacing | Symbol period | Reachable by CAT tone-stepping? |
+|---|---|---|---|---|
+| **Slow** | 30 s | 3.125 Hz | 320 ms | Yes, with ample margin |
+| **Normal** | 15 s | 6.25 Hz | 160 ms | **Yes — this is what works today** |
+| **Fast** | 10 s | 12.5 Hz | 80 ms | Marginal: 30 ms of margin, no room for a poll. MEASURE IT |
+| **Turbo** | 6 s | 25 Hz | 40 ms | **No. Shorter than one write's bound** |
+
+⛔ **So the submodes are not a matter of adding tables.** Turbo is unreachable
+by the mechanism this project transmits with, and Fast is an open measurement.
+Any plan that treats "add the other submodes" as a table-extraction task is
+wrong about this firmware.
+
+⭐ **There may be a way past it, and it is unexplored.** The QMX exposes a UAC
+**TX** (host → radio) interface, and we ignore it:
+
+```
+audio.c:363  case UAC_HOST_DRIVER_EVENT_TX_CONNECTED:
+             ESP_LOGI(TAG, "Lib event: TX_CONNECTED addr=%u iface=%u (ignored)");
+```
+
+Observed on every boot as `iface=4`. If the QMX modulates from that interface,
+we could synthesise any submode's waveform in software and the ceiling vanishes.
+⚠ That the interface *enumerates* does not mean the radio's firmware routes it to
+the modulator. It is measurement **M3** below, not a plan.
+
+### 2. Receive can be proven for free; transmit cannot
+
+Tonight settled the CRC-12 engine, both callsign codecs, packGrid, packNum, the
+Costas sync, the LDPC and the colorder permutation — by **listening**. No air
+time, no risk to anyone, no second station needed, and the arbiter was a Croatian
+operator who has never heard of this project.
+
+Transmit has no such arbiter. It needs a real JS8Call station that can hear us,
+and **never a second Tab5** — two copies share their mistakes exactly and would
+work each other perfectly while being unintelligible to everyone else.
+
+**Therefore: every feature is built RX-first, and its unpack direction is
+validated against real traffic before the pack direction is trusted.** That is
+not caution for its own sake — it is the only way to get an outside arbiter
+without spending somebody else's air time on frames that may be nonsense.
+
+## Sequencing principles
+
+1. **Unblock the commitment first.** JS8 Normal with a plain QSO was promised in
+   public. A mode that can hear but not answer is not a mode.
+2. **RX before TX, within every phase.** See fact 2.
+3. **Build the regression net before the features that need it.** We have 35
+   reference WAVs for FT8 and **zero** for JS8. Every later RX change is
+   currently unguarded.
+4. **Order by what a bug costs someone else.** Our own failed QSO is cheap. An
+   automatic responder that answers wrongly is worse. A relay that retransmits
+   other people's traffic wrongly is worst, so it goes last.
+5. **Features that need persistence wait for persistence.** The SD card on this
+   board dies on a mid-stream DMA abort; an inbox that loses mail is worse than
+   no inbox.
+
+## Measurement tasks (these gate phases, and none of them write a feature)
+
+| | Task | Why it gates something | Cost |
+|---|---|---|---|
+| **M1** | **Record a JS8 WAV corpus off air** — 12 kHz mono, whole slots, with the decoded text as ground truth, mirroring `test/wav_reference` | There is NO JS8 regression gate. Every RX change from J7 on is unguarded until this exists, and the FT8 corpus is this project's only safety net against silent sensitivity loss | Small, and **perishable** — do it while a station is audible |
+| **M2** | Measure the `TA;` write latency distribution at symbol rate: p50/p99 over a full burst | Decides whether Fast (80 ms) is reachable at all | Small — instrument `tx_cmd` and run one burst |
+| **M3** | Probe the UAC TX interface: open it, feed a steady tone while keyed in DIGI, look for RF | Decides whether Turbo and clean waveform TX are possible, i.e. whether the ceiling in fact 1 is real or just current | Medium. ⚠ Keys the radio — needs a dummy load and the operator present |
+
+## Phases
+
+Effort is **effort**, not a schedule. There is no date attached to any of this.
+
+### J6 — Transmit interop for Normal
+**Goal:** a JS8Call station decodes our CQ, and a full QSO completes both ways.
+**Why first:** everything below transmits. Until this is proven, every later
+phase is building on an unverified transmitter, and a bug found here invalidates
+all of them. It is also the only thing standing between the public promise and
+"done".
+**Needs built:** nothing. The code exists and is unverified.
+**Verification:** JS8Call on a shack PC or the IC-705, same antenna or an
+attenuated loopback. Their decode of our frame is the pass condition — our own
+screen is not evidence.
+**Risk:** low on substance, because the tone path is bit-exact against
+`genjs8.f90` and every table was confirmed by real traffic tonight. The likely
+failures are mundane: timing offset, audio level, the wrong slot parity.
+**Effort:** 1 session, mostly bench setup.
+
+### J7 — Free-text receive (multi-frame reassembly)
+**Goal:** read what JS8 operators actually send.
+**Why here:** free text is JS8's reason to exist, it is the majority of real
+traffic, and **it is provable by listening**. The risky part is the `FrameData`
+layout and the Varicode/Huffman alphabet, extracted from `varicode.cpp` with no
+test vectors — exactly the J2 situation, where the on-air arbiter is what
+settled it. Doing this RX-first buys that arbiter for free.
+**Needs built:** the data-frame layouts and the text alphabet from the source
+(⛔ extracted by a script, as `tools/gen_js8_ldpc_tables.py` does — never
+hand-transcribed); a reassembly buffer keyed by sender with a timeout; a message
+view, because a 200-character message does not fit a decode-list row.
+**Verification:** real traffic, and M1's corpus as the regression gate.
+**Risk:** the reassembly state is new surface — a stuck partial message, a
+sender who vanishes mid-transmission, two senders interleaving. All of it is
+host-testable from the corpus.
+**Effort:** 2 sessions.
+
+### J8 — Free-text transmit and a composer
+**Goal:** send a typed message.
+**Why after J7:** the codec is already validated in the unpack direction, and
+there is somewhere to display what came back. Composing before you can read is
+the wrong order.
+**Needs built:** the pack direction; a composer UI (the snap-on keyboard and the
+web page both already exist as text-entry surfaces); frame-count feedback,
+because the operator must know a 3-frame message costs 45 seconds of air time.
+**Verification:** JS8Call decodes a multi-frame message intact.
+**Risk:** air time. A long message keys the radio for a long time, so the
+operator needs the cost shown *before* transmitting, not after.
+**Effort:** 2 sessions.
+
+### J9 — Compound callsigns
+**Goal:** stop silently discarding stations.
+**Why here:** this is not a feature, it is a **correctness gap**.
+`js8_frame_to_text()` currently refuses `FrameCompound` and
+`FrameCompoundDirected` outright, which is right — rendering them with the
+28-bit codec would put a different station's callsign on the screen — but it
+means every portable, special-event or compound-prefix station is invisible to
+us. Cheap relative to what it recovers, and RX-first provable.
+**Needs built:** the two compound layouts, and the 50-bit codec applied in
+Directed-style exchanges.
+**Verification:** real traffic; a compound call appears and round-trips.
+**Effort:** 1 session.
+
+### J10 — The full directed-command vocabulary, with auto-responders
+**Goal:** answer `SNR?`, `GRID?`, `HEARING?`, `STATUS?` and the rest of the 32
+slots, and be able to ask them.
+**Why after free text:** several of the answers *are* free text. Building the
+responders first would mean building them twice.
+**Why it matters:** this is where JS8 stops being FT8 with different tables. An
+unattended station that answers queries is genuinely useful, and it is the
+foundation of everything below.
+**Needs built:** the remaining vocabulary (the table already spells all 32 for
+display); a responder with a rate limit; an operator switch per command class.
+**Verification:** query it from JS8Call and check every answer.
+**Risk:** ⛔ **this is the first phase where the radio transmits without a human
+deciding to.** It needs the same interlock discipline the FT8 robot has, and
+`feedback_never_leave_the_radio_transmitting` applies in full.
+**Effort:** 2 sessions.
+
+### J11 — Heartbeat network participation
+**Goal:** beacon, acknowledge heartbeats, and report SNR back.
+**Why after J10:** it is an automatic responder set, so it inherits J10's
+interlocks, and it needs a proven transmitter (J6) because it keys unattended on
+a timer.
+**Needs built:** the HB timer and its jitter; `HEARTBEAT SNR` replies; a visible
+indication that the station is beaconing, because an operator who has forgotten
+is transmitting unawares.
+**Verification:** appear on another station's heartbeat list; receive and answer
+an HB ACK.
+**Effort:** 1 session.
+
+### J12 — Store-and-forward inbox
+**Goal:** hold a message for a station that is not currently reachable, and
+deliver it when it appears. `MSG`, `MSG TO:`, `QUERY MSGS`.
+**Why this late:** it needs free text (J8), the vocabulary (J10), and
+**persistence**. The SD card on this board dies on a mid-stream DMA abort, and
+an inbox that silently loses mail is worse than no inbox — it makes a promise to
+a third party on the operator's behalf.
+**Needs built:** a message store with a size cap and an eviction rule; the
+delivery handshake; an inbox UI.
+**Verification:** store a message from JS8Call, power-cycle, deliver it.
+**Risk:** the SD failure modes are documented and nasty. A flash-backed store,
+or a RAM store that admits what it is, may be the right first answer.
+**Effort:** 2–3 sessions.
+
+### J13 — Relay
+**Goal:** forward another station's traffic along a path.
+**Why last of the network features:** a bug here is **other people's traffic
+corrupted or duplicated by us**, on a shared band. Everything it rests on must
+already be proven on air. Rule 4 of the sequencing principles puts it here and
+nothing else competes for the slot.
+**Verification:** a three-station test with two outside stations, not one and a
+Tab5.
+**Effort:** 2 sessions.
+
+### J14 — Submodes, gated on M2 and M3
+**Goal:** Slow, then Fast if it fits, then Turbo only if the audio path works.
+**Why in this order:** Slow is the easiest (320 ms symbols, ample CAT margin)
+*and* the most valuable — it is more sensitive than FT8, which is a capability
+this project does not otherwise have. Fast is an open measurement (M2). Turbo is
+blocked on M3 and may be permanently out of reach.
+**Needs built:** per-submode parameter tables extracted from `JS8Submode.cpp`
+and the `js8*_params.f90` files (⛔ by script); a submode selector; ⚠ the
+"MODIFIED" Costas arrays the submodes use, which are **not** Normal's.
+**Risk:** the slot engine's timing assumptions. 30 s and 10 s cycles are new
+ground for `ft8_test.c`'s slot loop, which has only ever run 15 s and 7.5 s.
+**Effort:** 1 session for Slow, 1 for Fast, unknown for Turbo.
+
+### J15 — APRS gateway
+**Goal:** send and receive APRS messages via a gateway station.
+**Why last:** once J8 exists this is a directed message to a known gateway with
+a particular text format, so it is nearly free — but it is also the feature with
+the least value to this project's operators, and it depends on a third party's
+service being up.
+**Effort:** 0.5 session.
+
+### Independent of the sequence: OSD174 second-pass decoding
+A sensitivity boost over plain belief-propagation, used by both JS8Call and
+WSJT-X. It is **pure RX, affects no protocol surface, and can be measured**
+against M1's corpus the way `ft8_decode_bench.c` measures FT8. It can be slotted
+in whenever there is appetite, and it is the only item here that improves
+something already shipped rather than adding something new.
+⚠ Costs decode time, and **core 0 is the wall** on this board.
+
+## What stays out, and why
+
+- **A second Tab5 as the test partner.** Not a scope decision, a validity one.
+- **Anything that keys the radio unattended before J6 passes.** We would be
+  transmitting frames nobody can read.
+- **Turbo**, unless M3 says the audio path works.
+
+## Risks, re-ordered for this plan
+
+1. **Transmit has never been validated** (J6). Everything below it inherits the
+   risk, which is why it is first.
+2. **No JS8 regression corpus** (M1). The FT8 corpus has caught silent
+   sensitivity loss more than once; JS8 has no equivalent, so any RX change from
+   J7 on is currently unguarded. Perishable: it needs signals on the band.
+3. **The submode ceiling may be structural** (M2/M3). If the UAC TX interface is
+   not modulated by the QMX, then Normal and Slow are the whole story on this
+   hardware, and that should be written down as a fact rather than rediscovered.
+4. **Unattended transmission** (J10 onwards). The failure mode is not a bad
+   decode, it is the radio transmitting wrongly with nobody watching.
+5. **Persistence for the inbox** (J12). The SD card's documented failure modes
+   make a naive store a promise the hardware cannot keep.
+6. **Varicode has no test vectors.** Unchanged from J2, and the mitigation is
+   unchanged: extract by script, never transcribe, and validate the unpack
+   direction against real traffic before trusting pack.
