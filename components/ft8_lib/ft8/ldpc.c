@@ -6,7 +6,13 @@
 // last 87 bits are the (systematic) plain-text.
 // this is an implementation of the sum-product algorithm
 // from Sarah Johnson's Iterative Error Correction book.
-// codeword[i] = log ( P(x=0) / P(x=1) )
+//
+// SIGN: upstream's comment here read codeword[i] = log(P(x=0)/P(x=1)), which
+// is the wrong way round for this code. The hard decision below is
+// plain[n] = (llr > 0) ? 1 : 0, so a POSITIVE value means a ONE bit, and that
+// is the convention decode.c feeds it. Getting it backwards does not warn or
+// crash - it simply never converges, which reads exactly like a bad parity
+// table. Cost one debug cycle on 2026-10-08.
 //
 
 #include "ldpc.h"
