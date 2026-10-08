@@ -397,3 +397,49 @@ const ftx_ldpc_code_t kFTX_LDPC_code_174_91 = {
     .Mn = kFTX_LDPC_Mn,
     .Num_rows = kFTX_LDPC_Num_rows,
 };
+
+
+/* ---- protocol facts, in one place - see the note in constants.h ---------- */
+
+int ftx_protocol_slot_ms(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4: return 7500;
+    case FTX_PROTOCOL_FT8: return 15000;
+    /* JS8 Normal shares FT8's whole timing - 12000 Hz, 1920 samples per
+     * symbol, 79 symbols, 15 s. Only the tables differ. The submodes that do
+     * NOT share it (Fast, Turbo, Slow, Ultra) are out of scope. */
+    case FTX_PROTOCOL_JS8: return 15000;
+    }
+    return 15000;
+}
+
+int ftx_protocol_num_tones(ftx_protocol_t protocol)
+{
+    return (protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
+}
+
+const char* ftx_protocol_name(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4: return "FT4";
+    case FTX_PROTOCOL_FT8: return "FT8";
+    case FTX_PROTOCOL_JS8: return "JS8";
+    }
+    return "?";
+}
+
+bool ftx_protocol_is_implemented(ftx_protocol_t protocol)
+{
+    /* ⛔ JS8 is NOT. The codec (J1) and the message layer (J2) exist and are
+     * host-tested, but decode.c cannot extract its likelihoods - its post-LDPC
+     * half is bound to FT8's 91-bit payload and CRC-14, while JS8 is 87 bits,
+     * CRC-12 and a column permutation - and ft8_tx.c cannot build its tones.
+     *
+     * Returning false here is what stops a JS8 selection from quietly
+     * behaving as FT8. Flip it when decode.c and ft8_tx.c have real branches,
+     * not before. */
+    return protocol == FTX_PROTOCOL_FT4 || protocol == FTX_PROTOCOL_FT8;
+}

@@ -248,7 +248,7 @@ static void add_ft8_tx_status(cJSON *root)
      * device is the only thing that has it. Same rule the FT4 preset list had
      * to learn the hard way this week - one accessor, both screens. */
     cJSON_AddStringToObject(f, "proto",
-        ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+        ft8_op_mode_name());
 
     /* ⭐ THE MINI OCCUPANCY STRIP AND THE SLOT CLOCK, so the browser can show
      * what the Tab5's left pane shows. Operator, 2026-09-02: "I want to have
@@ -5913,7 +5913,7 @@ static esp_err_t decodes_handler(httpd_req_t *req)
 
     cJSON *root = cJSON_CreateObject();
     if (!root) { heap_caps_free(snap); return httpd_resp_send_500(req); }
-    cJSON_AddStringToObject(root, "mode", ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    cJSON_AddStringToObject(root, "mode", ft8_op_mode_name());
     // So the browser can label the column MI or KM exactly as the Tab5 does.
     cJSON_AddBoolToObject(root, "miles", qs.distance_in_miles);
     cJSON_AddStringToObject(root, "working", pin);

@@ -386,7 +386,7 @@ static inline bool slot_is_even(int64_t sec, ftx_protocol_t proto)
 // fire or be scanned).
 static int64_t next_slot_sec(bool match_parity, bool want_even, ftx_protocol_t proto)
 {
-    int period_ms = (proto == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(proto);
     struct timeval tv;
     gettimeofday(&tv, NULL);
     int64_t now_ms  = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -2837,7 +2837,7 @@ static void ft8_qso_advance_body(int64_t slot_sec)
                 .my_grid    = qs.my_grid,
                 .their_grid = their_grid,
                 .freq_hz    = cat_get_frequency(),
-                .mode       = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8",
+                .mode       = ft8_op_mode_name(),
                 .rst_sent   = s_rst_sent,
                 .rst_rcvd   = s_rst_rcvd,
                 .qso_time   = time(NULL),
@@ -3308,7 +3308,7 @@ void ft8_qso_on_tx_complete(void)
     // machine on mid-burst, at which point the count no longer matters).
     if (s_state == FT8_QSO_CQ) s_cq_calls_sent++;
     if (s_state != FT8_QSO_IDLE && s_min_scan_utc > 0) {
-        int period_ms = (s_have_cur && s_cur_req.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+        int period_ms = s_have_cur ? ftx_protocol_slot_ms(s_cur_req.protocol) : 15000;
         struct timeval tv;
         gettimeofday(&tv, NULL);
         int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;

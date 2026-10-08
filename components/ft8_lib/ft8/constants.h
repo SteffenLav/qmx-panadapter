@@ -2,6 +2,7 @@
 #define _INCLUDE_CONSTANTS_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -76,8 +77,37 @@ extern const ftx_ldpc_code_t kFTX_LDPC_code_174_91;
 typedef enum
 {
     FTX_PROTOCOL_FT4,
-    FTX_PROTOCOL_FT8
+    FTX_PROTOCOL_FT8,
+    FTX_PROTOCOL_JS8   ///< JS8 "Normal" - FT8's timing, different tables
 } ftx_protocol_t;
+
+/* ⛔ ASK THESE, DO NOT WRITE "proto == FTX_PROTOCOL_FT4 ? a : b".
+ *
+ * That shape was in fourteen places when JS8 was added, and every one of them
+ * put JS8 on the FT8 branch. For the slot period that is RIGHT - JS8 Normal is
+ * a 15 s cycle, the same as FT8 - but it is right BY ACCIDENT, and the next
+ * protocol or the next question will not be so lucky. A two-way ternary cannot
+ * express a three-way fact, and it fails silently when it is wrong.
+ *
+ * So the facts live here, once, and the call sites ask. */
+
+/// Slot period in milliseconds: FT8 and JS8 15000, FT4 7500.
+int ftx_protocol_slot_ms(ftx_protocol_t protocol);
+
+/// Tones per symbol: FT4 is 4-FSK, FT8 and JS8 are 8-FSK.
+int ftx_protocol_num_tones(ftx_protocol_t protocol);
+
+/// "FT8", "FT4", "JS8" - for logs and labels, never allocated.
+const char* ftx_protocol_name(ftx_protocol_t protocol);
+
+/* Can this build DECODE and TRANSMIT the protocol?
+ *
+ * ⛔ FALSE FOR JS8 TODAY, AND THAT IS THE POINT. J1 and J2 built the codec and
+ * the message layer; nothing has taught decode.c to extract JS8's likelihoods
+ * or checked its CRC-12, and ft8_tx.c cannot build its tones. Selecting JS8
+ * must REFUSE loudly rather than quietly behave as FT8 - a mode that silently
+ * sends something else is worse than a mode that is missing. */
+bool ftx_protocol_is_implemented(ftx_protocol_t protocol);
 
 /// Costas 7x7 tone pattern for synchronization
 extern const uint8_t kFT8_Costas_pattern[7];

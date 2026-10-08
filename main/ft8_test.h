@@ -133,16 +133,31 @@ uint32_t ft8_get_timing_seq(void);
 typedef enum {
     FT8_OP_MODE_FT8 = 0,
     FT8_OP_MODE_FT4 = 1,
+    /* ⛔ NOT USABLE YET. The codec (J1) and the message layer (J2) are built
+     * and host-tested, but decode.c cannot extract JS8's likelihoods and
+     * ft8_tx.c cannot build its tones - see ftx_protocol_is_implemented().
+     *
+     * It exists here so the selector, the settings field and the slot loop are
+     * in place and provably three-way, rather than being retrofitted later
+     * onto code that assumes two. ft8_op_mode_set() REFUSES it while the
+     * protocol is unimplemented, so no path can reach the radio with it. */
+    FT8_OP_MODE_JS8 = 2,
 } ft8_op_mode_t;
 
 void          ft8_op_mode_set(ft8_op_mode_t m);
 ft8_op_mode_t ft8_op_mode_get(void);
 
-// Slot period in ms for the current sub-mode (15000 FT8 / 7500 FT4). Single
+// Slot period in ms for the current sub-mode (15000 FT8 and JS8, 7500 FT4).
+// Single
 // source of truth for anything outside ft8_test.c that needs slot timing -
 // the countdown bar/label in ft8_screen_view.c, in particular - so it can
 // never drift out of sync with the slot engine's own period.
 int ft8_op_mode_slot_ms(void);
+
+/* "FT8", "FT4" or "JS8" for the current sub-mode. One spelling, because this
+ * string reaches the ADIF log, /api/status and the screen alike - and a QSO
+ * logged under the wrong mode is a wrong record, not a cosmetic slip. */
+const char *ft8_op_mode_name(void);
 
 #ifdef __cplusplus
 }

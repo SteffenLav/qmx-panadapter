@@ -242,7 +242,7 @@ static inline bool slot_is_even(int64_t slot_start_unix_sec, ftx_protocol_t prot
 // even after the actual TX-firing parity was fixed.
 int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t proto)
 {
-    int period_ms = (proto == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(proto);
     struct timeval tv;
     gettimeofday(&tv, NULL);
     int64_t now_ms  = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -903,7 +903,7 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
     // consecutive slots, then silent for two, repeating) - this is what fixed
     // that. For FT8 (period exactly 15000 ms) the result is numerically
     // identical to the old formula, so FT8 behaviour is unchanged.
-    int period_ms = (s_armed.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(s_armed.protocol);
     bool is_even = ((slot_start_ms / period_ms) % 2) == 0;
     if (s_state == FT8_TX_ARMED &&
         (!s_armed.use_parity || is_even == s_armed.want_even_slot)) {
@@ -944,7 +944,7 @@ bool ft8_tx_slot_would_run(int64_t slot_start_ms)
     // Same parity/state test as ft8_tx_should_run_this_slot(), minus the
     // ARMED -> ACTIVE transition - a pure query for the hold-for-decode gate.
     lock();
-    int period_ms = (s_armed.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(s_armed.protocol);
     bool is_even = ((slot_start_ms / period_ms) % 2) == 0;
     bool would = (s_state == FT8_TX_ARMED &&
                   (!s_armed.use_parity || is_even == s_armed.want_even_slot));
@@ -1073,6 +1073,21 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     const int     nn             = is_ft4 ? FT4_NN : FT8_NN;
     const int64_t symbol_period_us = is_ft4 ? FT4_SYMBOL_PERIOD_US : FT8_SYMBOL_PERIOD_US;
     const float   tone_spacing_hz  = is_ft4 ? FT4_TONE_SPACING_HZ : FT8_TONE_SPACING_HZ;
+    const int     slot_ms          = ftx_protocol_slot_ms(req->protocol);
+
+    /* ⛔ JS8 would reach here with FT8's timing - which is CORRECT for Normal,
+     * 1920 samples per symbol and 79 symbols - but with FT8's TONES, because
+     * ft8_encode() above has no JS8 branch. The frame would be unintelligible
+     * and would look like a JS8 transmission on the band.
+     *
+     * ftx_protocol_is_implemented() is what keeps that from happening, and the
+     * check is here as well as at the mode selector: this is the last point
+     * before the radio is keyed. */
+    if (!ftx_protocol_is_implemented(req->protocol)) {
+        ESP_LOGE(TAG, "refusing to transmit %s - not implemented in this build",
+                 ftx_protocol_name(req->protocol));
+        return;
+    }
 
     // Final pre-flight: a cheap *cached-string* read (cat_get_mode_str()
     // just returns the digit from the last MD; poll response - no CAT round
@@ -1086,7 +1101,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         ESP_LOGW(TAG, "TX aborted before key-up: mode drifted to '%s' (need DiGi)", mode);
     } else {
         ESP_LOGI(TAG, "TX burst starting (%s): '%s' base=%d Hz%s",
-                 is_ft4 ? "FT4" : "FT8", req->display_text, req->audio_freq_hz,
+                 ftx_protocol_name(req->protocol), req->display_text, req->audio_freq_hz,
                  sim ? (is_ft4 ? "  [FT4 - simulation mode]"
                                : "  [SIMULATION - radio not keyed]")
                      : (FT8_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]"));
@@ -1131,7 +1146,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             struct timeval tvk;
             gettimeofday(&tvk, NULL);
             int64_t key_ms = (int64_t)tvk.tv_sec * 1000 + tvk.tv_usec / 1000;
-            int     per_ms = is_ft4 ? 7500 : 15000;
+            int     per_ms = slot_ms;
             ESP_LOGI(TAG, "key down at +%lld ms into the slot", 
                      (long long)(key_ms % per_ms));
         }

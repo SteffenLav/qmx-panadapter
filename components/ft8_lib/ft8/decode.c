@@ -316,7 +316,7 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
 {
     int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
-    int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
+    int num_tones = ftx_protocol_num_tones(wf->protocol);
 
     int heap_size = 0;
     ftx_candidate_t candidate;

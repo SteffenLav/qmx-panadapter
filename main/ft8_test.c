@@ -82,6 +82,11 @@
 
 static const char *TAG = "ft8_test";
 
+/* Defined further down, beside the slot engine it belongs to; declared here
+ * because ft8_op_mode_set() and ft8_op_mode_name() both ask it, and they sit
+ * above it. */
+static ftx_protocol_t proto_for_mode(void);
+
 #define SR_HZ                 12000
 #define SLOT_SAMPLES          180000      // 15 s × 12 kHz (FT8 slot; also the
                                           // scratch-buffer / max size - FT4's
@@ -114,6 +119,18 @@ void ft8_op_mode_set(ft8_op_mode_t m)
 #if FT4_MODE_DISABLED
     m = FT8_OP_MODE_FT8;   // see FT4_MODE_DISABLED's comment in ft8_test.h
 #endif
+    /* ⛔ A sub-mode whose protocol this build cannot decode or transmit is
+     * refused HERE, at the one door into the slot engine, rather than being
+     * allowed in and checked at each use. JS8 is that case today.
+     *
+     * Refused loudly: a mode that silently behaves as FT8 would look like it
+     * works, and the operator would be transmitting FT8 frames while the
+     * screen said JS8. */
+    if (m == FT8_OP_MODE_JS8 && !ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+        ESP_LOGW(TAG, "JS8 selected but not implemented in this build - staying on %s",
+                 ftx_protocol_name(proto_for_mode()));
+        return;
+    }
     // Changing sub-mode invalidates everything already on screen: the two
     // protocols have different slot lengths, so rows decoded under the old
     // timing describe a band that no longer exists as far as the new engine is
@@ -129,7 +146,8 @@ void ft8_op_mode_set(ft8_op_mode_t m)
     s_op_mode = m;
     s_op_mode_loaded = true;   // a deliberate set always wins over the lazy load
     settings_set_ft8_op_mode((uint8_t)m);   // sticky across reboot (debounced flush)
-    ESP_LOGI(TAG, "operating sub-mode -> %s", m == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    ESP_LOGI(TAG, "operating sub-mode -> %s",
+             m == FT8_OP_MODE_FT4 ? "FT4" : m == FT8_OP_MODE_JS8 ? "JS8" : "FT8");
     if (changed) {
         ft8_screen_clear();
         ft8_pileup_clear();
@@ -147,7 +165,17 @@ ft8_op_mode_t ft8_op_mode_get(void)
         s_op_mode_loaded = true;
         qmx_settings_t cfg;
         settings_load_all(&cfg);
-        s_op_mode = (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8;
+        /* Three-way now, and an unknown or unimplemented stored value falls
+         * back to FT8 rather than to whatever the enum's first member is. A
+         * device that stored JS8 before it worked must not come up in it. */
+        if (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) {
+            s_op_mode = FT8_OP_MODE_FT4;
+        } else if (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_JS8 &&
+                   ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+            s_op_mode = FT8_OP_MODE_JS8;
+        } else {
+            s_op_mode = FT8_OP_MODE_FT8;
+        }
 #if FT4_MODE_DISABLED
         // A device that had FT4 selected before this change must not come
         // back up in FT4 - see FT4_MODE_DISABLED's comment in ft8_test.h.
@@ -157,9 +185,17 @@ ft8_op_mode_t ft8_op_mode_get(void)
     return s_op_mode;
 }
 
+const char *ft8_op_mode_name(void)
+{
+    return ftx_protocol_name(proto_for_mode());
+}
+
 int ft8_op_mode_slot_ms(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
+    /* Asked of the protocol rather than written as a two-way ternary here -
+     * see the note at ftx_protocol_slot_ms(). JS8 Normal is 15 s like FT8, and
+     * saying so explicitly is what stops the next sub-mode inheriting it. */
+    return ftx_protocol_slot_ms(proto_for_mode());
 }
 
 // Max FT8 candidates considered per slot (matches the cands[] buffer in
@@ -541,8 +577,12 @@ static void free_capture_pool(void)
 // Map the FT8/FT4 sub-mode flag to a decoder protocol.
 static inline ftx_protocol_t proto_for_mode(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FTX_PROTOCOL_FT4
-                                                  : FTX_PROTOCOL_FT8;
+    switch (ft8_op_mode_get())
+    {
+    case FT8_OP_MODE_FT4: return FTX_PROTOCOL_FT4;
+    case FT8_OP_MODE_JS8: return FTX_PROTOCOL_JS8;
+    default:              return FTX_PROTOCOL_FT8;
+    }
 }
 
 // Free just the monitor objects (keep s_cap_scratch, which is protocol-agnostic
@@ -683,7 +723,7 @@ static bool build_monitor_pool(ftx_protocol_t proto)
 
     s_pool_proto = (int)proto;
     ESP_LOGI(TAG, "monitor pool built for %s: block=%d samples, %d blocks/slot, %u KB waterfall each",
-             proto == FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+             ftx_protocol_name(proto),
              s_mon_pool[0]->block_size, s_mon_pool[0]->wf.max_blocks,
              (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
                         * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024));
@@ -715,7 +755,7 @@ static void reinit_pool_if_mode_changed(void)
     }
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
-             want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+             ftx_protocol_name(want));
 
     /* ⛔ THIS FREED MEMORY THE DECODER WAS STILL READING, AND IT CRASHED THE
      * BOARD. Measured on bench dev 2026-09-25, switching FT8 -> FT4:
@@ -774,7 +814,7 @@ static void reinit_pool_if_mode_changed(void)
     free_monitor_objects();
     if (!build_monitor_pool(want)) {
         ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
-                 want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+                 ftx_protocol_name(want));
         free_monitor_objects();
     }
 }
@@ -1315,7 +1355,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                     ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
                     pskreporter_spot(sp_call, sp_grid,
                                      cat_get_frequency() + (uint32_t)freq_hz, snr_db,
-                                     s_pool_proto == (int)FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+                                     ftx_protocol_name((ftx_protocol_t)s_pool_proto),
                                      slot_sec);
                 }
             }
@@ -1775,7 +1815,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // instance, no concurrency concern).
     {
         static int s_stuck_slots = 0;
-        const char *proto = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+        const char *proto = ft8_op_mode_name();
         int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
                          (ft8_qso_get_state() != FT8_QSO_IDLE);
@@ -2128,7 +2168,8 @@ static void ft8_task(void *arg)
         // enabled. Corrected 2026-08-09 - do not rely on a protocol-based TX
         // safety boundary here or in ft8_tx.c, because there isn't one.
 
-        ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
+        ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx,
+                 ftx_protocol_name((ftx_protocol_t)s_pool_proto));
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
         last_boundary_ms = boundary_ms;
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)

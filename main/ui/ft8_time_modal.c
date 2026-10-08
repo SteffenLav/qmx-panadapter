@@ -56,7 +56,7 @@ static const char *TAG = "ft8_time_modal";
 // label to show the operator.
 static const char *active_proto_label(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+    return ft8_op_mode_name();
 }
 
 // The clock source actually in charge right now, as a short UI label. NTP/GPS

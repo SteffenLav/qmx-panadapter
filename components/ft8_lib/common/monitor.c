@@ -54,7 +54,7 @@ static void waterfall_free(ftx_waterfall_t* me)
 
 void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 {
-    float slot_time = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SLOT_TIME : FT8_SLOT_TIME;
+    float slot_time = (float)ftx_protocol_slot_ms(cfg->protocol) / 1000.0f;
     float symbol_period = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
     // Compute DSP parameters that depend on the sample rate
     me->block_size = (int)(cfg->sample_rate * symbol_period); // samples corresponding to one FSK symbol
