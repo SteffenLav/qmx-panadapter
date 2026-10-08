@@ -392,6 +392,66 @@ Do it before any RTTY TX code exists.
 halves of one implementation share their mistakes — the same reason JS8 needs a
 real JS8Call counterpart rather than a second Tab5.
 
+### 4. Prior art: the radio already does RTTY, and the known bottleneck is not on our path
+
+Searched 2026-10-08 at the operator's prompting — he was right that this ground
+has been covered before. Sources are QRP Labs' own product pages and the
+QRPLabs groups.io list, so treat the list posts as user reports rather than as
+measurements we have made.
+
+**QRP Labs list RTTY as a supported mode.** The QMX's Digi mode is described as
+transmitting a single signal for FSK modes, "which covers the majority of
+digital modes in use today, including everything in WSJT-X (except MSK144),
+JS8Call, some fldigi modes e.g. RTTY, Olivia and more". So the synthesiser
+producing clean 45.45 baud FSK is **not** the open question it is treated as
+above — the radio does this today when driven from fldigi over USB audio.
+
+**The known bottleneck is in the AUDIO path, and we do not use it.** When
+driven from a PC, the QMX (like the QDX) measures the incoming audio tone with
+a timer and then sets the synthesiser. A QDX RTTY report on the list describes
+having to reduce the number of tone samples required before setting the output
+frequency — **default 480** — so the radio could keep up with a tone changing
+every 22 ms. That averaging window is the thing that makes RTTY marginal over
+the audio route.
+
+**The Tab5 does not go through tone measurement at all.** `ft8_tx.c` sends
+`TA<freq>;` over CAT and the radio sets its synthesiser from the number. The
+480-sample averaging has nothing to act on. On this path the question is not
+"can the radio follow a 22 ms tone change" — it demonstrably can — but the
+narrower one:
+
+> Does the QMX's CAT parser accept and act on `TA<freq>;` at ~45 commands per
+> second, sustained, while keyed?
+
+That is a smaller and more tractable question than this document originally
+posed, and it is still unmeasured.
+
+**Two user-reported faults worth knowing, both specific to the audio route:**
+
+- *TX drops back to RX a second or two into a RTTY over* while fldigi keeps
+  sending. The proposed fix on the list is fldigi's **Soundcard → "Modem signal
+  on left and right channels"** — the QMX takes its input from the right
+  channel. Reported as "probably solved", never confirmed by the original
+  poster.
+- *RX audio too weak for fldigi or MMTTY to decode*, with mark and space
+  measured at only 20–40 µV peak at the scope.
+
+Neither affects the Tab5: we neither send nor receive audio to the radio for
+this purpose. They are listed so that a user's "RTTY does not work on my QMX"
+report is not mistaken for a fault in our implementation.
+
+**Revised R4.** The gate test above stands, but its purpose changes: it is no
+longer asking whether the radio can do RTTY, it is asking whether the CAT route
+can drive it. Keep fldigi or MMTTY on a PC as the arbiter, and if the CAT route
+fails the gate, the fallback worth considering is whether the Tab5 should drive
+RTTY the way a PC does rather than over CAT — which it cannot today, having no
+transmit audio path, and which is the same obstacle that rules out PSK31.
+
+Sources: [QMX product page](https://qrp-labs.com/qmx.html) ·
+[fldigi and QMX transmit RTTY](https://groups.io/g/QRPLabs/topic/fldigi_and_qmx_transmit_rtty/106116158) ·
+[QMX RTTY how](https://groups.io/g/QRPLabs/topic/qmx_rtty_how/108126424) ·
+[QDX works on RTTY](https://www.qsl.net/y/yo4tnv//Transceivers/Qrp-Labs%20QDX/QRPLabs@groups.io%20_%20QDX%20works%20on%20RTTY!.pdf)
+
 ### Revised estimate
 
 | | Old | Revised | Why |
