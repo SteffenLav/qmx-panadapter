@@ -101,7 +101,7 @@ static void test_left_column(void)
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     fill(&in);
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
 
     expect_row(lines, 0, "Validity",  "A");
     expect_row(lines, 1, "Fix",       "3D");
@@ -124,7 +124,7 @@ static void test_latlon_is_degrees_minutes(void)
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     fill(&in);
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
     CHECK(strstr(lines[5], "55 42.869013 N") != NULL,
           "latitude should be \"55 42.869013 N\", got \"%.30s\"\n", lines[5] + 10);
     CHECK(strstr(lines[6], "12 28.290529 E") != NULL,
@@ -133,11 +133,11 @@ static void test_latlon_is_degrees_minutes(void)
     // Southern and western hemispheres must show S and W, not a minus sign.
     in.lat_deg = -33.8688;
     in.lon_deg = 151.2093;
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
     CHECK(strstr(lines[5], " S") != NULL, "negative latitude should read S\n");
     CHECK(strstr(lines[5], "-") == NULL, "latitude should not carry a minus\n");
     in.lon_deg = -58.3816;
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
     CHECK(strstr(lines[6], " W") != NULL, "negative longitude should read W\n");
 }
 
@@ -160,7 +160,7 @@ static void test_sat_table(void)
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     fill(&in);
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
 
     CHECK(strncmp(lines[12], " 13 84 241 31  GPS", 18) == 0,
           "sat row 0 \"%.20s\"\n", lines[12]);
@@ -188,7 +188,7 @@ static void test_sky_quadrants(void)
         in.sat[i].snr_db = 20;
         in.sat[i].talker[0] = 'G'; in.sat[i].talker[1] = 'P';
     }
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
 
     int row[4] = { -1, -1, -1, -1 };
     for (int r = 0; r < GPS_PAGE_ROWS; r++) {
@@ -213,7 +213,7 @@ static void test_qmx_source_keeps_its_rows(void)
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     fill(&in);
-    gps_page_render(&in, GPS_PAGE_SRC_QMX, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_QMX, lines, NULL, NULL);
 
     expect_row(lines, 8,  "Fix sats", "-");
     expect_row(lines, 9,  "Tot sats", "-");
@@ -235,7 +235,7 @@ static void test_no_fix_says_so(void)
     in.year = 2026; in.mon = 10; in.mday = 8;
     in.hour = 16; in.min = 0; in.sec = 0;
     in.avg_snr = -1;
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
 
     expect_row(lines, 0, "Validity", "V");
     expect_row(lines, 4, "Grid", "-");
@@ -250,7 +250,7 @@ static void dump(void)
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     fill(&in);
-    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines);
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
     printf("\n--- rendered page ---\n");
     for (int r = 0; r < GPS_PAGE_ROWS; r++) {
         const char *l = lines[r];

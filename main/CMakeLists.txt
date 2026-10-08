@@ -33,6 +33,8 @@ idf_component_register(
         "ui/resource_mgmt_modal.c"
         "ui/reader_view.c"
         "ui/spot_map_view.c"
+        "ui/gps_page.c"
+        "ui/gps_status_view.c"
         "ui/qmx_term_view.c"
         "ui/font_qmx_mono_25.c"
         "ui/reader_diagram.c"

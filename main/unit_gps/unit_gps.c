@@ -119,53 +119,6 @@ const char *unit_gps_state_name(unit_gps_state_t state)
     return "OFF";
 }
 
-/* One well-formed RMC sentence, in arrival order.
- *
- * The flip stamp is taken when the LINE COMPLETED (the sentence end), not when
- * it was parsed: the second boundary the sentence reports on has already passed
- * by then, and the whole point of flip_us is to say how long ago. A sentence
- * that carries the N->N+1 edge passes its stamp on; every other sentence
- * passes 0, which means "no edge with this one" and yields a whole-second
- * apply rather than a phase claim it cannot support. */
-static void on_rmc_line(const char *line, int64_t arrival_us)
-{
-    nmea_rmc_t r;
-    if (!nmea_parse_rmc(line, &r)) return;    // not RMC / bad checksum / insane field
-
-    uint32_t arr_ms = (uint32_t)(arrival_us / 1000);
-    s_last_sentence_ms = arr_ms;
-    s_have_sentence    = true;
-
-    bool flipped = (s_prev_sec >= 0) && nmea_second_flipped(s_prev_sec, r.sec);
-    s_prev_sec   = r.sec;
-
-    /* Snapshot fields for the GPS page. Taken from EVERY well-formed RMC,
-     * including a void one: a receiver with no lock still reports a time, and
-     * a page that showed nothing until lock could not tell "searching" from
-     * "not connected" - which is the whole reason the page exists. */
-    info_lock();
-    s_rmc_valid = r.valid;
-    s_has_time  = true;
-    s_year = r.year; s_mon = r.mon;  s_mday = r.mday;
-    s_hour = r.hour; s_min = r.min;  s_sec  = r.sec;
-    if (r.has_pos) {
-        s_has_pos = true;
-        s_lat_deg = r.lat_deg;
-        s_lon_deg = r.lon_deg;
-    }
-    info_unlock();
-
-    if (!r.valid) return;    // 'V': the receiver is talking but has no lock
-
-    s_last_fix_ms = arr_ms;
-    s_have_fix    = true;
-
-    time_sync_notify_unit_gps(r.year, r.mon, r.mday,
-                              r.hour, r.min, r.sec,
-                              r.frac_us, flipped ? arrival_us : 0);
-}
-
-
 /* ---- Status snapshot (GGA / GSA / GSV) ---------------------------------
  *
  * Mirrors what the QMX's own GPS viewer shows, so the two pages can be the
@@ -340,6 +293,53 @@ void unit_gps_get_info(unit_gps_info_t *out)
     out->avg_snr = n ? (sum + n / 2) / n : -1;
     info_unlock();
 }
+
+/* One well-formed RMC sentence, in arrival order.
+ *
+ * The flip stamp is taken when the LINE COMPLETED (the sentence end), not when
+ * it was parsed: the second boundary the sentence reports on has already passed
+ * by then, and the whole point of flip_us is to say how long ago. A sentence
+ * that carries the N->N+1 edge passes its stamp on; every other sentence
+ * passes 0, which means "no edge with this one" and yields a whole-second
+ * apply rather than a phase claim it cannot support. */
+static void on_rmc_line(const char *line, int64_t arrival_us)
+{
+    nmea_rmc_t r;
+    if (!nmea_parse_rmc(line, &r)) return;    // not RMC / bad checksum / insane field
+
+    uint32_t arr_ms = (uint32_t)(arrival_us / 1000);
+    s_last_sentence_ms = arr_ms;
+    s_have_sentence    = true;
+
+    bool flipped = (s_prev_sec >= 0) && nmea_second_flipped(s_prev_sec, r.sec);
+    s_prev_sec   = r.sec;
+
+    /* Snapshot fields for the GPS page. Taken from EVERY well-formed RMC,
+     * including a void one: a receiver with no lock still reports a time, and
+     * a page that showed nothing until lock could not tell "searching" from
+     * "not connected" - which is the whole reason the page exists. */
+    info_lock();
+    s_rmc_valid = r.valid;
+    s_has_time  = true;
+    s_year = r.year; s_mon = r.mon;  s_mday = r.mday;
+    s_hour = r.hour; s_min = r.min;  s_sec  = r.sec;
+    if (r.has_pos) {
+        s_has_pos = true;
+        s_lat_deg = r.lat_deg;
+        s_lon_deg = r.lon_deg;
+    }
+    info_unlock();
+
+    if (!r.valid) return;    // 'V': the receiver is talking but has no lock
+
+    s_last_fix_ms = arr_ms;
+    s_have_fix    = true;
+
+    time_sync_notify_unit_gps(r.year, r.mon, r.mday,
+                              r.hour, r.min, r.sec,
+                              r.frac_us, flipped ? arrival_us : 0);
+}
+
 
 static void unit_gps_task(void *arg)
 {

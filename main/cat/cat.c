@@ -133,6 +133,11 @@ static bool s_qmx_gps_source_internal = false;
  * them the same is what let us overwrite a GPS radio's clock in the first ~20 s
  * of a session, before the query had landed. See push_to_qmx() in time_sync.c. */
 static bool s_qmx_gps_source_known = false;
+
+/* Position from the last GP reply we understood. 0,0 is a real place in the
+ * Atlantic, so "never had one" is a flag, not a magic value. */
+static double s_qmx_gps_lat, s_qmx_gps_lon;
+static bool   s_qmx_gps_pos_valid = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
@@ -3336,6 +3341,41 @@ bool cat_gps_gp_parse(const char *resp, size_t len,
     if (*y < 2024 || *y > 2099) return false;
     if (*mo < 1 || *mo > 12 || *d < 1 || *d > 31) return false;
     if (*h > 23 || *mi > 59 || *s > 60) return false;
+
+    /* ⭐ The reply carries the POSITION too, and nothing read it until the GPS
+     * page needed it (2026-10-08). Format: "GP+DD.DDDDDD+DDD.DDDDDD+YYYY..." -
+     * DECIMAL DEGREES with an explicit sign, NOT the degrees-and-minutes that
+     * NMEA uses. The two are only distinguishable by where they came from, so
+     * this is converted nowhere: it is stored exactly as the radio sent it and
+     * the page formats it.
+     *
+     * Stashed rather than returned, because every existing caller wants the
+     * clock and changing six call sites to carry two doubles they ignore is
+     * how a parser grows a signature nobody can read. */
+    {
+        const char *p1 = resp + 2;
+        char *end1 = NULL, *end2 = NULL;
+        double la = strtod(p1, &end1);
+        double lo = (end1 && *end1) ? strtod(end1, &end2) : 0.0;
+        /* Both signs must have been consumed and the remainder must be the
+         * 14-digit timestamp with its own sign - otherwise this is a reply
+         * shape we do not understand and the position is not claimed. */
+        if (end1 && end2 && end2 != end1 &&
+            la >= -90.0 && la <= 90.0 && lo >= -180.0 && lo <= 180.0 &&
+            !(la == 0.0 && lo == 0.0)) {
+            s_qmx_gps_lat = la;
+            s_qmx_gps_lon = lo;
+            s_qmx_gps_pos_valid = true;
+        }
+    }
+    return true;
+}
+
+bool cat_qmx_gps_position(double *lat, double *lon)
+{
+    if (!s_qmx_gps_pos_valid) return false;
+    if (lat) *lat = s_qmx_gps_lat;
+    if (lon) *lon = s_qmx_gps_lon;
     return true;
 }
 

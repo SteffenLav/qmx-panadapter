@@ -246,6 +246,11 @@ esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *ou
 bool cat_gps_gp_parse(const char *resp, size_t len,
                       int *y, int *mo, int *d, int *h, int *mi, int *s);
 
+/* Latitude and longitude from the last GP reply, in DECIMAL DEGREES (the
+ * radio's own format - not the degrees-and-minutes NMEA uses). False when the
+ * radio has never reported a position this session. */
+bool cat_qmx_gps_position(double *lat, double *lon);
+
 bool cat_qmx_gps_source_internal(void);
 /* False until the radio has actually answered the GPS-source question. Callers
  * that would CHANGE the radio's state on the strength of "no GPS" must wait for

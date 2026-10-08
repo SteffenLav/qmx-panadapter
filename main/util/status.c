@@ -470,7 +470,14 @@ static void status_task(void *arg)
             // (LOCKED inside the freshness window) - get_effective_source()
             // will not return it otherwise - so the GPS claim can never be
             // made from mode alone or from a stale lock.
-            case TIME_SOURCE_UNIT_GPS: clk_suffix = " UTC(GPS)"; break;
+            // "U-GPS", not "GPS": the receiver on the Tab5 itself (Unit GPS
+            // on PORT.A, or Module GPS v2.1 on the M-Bus), told apart from the
+            // QMX's own GPS below. The operator asked for the two to be
+            // distinguishable - they are different antennas, different
+            // failures, and only one of them survives the radio being
+            // unplugged. Same word on the web UI and in the FT8 time modal;
+            // those are the other two copies of this switch.
+            case TIME_SOURCE_UNIT_GPS: clk_suffix = " UTC(U-GPS)"; break;
             case TIME_SOURCE_SNTP:   clk_suffix = " UTC(NTP)"; break;
             // QMX source: GPS when auto-detected as GPS-disciplined, else the
             // plain-QMX RTC (naive offline fallback).

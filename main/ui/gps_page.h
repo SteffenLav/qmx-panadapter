@@ -15,6 +15,8 @@
  * down on a PC instead of on the glass.
  */
 
+#include <stdint.h>
+
 #include "unit_gps/unit_gps.h"
 
 #define GPS_PAGE_COLS 80
@@ -32,10 +34,51 @@ typedef enum {
 /* One line of the title, naming the source. Never "GPS" alone. */
 const char *gps_page_title(gps_page_src_t src);
 
+#define GPS_PAGE_MAX_MARKERS UNIT_GPS_MAX_SATS
+
+/* Where a satellite was drawn in the sky plot, so the view can colour it.
+ *
+ * The marker is ALSO written into `lines`, not instead of it. The view blanks
+ * those cells and redraws them coloured - the same thing qmx_term_view does
+ * with the radio's colour runs. Reporting the position instead of drawing it
+ * would mean the harness tested a placement the device never uses. */
+typedef struct {
+    int  row, col;
+    char text[6];   /* "13x" or "+28" */
+    int  snr_db;    /* -1 = in view, not tracked */
+    bool used;      /* in the position solution */
+    bool compass;   /* a 0/90/180/270 label, not a satellite - drawn blue */
+} gps_page_marker_t;
+
 /* Render into `lines`, each NUL-terminated and exactly GPS_PAGE_COLS wide
- * (trailing spaces included, as the grid has them). */
+ * (trailing spaces included, as the grid has them). `markers`/`n_markers` may
+ * be NULL when the caller does not colour them. */
 void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
-                     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1]);
+                     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                     gps_page_marker_t *markers, int *n_markers);
+
+/* The satellite table, as its own list.
+ *
+ * The page grid has room for twelve rows and a receiver routinely sees twenty,
+ * so the view scrolls this list rather than truncating it. gps_page_render()
+ * writes the first GPS_PAGE_TABLE_ROWS of exactly these strings into `lines`,
+ * so what scrolls and what the harness checks are the same text. */
+#define GPS_PAGE_TABLE_ROW0  12
+#define GPS_PAGE_TABLE_ROWS  (GPS_PAGE_ROWS - GPS_PAGE_TABLE_ROW0)   /* 12 */
+#define GPS_PAGE_SAT_COLS    26
+
+typedef struct {
+    char text[GPS_PAGE_SAT_COLS + 1];
+    int  snr_db;   /* -1 = in view, not tracked */
+    bool used;     /* in the position solution */
+} gps_page_satrow_t;
+
+/* Format every satellite. Returns how many rows were written. */
+int gps_page_sat_rows(const unit_gps_info_t *in, gps_page_satrow_t *out, int max);
+
+/* SNR colour, shared by the table and the sky plot so one satellite cannot be
+ * green in one place and amber in the other. */
+uint32_t gps_page_snr_colour(int snr_db);
 
 /* "GPS", "GLONASS", "Galileo", "Beidou", "QZSS" - the QMX viewer spells the
  * constellation out in its last column. Lives here, not in the driver: it is

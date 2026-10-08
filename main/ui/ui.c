@@ -4,6 +4,7 @@
 #include "util/format_freq.h"   // #302: ONE frequency format
 #include "util/freq_gridlines.h"
 #include "ui_theme.h"
+#include "gps_status_view.h"   // tapping the UTC field opens the GPS page
 #include "cw_decode.h"   /* the QMX decodes CW itself; this just shows it */
 LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "nvs.h"
@@ -2548,6 +2549,11 @@ static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_batt_icon = NULL;  /* battery glyph, colored by charge level */
 static lv_obj_t *s_bot_batt_slash = NULL; /* red diagonal stroke over the glyph when no pack is attached */
 static lv_obj_t *s_bot_center_suffix = NULL;
+
+/* X span of the UTC field in the bottom bar, recorded when it is laid out.
+ * The tap is arbitrated by x inside bottom_edge_swipe_cb() - see the note at
+ * the assignment and at sd_indicator_hit(). */
+static lv_coord_t s_bot_clock_x0 = -1, s_bot_clock_x1 = -1;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
 static lv_obj_t *s_bot_bt = NULL;        // Bluetooth glyph, left of the WiFi fan
@@ -6223,7 +6229,14 @@ static void build_bottom_bar(lv_obj_t *parent)
         const lv_font_t *font = &lv_font_montserrat_24;
         const lv_coord_t cell_w = 15;
         const lv_coord_t clock_w = 7 * cell_w;  // 6 digit cells + 2 half-width colon cells
-        // Size x0 using the widest suffix so the clock stays centered when NTP is active.
+        /* Size x0 using " UTC(NTP)", NOT the widest suffix.
+         *
+         * " UTC(U-GPS)" is two characters wider, and sizing on it moves this
+         * whole zone right by about 15 px - which squeezes the firmware
+         * version text on the right of the bar. Tried on 2026-10-08 and
+         * reverted at the operator's request: "I know it overlaps - but it is
+         * only for me with long working and dirty suffixes". The overlap is
+         * his to live with; the version text is not. */
         const char *sizing_suffix = " UTC(NTP)";
         lv_coord_t suffix_w = lv_txt_get_width(sizing_suffix, strlen(sizing_suffix), font, 0);
         lv_coord_t total_w = clock_w + suffix_w;
@@ -6243,6 +6256,22 @@ static void build_bottom_bar(lv_obj_t *parent)
         lv_obj_set_style_text_color(s_bot_center_suffix, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(s_bot_center_suffix, font, 0);
         lv_obj_align(s_bot_center_suffix, LV_ALIGN_LEFT_MID, x0 + clock_w, 0);
+
+        /* The UTC field is a tap target for the GPS page - but NOT as an
+         * object of its own.
+         *
+         * ⛔ An invisible button here does not work and cannot be made to:
+         * s_bottom_edge_strip is the full width of the bar, is
+         * move_foreground()'d above everything, and owns every press down
+         * here. The first attempt was exactly that button, and it never fired
+         * once (2026-10-08, caught on the glass). The same note already
+         * existed at sd_indicator_hit().
+         *
+         * So the target is recognised by X RANGE inside
+         * bottom_edge_swipe_cb(), like the microSD indicator and the update
+         * line. Its span is recorded here, where the geometry is known. */
+        s_bot_clock_x0 = x0;
+        s_bot_clock_x1 = x0 + clock_w + suffix_w;
     }
 
 
@@ -10067,6 +10096,18 @@ static bool update_line_hit(int x)
 // alone. Same arbitration-by-x as update_line_hit(), for the same reason: the
 // bottom edge strip owns every press down here, so a target on the bar has to
 // be recognised inside bottom_edge_swipe_cb() or it does not exist.
+// True when x falls on the UTC clock field - the digits AND the "(U-GPS)"
+// suffix, which is one target because it reads as one thing.
+//
+// Same arbitration-by-x as sd_indicator_hit() and update_line_hit(), and for
+// the same reason: the bottom edge strip owns every press down here.
+static bool clock_field_hit(int x)
+{
+    if (s_bot_clock_x0 < 0) return false;
+    const int margin = 12;
+    return x >= (int)s_bot_clock_x0 - margin && x <= (int)s_bot_clock_x1 + margin;
+}
+
 static bool sd_indicator_hit(int x)
 {
     if (!s_bot_diag_dot) return false;
@@ -10087,27 +10128,24 @@ void ui_set_update_line(const char *text, uint32_t colour)
     update_line_blink_stop();          // any normal text-set ends a pulse in progress
     const char *t = text ? text : "";
 
-    // Font stays at the ORIGINAL montserrat_24 - the operator's wording is
-    // ~20 characters in every state, which fits the ~270 px between the SD text
-    // (ends x=254) and the clock (starts x=534), measured on the real bar.
-    //
-    // The smaller sizes below are a SAFETY NET, not the normal path: they only
-    // engage if a string genuinely will not fit, which today means an unusually
-    // long version pair. Shrinking beats overlapping - "v1.8.8 - touch to
-    // update" (24 chars) previously ran through the clock and pushed the SD dot
-    // off screen, seen on a device screenshot rather than predicted.
-    static const lv_font_t *fonts[] = {
-        &lv_font_montserrat_24, &lv_font_montserrat_22,
-        &lv_font_montserrat_20, &lv_font_montserrat_18,
-    };
-    const int budget_px = 264;
-    const lv_font_t *use = fonts[0];
-    for (unsigned i = 0; i < sizeof(fonts) / sizeof(fonts[0]); i++) {
-        lv_point_t sz;
-        lv_text_get_size(&sz, t, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        use = fonts[i];
-        if (sz.x <= budget_px) break;
-    }
+    /* ⛔ ALWAYS montserrat_24. NO AUTO-SHRINK.
+     *
+     * This used to pick a smaller font when the string exceeded a 264 px
+     * budget, so that "v1.8.8 - touch to update" could not run through the
+     * clock. The side effect was that a DEVELOPMENT version string -
+     * "v1.16.12-10-gee82625b-dirty", 27 characters from git describe - shrank
+     * on every dev build, and that is the bar the operator reads all day.
+     *
+     * Removed at his explicit instruction, twice, 2026-10-08: "I know it
+     * overlaps - but it is only for me with long working and dirty suffixes",
+     * and "everything run into each other - its supposed to be like that with
+     * me - looks good when fw stay short". A released version is short and
+     * does not overlap; a dev one overlaps and he would rather read it.
+     *
+     * I raised the budget to 330 px first and that was still too narrow, which
+     * is why there is no number here now - any number is a guess at the next
+     * version string. */
+    const lv_font_t *use = &lv_font_montserrat_24;
 
     if (display_lock(20)) {
         lv_obj_set_style_text_font(s_bot_version, use, 0);
@@ -10968,6 +11006,14 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             //
             ESP_LOGI("ui", "update line tapped (x=%d)", (int)p.x);
             s_update_tap_cb();
+        } else if (be_decided == 0 && be_start_x >= 0 && clock_field_hit(be_start_x)) {
+            /* The UTC field opens the GPS page - but only when a GNSS receiver
+             * is actually disciplining the clock. On NTP the tap is ignored:
+             * a page of dashes reads as a receiver that has failed, rather
+             * than as no receiver at all. gps_status_view_open() makes that
+             * decision itself, so there is one place it lives. */
+            ESP_LOGI("ui", "UTC field tapped (x=%d)", (int)be_start_x);
+            gps_status_view_open();
         } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
             ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }

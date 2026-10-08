@@ -21,6 +21,7 @@
 #include "audio.h"          // audio_ring_backlog_pairs - spectrum staleness               // ui_get_*, ui_set_zoom
 #include "qmx_term.h"         // /api/term
 #include "ui/qmx_term_view.h" // the dev "term_view" action
+#include "ui/gps_status_view.h" // the dev "gps_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
@@ -888,7 +889,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         // these two labels "can never disagree" - they had already diverged,
         // which is the argument for deriving the string in ONE place.
         time_sync_source_t ts = time_sync_get_effective_source();
-        const char *tsn = ts == TIME_SOURCE_UNIT_GPS ? "GPS"
+        /* "U-GPS" for a receiver on the Tab5 (PORT.A Unit GPS or the M-Bus
+         * Module GPS), "GPS" only for the QMX's own - the operator asked for
+         * the two to be distinguishable, 2026-10-08. The browser prints this
+         * string verbatim inside UTC(...), so there is no JS side to change.
+         * The other two copies of this switch are in util/status.c (bottom
+         * bar) and ui/ft8_time_modal.c. */
+        const char *tsn = ts == TIME_SOURCE_UNIT_GPS ? "U-GPS"
                         : ts == TIME_SOURCE_SNTP   ? "NTP"
                         : ts == TIME_SOURCE_QMX    ? (time_sync_qmx_gps_confirmed() ? "GPS" : "QMX")
                         : ts == TIME_SOURCE_RTC    ? "RTC"
@@ -1818,6 +1825,30 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             if (cJSON_IsBool(kbj)) qmx_term_view_set_keyboard(cJSON_IsTrue(kbj));
             display_unlock();
         }
+    } else if (action && strcmp(action, "gps_view") == 0) {
+        /* Hidden dev action, same reason as "term_view" above: open or close
+         * the GPS page from here, so its layout can be checked on a screenshot
+         * instead of asking the operator to tap the UTC field. The reply says
+         * whether it actually opened - it refuses when no GNSS receiver is
+         * disciplining the clock, and that refusal is the thing worth seeing.
+         *   {"action":"gps_view","open":true} */
+        cJSON *o = cJSON_GetObjectItem(root, "open");
+        bool want = cJSON_IsBool(o) ? cJSON_IsTrue(o) : true;
+        bool avail = gps_status_view_available();
+        bool open_now = false;
+        if (display_lock(500)) {
+            if (want) gps_status_view_open();
+            else      gps_status_view_close();
+            open_now = gps_status_view_is_open();
+            display_unlock();
+        }
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        char out[96];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"open\":%s,\"source_available\":%s}",
+                 open_now ? "true" : "false", avail ? "true" : "false");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "time_redetect") == 0) {
         // Developer escape hatch: re-arm the once-per-boot QMX GPS auto-detection.
         // See time_sync_force_redetect() for why a reboot is not a usable way to

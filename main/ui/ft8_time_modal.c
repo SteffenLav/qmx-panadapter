@@ -66,10 +66,12 @@ static const char *active_proto_label(void)
 static const char *active_source_label(void)
 {
     switch (time_sync_get_effective_source()) {   // current authority, not last writer
-        // The Unit GPS says "GPS" like every other GPS authority - origin is
-        // told apart by the bottom-bar chip and the apply logs, not by a new
-        // word here, and the SS cycle below stays FT8/NTP/QMX.
-        case TIME_SOURCE_UNIT_GPS: return "GPS";
+        // "U-GPS" - a receiver on the Tab5 itself, as against the QMX's own
+        // GPS below. This used to say "GPS" on the argument that the origin
+        // was visible from the bottom-bar chip and the apply logs; the
+        // operator asked for the word itself to say which, 2026-10-08. The SS
+        // cycle below still stays FT8/NTP/QMX.
+        case TIME_SOURCE_UNIT_GPS: return "U-GPS";
         case TIME_SOURCE_SNTP:   return "NTP";
         case TIME_SOURCE_QMX:    return time_sync_qmx_gps_confirmed() ? "GPS" : "QMX";
         case TIME_SOURCE_FT8:    return active_proto_label();   // FT8 or FT4

@@ -125,7 +125,8 @@ static bool cell_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1], int row, int
 }
 
 static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
-                     const unit_gps_info_t *in)
+                     const unit_gps_info_t *in,
+                     gps_page_marker_t *markers, int *n_markers)
 {
     /* Satellites FIRST, grid dots second, so a dot never lands on top of a
      * satellite label. */
@@ -155,18 +156,72 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         if (col < PLOT_X0) col = PLOT_X0;
         if (col + len > GPS_PAGE_COLS) col = GPS_PAGE_COLS - len;
         put(lines, y, col, txt);
+
+        if (markers && n_markers && *n_markers < GPS_PAGE_MAX_MARKERS) {
+            gps_page_marker_t *m = &markers[(*n_markers)++];
+            m->row    = y;
+            m->col    = col;
+            m->snr_db  = s->snr_db;
+            m->used    = s->used;
+            m->compass = false;
+            snprintf(m->text, sizeof(m->text), "%s", txt);
+        }
     }
 
-    /* Dotted rings at 0, 30 and 60 degrees elevation, then the two axes. The
-     * step is in whole degrees of azimuth: fine enough that the rim reads as a
-     * circle, coarse enough that it stays dotted rather than solid. */
-    for (int elev = 0; elev <= 60; elev += 30) {
-        double r = (90.0 - elev) / 90.0;
-        for (int a = 0; a < 360; a += 5) {
-            double rad = a * M_PI / 180.0;
-            int x = PLOT_CX + (int)lround(sin(rad) * r * PLOT_RX);
-            int y = PLOT_CY - (int)lround(cos(rad) * r * PLOT_RY);
-            if (cell_free(lines, y, x)) put_ch(lines, y, x, '.');
+    /* Dotted rings at 0, 30 and 60 degrees elevation.
+     *
+     * ⭐ SCANNED BY ROW, NOT BY ANGLE. Stepping round the circle in degrees
+     * puts two and three dots side by side on the rows where the ellipse is
+     * flattest - it is wider than it is tall, so equal angular steps are not
+     * equal arc steps - and the ring reads as a ragged band rather than a
+     * line. Operator, 2026-10-08: "only ONE dot per line - not 2 or 3".
+     *
+     * One row at a time, solving the ellipse for x, gives exactly one dot per
+     * side per row and a clean oval. */
+    /* TWO rings: the horizon rim and one HALF WAY in, which is 45 degrees of
+     * elevation. The radio's plot has both; the three evenly-spaced rings this
+     * code drew first were my invention and crowded a 52-column plot. */
+    for (int elev = 0; elev <= 45; elev += 45) {
+        double k  = (90.0 - elev) / 90.0;
+        double rx = k * PLOT_RX;
+        double ry = k * PLOT_RY;
+        if (ry < 1.0) continue;
+        for (int y = PLOT_CY - (int)lround(ry); y <= PLOT_CY + (int)lround(ry); y++) {
+            double dy = (double)(y - PLOT_CY) / ry;
+            if (dy < -1.0) dy = -1.0;
+            if (dy >  1.0) dy =  1.0;
+            int dx = (int)lround(rx * sqrt(1.0 - dy * dy));
+            /* Where the ring is narrow - the top and bottom of the small
+             * inner rings - the left and right solutions land within a cell
+             * or two of each other and read as a blob. One dot there. */
+            if (dx <= 1) {
+                if (cell_free(lines, y, PLOT_CX)) put_ch(lines, y, PLOT_CX, '.');
+            } else {
+                if (cell_free(lines, y, PLOT_CX - dx)) put_ch(lines, y, PLOT_CX - dx, '.');
+                if (cell_free(lines, y, PLOT_CX + dx)) put_ch(lines, y, PLOT_CX + dx, '.');
+            }
+        }
+
+        /* The row scan alone leaves the TOP AND BOTTOM of the oval open: the
+         * ellipse is twice as wide as it is tall, so its flattest arcs cross
+         * many columns within one row. A second pass by column closes them,
+         * and only places a dot where the row is clear for two cells either
+         * side - which keeps the "one dot per line" rule that the row scan
+         * exists to satisfy. */
+        for (int x = PLOT_CX - (int)lround(rx); x <= PLOT_CX + (int)lround(rx); x++) {
+            double dxn = (double)(x - PLOT_CX) / rx;
+            if (dxn < -1.0) dxn = -1.0;
+            if (dxn >  1.0) dxn =  1.0;
+            int dy2 = (int)lround(ry * sqrt(1.0 - dxn * dxn));
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                int y = PLOT_CY + sgn * dy2;
+                if (!cell_free(lines, y, x))     continue;
+                if (!cell_free(lines, y, x - 1)) continue;
+                if (!cell_free(lines, y, x + 1)) continue;
+                if (!cell_free(lines, y, x - 2)) continue;
+                if (!cell_free(lines, y, x + 2)) continue;
+                put_ch(lines, y, x, '.');
+            }
         }
     }
     for (int y = PLOT_CY - PLOT_RY; y <= PLOT_CY + PLOT_RY; y++) {
@@ -176,16 +231,66 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         if (cell_free(lines, PLOT_CY, x)) put_ch(lines, PLOT_CY, x, '.');
     }
 
-    /* Compass labels. Azimuth, not a clock face: 0 north at the top. */
-    put(lines, PLOT_CY - PLOT_RY, PLOT_CX, "0");
-    put(lines, PLOT_CY + PLOT_RY, PLOT_CX - 1, "180");
-    put(lines, PLOT_CY, PLOT_CX - PLOT_RX - 3, "270");
-    put(lines, PLOT_CY, GPS_PAGE_COLS - 2, "90");
+    /* Compass labels. Azimuth, not a clock face: 0 north at the top. Emitted
+     * as markers too, so the view can draw them BLUE the way the radio does. */
+    struct { int r, c; const char *t; } cmp[4] = {
+        { PLOT_CY - PLOT_RY, PLOT_CX,                "0"   },
+        { PLOT_CY + PLOT_RY, PLOT_CX - 1,            "180" },
+        { PLOT_CY,           PLOT_CX - PLOT_RX - 3,  "270" },
+        { PLOT_CY,           GPS_PAGE_COLS - 2,      "90"  },
+    };
+    for (int i = 0; i < 4; i++) {
+        put(lines, cmp[i].r, cmp[i].c, cmp[i].t);
+        if (markers && n_markers && *n_markers < GPS_PAGE_MAX_MARKERS) {
+            gps_page_marker_t *m = &markers[(*n_markers)++];
+            m->row = cmp[i].r;
+            m->col = cmp[i].c;
+            m->snr_db = -1;
+            m->used = false;
+            m->compass = true;
+            snprintf(m->text, sizeof(m->text), "%s", cmp[i].t);
+        }
+    }
+}
+
+/* Elevation, azimuth and SNR are each left BLANK when the receiver did not
+ * report them, exactly as the QMX leaves them. Printing 0 or -1 would read as
+ * a measurement. */
+int gps_page_sat_rows(const unit_gps_info_t *in, gps_page_satrow_t *out, int max)
+{
+    if (!in || !out || max <= 0) return 0;
+    int n = 0;
+    for (int i = 0; i < in->n_sats && n < max; i++) {
+        const unit_gps_sat_t *s = &in->sat[i];
+        char el[8] = "  ", az[8] = "   ", sn[8] = "  ";
+        if (s->elev_deg >= 0) snprintf(el, sizeof(el), "%2d", s->elev_deg);
+        if (s->azim_deg >= 0) snprintf(az, sizeof(az), "%3d", s->azim_deg);
+        if (s->snr_db   >= 0) snprintf(sn, sizeof(sn), "%2d", s->snr_db);
+        snprintf(out[n].text, sizeof(out[n].text), "%3d %s %s %s  %s",
+                 s->prn, el, az, sn, unit_gps_constellation(s->talker));
+        out[n].snr_db = s->snr_db;
+        out[n].used   = s->used;
+        n++;
+    }
+    return n;
+}
+
+/* Strong green, usable amber, weak grey - and an UNTRACKED satellite dimmer
+ * still. A sky full of untracked satellites is what a bad antenna looks like,
+ * and it must not look the same as a sky full of good ones. */
+uint32_t gps_page_snr_colour(int snr_db)
+{
+    if (snr_db < 0)   return 0x707070;
+    if (snr_db >= 30) return 0x4CD964;
+    if (snr_db >= 20) return 0xE8C040;
+    return 0xA0A0A0;
 }
 
 void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
-                     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1])
+                     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                     gps_page_marker_t *markers, int *n_markers)
 {
+    if (n_markers) *n_markers = 0;
     for (int r = 0; r < GPS_PAGE_ROWS; r++) {
         memset(lines[r], ' ', GPS_PAGE_COLS);
         lines[r][GPS_PAGE_COLS] = '\0';
@@ -277,19 +382,21 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
         return;
     }
 
-    /* Satellite table. Elevation, azimuth and SNR are each blank when the
-     * receiver did not report them, exactly as the QMX leaves them blank. */
-    for (int i = 0; i < in->n_sats && TABLE_Y0 + i < GPS_PAGE_ROWS; i++) {
-        const unit_gps_sat_t *s = &in->sat[i];
-        char row[48];
-        char el[8] = "  ", az[8] = "   ", sn[8] = "  ";
-        if (s->elev_deg >= 0) snprintf(el, sizeof(el), "%2d", s->elev_deg);
-        if (s->azim_deg >= 0) snprintf(az, sizeof(az), "%3d", s->azim_deg);
-        if (s->snr_db   >= 0) snprintf(sn, sizeof(sn), "%2d", s->snr_db);
-        snprintf(row, sizeof(row), "%3d %s %s %s  %s",
-                 s->prn, el, az, sn, unit_gps_constellation(s->talker));
-        put(lines, TABLE_Y0 + i, 0, row);
+    /* Satellite table - the first screenful. The view scrolls the full list
+     * from gps_page_sat_rows(), which formats exactly these strings, so the
+     * scrolled text and the text checked here cannot drift apart. */
+    {
+        /* Only the rows that fit on the grid, and on the STACK - twelve rows
+         * is about 400 bytes. The static array this used to be was 32 rows in
+         * .bss, and internal .bss comes straight out of the DMA pool: with it
+         * the SD card would not mount at all (2026-10-08, "DMA free=1235 B,
+         * could not take 1024 B"). See project_internal_bss_root_cause. */
+        gps_page_satrow_t rows[GPS_PAGE_TABLE_ROWS];
+        int n = gps_page_sat_rows(in, rows, GPS_PAGE_TABLE_ROWS);
+        for (int i = 0; i < n; i++) {
+            put(lines, TABLE_Y0 + i, 0, rows[i].text);
+        }
     }
 
-    draw_sky(lines, in);
+    draw_sky(lines, in, markers, n_markers);
 }
