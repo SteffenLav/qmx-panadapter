@@ -49,6 +49,16 @@ extern "C"
 /// Costas 7x7, NCOSTAS=1 ("original") - the same array for all three blocks.
 extern const uint8_t kJS8_Costas_pattern[7];
 
+/* ⭐ JS8 HAS NO GRAY CODING, and this identity map is how that is said in
+ * code rather than as a special case in the inner loop.
+ *
+ * FT8 maps each 3-bit group through kFT8_Gray_map before choosing a tone;
+ * genjs8.f90 builds the tone as c0*4 + c1*2 + c2, and js8dec.f90's bit metrics
+ * group the tones the same plain-binary way. Feeding the decoder this map
+ * instead of a branch keeps the extraction function shared and makes the
+ * difference a table, where every other FT8-vs-JS8 difference already lives. */
+extern const uint8_t kJS8_Gray_map[8];
+
 /// The (174,87) code, for bp_decode_code().
 extern const ftx_ldpc_code_t kJS8_LDPC_code_174_87;
 

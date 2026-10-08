@@ -1,5 +1,7 @@
 #include "decode.h"
 #include "constants.h"
+#include "js8.h"
+#include "js8_message.h"
 #include "crc.h"
 #include "ldpc.h"
 
@@ -168,7 +170,9 @@ static void heapify_up(ftx_candidate_t heap[], int heap_size);
 
 static void ftx_normalize_logl(float* log174);
 static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
+static void ft8_extract_symbol(const WF_ELEM_T* wf, const uint8_t* gray, float* logl);
+static int  ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate);
+static int  js8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate);
 #if FT8_MULTI_SYMBOL_FALLBACK  /* off: see ftx_decode_candidate() */
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
 static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
@@ -184,7 +188,11 @@ static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candid
     return wf->mag + offset;
 }
 
-static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+/* Shared by FT8 and JS8, which have the SAME sync layout - three 7-symbol
+ * groups at 0, 36 and 72 - and different Costas arrays. Passing the array in
+ * keeps one scoring body rather than a copy that can drift. */
+static int ft8_like_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate,
+                               const uint8_t* costas)
 {
     int score = 0;
     int num_average = 0;
@@ -216,7 +224,7 @@ static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             // ++num_average;
 
             // Check only the neighbors of the expected symbol frequency- and time-wise
-            int sm = kFT8_Costas_pattern[k]; // Index of the expected bin
+            int sm = costas[k]; // Index of the expected bin
             if (sm > 0)
             {
                 // look at one frequency bin lower
@@ -315,7 +323,9 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
 {
-    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
+    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) =
+        (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score :
+        (wf->protocol == FTX_PROTOCOL_JS8) ? js8_sync_score : ft8_sync_score;
     int num_tones = ftx_protocol_num_tones(wf->protocol);
 
     int heap_size = 0;
@@ -402,7 +412,19 @@ static void ft4_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
     }
 }
 
-static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+{
+    return ft8_like_sync_score(wf, candidate, kFT8_Costas_pattern);
+}
+
+/* JS8 Normal, NCOSTAS=1: the same array for all three sync groups. */
+static int js8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+{
+    return ft8_like_sync_score(wf, candidate, kJS8_Costas_pattern);
+}
+
+static void ft8_like_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                       const uint8_t* gray, float* log174)
 {
     const WF_ELEM_T* mag = get_cand_mag(wf, cand); // Pointer to 8 magnitude bins of the first symbol
 
@@ -424,7 +446,7 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
         }
         else
         {
-            ft8_extract_symbol(mag + (sym_idx * wf->block_stride), log174 + bit_idx);
+            ft8_extract_symbol(mag + (sym_idx * wf->block_stride), gray, log174 + bit_idx);
         }
     }
 }
@@ -459,7 +481,7 @@ static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_ca
         else if (k + 1 >= FT8_ND)
         {
             // Last symbol (odd count): just use single-symbol
-            ft8_extract_symbol(mag + (sym_idx_1 * wf->block_stride), log174 + bit_idx);
+            ft8_extract_symbol(mag + (sym_idx_1 * wf->block_stride), kFT8_Gray_map, log174 + bit_idx);
         }
         else
         {
@@ -612,8 +634,81 @@ static void ft8_extract_symbols(const ftx_waterfall_t* wf, const ftx_candidate_t
     }
 }
 
+static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    ft8_like_extract_likelihood(wf, cand, kFT8_Gray_map, log174);
+}
+
+/* JS8 shares FT8's symbol layout exactly - sync at 0, 36 and 72, data at
+ * 7..35 and 43..71 - so only the tone-to-bits map differs, and for JS8 that
+ * map is the identity. */
+static void js8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    ft8_like_extract_likelihood(wf, cand, kJS8_Gray_map, log174);
+}
+
+/* ⭐ THE JS8 DECODE PATH, DELIBERATELY SEPARATE FROM THE FT8 ONE.
+ *
+ * After the LDPC the two have nothing in common: FT8 takes the first 91 bits
+ * as payload+CRC-14, while JS8's codeword columns are PERMUTED, its payload is
+ * the LAST 87 bits of the un-permuted word, and its CRC is 12 bits with an XOR
+ * of 42. Threading that through ftx_decode_candidate() as a third branch would
+ * have put four conditionals inside a function whose FT8 behaviour is measured
+ * against a 35-WAV corpus. A separate function leaves that path byte for byte
+ * as it was.
+ *
+ * ⛔ UNPROVEN ON A REAL SIGNAL. Every piece is host-tested - the LDPC against
+ * JS8Call's own Fortran, the message layer against hand-computed vectors - but
+ * nothing has yet decoded a frame produced by anything other than this code.
+ * A JS8Call station is the only arbiter; a second Tab5 is not. */
+static bool js8_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                 int max_iterations, ftx_message_t* message,
+                                 ftx_decode_status_t* status)
+{
+    status->snr_db = estimate_snr_db(wf, cand);
+
+    float log174[FTX_LDPC_N];
+    js8_extract_likelihood(wf, cand, log174);
+    ftx_normalize_logl(log174);
+
+    uint8_t plain174[FTX_LDPC_N];
+    /* stall_limit 0: the measurement that chose 8 was taken on an FT8 corpus
+     * with FT8's parity matrix, and an FT8-derived LDPC limit applied to
+     * another code has already hurt FT4 once. See the note in ldpc.c. */
+    bp_decode_code(&kJS8_LDPC_code_174_87, log174, max_iterations, 0,
+                   plain174, &status->ldpc_errors);
+    if (status->ldpc_errors > 0) return false;
+
+    /* Undo colorder, then take the payload from the END: encode174.f90 lays
+     * out [parity(87) | message(87)] and permutes afterwards. */
+    uint8_t itmp[JS8_LDPC_N];
+    for (int i = 0; i < JS8_LDPC_N; ++i) itmp[i] = plain174[kJS8_LDPC_colorder[i]];
+
+    const uint8_t* payload = itmp + JS8_LDPC_M;
+    if (!js8_check_payload_crc(payload)) return false;
+
+    /* The 75 message bits - 72-bit frame then the 3-bit transmission type -
+     * packed MSB first into the shared payload buffer. The caller unpacks the
+     * frame with js8_unpack_directed()/js8_unpack_heartbeat(). */
+    memset(message->payload, 0, FTX_PAYLOAD_LENGTH_BYTES);
+    for (int i = 0; i < JS8_MSG_BITS; ++i)
+    {
+        if (payload[i]) message->payload[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+    }
+
+    status->crc_extracted = 0;
+    status->crc_calculated = 0;
+    message->hash = 0;
+    return true;
+}
+
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
+    if (wf->protocol == FTX_PROTOCOL_JS8)
+    {
+        return js8_decode_candidate(wf, cand, max_iterations, message, status);
+    }
+
     // Estimate SNR early
     status->snr_db = estimate_snr_db(wf, cand);
 
@@ -818,7 +913,7 @@ static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl)
 }
 
 // Compute unnormalized log likelihood log(p(1) / p(0)) of 3 message bits (1 FSK symbol)
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
+static void ft8_extract_symbol(const WF_ELEM_T* wf, const uint8_t* gray, float* logl)
 {
     // Cleaned up code for the simple case of n_syms==1
 #if 1
@@ -826,7 +921,7 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
 
     for (int j = 0; j < 8; ++j)
     {
-        s2[j] = WF_ELEM_MAG(wf[kFT8_Gray_map[j]]);
+        s2[j] = WF_ELEM_MAG(wf[gray[j]]);
     }
 
     logl[0] = max4(s2[4], s2[5], s2[6], s2[7]) - max4(s2[0], s2[1], s2[2], s2[3]);
