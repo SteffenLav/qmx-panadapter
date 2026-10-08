@@ -250,23 +250,30 @@ void ft8_robot_tick(int64_t slot_sec)
     if (this_parity == s_last_parity) s_parity_run++;
     else { s_last_parity = this_parity; s_parity_run = 1; }
 
-    // Build TX1 exactly like the manual row_activate() path: our reply goes on a
-    // clear tone (not the caller's own), parity derived from their last_utc.
-    // Honours TX hold, same as every other TX path.
+    // Build the opening message through the SAME function the manual
+    // decode-list tap uses, rather than a second copy of the decision.
+    //
+    // ⛔ IT WAS A SECOND COPY, AND THE TWO DISAGREED. This built TX1 with
+    // extra=NULL unconditionally - a grid - so "Skip TX1" was honoured on a
+    // manual tap and silently ignored by the robot. The comment here even said
+    // "exactly like the manual row_activate() path" while doing something else.
+    // Routing through ft8_qso_build_manual_reply() makes that true, and brings
+    // JS8 with it: JS8 has no locator field in a Directed frame, so its opening
+    // message IS the report, and that rule now lives in one place.
+    //
+    // Safe for this caller by construction: the ladder-advance branch inside
+    // that function needs the heard message to be addressed to US, and the scan
+    // above admits only is_cq() rows. So it reduces to exactly the Field Day
+    // gate plus the report-or-grid choice - and `is_fresh_grid` is always true
+    // here, which is why it is not read.
+    //
+    // Our reply still goes on a clear tone (not the caller's own) with parity
+    // derived from their last_utc, and still honours TX hold like every other
+    // TX path - all of that is inside ft8_tx_build_request(), unchanged.
     int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
-    // ⭐ JS8 has no grid opening at all - a Directed frame has no locator field
-    // - so the opening message IS the report (see ft8_qso.c's `js8` note and
-    // js8_text.c). Passing NULL here would build nothing JS8 can send.
-    char rpt[8];
-    const char *extra = NULL;
-    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
-        ft8_qso_fmt_report(t->last_snr_db, rpt, sizeof(rpt));
-        extra = rpt;
-    }
-    if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, t->call, reply_freq_hz,
-                              t->last_utc, extra, &req, err, sizeof(err))) {
+    if (!ft8_qso_build_manual_reply(t, reply_freq_hz, &req, NULL, err, sizeof(err))) {
         ESP_LOGW(TAG, "robot build_request(%s) failed: %s", t->call, err);
         return;
     }

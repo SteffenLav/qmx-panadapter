@@ -647,7 +647,9 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
 
     if (is_fresh_grid) *is_fresh_grid = fresh_grid;
 
-    ESP_LOGI(TAG, "manual reply to %s: heard '%s' -> %s%s",
+    // "reply", not "manual reply": ft8_robot.c calls this too, so the old
+    // wording made an automatic pounce read as an operator tap in the log.
+    ESP_LOGI(TAG, "reply to %s: heard '%s' -> %s%s",
              heard->call, heard->last_text,
              extra ? extra : "(grid)", fresh_grid ? " [fresh]" : "");
 
