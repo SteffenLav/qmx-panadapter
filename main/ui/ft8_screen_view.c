@@ -2875,10 +2875,12 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
     settings_set_ft8_freq_hz(freq_hz);
 
     ft8_op_mode_set(mode);
-    // FT4 TX is always forced through the simulation interlock (see ft8_tx.c's
-    // FT4 SAFETY note) regardless of the drawer's general sim-mode toggle, so
-    // the breathing red border must track the sub-mode too, not just that
-    // checkbox.
+    // Re-assert the breathing red simulation border from the setting. It does
+    // NOT depend on the sub-mode: this comment used to say "FT4 TX is always
+    // forced through the simulation interlock (see ft8_tx.c's FT4 SAFETY note)"
+    // and neither the interlock nor the note exists - see ui.c. The call stays
+    // because a preset tap repaints a good deal of the screen and the border
+    // has to be re-foregrounded over it.
     ui_refresh_sim_mode_indicator();
     ft8_screen_clear();  // flush stale decodes from previous mode/band
     if (s_lbl_mode) {

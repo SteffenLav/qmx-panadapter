@@ -1297,8 +1297,10 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             sleep_until(t0, (int64_t)i * symbol_period_us);
             tx_cmd(t0, sim, "TA%.2f;", (double)freq);
             // Live power/SWR mid-burst query is FT8-only timing (tuned to FT8's
-            // 160 ms symbol slack at symbols 6/14); skipped for FT4 (forced sim
-            // anyway - !sim is always false here when is_ft4).
+            // 160 ms symbol slack at symbols 6/14) and is skipped for FT4 on
+            // those grounds alone - see the note on the branch below. This
+            // comment used to add "forced sim anyway - !sim is always false here
+            // when is_ft4", contradicting the correction eight lines below it.
 #if FT8_TX_SEND_LIVE
             // FT8 only. FT4's symbol period is 48 ms and a CDC write is bounded
             // at 50 ms, so a mid-burst query does not fit in the slack and would

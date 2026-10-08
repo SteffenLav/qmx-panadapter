@@ -3503,8 +3503,9 @@ static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_check_wspr_test = NULL;       // the same setting, WSPR page ("Test station")
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
-static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
-                                                  // simulator (ft8_sim.c) is FT8-only for now
+static bool      s_sim_mode_locked = false;      // NEVER true since #256 - kept with the
+                                                  // guard pattern apply_sim_mode_lock()
+                                                  // documents, not as a live gate
 
 static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
@@ -3515,7 +3516,7 @@ static lv_obj_t *s_dropdown_wf_speed = NULL;
 static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
-static void apply_sim_mode_lock(bool ft4);   // defined below, used by ui_refresh_sim_mode_indicator() above it
+static void apply_sim_mode_lock(void);   // defined below, used by ui_refresh_sim_mode_indicator() above it
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -3892,21 +3893,29 @@ void ui_set_sim_mode_indicator(bool active)
 }
 
 // Re-evaluate and apply the breathing border from BOTH of its sources: the
-// drawer's general "FT8 Simulation Mode" toggle (s_sim_mode_en) AND the
-// FT8/FT4 sub-mode itself - FT4 TX is unconditionally forced through the same
-// simulation interlock regardless of this toggle (see ft8_tx.c's FT4 SAFETY
-// note), so the visual warning must follow that, not just the checkbox.
-// Also re-locks the checkbox itself (apply_sim_mode_lock) - the phantom-
-// station simulator it controls is FT8-only (see that function's comment),
-// so the two concerns share every call site and are kept together here.
-// Call this (instead of ui_set_sim_mode_indicator directly) anywhere either
-// source can change: the drawer checkbox callback, drawer build, and the
-// FT8/FT4 preset dropdown (ft8_screen_view.c's apply_freq_preset()).
+// drawer's general "FT8 Simulation Mode" toggle (s_sim_mode_en) - which is now
+// its ONLY source.
+//
+// ⚠ THIS COMMENT USED TO CLAIM "FT4 TX is unconditionally forced through the
+// same simulation interlock regardless of this toggle (see ft8_tx.c's FT4 SAFETY
+// note)". There is no such interlock and no such note: ft8_tx_run()'s `sim` is
+// settings' sim_mode_en and nothing else, real FT4 QSOs have completed on air,
+// and ft8_tx.c/ft8_test.c already carry their own corrections of the same claim
+// (2026-08-09). This was the copy nobody went back for. A comment describing a
+// TX safety boundary that does not exist is the worst kind to leave: the next
+// reader trusts it instead of checking.
+//
+// It still pairs with apply_sim_mode_lock(), which re-asserts the checkbox as
+// usable - also no longer sub-mode dependent (see its own comment), but kept
+// together here so the indicator and the control can never disagree.
+//
+// Call this (instead of ui_set_sim_mode_indicator directly) anywhere the
+// setting can change: the drawer checkbox callback, drawer build, and the
+// preset dropdown (ft8_screen_view.c's apply_freq_preset()).
 void ui_refresh_sim_mode_indicator(void)
 {
-    bool ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
     ui_set_sim_mode_indicator(s_sim_mode_en);
-    apply_sim_mode_lock(ft4);
+    apply_sim_mode_lock();
 }
 
 // 1 Hz keepalive: re-foregrounds the border (see comment above s_sim_border)
@@ -11554,9 +11563,12 @@ static void drawer_check_pskrep_cb(lv_event_t *e)
 // (dim + DISABLED + an early return in the handler) is the one this file uses
 // wherever a control must be genuinely unusable, and the next thing that needs
 // locking should copy it rather than reinvent it.
-static void apply_sim_mode_lock(bool ft4)
+static void apply_sim_mode_lock(void)
 {
-    (void)ft4;
+    // The `bool ft4` parameter is gone with the lock it used to drive. It was
+    // ignored - `(void)ft4` - so every caller computed a sub-mode only to throw
+    // it away, and a signature that still asked for it kept reading as a
+    // protocol-based interlock.
     s_sim_mode_locked = false;
     if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, LV_OPA_COVER, 0);
     if (s_check_sim_mode) {
@@ -11571,7 +11583,9 @@ static void apply_sim_mode_lock(bool ft4)
 // toggle site itself.
 static void drawer_check_sim_mode_cb(lv_event_t *e)
 {
-    if (s_sim_mode_locked) return;   // FT4 - see apply_sim_mode_lock()
+    // Never taken: s_sim_mode_locked has been permanently false since #256.
+    // Kept as the guard half of the pattern apply_sim_mode_lock() documents.
+    if (s_sim_mode_locked) return;
     lv_obj_t *cb = lv_event_get_target(e);
     s_sim_mode_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_sim_mode_en(s_sim_mode_en);
@@ -14317,7 +14331,7 @@ static void drawer_build(void)
         s_sim_mode_en = scfg_sim.sim_mode_en;
         s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
         lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
-        ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
+        ui_refresh_sim_mode_indicator();   // also re-asserts the checkbox (apply_sim_mode_lock)
         y += 56;
     }
     // The km/miles switch alone, for the WSPR page (DRAWER_SEC_WSPRDIST). Same

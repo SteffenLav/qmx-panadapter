@@ -340,11 +340,13 @@ void ui_raise_edge_strips(void);
 // drawer-build time to restore the saved NVS state.
 void ui_set_sim_mode_indicator(bool active);
 
-// Re-evaluate the breathing red border from both its sources (the drawer's
-// general sim-mode toggle AND the FT8/FT4 sub-mode, since FT4 TX is always
-// forced through the same interlock regardless of the toggle - see ft8_tx.c's
-// FT4 SAFETY note). Call this after either source changes, instead of
-// ui_set_sim_mode_indicator() directly.
+// Re-evaluate the breathing red border from the drawer's general sim-mode
+// toggle, which is its only source. Call this after that setting changes,
+// instead of ui_set_sim_mode_indicator() directly.
+//
+// ⚠ This used to say the border also followed the FT8/FT4 sub-mode "since FT4
+// TX is always forced through the same interlock". No such interlock exists -
+// see the corrected note at the implementation in ui.c.
 void ui_refresh_sim_mode_indicator(void);
 
 // Bottom-bar right zone: strength fan, SSID (or "off"), then the IP pinned to
