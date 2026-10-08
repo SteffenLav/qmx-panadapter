@@ -118,11 +118,46 @@ distinct from a report of 0 dB.
    right: generic over the dimensions, but the table SYMBOLS were named
    directly in the loops. Commit `8d8f556` passes the tables in as an
    `ftx_ldpc_code_t`, so FT8 and JS8 share one engine. FT8 decode is unchanged
-   - 368 unique decodes / 235 ground-truth hits over the 35-WAV corpus before
-   and after, per-file identical.
+   - per-file identical over the 35-WAV corpus before and after.
+
+   ⚠ The absolute figures first recorded here, "368 unique decodes / 235
+   ground-truth hits", do not reproduce. Re-measured 2026-10-08 with the build
+   line in `test/ft8_decode_bench.c`'s header and the loop beside it, the
+   corpus gives **403 unique / 260 ground-truth hits**, and it gives the same
+   at `8d8f5568`, at `7f42fb57` and with the TX path added - per-file
+   identical at all three. So the no-regression claim stands and only the two
+   numbers were wrong. Use 403/260 as the gate.
 
 Also confirmed as written: Costas `{4,2,5,6,1,3,0}` for all three sync blocks
 (NCOSTAS=1), NSPS 1920, 79 symbols, KK=87, ND=58, NS=21, 15 s cycle.
+
+---
+
+## The TX tone path is built, and checked against genjs8.f90 (2026-10-08)
+
+`js8_encode()` in `js8_codec.c` takes a 72-bit frame and a 3-bit transmission
+type and returns the 79 tones: CRC-12, LDPC(174,87), the colorder permutation
+and the symbol layout. `js8_tones_from_codeword()` is the layout on its own, so
+the decode harness drives the shipped function instead of its own copy.
+
+⭐ **This is the first part of the JS8 work with a real outside arbiter and no
+radio.** `genjs8.f90` does its own message packing - 12 characters of a
+68-character alphabet, not a varicode frame - so none of JS8Call's Qt C++ is
+needed to run it. `tools/js8_tone_arbiter.py` fetches the Fortran at tag
+`v2.3.1`, compiles it with gfortran and compares tone sequences:
+**64 of 64 bit-exact**. That covers the 6-bit word packing, the CRC buffer
+layout, the transmission-type bits, `encode174`, colorder and the tone layout.
+
+⛔ **It does not cover the CRC-12 engine.** `crc12.cpp` is one call into
+`boost::augmented_crc` and Boost is not on this machine, so the arbiter's shim
+feeds the Fortran our own `js8_crc12_raw()`. If that engine is wrong, both
+sides are wrong together and the comparison still passes. The CRC value reaches
+the tones, so a real JS8Call station is still the only arbiter for it.
+
+⛔ **JS8 remains unselectable.** `ftx_protocol_is_implemented()` is still false
+for it: there is no QSO ladder (J4) and no UI (J5), and nothing should be able
+to key a mode whose exchange logic does not exist. The gate stays until those
+land.
 
 ---
 

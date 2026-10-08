@@ -88,6 +88,23 @@ void js8_pack_payload(const uint8_t frame[9], uint8_t itype, uint8_t payload[JS8
 /// one. Returns true when they match.
 bool js8_check_payload_crc(const uint8_t payload[JS8_LDPC_K]);
 
+/// Lay a 174-bit codeword out as the 79 channel symbols: Costas at 0, 36 and
+/// 72, three codeword bits per data symbol as c0*4 + c1*2 + c2.
+///
+/// ⭐ Straight binary, NOT Gray coded - see the note on kJS8_Gray_map above.
+/// Mirrors the itone loop at the end of genjs8.f90 (its k starts at 7 1-based,
+/// and it steps k past the middle sync block at j=30; here that is k=6 and
+/// j==29).
+void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[JS8_NN]);
+
+/// Frame + transmission type -> the 79 tones to key. CRC-12, LDPC(174,87),
+/// colorder and the tone layout, i.e. the whole of genjs8.f90 after the
+/// varicode step.
+///
+/// `frame` is the 9-byte varicode frame from js8_message.h, MSB first.
+/// `tones` receives JS8_NN values in 0..7.
+void js8_encode(const uint8_t frame[9], uint8_t itype, uint8_t tones[JS8_NN]);
+
 #ifdef __cplusplus
 }
 #endif

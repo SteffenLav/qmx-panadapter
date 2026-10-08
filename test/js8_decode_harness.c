@@ -52,26 +52,10 @@ static int g_fail = 0;
 
 static uint8_t g_mag[NUM_BLOCKS * NUM_BINS];
 
-/* The 79 channel symbols, exactly as genjs8.f90 lays them out: Costas at 0, 36
- * and 72 (0-based), data at 7..35 and 43..71, and the tone is the plain binary
- * value of three codeword bits - NO Gray map. */
-static void tones_from_codeword(const uint8_t cw[JS8_LDPC_N], uint8_t itone[JS8_NN])
-{
-    for (int i = 0; i < 7; i++)
-    {
-        itone[i]      = kJS8_Costas_pattern[i];
-        itone[36 + i] = kJS8_Costas_pattern[i];
-        itone[72 + i] = kJS8_Costas_pattern[i];
-    }
-    int k = 6;                       /* genjs8's k starts at 7, 1-based */
-    for (int j = 0; j < JS8_ND; j++)
-    {
-        int i = 3 * j;
-        k++;
-        if (j == 29) k += 7;         /* step over the middle sync block */
-        itone[k] = (uint8_t)(cw[i] * 4 + cw[i + 1] * 2 + cw[i + 2]);
-    }
-}
+/* The tone layout itself is NOT reimplemented here. js8_tones_from_codeword()
+ * is the function the transmitter uses, so this harness drives the real one -
+ * a test that built its own copy would keep passing after the shipped layout
+ * drifted. */
 
 /* An ideal signal: full magnitude on the transmitted tone, a floor elsewhere.
  * `offset` is where the frame starts in the block grid, so the candidate's
@@ -105,10 +89,10 @@ static bool round_trip(const js8_directed_t* in, js8_directed_t* out, int offset
     uint8_t frame[JS8_FRAME_BYTES];
     if (!js8_pack_directed(in, frame)) return false;
 
-    uint8_t payload[JS8_LDPC_K], cw[JS8_LDPC_N], itone[JS8_NN];
-    js8_pack_payload(frame, 0, payload);
-    js8_encode174(payload, cw);
-    tones_from_codeword(cw, itone);
+    /* The transmitter's own entry point, so these decode tests also stand as
+     * the end-to-end TX proof: frame -> CRC-12 -> LDPC -> colorder -> tones. */
+    uint8_t itone[JS8_NN];
+    js8_encode(frame, 0, itone);
 
     /* Corrupt whole SYMBOLS, which is what fading does - not individual bits.
      * Three bits go wrong together each time, so this is a harder load than
@@ -205,12 +189,9 @@ static void test_heartbeat(void)
     snprintf(hb.grid, sizeof(hb.grid), "JO65");
     hb.is_cq = true;
 
-    uint8_t frame[JS8_FRAME_BYTES], payload[JS8_LDPC_K];
-    uint8_t cw[JS8_LDPC_N], itone[JS8_NN];
+    uint8_t frame[JS8_FRAME_BYTES], itone[JS8_NN];
     CHECK(js8_pack_heartbeat(&hb, frame), "CQ pack\n");
-    js8_pack_payload(frame, 0, payload);
-    js8_encode174(payload, cw);
-    tones_from_codeword(cw, itone);
+    js8_encode(frame, 0, itone);
     paint(itone, 1, 10, 250);
 
     ftx_waterfall_t wf;
@@ -310,6 +291,70 @@ static void test_sync_prefers_js8_costas(void)
           "JS8 sync should score the JS8 pattern above FT8's reading of it\n");
 }
 
+/* The tone LAYOUT, checked against genjs8.f90 as structure rather than through
+ * the decoder. The decode tests above would still pass if the sync blocks and
+ * the data symbols were both moved consistently, because the same code lays
+ * them out and reads them back. These checks are read off the Fortran:
+ *   itone(1:7)=icos7a, itone(37:43)=icos7b, itone(73:79)=icos7c
+ *   k=7; do j=1,58; i=3*j-2; k=k+1; if(j.eq.30) k=k+7; itone(k)=...
+ * which puts data at 0-based 7..35 and 43..71 and nothing anywhere else. */
+static void test_tone_layout(void)
+{
+    uint8_t frame[JS8_FRAME_BYTES], tones[JS8_NN];
+    js8_directed_t d = { 0 };
+    snprintf(d.from, sizeof(d.from), "OZ1LAV");
+    snprintf(d.to, sizeof(d.to), "N2VGU");
+    d.cmd = 0;
+    CHECK(js8_pack_directed(&d, frame), "pack for layout test\n");
+
+    js8_encode(frame, 0, tones);
+
+    for (int i = 0; i < 7; i++)
+    {
+        CHECK(tones[i] == kJS8_Costas_pattern[i], "sync A at %d\n", i);
+        CHECK(tones[36 + i] == kJS8_Costas_pattern[i], "sync B at %d\n", 36 + i);
+        CHECK(tones[72 + i] == kJS8_Costas_pattern[i], "sync C at %d\n", 72 + i);
+    }
+
+    int data = 0;
+    for (int i = 0; i < JS8_NN; i++)
+    {
+        CHECK(tones[i] < 8, "tone %d out of range: %d\n", i, (int)tones[i]);
+        bool is_sync = (i < 7) || (i >= 36 && i < 43) || (i >= 72);
+        if (!is_sync) data++;
+    }
+    CHECK(data == JS8_ND, "%d data symbols, expected %d\n", data, JS8_ND);
+
+    /* Every data symbol must be the plain binary value of its three codeword
+     * bits - this is the NO-GRAY-MAP rule, and it is the one difference from
+     * FT8 that produces no symptom other than silence. */
+    uint8_t payload[JS8_LDPC_K], cw[JS8_LDPC_N];
+    js8_pack_payload(frame, 0, payload);
+    js8_encode174(payload, cw);
+    int k = 6, mismatches = 0;
+    for (int j = 0; j < JS8_ND; j++)
+    {
+        k++;
+        if (j == 29) k += 7;
+        uint8_t want = (uint8_t)(cw[3 * j] * 4 + cw[3 * j + 1] * 2 + cw[3 * j + 2]);
+        if (tones[k] != want) mismatches++;
+    }
+    CHECK(mismatches == 0, "%d data symbols are not c0*4+c1*2+c2\n", mismatches);
+
+    /* A one-bit change in the frame must move at least one tone. A layout that
+     * dropped the payload on the floor would pass everything above. */
+    uint8_t frame2[JS8_FRAME_BYTES], tones2[JS8_NN];
+    memcpy(frame2, frame, sizeof(frame2));
+    frame2[4] ^= 0x01;
+    js8_encode(frame2, 0, tones2);
+    CHECK(memcmp(tones, tones2, JS8_NN) != 0, "a changed frame gave identical tones\n");
+
+    /* The transmission type is carried too, and is not part of the frame. */
+    uint8_t tones3[JS8_NN];
+    js8_encode(frame, 1, tones3);
+    CHECK(memcmp(tones, tones3, JS8_NN) != 0, "itype did not reach the tones\n");
+}
+
 int main(void)
 {
     printf("JS8 decode path\n");
@@ -319,6 +364,7 @@ int main(void)
     test_heartbeat();
     test_noise_is_rejected();
     test_sync_prefers_js8_costas();
+    test_tone_layout();
 
     if (g_fail) { printf("\nFAILED: %d check(s)\n", g_fail); return 1; }
     printf("\nall checks passed\n");

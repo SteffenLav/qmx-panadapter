@@ -111,3 +111,34 @@ bool js8_check_payload_crc(const uint8_t payload[JS8_LDPC_K])
 
     return carried == js8_crc12_of(frame, itype);
 }
+
+void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[JS8_NN])
+{
+    // Message structure: S7 D29 S7 D29 S7 - identical to FT8's.
+    for (int i = 0; i < 7; ++i)
+    {
+        tones[i]      = kJS8_Costas_pattern[i];
+        tones[36 + i] = kJS8_Costas_pattern[i];
+        tones[72 + i] = kJS8_Costas_pattern[i];
+    }
+
+    int k = 6; // genjs8.f90's k=7, one-based
+    for (int j = 0; j < JS8_ND; ++j)
+    {
+        int i = 3 * j;
+        ++k;
+        if (j == 29)
+            k += 7; // step over the middle sync block (its j.eq.30)
+        tones[k] = (uint8_t)(codeword[i] * 4 + codeword[i + 1] * 2 + codeword[i + 2]);
+    }
+}
+
+void js8_encode(const uint8_t frame[9], uint8_t itype, uint8_t tones[JS8_NN])
+{
+    uint8_t payload[JS8_LDPC_K];
+    uint8_t codeword[JS8_LDPC_N];
+
+    js8_pack_payload(frame, itype, payload);
+    js8_encode174(payload, codeword);
+    js8_tones_from_codeword(codeword, tones);
+}
