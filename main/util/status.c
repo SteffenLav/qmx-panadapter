@@ -10,6 +10,8 @@
 #include "ft8_test.h"
 #include "settings.h"
 #include "unit_gps.h"        // the bottom-bar Unit GPS chip - pipeline state
+#include "gps_autogrid.h"  // station grid from the fix (operator, 2026-10-09)
+#include "ui/gps_page.h"    // gps_page_grid() - Maidenhead from signed degrees
 #include "bsp/m5stack_tab5.h"
 #include "sd_archive.h"
 #include "esp_heap_caps.h"
@@ -657,6 +659,36 @@ static void status_task(void *arg)
                 ui_set_unit_gps_chip(0);   // LISTENING or DEVICE - acquiring
             }
         }
+        /* ⭐ THE STATION GRID, FROM THE FIX. "We also need to set the grid
+         * automatically when we now have the grid from GPS" - operator,
+         * 2026-10-09. my_grid goes out in every FT8 CQ and TX1 and into every
+         * ADIF record, so WHEN this fires is the careful part and lives in
+         * gps_autogrid.c with its own harness: a minute of agreement, and only
+         * when it differs from what is stored.
+         *
+         * ⚠ It overwrites a hand-entered grid, deliberately - operating
+         * portable is the case this is for, and that is exactly the case
+         * where the stored grid is the wrong one. Logged, so the change is
+         * never silent. */
+        {
+            static gps_autogrid_t s_autogrid;
+            static bool           s_autogrid_init;
+            if (!s_autogrid_init) { gps_autogrid_init(&s_autogrid); s_autogrid_init = true; }
+
+            unit_gps_info_t gi;
+            unit_gps_get_info(&gi);
+            char gbuf[7] = { 0 };
+            const char *gps_grid = NULL;
+            if (gi.valid && gi.has_pos) {
+                gps_page_grid(gi.lat_deg, gi.lon_deg, gbuf);
+                if (gbuf[0]) gps_grid = gbuf;
+            }
+            if (gps_autogrid_step(&s_autogrid, gps_grid, cfg.my_grid)) {
+                ESP_LOGI(TAG, "grid from GPS: '%s' -> '%s'", cfg.my_grid, gbuf);
+                settings_set_my_grid(gbuf);
+            }
+        }
+
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
         // Bluetooth, next to it. "Started" and "a mouse is on the other end"
         // are separate facts and the glyph shows both.
