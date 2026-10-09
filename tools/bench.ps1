@@ -745,16 +745,54 @@ function Cmd-Flash {
         # Best effort by design: no IP, no answer, or an older build without
         # the endpoint all just fall through to the flash, which is exactly
         # what used to happen every time anyway.
-        # Step timing. The operator measured 15-20 s between the Tab5 putting
-        # "Now turn on or reboot your QMX/+" on screen (i.e. prepare_for_flash
-        # has already finished) and esptool starting. Everything in that gap is
-        # condition-based with an early exit, so a guess about which step owns
-        # it is worthless - print the real numbers instead.
+        # ⭐ THE RADIO GOES DOWN LAST, NOT FIRST.
+        #
+        # prepare_for_flash used to be the opening move, so the QMX stayed dead
+        # through the capture stop, the port wait, idf.py's build check AND the
+        # whole of esptool's connect/stub/erase phase before a single byte was
+        # written. The operator counted 21 s of that on 2026-10-09 and called it
+        # unacceptable; he was right.
+        #
+        # Nothing before the write needs the radio released - the teardown only
+        # has to happen before the RESET, and esptool resets on its own first
+        # contact. So everything that can be done with the radio alive is done
+        # first, and the teardown is the last step before esptool.
+        #
+        # Measured the same day: pre-flash was 1.8 s and a no-op build 2.4 s, so
+        # the rest of the 21 s was inside esptool. Moving the teardown cannot
+        # shorten esptool - it moves the radio's dead time to START at the write
+        # instead of ~5 s earlier, and takes the build out of it entirely. A
+        # build that is NOT a no-op used to run with the radio down, which on a
+        # cold tree is minutes.
         $swTotal = [Diagnostics.Stopwatch]::StartNew()
         $swStep  = [Diagnostics.Stopwatch]::StartNew()
         $timings = [ordered]@{}
         $mark = { param($name) $timings[$name] = $swStep.Elapsed.TotalSeconds; $swStep.Restart() }
 
+        # 1. Binaries current, radio still up. `idf.py flash` would do this too,
+        #    but it does it AFTER the teardown.
+        $rcBuild = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("build"))
+        if ($rcBuild -ne 0) {
+            Write-Host "Build FAILED (exit $rcBuild) - nothing flashed, radio untouched." -ForegroundColor Red
+            return
+        }
+        & $mark "build (radio still up)"
+
+        # 2. Free the port, radio still up.
+        if ($hadCapture) { Cmd-StopCapture $reg $b }
+        & $mark "stop capture (radio still up)"
+        # Wait for the port to actually open, however the capture was stopped -
+        # and even when there was no capture, since something else on this
+        # machine may hold it. See Wait-PortFree for why a fixed sleep is not
+        # good enough. Not fatal on timeout: esptool's own error is clearer
+        # than anything invented here, and it has not written a byte yet.
+        if (-not (Wait-PortFree $b.com 20)) {
+            Write-Host "$($b.com) still busy after 20 s - flashing anyway, esptool will say who holds it." -ForegroundColor Yellow
+        }
+        & $mark "wait for $($b.com) (radio still up)"
+
+        # 3. NOW drop the radio. Everything from here is the dead window.
+        $swDead = [Diagnostics.Stopwatch]::StartNew()
         if ($b.ip -and $b.ip -ne "UNKNOWN") {
             try {
                 Invoke-WebRequest -Uri "http://$($b.ip)/api/cmd" -Method POST `
@@ -766,25 +804,53 @@ function Cmd-Flash {
                 Write-Host "prepare_for_flash not answered ($($_.Exception.Message)) - flashing anyway." -ForegroundColor DarkYellow
             }
         }
-        & $mark "prepare_for_flash (incl. fixed 0.6 s)"
-        if ($hadCapture) { Cmd-StopCapture $reg $b }
-        & $mark "stop capture"
-        # Wait for the port to actually open, however the capture was stopped -
-        # and even when there was no capture, since something else on this
-        # machine may hold it. See Wait-PortFree for why a fixed sleep is not
-        # good enough. Not fatal on timeout: esptool's own error is clearer
-        # than anything invented here, and it has not written a byte yet.
-        if (-not (Wait-PortFree $b.com 20)) {
-            Write-Host "$($b.com) still busy after 20 s - flashing anyway, esptool will say who holds it." -ForegroundColor Yellow
+        & $mark "prepare_for_flash (RADIO NOW DOWN)"
+
+        # 4. esptool straight onto the prebuilt image, skipping idf.py's own
+        #    startup and build check - both already done above, with the radio
+        #    up. Falls back to `idf.py flash` if anything about the build dir is
+        #    not as expected, because a slower flash beats a clever one that
+        #    does not flash.
+        $buildDir = if ($b.build_dir) { $b.build_dir } else { Join-Path $b.tree "build" }
+        $flashArgs = Join-Path $buildDir "flash_args"
+        $target = $null
+        $pdPath = Join-Path $buildDir "project_description.json"
+        if (Test-Path $pdPath) {
+            try { $target = (Get-Content $pdPath -Raw | ConvertFrom-Json).target } catch { }
         }
-        & $mark "wait for $($b.com) to be released"
-        Write-Host ("Pre-flash took {0:N1}s:" -f $swTotal.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+        $firstWriteAt = $null
+        if ((Test-Path $flashArgs) -and $target) {
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                Push-Location $buildDir
+                try {
+                    & python -m esptool --chip $target -p $b.com -b 460800 `
+                        --before default_reset --after hard_reset `
+                        write_flash "@flash_args" 2>&1 | ForEach-Object {
+                        # The operator's own metric: radio down -> bytes moving.
+                        if ($null -eq $firstWriteAt -and $_ -match 'Writing at') {
+                            $firstWriteAt = $swDead.Elapsed.TotalSeconds
+                        }
+                        Write-Host $_
+                    }
+                    $rc = $LASTEXITCODE
+                } finally { Pop-Location }
+            } finally { $ErrorActionPreference = $prevEap }
+        } else {
+            Write-Host "No usable $flashArgs / target - falling back to idf.py flash." -ForegroundColor DarkYellow
+            $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("-p", $b.com, "flash"))
+        }
+        & $mark "esptool"
+
+        Write-Host ("Timing (total {0:N1}s):" -f $swTotal.Elapsed.TotalSeconds) -ForegroundColor DarkGray
         foreach ($k in $timings.Keys) {
             Write-Host ("    {0,6:N1}s  {1}" -f $timings[$k], $k) -ForegroundColor DarkGray
         }
-        $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("-p", $b.com, "flash"))
-        & $mark "esptool"
-        Write-Host ("esptool took {0:N1}s" -f $timings["esptool"]) -ForegroundColor DarkGray
+        if ($firstWriteAt) {
+            Write-Host ("    {0,6:N1}s  RADIO DOWN -> first byte written" -f $firstWriteAt) -ForegroundColor Cyan
+        }
+        Write-Host ("    {0,6:N1}s  RADIO DOWN -> esptool done (it reboots on exit)" -f $swDead.Elapsed.TotalSeconds) -ForegroundColor Cyan
         if ($rc -ne 0) { Write-Host "Flash FAILED (exit $rc)" -ForegroundColor Red }
     } finally {
         # Restarting the capture is a finally block, not a step - the crash you
