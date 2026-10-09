@@ -501,6 +501,126 @@ static void note_tx_slot(int64_t slot_sec, int slot_index)
 // one buffer serves every slot (capture is strictly sequential).
 static float        *s_cap_scratch = NULL;
 
+/* ---- Slot-audio capture (M1: the JS8 reference corpus) ------------------
+ *
+ * See the long note in ft8_test.h for WHY this and not rxcap. Short version:
+ * s_cap_scratch is the decoder's own input - 12 kHz, slot-aligned, the same
+ * 180000 samples the FT8 reference WAVs in test/wav_reference hold - and
+ * rxcap is the 48 kHz codec output after the AGC.
+ *
+ * Snapshot point: after the last monitor_process() of the slot, where the
+ * buffer is complete INCLUDING the zero-padded dead-air tail. Taken before
+ * the decode is queued, because the decode task is what reuses nothing here
+ * but the next capture does, and the next capture arms ~1.7 s later. */
+static int16_t      *s_slotcap      = NULL;   /* PSRAM, SLOT_SAMPLES int16 */
+static uint32_t      s_slotcap_n    = 0;      /* samples actually held      */
+static int64_t       s_slotcap_sec  = 0;      /* the slot's UTC boundary    */
+static int           s_slotcap_peak = 0;   /* after normalising  */
+static float         s_slotcap_fpeak = 0;  /* BEFORE normalising */
+static const char   *s_slotcap_prot = "";
+static uint32_t      s_slotcap_seq  = 0;
+static volatile bool s_slotcap_en   = false;
+static volatile bool s_slotcap_hold = false;
+
+void ft8_slotcap_hold(bool on) { s_slotcap_hold = on; }
+bool ft8_slotcap_enabled(void) { return s_slotcap_en; }
+
+void ft8_slotcap_set_enabled(bool on)
+{
+    if (on == s_slotcap_en) return;
+    s_slotcap_en = on;
+    if (!on) {
+        /* Keep the buffer: the operator almost always wants the LAST slot
+         * after switching recording off, and 360 KB of PSRAM out of 13 MB is
+         * not worth losing it over. Freed only on ft8_test teardown. */
+        ESP_LOGW(TAG, "slotcap: OFF (last slot kept, seq=%u)",
+                 (unsigned)s_slotcap_seq);
+        return;
+    }
+    ESP_LOGW(TAG, "slotcap: ON - every complete slot is kept as 12 kHz PCM");
+}
+
+const int16_t *ft8_slotcap_data(uint32_t *n, int64_t *slot_sec, int *peak,
+                                const char **proto, uint32_t *seq, float *fpeak)
+{
+    if (n)        *n        = s_slotcap_n;
+    if (slot_sec) *slot_sec = s_slotcap_sec;
+    if (peak)     *peak     = s_slotcap_peak;
+    if (proto)    *proto    = s_slotcap_prot;
+    if (seq)      *seq      = s_slotcap_seq;
+    if (fpeak)    *fpeak    = s_slotcap_fpeak;
+    return (s_slotcap && s_slotcap_n) ? s_slotcap : NULL;
+}
+
+/* THE SCALE IS THE WHOLE PROBLEM HERE, so it is written down.
+ *
+ * s_cap_scratch holds RAW int16 MAGNITUDES, not a +/-1.0 signal: dsp.c builds
+ * it from audio_read_samples' int16 with a sign-flip mixer and a decimating
+ * FIR, neither of which normalises (dsp.c:1187).
+ *
+ * monitor_process() is not scale-free. It converts each bin to dB and then
+ * packs it as `2*db + 240`, CLAMPED to 0..255 - a window of -120..0 dB
+ * (monitor.c:189). Anything above about +7.5 dB saturates to 255, and a
+ * waterfall of 255s has no contrast for the Costas sync to find.
+ *
+ * So the corpus is written NORMALISED: the slot's own peak is scaled to
+ * int16 full scale, and the WAV is divided by 32768 again on load, which puts
+ * the harness in the +/-1.0 convention the 35 FT8 references already use.
+ *
+ * ⚠ WHAT THIS DOES NOT SETTLE. If the live float peak is large enough that
+ * the board's own waterfall is clamping, then the corpus is KINDER than the
+ * board and a harness pass would not mean the board can do it. That is why
+ * `peak_float` is reported in /api/slot.json rather than thrown away - it is
+ * the measurement that decides whether the live path has a saturation defect,
+ * and it has NOT been measured yet. Do not assume either answer. */
+static void slotcap_take(const float *src, uint32_t n, int64_t slot_sec,
+                         const char *proto)
+{
+    if (!s_slotcap_en || s_slotcap_hold) return;
+    if (n == 0 || n > SLOT_SAMPLES) return;
+    if (!s_slotcap) {
+        s_slotcap = heap_caps_malloc(SLOT_SAMPLES * sizeof(int16_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_slotcap) {
+            s_slotcap_en = false;
+            ESP_LOGE(TAG, "slotcap: no PSRAM for %d samples - disabled",
+                     SLOT_SAMPLES);
+            return;
+        }
+    }
+
+    float fpeak = 0.0f;
+    for (uint32_t i = 0; i < n; i++) {
+        float a = src[i] < 0.0f ? -src[i] : src[i];
+        if (a > fpeak) fpeak = a;
+    }
+    /* A silent slot must stay silent rather than be amplified into noise, so
+     * the gain is only applied when there is something to scale. */
+    float gain = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
+
+    int peak = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        float   x = src[i] * gain;
+        int32_t v = (int32_t)(x < 0.0f ? x - 0.5f : x + 0.5f);
+        if (v >  32767) v =  32767;
+        if (v < -32768) v = -32768;
+        s_slotcap[i] = (int16_t)v;
+        int a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
+    }
+    s_slotcap_n     = n;
+    s_slotcap_sec   = slot_sec;
+    s_slotcap_peak  = peak;
+    s_slotcap_fpeak = fpeak;
+    s_slotcap_prot  = proto;
+    s_slotcap_seq++;
+    ESP_LOGI(TAG, "slotcap: slot UTC %lld kept (%lu smp, float peak %.1f = "
+                  "%.1f dB, gain x%.3f, %s, seq=%u)",
+             (long long)slot_sec, (unsigned long)n, fpeak,
+             20.0f * log10f(fpeak > 1e-6f ? fpeak : 1e-6f), gain, proto,
+             (unsigned)s_slotcap_seq);
+}
+
 // Shared kiss-FFT scratch, reused by EVERY monitor's STFT (monitor_process).
 // monitor_process is called only from the capture task, one monitor at a time,
 // strictly sequentially (captures never overlap; decode works on the pre-built
@@ -582,6 +702,8 @@ static void free_capture_pool(void)
     }
     free_shared_fft();
     if (s_cap_scratch) { heap_caps_free(s_cap_scratch); s_cap_scratch = NULL; }
+    if (s_slotcap) { heap_caps_free(s_slotcap); s_slotcap = NULL;
+                     s_slotcap_n = 0; }
     s_pool_proto = -1;
 }
 
@@ -2681,6 +2803,11 @@ static void ft8_task(void *arg)
                     stft_us += esp_timer_get_time() - ts;
                     processed++;
                 }
+                /* The corpus snapshot. Here and not earlier: the loop above
+                 * has just zero-padded the dead-air tail, so the buffer is
+                 * now exactly the 15 s the decoder will work on. */
+                slotcap_take(s_cap_scratch, (uint32_t)slot_samples, slot_sec,
+                             ft8_op_mode_name());
                 int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
                 int stft_ms = (int)(stft_us / 1000);
                 int drop_delta = (int)(audio_get_dropped_total() - drop_before);

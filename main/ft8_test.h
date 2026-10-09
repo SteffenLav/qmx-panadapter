@@ -179,6 +179,52 @@ int ft8_op_mode_slot_ms(void);
  * logged under the wrong mode is a wrong record, not a cosmetic slip. */
 const char *ft8_op_mode_name(void);
 
+/* ---- Slot-audio capture (the JS8/FT8 reference corpus, M1) --------------
+ *
+ * There are 35 reference WAVs for FT8 in test/wav_reference and ZERO for JS8,
+ * so every RX change from J7 onwards is unguarded. Recording one needs the
+ * audio THE DECODER SEES, and that is this buffer and nothing else:
+ * dsp_ft8_capture() fills 180000 floats at 12 kHz, anchored to the UTC slot
+ * boundary by its own backfill.
+ *
+ * ⛔ rxcap (/api/rxaudio.wav) is NOT this signal and must not be used for a
+ * corpus. It records s_out - the codec OUTPUT, 48 kHz, after the AGC and the
+ * audio filter chain. It answers "what did the speaker play", which is a
+ * different question from "what did the decoder get". The M1 note in
+ * docs/js8-feasibility.md said no firmware change was needed; that was wrong
+ * for exactly this reason.
+ *
+ * One buffer, deliberately. A download takes ~1 s and the next slot lands
+ * 15 s later, so a snapshot skipped while the socket is draining costs one
+ * slot in fifteen - cheaper than the tearing window a second buffer would
+ * have to be reasoned about.
+ *
+ * Arm/disarm is runtime, so the PSRAM (360 KB) is only spent while a corpus
+ * is actually being recorded. */
+void ft8_slotcap_set_enabled(bool on);
+bool ft8_slotcap_enabled(void);
+
+/* The last COMPLETE slot, as int16 at 12 kHz. Returns NULL until one lands.
+ * *n = samples, *slot_sec = the slot's UTC boundary (names the file),
+ * *proto = "FT8"/"FT4"/"JS8", *seq increments once per snapshot so a host
+ * loop can tell a new slot from a re-read.
+ *
+ * TWO peaks, and the difference matters. *fpeak is the largest |sample| of
+ * the DECODER'S OWN float buffer, before anything is done to it; *peak is the
+ * largest |sample| of the stored int16 AFTER the slot is normalised to full
+ * scale. The stored audio is normalised because monitor_process() packs each
+ * bin as a CLAMPED `2*db + 240` over -120..0 dB, so an un-normalised slot can
+ * saturate the waterfall to a flat 255 and decode nothing. *fpeak is kept
+ * because it, and only it, says whether the LIVE path is already in that
+ * state - see the note at slotcap_take(). */
+const int16_t *ft8_slotcap_data(uint32_t *n, int64_t *slot_sec, int *peak,
+                                const char **proto, uint32_t *seq,
+                                float *fpeak);
+
+/* Held across the whole /api/slot.wav body: the snapshot is skipped while
+ * true, so the socket cannot read a buffer being overwritten. */
+void ft8_slotcap_hold(bool on);
+
 #ifdef __cplusplus
 }
 #endif

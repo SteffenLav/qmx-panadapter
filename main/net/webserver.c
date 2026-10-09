@@ -2132,6 +2132,28 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             esp_restart();
         }
         return ESP_OK;
+    } else if (action && strcmp(action, "slotcap") == 0) {
+        /* Arm/disarm the decoder-input slot recorder (M1 corpus).
+           {"action":"slotcap","on":true} then poll GET /api/slot.json and
+           fetch GET /api/slot.wav whenever `seq` changes.
+           tools/js8_corpus.py does exactly that. Omitting "on" just reads. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        if (cJSON_IsBool(on)) ft8_slotcap_set_enabled(cJSON_IsTrue(on));
+        uint32_t n = 0, seq = 0; int64_t sec = 0; int peak = 0; float fpeak = 0;
+        const char *proto = "";
+        ft8_slotcap_data(&n, &sec, &peak, &proto, &seq, &fpeak);
+        cJSON_Delete(root);
+        char body[192];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"armed\":%s,\"seq\":%lu,\"samples\":%lu,"
+                 "\"slot_utc\":%lld,\"peak\":%d,\"peak_float\":%.3f,"
+                 "\"proto\":\"%s\",\"rate\":12000,\"normalised\":true}",
+                 ft8_slotcap_enabled() ? "true" : "false",
+                 (unsigned long)seq, (unsigned long)n, (long long)sec, peak,
+                 (double)fpeak, proto ? proto : "");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "rxcap") == 0) {
         /* Record what the codec is actually PLAYING, so the artefact can be
            looked at instead of inferred from counters (2026-09-06). One shot:
@@ -3711,6 +3733,124 @@ static esp_err_t rxaudio_json_handler(httpd_req_t *req)
     free(out);
     return e;
 }
+
+/* GET /api/slot.wav - the LAST COMPLETE SLOT exactly as the decoder saw it.
+ *
+ * This is the M1 corpus endpoint. The 35 FT8 references in
+ * test/wav_reference are 12 kHz mono, 180000 frames, 15.0 s, named from the
+ * slot's UTC second; this emits the same thing for whatever sub-mode is
+ * running, so a JS8 corpus drops straight into the existing harness shape.
+ *
+ * ⛔ NOT /api/rxaudio.wav. That one records the codec OUTPUT at 48 kHz after
+ * the AGC and the audio filters. It is the right instrument for "why does the
+ * speaker click" and the wrong one for a decoder corpus, because the decoder
+ * never hears it. See the note on ft8_slotcap_set_enabled().
+ *
+ * Arm first: POST /api/cmd {"action":"slotcap","on":true}. Unarmed it spends
+ * no PSRAM and returns 404.
+ *
+ * The WS pause and the hold flag are both deliberate: the pause keeps the
+ * 360 KB body off the same socket budget as the live frame, and the hold
+ * stops the capture task overwriting the buffer mid-body. */
+static esp_err_t slot_wav_handler(httpd_req_t *req)
+{
+    uint32_t n = 0, seq = 0; int64_t sec = 0; int peak = 0; float fpeak = 0;
+    const char *proto = "";
+    const int16_t *pcm = ft8_slotcap_data(&n, &sec, &peak, &proto, &seq, &fpeak);
+    if (!pcm || !n) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND,
+            "no slot held - POST /api/cmd {\"action\":\"slotcap\",\"on\":true} "
+            "and wait for one slot");
+        return ESP_FAIL;
+    }
+    const uint32_t rate = 12000, ch = 1, bits = 16;
+    const uint32_t data_bytes = n * sizeof(int16_t);
+    uint8_t hdr[44];
+    #define W32(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff);                          hdr[o+2]=(uint8_t)(((v)>>16)&0xff); hdr[o+3]=(uint8_t)(((v)>>24)&0xff);}while(0)
+    #define W16(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff);}while(0)
+    memcpy(hdr, "RIFF", 4);         W32(4, 36 + data_bytes);
+    memcpy(hdr + 8, "WAVEfmt ", 8); W32(16, 16); W16(20, 1);
+    W16(22, ch); W32(24, rate); W32(28, rate * ch * bits / 8);
+    W16(32, ch * bits / 8); W16(34, bits);
+    memcpy(hdr + 36, "data", 4);    W32(40, data_bytes);
+    #undef W32
+    #undef W16
+
+    /* Named the way the FT8 corpus is named - YYMMDD_HHMMSS from the slot's
+     * own UTC boundary - so the downloaded file needs no renaming to sit
+     * beside the existing references. */
+    char fname[64];
+    {
+        time_t t = (time_t)sec;
+        struct tm g;
+        gmtime_r(&t, &g);
+        snprintf(fname, sizeof(fname),
+                 "attachment; filename=%02d%02d%02d_%02d%02d%02d.wav",
+                 (g.tm_year + 1900) % 100, g.tm_mon + 1, g.tm_mday,
+                 g.tm_hour, g.tm_min, g.tm_sec);
+    }
+
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", fname);
+    ft8_slotcap_hold(true);
+    webserver_ws_set_paused(true);
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+    const uint8_t *p = (const uint8_t *)pcm;
+    for (uint32_t off = 0; off < data_bytes && err == ESP_OK; off += 4096) {
+        uint32_t len = (data_bytes - off < 4096) ? (data_bytes - off) : 4096;
+        err = httpd_resp_send_chunk(req, (const char *)(p + off), (ssize_t)len);
+    }
+    /* Same rule as every other download here: do NOT cap a failed body with a
+       valid terminator, or a short file looks complete. */
+    if (err != ESP_OK) {
+        webserver_ws_set_paused(false); ft8_slotcap_hold(false); return ESP_FAIL;
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    webserver_ws_set_paused(false);
+    ft8_slotcap_hold(false);
+    return ESP_OK;
+}
+
+/* GET /api/slot.json - what is held, without downloading 360 KB.
+ *
+ * `seq` is the whole point: a corpus loop polls this and downloads only when
+ * seq changes, so it never re-fetches the same slot and never has to guess at
+ * slot timing from its own clock. `peak` makes a dead or clipped capture
+ * visible from the metadata alone. */
+static esp_err_t slot_json_handler(httpd_req_t *req)
+{
+    uint32_t n = 0, seq = 0; int64_t sec = 0; int peak = 0; float fpeak = 0;
+    const char *proto = "";
+    const int16_t *pcm = ft8_slotcap_data(&n, &sec, &peak, &proto, &seq, &fpeak);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "armed", ft8_slotcap_enabled());
+    cJSON_AddBoolToObject(root, "held", pcm && n);
+    cJSON_AddNumberToObject(root, "seq", (double)seq);
+    cJSON_AddNumberToObject(root, "samples", (double)n);
+    cJSON_AddNumberToObject(root, "rate", 12000);
+    cJSON_AddNumberToObject(root, "slot_utc", (double)sec);
+    cJSON_AddNumberToObject(root, "peak", (double)peak);
+    /* The decoder's own float peak, BEFORE the normalisation that the stored
+     * int16 went through. Above ~2.4 (+7.5 dB) the live waterfall is clamping
+     * and the corpus is easier than the board - see slotcap_take(). */
+    cJSON_AddNumberToObject(root, "peak_float", (double)fpeak);
+    cJSON_AddBoolToObject(root, "normalised", true);
+    cJSON_AddStringToObject(root, "proto", proto ? proto : "");
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_500(req); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, out);
+    free(out);
+    return e;
+}
+
+static const httpd_uri_t uri_slot_wav = {
+    .uri = "/api/slot.wav", .method = HTTP_GET, .handler = slot_wav_handler,
+};
+static const httpd_uri_t uri_slot_json = {
+    .uri = "/api/slot.json", .method = HTTP_GET, .handler = slot_json_handler,
+};
 
 static const httpd_uri_t uri_rxaudio_wav = {
     .uri = "/api/rxaudio.wav", .method = HTTP_GET, .handler = rxaudio_wav_handler,
@@ -6970,6 +7110,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log_saved);
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_rxaudio_wav);
+    httpd_register_uri_handler(s_server, &uri_slot_wav);
+    httpd_register_uri_handler(s_server, &uri_slot_json);
     httpd_register_uri_handler(s_server, &uri_rxaudio_json);
     httpd_register_uri_handler(s_server, &uri_adif_check);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
