@@ -141,13 +141,31 @@ int battery_mv_to_level(int mv)
 {
     if (mv <= BATTERY_MIN_MV) return 0;
     if (mv >= BATTERY_MAX_MV) return 100;
-    return (int)(((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV));
+    /* ROUND, do not truncate. Integer division threw away the fraction, which
+     * is a systematic HALF-POINT bias low across the whole range. Caught
+     * 2026-10-09: the pack settled at 7953 mV = 79.59 % against an 80 % limit
+     * and the bar read "79 % (limit)", which looks like the limit missing by a
+     * point when the real error was 0.41.
+     *
+     * The guards above make the numerator strictly positive, so the +half idiom
+     * is safe here - unlike render.c's S-meter, where the same idiom met a
+     * negative argument and biased a whole S-unit high (fixed the same day).
+     *
+     * ⚠ This also moves the CUTOFF half a point earlier, since
+     * util/status.c compares this same level against the limit: it now fires at
+     * a true 79.5 % rather than 80.0 %. Deliberate - one percent scale for both
+     * screens and the control path, and undershooting a battery-care limit is
+     * the safe direction. Splitting them would re-create the two-numbers-one-
+     * name fault this project hit twice already today. */
+    const int span = BATTERY_MAX_MV - BATTERY_MIN_MV;
+    return (int)(((mv - BATTERY_MIN_MV) * 100 + span / 2) / span);
 }
 
 // Compensates a real, confirmed-on-hardware artifact: the INA226 reads the
 // pack's TERMINAL voltage, which while charge current is actually flowing
-// sits ~200 mV (~10 percentage points on this pack's linear map) above the
-// true resting voltage, due to the pack's own internal resistance
+// sits ~120 mV above the true resting voltage at this charger's ~0.5 A
+// (measured 2026-10-09; it was assumed to be a flat 200 mV, which was right
+// only at ~1 A), due to the pack's own internal resistance
 // (V_terminal = V_true + I_charge * R_internal). Left uncompensated this
 // makes every consumer - the status-bar %/icon, the web API, and (most
 // importantly) util/status.c's charge-limit cutoff decision - see a reading
