@@ -71,10 +71,11 @@ def decodes_for_slot(base, utc, period_s):
         st = get_json(base, "/api/status", timeout=15)
         d = get_json(base, "/api/decodes", timeout=15)
     except Exception as e:                      # noqa: BLE001 - diagnostic only
-        return None, "decodes unavailable: %s" % e
+        return None, None, "decodes unavailable: %s" % e
     now = st.get("utc_epoch")
     if not now:
-        return None, "no utc_epoch in /api/status"
+        return None, None, "no utc_epoch in /api/status"
+    freq_hz = st.get("freq_hz")
     out = []
     for r in d.get("rows") or []:
         if not isinstance(r, dict):
@@ -88,16 +89,21 @@ def decodes_for_slot(base, utc, period_s):
             continue
         if utc <= heard < utc + period_s:
             out.append(r)
-    return out, None
+    return out, freq_hz, None
 
 
-def write_txt(path, utc, proto, peak, rows, note):
-    """One line per decode, in the shape test/wav_reference/*.txt uses:
-    HHMMSS  SNR  DT  FREQ ~  MESSAGE - so the FT8 harness's comparator reads
-    both corpora without a second parser."""
+def write_txt(path, utc, proto, peak, fpeak, freq_hz, rows, note):
+    """One line per decode, in the shape the .txt files in test/wav_reference
+    use: HHMMSS  SNR  DT  FREQ ~  MESSAGE - so one comparator reads both
+    corpora.
+
+    The header carries what the filename cannot: the DIAL FREQUENCY, without
+    which a corpus file cannot be told from one recorded on another band, and
+    peak_float, the decoder's own input level before the WAV was normalised."""
     hhmmss = time.strftime("%H%M%S", time.gmtime(utc))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("# %s slot UTC %d  peak=%d\n" % (proto, utc, peak))
+        f.write("# %s slot UTC %d  dial %d Hz  peak_float %.2f  peak %d\n"
+                % (proto, utc, freq_hz or 0, fpeak, peak))
         f.write("# %s\n" % note)
         if rows is None:
             f.write("# /api/decodes was unreachable - expected set UNKNOWN,\n")
@@ -107,14 +113,27 @@ def write_txt(path, utc, proto, peak, rows, note):
             msg = (r.get("text") or "").strip()
             if not msg:
                 continue
-            snr = r.get("snr", r.get("db", 0))
-            dt = r.get("dt", 0.0)
-            hz = r.get("hz", r.get("freq", r.get("df", 0)))
+            snr = r.get("snr", 0)
+            hz = r.get("hz", 0)
+            # ⚠ `dt` is int16 MILLISECONDS here (ft8_screen.h:31, last_dt_ms),
+            # while the FT8 .txt column is seconds. Printing it raw put "720.0"
+            # in the first 18 files written on 2026-10-09 - a plausible-looking
+            # number that was 1000x wrong, which is the worst kind.
+            dt_ms = r.get("dt", 0)
             try:
                 f.write("%s %3d %4.1f %4d ~  %s\n"
-                        % (hhmmss, int(snr), float(dt), int(hz), msg))
+                        % (hhmmss, int(snr), float(dt_ms) / 1000.0,
+                           int(hz), msg))
             except (TypeError, ValueError):
                 f.write("%s   0  0.0    0 ~  %s\n" % (hhmmss, msg))
+
+
+def say(msg):
+    """Flushed, always. The first long run of this tool wrote four slots and
+    then stopped, and because stdout was block-buffered the output file was
+    empty - so "it is working" and "it is wedged" looked identical for five
+    minutes. Progress that is not flushed is not progress."""
+    print(msg, flush=True)
 
 
 def main():
@@ -141,7 +160,7 @@ def main():
     if not r.get("armed"):
         print("ERROR: the board did not arm: %s" % r, file=sys.stderr)
         return 1
-    print("armed; writing to %s  (Ctrl-C to stop)" % a.out)
+    say("armed; writing to %s  (Ctrl-C to stop)" % a.out)
 
     seen = r.get("seq", 0)
     kept = 0
@@ -150,8 +169,11 @@ def main():
             time.sleep(2.0)
             try:
                 st = get_json(base, "/api/slot.json", timeout=15)
-            except (urllib.error.URLError, OSError, ValueError) as e:
-                print("  poll failed (%s) - retrying" % e)
+            except Exception as e:              # noqa: BLE001
+                # Broad on purpose: a poll that dies on an unexpected exception
+                # type stops the recording, and the perishable thing here is
+                # the band, not the tidiness of the except clause.
+                say("  poll failed (%s: %s) - retrying" % (type(e).__name__, e))
                 continue
             if not st.get("armed"):
                 print("ERROR: the board disarmed itself - check the log for "
@@ -165,34 +187,38 @@ def main():
             peak = int(st.get("peak", 0))
             proto = st.get("proto", "?")
             if peak < a.min_peak:
-                print("  skip slot %d: peak=%d (silent capture)" % (utc, peak))
+                say("  skip slot %d: peak=%d (silent capture)" % (utc, peak))
                 continue
 
             stem = os.path.join(a.out, slot_name(utc))
             try:
-                wav = get(base, "/api/slot.wav", timeout=120)
-            except (urllib.error.URLError, OSError) as e:
-                print("  slot %d: download failed (%s)" % (utc, e))
+                wav = get(base, "/api/slot.wav", timeout=30)
+            except Exception as e:              # noqa: BLE001
+                say("  slot %d: download failed (%s: %s)"
+                    % (utc, type(e).__name__, e))
                 continue
             # Measure the artefact, not the status line: a short body means a
             # truncated transfer, and a truncated WAV decodes as a quiet slot.
             want = 44 + int(st["samples"]) * 2
             if len(wav) != want:
-                print("  slot %d: SHORT BODY %d of %d bytes - discarded"
-                      % (utc, len(wav), want))
+                say("  slot %d: SHORT BODY %d of %d bytes - discarded"
+                    % (utc, len(wav), want))
                 continue
             with open(stem + ".wav", "wb") as f:
                 f.write(wav)
 
             period_s = 8 if proto == "FT4" else 15
-            rows, err = decodes_for_slot(base, utc, period_s)
+            rows, freq_hz, err = decodes_for_slot(base, utc, period_s)
             note = ("this board's own decodes, NOT ground truth - see the "
                     "header of tools/js8_corpus.py")
-            write_txt(stem + ".txt", utc, proto, peak, rows, note)
+            write_txt(stem + ".txt", utc, proto, peak,
+                      float(st.get("peak_float", 0.0)), freq_hz, rows, note)
             kept += 1
             n = len(rows) if rows else 0
-            print("  %s.wav  %s  peak=%-6d decodes=%d%s"
-                  % (slot_name(utc), proto, peak, n,
+            say("  %s.wav  %s  %s  fpeak=%-7.1f decodes=%d%s"
+                % (slot_name(utc), proto,
+                     ("%.3f MHz" % (freq_hz / 1e6)) if freq_hz else "? MHz",
+                     float(st.get("peak_float", 0.0)), n,
                      "  (" + err + ")" if err else ""))
             if a.slots and kept >= a.slots:
                 break
