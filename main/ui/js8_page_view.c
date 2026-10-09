@@ -30,6 +30,7 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define REFRESH_MS 2000
 
 static lv_obj_t   *s_overlay;
+static lv_obj_t   *s_dial;                 /* the heading's right-hand half */
 static lv_obj_t   *s_rows[JS8_PAGE_ROWS];
 static lv_timer_t *s_timer;
 static bool        s_open;
@@ -44,7 +45,7 @@ static bool        s_open;
 typedef struct {
     js8_chat_msg_t msgs[JS8_CHAT_MAX_MSGS];
     char           lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1];
-    char           subtitle[32];
+    char           dial[32];
 } js8_view_scratch_t;
 
 static js8_view_scratch_t *s_scratch;
@@ -63,14 +64,19 @@ static void repaint(void)
 
     /* The dial, read fresh each repaint: the operator can retune with the page
      * open, and a stale heading would say the traffic came from a band it did
-     * not. */
+     * not.
+     *
+     * ⛔ IT LIVES IN THE HEADER, NOT IN THE GRID. The grid used to draw its own
+     * title row and the header drew the same words one line above it, so the
+     * page named itself twice - seen on the glass 2026-10-09. */
     uint32_t hz = cat_get_frequency();
-    if (hz) snprintf(s_scratch->subtitle, sizeof(s_scratch->subtitle),
+    if (hz) snprintf(s_scratch->dial, sizeof(s_scratch->dial),
                      "%u.%03u MHz", (unsigned)(hz / 1000000u),
                      (unsigned)((hz / 1000u) % 1000u));
-    else    snprintf(s_scratch->subtitle, sizeof(s_scratch->subtitle), "no CAT");
+    else    snprintf(s_scratch->dial, sizeof(s_scratch->dial), "no CAT");
+    if (s_dial) lv_label_set_text(s_dial, s_scratch->dial);
 
-    js8_page_render(s_scratch->msgs, have, s_scratch->subtitle, s_scratch->lines);
+    js8_page_render(s_scratch->msgs, have, s_scratch->lines);
 
     for (int r = 0; r < JS8_PAGE_ROWS; r++)
         if (s_rows[r]) lv_label_set_text(s_rows[r], s_scratch->lines[r]);
@@ -111,6 +117,15 @@ void js8_page_view_open(void)
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 16, 0);
 
+    /* Right of the title, left of Close: the band this page is listening to.
+     * Montserrat like the title, not the grid font - it is furniture, not a
+     * column of data. */
+    s_dial = lv_label_create(hdr);
+    lv_label_set_text(s_dial, "");
+    lv_obj_set_style_text_font(s_dial, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_dial, lv_color_hex(0xA0A0A0), 0);
+    lv_obj_align(s_dial, LV_ALIGN_RIGHT_MID, -124, 0);
+
     lv_obj_t *cb = lv_btn_create(hdr);
     lv_obj_set_size(cb, 92, 48);
     lv_obj_align(cb, LV_ALIGN_RIGHT_MID, -16, 0);
@@ -133,11 +148,7 @@ void js8_page_view_open(void)
     for (int r = 0; r < JS8_PAGE_ROWS; r++) {
         s_rows[r] = lv_label_create(grid);
         lv_obj_set_style_text_font(s_rows[r], &qmx_mono_25, 0);
-        /* The title and the rule are the page's own furniture, so they are
-         * drawn in the accent rather than the body colour. Doing it here means
-         * the layout stays a pure text function with no colour in it. */
-        lv_obj_set_style_text_color(
-            s_rows[r], lv_color_hex(r < JS8_PAGE_ROW0 ? UI_COLOR_PRIMARY : 0xD8D8D8), 0);
+        lv_obj_set_style_text_color(s_rows[r], lv_color_hex(0xD8D8D8), 0);
         lv_label_set_long_mode(s_rows[r], LV_LABEL_LONG_CLIP);
         lv_obj_set_width(s_rows[r], GRID_W);
         lv_obj_set_pos(s_rows[r], 0, r * ROW_H);
@@ -159,6 +170,7 @@ void js8_page_view_close(void)
     if (s_overlay) { lv_obj_del(s_overlay); s_overlay = NULL; }
     if (s_scratch) { heap_caps_free(s_scratch); s_scratch = NULL; }
     memset(s_rows, 0, sizeof(s_rows));
+    s_dial = NULL;
     ui_help_overlay_changed();
     ESP_LOGI(TAG, "JS8 page closed");
 }

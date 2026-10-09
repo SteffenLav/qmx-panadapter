@@ -34,9 +34,14 @@
 #define JS8_PAGE_COL_TEXT    26
 #define JS8_PAGE_W_TEXT      (JS8_PAGE_COLS - JS8_PAGE_COL_TEXT)   /* 54 */
 
-/* Row 0 is the title, row 1 the rule, so 22 rows carry messages. */
-#define JS8_PAGE_ROW0        2
-#define JS8_PAGE_BODY_ROWS   (JS8_PAGE_ROWS - JS8_PAGE_ROW0)       /* 22 */
+/* ⛔ NO TITLE ROW. The first version drew "JS8 - conversation" and a rule into
+ * rows 0 and 1, and the view draws its own header above the grid with the
+ * Close button in it - so the page said its own name twice, one line apart.
+ * Seen on the glass 2026-10-09, not by the tests, because both headings were
+ * correct in isolation. The dial moved into the view's header with the title;
+ * this module is now only the message grid, and gained two rows for it. */
+#define JS8_PAGE_ROW0        0
+#define JS8_PAGE_BODY_ROWS   JS8_PAGE_ROWS                         /* 24 */
 
 /* Flag column. */
 #define JS8_PAGE_FLAG_LIVE      '*'   /* frames still arriving            */
@@ -54,13 +59,10 @@
  * opened to see what just happened, and this way the newest message needs no
  * scrolling. Flipping it is one loop here and nothing else.
  *
- * `subtitle` is right-aligned on the title row - the band and dial the caller
- * knows and this module does not. May be NULL.
- *
  * Each line comes back NUL-terminated and exactly JS8_PAGE_COLS wide, trailing
- * spaces included, as the grid has them. Returns the number of body rows used.
+ * spaces included, as the grid has them. Returns the number of rows used.
  */
-int js8_page_render(const js8_chat_msg_t *msgs, int n, const char *subtitle,
+int js8_page_render(const js8_chat_msg_t *msgs, int n,
                     char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1]);
 
 /* Rows one message needs at JS8_PAGE_W_TEXT per line, at least 1. Exposed so

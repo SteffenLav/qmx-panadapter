@@ -48,11 +48,23 @@ static bool at(int row, int col, const char *want)
     return strncmp(&L[row][col], want, strlen(want)) == 0;
 }
 
+static void t_no_title_row(void)
+{
+    printf("the grid holds messages only - the view draws the heading\n");
+    js8_chat_msg_t m = mk(1791554040, 1188, "OZ1LAV", "FIRST", false, false);
+    js8_page_render(&m, 1, L);
+    /* ⛔ The page drew "JS8 - conversation" into row 0 and the view drew the
+     * same words in its own header, one line apart. Seen on the glass. */
+    CHECK(strstr(L[0], "conversation") == NULL, "row 0 still carries a title: '%s'", L[0]);
+    CHECK(L[0][0] != '-', "row 0 is still a rule");
+    CHECK(at(0, JS8_PAGE_COL_TEXT, "FIRST"), "the first message is not on row 0: '%s'", L[0]);
+}
+
 static void t_every_line_is_exactly_the_grid_width(void)
 {
     printf("every line is exactly %d characters\n", JS8_PAGE_COLS);
     js8_chat_msg_t m = mk(1791554040, 1188, "", "QSL", true, false);
-    js8_page_render(&m, 1, "40m  7.078 MHz", L);
+    js8_page_render(&m, 1, L);
     for (int r = 0; r < JS8_PAGE_ROWS; r++)
         CHECK((int)strlen(L[r]) == JS8_PAGE_COLS, "row %d is %d chars",
               r, (int)strlen(L[r]));
@@ -64,7 +76,7 @@ static void t_columns(void)
     /* 1791554040 = 2026-10-09 13:54:00 UTC - the first free-text decode this
      * project made, off the bench. */
     js8_chat_msg_t m = mk(1791554040, 1188, "", "QSL", true, false);
-    js8_page_render(&m, 1, NULL, L);
+    js8_page_render(&m, 1, L);
     int r = JS8_PAGE_ROW0;
     CHECK(L[r][0] == JS8_PAGE_FLAG_LIVE, "flag is '%c', want '*'", L[r][0]);
     CHECK(at(r, JS8_PAGE_COL_TIME, "13:54:00"), "time column: '%.8s'",
@@ -84,20 +96,10 @@ static void t_columns(void)
           &L[r][JS8_PAGE_COL_TEXT]);
 }
 
-static void t_title_and_subtitle(void)
-{
-    printf("the title row carries the subtitle, right-aligned\n");
-    js8_page_render(NULL, 0, "40m  7.078 MHz", L);
-    CHECK(at(0, 0, "JS8  -  conversation"), "title: '%.20s'", L[0]);
-    const char *sub = "40m  7.078 MHz";
-    CHECK(at(0, JS8_PAGE_COLS - (int)strlen(sub), sub), "subtitle not right-aligned: '%s'", L[0]);
-    CHECK(L[1][0] == '-' && L[1][JS8_PAGE_COLS - 1] == '-', "rule row is not a rule");
-}
-
 static void t_empty_says_why(void)
 {
     printf("an empty page explains itself\n");
-    js8_page_render(NULL, 0, NULL, L);
+    js8_page_render(NULL, 0, L);
     CHECK(strstr(L[JS8_PAGE_ROW0], "nothing heard yet") != NULL,
           "empty page row reads '%s'", L[JS8_PAGE_ROW0]);
 }
@@ -109,7 +111,7 @@ static void t_wrap_on_a_space(void)
     const char *txt = "GOOD MORNING OM THANKS FOR THE CALL THE WEATHER HERE IS "
                       "FINE TODAY";
     js8_chat_msg_t m = mk(0, 1500, "OZ1LAV", txt, false, false);
-    int used = js8_page_render(&m, 1, NULL, L);
+    int used = js8_page_render(&m, 1, L);
     CHECK(used == 2, "used %d rows, want 2", used);
 
     int r = JS8_PAGE_ROW0;
@@ -141,7 +143,7 @@ static void t_long_word_keeps_its_tail(void)
     memset(word, 'A', 70);
     word[70] = 0;
     js8_chat_msg_t m = mk(0, 1500, "X", word, false, false);
-    int used = js8_page_render(&m, 1, NULL, L);
+    int used = js8_page_render(&m, 1, L);
     CHECK(used == 2, "used %d rows, want 2", used);
     int r = JS8_PAGE_ROW0;
     CHECK(L[r][JS8_PAGE_COLS - 1] == 'A', "first row did not fill the column");
@@ -158,7 +160,7 @@ static void t_flags(void)
         mk(0, 2000, "B", "CUT",  false, true),
         mk(0, 3000, "C", "DONE", false, false),
     };
-    js8_page_render(m, 3, NULL, L);
+    js8_page_render(m, 3, L);
     CHECK(L[JS8_PAGE_ROW0 + 0][0] == JS8_PAGE_FLAG_LIVE,  "row 0 flag '%c'", L[JS8_PAGE_ROW0][0]);
     CHECK(L[JS8_PAGE_ROW0 + 1][0] == JS8_PAGE_FLAG_TRUNC, "row 1 flag '%c'", L[JS8_PAGE_ROW0+1][0]);
     CHECK(L[JS8_PAGE_ROW0 + 2][0] == JS8_PAGE_FLAG_NONE,  "row 2 flag '%c'", L[JS8_PAGE_ROW0+2][0]);
@@ -166,7 +168,7 @@ static void t_flags(void)
     /* Live wins over truncated: a run still arriving shows '*', and shows '~'
      * as soon as it stops. */
     js8_chat_msg_t both = mk(0, 1000, "A", "X", true, true);
-    js8_page_render(&both, 1, NULL, L);
+    js8_page_render(&both, 1, L);
     CHECK(L[JS8_PAGE_ROW0][0] == JS8_PAGE_FLAG_LIVE, "live did not win: '%c'",
           L[JS8_PAGE_ROW0][0]);
 }
@@ -178,7 +180,7 @@ static void t_empty_text_still_takes_a_row(void)
         mk(100, 1000, "A", "", false, false),
         mk(200, 2000, "B", "SECOND", false, false),
     };
-    int used = js8_page_render(m, 2, NULL, L);
+    int used = js8_page_render(m, 2, L);
     CHECK(used == 2, "used %d rows, want 2", used);
     CHECK(at(JS8_PAGE_ROW0, JS8_PAGE_COL_SENDER, "A"), "first row lost its sender");
     CHECK(at(JS8_PAGE_ROW0 + 1, JS8_PAGE_COL_TEXT, "SECOND"), "second message moved up");
@@ -190,7 +192,7 @@ static void t_overflow_stops_at_the_last_row(void)
     js8_chat_msg_t m[JS8_CHAT_MAX_MSGS];
     for (int i = 0; i < JS8_CHAT_MAX_MSGS; i++)
         m[i] = mk(i, 1000 + i, "X", "HELLO", false, false);
-    int used = js8_page_render(m, JS8_CHAT_MAX_MSGS, NULL, L);
+    int used = js8_page_render(m, JS8_CHAT_MAX_MSGS, L);
     CHECK(used == JS8_PAGE_BODY_ROWS, "used %d rows, want %d", used, JS8_PAGE_BODY_ROWS);
     for (int r = 0; r < JS8_PAGE_ROWS; r++)
         CHECK((int)strlen(L[r]) == JS8_PAGE_COLS, "row %d is %d chars after overflow",
@@ -208,7 +210,7 @@ static void t_rows_for_agrees_with_render(void)
     };
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         js8_chat_msg_t m = mk(0, 1000, "X", cases[i], false, false);
-        int used = js8_page_render(&m, 1, NULL, L);
+        int used = js8_page_render(&m, 1, L);
         int want = js8_page_rows_for(&m);
         CHECK(used == want, "case %u: render used %d, rows_for said %d", i, used, want);
     }
@@ -216,9 +218,9 @@ static void t_rows_for_agrees_with_render(void)
 
 int main(void)
 {
+    t_no_title_row();
     t_every_line_is_exactly_the_grid_width();
     t_columns();
-    t_title_and_subtitle();
     t_empty_says_why();
     t_wrap_on_a_space();
     t_long_word_keeps_its_tail();

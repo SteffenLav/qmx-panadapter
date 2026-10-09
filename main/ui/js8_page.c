@@ -74,18 +74,10 @@ int js8_page_rows_for(const js8_chat_msg_t *m)
     return rows ? rows : 1;
 }
 
-int js8_page_render(const js8_chat_msg_t *msgs, int n, const char *subtitle,
+int js8_page_render(const js8_chat_msg_t *msgs, int n,
                     char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1])
 {
     for (int r = 0; r < JS8_PAGE_ROWS; r++) blank(lines[r]);
-
-    put(lines[0], 0, "JS8  -  conversation", 20);
-    if (subtitle) {
-        int len = (int)strlen(subtitle);
-        if (len > JS8_PAGE_COLS) len = JS8_PAGE_COLS;
-        put(lines[0], JS8_PAGE_COLS - len, subtitle, len);
-    }
-    memset(lines[1], '-', JS8_PAGE_COLS);
 
     if (n <= 0 || !msgs) {
         /* Say which band is being listened to, not "no data". An empty page
