@@ -3016,6 +3016,11 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * session reaches for, and getting it wrong is an electrical question (pins
  * driven into a GPS transmitter) rather than a preference. */
 #define DRAWER_SEC_PORTA      47
+/* "GPS Stats" - a LAUNCHER for the GPS page, the same shape as
+ * DRAWER_SEC_TERM. It lives in Radio because the page covers both receivers:
+ * the Tab5's own module and the QMX's internal one, which it reaches through
+ * the radio's menus. Operator, 2026-10-09. */
+#define DRAWER_SEC_GPSSTATS   48
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
 // size array indexed by an enum will be overrun" section. IDs are 0..47.
 //
@@ -3029,7 +3034,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     48
+#define N_DRAWER_SECTIONS     49
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3087,6 +3092,7 @@ static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_OUTPWR, "Output power", true },
     { DRAWER_SEC_PAUSE, "Release radio", false },
     { DRAWER_SEC_TERM, "Radio menus", false },
+    { DRAWER_SEC_GPSSTATS, "GPS Stats", true },
 };
 // DRAWER_SEC_OTADL sits here, not in Device, and that placement is the point:
 // Device is an EXPERT-only group, and "should this thing download 3.3 MB on my
@@ -3627,6 +3633,7 @@ static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_term_btn_cb(lv_event_t *e);
+static void drawer_gpsstats_btn_cb(lv_event_t *e);
 static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
@@ -13034,6 +13041,25 @@ static void drawer_build(void)
         y += 72;
     }
 
+    /* "GPS Stats" - the same launcher shape, directly under Radio menus
+     * because for the QMX's own receiver this IS a trip into those menus. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_GPSSTATS, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_add_event_cb(btn, drawer_gpsstats_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, LV_SYMBOL_GPS "  GPS Stats");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
     // Display sleep (#34): idle minutes before the backlight turns off.
     // Touch wakes it; a two-finger double-tap blanks immediately. Kept in
     // both Panadapter and FT8 modes (it's a device-level setting).
@@ -15587,6 +15613,22 @@ static void drawer_term_btn_cb(lv_event_t *e)
     (void)e;
     ui_set_drawer_open(false);
     qmx_term_view_open();
+}
+
+static void drawer_gpsstats_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_set_drawer_open(false);
+    /* gps_status_view_open() decides for itself which receiver is in use and
+     * hands over to the radio's own viewer for the QMX - and says nothing at
+     * all when neither is disciplining the clock. The toast is here rather
+     * than there because a BUTTON press that appears to do nothing is a
+     * different thing from a tap on a clock: he pressed this one on purpose. */
+    if (!gps_status_view_available()) {
+        ui_toast("No GPS receiver is disciplining the clock");
+        return;
+    }
+    gps_status_view_open();
 }
 
 static void drawer_check_flip_cb(lv_event_t *e)
