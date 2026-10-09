@@ -37,13 +37,33 @@ extern "C"
  * at the two pack functions below.
  */
 
-/* Frame type, the first 3 bits of every frame (varicode.h). */
+/* Frame type. ⛔ THE FIELD IS NOT ALWAYS 3 BITS WIDE.
+ *
+ * Types 0..3 use three bits. The data frames use only the top TWO, and the
+ * third bit is payload - so a frame beginning 10x is a data frame whichever
+ * way x falls, and the same for 11x. The protocol does this because no other
+ * type starts with a 1, so that bit is free to carry message content.
+ *
+ * Reading all three bits and treating the result as eight distinct types was
+ * wrong in two ways at once: it produced phantom types 5 and 7 that cannot
+ * mean anything, and it would have split one sender's data frames across two
+ * buckets depending on the value of a payload bit. Use js8_frame_type(),
+ * which collapses them. */
 typedef enum {
     JS8_FRAME_HEARTBEAT         = 0,  /* [000] CQ and HB, carries a grid */
     JS8_FRAME_COMPOUND          = 1,  /* [001] not implemented - out of scope */
     JS8_FRAME_COMPOUND_DIRECTED = 2,  /* [010] not implemented - out of scope */
     JS8_FRAME_DIRECTED          = 3,  /* [011] the exchange */
+    JS8_FRAME_DATA              = 4,  /* [10x] free text, per-character coding */
+    JS8_FRAME_DATA_COMPRESSED   = 6,  /* [11x] free text, word-indexed coding */
 } js8_frame_type_t;
+
+/* True for the two data frames, so callers do not have to know which codes
+ * those are. */
+static inline bool js8_frame_is_data(js8_frame_type_t t)
+{
+    return t == JS8_FRAME_DATA || t == JS8_FRAME_DATA_COMPRESSED;
+}
 
 #define JS8_FRAME_BYTES 9     /* 72 bits, MSB first */
 

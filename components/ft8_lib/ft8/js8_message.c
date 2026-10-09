@@ -431,7 +431,18 @@ int js8_unpack_num(uint8_t packed)
 
 js8_frame_type_t js8_frame_type(const uint8_t frame[JS8_FRAME_BYTES])
 {
-    return (js8_frame_type_t)((frame[0] >> 5) & 7u);
+    uint8_t t3 = (uint8_t)((frame[0] >> 5) & 7u);
+    /* ⛔ The data frames flag themselves in TWO bits, not three - the third is
+     * payload (see the enum). So 100/101 are one type and 110/111 are one
+     * type, and the odd codes must be folded onto the even ones rather than
+     * reported as types 5 and 7, which do not exist.
+     *
+     * This used to return all three bits. The effect was invisible while
+     * nothing handled data frames at all - js8_text.c dropped 4..7 alike
+     * through its default - and would have become a split-sender bug the
+     * moment reassembly started bucketing by type. */
+    if (t3 >= 4u) t3 &= 6u;
+    return (js8_frame_type_t)t3;
 }
 
 bool js8_pack_directed(const js8_directed_t* msg, uint8_t frame[JS8_FRAME_BYTES])

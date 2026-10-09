@@ -168,10 +168,30 @@ bool js8_frame_to_text(const uint8_t frame[JS8_FRAME_BYTES], char* out, size_t o
 
     case JS8_FRAME_COMPOUND:
     case JS8_FRAME_COMPOUND_DIRECTED:
-    default:
         /* Out of scope (docs/js8-feasibility.md). Refusing is right: these
          * carry compound callsigns, and rendering one with the 28-bit codec
          * would put a DIFFERENT station's callsign on the screen. */
+        return false;
+
+    case JS8_FRAME_DATA:
+    case JS8_FRAME_DATA_COMPRESSED:
+        /* ⛔ RECOGNISED BUT NOT RENDERABLE, and the distinction matters.
+         *
+         * These are JS8's free text. Turning one into characters needs the
+         * coding table it was packed with - a 44-entry Huffman alphabet, or a
+         * 262144-word index - and this project has neither. Both live only in
+         * JS8Call, under GPL-3, and this codebase is MIT. A word list is data
+         * rather than a design idea: any decoder that reads a compressed
+         * frame has to reproduce the same indices, so there is no route to it
+         * by reimplementation. See docs/js8-feasibility.md, J7.
+         *
+         * So a data frame goes to js8_reasm.c instead, which can say WHO is
+         * sending, HOW MANY frames and WHEN - everything except the words.
+         * Returning false here is correct and must stay separate from the
+         * compound case above: that one is a refusal, this one is a gap. */
+        return false;
+
+    default:
         return false;
     }
 }
