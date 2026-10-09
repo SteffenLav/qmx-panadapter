@@ -1,0 +1,4 @@
+# JS8 slot UTC 1791555480  dial 14078000 Hz  KiwiSDR 85.183.11.108:8073 (Hamburg)
+# THIS BUILD'S OWN OUTPUT, not ground truth - a regression floor. See README.md.
+141800  0  0.0  0 ~  HB IU7VLD JN80
+#F F4MEE: JE NE M'ATTENDAI PAS A <?> UN FR SUR CETTE FRÉ<?>

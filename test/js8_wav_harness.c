@@ -79,6 +79,13 @@ static int g_unrendered[8];
 static int g_slots = 0;
 static int g_exp_total = 0, g_got_total = 0, g_match_total = 0, g_extra_total = 0;
 
+/* Expected free-text runs for the slot being checked, filled by
+ * parse_expected() from the "#F " lines and cleared once the slot is done.
+ * Declared up here because parse_expected() is above the reassembly block. */
+static char g_exp_ft[MAX_ROWS][128];
+static int  g_n_exp_ft;
+static int  g_ft_lost;
+
 /* ---- WAV ------------------------------------------------------------- */
 
 /* Deliberately strict. A corpus WAV that is not exactly 12 kHz mono 16-bit is
@@ -167,6 +174,16 @@ static int parse_expected(const char *path, row_t *rows, int max_rows)
     char line[512];
     while (n < max_rows && fgets(line, sizeof(line), f)) {
         trim(line);
+        /* "#F <text>" is an expected FREE-TEXT run for this slot, exactly as
+         * js8_reasm_describe() renders it. Without this the corpus guards the
+         * structured decodes and nothing else, which is how J7 came to have no
+         * on-air regression floor at all. It hides behind '#' so an older
+         * harness reads these as comments instead of choking. */
+        if (line[0] == '#' && line[1] == 'F' && line[2] == ' ') {
+            if (g_n_exp_ft < MAX_ROWS)
+                snprintf(g_exp_ft[g_n_exp_ft++], sizeof(g_exp_ft[0]), "%s", line + 3);
+            continue;
+        }
         if (!line[0] || line[0] == '#') continue;
         const char *tilde = strstr(line, "~");
         if (!tilde) continue;
@@ -352,19 +369,36 @@ static void run_pair(const char *wav, const char *txt)
      * lives JS8_REASM_TIMEOUT_SLOTS past its last frame, so printing every
      * active run would print one message once per slot for a minute. */
     js8_reasm_tick(&g_reasm, slot_utc);
+    char seen_ft[MAX_ROWS][128];
+    int  n_seen_ft = 0;
     for (int k = 0; k < js8_reasm_active(&g_reasm); k++) {
         const js8_reasm_run_t *run = js8_reasm_at(&g_reasm, k);
         if (!run || run->last_slot != slot_utc) continue;
         char one[96];
         if (!js8_reasm_describe(run, one, sizeof(one))) continue;
-        printf("        [free text] %s\n", one);
         g_freetext_runs++;
+        if (n_seen_ft < MAX_ROWS) {
+            snprintf(seen_ft[n_seen_ft], sizeof(seen_ft[0]), "%s", one);
+            /* ⛔ TRIM BEFORE COMPARING. A JS8 frame often ends mid-word, so a
+             * run's text frequently ends in a space - and trim() has already
+             * taken that space off the expected line when it was read. Without
+             * this every growing message reads as LOST. */
+            trim(seen_ft[n_seen_ft]);
+            n_seen_ft++;
+        }
     }
-
+    /* ⛔ PRINTED AFTER THE FILE NAME, NOT BEFORE IT. These lines used to come
+     * out above the "<name>.wav" summary, so every free-text line appeared
+     * under the PREVIOUS slot. That is not cosmetic: the script that generated
+     * this corpus's expectations read the output and attributed every run to
+     * the wrong file, and the corpus then failed against itself. */
     if (n_exp < 0) {
         printf("  %-20s  %d decoded   (no .txt - nothing to compare)\n",
                base, n_got);
         for (int i = 0; i < n_got; i++) printf("        %s\n", got[i].text);
+        for (int k = 0; k < n_seen_ft; k++)
+            printf("        [free text] %s\n", seen_ft[k]);
+        g_n_exp_ft = 0;
         return;
     }
     g_exp_total += n_exp;
@@ -389,6 +423,22 @@ static void run_pair(const char *wav, const char *txt)
     printf("  %-20s  %d/%d%s%s\n", base, matched, n_exp,
            extra   ? "  +EXTRA" : "",
            missing ? "  <-- LOST" : "");
+    for (int k = 0; k < n_seen_ft; k++)
+        printf("        [free text] %s\n", seen_ft[k]);
+    /* An expected run that did not come back is a LOST decode and fails - the
+     * same contract the structured rows have. The corpus is a floor: decoding
+     * MORE is fine, decoding less is not. */
+    for (int i = 0; i < g_n_exp_ft; i++) {
+        int hit = 0;
+        for (int k = 0; k < n_seen_ft; k++)
+            if (!strcmp(g_exp_ft[i], seen_ft[k])) { hit = 1; break; }
+        if (!hit) {
+            printf("        LOST free text: %s\n", g_exp_ft[i]);
+            g_ft_lost++;
+            g_fail++;
+        }
+    }
+    g_n_exp_ft = 0;
     if (missing) {
         g_fail++;
         for (int i = 0; i < n_exp; i++) {
@@ -588,6 +638,7 @@ int main(int argc, char **argv)
      * statement about the recording; before, it was a statement about the
      * harness. */
     printf("free text  : %d  (runs, in the slot a frame arrived)\n", g_freetext_runs);
+    if (g_ft_lost) printf("free text LOST: %d\n", g_ft_lost);
     printf("matched    : %d\n", g_match_total);
     printf("extra      : %d  (not a failure - the corpus is a floor)\n", g_extra_total);
     printf("\n%s\n", g_fail ? "FAIL - a decode present in the corpus was lost"
