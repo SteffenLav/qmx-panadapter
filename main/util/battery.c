@@ -185,6 +185,24 @@ int battery_get_mv(void)
     return (int)mv;
 }
 
+bool battery_get_raw_mv(int *out_mv)
+{
+    if (!s_initialised) return false;
+    uint32_t mv;
+    if (ina226_read_bus_mv(&mv) != ESP_OK) return false;
+    if (out_mv) *out_mv = (int)mv;
+    return true;
+}
+
+bool battery_get_charge_ma(int *out_ma)
+{
+    if (!s_initialised) return false;
+    int32_t ma;
+    if (ina226_read_shunt_ma(&ma) != ESP_OK) return false;
+    if (out_ma) *out_ma = (int)ma;
+    return true;
+}
+
 bool battery_is_charging(void)
 {
     if (!s_initialised) return false;

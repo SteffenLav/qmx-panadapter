@@ -421,6 +421,32 @@ static void status_task(void *arg)
         // CHARGE_IR_DROP_MV above), NOT the raw displayed level, so the
         // decision tracks true SoC instead of the momentarily-loaded
         // terminal voltage.
+        /* ⭐ BATTERY CALIBRATION TRACE. The data needed to replace the fixed
+         * CHARGE_IR_DROP_MV with a current-scaled model, logged where the
+         * serial capture keeps it.
+         *
+         * R_internal = dV/dI across a charge on/off transition, so V and I must
+         * be sampled together and UNCOOKED - battery_get_mv() has already
+         * subtracted the very constant under test. The line also carries the
+         * compensated level so the error is visible directly.
+         *
+         * Logged only while current is actually flowing, plus one line on every
+         * cutoff/resume transition below. On this bench the pack sits at the
+         * limit with the charger permanently connected, so charging is normally
+         * OFF and this costs nothing; when it does charge, one line a second is
+         * exactly the resolution the transition needs. */
+        {
+            static bool s_batcal_prev_charging = false;
+            int raw_mv = -1, chg_ma = 0;
+            bool have_v = battery_get_raw_mv(&raw_mv);
+            bool have_i = battery_get_charge_ma(&chg_ma);
+            if (have_v && have_i && (charging || s_batcal_prev_charging)) {
+                ESP_LOGI(TAG, "batcal: raw=%dmV ma=%d comp_level=%d%% charging=%d cutoff=%d",
+                         raw_mv, chg_ma, level, (int)charging, (int)s_charge_cutoff_active);
+            }
+            s_batcal_prev_charging = charging;
+        }
+
         /* ⛔ A FAILED READ IS NOT A FLAT BATTERY. battery_get_level() returns -1
          * when the INA226 read fails, and -1 satisfies "level < limit - 5", so
          * a single bad read switched charging straight back on and defeated
@@ -445,10 +471,16 @@ static void status_task(void *arg)
                     /* No usable reading this tick - hold whatever state we are
                        in and wait for the next poll a second from now. */
                 } else if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                    int rv = -1, rm = 0;
+                    (void)battery_get_raw_mv(&rv); (void)battery_get_charge_ma(&rm);
                     bsp_set_charge_en(false);
                     s_charge_cutoff_active = true;
-                    ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%)",
-                             level, (unsigned)cfg.charge_limit_pct);
+                    /* raw+ma AT THE INSTANT OF CUTOFF. This is the one sample
+                       the whole IR model turns on: pair it with the resting
+                       voltage a minute later and the real drop falls out. */
+                    ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%) "
+                                  "[batcal cut: raw=%dmV ma=%d]",
+                             level, (unsigned)cfg.charge_limit_pct, rv, rm);
                 } else if (s_charge_cutoff_active &&
                            level < (int)cfg.charge_limit_pct - CHARGE_LIMIT_HYSTERESIS_PCT) {
                     bsp_set_charge_en(true);
