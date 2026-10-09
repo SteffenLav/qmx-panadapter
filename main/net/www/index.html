@@ -9750,6 +9750,8 @@ document.getElementById("term-close").addEventListener("click", termCloseModal);
    REFRESH matches the glass's own REFRESH_MS (ui/gps_status_view.c): a GNSS
    receiver reports once a second and a faster poll would only cost HTTP. */
 let gpsTimer = null;
+let gpsMetrics = null;   // cached cell metrics - see the fit80() call
+let gpsGridShown = "";   // the grid currently painted
 const GPS_REFRESH_MS = 1000;
 
 function gpsEsc(t) {
@@ -9765,6 +9767,8 @@ function gpsShowGrid(on) {
     const sv = document.getElementById("gps-rings");
     while (sv && sv.firstChild) sv.removeChild(sv.firstChild);
     document.getElementById("gps-screen").innerHTML = "";
+    gpsGridShown = "";
+    gpsSatsShown = "";
     document.getElementById("gps-sats").style.display = "none";
     document.getElementById("gps-state").textContent = "";
   }
@@ -9812,9 +9816,27 @@ function gpsRowHtml(text, marks, row, cols) {
    same rows to the RIGHT of it. Positioned from fit80()'s measured cell size,
    and it scrolls because a receiver routinely sees twenty satellites while the
    hole is twelve rows tall - the same reason the pane on the glass scrolls. */
+/* ⛔ ONLY REBUILD WHEN THE CONTENT CHANGED, AND KEEP THE SCROLL.
+ *
+ * This polls once a second and used to replace the pane's innerHTML every
+ * time. Replacing it resets scrollTop to 0 and repaints every row, so the
+ * list jumped back to the top once a second and visibly flickered - reported
+ * from the glass 2026-10-09 ("the satellite list is flipping all the time").
+ * The Tab5 does not do this because it sets each label's TEXT and leaves the
+ * objects alone; this is the browser-side equivalent.
+ *
+ * ⚠ MEASURED FIRST: four consecutive /api/gps polls on the bench returned the
+ * satellites in an identical order, so the device was not reordering anything
+ * and the fault was entirely here. Do not "fix" this by sorting the list. */
+let gpsSatsShown = "";
+
 function gpsPlaceSats(metrics, j) {
   const pane = document.getElementById("gps-sats");
-  if (!metrics || !j.sats || !j.sats.length) { pane.style.display = "none"; return; }
+  if (!metrics || !j.sats || !j.sats.length) {
+    pane.style.display = "none";
+    gpsSatsShown = "";
+    return;
+  }
   const row0 = (j.table_row0 !== undefined) ? j.table_row0 : 12;
   const rows = (j.rows || 24) - row0;
   pane.style.left     = (metrics.padL) + "px";
@@ -9823,8 +9845,14 @@ function gpsPlaceSats(metrics, j) {
   pane.style.height   = (rows * metrics.lineH) + "px";
   pane.style.fontSize = metrics.size + "px";
   pane.style.display  = "";
-  pane.innerHTML = j.sats.map(
+
+  const html = j.sats.map(
     (r) => '<div style="color:' + r.colour + '">' + gpsEsc(r.text) + "</div>").join("");
+  if (html === gpsSatsShown) return;          /* nothing moved - leave it be */
+  const keep = pane.scrollTop;                /* a rebuild loses this */
+  pane.innerHTML = html;
+  pane.scrollTop = keep;
+  gpsSatsShown = html;
 }
 
 /* Paint the elevation rings as thin faint-grey ovals, positioned from the
@@ -9914,19 +9942,34 @@ async function gpsPoll() {
 
   const cols  = j.cols || 80;
   const marks = j.marks || [];
-  document.getElementById("gps-screen").innerHTML =
-      (j.lines || []).map((t, r) => gpsRowHtml(t, marks, r, cols)).join("\n");
+  {
+    /* Same rule as the satellite pane: a 1 Hz innerHTML rebuild of the whole
+       grid repaints 24 rows whether or not anything changed, and drops any
+       text the operator had selected. */
+    const grid = (j.lines || []).map((t, r) => gpsRowHtml(t, marks, r, cols)).join("\n");
+    if (grid !== gpsGridShown) {
+      document.getElementById("gps-screen").innerHTML = grid;
+      gpsGridShown = grid;
+    }
+  }
   {
     /* One measurement, both overlays - the rings and the satellite pane must
-       land on the same grid or they disagree with the text under them. */
-    const metrics = fit80("gps-screen");
-    gpsDrawRings(metrics, j);
-    gpsPlaceSats(metrics, j);
+       land on the same grid or they disagree with the text under them.
+       ⛔ CACHED. fit80() resets the font size to its base and re-measures, so
+       calling it on every 1 Hz poll reflowed the whole grid once a second -
+       the other half of the flicker. The cell size only changes when the
+       window does, and the resize handler drops the cache. */
+    if (!gpsMetrics) gpsMetrics = fit80("gps-screen");
+    gpsDrawRings(gpsMetrics, j);
+    gpsPlaceSats(gpsMetrics, j);
   }
 }
 
 function gpsOpenModal() {
   document.getElementById("gps-modal").style.display = "";
+  gpsMetrics = null;        /* the modal was hidden, so nothing was measurable */
+  gpsSatsShown = "";
+  gpsGridShown = "";
   gpsShowGrid(false);
   document.getElementById("gps-state").textContent = "reading...";
   gpsMsg("");
@@ -9950,7 +9993,10 @@ document.getElementById("gps-close").addEventListener("click", gpsCloseModal);
 /* The pane is positioned from measured metrics, so a resize has to re-measure
    - otherwise the satellite table slides off the hole it belongs in. */
 window.addEventListener("resize", () => {
-  if (document.getElementById("gps-modal").style.display !== "none") gpsPoll();
+  if (document.getElementById("gps-modal").style.display === "none") return;
+  gpsMetrics = null;        /* the cell size changed - re-measure once */
+  gpsSatsShown = "";        /* and the pane must be rebuilt at the new size */
+  gpsPoll();
 });
 document.querySelectorAll(".term-key").forEach((b) => {
   b.addEventListener("click", async () => {
