@@ -1447,10 +1447,19 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    volatile int *cursor, portMUX_TYPE *cursor_lock,
                                    decode_result_t *out)
 {
+    /* ⛔ EVERY COUNTER IN decode_result_t IS RESET HERE, and the list is not
+     * optional. r_main is a STACK local in decode_slot and is never memset,
+     * so a counter left out of this block starts as whatever was on the
+     * stack. Adding js8ev[] without adding n_js8ev here crashed ft8_dec on
+     * the first JS8 slot after boot (load access fault at 0x4c000000,
+     * 2026-10-09): the merge loop read a garbage count and walked off the
+     * array. Anything added to that struct is added here in the same edit. */
     out->early_advanced = false;
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
+    out->n_js8ev     = 0;
+    out->js8ev_dropped = 0;
     (void)start_off_ms;   // no longer added to the timing (backfill anchors the
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
@@ -2055,7 +2064,14 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         const decode_result_t *ranges[2] = { &r_main, &r_worker };
         for (int pass = 0; pass < 2; pass++) {
             for (int rr = 0; rr < 2; rr++) {
-                for (int k = 0; k < ranges[rr]->n_js8ev; k++) {
+                /* Clamped, as well as initialised at the source. The reset
+                 * above is the fix; this is so the same slip can never again
+                 * turn into a crash on the decode task overnight - it would
+                 * cost a wrong count instead. */
+                int nev = ranges[rr]->n_js8ev;
+                if (nev < 0) nev = 0;
+                if (nev > FT8_JS8_MAX_EVENTS) nev = FT8_JS8_MAX_EVENTS;
+                for (int k = 0; k < nev; k++) {
                     bool is_data = js8_frame_is_data(ranges[rr]->js8ev[k].type);
                     if ((pass == 0) == is_data) continue;   /* pass 0 = idents */
                     js8_reasm_add(&s_js8_reasm, slot_sec,
