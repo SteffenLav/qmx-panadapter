@@ -703,6 +703,14 @@ void settings_set_colormap_idx(uint8_t idx);
 void settings_set_my_callsign(const char *call);
 void settings_set_my_grid(const char *grid);
 
+// The grid the GPS last wrote into my_grid. Provenance, not configuration:
+// gps_autogrid.c uses it to leave a hand-corrected grid alone (see the ⭐
+// guard 3 in main/util/gps_autogrid.h), and that has to survive a reboot.
+// Written through to NVS immediately - it changes at most once per square.
+// Only status.c should touch these.
+void settings_get_gps_grid_auto(char *out, size_t cap);
+void settings_set_gps_grid_auto(const char *grid);
+
 // FT8 CQ message presets. idx 0..2. Pass NULL/empty to clear a slot.
 // settings_set_cq_sel selects the active preset (0..2). Debounced flush.
 void settings_set_cq_msg(uint8_t idx, const char *text);

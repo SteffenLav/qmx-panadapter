@@ -663,17 +663,27 @@ static void status_task(void *arg)
          * automatically when we now have the grid from GPS" - operator,
          * 2026-10-09. my_grid goes out in every FT8 CQ and TX1 and into every
          * ADIF record, so WHEN this fires is the careful part and lives in
-         * gps_autogrid.c with its own harness: a minute of agreement, and only
-         * when it differs from what is stored.
+         * gps_autogrid.c with its own harness: a minute of agreement, only
+         * when it differs from what is stored, and never twice for the same
+         * square.
          *
-         * ⚠ It overwrites a hand-entered grid, deliberately - operating
-         * portable is the case this is for, and that is exactly the case
-         * where the stored grid is the wrong one. Logged, so the change is
-         * never silent. */
+         * ⭐ "I want it filled in as soon as GPS data is available - operator
+         * can then alter it if needed" (operator, 2026-10-09). So the module
+         * remembers what it wrote and the seed below reads that back from NVS
+         * at first call. Without the seed the operator's correction would be
+         * undone 60 s after every boot, which is the opposite of "can then
+         * alter it". Moving to a DIFFERENT square still writes - that is the
+         * portable case the feature is for. Logged, never silent. */
         {
             static gps_autogrid_t s_autogrid;
             static bool           s_autogrid_init;
-            if (!s_autogrid_init) { gps_autogrid_init(&s_autogrid); s_autogrid_init = true; }
+            if (!s_autogrid_init) {
+                gps_autogrid_init(&s_autogrid);
+                char seed[8] = { 0 };
+                settings_get_gps_grid_auto(seed, sizeof(seed));
+                gps_autogrid_set_written(&s_autogrid, seed);
+                s_autogrid_init = true;
+            }
 
             unit_gps_info_t gi;
             unit_gps_get_info(&gi);
@@ -686,6 +696,10 @@ static void status_task(void *arg)
             if (gps_autogrid_step(&s_autogrid, gps_grid, cfg.my_grid)) {
                 ESP_LOGI(TAG, "grid from GPS: '%s' -> '%s'", cfg.my_grid, gbuf);
                 settings_set_my_grid(gbuf);
+                /* Persist WHAT WE WROTE, not just the grid itself: this is the
+                 * only record that distinguishes a later hand edit from a
+                 * square never filled. */
+                settings_set_gps_grid_auto(gps_autogrid_written(&s_autogrid));
             }
         }
 

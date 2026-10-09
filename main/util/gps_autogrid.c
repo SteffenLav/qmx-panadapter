@@ -2,10 +2,29 @@
 
 #include <string.h>
 
+/* Copy into a fixed buffer, always terminated. */
+static void set_grid(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+    if (src) for (; src[i] && i + 1 < cap; i++) dst[i] = src[i];
+    dst[i] = 0;
+}
+
 void gps_autogrid_init(gps_autogrid_t *st)
 {
     if (!st) return;
     memset(st, 0, sizeof(*st));
+}
+
+void gps_autogrid_set_written(gps_autogrid_t *st, const char *grid)
+{
+    if (!st) return;
+    set_grid(st->written, sizeof(st->written), grid);
+}
+
+const char *gps_autogrid_written(const gps_autogrid_t *st)
+{
+    return st ? st->written : "";
 }
 
 /* Maidenhead is conventionally FIELD upper, SQUARE digits, SUBSQUARE lower,
@@ -40,9 +59,7 @@ bool gps_autogrid_step(gps_autogrid_t *st, const char *gps_grid,
     }
 
     if (!same_grid(st->last, gps_grid)) {
-        size_t i = 0;
-        for (; gps_grid[i] && i + 1 < sizeof(st->last); i++) st->last[i] = gps_grid[i];
-        st->last[i] = 0;
+        set_grid(st->last, sizeof(st->last), gps_grid);
         st->stable_s = 1;
         return false;
     }
@@ -54,7 +71,16 @@ bool gps_autogrid_step(gps_autogrid_t *st, const char *gps_grid,
     if (st->stable_s < GPS_AUTOGRID_STABLE_S) st->stable_s++;
     if (st->stable_s < GPS_AUTOGRID_STABLE_S) return false;
 
-    /* Stable. Write it only if it says something different from what is
-     * stored - including the case where nothing is stored at all. */
-    return !same_grid(stored_grid ? stored_grid : "", gps_grid);
+    /* Stable. Guard 2: nothing to do if it already says this. Includes the
+     * case where nothing is stored at all - then they differ, and we fill. */
+    if (same_grid(stored_grid ? stored_grid : "", gps_grid)) return false;
+
+    /* Guard 3: we already wrote THIS square once and the stored grid has
+     * since moved away from it, so the operator typed over it. Leave it
+     * alone. The suppression is per square: reaching a different square
+     * writes again, which is the portable case. */
+    if (st->written[0] && same_grid(st->written, gps_grid)) return false;
+
+    set_grid(st->written, sizeof(st->written), gps_grid);
+    return true;
 }

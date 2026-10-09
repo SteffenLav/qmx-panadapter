@@ -33,6 +33,15 @@ static const char *TAG = "settings";
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
+/* Provenance, NOT a user setting: the grid the GPS last wrote into
+ * my_grid. gps_autogrid.c needs it to tell "the operator typed over my
+ * value" from "we have not written this square yet", and that answer must
+ * survive a reboot or the operator's correction is undone a minute after
+ * every boot. Deliberately absent from config_io_export() and from the web
+ * settings: it is device state, and carrying it to another radio would
+ * suppress that radio's first fill. A settings factory reset erases the
+ * whole user_nvs partition, so it is forgotten there, which is right. */
+#define KEY_GPS_GRID_A  "gps_grid_a"
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_WIFI_IP     "wifi_ip"
 #define KEY_WIFI_MASK   "wifi_mask"
@@ -3719,4 +3728,30 @@ void settings_set_lotw_uploaded_n(uint32_t n)
     s_pending.lotw_uploaded_n = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_LOTW_UPLOADED);
+}
+
+/* ── The grid the GPS last wrote (provenance for gps_autogrid.c) ────────────
+ * Written straight through rather than staged: it changes at most once per
+ * Maidenhead square the station moves into, so the debounce machinery and a
+ * dirty bit would buy nothing. It is also not part of qmx_settings_t on
+ * purpose - no caller but status.c has any business reading it. */
+void settings_get_gps_grid_auto(char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    out[0] = ' ';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    size_t sz = cap;
+    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = ' ';
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_set_gps_grid_auto(const char *grid)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (grid && grid[0]) nvs_set_str(s_nvs, KEY_GPS_GRID_A, grid);
+    else                 nvs_erase_key(s_nvs, KEY_GPS_GRID_A);
+    nvs_commit(s_nvs);
+    xSemaphoreGive(s_mutex);
 }
