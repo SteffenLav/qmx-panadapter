@@ -22,6 +22,7 @@
 #include "cw_decode.h"
 #include "audio.h"
 #include "rx_audio.h"
+#include "util/mic_probe.h"   // one-shot ES7210 channel probe (GitHub #17)
 #include "dsp.h"
 #include "render.h"
 #include "render_waterfall.h"
@@ -477,6 +478,12 @@ void app_main(void)
     // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
     // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
     // costs nothing on any unit that has never turned it on.
+    /* ⛔ BEFORE rx_audio_preopen(), which claims the I2S port with a TX-only
+     * channel. The probe needs the RX half, and the two cannot coexist - see
+     * util/mic_probe.h. Does nothing unless armed, and never returns when it
+     * runs: it reboots into a normal session. */
+    mic_probe_run_if_pending();
+
     rx_audio_preopen();
     MEM_LEDGER("rx_audio_preopen (I2S)");
 

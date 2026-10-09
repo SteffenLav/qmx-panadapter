@@ -36,6 +36,7 @@ idf_component_register(
         "ui/gps_page.c"
         "ui/js8_page.c"
         "util/gps_autogrid.c"
+        "util/mic_probe.c"
         "ui/gps_status_view.c"
         "ui/qmx_term_view.c"
         "ui/font_qmx_mono_25.c"

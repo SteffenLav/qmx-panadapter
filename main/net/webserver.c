@@ -68,6 +68,7 @@
 #include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
+#include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
@@ -2316,6 +2317,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, out ? out : "{\"ok\":false}");
         if (out) cJSON_free(out);
         cJSON_Delete(resp);
+        return ESP_OK;
+    } else if (action && strcmp(action, "mic_probe") == 0) {
+        /* ⛔ DEV ONLY, AND IT REBOOTS TWICE. Arms the one-shot ES7210 channel
+         * probe and restarts into it; the probe restarts again when it is
+         * done. The QMX is wedged by both reboots (#74) and needs a power
+         * cycle afterwards.
+         *
+         * It exists because GitHub #17 turns on a question nobody can answer
+         * from the documentation: Tony reports the 3.5 mm socket is a 4-pole
+         * headset jack with the mic on the nearest ring, M5Stack's own page
+         * calls it a headphone jack and publishes no schematic, and a
+         * previous answer that GUESSED went out publicly and was wrong. Feed
+         * a tone into the mic ring, run this, and read the four per-channel
+         * RMS figures out of the serial log.
+         *
+         * See util/mic_probe.h for why it cannot be done without a reboot. */
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req,
+            "{\"ok\":true,\"note\":\"rebooting into the ES7210 probe; it reboots "
+            "again when done. Read the four per-channel RMS lines in the serial "
+            "log. The QMX will need a power cycle.\"}");
+        mic_probe_request();      /* does not return */
         return ESP_OK;
     } else if (action && strcmp(action, "cpu_owners") == 0) {
         // TEMP INSTRUMENT (#284) - dev only. Names the task eating a core.
