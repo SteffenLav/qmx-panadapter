@@ -24,6 +24,7 @@
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ui/gps_status_view.h" // the dev "gps_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
+#include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
@@ -304,6 +305,43 @@ static void add_ft8_tx_status(cJSON *root)
         cJSON_AddStringToObject(f, "tab",
                                 ft8_screen_view_js8_tab_is_conversation()
                                     ? "conversation" : "stations");
+
+        /* The newest few conversation entries - what the JS8 screen's
+         * Conversation pane is showing.
+         *
+         * ⛔ IT EXISTS SO THE PANE CAN BE VERIFIED WITHOUT THE OPERATOR'S
+         * EYES. The tab name was added for the same reason an hour earlier,
+         * and the contents were still invisible: checking whether a decode had
+         * reached the screen meant asking him to look, while he was working in
+         * the shack.
+         *
+         * ⚠ EIGHT, not JS8_CHAT_MAX_MSGS. The store holds 32 and each carries
+         * up to 240 characters of text, which is about 8 KB of JSON on a
+         * response that a browser polls every second. Eight is enough to see
+         * that the pane is alive and what is on top of it. */
+        if (ft8_op_mode_get() == FT8_OP_MODE_JS8) {
+            int n_chat = js8_chat_count();
+            if (n_chat > 8) n_chat = 8;
+            if (n_chat > 0) {
+                cJSON *carr = cJSON_AddArrayToObject(f, "chat");
+                for (int i = 0; i < n_chat && carr; i++) {
+                    js8_chat_msg_t cm;
+                    if (!js8_chat_at(i, &cm)) continue;
+                    cJSON *o = cJSON_CreateObject();
+                    cJSON_AddStringToObject(o, "kind",
+                                            cm.kind == JS8_CHAT_FREETEXT ? "freetext"
+                                                                         : "directed");
+                    cJSON_AddStringToObject(o, "sender", cm.sender);
+                    cJSON_AddStringToObject(o, "text",   cm.text);
+                    cJSON_AddNumberToObject(o, "hz",     cm.freq_hz);
+                    cJSON_AddNumberToObject(o, "utc",    (double)cm.first_utc);
+                    cJSON_AddNumberToObject(o, "frames", cm.frames);
+                    cJSON_AddBoolToObject(o,   "active", cm.active);
+                    cJSON_AddBoolToObject(o,   "truncated", cm.truncated);
+                    cJSON_AddItemToArray(carr, o);
+                }
+            }
+        }
 
         /* JS8 free text in flight (J7). Omitted entirely when nothing is in
          * flight, so a client cannot mistake an empty array for a decoder
