@@ -2750,6 +2750,27 @@ static void ft8_task(void *arg)
         last_boundary_ms = boundary_ms;
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
 
+        /* ⭐ TWO MARKS, ONE CLOCK - so a late key-down can be ATTRIBUTED.
+         *
+         * JS8 on 2026-10-09 went ACTIVE at +169 ms and +495 ms into the slot,
+         * against FT8's measured +14 ms, and neither DT-follow nor the
+         * late-fire rescue had fired. "going ACTIVE (+N ms)" in ft8_tx.c was
+         * the FIRST timestamp anyone took, and by then the time was already
+         * spent - one anchor cannot say where it went.
+         *
+         * These two say it. `woke` is how late this task got the boundary at
+         * all (scheduling, or the previous slot's work overrunning); the delta
+         * to the TX check is what this loop then does before it can key. Both
+         * are gettimeofday against the same clock that defines boundary_ms,
+         * which is the whole point - subtracting marks from different phases
+         * is how a 60x-wrong "884 ms baseline" was once derived here. */
+        int64_t woke_ms;
+        {
+            struct timeval tv_w;
+            gettimeofday(&tv_w, NULL);
+            woke_ms = (int64_t)tv_w.tv_sec * 1000 + tv_w.tv_usec / 1000;
+        }
+
         ft8_tx_request_t txreq;
         // Hold-for-decode gate (see FT8_TX_HOLD_DEADLINE_MS): a TX is due this
         // slot, but the previous RX slot's decode is still in flight and the
@@ -2824,7 +2845,21 @@ static void ft8_task(void *arg)
         // rest of its slot back, and we fall through to the normal RX capture
         // below rather than sitting idle until the next boundary (#136).
         bool slot_used_by_tx = false;
+        /* The second mark. Only printed when a burst is actually about to go
+         * out, so it costs nothing on an RX slot and cannot swamp the link. */
         if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
+            {
+                struct timeval tv_c;
+                gettimeofday(&tv_c, NULL);
+                int64_t check_ms = (int64_t)tv_c.tv_sec * 1000 + tv_c.tv_usec / 1000;
+                ESP_LOGI(TAG, "slot %d TX path: woke +%lld ms, TX check +%lld ms "
+                              "(loop spent %lld ms), hold=%d decode_in_flight=%d",
+                         slot_idx,
+                         (long long)(woke_ms - boundary_ms),
+                         (long long)(check_ms - boundary_ms),
+                         (long long)(check_ms - woke_ms),
+                         (int)hold_for_fresh, (int)bgate.decode_in_flight);
+            }
             ft8_status_set("TX: %s", txreq.display_text);
             note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
