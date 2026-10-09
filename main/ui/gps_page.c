@@ -20,6 +20,11 @@
 #define PLOT_W    (GPS_PAGE_COLS - PLOT_X0)   /* 52 */
 #define PLOT_CX   (PLOT_X0 + PLOT_W / 2)      /* 54 */
 #define PLOT_CY   11
+/* ⚠ WIDER THAN TALL ON PURPOSE - it fills the plot area, and the operator
+ * confirmed 2026-10-09 that it "need not be a true circular circle". Making
+ * it a true circle on the glass would mean PLOT_RX 20 (the cell is 15x27 px,
+ * so a circle needs a 1.8:1 radius ratio) and that was NOT what was wanted.
+ * The UFO complaint was about the OUTLINE, not the aspect - see draw_ring(). */
 #define PLOT_RX   24
 #define PLOT_RY   11
 #define TABLE_Y0  12
@@ -150,6 +155,62 @@ static bool cell_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1], int row, int
     return lines[row][col] == ' ';
 }
 
+/* One elevation ring, as a closed outline.
+ *
+ * ⛔ SPLIT BY SLOPE, NOT SCANNED ONE WAY. The ring is twice as wide as it is
+ * tall, so a pure row scan puts one dot per row everywhere: dense and vertical
+ * down the sides, but across the flat top it steps ten columns between rows
+ * and leaves the arc open. The eye then joins the two dense sides and reads
+ * the whole thing as two lens arcs meeting at points - operator, 2026-10-09:
+ * "two lenses put together (a UFO)".
+ *
+ * ⭐ The fix is the standard ellipse region split. Walk the curve by COLUMN
+ * where it is flatter than 45 degrees (the top and bottom) and by ROW where it
+ * is steeper (the sides). Each pass then advances one cell at a time along the
+ * direction the curve is actually moving, so the outline is continuous all the
+ * way round and still never doubles a dot - which is what the old row scan was
+ * protecting (2026-10-08: "only ONE dot per line - not 2 or 3").
+ *
+ * The slope of x^2/a^2 + y^2/b^2 = 1 is dy/dx = -(b^2 x)/(a^2 y); the two
+ * regions meet where that is 1. */
+static void draw_ring(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                      double a, double b)
+{
+    if (a < 1.0 || b < 1.0) return;
+
+    /* Flat part: one dot per column, top and bottom. */
+    for (int dx = -(int)lround(a); dx <= (int)lround(a); dx++) {
+        double xn = (double)dx / a;
+        if (xn < -1.0) xn = -1.0;
+        if (xn >  1.0) xn =  1.0;
+        double y = b * sqrt(1.0 - xn * xn);
+        if (y < 1e-9) continue;                        /* the side, not here */
+        if (b * b * fabs((double)dx) > a * a * y) continue;   /* |slope| > 1 */
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            int row = PLOT_CY + sgn * (int)lround(y);
+            int col = PLOT_CX + dx;
+            if (cell_free(lines, row, col)) put_ch(lines, row, col, '.');
+        }
+    }
+
+    /* Steep part: one dot per row, left and right. This is what gives a
+     * vertical run of cells at 90 and 270 - the tangent the operator asked
+     * for - because near the equator x barely changes between rows. */
+    for (int dy = -(int)lround(b); dy <= (int)lround(b); dy++) {
+        double yn = (double)dy / b;
+        if (yn < -1.0) yn = -1.0;
+        if (yn >  1.0) yn =  1.0;
+        double x = a * sqrt(1.0 - yn * yn);
+        if (x < 1e-9) continue;                        /* the top, not here */
+        if (b * b * x <= a * a * fabs((double)dy)) continue;  /* |slope| <= 1 */
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            int row = PLOT_CY + dy;
+            int col = PLOT_CX + sgn * (int)lround(x);
+            if (cell_free(lines, row, col)) put_ch(lines, row, col, '.');
+        }
+    }
+}
+
 static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
                      const unit_gps_info_t *in,
                      gps_page_marker_t *markers, int *n_markers)
@@ -194,61 +255,12 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         }
     }
 
-    /* Dotted rings at 0, 30 and 60 degrees elevation.
-     *
-     * ⭐ SCANNED BY ROW, NOT BY ANGLE. Stepping round the circle in degrees
-     * puts two and three dots side by side on the rows where the ellipse is
-     * flattest - it is wider than it is tall, so equal angular steps are not
-     * equal arc steps - and the ring reads as a ragged band rather than a
-     * line. Operator, 2026-10-08: "only ONE dot per line - not 2 or 3".
-     *
-     * One row at a time, solving the ellipse for x, gives exactly one dot per
-     * side per row and a clean oval. */
     /* TWO rings: the horizon rim and one HALF WAY in, which is 45 degrees of
      * elevation. The radio's plot has both; the three evenly-spaced rings this
      * code drew first were my invention and crowded a 52-column plot. */
     for (int elev = 0; elev <= 45; elev += 45) {
-        double k  = (90.0 - elev) / 90.0;
-        double rx = k * PLOT_RX;
-        double ry = k * PLOT_RY;
-        if (ry < 1.0) continue;
-        for (int y = PLOT_CY - (int)lround(ry); y <= PLOT_CY + (int)lround(ry); y++) {
-            double dy = (double)(y - PLOT_CY) / ry;
-            if (dy < -1.0) dy = -1.0;
-            if (dy >  1.0) dy =  1.0;
-            int dx = (int)lround(rx * sqrt(1.0 - dy * dy));
-            /* Where the ring is narrow - the top and bottom of the small
-             * inner rings - the left and right solutions land within a cell
-             * or two of each other and read as a blob. One dot there. */
-            if (dx <= 1) {
-                if (cell_free(lines, y, PLOT_CX)) put_ch(lines, y, PLOT_CX, '.');
-            } else {
-                if (cell_free(lines, y, PLOT_CX - dx)) put_ch(lines, y, PLOT_CX - dx, '.');
-                if (cell_free(lines, y, PLOT_CX + dx)) put_ch(lines, y, PLOT_CX + dx, '.');
-            }
-        }
-
-        /* The row scan alone leaves the TOP AND BOTTOM of the oval open: the
-         * ellipse is twice as wide as it is tall, so its flattest arcs cross
-         * many columns within one row. A second pass by column closes them,
-         * and only places a dot where the row is clear for two cells either
-         * side - which keeps the "one dot per line" rule that the row scan
-         * exists to satisfy. */
-        for (int x = PLOT_CX - (int)lround(rx); x <= PLOT_CX + (int)lround(rx); x++) {
-            double dxn = (double)(x - PLOT_CX) / rx;
-            if (dxn < -1.0) dxn = -1.0;
-            if (dxn >  1.0) dxn =  1.0;
-            int dy2 = (int)lround(ry * sqrt(1.0 - dxn * dxn));
-            for (int sgn = -1; sgn <= 1; sgn += 2) {
-                int y = PLOT_CY + sgn * dy2;
-                if (!cell_free(lines, y, x))     continue;
-                if (!cell_free(lines, y, x - 1)) continue;
-                if (!cell_free(lines, y, x + 1)) continue;
-                if (!cell_free(lines, y, x - 2)) continue;
-                if (!cell_free(lines, y, x + 2)) continue;
-                put_ch(lines, y, x, '.');
-            }
-        }
+        double k = (90.0 - elev) / 90.0;
+        draw_ring(lines, k * PLOT_RX, k * PLOT_RY);
     }
     for (int y = PLOT_CY - PLOT_RY; y <= PLOT_CY + PLOT_RY; y++) {
         if (cell_free(lines, y, PLOT_CX)) put_ch(lines, y, PLOT_CX, '.');

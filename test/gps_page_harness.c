@@ -205,6 +205,51 @@ static void test_sky_quadrants(void)
     CHECK(row[3] >= 9 && row[3] <= 13, "azimuth 270 should be mid-height, row %d\n", row[3]);
 }
 
+/* ⛔ THE RIM MUST BE A CLOSED OUTLINE, NOT TWO ARCS.
+ *
+ * The ring used to be scanned by row everywhere, which is dense down the
+ * sides and leaves ten-column gaps across the flat top, so it read as two
+ * lens shapes meeting at points - operator, 2026-10-09: "two lenses put
+ * together (a UFO)". Two properties pin the fix:
+ *
+ *   - the TOP row of the rim carries a continuous run of cells, not one dot;
+ *   - the sides stand VERTICAL at 90 and 270, which is the tangent he asked
+ *     for: the same column repeats over several rows either side of the
+ *     equator.
+ */
+static void test_rim_is_a_closed_outline(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    memset(&in, 0, sizeof(in));
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
+
+    /* The flat top: count the dots on the rim's topmost row. A row scan put
+     * one or two there; a closed outline puts a run. The compass label "0"
+     * sits in the middle of that run, so count dots either side of it. */
+    int top = 0;
+    for (int c = 28; c < GPS_PAGE_COLS; c++) if (lines[0][c] == '.') top++;
+    CHECK(top >= 8, "the rim's top row has %d dots - it is open, not an outline\n", top);
+
+    /* The vertical tangent: the leftmost rim cell must be in the SAME column
+     * for the rows just above and below the equator. The equator row itself
+     * is the 270-90 axis, so it is excluded. */
+    int colmin[3];
+    for (int i = 0; i < 3; i++) {
+        int r = 9 + i;                 /* rows 9, 10 - and 12 below */
+        if (i == 2) r = 12;
+        colmin[i] = -1;
+        for (int c = 28; c < GPS_PAGE_COLS; c++)
+            if (lines[r][c] == '.') { colmin[i] = c; break; }
+    }
+    CHECK(colmin[0] > 0 && colmin[0] == colmin[1],
+          "rows 9 and 10 start at columns %d and %d - the side is not vertical\n",
+          colmin[0], colmin[1]);
+    CHECK(colmin[1] == colmin[2],
+          "the rim is not symmetric about the equator (%d vs %d)\n",
+          colmin[1], colmin[2]);
+}
+
 /* The QMX page must keep the rows it cannot fill, showing them empty. Hiding
  * them would make it a different page, which is exactly what the operator
  * asked to avoid. */
@@ -301,6 +346,7 @@ int main(int argc, char **argv)
     test_grid();
     test_sat_table();
     test_sky_quadrants();
+    test_rim_is_a_closed_outline();
     test_qmx_source_keeps_its_rows();
     test_no_fix_says_so();
     test_title_names_the_port_not_a_version();
