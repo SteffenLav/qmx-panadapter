@@ -206,6 +206,61 @@ static void test_sky_quadrants(void)
     CHECK(row[3] >= 9 && row[3] <= 13, "azimuth 270 should be mid-height, row %d\n", row[3]);
 }
 
+/* ⛔ TWO SATELLITES CLOSE TOGETHER MUST NOT OVERPRINT.
+ *
+ * Seen on the Tab5 2026-10-09 with 14 satellites up: PRN 23 and 33 landed on
+ * the same cells and drew as one unreadable smear, and 5 and 65 did the same.
+ * put() wrote unconditionally and the marker inherited the same column, so
+ * the drawn layer stacked them too.
+ *
+ * The pair below is taken from that screen: both are ~2 degrees apart in
+ * azimuth at the same elevation, which is the same cell before the nudge. */
+static void test_close_satellites_do_not_overprint(void)
+{
+    unit_gps_info_t in;
+    char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    memset(&in, 0, sizeof(in));
+    in.n_sats = 2;
+    const int prn[2] = { 23, 33 };
+    for (int i = 0; i < 2; i++) {
+        in.sat[i].prn = (uint8_t)prn[i];
+        in.sat[i].elev_deg = 40;
+        in.sat[i].azim_deg = (int16_t)(45 + i * 2);   /* 45 and 47 */
+        in.sat[i].snr_db = 25;
+        in.sat[i].used = true;
+        in.sat[i].talker[0] = 'G'; in.sat[i].talker[1] = 'P';
+    }
+    gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
+
+    /* Both labels must appear WHOLE somewhere in the plot area. An overprint
+     * destroys one of them, so searching for the exact string is the test. */
+    for (int i = 0; i < 2; i++) {
+        char want[8];
+        snprintf(want, sizeof(want), "%dx", prn[i]);
+        int found = 0;
+        for (int r = 0; r < GPS_PAGE_ROWS; r++)
+            if (strstr(lines[r] + 28, want)) found++;
+        CHECK(found == 1, "PRN %d should appear once as \"%s\", found %d\n",
+              prn[i], want, found);
+    }
+
+    /* ⚠ And the nudge must not have thrown it across the plot. One cell is
+     * about 2.5 degrees of azimuth here; a label several cells away would be
+     * a lie about where the satellite is. Same row or one either side. */
+    int row[2] = { -1, -1 };
+    for (int i = 0; i < 2; i++) {
+        char want[8];
+        snprintf(want, sizeof(want), "%dx", prn[i]);
+        for (int r = 0; r < GPS_PAGE_ROWS && row[i] < 0; r++)
+            if (strstr(lines[r] + 28, want)) row[i] = r;
+    }
+    int drow = row[0] - row[1];
+    if (drow < 0) drow = -drow;
+    CHECK(row[0] >= 0 && row[1] >= 0 && drow <= 1,
+          "the two labels should stay within one row of each other, %d and %d\n",
+          row[0], row[1]);
+}
+
 /* ⛔ THE RIM IS SEPARATED DOTS, AND IT MUST STILL READ AS CLOSED.
  *
  * This test has been WRONG ONCE in the direction it is now testing against.
@@ -435,6 +490,7 @@ int main(int argc, char **argv)
     test_grid();
     test_sat_table();
     test_sky_quadrants();
+    test_close_satellites_do_not_overprint();
     test_no_ring_characters_in_the_grid();
     test_ring_geometry();
     test_axis_geometry();

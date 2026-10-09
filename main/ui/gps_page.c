@@ -1,4 +1,4 @@
-#include "gps_page.h"
+﻿#include "gps_page.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -20,7 +20,7 @@
 #define PLOT_W    (GPS_PAGE_COLS - PLOT_X0)   /* 52 */
 #define PLOT_CX   (PLOT_X0 + PLOT_W / 2)      /* 54 */
 #define PLOT_CY   11
-/* ⚠ WIDER THAN TALL ON PURPOSE - it fills the plot area, and the operator
+/* âš  WIDER THAN TALL ON PURPOSE - it fills the plot area, and the operator
  * confirmed 2026-10-09 that it "need not be a true circular circle". Making
  * it a true circle on the glass would mean PLOT_RX 20 (the cell is 15x27 px,
  * so a circle needs a 1.8:1 radius ratio) and that was NOT what was wanted.
@@ -51,14 +51,14 @@ const char *gps_page_title(gps_page_src_t src, int rx_gpio)
     /* Never just "GPS". Two receivers, two antennas, two failure modes, and
      * only one of them survives the radio being unplugged.
      *
-     * ⛔ IT USED TO SAY "Module v2.1 on the M-Bus", HARDCODED, and that was
+     * â›” IT USED TO SAY "Module v2.1 on the M-Bus", HARDCODED, and that was
      * wrong for half the hardware this driver supports. GPS_PAGE_SRC_MODULE
      * covers Eric's Unit GPS v1.1 on PORT.A as well as the Module GPS v2.1 on
      * the M-Bus - the header still says so - and nothing read a version from
      * anything. A Unit GPS was labelled as a module on a bus it was not
      * plugged into.
      *
-     * ⭐ So name the PORT, which is a fact we hold: the driver records the pin
+     * â­ So name the PORT, which is a fact we hold: the driver records the pin
      * it bound to (unit_gps_rx_gpio()). The version is NOT recoverable - the
      * baud rate does not discriminate, because the v2.1's ATGM336H-6N defaults
      * to 9600 and runs at 115200 on this bench - so it is not claimed. */
@@ -138,7 +138,7 @@ static void fmt_latlon(char *buf, size_t n, double deg, bool is_lat)
     snprintf(buf, n, "%d %09.6f %c", d, m, hemi);
 }
 
-/* The rings the view draws. ⛔ THE ONE PLACE THE RING GEOMETRY LIVES - the
+/* The rings the view draws. â›” THE ONE PLACE THE RING GEOMETRY LIVES - the
  * Tab5 and the browser both read it from here, so they cannot disagree about
  * where the horizon is. See the note in gps_page.h for why these stopped
  * being characters. */
@@ -181,6 +181,43 @@ int gps_page_axes(gps_page_axis_t *out, int max)
     return n;
 }
 
+/* True when every cell the label would occupy is still blank. */
+static bool cells_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                       int row, int col, int len)
+{
+    if (row < 0 || row >= GPS_PAGE_ROWS) return false;
+    if (col < PLOT_X0 || col + len > GPS_PAGE_COLS) return false;
+    for (int i = 0; i < len; i++)
+        if (lines[row][col + i] != ' ') return false;
+    return true;
+}
+
+/* â›” TWO SATELLITES CLOSE TOGETHER USED TO OVERPRINT, AND IT WAS UNREADABLE.
+ * Seen on the glass 2026-10-09 with a 14-satellite sky: PRN 23 and 33 landed
+ * on the same cells and drew as "2Ì¶3Ì¶3Ì¶+", and 5 and 65 did the same. put()
+ * writes unconditionally, and the marker inherited the same column, so the
+ * drawn layer stacked them too.
+ *
+ * So nudge to the nearest free run instead. COLUMNS ARE TRIED FIRST because
+ * a cell is 15x27 px - one column is a 15 px lie about azimuth, one row a
+ * 27 px lie about elevation, so the column move distorts less. The search is
+ * bounded and deterministic; if nothing is free the label is drawn where it
+ * belongs and overprints, which is no worse than before.
+ *
+ * âš  This moves the label, NOT the satellite. At this plot's scale one cell
+ * is about 2.5 degrees of azimuth - acceptable for reading a sky plot, and
+ * the exact azimuth is in the table underneath either way. */
+static void nudge_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                       int *row, int *col, int len)
+{
+    static const int8_t dc[] = { 0,  1, -1,  2, -2,  0,  0,  1, -1,  1, -1 };
+    static const int8_t dr[] = { 0,  0,  0,  0,  0, -1,  1, -1, -1,  1,  1 };
+    for (size_t i = 0; i < sizeof(dc) / sizeof(dc[0]); i++) {
+        int r = *row + dr[i], c = *col + dc[i];
+        if (cells_free(lines, r, c, len)) { *row = r; *col = c; return; }
+    }
+}
+
 static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
                      const unit_gps_info_t *in,
                      gps_page_marker_t *markers, int *n_markers)
@@ -212,6 +249,7 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         int col = (x >= PLOT_CX) ? x : x - (len - 1);
         if (col < PLOT_X0) col = PLOT_X0;
         if (col + len > GPS_PAGE_COLS) col = GPS_PAGE_COLS - len;
+        nudge_free(lines, &y, &col, len);   /* before put() AND before the marker */
         put(lines, y, col, txt);
 
         if (markers && n_markers && *n_markers < GPS_PAGE_MAX_MARKERS) {
@@ -225,10 +263,10 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         }
     }
 
-    /* ⛔ NO RING DOTS. The view draws the rings as real ovals from
+    /* â›” NO RING DOTS. The view draws the rings as real ovals from
      * gps_page_rings() - see gps_page.h. Putting them back here is going
      * round the loop a fourth time. */
-    /* ⛔ NO AXIS DOTS EITHER. The views draw both axes from gps_page_axes(),
+    /* â›” NO AXIS DOTS EITHER. The views draw both axes from gps_page_axes(),
      * underneath the text - see gps_page.h. The grid now carries only what is
      * genuinely textual: the labels, the satellites and the compass points. */
 
@@ -353,7 +391,7 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
         put(lines, 7, VAL_COL, "-");
     }
 
-    /* ⛔ The three rows below are the ones the QMX cannot fill over CAT. They
+    /* â›” The three rows below are the ones the QMX cannot fill over CAT. They
      * stay on the page and read "-", rather than being hidden, so the two
      * sources are visibly the SAME page with the radio simply not reporting -
      * not two different pages. */
@@ -403,7 +441,7 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
 }
 
 
-/* ⭐ ONE composition, two displays. The glass (ui/gps_status_view.c) and the
+/* â­ ONE composition, two displays. The glass (ui/gps_status_view.c) and the
  * web (/api/gps) both draw the markers and the satellite table themselves -
  * coloured, and the table scrolling because a receiver routinely sees twenty
  * satellites while the grid has room for twelve. Both therefore have to blank
