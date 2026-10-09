@@ -16,8 +16,10 @@
  *       -lm
  *
  * Run:
- *   ./js8_wav_harness test/wav_reference_js8            # a whole corpus
- *   ./js8_wav_harness slot.wav slot.txt                 # one pair
+ *   ./js8_wav_harness                        # selftest + the whole corpus
+ *   ./js8_wav_harness test/wav_reference_js8 # a corpus directory
+ *   ./js8_wav_harness slot.wav slot.txt      # one pair
+ *   ./js8_wav_harness --selftest             # the synthetic slot alone
  *
  * WHY THIS EXISTS. js8_decode_harness.c feeds the decoder a waterfall this
  * code built itself, so it can only prove the implementation agrees with
@@ -57,6 +59,9 @@
 #define FIND_MIN_SCORE   10
 #define LDPC_MAX_ITERS   20
 #define MAX_ROWS         64
+
+/* Relative to the repo root, which is where run_harnesses.py runs it from. */
+#define DEFAULT_CORPUS   "test/wav_reference_js8"
 
 typedef struct {
     char text[JS8_TEXT_MAX];
@@ -390,7 +395,15 @@ static int selftest(void)
 
 int main(int argc, char **argv)
 {
-    if (argc == 2 && !strcmp(argv[1], "--selftest")) {
+    /* No arguments is how tools/run_harnesses.py invokes every harness, so
+     * that case has to be the useful one: prove the harness can hear a clean
+     * signal, then hold the recorded corpus to its floor. Printing a usage
+     * line here would have made this a permanent RUN FAIL in the suite. */
+    if (argc == 1) {
+        if (selftest() != 0) return 1;
+        printf("\n=== JS8 WAV harness: %s ===\n", DEFAULT_CORPUS);
+        run_dir(DEFAULT_CORPUS);
+    } else if (argc == 2 && !strcmp(argv[1], "--selftest")) {
         return selftest();
     } else if (argc == 2) {
         printf("=== JS8 WAV harness: %s ===\n", argv[1]);

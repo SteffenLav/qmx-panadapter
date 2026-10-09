@@ -1,8 +1,31 @@
 # JS8 reference corpus
 
-Empty on purpose. There are 35 FT8 references in `../wav_reference` and this
-directory is the JS8 equivalent (M1 in `docs/js8-feasibility.md`). It is filled
-from a running board:
+10 slots recorded off bench dev on 2026-10-09 - 4 with decodes, 6 without.
+This is the JS8 equivalent of the 35 FT8 references in `../wav_reference`
+(M1 in `docs/js8-feasibility.md`). Check them with the harness, which also
+runs as part of `tools/run_harnesses.py`:
+
+    ./js8_wav_harness                        # selftest + this directory
+
+What is in it:
+
+| Slot | Dial | Decode |
+|---|---|---|
+| `261009_112345` | 14.078 | `HB F4LPU JN15` at -12 |
+| `261009_113345` | 7.078 | `G4GHL LA7HKA HEARTBEAT SNR` at -3 |
+| `261009_113700` | 7.078 | `M0IQF LA7HKA HEARTBEAT SNR` at -16 |
+| `261009_113800` | 7.078 | `9A3SWO LA7HKA HEARTBEAT SNR` at -18 |
+
+The other six decode nothing and are kept deliberately: they are the only
+thing that catches the opposite regression, a change that INVENTS decodes.
+They are the six highest-`peak_float` silent slots of the 60 recorded, so they
+are the ones most likely to tempt a decoder into a false positive.
+
+⛔ **Start the recorder before touching the radio.** `slotcap` holds one slot
+and each overwrites the last. Three 40 m slots that decoded 4, 2 and 1 were
+lost on 2026-10-09 by retuning first and starting the recorder afterwards.
+
+Add more:
 
     python tools/js8_corpus.py 192.168.1.210 --out test/wav_reference_js8
 

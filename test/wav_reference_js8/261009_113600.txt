@@ -1,2 +1,2 @@
-# JS8 slot UTC 1791545145  dial 7078000 Hz  peak_float 5.08  peak 32767
+# JS8 slot UTC 1791545760  dial 7078000 Hz  peak_float 16.91  peak 32767
 # this board's own decodes, NOT ground truth - see the header of tools/js8_corpus.py

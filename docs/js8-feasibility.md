@@ -468,7 +468,7 @@ without spending somebody else's air time on frames that may be nonsense.
 
 | | Task | Why it gates something | Cost |
 |---|---|---|---|
-| **M1** | **Record a JS8 WAV corpus off air** — 12 kHz mono, whole slots, with the decoded text as ground truth, mirroring `test/wav_reference` | There is NO JS8 regression gate. Every RX change from J7 on is unguarded until this exists, and the FT8 corpus is this project's only safety net against silent sensitivity loss | Small, and **perishable** — do it while a station is audible |
+| **M1** | ~~Record a JS8 WAV corpus off air~~ — **DONE 2026-10-09**, see below | — | — |
 | **M2** | Measure the `TA;` write latency distribution at symbol rate: p50/p99 over a full burst | Decides whether Fast (80 ms) is reachable at all | Small — instrument `tx_cmd` and run one burst |
 | **M3** | Probe the UAC TX interface: open it, feed a steady tone while keyed in DIGI, look for RF | Decides whether Turbo and clean waveform TX are possible, i.e. whether the ceiling in fact 1 is real or just current | Medium. ⚠ Keys the radio — needs a dummy load and the operator present |
 
@@ -502,6 +502,47 @@ settled it. Doing this RX-first buys that arbiter for free.
 (⛔ extracted by a script, as `tools/gen_js8_ldpc_tables.py` does — never
 hand-transcribed); a reassembly buffer keyed by sender with a timeout; a message
 view, because a 200-character message does not fit a decode-list row.
+
+### M1 as built (2026-10-09)
+
+`test/wav_reference_js8` holds 10 slots off bench dev - 4 with decodes and 6
+without. `test/js8_wav_harness.c` runs the real decode path over them and is
+in `tools/run_harnesses.py`, so it runs with the rest of the suite. 4/4
+matched at the time of recording.
+
+**The corpus had to come from new firmware, which this plan said it would
+not.** M1 said no firmware change was needed because `rxcap` already existed.
+That was wrong: `rxcap` records `s_out`, the codec output at 48 kHz after the
+AGC and the audio filter chain, and the decoder never hears it. The decoder
+reads `dsp_ft8_capture()`'s buffer - 180000 floats at 12 kHz, anchored to the
+UTC slot boundary - which is what `/api/slot.wav` now serves.
+
+**What the corpus is:** a regression floor. The expected text is this
+firmware's own decode list, so it fails when a change decodes LESS than the
+build that recorded it. The 6 zero-decode slots are there to catch the
+opposite failure, a change that invents decodes.
+
+**What it is not:** ground truth, and not a sensitivity measure. A station
+JS8Call would have decoded and we did not is recorded as absent. Settling that
+needs JS8Call's own decoder over the same WAVs; JS8Call 2.3.1 as installed has
+no standalone WAV decoder, so it is not available today.
+
+**Measured while building it,** because `monitor_process()` packs each bin as
+a clamped `2*db + 240` over -120..0 dB and is therefore NOT scale-free:
+
+    input scale    1    22   100   300  1000  3000  8000
+    candidates    56    56    56    54    16     3     0
+
+Live `peak_float` was 22 on 40 m and ~100 on 20 m, so the live path is clear of
+the clamp - with about 3x of margin on 20 m, not the 15x that the 40 m reading
+alone suggested. The stored WAVs are normalised; `/api/slot.json` reports
+`peak_float` so the live level is never inferred from them.
+
+**Recording procedure, and the one way to get it wrong:** start
+`tools/js8_corpus.py` BEFORE touching the radio. `slotcap` holds a single slot
+and each one overwrites the last, so three 40 m slots that decoded 4, 2 and 1
+were lost on 2026-10-09 by retuning first and starting the recorder after.
+
 **Verification:** real traffic, and M1's corpus as the regression gate.
 **Risk:** the reassembly state is new surface — a stuck partial message, a
 sender who vanishes mid-transmission, two senders interleaving. All of it is
