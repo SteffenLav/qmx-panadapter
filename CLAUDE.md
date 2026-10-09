@@ -88,6 +88,7 @@ Detailed sections moved to memory for session speed:
 - [Diagnostic logging](../../../memory/project_diagnostic_logging.md)
 - [FT8/FT4 features](../../../memory/project_ft8_features.md)
 - [Release process](../../../memory/project_release_process.md)
+- [Internal RAM audit](../../../memory/project_internal_ram_bss_audit.md) — where the 445 KB goes, what may and may NOT move to PSRAM
 
 See MEMORY.md index for complete topic list.
 
