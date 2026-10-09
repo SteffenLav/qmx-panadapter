@@ -42,7 +42,8 @@ static bool s_initialised = false;
 //
 // Two observations a sliding window cannot make, both added below:
 //   * a real pack cannot STEP - between two 1 s samples it moves by IR drop at
-//     most (CHARGE_IR_DROP_MV is ~200 mV), never volts. This catches the jump
+//     most (~120 mV measured at this charger's 0.5 A), never volts. This
+//     catches the jump
 //     however long each plateau lasts.
 //   * the device cannot be RUNNING off a 2S pack reading 4.2 V. Below the floor
 //     is not a flat battery, it is no battery.
@@ -159,7 +160,37 @@ int battery_mv_to_level(int mv)
 // away oscillated rapidly instead of charging smoothly up to it. Applying
 // this compensation centrally here (not just in the charge-limit decision)
 // also fixes the visual jump the user sees on the displayed %/voltage.
-#define CHARGE_IR_DROP_MV 200
+/* ⭐ MEASURED, not assumed. Bench dev, 2026-10-09, one charge run from 79 % to
+ * the 85 % cutoff with raw V and I logged together (see the batcal trace in
+ * util/status.c):
+ *
+ *   at cutoff        8245 mV at -504 mA
+ *   1 s later, off   8150 mV at 0 mA     -> IR = 95 mV  -> R = 0.188 ohm
+ *   settled          8125 mV             -> a further 25 mV of slow relaxation
+ *   total offset     120 mV
+ *
+ * The old fixed CHARGE_IR_DROP_MV of 200 therefore over-subtracted by ~80 mV,
+ * which on the 17 mV/% map is ~4.7 points: the compensated reading sat that far
+ * low, the cutoff fired late, and a limit of 80 % left the pack at 85.6 %
+ * (operator report, same day). 200 mV would have been about right at 1 A - this
+ * charger delivers half that.
+ *
+ * ⚠ TWO THINGS I GOT WRONG BEFORE MEASURING, both recorded so they are not
+ * re-argued:
+ *   - "the current tapers near the end of charge" - it does NOT. It held
+ *     490-505 mA from 79 % right through the 85 % cutoff. The error was never
+ *     about taper, only about the assumed magnitude.
+ *   - the offset is not pure IR. 95 mV of it vanishes within a second (real
+ *     IR), but ~25 mV is slow polarisation that decays over minutes. Modelling
+ *     I x R alone would under-compensate by that much, so it is carried as its
+ *     own term rather than folded into R.
+ *
+ * ⚠ One battery, one unit, one current point (~0.5 A). R is not characterised
+ * across current or temperature. It is a measurement where there was a guess,
+ * not a cell model. */
+#define BATTERY_R_INTERNAL_MOHM   188   // measured dV/dI at the cutoff transition
+#define CHARGE_POLARISATION_MV     25   // slow part, decays over minutes
+#define CHARGE_IR_DROP_FALLBACK_MV 200  // only when the current read fails
 
 int battery_get_level(void)
 {
@@ -179,7 +210,16 @@ int battery_get_mv(void)
     battery_track(mv);   // feed the no-battery detector with the RAW reading (called every status poll)
 
     if (battery_is_charging()) {
-        int32_t compensated = (int32_t)mv - CHARGE_IR_DROP_MV;
+        /* V_drop = |I| x R + polarisation. Falls back to the old fixed constant
+           if the current read fails - the status quo beats no compensation,
+           which would read ~7 points HIGH and cut off early. */
+        int32_t drop = CHARGE_IR_DROP_FALLBACK_MV;
+        int32_t ma;
+        if (ina226_read_shunt_ma(&ma) == ESP_OK) {
+            int32_t mag = (ma < 0) ? -ma : ma;          /* charging is negative */
+            drop = (mag * BATTERY_R_INTERNAL_MOHM) / 1000 + CHARGE_POLARISATION_MV;
+        }
+        int32_t compensated = (int32_t)mv - drop;
         return compensated > 0 ? compensated : 0;
     }
     return (int)mv;

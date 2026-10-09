@@ -29,11 +29,10 @@ bool battery_is_charging(void);
 /* RAW pack voltage and charge current, straight off the INA226 with no IR
  * compensation applied.
  *
- * battery_get_mv() subtracts a FIXED CHARGE_IR_DROP_MV while charging, and that
- * constant is the problem being measured: at the 2026-10-09 cutoff the real
- * drop was about 105 mV against the 200 mV subtracted, so the limit overshot by
- * ~5 points. Deriving the right model needs V and I together and UNCOOKED -
- * R_internal = dV/dI across a charge on/off transition.
+ * battery_get_mv() subtracts |I| x R + polarisation while charging, so it can
+ * never answer a question ABOUT that compensation. These two can: they are what
+ * the batcal trace logs, and what R was derived from in the first place
+ * (dV/dI across the charge cutoff, 2026-10-09).
  *
  * Both return false if the read failed; *out is untouched then. ma is signed,
  * and NEGATIVE means current flowing INTO the pack (Tab5 polarity - see the

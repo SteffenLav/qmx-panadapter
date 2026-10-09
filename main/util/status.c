@@ -93,10 +93,10 @@ static bool s_charge_cutoff_active = false;
  * charging and then jumped to "85 % (limit)" the moment charging stopped.
  * Measured at that moment: mv=8055 at rest, which really is 85.6 % on the
  * 6.6 V/8.3 V map - the number was arithmetically right. The pack genuinely
- * overshoots, because CHARGE_IR_DROP_MV is a FIXED 200 mV while the real drop
- * halves as the charge current tapers, so the compensated reading under-reads
- * and the cutoff fires late. Working back from the cutoff: ~8160 mV raw, versus
- * 8055 mV at rest - about 105 mV of real drop, not 200.
+ * overshot, because the IR compensation was a FIXED 200 mV against a measured
+ * total offset of 120 mV at this charger's ~0.5 A. Since measured and replaced
+ * by |I| x R + polarisation (battery.c), so the cutoff should now land on the
+ * limit and this cap is a backstop rather than a mask.
  *
  * The operator's call, and his reasoning: what matters is the level you get
  * when actually running on the battery, not the resting peak you never
@@ -416,14 +416,13 @@ static void status_task(void *arg)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
 
-        // Battery care: stop charging at a user-set percentage. Uses
-        // level_for_limit (IR-drop compensated while actively charging - see
-        // CHARGE_IR_DROP_MV above), NOT the raw displayed level, so the
-        // decision tracks true SoC instead of the momentarily-loaded
-        // terminal voltage.
-        /* ⭐ BATTERY CALIBRATION TRACE. The data needed to replace the fixed
-         * CHARGE_IR_DROP_MV with a current-scaled model, logged where the
-         * serial capture keeps it.
+        // Battery care: stop charging at a user-set percentage. Uses the
+        // compensated level (|I| x R + polarisation while actively charging -
+        // see battery.c), NOT the capped display level, so the decision tracks
+        // true SoC instead of the momentarily-loaded terminal voltage.
+        /* ⭐ BATTERY CALIBRATION TRACE. The data R_INTERNAL was derived from,
+         * kept live so the model can be re-checked on another pack or unit
+         * rather than trusted forever.
          *
          * R_internal = dV/dI across a charge on/off transition, so V and I must
          * be sampled together and UNCOOKED - battery_get_mv() has already
