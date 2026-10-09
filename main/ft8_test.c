@@ -856,7 +856,30 @@ static bool build_monitor_pool(ftx_protocol_t proto)
 
     size_t fft_work_size = 0;
     kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
-    s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    /* ⛔ ASK BEFORE TRYING. This wants ~38 kB of INTERNAL RAM and the largest
+     * internal block after boot settles is about 27 kB, so the attempt fails
+     * essentially every time - measured on ~110 boots in the bench capture,
+     * including two where 59.8 kB and 69.8 kB were free. FREE MEMORY WAS NEVER
+     * THE CONSTRAINT; fragmentation is, and no amount of free bytes fixes a
+     * request larger than the largest block.
+     *
+     * The fallback below is correct and the decoder is comfortable on PSRAM
+     * (3.1 s of an 11 s budget, bench 2026-10-09). The problem was only that a
+     * DESIGNED fallback announced itself as a failure: heapwatch logs every
+     * failed allocation at ERROR, so this printed a red line on every boot for
+     * months and trained the eye to skip it. A diagnostic that cries wolf on a
+     * healthy path is worse than none - the same reasoning as the flash-persist
+     * streak reporting in util/diag_log.c.
+     *
+     * ⚠ DO NOT "FIX" THIS BY RESERVING THE 38 kB INTERNAL. That trades away
+     * most of what the 2026-10-09 .bss audit recovered, to speed up an FFT that
+     * already meets its deadline with 72% of the budget unused. Measure the
+     * decode time before ever reconsidering - see project_internal_ram_bss_audit. */
+    size_t int_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (int_lblk >= fft_work_size) {
+        s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     s_shared_fft_internal = (s_shared_fft_work != NULL);
     if (!s_shared_fft_work) {
         s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -901,9 +924,13 @@ static bool build_monitor_pool(ftx_protocol_t proto)
              s_mon_pool[0]->block_size, s_mon_pool[0]->wf.max_blocks,
              (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
                         * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024));
-    ESP_LOGI(TAG, "shared FFT scratch: %u B in %s (nfft=%d) - all %d monitors share it",
+    /* Name the REASON, not just the destination: "PSRAM" alone invites the
+     * question this line now answers, and the answer is the largest internal
+     * block, never the free total. */
+    ESP_LOGI(TAG, "shared FFT scratch: %u B in %s (nfft=%d, internal largest block %u B)"
+                  " - all %d monitors share it",
              (unsigned)fft_work_size, s_shared_fft_internal ? "INTERNAL" : "PSRAM",
-             s_mon_pool[0]->nfft, FT8_NUM_BUFFERS);
+             s_mon_pool[0]->nfft, (unsigned)int_lblk, FT8_NUM_BUFFERS);
     return true;
 }
 
