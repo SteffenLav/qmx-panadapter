@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-/* See js8_reasm.h for what this module is and, more importantly, what it is
- * not: it never produces text, because the coding tables are GPL-3 and this
- * project is MIT. */
+/* See js8_reasm.h for what this module is. It decodes each data frame as it
+ * arrives (js8_jsc.c) and keeps only the text; the raw frames are not stored,
+ * because nothing re-decodes them and this struct lives in internal .bss. */
 
 /* Both sides of this copy live inside the same js8_reasm_t, so snprintf is
  * rejected under -Werror=restrict: the compiler cannot prove the source and
@@ -146,10 +146,33 @@ bool js8_reasm_add(js8_reasm_t* r, int64_t slot_utc, int freq_hz,
     run->last_slot = slot_utc;
     run->n_seen++;
     if (run->n_frames < JS8_REASM_MAX_FRAMES) {
-        memcpy(run->frames[run->n_frames], frame, JS8_FRAME_BYTES);
         run->n_frames++;
     } else {
         run->overflowed = true;
+    }
+
+    /* ⭐ DECODE NOW, and keep only the text. Nothing ever re-decodes a frame,
+     * so storing the raw 9 bytes as well would cost internal .bss for no
+     * reader - and this project has been bitten by its own .bss before (#65).
+     *
+     * A frame that decodes to nothing is normal, not an error: it can be the
+     * tail of a transmission we joined late, or a word coding whose index
+     * landed above our truncated table. It still counts in n_seen, so "6
+     * frames, no text" is a state the operator can see rather than a silence. */
+    if (!run->text_full) {
+        char piece[JS8_JSC_TEXT_MAX];
+        if (js8_jsc_frame_to_text(frame, piece, sizeof(piece))) {
+            size_t pl = strlen(piece);
+            size_t room = sizeof(run->text) - 1 - (size_t)run->n_text;
+            if (pl > room) { pl = room; run->text_full = true; }
+            if (pl) {
+                memcpy(run->text + run->n_text, piece, pl);
+                run->n_text += (int)pl;
+                run->text[run->n_text] = '\0';
+            } else {
+                run->text_full = true;
+            }
+        }
     }
 
     /* A run can be identified part-way through, by an ident that arrived
@@ -206,14 +229,42 @@ bool js8_reasm_describe(const js8_reasm_run_t* run, char* out, size_t out_len)
     out[0] = '\0';
     if (!run->used) return false;
 
-    /* "[data Nf]" and never the words, because there are no words - see the
-     * header. The frame count is n_seen, not n_frames: what the operator
-     * wants to know is how much the station sent, not how much we kept. */
-    if (run->sender[0])
-        snprintf(out, out_len, "%s [data %df%s]", run->sender, run->n_seen,
-                 run->overflowed ? "+" : "");
-    else
-        snprintf(out, out_len, "%d Hz [data %df%s]", run->freq_hz, run->n_seen,
-                 run->overflowed ? "+" : "");
+    /* The frame count is n_seen, not n_frames: what the operator wants to
+     * know is how much the station sent, not how much we kept.
+     *
+     * With text, the text IS the line - a decode list showing "6 frames" next
+     * to a message nobody can read would be the worst of both. Without text,
+     * the count still says the band is busy, which is the whole reason this
+     * module exists. */
+    const char* who = run->sender[0] ? run->sender : NULL;
+    char tag[16];
+    snprintf(tag, sizeof(tag), "%df%s", run->n_seen,
+             run->overflowed || run->text_full ? "+" : "");
+
+    if (run->n_text > 0) {
+        /* ⛔ THE TRUNCATION MARKER GOES BEFORE THE TEXT, NOT AFTER IT.
+         *
+         * Measured, because the first version put it after and the harness
+         * failed: the caller's buffer is shorter than the message (the decode
+         * list passes 64 bytes against 240 of text), so snprintf cut the
+         * marker off and a message stopped short read as a complete sentence
+         * that merely ended oddly. In front, it cannot be lost - and it
+         * carries the frame count, which is the thing worth knowing at
+         * exactly the moment the text does not all fit. */
+        if (run->overflowed || run->text_full) {
+            if (who) snprintf(out, out_len, "%s [%df+]: %s", who,
+                              run->n_seen, run->text);
+            else     snprintf(out, out_len, "%d Hz [%df+]: %s", run->freq_hz,
+                              run->n_seen, run->text);
+        } else if (who) {
+            snprintf(out, out_len, "%s: %s", who, run->text);
+        } else {
+            snprintf(out, out_len, "%d Hz: %s", run->freq_hz, run->text);
+        }
+    } else if (who) {
+        snprintf(out, out_len, "%s [data %s]", who, tag);
+    } else {
+        snprintf(out, out_len, "%d Hz [data %s]", run->freq_hz, tag);
+    }
     return true;
 }

@@ -4,6 +4,8 @@
  *   gcc -O2 -Wall -I components/ft8_lib -I components/ft8_lib/ft8 \
  *       -o js8_reasm_harness test/js8_reasm_harness.c \
  *       components/ft8_lib/ft8/js8_reasm.c \
+ *       components/ft8_lib/ft8/js8_jsc.c \
+ *       components/ft8_lib/ft8/js8_jsc_tables.c \
  *       components/ft8_lib/ft8/js8_message.c \
  *       components/ft8_lib/ft8/js8_codec.c \
  *       components/ft8_lib/ft8/js8_tables.c \
@@ -15,9 +17,13 @@
  * senders interleaving. All three are reachable without a radio, which is why
  * the state machine is a separate module rather than code inside ft8_test.c.
  *
- * ⛔ Nothing here decodes text, and no test should ever be added that expects
- * it to. The coding tables are GPL-3 and this project is MIT - see the header
- * of js8_reasm.h. These tests are about WHO, HOW MANY and WHEN.
+ * ⚠ TEXT DECODING MOVED. When this harness was written the tables were out of
+ * reach on licence grounds, so the module could only count frames. The
+ * project relicensed to GPL-3 on 2026-10-09 and js8_reasm.c now decodes each
+ * frame on arrival (js8_jsc.c). The frames below are synthetic - their
+ * payloads are arbitrary fill - so they decode to nothing, which is exactly
+ * what keeps these tests about WHO, HOW MANY and WHEN. The text path has its
+ * own vectors in test/js8_jsc_harness.c, hand-computed from the coding rules.
  */
 #include <stdio.h>
 #include <string.h>
@@ -39,6 +45,20 @@ static int g_fail = 0;
 static void mk(uint8_t f[JS8_FRAME_BYTES], unsigned top3, uint8_t fill)
 {
     memset(f, fill, JS8_FRAME_BYTES);
+    f[0] = (uint8_t)((f[0] & 0x1Fu) | ((top3 & 7u) << 5));
+}
+
+/* A data frame that CANNOT decode to text: every bit set, so there is no pad
+ * zero to seek back to and js8_jsc_frame_to_text refuses it.
+ *
+ * ⚠ This exists because an earlier version of this file asserted that
+ * arbitrary fill decodes to nothing. It does not - 0xBB decodes as perfectly
+ * good Huffman garbage (" N TTTTTTTT..."), which broke four tests the moment
+ * text decoding was wired in. Tests about WHO and HOW MANY use this; the text
+ * path has its own hand-computed vectors in test/js8_jsc_harness.c. */
+static void mk_notext(uint8_t f[JS8_FRAME_BYTES], unsigned top3)
+{
+    memset(f, 0xFF, JS8_FRAME_BYTES);
     f[0] = (uint8_t)((f[0] & 0x1Fu) | ((top3 & 7u) << 5));
 }
 
@@ -84,7 +104,7 @@ static void test_a_run_takes_its_name_from_an_earlier_frame(void)
     js8_reasm_t r; js8_reasm_init(&r);
     uint8_t dir[JS8_FRAME_BYTES], dat[JS8_FRAME_BYTES];
     mk(dir, 3, 0x11);
-    mk(dat, 4, 0x22);
+    mk_notext(dat, 4);
 
     /* Slot 0: a directed frame identifies the station. Not stored, but it is
      * the only thing that can name what follows. */
@@ -112,7 +132,7 @@ static void test_unidentified_run_says_the_frequency(void)
 {
     printf("attribution: with no callsign the run is reported by offset\n");
     js8_reasm_t r; js8_reasm_init(&r);
-    uint8_t dat[JS8_FRAME_BYTES]; mk(dat, 6, 0x33);
+    uint8_t dat[JS8_FRAME_BYTES]; mk_notext(dat, 6);
 
     js8_reasm_add(&r, 2000, 1500, dat, JS8_FRAME_DATA_COMPRESSED, NULL);
     const js8_reasm_run_t* run = js8_reasm_at(&r, 0);
@@ -324,6 +344,74 @@ static void test_a_stale_identification_is_forgotten(void)
           run ? run->sender : "(null)");
 }
 
+/* ---- the text that J7 exists for ------------------------------------- */
+
+static void test_text_accumulates_across_frames(void)
+{
+    printf("text: frames are decoded on arrival and joined into one message\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dir[JS8_FRAME_BYTES];
+    mk(dir, 3, 0x11);
+    js8_reasm_add(&r, 12000, 1100, dir, JS8_FRAME_DIRECTED, "OZ9JEP");
+
+    /* Two Huffman frames, built the way js8_jsc_harness builds them: is-data,
+     * coding flag 0, codes, one 0, then 1s. "E"=100 and "T"=1101 come
+     * straight from varicode.cpp's hufftable. */
+    uint8_t f1[JS8_FRAME_BYTES], f2[JS8_FRAME_BYTES];
+    {
+        const char *b1 = "10" "100"  "0";   /* data, huff, E, pad-zero */
+        const char *b2 = "10" "1101" "0";   /* data, huff, T, pad-zero */
+        const char *src[2] = { b1, b2 };
+        uint8_t *dst[2] = { f1, f2 };
+        for (int k = 0; k < 2; k++) {
+            uint8_t bits[72];
+            int n = 0;
+            for (const char *p = src[k]; *p; p++) bits[n++] = (uint8_t)(*p == '1');
+            while (n < 72) bits[n++] = 1;
+            memset(dst[k], 0, JS8_FRAME_BYTES);
+            for (int i = 0; i < 72; i++)
+                if (bits[i]) dst[k][i / 8] |= (uint8_t)(1u << (7 - (i % 8)));
+        }
+    }
+    js8_reasm_add(&r, 12015, 1100, f1, JS8_FRAME_DATA, NULL);
+    js8_reasm_add(&r, 12030, 1100, f2, JS8_FRAME_DATA, NULL);
+
+    const js8_reasm_run_t *run = js8_reasm_at(&r, 0);
+    CHECK(run && run->n_seen == 2, "two data frames (got %d)\n",
+          run ? run->n_seen : -1);
+    CHECK(run && !strcmp(run->text, "ET"),
+          "joined to 'ET', got '%s'\n", run ? run->text : "(null)");
+    CHECK(run && !run->text_full, "not flagged truncated\n");
+
+    char line[64];
+    js8_reasm_describe(run, line, sizeof(line));
+    /* ⭐ The text IS the line once there is text. A decode list showing a
+     * frame count beside an unreadable message would be the worst of both. */
+    CHECK(!strcmp(line, "OZ9JEP: ET"), "line '%s'\n", line);
+}
+
+static void test_a_truncated_message_says_so_even_in_a_short_buffer(void)
+{
+    printf("text: the truncation marker survives a short caller buffer\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dat[JS8_FRAME_BYTES];
+    mk(dat, 4, 0xBB);          /* decodes to Huffman text, deliberately */
+
+    for (int i = 0; i < JS8_REASM_MAX_FRAMES + 5; i++)
+        js8_reasm_add(&r, 13000 + 15 * i, 1300, dat, JS8_FRAME_DATA, NULL);
+
+    const js8_reasm_run_t *run = js8_reasm_at(&r, 0);
+    CHECK(run && (run->text_full || run->overflowed), "flagged as cut\n");
+
+    /* 40 bytes against 240 of text. ⛔ The marker was AFTER the text in the
+     * first version and snprintf cut it off, so a message stopped short read
+     * as a complete one. This is that test. */
+    char line[40];
+    js8_reasm_describe(run, line, sizeof(line));
+    CHECK(strstr(line, "f+]") != NULL,
+          "the line admits the cut even at 40 bytes: '%s'\n", line);
+}
+
 int main(void)
 {
     printf("=== js8_reasm harness ===\n\n");
@@ -339,6 +427,8 @@ int main(void)
     test_mixed_coding_is_flagged_not_split();
     test_a_full_table_refuses_rather_than_evicting();
     test_a_stale_identification_is_forgotten();
+    test_text_accumulates_across_frames();
+    test_a_truncated_message_says_so_even_in_a_short_buffer();
 
     printf("\n%s\n", g_fail ? "FAIL" : "PASS");
     return g_fail ? 1 : 0;

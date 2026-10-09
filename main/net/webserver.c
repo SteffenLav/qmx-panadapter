@@ -298,11 +298,10 @@ static void add_ft8_tx_status(cJSON *root)
          * column uses - so the strip's highlight and the rows agree. */
         cJSON_AddBoolToObject(f, "slot_even", ((ms / slot_ms) % 2) == 0);
 
-        /* JS8 free text in flight (J7). ⛔ No text, and the field names say
-         * so: these runs carry who/where/how many and nothing else, because
-         * the coding tables are GPL-3 and this project is MIT. See
-         * js8_reasm.h. Omitted entirely when nothing is in flight, so a
-         * client cannot mistake an empty array for a decoder that broke. */
+        /* JS8 free text in flight (J7). Omitted entirely when nothing is in
+         * flight, so a client cannot mistake an empty array for a decoder
+         * that broke. ⚠ "text" can be empty while "frames" is not - see
+         * ft8_js8_freetext_t. */
         int n_ft = ft8_js8_freetext_count();
         if (n_ft > 0) {
             cJSON *arr = cJSON_AddArrayToObject(f, "freetext");
@@ -311,6 +310,7 @@ static void add_ft8_tx_status(cJSON *root)
                 if (!ft8_js8_freetext_at(i, &ft)) continue;
                 cJSON *o = cJSON_CreateObject();
                 cJSON_AddStringToObject(o, "sender", ft.sender);
+                cJSON_AddStringToObject(o, "text",   ft.text);
                 cJSON_AddNumberToObject(o, "hz",     ft.freq_hz);
                 cJSON_AddNumberToObject(o, "frames", ft.frames);
                 cJSON_AddNumberToObject(o, "secs",   ft.secs);

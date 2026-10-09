@@ -175,20 +175,19 @@ bool js8_frame_to_text(const uint8_t frame[JS8_FRAME_BYTES], char* out, size_t o
 
     case JS8_FRAME_DATA:
     case JS8_FRAME_DATA_COMPRESSED:
-        /* ⛔ RECOGNISED BUT NOT RENDERABLE, and the distinction matters.
+        /* ⛔ DECODABLE, BUT NOT A MESSAGE ON ITS OWN - which is why this
+         * still returns false.
          *
-         * These are JS8's free text. Turning one into characters needs the
-         * coding table it was packed with - a 44-entry Huffman alphabet, or a
-         * 262144-word index - and this project has neither. Both live only in
-         * JS8Call, under GPL-3, and this codebase is MIT. A word list is data
-         * rather than a design idea: any decoder that reads a compressed
-         * frame has to reproduce the same indices, so there is no route to it
-         * by reimplementation. See docs/js8-feasibility.md, J7.
+         * js8_jsc.c can turn these 70 bits into characters now (the project
+         * relicensed to GPL-3 on 2026-10-09 so the tables could be used). But
+         * one data frame is a FRAGMENT: a sentence spans several frames, and
+         * rendering each as its own decode-list row would put a handful of
+         * half-words on the screen instead of a message.
          *
-         * So a data frame goes to js8_reasm.c instead, which can say WHO is
-         * sending, HOW MANY frames and WHEN - everything except the words.
-         * Returning false here is correct and must stay separate from the
-         * compound case above: that one is a refusal, this one is a gap. */
+         * So a data frame goes to js8_reasm.c, which joins the fragments by
+         * sender and offset and decodes them. Returning false here must stay
+         * separate from the compound case above: that one is a refusal, this
+         * one is a redirection. */
         return false;
 
     default:

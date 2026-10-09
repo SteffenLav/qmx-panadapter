@@ -525,7 +525,8 @@ bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out)
     out->frames     = run->n_seen;
     out->secs       = (int)(run->last_slot - run->first_slot) + 15;
     out->compressed = run->compressed;
-    out->truncated  = run->overflowed;
+    out->truncated  = run->overflowed || run->text_full;
+    snprintf(out->text, sizeof(out->text), "%s", run->text);
     return true;
 }
 
@@ -1601,9 +1602,10 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             js8_frame_is_data(js8_frame_type(msg.payload))) {
             /* ⭐ A JS8 DATA FRAME LANDS HERE, and until now that was the end
              * of it: the frame passed CRC-12, carried somebody's free text,
-             * and was discarded without trace. It has no renderer because the
-             * coding tables are GPL-3 and this project is MIT (see
-             * js8_reasm.h), but it can still be counted and attributed. */
+             * and was discarded without trace. js8_text.c returns false for
+             * it deliberately - one frame is a fragment, not a message - so
+             * it goes to js8_reasm.c, which joins the fragments and decodes
+             * them (js8_jsc.c). */
             int dfreq = (int)lroundf((mon->min_bin + cands[i].freq_offset) /
                                      mon->symbol_period);
             js8ev_record(out, dfreq, js8_frame_type(msg.payload), NULL,

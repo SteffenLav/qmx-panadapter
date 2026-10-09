@@ -6,6 +6,7 @@
 #include <stddef.h>   /* size_t, for js8_reasm_describe */
 
 #include "js8_message.h"
+#include "js8_jsc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,21 +21,18 @@ extern "C" {
  * offset it arrived on, and the slots it arrived in. That is what this module
  * does, and it is the only thing it can do.
  *
- * ⛔ IT DOES NOT PRODUCE TEXT, and must not be read as half-finished work
- * that will. Turning the 70 bits into characters needs the coding table they
- * were packed with: a 44-entry Huffman alphabet for [10x], or a 262144-word
- * index for [11x]. Both exist only inside JS8Call, which is GPL-3, while this
- * project is MIT. A word list is data rather than an idea, so a clean
- * reimplementation cannot arrive at the same indices - it either has the same
- * list or it decodes gibberish. The decision not to copy it is deliberate.
+ * ⚠ IT USED NOT TO PRODUCE TEXT, and the history is worth one line because
+ * the shape of the module still reflects it. The coding tables live only
+ * inside JS8Call, which is GPL-3, and while this project was MIT they were
+ * out of reach - a 262144-word dictionary is data, not an idea, so no clean
+ * reimplementation can reach the same indices. The project relicensed to
+ * GPL-3 on 2026-10-09 for exactly this, and js8_jsc.c now decodes each frame
+ * as it arrives (see JS8_REASM_TEXT_MAX).
  *
- * ⭐ WHAT IT IS THEREFORE FOR. The operator currently sees nothing at all when
- * a station sends free text: js8_frame_to_text() returns false and the frame
- * is dropped without trace. With this, the screen can say that OZ9JEP is
- * sending a 6-frame message right now at 1200 Hz, which is the difference
- * between a dead-looking band and a visibly busy one. It is also the entire
- * state machine J7 needs, so if the table question is ever settled only the
- * renderer has to be added.
+ * ⭐ IT STILL EARNS ITS KEEP WITHOUT TEXT. A frame can decode to nothing -
+ * a transmission joined late, or a word index above our truncated table - and
+ * then the run still says that OZ9JEP is sending six frames at 1200 Hz,
+ * which is the difference between a dead-looking band and a visibly busy one.
  */
 
 /* Offsets drift a few Hz between slots - the candidate search itself
@@ -55,11 +53,19 @@ extern "C" {
  * a path fed from the decode task. */
 #define JS8_REASM_MAX_ACTIVE    6
 
-/* Frames kept per transmission. A 70-bit frame carries roughly 8-14
+/* Frames counted per transmission. A 70-bit frame carries roughly 8-14
  * characters, so 24 frames is a few hundred characters - longer than the
  * messages JS8 operators actually send. Beyond this the run is still counted,
  * it just stops storing, which is reported rather than hidden. */
 #define JS8_REASM_MAX_FRAMES    24
+
+/* Accumulated message text. ⛔ THE RAW FRAMES ARE NOT KEPT. Each frame is
+ * decoded as it arrives and only the text is held, which is both what the
+ * screen wants and cheaper: this struct is a static in ft8_test.c, so it
+ * lives in internal .bss, and this project has been bitten by its own .bss
+ * before (#65). Holding 24 frames AND their text would have doubled the
+ * cost for nothing - nothing re-decodes a frame later. */
+#define JS8_REASM_TEXT_MAX      240
 
 #define JS8_REASM_CALL_LEN      14
 
@@ -74,7 +80,13 @@ typedef struct {
     bool     compressed;       /* the coding the FIRST frame declared        */
     bool     mixed_coding;     /* ⚠ later frames disagreed with it           */
     char     sender[JS8_REASM_CALL_LEN];   /* "" when never identified       */
-    uint8_t  frames[JS8_REASM_MAX_FRAMES][JS8_FRAME_BYTES];
+    /* The message so far. Frames are decoded on arrival and concatenated;
+     * a frame that decodes to nothing contributes nothing but is still
+     * counted in n_seen, so "6 frames, no text" is a visible state rather
+     * than a silent one. */
+    char     text[JS8_REASM_TEXT_MAX];
+    int      n_text;
+    bool     text_full;        /* text was cut because the buffer filled     */
 } js8_reasm_run_t;
 
 typedef struct {
