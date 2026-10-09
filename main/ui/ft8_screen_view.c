@@ -956,11 +956,26 @@ static void update_row(int i, const ft8_call_t *src)
     // subtracting it makes an on-time station read ~0.0 (the WSJT-X-style
     // number Roy KI0ER asked for) and an off-time one show its true offset.
     // Falls back to the raw value while no consensus exists yet (first slot).
+    //
+    // ⚠ BLANK when the consensus came from fewer than two STATIONS. With one
+    // station on the band the consensus is that station's own offset, so the
+    // subtraction is identically zero and the column printed a confident +0.0
+    // in every slot - a number that looks like a measurement and is not one
+    // (Randy N4OPI, 2026-10-08: two Tab5s on a quiet band, his screen read
+    // +0.0 every cycle while the browser's raw column read +0.2 to +1.0, and
+    // the two disagreeing was what made him report it).
+    //
+    // The test is DISTINCT SENDERS, not sample count: his own log shows one
+    // station decoded five times in a slot, which is five timing samples.
     {
         int consensus = 0;
-        (void)ft8_get_last_timing_ms(&consensus);
-        snprintf(b_dt, sizeof(b_dt), "%+.1f",
-                 ((int)src->last_dt_ms - consensus) / 1000.0f);
+        if (ft8_get_last_timing_stations() < 2) {
+            snprintf(b_dt, sizeof(b_dt), "--");
+        } else {
+            (void)ft8_get_last_timing_ms(&consensus);
+            snprintf(b_dt, sizeof(b_dt), "%+.1f",
+                     ((int)src->last_dt_ms - consensus) / 1000.0f);
+        }
     }
     snprintf(b_hz, sizeof(b_hz), "%d", (int)src->last_freq);
 

@@ -682,6 +682,20 @@ static void update_dt_follow(const char *target)
     int consensus;
     if (!ft8_get_last_timing_ms(&consensus)) return;   // no band reference yet
 
+    /* ⚠ A consensus built from ONE station is not a band reference - it is that
+     * station's own offset. If the partner is that station, excess is identically
+     * zero and this function can never engage, which is precisely the case where
+     * following would help most: a lone, badly-clocked partner on a quiet band.
+     *
+     * The arithmetic cannot be rescued here. With one station we have no way to
+     * separate their clock error from our own ~560 ms RX audio latency, so there
+     * is nothing to follow. Say so and clear, rather than compute a zero and let
+     * it read as "partner is on the band's beat".
+     *
+     * Found 2026-10-09 while fixing the display version of the same subtraction
+     * (Randy N4OPI's two-Tab5 report). Same class, two call sites. */
+    if (ft8_get_last_timing_stations() < 2) { clear_dt_follow(); return; }
+
     ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);

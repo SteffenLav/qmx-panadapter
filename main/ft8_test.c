@@ -410,6 +410,11 @@ static volatile bool     s_last_timing_valid = false;
 // not the raw measurement above - is what the time modal shows as the "nudge",
 // so a +/-2 s single-station raw reading never looks like a 2 s clock jump.
 static volatile int      s_last_applied_ms   = 0;
+// How many DISTINCT STATIONS contributed timing samples to s_last_timing_ms.
+// 1 means the consensus is one station's own offset, so "dt - consensus" is
+// identically zero for that station and carries no information - the DT column
+// must say so rather than print a confident +0.0 (Randy N4OPI, 2026-10-08).
+static volatile int      s_last_timing_stations = 0;
 // Bumped every time s_last_timing_ms is updated from a genuine decode, so
 // the UI can detect "a new sync just happened" even though it polls at 1 Hz
 // while decodes land roughly every 15 s.
@@ -433,6 +438,11 @@ bool ft8_get_last_applied_ms(int *out_ms)
 uint32_t ft8_get_timing_seq(void)
 {
     return s_timing_seq;
+}
+
+int ft8_get_last_timing_stations(void)
+{
+    return s_last_timing_valid ? s_last_timing_stations : 0;
 }
 
 // Monitor pool. Allocated + monitor_init'd in ft8_task. A monitor is owned by
@@ -854,6 +864,16 @@ typedef struct {
     int   n_attempted;
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
     int   n_timing;
+    /* Sender-callsign hash for each timing sample, parallel to timing[].
+     *
+     * Exists because the SAMPLE count does not measure what the consensus
+     * needs. Randy N4OPI's 2026-10-08 capture decoded one station five times in
+     * a slot (five candidates, five timing samples, one callsign) - so a
+     * sample-count test reads "plenty of evidence" while the consensus is in
+     * fact a single station's own offset. The DT shown for that station is then
+     * (its dt - its own dt) = exactly 0.0, every slot, which tells the operator
+     * nothing. Counting DISTINCT SENDERS is the test that catches it. */
+    uint32_t tcall[FT8_MAX_CANDIDATES];
     /* Set when this range advanced the QSO early - see the early-advance note
        in the decode loop. decode_slot() skips its own end-of-slot advance when
        it is set, so advance() runs exactly ONCE per slot either way. */
@@ -1385,6 +1405,21 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             float cand_dt_ms = (cands[i].time_offset * mon->block_size +
                                 cands[i].time_sub * mon->subblock_size) / 12.0f;
             if (out->n_timing < FT8_MAX_CANDIDATES) {
+                /* FNV-1a over the sender callsign, stored beside the sample so
+                 * the merge can count distinct stations. A hash, not the string:
+                 * this array is per-decode-result and lives on the decode
+                 * stack's budget - 140 x 4 bytes, not 140 x 14. Collisions cost
+                 * an under-count of stations, which only blanks a DT column
+                 * that was about to be shown; nothing acts on it. */
+                char tcall[FT8_CALL_MAX_LEN];
+                uint32_t h = 2166136261u;
+                if (ft8_screen_extract_call(text, tcall, sizeof(tcall))) {
+                    for (const char *c = tcall; *c; c++) {
+                        h ^= (uint32_t)(unsigned char)*c;
+                        h *= 16777619u;
+                    }
+                }
+                out->tcall[out->n_timing]  = h;
                 out->timing[out->n_timing++] = cand_dt_ms;
             }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
@@ -1772,12 +1807,27 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // Merge both halves' timing samples, then robust (outlier-rejecting) average
     // into the system-clock error estimate. Positive = clock fast; negative = slow.
     float timing_ms_arr[FT8_MAX_CANDIDATES];
+    uint32_t tcall_arr[FT8_MAX_CANDIDATES];
     int   n_timing = 0;
-    for (int i = 0; i < r_main.n_timing   && n_timing < FT8_MAX_CANDIDATES; i++)
+    for (int i = 0; i < r_main.n_timing   && n_timing < FT8_MAX_CANDIDATES; i++) {
+        tcall_arr[n_timing]      = r_main.tcall[i];
         timing_ms_arr[n_timing++] = r_main.timing[i];
-    for (int i = 0; i < r_worker.n_timing && n_timing < FT8_MAX_CANDIDATES; i++)
+    }
+    for (int i = 0; i < r_worker.n_timing && n_timing < FT8_MAX_CANDIDATES; i++) {
+        tcall_arr[n_timing]      = r_worker.tcall[i];
         timing_ms_arr[n_timing++] = r_worker.timing[i];
+    }
+    /* Distinct senders among the samples. Counted BEFORE robust_mean_timing_ms,
+     * which sorts timing_ms_arr in place and would break the pairing. O(n^2) on
+     * at most 140 entries, once per slot - not worth a set. */
+    int n_stations = 0;
+    for (int i = 0; i < n_timing; i++) {
+        bool seen = false;
+        for (int j = 0; j < i && !seen; j++) seen = (tcall_arr[j] == tcall_arr[i]);
+        if (!seen) n_stations++;
+    }
     if (n_timing > 0) {
+        s_last_timing_stations = n_stations;
         s_last_timing_ms    = (int)roundf(robust_mean_timing_ms(timing_ms_arr, n_timing));
         s_last_timing_valid = true;
         int applied_ms      = 0;   // real correction pushed to the clock this slot
@@ -1872,11 +1922,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
-        "backlog=%dpr drop=%dpr timing=%+dms applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
+        "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
+        s_last_timing_valid ? s_last_timing_stations : 0,
         s_last_timing_valid ? s_last_applied_ms : 0,
         (unsigned)heap_i, (unsigned)heap_i_min, (unsigned)heap_i_lblk, (unsigned)heap_p);
 

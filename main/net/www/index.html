@@ -5249,9 +5249,26 @@ document.getElementById("set-modal").addEventListener("click", (e) => {
    country was not shown anywhere in this list at all. */
 const DEC_COLS = [
   ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["cty", "COUNTRY"],
-  ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["km",   "KM"],
-  ["brg",  "BRG"],  ["age",  "AGE"],
+  ["snr",  "SNR"],  ["dt",   "DT"],   ["dtr",  "DTR"],     ["hz",   "HZ"],
+  ["km",   "KM"],   ["brg",  "BRG"],  ["age",  "AGE"],
 ];
+/* TWO timing columns, because there are two honest answers and this table used
+   to show one of them under the other's name.
+
+   DT  = the station's offset MINUS the band consensus. Identical to the Tab5's
+         DT column, and the WSJT-X-style number: an on-time station reads ~0.0
+         because the consensus carries the RX audio latency both measurements
+         share. Shows "--" when fewer than two STATIONS fed the consensus - then
+         it is one station's offset minus itself, which is zero by construction
+         and not a measurement.
+   DTR = the raw, slot-boundary-relative offset. Includes ~0.5 s of one-way RX
+         audio latency (QMX SDR + USB buffering), so it is NOT comparable with
+         WSJT-X's DT - but it is the number that moves when the transmitter's
+         timing moves, which is what you want when checking a TX.
+
+   Randy N4OPI put the two side by side on 2026-10-08 and reported that they
+   disagreed. They did, by the audio latency, and nothing on either screen said
+   so. */
 /* Sort comparators: how to pull a comparable value out of a row, and which
    direction is the useful default the first time that column is clicked
    (SNR/KM: strongest/furthest first; everything else: low-to-high or A-Z).
@@ -5265,7 +5282,11 @@ const DEC_SORT = {
   text: { get: r => r.text || null, type: "str", def: "asc"  },
   cty:  { get: r => r.cty === undefined ? null : r.cty, type: "str", def: "asc" },
   snr:  { get: r => r.snr === undefined ? null : r.snr, type: "num", def: "desc" },
+  /* Both timing columns sort on the RAW value: the consensus is the same
+     constant for every row in a response, so subtracting it cannot reorder
+     anything. One accessor, no chance of the two columns sorting differently. */
   dt:   { get: r => r.dt  === undefined ? null : r.dt,  type: "num", def: "asc"  },
+  dtr:  { get: r => r.dt  === undefined ? null : r.dt,  type: "num", def: "asc"  },
   hz:   { get: r => r.hz  === undefined ? null : r.hz,  type: "num", def: "asc"  },
   km:   { get: r => r.km  === undefined ? null : r.km,  type: "num", def: "desc" },
   brg:  { get: r => r.brg === undefined ? null : r.brg, type: "num", def: "asc"  },
@@ -5617,12 +5638,29 @@ async function pollWspr() {
 setInterval(pollWspr, 5000);
 pollWspr();
 
-const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc" };
+const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc",
+                   dtConsensus: 0, dtStations: 0 };
 let decPollInFlight = false;
 
 function decFmt(k, r) {
   if (k === "snr") return (r.snr > 0 ? "+" : "") + r.snr;
-  if (k === "dt")  return (r.dt / 1000).toFixed(1);
+  /* DT: consensus-corrected, the same arithmetic and the same blanking rule as
+     the Tab5's own column. "--" when fewer than two stations fed the consensus,
+     because then it is a station's offset minus itself. */
+  if (k === "dt") {
+    if (decState.dtStations < 2) return "—";
+    const v = (r.dt - decState.dtConsensus) / 1000;
+    /* >= 0, not > 0: the Tab5 formats with %+.1f, which signs an exact zero as
+       "+0.0". A bare "0.0" here would be the two screens disagreeing again, in
+       the one place they are now meant to match character for character. */
+    return (v >= 0 ? "+" : "") + v.toFixed(1);
+  }
+  /* DTR: raw, boundary-relative, audio latency included. Signed like DT - the
+     sign was missing here and a bare "0.6" reads as a corrected value. */
+  if (k === "dtr") {
+    const v = r.dt / 1000;
+    return (v >= 0 ? "+" : "") + v.toFixed(1);
+  }
   if (k === "hz")  return r.hz;
   if (k === "age") return r.age < 60 ? r.age + "s" : Math.floor(r.age / 60) + "m";
   // The device OMITS km/brg when either grid is missing rather than sending a
@@ -5651,8 +5689,21 @@ function decRenderTable() {
   const head = document.getElementById("dec-head");
   const arrow = key => decState.sortKey === key
     ? '<span class="arrow">' + (decState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
+  /* Hover text for the two timing columns. Without it DT and DTR are two
+     near-identical numbers under near-identical headings, which is the
+     confusion this pair was added to END, not to repeat. */
+  const DEC_TIPS = {
+    dt:  "Offset from the band consensus, as WSJT-X reports DT and as the Tab5 "
+       + "shows it. The consensus carries the RX audio latency both share, so an "
+       + "on-time station reads about 0.0. Shows — while fewer than two "
+       + "stations have fed the consensus.",
+    dtr: "Raw offset from the slot boundary, including about 0.5 s of one-way RX "
+       + "audio latency. Not comparable with WSJT-X's DT, but it is the number "
+       + "that moves when a transmitter's timing moves.",
+  };
   head.innerHTML = DEC_COLS.map(c =>
     '<th class="sortable" onclick="decSetSort(\'' + c[0] + '\')" '
+    + (DEC_TIPS[c[0]] ? 'title="' + DEC_TIPS[c[0]] + '" ' : '')
     + 'style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
     + (c[0] === "km" ? decState.unit : c[1]) + arrow(c[0]) + "</th>").join("");
   document.getElementById("dec-order-reset").style.display = decState.sortKey === null ? "none" : "";
@@ -5711,6 +5762,11 @@ async function pollDecodes() {
     // The KM column has to become MI the moment the Tab5 setting is flipped.
     decState.unit = d.miles ? "MI" : "KM";
     decState.mode = d.mode || "FT8";
+    /* Slot properties, not row properties - DT subtracts the first and blanks
+       on the second. Defaulted so an older device that does not send them makes
+       DT render "--" rather than silently showing the raw value as corrected. */
+    decState.dtConsensus = d.dt_consensus || 0;
+    decState.dtStations  = d.dt_stations  || 0;
     /* Just "Decode list": the mode heading above the panel already says FT8 or
        FT4, and saying it twice on one screen is noise. */
     document.getElementById("dec-title").textContent = "Decode list";

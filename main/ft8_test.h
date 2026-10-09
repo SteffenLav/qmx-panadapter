@@ -106,6 +106,17 @@ bool ft8_get_last_applied_ms(int *out_ms);
 // SS box) without needing a callback/notification mechanism.
 uint32_t ft8_get_timing_seq(void);
 
+// How many DISTINCT STATIONS contributed timing samples to the consensus that
+// ft8_get_last_timing_ms() returns. 0 = no measurement yet.
+//
+// A DT shown as "station offset minus consensus" is only meaningful when the
+// consensus came from somebody else as well. With one station on the band the
+// consensus IS that station's offset and the subtraction is identically zero,
+// so the display must blank rather than print +0.0. The SAMPLE count does not
+// answer this - one station routinely yields three to five candidate decodes in
+// a slot (Randy N4OPI's 2026-10-08 capture: five samples, one callsign).
+int ft8_get_last_timing_stations(void);
+
 // ---- Operating sub-mode (FT8 vs FT4) ------------------------------------
 // FT4 and FT8 share the QMX's USB/DiGi data mode and the same ft8_lib
 // primitives - they differ only in slot length (15 s vs 7.5 s), symbol rate,

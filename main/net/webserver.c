@@ -5943,6 +5943,26 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     // So the browser can label the column MI or KM exactly as the Tab5 does.
     cJSON_AddBoolToObject(root, "miles", qs.distance_in_miles);
     cJSON_AddStringToObject(root, "working", pin);
+    /* The band timing consensus, so the browser can show the SAME corrected DT
+     * the Tab5 shows alongside the raw one.
+     *
+     * Until now the browser sent only the per-row raw dt and the Tab5 showed
+     * dt minus this consensus, both under a column headed "DT". The two
+     * therefore disagreed by the whole RX audio latency (~0.5 s) and there was
+     * nothing on either screen to say why - reported by Randy N4OPI on
+     * 2026-10-08 with a table of the two readings side by side.
+     *
+     * Sent once per response rather than folded into each row: it is a property
+     * of the slot, not of a station, and the browser needs the raw value too. */
+    {
+        int consensus = 0;
+        bool have = ft8_get_last_timing_ms(&consensus);
+        cJSON_AddNumberToObject(root, "dt_consensus", have ? consensus : 0);
+        /* DISTINCT STATIONS behind that consensus. <2 means the corrected
+           column is identically zero and must render "--" - same rule and same
+           accessor as the Tab5 list, so the two screens cannot disagree. */
+        cJSON_AddNumberToObject(root, "dt_stations", ft8_get_last_timing_stations());
+    }
     cJSON *arr = cJSON_AddArrayToObject(root, "rows");
 
     int64_t now = (int64_t)time(NULL);
