@@ -298,6 +298,13 @@ static void add_ft8_tx_status(cJSON *root)
          * column uses - so the strip's highlight and the rows agree. */
         cJSON_AddBoolToObject(f, "slot_even", ((ms / slot_ms) % 2) == 0);
 
+        /* Which JS8 pane the screen is showing. Here so a question about the
+         * screen can be answered from the API instead of by interrupting the
+         * operator - 2026-10-09, chasing an internal-heap regression. */
+        cJSON_AddStringToObject(f, "tab",
+                                ft8_screen_view_js8_tab_is_conversation()
+                                    ? "conversation" : "stations");
+
         /* JS8 free text in flight (J7). Omitted entirely when nothing is in
          * flight, so a client cannot mistake an empty array for a decoder
          * that broke. ⚠ "text" can be empty while "frames" is not - see

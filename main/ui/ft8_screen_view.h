@@ -95,3 +95,7 @@ void ft8_screen_view_nudge_confirm(int delta);
  * Called from the view itself on a sub-mode change; exposed so anything else
  * that changes the sub-mode can keep the screen honest. */
 void ft8_screen_view_js8_tabs_refresh(void);
+
+/* Which JS8 pane is showing. Reported in /api/status so the capture and the
+ * API can say what is on the screen without asking the operator. */
+bool ft8_screen_view_js8_tab_is_conversation(void);

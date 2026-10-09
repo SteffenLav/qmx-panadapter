@@ -17,10 +17,11 @@
 #include "js8_chat.h"
 
 /* The JS8 screen's right pane is 960 x 580 px and qmx_mono_25 advances 15 px
- * per column over 27 px rows, so the grid is exactly 64 x 21. It was 80 x 24
- * while this was a full-screen overlay. */
+ * per column over 27 px rows. The pane spends 30 px on its own column header -
+ * the view draws that, not this module - leaving 550 px, so the grid is
+ * exactly 64 x 20. It was 80 x 24 while this was a full-screen overlay. */
 #define JS8_PAGE_COLS 64
-#define JS8_PAGE_ROWS 21
+#define JS8_PAGE_ROWS 20
 
 /* Column geometry. One row of a message reads:
  *

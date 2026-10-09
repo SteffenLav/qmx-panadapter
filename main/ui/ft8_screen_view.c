@@ -3200,6 +3200,7 @@ static void ft8_freq_label_clicked_cb(lv_event_t *e)
 #define CONV_CELL_W 15      /* qmx_mono_25 advance - must match js8_page.h's
                              * column count against RIGHT_W, see below */
 #define CONV_ROW_H  27
+#define CONV_HDR_H  30      /* same as the Stations column header */
 
 LV_FONT_DECLARE(qmx_mono_25);
 
@@ -3220,6 +3221,12 @@ typedef struct {
     js8_chat_msg_t msgs[JS8_CHAT_MAX_MSGS];
     char           lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1];
     int            row_msg[JS8_PAGE_ROWS];
+    /* What each label currently shows. ⛔ WITHOUT THIS THE PAGE CHURNS THE
+     * INTERNAL HEAP: lv_label_set_text() frees and reallocates the label's own
+     * text buffer every call, and this repaints 20 rows a second whether or
+     * not anything changed. 64-byte buffers cycling at 20 Hz fragment exactly
+     * the pool the DMA allocations come from. */
+    char           shown[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1];
 } conv_scratch_t;
 static conv_scratch_t *s_conv;
 
@@ -3282,7 +3289,10 @@ static void conv_repaint(void)
                     s_conv->lines, s_conv->row_msg);
 
     for (int r = 0; r < JS8_PAGE_ROWS; r++) {
-        if (s_conv_rows[r]) lv_label_set_text(s_conv_rows[r], s_conv->lines[r]);
+        if (s_conv_rows[r] && strcmp(s_conv->shown[r], s_conv->lines[r]) != 0) {
+            lv_label_set_text(s_conv_rows[r], s_conv->lines[r]);
+            memcpy(s_conv->shown[r], s_conv->lines[r], JS8_PAGE_COLS + 1);
+        }
         if (s_conv_hits[r]) {
             /* Only a row that belongs to a message is tappable, so a tap on
              * empty space below the list does nothing rather than targeting
@@ -3358,11 +3368,28 @@ static void js8_tabs_apply(void)
 
 void ft8_screen_view_js8_tabs_refresh(void) { js8_tabs_apply(); }
 
+/* ⛔ LOG THE TAB, WITH THE HEAP BESIDE IT.
+ *
+ * 2026-10-09: an internal-heap regression had to be chased by asking the
+ * operator which tab was showing, while he was working in the shack. The
+ * capture is the instrument; if it cannot say what is on the screen then
+ * every question about the screen costs him an interruption. The heap goes on
+ * the same line so a tab change and a step in the heap are one reading rather
+ * than two to correlate by timestamp. */
+static void log_tab(void)
+{
+    ESP_LOGI(TAG, "js8 tab: %s (heap_i=%uKB lblk=%uKB)",
+             s_tab_conversation ? "conversation" : "stations",
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
+}
+
 static void tab_stations_cb(lv_event_t *e)
 {
     (void)e;
     s_tab_conversation = false;
     js8_tabs_apply();
+    log_tab();
 }
 
 static void tab_conv_cb(lv_event_t *e)
@@ -3370,6 +3397,12 @@ static void tab_conv_cb(lv_event_t *e)
     (void)e;
     s_tab_conversation = true;
     js8_tabs_apply();
+    log_tab();
+}
+
+bool ft8_screen_view_js8_tab_is_conversation(void)
+{
+    return s_tab_conversation;
 }
 
 static void build_js8_tabs(void)
@@ -3409,13 +3442,39 @@ static void build_js8_tabs(void)
     lv_obj_clear_flag(s_conv_pane, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_conv_pane, LV_OBJ_FLAG_HIDDEN);
 
+    /* The conversation's own column header, drawn HERE and not by js8_page.c.
+     * Without it the bare offset in the second column names nothing - seen on
+     * the glass 2026-10-09, next to a Stations table that has always had one.
+     * It is furniture, so it stays out of the layout module exactly as the
+     * heading did. Positions come from the same column constants the grid
+     * uses, so the two cannot drift apart. */
+    {
+        lv_obj_t *ch = lv_obj_create(s_conv_pane);
+        lv_obj_set_size(ch, RIGHT_W, CONV_HDR_H);
+        lv_obj_set_pos(ch, 0, 0);
+        lv_obj_add_style(ch, &s_style_header, 0);
+        lv_obj_clear_flag(ch, LV_OBJ_FLAG_SCROLLABLE);
+        struct { const char *t; int col; } ct[4] = {
+            { "AGE",     JS8_PAGE_COL_AGE    },
+            { "Hz",      JS8_PAGE_COL_HZ     },
+            { "CALL",    JS8_PAGE_COL_SENDER },
+            { "MESSAGE", JS8_PAGE_COL_TEXT   },
+        };
+        for (int i = 0; i < 4; i++) {
+            lv_obj_t *l = lv_label_create(ch);
+            lv_obj_add_style(l, &s_style_header_label, 0);
+            lv_label_set_text(l, ct[i].t);
+            lv_obj_set_x(l, 6 + ct[i].col * CONV_CELL_W);
+        }
+    }
+
     for (int r = 0; r < JS8_PAGE_ROWS; r++) {
         s_conv_rows[r] = lv_label_create(s_conv_pane);
         lv_obj_set_style_text_font(s_conv_rows[r], &qmx_mono_25, 0);
         lv_obj_set_style_text_color(s_conv_rows[r], lv_color_hex(0xD8D8D8), 0);
         lv_label_set_long_mode(s_conv_rows[r], LV_LABEL_LONG_CLIP);
         lv_obj_set_width(s_conv_rows[r], JS8_PAGE_COLS * CONV_CELL_W);
-        lv_obj_set_pos(s_conv_rows[r], 6, r * CONV_ROW_H);
+        lv_obj_set_pos(s_conv_rows[r], 6, CONV_HDR_H + r * CONV_ROW_H);
         lv_label_set_text(s_conv_rows[r], "");
 
         /* A transparent target over the whole row, because the label is
@@ -3424,7 +3483,7 @@ static void build_js8_tabs(void)
         s_conv_hits[r] = lv_obj_create(s_conv_pane);
         lv_obj_remove_style_all(s_conv_hits[r]);
         lv_obj_set_size(s_conv_hits[r], RIGHT_W, CONV_ROW_H);
-        lv_obj_set_pos(s_conv_hits[r], 0, r * CONV_ROW_H);
+        lv_obj_set_pos(s_conv_hits[r], 0, CONV_HDR_H + r * CONV_ROW_H);
         lv_obj_set_style_bg_opa(s_conv_hits[r], LV_OPA_TRANSP, 0);
         lv_obj_clear_flag(s_conv_hits[r], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(s_conv_hits[r], LV_OBJ_FLAG_CLICKABLE);
