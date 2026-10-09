@@ -19,10 +19,15 @@ typedef struct {
 } js8_chat_store_t;
 
 static js8_chat_store_t *s_store;
+/* So a board with no PSRAM to spare does not retry and log once per slot
+ * forever. One complaint, then the page is simply empty. */
+static bool s_tried;
 
 bool js8_chat_init(void)
 {
     if (s_store) return true;
+    if (s_tried)  return false;
+    s_tried = true;
 #if defined(ESP_PLATFORM)
     s_store = heap_caps_calloc(1, sizeof(*s_store), MALLOC_CAP_SPIRAM);
     if (!s_store) {

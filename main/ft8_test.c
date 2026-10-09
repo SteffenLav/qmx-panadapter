@@ -61,6 +61,7 @@
 #include "ft8/encode.h"
 #include "ft8/js8_text.h"
 #include "ft8/js8_reasm.h"
+#include "js8_chat.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
@@ -2086,6 +2087,75 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             }
         }
         js8_reasm_tick(&s_js8_reasm, slot_sec);
+
+        /* ---- feed the conversation store (the JS8 page) -------------------
+         *
+         * Here, after the join, for the same reason js8_reasm is fed here: the
+         * candidate loop runs on two threads and this store has no lock.
+         *
+         * ⭐ THE STRUCTURED MESSAGES ARE RE-RENDERED FROM THE STORED PAYLOAD
+         * rather than carried as text in js8ev[]. A text field there would
+         * have cost 24 x 40 bytes in r_worker, which is a static in INTERNAL
+         * .bss - the memory #65 was about, and the board runs near 30 KB free.
+         * The payload is already kept for the reassembler, so unpacking it a
+         * second time costs a few microseconds per structured frame per slot
+         * and no memory at all. It is outside the candidate loop and outside
+         * FT8_DECODE_BUDGET_MS, which is what the "ONE call, deliberately"
+         * note in that loop is protecting. */
+        if (js8_chat_init()) {
+            const decode_result_t *src[2] = { &r_main, &r_worker };
+            for (int rr = 0; rr < 2; rr++) {
+                int nev = src[rr]->n_js8ev;
+                if (nev > FT8_JS8_MAX_EVENTS) nev = FT8_JS8_MAX_EVENTS;
+                for (int k = 0; k < nev; k++) {
+                    if (js8_frame_is_data(src[rr]->js8ev[k].type)) continue;
+                    ftx_message_t jm;
+                    memset(&jm, 0, sizeof(jm));
+                    memcpy(jm.payload, src[rr]->js8ev[k].frame, JS8_FRAME_BYTES);
+                    char jtext[FTX_MAX_MESSAGE_LENGTH];
+                    ftx_message_offsets_t joff;
+                    if (!decode_msg_to_text(&jm, FTX_PROTOCOL_JS8, jtext,
+                                            sizeof(jtext), &joff))
+                        continue;
+                    js8_chat_msg_t cm;
+                    memset(&cm, 0, sizeof(cm));
+                    cm.kind      = JS8_CHAT_DIRECTED;
+                    cm.first_utc = slot_sec;
+                    cm.last_utc  = slot_sec;
+                    cm.freq_hz   = src[rr]->js8ev[k].freq_hz;
+                    cm.frames    = 1;
+                    cm.snr_db    = JS8_CHAT_NO_SNR;
+                    snprintf(cm.sender, sizeof(cm.sender), "%s",
+                             src[rr]->js8ev[k].call);
+                    snprintf(cm.text, sizeof(cm.text), "%s", jtext);
+                    js8_chat_add(&cm);
+                }
+            }
+            for (int k = 0; k < js8_reasm_active(&s_js8_reasm); k++) {
+                const js8_reasm_run_t *run = js8_reasm_at(&s_js8_reasm, k);
+                if (!run) continue;
+                js8_chat_msg_t cm;
+                memset(&cm, 0, sizeof(cm));
+                cm.kind       = JS8_CHAT_FREETEXT;
+                cm.first_utc  = run->first_slot;
+                cm.last_utc   = run->last_slot;
+                cm.freq_hz    = run->freq_hz;
+                cm.frames     = run->n_seen;
+                cm.snr_db     = JS8_CHAT_NO_SNR;
+                cm.active     = (run->last_slot == slot_sec);
+                /* Both ways a message can be cut, as js8_reasm_describe spells
+                 * them: the text buffer filled, or frames arrived past the cap.
+                 * The page has one flag; it must mean either. */
+                cm.truncated  = run->text_full || run->overflowed;
+                cm.compressed = run->compressed;
+                snprintf(cm.sender, sizeof(cm.sender), "%s", run->sender);
+                snprintf(cm.text, sizeof(cm.text), "%s", run->text);
+                js8_chat_add(&cm);
+            }
+            /* The same quiet window js8_reasm uses, so a run stops being
+             * marked live on the page in the slot it is forgotten there. */
+            js8_chat_tick(slot_sec, JS8_REASM_TIMEOUT_SLOTS * 15);
+        }
 
         int n_runs = js8_reasm_active(&s_js8_reasm);
         int dropped = r_main.js8ev_dropped + r_worker.js8ev_dropped;
