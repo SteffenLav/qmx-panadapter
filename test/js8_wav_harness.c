@@ -111,8 +111,25 @@ static int load_slot_wav(const char *path, float *dst, int max_samples, int *n_o
      * waterfall to 255 and decodes nothing. Measured here on 2026-10-09: the
      * synthetic self-test found 0 candidates at amplitude 8000 and decodes at
      * 0.25. The board's slot WAVs are normalised for the same reason. */
+    /* JS8_WAV_SCALE re-scales the loaded slot. It exists for ONE measurement:
+     * the stored WAV is normalised, so setting this to the slot's own
+     * peak_float from /api/slot.json puts the harness at the LIVE level and
+     * answers whether the board's own waterfall is clamping. Unset = 1.0.
+     *
+     * ⭐ THAT MEASUREMENT IS DONE. One real 40 m JS8 slot off bench dev,
+     * 2026-10-09, candidates found at each input scale:
+     *
+     *     scale     1    22   100   300  1000  3000  8000
+     *     cand     56    56    56    54    16     3     0
+     *
+     * The live peak_float was 22. The clamp does not bite until about 300 and
+     * does not dominate until 1000, so the live path has 15-45x of margin and
+     * the normalised corpus is NOT easier than the board. The 0 at 8000 is
+     * what made the first self-test fail and is what put this knob here. */
+    const char *sc = getenv("JS8_WAV_SCALE");
+    float extra = sc ? (float)atof(sc) : 1.0f;
     while (n < max_samples && fread(&s, sizeof(s), 1, f) == 1)
-        dst[n++] = (float)s / 32768.0f;
+        dst[n++] = (float)s / 32768.0f * extra;
     fclose(f);
     *n_out = n;
     return 0;
