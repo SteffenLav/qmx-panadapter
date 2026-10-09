@@ -83,7 +83,6 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "reader_view.h"
 #include "spot_map_view.h"
 #include "qmx_term_view.h"     // "Radio menus" - the QMX's own menu system (#147)
-#include "js8_page_view.h"     // "JS8 conversation" - the free-text message page (J7)
 #include "ft8_test.h"
 #include "esp_lcd_touch.h"
 #include "esp_system.h"        // esp_restart - the drawer's "Restart now" (#270)
@@ -3017,10 +3016,6 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * session reaches for, and getting it wrong is an electrical question (pins
  * driven into a GPS transmitter) rather than a preference. */
 #define DRAWER_SEC_PORTA      47
-/* The JS8 conversation page. A LAUNCHER, not a setting - it opens a full
- * screen view, the same shape as DRAWER_SEC_TERM. Shown only on the FT8 page
- * and only while the sub-mode is JS8; see drawer_section_visible(). */
-#define DRAWER_SEC_JS8CHAT    48
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
 // size array indexed by an enum will be overrun" section. IDs are 0..47.
 //
@@ -3034,7 +3029,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     49
+#define N_DRAWER_SECTIONS     48
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3135,7 +3130,6 @@ static const drawer_item_t GRP_WSPR[] = {
 };
 static const drawer_item_t GRP_FT8[] = {
     { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter", true },
-    { DRAWER_SEC_JS8CHAT, "JS8 conversation", true },
     { DRAWER_SEC_SIMMODE, "Simulation mode", false },
 };
 static const drawer_item_t GRP_SPECTRUM[] = {
@@ -3393,9 +3387,6 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      *    which is what was wanted all along: the borrowed section also carried
      *    fast pounce and PSK Reporter, both FT8-only. */
     if (id == DRAWER_SEC_SIMMODE) return ft8;
-    /* JS8 only. On FT8 or FT4 the page would always be empty, and an empty
-     * page reads as a broken decoder rather than as the wrong sub-mode. */
-    if (id == DRAWER_SEC_JS8CHAT) return ft8 && ft8_op_mode_get() == FT8_OP_MODE_JS8;
     if (id == DRAWER_SEC_DISTANCE) return ft8;
     if (id == DRAWER_SEC_FT8SYNC) return ft8;
     /* ⛔ THE FALL-THROUGH AT THE BOTTOM OF THIS FUNCTION IS `return true`, so a
@@ -3636,7 +3627,6 @@ static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_term_btn_cb(lv_event_t *e);
-static void drawer_js8chat_btn_cb(lv_event_t *e);
 static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
@@ -14326,25 +14316,6 @@ static void drawer_build(void)
         lv_obj_align(s_check_pskrep, LV_ALIGN_TOP_RIGHT, 0, 118);
         y += 168;
     }
-    /* The JS8 conversation page. A launcher, same geometry as "Radio menus".
-     * Placed before Simulation mode so the two FT8 settings stay together
-     * below it rather than being split by a button. */
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_JS8CHAT, y, 72);
-        lv_obj_t *btn = lv_btn_create(sec);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
-        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
-        lv_obj_add_event_cb(btn, drawer_js8chat_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, LV_SYMBOL_LIST "  JS8 conversation");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 72;
-    }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
     // pattern as DRAWER_SEC_DISTANCE above, not a Panadapter-mode setting.
@@ -15616,13 +15587,6 @@ static void drawer_term_btn_cb(lv_event_t *e)
     (void)e;
     ui_set_drawer_open(false);
     qmx_term_view_open();
-}
-
-static void drawer_js8chat_btn_cb(lv_event_t *e)
-{
-    (void)e;
-    ui_set_drawer_open(false);
-    js8_page_view_open();
 }
 
 static void drawer_check_flip_cb(lv_event_t *e)

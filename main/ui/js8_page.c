@@ -28,18 +28,20 @@ static void put(char *line, int col, const char *s, int width)
     }
 }
 
-/* HH:MM:SS from a UTC second, by arithmetic rather than gmtime().
+/* Age as the Stations list writes it: seconds while they fit, then minutes.
  *
- * gmtime() would drag in the C library's time zone handling for a value that
- * is already UTC, and on this target it is not reentrant. The page only ever
- * shows a time of day, so the date is not needed and a day boundary inside the
- * list simply shows the clock wrapping, which is what a clock does. */
-static void hhmmss(int64_t utc, char out[9])
+ * Four columns. 999 s is 16 minutes, far longer than a JS8 run stays
+ * interesting, so beyond that it reads "99m" rather than growing the column.
+ * A negative age means the clock moved backwards under us - shown as "0s"
+ * rather than hidden, because a negative age on screen is how a time-sync
+ * fault announces itself. */
+static void age_str(int64_t now_utc, int64_t then_utc, char out[6])
 {
-    int64_t s = utc % 86400;
-    if (s < 0) s += 86400;
-    snprintf(out, 9, "%02d:%02d:%02d",
-             (int)(s / 3600), (int)((s / 60) % 60), (int)(s % 60));
+    int64_t a = now_utc - then_utc;
+    if (a < 0) a = 0;
+    if (a < 1000)      snprintf(out, 6, "%3ds", (int)a);
+    else if (a < 5940) snprintf(out, 6, "%3dm", (int)(a / 60));
+    else               snprintf(out, 6, " 99m");
 }
 
 /* Where to break `s` so the first line is at most `width`. Returns the number
@@ -74,17 +76,21 @@ int js8_page_rows_for(const js8_chat_msg_t *m)
     return rows ? rows : 1;
 }
 
-int js8_page_render(const js8_chat_msg_t *msgs, int n,
-                    char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1])
+int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
+                    char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1],
+                    int row_msg[JS8_PAGE_ROWS])
 {
-    for (int r = 0; r < JS8_PAGE_ROWS; r++) blank(lines[r]);
+    for (int r = 0; r < JS8_PAGE_ROWS; r++) {
+        blank(lines[r]);
+        if (row_msg) row_msg[r] = -1;
+    }
 
     if (n <= 0 || !msgs) {
         /* Say which band is being listened to, not "no data". An empty page
          * with no explanation reads as a broken decoder, and free text really
          * is rare: one run in 82 slots on the bench on 2026-10-09. */
-        put(lines[JS8_PAGE_ROW0], JS8_PAGE_COL_TIME,
-            "nothing heard yet - JS8 traffic appears here as it decodes", 58);
+        put(lines[JS8_PAGE_ROW0], JS8_PAGE_COL_AGE,
+            "nothing decoded yet", 19);
         return 0;
     }
 
@@ -99,9 +105,9 @@ int js8_page_render(const js8_chat_msg_t *msgs, int n,
                       : m->truncated  ? JS8_PAGE_FLAG_TRUNC
                                       : JS8_PAGE_FLAG_NONE;
 
-        char t[9];
-        hhmmss(m->first_utc, t);
-        put(lines[row], JS8_PAGE_COL_TIME, t, 8);
+        char ag[6];
+        age_str(now_utc, m->last_utc, ag);
+        put(lines[row], JS8_PAGE_COL_AGE, ag, JS8_PAGE_W_AGE);
 
         char hz[6];
         snprintf(hz, sizeof(hz), "%4d", m->freq_hz);
@@ -119,6 +125,7 @@ int js8_page_render(const js8_chat_msg_t *msgs, int n,
             if (row >= JS8_PAGE_ROWS) break;
             int skip, len = wrap_at(p, JS8_PAGE_W_TEXT, &skip);
             put(lines[row], JS8_PAGE_COL_TEXT, p, len);
+            if (row_msg) row_msg[row] = i;
             p += skip;
             row++;
         } while (*p);

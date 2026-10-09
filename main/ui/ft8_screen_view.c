@@ -38,6 +38,8 @@
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
 #include "ft8_greylist.h"
+#include "js8_page.h"
+#include "js8_chat.h"
 #include "ft8_robot.h"   // ft8_robot_stand_down - cancelling a TX stops the automatics
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
@@ -625,6 +627,9 @@ static bool row_is_cq(int idx)
 }
 
 static void row_activate_ex(int idx, bool direct);
+/* Defined with the JS8 panes, far below; the 1 Hz clock timer drives it. */
+static void conv_repaint(void);
+static void js8_tabs_apply(void);
 
 static void row_activate(int idx) { row_activate_ex(idx, false); }
 
@@ -1640,6 +1645,11 @@ static int      s_respawn_tries   = 0;
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
+
+    /* The conversation ages every second (the AGE column) and gains a row
+     * every slot, so 1 Hz is the right cadence - the 500 ms list refresh is
+     * for the Stations table and does nothing here. */
+    conv_repaint();
 
     // Drain a web CQ request BEFORE the visibility gate below, so it is consumed
     // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
@@ -2908,6 +2918,10 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
         lv_label_set_text(s_lbl_mode, mode_label(now));
         lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(mode_accent_hex(now)), 0);
     }
+    /* The sub-mode decides whether the right pane has tabs at all, and whether
+     * TXCQ parity is shown. Called here rather than from the refresh timer so
+     * the screen changes with the mode, not up to half a second later. */
+    js8_tabs_apply();
 
     // Optimistically update both labels without waiting for the FA poll.
     ui_update_frequency(freq_hz);               // top-bar "Freq:" label
@@ -3166,6 +3180,258 @@ static void ft8_freq_label_clicked_cb(lv_event_t *e)
 }
 
 // ---------------- public API ----------------
+
+/* ===================== the JS8 screen's two panes ======================
+ *
+ * In JS8 the right pane carries a tab bar: Stations (the table this file has
+ * always drawn) and Conversation (js8_page.c's grid, fed by js8_chat.c).
+ *
+ * ⛔ IN FT8 AND FT4 NOTHING CHANGES. The tab bar is built but hidden, and the
+ * column header and list sit at the same y they always did. JS8 is the only
+ * mode that moves them down by TABBAR_H. A tab bar nobody can use would cost
+ * every FT8 operator 44 px for nothing.
+ *
+ * ⭐ Conversation is the DEFAULT in JS8. It is the only view that can show
+ * free text at all, it fills in time order rather than as a per-station
+ * aggregate so it shows the band is alive sooner, and it is where the compose
+ * line goes when free-text TX (J8) lands. Stations is one tap away.
+ */
+#define TABBAR_H   44
+#define CONV_CELL_W 15      /* qmx_mono_25 advance - must match js8_page.h's
+                             * column count against RIGHT_W, see below */
+#define CONV_ROW_H  27
+
+LV_FONT_DECLARE(qmx_mono_25);
+
+static lv_obj_t *s_col_hdr;              /* the Stations column header       */
+static lv_obj_t *s_tabbar;
+static lv_obj_t *s_tab_btn_stations;
+static lv_obj_t *s_tab_btn_conv;
+static lv_obj_t *s_conv_pane;
+static lv_obj_t *s_conv_rows[JS8_PAGE_ROWS];
+static lv_obj_t *s_conv_hits[JS8_PAGE_ROWS];
+static bool      s_tab_conversation = true;   /* which tab, while in JS8 */
+
+/* PSRAM, for the same reason the GPS page's scratch is there: this is ~11 kB
+ * and internal .bss comes out of the DMA pool (#65, and the SD mount failure
+ * of 2026-10-08). Allocated on the first JS8 repaint, never freed - the screen
+ * itself is permanent, unlike a modal. */
+typedef struct {
+    js8_chat_msg_t msgs[JS8_CHAT_MAX_MSGS];
+    char           lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1];
+    int            row_msg[JS8_PAGE_ROWS];
+} conv_scratch_t;
+static conv_scratch_t *s_conv;
+
+static bool js8_mode_now(void) { return ft8_op_mode_get() == FT8_OP_MODE_JS8; }
+
+/* Tapping a conversation row targets THAT station.
+ *
+ * ⭐ It resolves to the Stations row with the same callsign and activates it,
+ * rather than duplicating row_activate_ex(). That function does more than open
+ * a modal - it checks the grey list, finds the station in the heard table,
+ * picks a reply tone and honours Fox/Hound - and a second copy of that would
+ * drift. The Stations rows are built and refreshed whichever tab is showing,
+ * so they are there to be found.
+ *
+ * A row with no sender cannot be targeted: a JS8 data frame carries no
+ * callsign, so a free-text run nothing identified has nobody to reply to. */
+static void conv_row_clicked_cb(lv_event_t *e)
+{
+    if (!s_conv || !s_rows) return;
+    int row = (int)(intptr_t)lv_event_get_user_data(e);
+    if (row < 0 || row >= JS8_PAGE_ROWS) return;
+    int mi = s_conv->row_msg[row];
+    if (mi < 0 || mi >= JS8_CHAT_MAX_MSGS) return;
+    const char *call = s_conv->msgs[mi].sender;
+    if (!call || !call[0]) {
+        ui_toast("No callsign on that message");
+        return;
+    }
+    for (int i = 0; i < MAX_ROWS; i++) {
+        if (!s_rows[i].row || !s_rows[i].l_call) continue;
+        if (lv_obj_has_flag(s_rows[i].row, LV_OBJ_FLAG_HIDDEN)) continue;
+        const char *rc = lv_label_get_text(s_rows[i].l_call);
+        if (rc && strcmp(rc, call) == 0) { row_activate(i); return; }
+    }
+    ui_toast("Station no longer heard");
+}
+
+static void conv_repaint(void)
+{
+    if (!s_conv_pane || !js8_mode_now() || !s_tab_conversation) return;
+    /* Nothing to repaint behind another screen. The clock timer runs whether
+     * or not the FT8 screen is up, and 21 label writes a second into hidden
+     * objects is work for no reader. */
+    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+    if (!s_conv) {
+        s_conv = heap_caps_calloc(1, sizeof(*s_conv), MALLOC_CAP_SPIRAM);
+        if (!s_conv) {
+            ESP_LOGE(TAG, "no PSRAM for the JS8 conversation scratch (%u B)",
+                     (unsigned)sizeof(*s_conv));
+            return;
+        }
+    }
+    int n = js8_chat_count();
+    if (n > JS8_CHAT_MAX_MSGS) n = JS8_CHAT_MAX_MSGS;
+    int have = 0;
+    for (int i = 0; i < n; i++)
+        if (js8_chat_at(i, &s_conv->msgs[have])) have++;
+
+    js8_page_render(s_conv->msgs, have, (int64_t)time(NULL),
+                    s_conv->lines, s_conv->row_msg);
+
+    for (int r = 0; r < JS8_PAGE_ROWS; r++) {
+        if (s_conv_rows[r]) lv_label_set_text(s_conv_rows[r], s_conv->lines[r]);
+        if (s_conv_hits[r]) {
+            /* Only a row that belongs to a message is tappable, so a tap on
+             * empty space below the list does nothing rather than targeting
+             * whatever was last there. */
+            if (s_conv->row_msg[r] >= 0)
+                lv_obj_add_flag(s_conv_hits[r], LV_OBJ_FLAG_CLICKABLE);
+            else
+                lv_obj_clear_flag(s_conv_hits[r], LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+}
+
+static void tab_paint(void)
+{
+    const bool js8 = js8_mode_now();
+    if (s_tab_btn_stations) {
+        bool on = !js8 || !s_tab_conversation;
+        lv_obj_set_style_bg_color(s_tab_btn_stations,
+                                  lv_color_hex(on ? 0x2a3138 : 0x14181c), 0);
+        lv_obj_set_style_border_color(s_tab_btn_stations,
+                                      lv_color_hex(on ? JS8_ACCENT_HEX : 0x303840), 0);
+    }
+    if (s_tab_btn_conv) {
+        bool on = js8 && s_tab_conversation;
+        lv_obj_set_style_bg_color(s_tab_btn_conv,
+                                  lv_color_hex(on ? 0x2a3138 : 0x14181c), 0);
+        lv_obj_set_style_border_color(s_tab_btn_conv,
+                                      lv_color_hex(on ? JS8_ACCENT_HEX : 0x303840), 0);
+    }
+}
+
+/* Show the right things for the mode and the chosen tab, and put the column
+ * header and the list at the y the mode calls for. Safe before the widgets
+ * exist, so it can be called from the sub-mode hook at any time. */
+static void js8_tabs_apply(void)
+{
+    const bool js8 = js8_mode_now();
+    const int  top = js8 ? TABBAR_H : 0;
+
+    if (s_tabbar) {
+        if (js8) lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
+        else     lv_obj_add_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
+    }
+    const bool show_conv = js8 && s_tab_conversation;
+
+    if (s_col_hdr) {
+        lv_obj_set_pos(s_col_hdr, 0, top);
+        if (show_conv) lv_obj_add_flag(s_col_hdr, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_col_hdr, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_list) {
+        lv_obj_set_pos(s_list, 0, top + 30);
+        lv_obj_set_size(s_list, RIGHT_W, MID_H - top - 30);
+        if (show_conv) lv_obj_add_flag(s_list, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_list, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_conv_pane) {
+        if (show_conv) lv_obj_clear_flag(s_conv_pane, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_conv_pane, LV_OBJ_FLAG_HIDDEN);
+    }
+    /* TXCQ parity is an FT8 convention. MEASURED 2026-10-09 over 118 KiwiSDR
+     * slots: JS8 traffic splits evenly across even and odd slots (5/5 on
+     * 7.078, 6/7 on 14.078) and one station transmitted in both parities
+     * inside a single QSO, so there is no even/odd calling convention to
+     * choose. The button would do nothing a JS8 operator wants. */
+    if (s_btn_parity) {
+        if (js8) lv_obj_add_flag(s_btn_parity, LV_OBJ_FLAG_HIDDEN);
+        else     lv_obj_clear_flag(s_btn_parity, LV_OBJ_FLAG_HIDDEN);
+    }
+    tab_paint();
+    if (show_conv) conv_repaint();
+}
+
+void ft8_screen_view_js8_tabs_refresh(void) { js8_tabs_apply(); }
+
+static void tab_stations_cb(lv_event_t *e)
+{
+    (void)e;
+    s_tab_conversation = false;
+    js8_tabs_apply();
+}
+
+static void tab_conv_cb(lv_event_t *e)
+{
+    (void)e;
+    s_tab_conversation = true;
+    js8_tabs_apply();
+}
+
+static void build_js8_tabs(void)
+{
+    s_tabbar = lv_obj_create(s_right_pane);
+    lv_obj_remove_style_all(s_tabbar);
+    lv_obj_set_size(s_tabbar, RIGHT_W, TABBAR_H);
+    lv_obj_set_pos(s_tabbar, 0, 0);
+    lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
+
+    struct { lv_obj_t **out; const char *text; int x; lv_event_cb_t cb; } tabs[2] = {
+        { &s_tab_btn_conv,     "Conversation", 8,   tab_conv_cb     },
+        { &s_tab_btn_stations, "Stations",     208, tab_stations_cb },
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *b = lv_btn_create(s_tabbar);
+        lv_obj_set_size(b, 192, 40);
+        lv_obj_set_pos(b, tabs[i].x, 2);
+        lv_obj_set_style_radius(b, 6, 0);
+        lv_obj_set_style_border_width(b, 2, 0);
+        lv_obj_add_event_cb(b, tabs[i].cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, tabs[i].text);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(l);
+        *tabs[i].out = b;
+    }
+
+    s_conv_pane = lv_obj_create(s_right_pane);
+    lv_obj_remove_style_all(s_conv_pane);
+    lv_obj_set_size(s_conv_pane, RIGHT_W, MID_H - TABBAR_H);
+    lv_obj_set_pos(s_conv_pane, 0, TABBAR_H);
+    lv_obj_set_style_bg_color(s_conv_pane, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_conv_pane, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_conv_pane, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_conv_pane, LV_OBJ_FLAG_HIDDEN);
+
+    for (int r = 0; r < JS8_PAGE_ROWS; r++) {
+        s_conv_rows[r] = lv_label_create(s_conv_pane);
+        lv_obj_set_style_text_font(s_conv_rows[r], &qmx_mono_25, 0);
+        lv_obj_set_style_text_color(s_conv_rows[r], lv_color_hex(0xD8D8D8), 0);
+        lv_label_set_long_mode(s_conv_rows[r], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(s_conv_rows[r], JS8_PAGE_COLS * CONV_CELL_W);
+        lv_obj_set_pos(s_conv_rows[r], 6, r * CONV_ROW_H);
+        lv_label_set_text(s_conv_rows[r], "");
+
+        /* A transparent target over the whole row, because the label is
+         * clipped to its text and a tap to the right of a short message would
+         * otherwise miss. */
+        s_conv_hits[r] = lv_obj_create(s_conv_pane);
+        lv_obj_remove_style_all(s_conv_hits[r]);
+        lv_obj_set_size(s_conv_hits[r], RIGHT_W, CONV_ROW_H);
+        lv_obj_set_pos(s_conv_hits[r], 0, r * CONV_ROW_H);
+        lv_obj_set_style_bg_opa(s_conv_hits[r], LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(s_conv_hits[r], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(s_conv_hits[r], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_conv_hits[r], conv_row_clicked_cb,
+                            LV_EVENT_CLICKED, (void *)(intptr_t)r);
+    }
+}
 
 void ft8_screen_view_init(lv_obj_t *parent)
 {
@@ -3601,6 +3867,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     // Column header (shared styles)
     lv_obj_t *hdr = lv_obj_create(s_right_pane);
+    s_col_hdr = hdr;
     lv_obj_set_size(hdr, RIGHT_W, 30);
     lv_obj_set_pos(hdr, 0, 0);
     lv_obj_add_style(hdr, &s_style_header, 0);
@@ -3654,6 +3921,9 @@ void ft8_screen_view_init(lv_obj_t *parent)
     ESP_LOGI(TAG, "row pool built (%d rows, heap_i %u -> %u, delta %d B)",
              MAX_ROWS, (unsigned)heap_before, (unsigned)heap_after,
              (int)heap_after - (int)heap_before);
+
+    build_js8_tabs();
+    js8_tabs_apply();
 
     s_t_refresh = lv_timer_create(t_refresh_cb, 500, NULL);
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);

@@ -89,3 +89,9 @@ void ft8_screen_view_refresh_preset(void);
 // gesture. No-op (silent) if there's no adjacent visible row or nothing was
 // ever confirmed this session. LVGL-thread only.
 void ft8_screen_view_nudge_confirm(int delta);
+
+/* Re-apply the JS8 screen's pane layout: the Stations/Conversation tab bar and
+ * the TXCQ parity button, both of which exist only while the sub-mode is JS8.
+ * Called from the view itself on a sub-mode change; exposed so anything else
+ * that changes the sub-mode can keep the screen honest. */
+void ft8_screen_view_js8_tabs_refresh(void);
