@@ -2836,8 +2836,14 @@ static const char *mode_label(ft8_op_mode_t mode)
 
 static lv_obj_t *s_ft8_freq_popup = NULL;
 
+static void preset_rows_reset(void);
+
 static void ft8_freq_popup_close(void)
 {
+    /* ⛔ CLEAR THE ROW REGISTRY FIRST. It holds pointers into the popup, and
+     * the gesture handler hit-tests them by coordinate - a stale entry after
+     * the objects are deleted is a use-after-free on the next press. */
+    preset_rows_reset();
     if (s_ft8_freq_popup) { lv_obj_delete(s_ft8_freq_popup); s_ft8_freq_popup = NULL; }
 }
 
@@ -2989,6 +2995,149 @@ static void ft8_freq_label_clicked_cb(lv_event_t *e);
 // panel to fit them without scrolling. `row_cb` (ft8_/ft4_freq_preset_cb) is
 // invoked with the chosen dial frequency on tap. Returns the panel height, or
 // 0 if no rows matched (nothing drawn).
+/* ===== press, slide, release in the frequency preset columns ==========
+ *
+ * Operator, 2026-10-09: "tap and hold to highlight item in column then move up
+ * and down to pick the right item".
+ *
+ * ⭐ THE SAME GESTURE THE DECODE LIST ALREADY HAS, and deliberately the same
+ * constants (ROW_PREVIEW_MS, ROW_HOLD_SELECT_MS, ROW_SCROLL_CANCEL_PX). Two
+ * lists on one screen that both respond to press-and-slide must not disagree
+ * about how long a hold is.
+ *
+ * A quick tap still tunes immediately. That path is what everyone has been
+ * using and the hold is an addition, not a replacement.
+ *
+ * ⚠ THE HIT TEST IS BY COORDINATE ACROSS ALL THREE COLUMNS, not within the
+ * column the press started in. He asked for up and down, and this does that;
+ * it also means a finger that drifts sideways lands on the row it is over
+ * rather than losing the highlight, and sliding into the next column works.
+ * LVGL keeps sending PRESSING to the object that was first pressed, which is
+ * what makes a global hit test possible at all. */
+#define PRESET_MAX_ROWS 48
+
+static struct {
+    lv_obj_t     *btn;
+    lv_obj_t     *lbl;
+    uint32_t      hz;
+    ft8_op_mode_t mode;
+    bool          active;      /* the gold "band the radio is on" styling */
+} s_preset_rows[PRESET_MAX_ROWS];
+static int        s_preset_n;
+static int        s_preset_hover = -1;
+static uint32_t   s_preset_press_ms;
+static lv_point_t s_preset_press_pt;
+static bool       s_preset_sel_mode;
+static bool       s_preset_scrolled;
+
+static void preset_rows_reset(void)
+{
+    memset(s_preset_rows, 0, sizeof(s_preset_rows));
+    s_preset_n = 0;
+    s_preset_hover = -1;
+    s_preset_sel_mode = false;
+    s_preset_scrolled = false;
+}
+
+/* Restore a row to the colours build_preset_column gave it. */
+static void preset_row_style(int i, bool hover, bool preview)
+{
+    if (i < 0 || i >= s_preset_n || !s_preset_rows[i].btn) return;
+    uint32_t bg, fg;
+    if (hover) {
+        bg = UI_COLOR_PRIMARY;  fg = 0xFFFFFF;
+    } else if (preview) {
+        bg = 0x203040;          fg = 0xFFFFFF;
+    } else if (s_preset_rows[i].active) {
+        bg = 0x2A2A00;          fg = UI_COLOR_ACCENT_GOLD;
+    } else {
+        bg = UI_COLOR_SURFACE;  fg = UI_COLOR_TEXT_SECONDARY;
+    }
+    lv_obj_set_style_bg_color(s_preset_rows[i].btn, lv_color_hex(bg), 0);
+    if (s_preset_rows[i].lbl)
+        lv_obj_set_style_text_color(s_preset_rows[i].lbl, lv_color_hex(fg), 0);
+}
+
+static void preset_set_hover(int idx, bool preview)
+{
+    if (idx == s_preset_hover) return;
+    preset_row_style(s_preset_hover, false, false);
+    s_preset_hover = idx;
+    preset_row_style(s_preset_hover, !preview, preview);
+}
+
+static int preset_row_at(lv_point_t pt)
+{
+    for (int i = 0; i < s_preset_n; i++) {
+        if (!s_preset_rows[i].btn) continue;
+        lv_area_t a;
+        lv_obj_get_coords(s_preset_rows[i].btn, &a);
+        if (pt.x >= a.x1 && pt.x <= a.x2 && pt.y >= a.y1 && pt.y <= a.y2) return i;
+    }
+    return -1;
+}
+
+static void preset_fire(int idx)
+{
+    if (idx < 0 || idx >= s_preset_n) return;
+    apply_freq_preset(s_preset_rows[idx].hz, s_preset_rows[idx].mode,
+                      "preset row");
+}
+
+static void preset_row_touch_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t pt = s_preset_press_pt;
+    if (indev) lv_indev_get_point(indev, &pt);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_preset_press_ms = lv_tick_get();
+        s_preset_press_pt = pt;
+        s_preset_sel_mode = false;
+        s_preset_scrolled = false;
+        preset_set_hover(-1, false);
+
+    } else if (code == LV_EVENT_PRESSING) {
+        if (!s_preset_sel_mode && !s_preset_scrolled) {
+            int32_t dx = pt.x - s_preset_press_pt.x;
+            int32_t dy = pt.y - s_preset_press_pt.y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            /* ⚠ Only a move before the hold gate counts as a scroll. After the
+             * gate the whole point is that the finger moves. */
+            if (dx > ROW_SCROLL_CANCEL_PX || dy > ROW_SCROLL_CANCEL_PX) {
+                s_preset_scrolled = true;
+                preset_set_hover(-1, false);
+            }
+        }
+        if (s_preset_scrolled) return;
+
+        uint32_t held = lv_tick_get() - s_preset_press_ms;
+        if (held >= ROW_HOLD_SELECT_MS) {
+            s_preset_sel_mode = true;
+            preset_set_hover(preset_row_at(pt), false);
+        } else if (held >= ROW_PREVIEW_MS) {
+            preset_set_hover(preset_row_at(pt), true);
+        }
+
+    } else if (code == LV_EVENT_RELEASED) {
+        int fire = s_preset_sel_mode ? s_preset_hover : preset_row_at(pt);
+        bool scrolled = s_preset_scrolled;
+        preset_set_hover(-1, false);
+        s_preset_sel_mode = false;
+        s_preset_scrolled = false;
+        /* A drag that never reached the hold gate was a scroll, not a choice:
+         * it must not tune the radio on the way past. */
+        if (!scrolled) preset_fire(fire);
+
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        preset_set_hover(-1, false);
+        s_preset_sel_mode = false;
+        s_preset_scrolled = false;
+    }
+}
+
 static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
                                const char *header_txt, uint32_t header_bg,
                                const ft8_band_freq_t *table, size_t table_n,
@@ -3084,8 +3233,16 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
         lv_obj_set_style_pad_all(btn, 0, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(btn, row_cb, LV_EVENT_CLICKED,
-                            (void *)(uintptr_t)dial_hz);
+        /* ⛔ NOT LV_EVENT_CLICKED ANY MORE. The whole gesture - preview, hold,
+         * slide, release - is driven from the raw press events, and a CLICKED
+         * handler alongside them would fire a SECOND time on every tap and
+         * tune twice. `row_cb` is unused now; the action comes from the row
+         * registry via apply_freq_preset(). */
+        lv_obj_add_event_cb(btn, preset_row_touch_cb, LV_EVENT_PRESSED,    NULL);
+        lv_obj_add_event_cb(btn, preset_row_touch_cb, LV_EVENT_PRESSING,   NULL);
+        lv_obj_add_event_cb(btn, preset_row_touch_cb, LV_EVENT_RELEASED,   NULL);
+        lv_obj_add_event_cb(btn, preset_row_touch_cb, LV_EVENT_PRESS_LOST, NULL);
+        (void)row_cb;
 
         char bstr[24];
         char fstr[16];
@@ -3096,6 +3253,18 @@ static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, active ? lv_color_hex(UI_COLOR_ACCENT_GOLD) : lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_center(lbl);
+
+        /* The registry the gesture resolves against. It holds the label too,
+         * because highlighting a row has to put its colours back afterwards
+         * and only this loop knows what they were. */
+        if (s_preset_n < PRESET_MAX_ROWS) {
+            s_preset_rows[s_preset_n].btn    = btn;
+            s_preset_rows[s_preset_n].lbl    = lbl;
+            s_preset_rows[s_preset_n].hz     = dial_hz;
+            s_preset_rows[s_preset_n].mode   = col_mode;
+            s_preset_rows[s_preset_n].active = active;
+            s_preset_n++;
+        }
     }
     return panel_h;
 }
@@ -3135,6 +3304,10 @@ static void ft8_freq_popup_open(void)
      * not a smaller gap. */
     int total = 0;
     int col = 0;
+
+    /* Rebuilt from scratch every time the columns are, so the registry cannot
+     * carry rows from a previous popup. */
+    preset_rows_reset();
 
     total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
                                  "FT8", 0xFFDD00,
