@@ -2,7 +2,6 @@
 
 #include <math.h>
 #include <stdio.h>
-#include <limits.h>
 #include <string.h>
 
 /* Column geometry, taken from the QMX's own viewer captured off the bench on
@@ -25,7 +24,8 @@
  * confirmed 2026-10-09 that it "need not be a true circular circle". Making
  * it a true circle on the glass would mean PLOT_RX 20 (the cell is 15x27 px,
  * so a circle needs a 1.8:1 radius ratio) and that was NOT what was wanted.
- * The UFO complaint was about the OUTLINE, not the aspect - see draw_ring(). */
+ * The UFO complaint was about the OUTLINE, not the aspect. The outline is no
+ * longer drawn here at all - see gps_page_rings() and the note in gps_page.h. */
 #define PLOT_RX   24
 #define PLOT_RY   11
 #define TABLE_Y0  12
@@ -156,96 +156,27 @@ static bool cell_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1], int row, int
     return lines[row][col] == ' ';
 }
 
-/* Would plotting at (r,c) read as a line segment with the dot at (pr,pc)?
- *
- * Same cell, side by side, or diagonally touching: yes. Directly above or
- * below: NO - a vertical pair is the side tangent, not a line artefact. */
-static bool touches_sideways(int r, int c, int pr, int pc)
+/* The rings the view draws. ⛔ THE ONE PLACE THE RING GEOMETRY LIVES - the
+ * Tab5 and the browser both read it from here, so they cannot disagree about
+ * where the horizon is. See the note in gps_page.h for why these stopped
+ * being characters. */
+int gps_page_rings(gps_page_ring_t *out, int max)
 {
-    int dr = r - pr, dc = c - pc;
-    if (dr < 0) dr = -dr;
-    if (dc < 0) dc = -dc;
-    if (dr == 0 && dc == 0) return true;      /* the same cell again */
-    return dc <= 1 && dr <= 1 && dc != 0;     /* beside it, or diagonal */
-}
-
-/* One elevation ring, as a ring of SEPARATED dots.
- *
- * ⛔ THREE REQUIREMENTS, ALL FROM THE GLASS, AND THEY PULL AGAINST EACH OTHER.
- *   1. 2026-10-08: "only ONE dot per line - not 2 or 3".
- *   2. 2026-10-09: it must not read as "two lenses put together (a UFO)" -
- *      i.e. the ring has to look closed all the way round, not like two dense
- *      side arcs meeting at points.
- *   3. 2026-10-09, after seeing (2) shipped: NO STRAIGHT LINES. The fix for
- *      (2) walked the curve one cell at a time, which is the textbook way to
- *      draw a continuous ellipse - and continuity is precisely the defect.
- *      Near the top, consecutive columns round to the SAME row, so the outline
- *      grew horizontal runs; down the sides, consecutive rows share a column
- *      and it grew vertical ones. He marked them in red on a screenshot.
- *
- * ⭐ What satisfies all three is EVEN SPACING ALONG THE CURVE with a
- * guaranteed gap: sample the ellipse parametrically, far more finely than the
- * grid, and keep a candidate only when it does not touch the dot already
- * placed. Chebyshev distance >= 2 between consecutive dots means no two
- * plotted cells are ever neighbours, so a run cannot form in any direction -
- * requirement 3 holds by construction, not by inspection.
- *
- * Because the parameter advances along the ARC, the dots come out roughly
- * equally spaced the whole way round rather than bunching on the sides, which
- * is what kills the UFO (requirement 2). And one dot is placed at a time, so
- * (1) holds too.
- *
- * ⚠ Do NOT "improve" this back into a continuous curve. That is where it came
- * from, twice. If the dotted look ever has to go, the replacement is a real
- * drawn oval in the VIEW (faint grey, LVGL/CSS), not a denser character grid -
- * the operator said as much when he rejected this.
- */
-static void draw_ring(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
-                      double a, double b)
-{
-    if (a < 1.0 || b < 1.0) return;
-
-    /* Fine enough that the limiter, not the step, decides the spacing: the
-     * longest ring is a few hundred cells around, so a few thousand samples
-     * leaves no gap unconsidered. */
-    const int STEPS = 2048;
-
-    int first_row = INT_MIN, first_col = INT_MIN;
-    int last_row  = INT_MIN, last_col  = INT_MIN;
-
-    for (int i = 0; i < STEPS; i++) {
-        double th  = 2.0 * M_PI * (double)i / (double)STEPS;
-        int    col = PLOT_CX + (int)lround(a * sin(th));
-        int    row = PLOT_CY - (int)lround(b * cos(th));
-
-        /* ⭐ VERTICAL IS ALLOWED, HORIZONTAL AND DIAGONAL ARE NOT.
-         *
-         * A dot directly above or below its neighbour is what gives the sides
-         * their one-dot-per-row tangent at 90 and 270 - the operator asked for
-         * that in the 2026-10-08 round and his approved screenshot has it. A
-         * dot BESIDE or DIAGONAL to its neighbour is what the eye reads as a
-         * straight line welded onto the circle, and that is what he marked in
-         * red. So the rule is not "nothing touches" - that emptied the sides
-         * and lost the shape - it is "nothing touches SIDEWAYS". */
-        if (last_row != INT_MIN && touches_sideways(row, col, last_row, last_col))
-            continue;
-
-        /* The same test against the FIRST dot once we are far enough round to
-         * be closing on it: the join is the one place the neighbour test above
-         * cannot see, and a run there is as visible as anywhere else. */
-        if (first_row != INT_MIN && i > STEPS / 2 &&
-            touches_sideways(row, col, first_row, first_col)) continue;
-
-        /* A satellite already here keeps the cell - it is the more important
-         * mark, and it also reads as part of the rim. Do NOT advance `last`
-         * when the cell is taken: the spacing is about the dots that were
-         * drawn, and skipping the update keeps the next one correctly placed. */
-        if (!cell_free(lines, row, col)) continue;
-
-        put_ch(lines, row, col, '.');
-        last_row = row; last_col = col;
-        if (first_row == INT_MIN) { first_row = row; first_col = col; }
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    /* TWO rings: the horizon rim and one HALF WAY in, which is 45 degrees of
+     * elevation. The radio's plot has both; three evenly-spaced rings were my
+     * invention and crowded a 52-column plot. */
+    for (int elev = 0; elev <= 45 && n < max; elev += 45) {
+        double k = (90.0 - elev) / 90.0;
+        out[n].cx = (double)PLOT_CX + 0.5;
+        out[n].cy = (double)PLOT_CY + 0.5;
+        out[n].rx = k * (double)PLOT_RX;
+        out[n].ry = k * (double)PLOT_RY;
+        out[n].elev_deg = elev;
+        n++;
     }
+    return n;
 }
 
 static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
@@ -292,13 +223,9 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
         }
     }
 
-    /* TWO rings: the horizon rim and one HALF WAY in, which is 45 degrees of
-     * elevation. The radio's plot has both; the three evenly-spaced rings this
-     * code drew first were my invention and crowded a 52-column plot. */
-    for (int elev = 0; elev <= 45; elev += 45) {
-        double k = (90.0 - elev) / 90.0;
-        draw_ring(lines, k * PLOT_RX, k * PLOT_RY);
-    }
+    /* ⛔ NO RING DOTS. The view draws the rings as real ovals from
+     * gps_page_rings() - see gps_page.h. Putting them back here is going
+     * round the loop a fourth time. */
     for (int y = PLOT_CY - PLOT_RY; y <= PLOT_CY + PLOT_RY; y++) {
         if (cell_free(lines, y, PLOT_CX)) put_ch(lines, y, PLOT_CX, '.');
     }

@@ -1693,8 +1693,17 @@
         <button id="gps-close" class="btn-neutral">Close</button>
       </div>
       <div id="gps-msg" style="display:none; background:#1a1a2a; border:1px solid #3a4a7a; border-radius:6px; padding:10px 12px; margin-bottom:10px; color:#c8d4ff; line-height:1.5;"></div>
-      <div id="gps-wrap" style="position:relative;">
-        <pre id="gps-screen" style="background:#000; border:1px solid #333; border-radius:6px; padding:10px 12px; margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:15px; line-height:1.15; white-space:pre;"></pre>
+      <!-- The black belongs to the WRAP now: the <pre> is transparent so the
+           ring SVG beneath it shows through. -->
+      <div id="gps-wrap" style="position:relative; background:#000; border-radius:6px;">
+        <!-- ⭐ The elevation rings are REAL OVALS, not characters. Three
+             attempts to draw them in the character grid were rejected on the
+             glass - a cell cannot hold a smooth curve, and every spacing that
+             broke the straight-line runs left a visible dotted line instead.
+             The device sends the geometry (gps_page_rings, the same numbers
+             the Tab5 draws) and this paints it under the text. -->
+        <svg id="gps-rings" style="position:absolute; left:0; top:0; pointer-events:none; overflow:visible;"></svg>
+        <pre id="gps-screen" style="position:relative; background:transparent; border:1px solid #333; border-radius:6px; padding:10px 12px; margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:15px; line-height:1.15; white-space:pre;"></pre>
         <div id="gps-sats" style="position:absolute; display:none; overflow-y:auto; overflow-x:hidden; font-family:'Consolas','DejaVu Sans Mono',monospace; white-space:pre; line-height:1.15;"></div>
       </div>
     </div>
@@ -9753,6 +9762,8 @@ function gpsEsc(t) {
 function gpsShowGrid(on) {
   document.getElementById("gps-wrap").style.display = on ? "" : "none";
   if (!on) {
+    const sv = document.getElementById("gps-rings");
+    while (sv && sv.firstChild) sv.removeChild(sv.firstChild);
     document.getElementById("gps-screen").innerHTML = "";
     document.getElementById("gps-sats").style.display = "none";
     document.getElementById("gps-state").textContent = "";
@@ -9816,6 +9827,37 @@ function gpsPlaceSats(metrics, j) {
     (r) => '<div style="color:' + r.colour + '">' + gpsEsc(r.text) + "</div>").join("");
 }
 
+/* Paint the elevation rings as thin faint-grey ovals, positioned from the
+   SAME measured cell metrics the satellite pane uses. The geometry is the
+   device's (gps_page_rings), so the browser and the Tab5 cannot disagree
+   about where the horizon is.
+
+   ⛔ Do NOT go back to drawing these as characters. It was tried three times
+   and rejected three times - continuous gives horizontal and diagonal runs,
+   spaced gives a visible ". . ." dotted line (measured: 11 such runs). */
+function gpsDrawRings(metrics, j) {
+  const svg = document.getElementById("gps-rings");
+  if (!svg) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  if (!metrics || !j.rings || !j.rings.length) return;
+
+  const pre = document.getElementById("gps-screen");
+  svg.setAttribute("width",  pre.offsetWidth);
+  svg.setAttribute("height", pre.offsetHeight);
+
+  for (const r of j.rings) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+    el.setAttribute("cx", metrics.padL + r.cx * metrics.cellW);
+    el.setAttribute("cy", metrics.padT + r.cy * metrics.lineH);
+    el.setAttribute("rx", r.rx * metrics.cellW);
+    el.setAttribute("ry", r.ry * metrics.lineH);
+    el.setAttribute("fill", "none");
+    el.setAttribute("stroke", "#4a4a4a");
+    el.setAttribute("stroke-width", "1");
+    svg.appendChild(el);
+  }
+}
+
 async function gpsPoll() {
   let j;
   try {
@@ -9859,7 +9901,13 @@ async function gpsPoll() {
   const marks = j.marks || [];
   document.getElementById("gps-screen").innerHTML =
       (j.lines || []).map((t, r) => gpsRowHtml(t, marks, r, cols)).join("\n");
-  gpsPlaceSats(fit80("gps-screen"), j);
+  {
+    /* One measurement, both overlays - the rings and the satellite pane must
+       land on the same grid or they disagree with the text under them. */
+    const metrics = fit80("gps-screen");
+    gpsDrawRings(metrics, j);
+    gpsPlaceSats(metrics, j);
+  }
 }
 
 function gpsOpenModal() {

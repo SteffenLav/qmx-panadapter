@@ -4620,6 +4620,28 @@ static esp_err_t gps_get_handler(httpd_req_t *req)
         cJSON_AddStringToObject(root, "title",
                                 gps_page_title(src, unit_gps_rx_gpio()));
 
+        /* ⭐ THE ELEVATION RINGS AS GEOMETRY, NOT CHARACTERS. Three attempts
+         * to draw them in the grid were rejected on the glass; the browser
+         * draws a real thin faint-grey oval from these instead. Cell units,
+         * because that is the coordinate system the grid and the browser
+         * share - the page converts with its own measured cell size. Same
+         * numbers the Tab5 draws, from the same gps_page_rings(). */
+        {
+            gps_page_ring_t rg[GPS_PAGE_MAX_RINGS];
+            int nr = gps_page_rings(rg, GPS_PAGE_MAX_RINGS);
+            cJSON *arr = cJSON_AddArrayToObject(root, "rings");
+            for (int i = 0; arr && i < nr; i++) {
+                cJSON *o = cJSON_CreateObject();
+                if (!o) break;
+                cJSON_AddNumberToObject(o, "cx", rg[i].cx);
+                cJSON_AddNumberToObject(o, "cy", rg[i].cy);
+                cJSON_AddNumberToObject(o, "rx", rg[i].rx);
+                cJSON_AddNumberToObject(o, "ry", rg[i].ry);
+                cJSON_AddNumberToObject(o, "elev", rg[i].elev_deg);
+                cJSON_AddItemToArray(arr, o);
+            }
+        }
+
         cJSON *lines = cJSON_AddArrayToObject(root, "lines");
         for (int r = 0; lines && r < GPS_PAGE_ROWS; r++) {
             /* Trailing blanks trimmed - the browser pads with CSS, and 24 rows

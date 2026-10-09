@@ -7,7 +7,9 @@
 #include "lvgl.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"           // EXT_RAM_BSS_ATTR
 
+#include <math.h>
 #include <string.h>
 #include <time.h>
 
@@ -34,6 +36,17 @@ static lv_obj_t  *s_overlay;
 static lv_obj_t  *s_rows[GPS_PAGE_ROWS];
 static lv_obj_t  *s_marks[GPS_PAGE_MAX_MARKERS];
 static lv_obj_t  *s_title;
+/* The elevation rings, drawn as real ovals rather than characters - see the
+ * note in gps_page.h. One lv_line per ring, built once with the grid and
+ * never touched again: the rings do not depend on the fix. */
+#define RING_PTS  97      /* 96 segments + the closing point */
+static lv_obj_t    *s_rings[GPS_PAGE_MAX_RINGS];
+/* ⛔ PSRAM, NOT INTERNAL .bss. About 3 kB of points, and internal .bss comes
+ * straight out of the DMA pool - that is what stopped the SD card mounting on
+ * 2026-10-08 and the reason this file's other scratch is in PSRAM too. lv_line
+ * does NOT copy the array, so it must outlive the object (hence static), and
+ * nothing here is DMA or ISR, so PSRAM is safe. */
+static EXT_RAM_BSS_ATTR lv_point_precise_t s_ring_pts[GPS_PAGE_MAX_RINGS][RING_PTS];
 /* SCRATCH IN PSRAM, NOT .bss, AND ONLY WHILE THE PAGE IS OPEN.
  *
  * These four buffers are about 4.3 kB together. As statics they sat in
@@ -300,6 +313,40 @@ void gps_status_view_open(void)
         lv_obj_set_pos(s_rows[r], 0, r * ROW_H);
         lv_label_set_text(s_rows[r], "");
     }
+    /* ⭐ THE ELEVATION RINGS, AS REAL OVALS. Three attempts to draw these with
+     * characters were all rejected on the glass - a 15x27 px cell cannot hold
+     * a smooth curve, and every spacing that broke the straight-line runs left
+     * a visible dotted line instead (measured: 11 horizontal ". . ." runs).
+     * Geometry comes from gps_page_rings() so the browser's SVG and this agree.
+     *
+     * Built BEFORE the labels in z-order terms? No - created after, so they
+     * would paint on top. lv_obj_move_background() puts them behind the text,
+     * which is what a grid line should be. */
+    {
+        gps_page_ring_t rings[GPS_PAGE_MAX_RINGS];
+        int nr = gps_page_rings(rings, GPS_PAGE_MAX_RINGS);
+        for (int i = 0; i < nr && i < GPS_PAGE_MAX_RINGS; i++) {
+            for (int k = 0; k < RING_PTS; k++) {
+                double th = 2.0 * M_PI * (double)k / (double)(RING_PTS - 1);
+                double x  = (rings[i].cx + rings[i].rx * sin(th)) * CELL_W;
+                double y  = (rings[i].cy - rings[i].ry * cos(th)) * ROW_H;
+                s_ring_pts[i][k].x = (int32_t)lround(x);
+                s_ring_pts[i][k].y = (int32_t)lround(y);
+            }
+            s_rings[i] = lv_line_create(grid);
+            lv_line_set_points(s_rings[i], s_ring_pts[i], RING_PTS);
+            /* Thin and faint: a reference, not content. The satellites and
+             * their numbers are what the operator reads. */
+            lv_obj_set_style_line_width(s_rings[i], 1, 0);
+            lv_obj_set_style_line_color(s_rings[i], lv_color_hex(0x4A4A4A), 0);
+            lv_obj_set_style_line_opa(s_rings[i], LV_OPA_COVER, 0);
+            lv_obj_set_style_line_rounded(s_rings[i], false, 0);
+            lv_obj_set_pos(s_rings[i], 0, 0);
+            lv_obj_clear_flag(s_rings[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_move_background(s_rings[i]);
+        }
+    }
+
     /* ⭐ The satellite table is a SCROLLABLE pane over the grid's table region.
      *
      * The page is 24 rows and the table starts at row 12, so the grid itself
@@ -360,6 +407,11 @@ void gps_status_view_close(void)
     memset(s_rows, 0, sizeof(s_rows));
     memset(s_marks, 0, sizeof(s_marks));
     memset(s_sat_rows, 0, sizeof(s_sat_rows));
+    /* The lv_line objects die with the overlay; drop the handles so a reopen
+     * cannot use a dangling one. The POINT arrays are static and are rebuilt
+     * on the next open - lv_line does not copy them, so they must outlive the
+     * object, which is why they are not on the stack. */
+    memset(s_rings, 0, sizeof(s_rings));
     s_sat_list = NULL;
     s_title = NULL;
     ui_help_overlay_changed();

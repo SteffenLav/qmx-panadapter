@@ -65,6 +65,37 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
                      char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
                      gps_page_marker_t *markers, int *n_markers);
 
+/* ⭐ THE ELEVATION RINGS ARE NOT CHARACTERS ANY MORE - THE VIEW DRAWS THEM.
+ *
+ * They were dots in the grid through three rounds of complaints and the
+ * character cell lost every one of them. A 15x27 px cell cannot hold a smooth
+ * ellipse: drawn continuously it grows horizontal and diagonal RUNS (the eye
+ * reads line segments welded to a circle), and spaced out to break those runs
+ * it becomes evenly spaced ". . ." - MEASURED 2026-10-09 as 11 dotted
+ * horizontal runs of three or more. Both were rejected on the glass. The grid
+ * is the wrong instrument for a curve.
+ *
+ * So this reports the GEOMETRY and the view draws a real thin faint-grey oval
+ * with it - LVGL on the Tab5, SVG in the browser. Reported in CELL units
+ * because that is the only coordinate system both views share; each converts
+ * with its own cell size.
+ *
+ * ⛔ The two AXES are still characters, deliberately. They are straight lines
+ * and the grid draws those perfectly, and they are in the screenshot the
+ * operator approved.
+ */
+typedef struct {
+    double cx, cy;    /* centre, in cells (cell CENTRES, so 0.5 offsets) */
+    double rx, ry;    /* radii, in cells */
+    int    elev_deg;  /* the elevation this ring marks: 0 = horizon */
+} gps_page_ring_t;
+
+#define GPS_PAGE_MAX_RINGS 4
+
+/* Fill `out` with the rings the plot wants drawn. Returns how many. Pure: it
+ * takes no snapshot, because the rings do not depend on the fix. */
+int gps_page_rings(gps_page_ring_t *out, int max);
+
 /* gps_page_render(), then blank the cells the CALLER draws itself: the marker
  * text and the satellite-table region. Both displays need exactly this, so it
  * is one function rather than two copies of two loops - see the note at the

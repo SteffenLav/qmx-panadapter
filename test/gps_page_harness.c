@@ -226,79 +226,92 @@ static void test_sky_quadrants(void)
  *      demanding the runs that caused this.
  */
 /* Mirrors of gps_page.c's private plot geometry. The file already hardcodes
- * the plot's first column (28) in two other tests, so this is the existing
- * convention rather than a new one - but it is a MIRROR, and a change to the
- * plot geometry has to come here too. */
+ * the plot's first column (28) in other tests, so this is the existing
+ * convention - but it is a MIRROR, and a change to the plot geometry has to
+ * come here too. */
 #define T_PLOT_CX  54
 #define T_PLOT_CY  11
 #define T_PLOT_RX  24
 #define T_PLOT_RY  11
 
-static void test_rim_is_separated_dots_and_closed(void)
+/* ⛔ THE RINGS ARE NOT CHARACTERS, AND THIS TEST HAS NOW BEEN WRONG TWICE.
+ *
+ * Round 1 asserted the rim's top row carried a continuous RUN of cells - that
+ * was the evidence the outline had stopped being "two lenses (a UFO)".
+ * Rejected on the glass: the runs read as straight lines welded to a circle.
+ * Round 2 forbade horizontal and diagonal neighbours. Also rejected: breaking
+ * the runs just left an evenly spaced ". . .", measured here as 11 dotted
+ * horizontal runs of three or more.
+ *
+ * ⭐ The conclusion is that the 15x27 px character cell is the wrong
+ * instrument for a curve, at any spacing. gps_page.c now reports the ring
+ * GEOMETRY and each view draws a real thin faint-grey oval - LVGL on the
+ * Tab5, SVG in the browser. So what is testable here is (a) that NO ring is
+ * drawn into the grid any more, and (b) that the geometry is right, because
+ * both views now trust it completely.
+ */
+static void test_no_ring_characters_in_the_grid(void)
 {
     unit_gps_info_t in;
     char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
     memset(&in, 0, sizeof(in));
     gps_page_render(&in, GPS_PAGE_SRC_MODULE, lines, NULL, NULL);
 
-    /* Collect the rim dots. Only the plot half of the grid: the left-hand
-     * label column has its own text. */
-    /* ⚠ EXCLUDE THE TWO AXES. draw_sky() also draws a solid dotted N-S column
-     * and E-W row through the centre, and those ARE continuous runs on
-     * purpose - they are in both of the operator's screenshots, including the
-     * one he approved. The complaint is about the CIRCUMFERENCE only, so a
-     * test that counted the axes would fail the correct drawing. */
-    int rr[1024], rc[1024], n = 0;
+    /* With no satellites, the only dots left in the plot must be the two
+     * AXES: the centre column and the centre row. Those stay as characters on
+     * purpose - they are straight lines, which the grid draws perfectly, and
+     * they are in the screenshot the operator approved. */
+    int stray = 0, sr = -1, sc = -1;
     for (int r = 0; r < GPS_PAGE_ROWS; r++)
         for (int c = 28; c < GPS_PAGE_COLS; c++) {
             if (lines[r][c] != '.') continue;
             if (r == T_PLOT_CY || c == T_PLOT_CX) continue;   /* an axis */
-            if (n < 1024) { rr[n] = r; rc[n] = c; n++; }
+            stray++;
+            if (sr < 0) { sr = r; sc = c; }
         }
+    CHECK(stray == 0,
+          "%d ring characters still in the grid (first at row %d col %d) - the "
+          "views draw the rings now, and a dotted one underneath is the look "
+          "that was rejected three times\n", stray, sr, sc);
 
-    CHECK(n > 20, "only %d rim dots - the plot is not being drawn\n", n);
+    /* The axes are still there - this test must not pass by the plot having
+     * vanished altogether. */
+    int axis = 0;
+    for (int r = 0; r < GPS_PAGE_ROWS; r++) if (lines[r][T_PLOT_CX] == '.') axis++;
+    CHECK(axis >= 10, "the N-S axis has only %d dots - the plot is gone\n", axis);
+}
 
-    /* 1. Nothing touches SIDEWAYS.
-     *
-     * ⛔ NOT "nothing touches". A vertical pair - one dot directly above
-     * another - is the side tangent at 90 and 270 that the operator asked for
-     * on 2026-10-08, and his approved screenshot has one dot per row down
-     * both sides. Forbidding that too emptied the sides and lost the shape;
-     * it was tried on the way to this. What reads as a straight line welded
-     * onto the circle is a HORIZONTAL or DIAGONAL neighbour, and only that. */
-    int touching = 0, tr = -1, tc = -1;
-    for (int i = 0; i < n; i++)
-        for (int j = i + 1; j < n; j++) {
-            int dr = rr[i] - rr[j], dc = rc[i] - rc[j];
-            if (dr < 0) dr = -dr;
-            if (dc < 0) dc = -dc;
-            if (dc != 0 && dc <= 1 && dr <= 1) {
-                touching++;
-                if (tr < 0) { tr = rr[i]; tc = rc[i]; }
-            }
-        }
-    CHECK(touching == 0,
-          "%d pairs of rim dots touch sideways (first at row %d col %d) - that is "
-          "a run, and a run reads as a straight line\n", touching, tr, tc);
+/* The geometry both views draw from. Nothing checks these on the glass: a
+ * wrong radius there just looks like a slightly different plot, and the two
+ * surfaces would drift apart without anyone noticing. */
+static void test_ring_geometry(void)
+{
+    gps_page_ring_t rg[GPS_PAGE_MAX_RINGS];
+    int n = gps_page_rings(rg, GPS_PAGE_MAX_RINGS);
 
-    /* 2. Still closed: every 30-degree sector has a dot. The cell is about
-     * twice as tall as it is wide, so the angle is measured on the ellipse's
-     * own normalised axes or every sector test would be skewed. */
-    int sector[12];
-    for (int i = 0; i < 12; i++) sector[i] = 0;
+    CHECK(n == 2, "expected 2 rings (horizon + 45 deg), got %d\n", n);
+    if (n < 2) return;
+
+    /* The horizon fills the plot; 45 degrees is half way in. */
+    CHECK(rg[0].elev_deg == 0 && rg[1].elev_deg == 45,
+          "rings should be 0 and 45 degrees, got %d and %d\n",
+          rg[0].elev_deg, rg[1].elev_deg);
+    CHECK(rg[0].rx == (double)T_PLOT_RX && rg[0].ry == (double)T_PLOT_RY,
+          "the horizon ring is %gx%g, expected %dx%d\n",
+          rg[0].rx, rg[0].ry, T_PLOT_RX, T_PLOT_RY);
+    CHECK(rg[1].rx == rg[0].rx / 2.0 && rg[1].ry == rg[0].ry / 2.0,
+          "the 45-degree ring should be half the horizon, got %gx%g\n",
+          rg[1].rx, rg[1].ry);
+
+    /* ⛔ CELL CENTRES, NOT CELL CORNERS. Both views multiply by their own cell
+     * size, so a half-cell error here puts every ring half a character off
+     * the axes it is supposed to be concentric with - on both surfaces at
+     * once, which is exactly the kind of fault a shared source hides. */
     for (int i = 0; i < n; i++) {
-        double x = (double)(rc[i] - T_PLOT_CX) / (double)T_PLOT_RX;
-        double y = (double)(T_PLOT_CY - rr[i]) / (double)T_PLOT_RY;
-        if (x * x + y * y < 0.25) continue;          /* inner dots, not the rim */
-        double ang = atan2(x, y);                     /* 0 at the top, clockwise */
-        if (ang < 0) ang += 2.0 * M_PI;
-        int k = (int)(ang / (2.0 * M_PI / 12.0));
-        if (k >= 0 && k < 12) sector[k]++;
+        CHECK(rg[i].cx == (double)T_PLOT_CX + 0.5 && rg[i].cy == (double)T_PLOT_CY + 0.5,
+              "ring %d centre is (%g,%g), expected cell centres (%g,%g)\n",
+              i, rg[i].cx, rg[i].cy, (double)T_PLOT_CX + 0.5, (double)T_PLOT_CY + 0.5);
     }
-    for (int i = 0; i < 12; i++)
-        CHECK(sector[i] > 0,
-              "sector %d (%d-%d deg) has no rim dot - the ring is open there, "
-              "which is the UFO\n", i, i * 30, (i + 1) * 30);
 }
 
 /* The QMX page must keep the rows it cannot fill, showing them empty. Hiding
@@ -397,7 +410,8 @@ int main(int argc, char **argv)
     test_grid();
     test_sat_table();
     test_sky_quadrants();
-    test_rim_is_separated_dots_and_closed();
+    test_no_ring_characters_in_the_grid();
+    test_ring_geometry();
     test_qmx_source_keeps_its_rows();
     test_no_fix_says_so();
     test_title_names_the_port_not_a_version();
