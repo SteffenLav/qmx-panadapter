@@ -4536,6 +4536,32 @@ const SET_FIELDS = [
      version exists, which is the part nobody wanted to lose; it just waits
      for you to ask before spending 3.3 MB. Applying an update is a separate,
      always-deliberate press either way. */
+  /* RX audio - the Tab5's Resource Management sliders, which had no web
+     equivalent at all. Scaled exactly as the device stores them, and the
+     device applies each one to the live DSP as well as persisting it (see
+     the POST handler): a control that only persisted would look saved and
+     do nothing until the next boot. */
+  ["RX audio", "rxaudio.gain_d10", "num", "AGC ceiling (÷10)",
+   "5-150. The maximum gain the AGC may reach; 20 means 200. With AGC off this is a fixed gain."],
+  ["RX audio", "rxaudio.agc_off", "bool", "AGC off (fixed gain)",
+   "Pins the gain at the ceiling instead of tracking - for faint signals"],
+  ["RX audio", "rxaudio.agc_attack_ms", "num", "AGC attack (ms)",
+   "1-50. Fast (1) for CW, 3 is the default, 5 for SSB"],
+  ["RX audio", "rxaudio.agc_release_ms", "num", "AGC release (ms)",
+   "10-500. 30 for CW, 150 default, 400 for SSB - a fast release pumps on speech pauses"],
+  ["RX audio", "rxaudio.pan_width_x10", "num", "Panoramic CW width (×10)",
+   "0-30. 18 means 1.8. Only does anything in CW/CW-R"],
+  ["RX audio", "rxaudio.pan_blend_x100", "num", "Panoramic blend (×100)",
+   "0-50. 15 means 0.15"],
+  ["RX audio", "rxaudio.pan_ovlp_x100", "num", "Panoramic overlap (×100)",
+   "0-100. 30 means 0.30"],
+  /* ⛔ An escape hatch, not a preference: two operators lost all audio to the
+     auto-mute after v1.16.4 and neither could be reproduced here. It is on
+     the Tab5 so it can be reached there, and here so it can be reached from
+     a phone when the Tab5 is across the room. */
+  ["RX audio", "rxaudio.hp_mute_en", "bool", "Mute the speaker when headphones are plugged in",
+   "Turn this OFF if you lose all audio - it is the headphone auto-mute"],
+
   /* Beside WiFi, not under a Device heading, and the Tab5 drawer places it
      the same way for the same reason: "should this thing download 3.3 MB on
      my hotspot" is a question about what the network connection does unasked,
@@ -4814,6 +4840,48 @@ async function ft8OptsRefreshBadge() {
   } catch (e) { /* leave the last-known badge showing */ }
 }
 
+/* Keep in step with drawer_preset_*_cb() in ui/ui.c - same names, same
+   numbers, same order as the Tab5's own row of buttons. */
+const DB_PRESETS = [
+  ["HF Normal", -130, -30, 40],
+  ["HF DX",     -130, -50, 60],
+  ["Strong",    -110, -20, 20],
+  ["Noise",     -150, -30, 40],
+];
+
+function dbPresetRender(body) {
+  const min = body.querySelector('[data-path="display.db_min"]');
+  if (!min) return;                       // the group is not on this panel
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; gap:6px; align-items:center; margin:8px 0 4px; flex-wrap:wrap;";
+  const lab = document.createElement("span");
+  lab.style.cssText = "color:var(--dim); font-size:13px;";
+  lab.textContent = "Presets:";
+  row.appendChild(lab);
+  for (const [name, lo, hi, ema] of DB_PRESETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bot-btn";
+    b.textContent = name;
+    b.title = "Floor " + lo + " dBm, ceiling " + hi + " dBm, smoothing " + ema +
+              "%. Fills the three rows below - press Save to apply.";
+    b.addEventListener("click", () => {
+      const set = (path, v) => {
+        const el = body.querySelector('[data-path="' + path + '"]');
+        if (el) el.value = String(v);
+      };
+      set("display.db_min", lo);
+      set("display.db_max", hi);
+      set("display.ema_pct", ema);
+    });
+    row.appendChild(b);
+  }
+  /* Directly above the floor row the buttons fill, so what changed is in
+     view when it changes. */
+  const host = min.closest("div");
+  if (host && host.parentNode) host.parentNode.insertBefore(row, host);
+}
+
 function setGet(obj, path) {
   return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
 }
@@ -4901,6 +4969,15 @@ function setBuildForm(cfg, ft8Opts) {
      one-control-per-line renderer has no shape for. General settings only -
      it has nothing to do with FT8 options. */
   if (!ft8Opts) cwProfRender(cfg, body);
+  /* The four dB-range presets the Tab5's Spectrum group offers as buttons.
+     They are not a setting of their own - each one is just a (floor, ceiling,
+     smoothing) triple, and all three already have rows above - so this fills
+     those rows in rather than posting anything of its own. The operator still
+     presses Save, which is what makes it safe to offer here: the values are
+     visible before they are sent.
+     ⛔ The triples are the DEVICE's (drawer_preset_*_cb in ui/ui.c). Changing
+     one there and not here would give the same button two meanings. */
+  if (!ft8Opts) dbPresetRender(body);
   // Re-tint a warning select as soon as the choice changes, not on save - the
   // point of the colour is to be seen while deciding.
   body.querySelectorAll("select[data-tintable]").forEach(sel => {

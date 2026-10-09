@@ -5123,6 +5123,25 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "psk_rx_en",         c.psk_rx_en);
     cJSON_AddBoolToObject(root, "bt_mouse_en",       c.bt_mouse_en);
     cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
+
+    /* RX audio - the Tab5's Resource Management sliders, which had no web
+     * equivalent at all until the parity sweep. Stored scaled exactly as
+     * settings.h documents (gain /10, width x10, blend and overlap x100);
+     * the browser shows the scaled number and the POST applies it live. */
+    {
+        cJSON *ra = cJSON_CreateObject();
+        if (ra) {
+            cJSON_AddNumberToObject(ra, "gain_d10",       settings_get_rxaud_gain_d10());
+            cJSON_AddNumberToObject(ra, "pan_width_x10",  settings_get_rxaud_pan_width_x10());
+            cJSON_AddNumberToObject(ra, "pan_blend_x100", settings_get_rxaud_pan_blend_x100());
+            cJSON_AddNumberToObject(ra, "pan_ovlp_x100",  settings_get_rxaud_pan_ovlp_x100());
+            cJSON_AddNumberToObject(ra, "agc_attack_ms",  settings_get_rxaud_agc_attack_ms());
+            cJSON_AddNumberToObject(ra, "agc_release_ms", settings_get_rxaud_agc_release_ms());
+            cJSON_AddBoolToObject  (ra, "agc_off",        settings_get_rxaud_agc_off());
+            cJSON_AddBoolToObject  (ra, "hp_mute_en",     settings_get_hp_mute_en());
+            cJSON_AddItemToObject(root, "rxaudio", ra);
+        }
+    }
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
     // #221 API AUDIT, read side: these were WRITE-ONLY - settable but not
@@ -5727,6 +5746,72 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
       if (cJSON_IsBool(b)) settings_set_charge_limit_en(cJSON_IsTrue(b)); }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "charge_limit_pct")))
         settings_set_charge_limit_pct((uint8_t)it->valuedouble);   // clamps 50..100
+
+    /* RX audio. ⛔ EACH ONE WRITES THE SETTING **AND** APPLIES IT LIVE, which
+     * is what ui/resource_mgmt_modal.c's sliders do and for the reason stated
+     * there: the DSP holds its own copy and would otherwise not hear the
+     * change until the next boot. Persisting alone would be a control that
+     * looks saved and does nothing - the same failure the SWR limit below had,
+     * and the reason that comment exists.
+     *
+     * ⚠ NOT /api/cmd's "rxaudio" action, which is the dev tuning path and is
+     * explicitly RAM-only. These are the operator's persisted settings.
+     *
+     * Values are clamped to the ranges settings.h documents before being
+     * applied, so a hand-written number cannot put the DSP somewhere it does
+     * not expect. */
+    {
+        cJSON *ra = cJSON_GetObjectItem(root, "rxaudio");
+        if (cJSON_IsObject(ra)) {
+            cJSON *v;
+            #define RA_CLAMP(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "gain_d10"))) {
+                int g = RA_CLAMP((int)v->valuedouble, 5, 150);
+                settings_set_rxaud_gain_d10((uint8_t)g);
+                rx_audio_set_agc_gain_max((float)g * 10.0f);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "pan_width_x10"))) {
+                int w = RA_CLAMP((int)v->valuedouble, 0, 30);
+                settings_set_rxaud_pan_width_x10((uint8_t)w);
+                rx_audio_set_pan_width((float)w / 10.0f);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "pan_blend_x100"))) {
+                int b = RA_CLAMP((int)v->valuedouble, 0, 50);
+                settings_set_rxaud_pan_blend_x100((uint8_t)b);
+                rx_audio_set_pan_blend((float)b / 100.0f);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "pan_ovlp_x100"))) {
+                int o = RA_CLAMP((int)v->valuedouble, 0, 100);
+                settings_set_rxaud_pan_ovlp_x100((uint8_t)o);
+                rx_audio_set_pan_overlap((float)o / 100.0f);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "agc_attack_ms"))) {
+                int a = RA_CLAMP((int)v->valuedouble, 1, 50);
+                settings_set_rxaud_agc_attack_ms((uint8_t)a);
+                rx_audio_set_agc_attack_ms((uint8_t)a);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "agc_release_ms"))) {
+                int r = RA_CLAMP((int)v->valuedouble, 10, 500);
+                settings_set_rxaud_agc_release_ms((uint16_t)r);
+                rx_audio_set_agc_release_ms((uint16_t)r);
+            }
+            if (cJSON_IsBool(v = cJSON_GetObjectItem(ra, "agc_off"))) {
+                bool off = cJSON_IsTrue(v);
+                settings_set_rxaud_agc_off(off);
+                rx_audio_set_agc_off(off);
+            }
+            /* ⛔ AN ESCAPE HATCH, NOT A PREFERENCE - two operators lost all
+             * audio to the headphone auto-mute after v1.16.4. It is on the
+             * Tab5 so a user with no sound can reach it there; it is here so
+             * they can reach it from a phone. Applies immediately. */
+            if (cJSON_IsBool(v = cJSON_GetObjectItem(ra, "hp_mute_en"))) {
+                settings_set_hp_mute_en(cJSON_IsTrue(v));
+                ESP_LOGI(TAG, "web: headphone auto-mute -> %s",
+                         cJSON_IsTrue(v) ? "ON" : "OFF (speaker always on)");
+            }
+            #undef RA_CLAMP
+        }
+    }
 
     // SWR protection limit. This was in the GET and in the browser's form but had
     // no case here, so the field looked editable, looked saved, and was dropped -
