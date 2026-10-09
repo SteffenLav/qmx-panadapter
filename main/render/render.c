@@ -2,6 +2,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <math.h>          // lroundf - see the S-meter conversion below
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_err.h"
@@ -179,11 +180,28 @@ static void render_task(void *arg)
                 if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK) {
                     // S-unit conversion: S9 = -73 dBm, 6 dB per S-unit below.
                     // Above S9, we use S9+xx where xx = dbm - (-73).
+                    //
+                    // ⛔ lroundf, NOT the (int)(x + 0.5f) idiom. That idiom is
+                    // only correct for x >= 0: C truncates toward zero, so for
+                    // a NEGATIVE x it rounds up instead of to nearest, biasing
+                    // the result high by up to a whole unit. Below S9 the
+                    // argument here is always negative, and each unit is 6 dB,
+                    // so the bias was up to 6 dB of real signal.
+                    //
+                    // Measured over the whole S1..S9 span: the Tab5 bar sat 5
+                    // to 8.5 dB above the browser's for the SAME dBm, never
+                    // less than 0.83 S-units out. Example: -103 dBm is exactly
+                    // S4, and the bar drew S5. Above S9 the two always agreed,
+                    // which is what made this look like a rendering style
+                    // difference rather than arithmetic.
+                    //
+                    // Found 2026-10-09 from the operator's report that the Tab5
+                    // and browser S-meters disagree. The browser was right.
                     int s_units;
                     if (peak_dbm >= -73.0f) {
-                        s_units = 9 + (int)((peak_dbm + 73.0f) + 0.5f);
+                        s_units = 9 + (int)lroundf(peak_dbm + 73.0f);
                     } else {
-                        s_units = 9 + (int)((peak_dbm + 73.0f) / 6.0f + 0.5f);
+                        s_units = 9 + (int)lroundf((peak_dbm + 73.0f) / 6.0f);
                         if (s_units < 0) s_units = 0;
                     }
                     ui_update_smeter(s_units);
