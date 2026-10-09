@@ -1,6 +1,12 @@
 # JS8 reference corpus
 
-10 slots recorded off bench dev on 2026-10-09 - 4 with decodes, 6 without.
+12 slots recorded off bench dev on 2026-10-09 - 7 with decodes, 5 without.
+
+⚠ **Not one of them carries a free-text (data) frame.** Across ~90 slots of
+live 40 m traffic with five stations active, every frame heard was heartbeat or
+directed. 7.078 at that hour is the heartbeat network. That is a measurement
+about the band, not about the decoder - but it is the reason J7's premise
+("free text is the majority of real traffic") is not yet confirmed here.
 This is the JS8 equivalent of the 35 FT8 references in `../wav_reference`
 (M1 in `docs/js8-feasibility.md`). Check them with the harness, which also
 runs as part of `tools/run_harnesses.py`:
@@ -15,10 +21,33 @@ What is in it:
 | `261009_113345` | 7.078 | `G4GHL LA7HKA HEARTBEAT SNR` at -3 |
 | `261009_113700` | 7.078 | `M0IQF LA7HKA HEARTBEAT SNR` at -16 |
 | `261009_113800` | 7.078 | `9A3SWO LA7HKA HEARTBEAT SNR` at -18 |
+| `261009_125915` | 7.078 | `HB OK2BUH JN89` at -7 |
+| `261009_125930` | 7.078 | `OK2BUH LA7HKA HEARTBEAT SNR` at -10 |
+| `261009_130415` | 7.078 | `<....> OK2BUH CMD` at -2 — see the warning above |
 
-The other six decode nothing and are kept deliberately: they are the only
+## ⛔ THE FLOOR RESISTS IMPROVEMENTS. Read this before changing a renderer.
+
+The expected text is what THIS firmware printed, so a change that renders a
+frame BETTER reads here as a lost decode and fails the harness. It is not a
+regression; the corpus is simply out of date.
+
+The live example is `261009_130415`, which holds:
+
+    130415  -2  1.9 1825 ~  <....> OK2BUH CMD
+
+`<....>` is js8_message.c's deliberate placeholder for a JS8 group token this
+build does not carry (@JS8NET, @DX/xx and the rest), and `CMD` is command
+index 24. The row is honest but useless to an operator. The moment the group
+tokens are implemented that line becomes `@JS8NET OK2BUH CMD` - correct, more
+useful, and a HARNESS FAILURE until this file is updated.
+
+**So: when a rendering improves on purpose, re-record or hand-edit the .txt in
+the same commit, and say in the message that the floor moved and why.** A
+corpus quietly forcing a renderer to stay wrong is worse than no corpus.
+
+The other five decode nothing and are kept deliberately: they are the only
 thing that catches the opposite regression, a change that INVENTS decodes.
-They are the six highest-`peak_float` silent slots of the 60 recorded, so they
+They are the highest-`peak_float` silent slots of the ~100 recorded, so they
 are the ones most likely to tempt a decoder into a false positive.
 
 ⛔ **Start the recorder before touching the radio.** `slotcap` holds one slot
