@@ -305,6 +305,39 @@ static void test_mixed_coding_is_flagged_not_split(void)
     CHECK(run && run->mixed_coding, "mixed coding flagged\n");
 }
 
+static void test_duplicate_candidates_in_one_slot_are_one_frame(void)
+{
+    printf("the same frame found several times in one slot is ONE fragment\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dat[JS8_FRAME_BYTES]; mk(dat, 4, 0x5A);
+
+    /* ⛔ THE MEASURED CASE, 2026-10-09 on 14.078: the decoder finds one
+     * transmission as several candidates a few Hz apart, each passes CRC-12,
+     * and each arrived here as a new fragment. HB9BV's free text came out as
+     * "MSG ID 178MSG ID 178MSG ID 178MSG ID 178". */
+    for (int i = 0; i < 4; i++)
+        js8_reasm_add(&r, 11000, 1270 + i * 3, dat, JS8_FRAME_DATA, NULL);
+
+    CHECK(js8_reasm_active(&r) == 1, "one run (got %d)\n", js8_reasm_active(&r));
+    const js8_reasm_run_t* run = js8_reasm_at(&r, 0);
+    CHECK(run && run->n_seen == 1, "n_seen is %d, want 1\n", run ? run->n_seen : -1);
+    CHECK(run && run->n_dup == 3, "n_dup is %d, want 3\n", run ? run->n_dup : -1);
+
+    /* A DIFFERENT frame in the same slot is a real second fragment. */
+    uint8_t other[JS8_FRAME_BYTES]; mk(other, 4, 0xA5);
+    js8_reasm_add(&r, 11000, 1272, other, JS8_FRAME_DATA, NULL);
+    run = js8_reasm_at(&r, 0);
+    CHECK(run && run->n_seen == 2, "a different frame was swallowed (n_seen %d)\n",
+          run ? run->n_seen : -1);
+
+    /* The SAME frame in a LATER slot is a station repeating itself, which is
+     * real traffic and must still count. */
+    js8_reasm_add(&r, 11015, 1270, other, JS8_FRAME_DATA, NULL);
+    run = js8_reasm_at(&r, 0);
+    CHECK(run && run->n_seen == 3, "a repeat in the next slot was dropped (n_seen %d)\n",
+          run ? run->n_seen : -1);
+}
+
 static void test_a_full_table_refuses_rather_than_evicting(void)
 {
     printf("a full table refuses a new run and says so\n");
@@ -425,6 +458,7 @@ int main(void)
     test_a_structured_frame_ends_the_run();
     test_overflow_counts_without_storing();
     test_mixed_coding_is_flagged_not_split();
+    test_duplicate_candidates_in_one_slot_are_one_frame();
     test_a_full_table_refuses_rather_than_evicting();
     test_a_stale_identification_is_forgotten();
     test_text_accumulates_across_frames();

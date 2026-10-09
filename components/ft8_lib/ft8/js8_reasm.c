@@ -143,6 +143,20 @@ bool js8_reasm_add(js8_reasm_t* r, int64_t slot_utc, int freq_hz,
         run->mixed_coding = true;
     }
 
+    /* ⛔ A REPEAT OF THE PREVIOUS FRAME IN THE SAME SLOT IS ONE SIGNAL, NOT
+     * TWO FRAGMENTS. See the last_frame note in js8_reasm.h for the measured
+     * case. Counted rather than dropped silently, so a run that is mostly
+     * duplicates is visible instead of looking like a long message. */
+    if (run->has_last && run->last_frame_slot == slot_utc &&
+        memcmp(run->last_frame, frame, JS8_FRAME_BYTES) == 0) {
+        run->n_dup++;
+        run->last_slot = slot_utc;
+        return true;
+    }
+    memcpy(run->last_frame, frame, JS8_FRAME_BYTES);
+    run->last_frame_slot = slot_utc;
+    run->has_last = true;
+
     run->last_slot = slot_utc;
     run->n_seen++;
     if (run->n_frames < JS8_REASM_MAX_FRAMES) {

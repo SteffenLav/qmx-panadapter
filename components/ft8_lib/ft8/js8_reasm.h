@@ -76,6 +76,24 @@ typedef struct {
     int64_t  last_slot;        /* UTC second of its most recent frame        */
     int      n_frames;         /* frames STORED (see n_seen for the truth)   */
     int      n_seen;           /* frames seen, including any not stored      */
+    int      n_dup;            /* repeats of the previous frame, same slot   */
+    /* ⛔ THE LAST FRAME, kept ONLY to recognise a repeat of itself.
+     *
+     * The decoder finds the same transmission as several candidates a few Hz
+     * apart, every one of which passes CRC-12 and arrives here as a separate
+     * fragment. Measured on air 2026-10-09: HB9BV's free text came out as
+     * "MSG ID 178MSG ID 178MSG ID 178MSG ID 178" - one message, four
+     * candidates, in a single slot.
+     *
+     * 9 bytes, and only the LAST frame: duplicates of one signal arrive
+     * consecutively because a run is already keyed by audio offset, so a
+     * different station's frame goes to a different run and cannot come
+     * between them. A repeat separated by a genuinely different fragment is
+     * NOT caught, and that is deliberate - it is also the shape of a station
+     * legitimately repeating itself across a long message. */
+    uint8_t  last_frame[JS8_FRAME_BYTES];
+    int64_t  last_frame_slot;
+    bool     has_last;
     bool     overflowed;       /* n_seen > JS8_REASM_MAX_FRAMES              */
     bool     compressed;       /* the coding the FIRST frame declared        */
     bool     mixed_coding;     /* ⚠ later frames disagreed with it           */
