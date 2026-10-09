@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <limits.h>
 #include <string.h>
 
 /* Column geometry, taken from the QMX's own viewer captured off the bench on
@@ -155,59 +156,95 @@ static bool cell_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1], int row, int
     return lines[row][col] == ' ';
 }
 
-/* One elevation ring, as a closed outline.
+/* Would plotting at (r,c) read as a line segment with the dot at (pr,pc)?
  *
- * ⛔ SPLIT BY SLOPE, NOT SCANNED ONE WAY. The ring is twice as wide as it is
- * tall, so a pure row scan puts one dot per row everywhere: dense and vertical
- * down the sides, but across the flat top it steps ten columns between rows
- * and leaves the arc open. The eye then joins the two dense sides and reads
- * the whole thing as two lens arcs meeting at points - operator, 2026-10-09:
- * "two lenses put together (a UFO)".
+ * Same cell, side by side, or diagonally touching: yes. Directly above or
+ * below: NO - a vertical pair is the side tangent, not a line artefact. */
+static bool touches_sideways(int r, int c, int pr, int pc)
+{
+    int dr = r - pr, dc = c - pc;
+    if (dr < 0) dr = -dr;
+    if (dc < 0) dc = -dc;
+    if (dr == 0 && dc == 0) return true;      /* the same cell again */
+    return dc <= 1 && dr <= 1 && dc != 0;     /* beside it, or diagonal */
+}
+
+/* One elevation ring, as a ring of SEPARATED dots.
  *
- * ⭐ The fix is the standard ellipse region split. Walk the curve by COLUMN
- * where it is flatter than 45 degrees (the top and bottom) and by ROW where it
- * is steeper (the sides). Each pass then advances one cell at a time along the
- * direction the curve is actually moving, so the outline is continuous all the
- * way round and still never doubles a dot - which is what the old row scan was
- * protecting (2026-10-08: "only ONE dot per line - not 2 or 3").
+ * ⛔ THREE REQUIREMENTS, ALL FROM THE GLASS, AND THEY PULL AGAINST EACH OTHER.
+ *   1. 2026-10-08: "only ONE dot per line - not 2 or 3".
+ *   2. 2026-10-09: it must not read as "two lenses put together (a UFO)" -
+ *      i.e. the ring has to look closed all the way round, not like two dense
+ *      side arcs meeting at points.
+ *   3. 2026-10-09, after seeing (2) shipped: NO STRAIGHT LINES. The fix for
+ *      (2) walked the curve one cell at a time, which is the textbook way to
+ *      draw a continuous ellipse - and continuity is precisely the defect.
+ *      Near the top, consecutive columns round to the SAME row, so the outline
+ *      grew horizontal runs; down the sides, consecutive rows share a column
+ *      and it grew vertical ones. He marked them in red on a screenshot.
  *
- * The slope of x^2/a^2 + y^2/b^2 = 1 is dy/dx = -(b^2 x)/(a^2 y); the two
- * regions meet where that is 1. */
+ * ⭐ What satisfies all three is EVEN SPACING ALONG THE CURVE with a
+ * guaranteed gap: sample the ellipse parametrically, far more finely than the
+ * grid, and keep a candidate only when it does not touch the dot already
+ * placed. Chebyshev distance >= 2 between consecutive dots means no two
+ * plotted cells are ever neighbours, so a run cannot form in any direction -
+ * requirement 3 holds by construction, not by inspection.
+ *
+ * Because the parameter advances along the ARC, the dots come out roughly
+ * equally spaced the whole way round rather than bunching on the sides, which
+ * is what kills the UFO (requirement 2). And one dot is placed at a time, so
+ * (1) holds too.
+ *
+ * ⚠ Do NOT "improve" this back into a continuous curve. That is where it came
+ * from, twice. If the dotted look ever has to go, the replacement is a real
+ * drawn oval in the VIEW (faint grey, LVGL/CSS), not a denser character grid -
+ * the operator said as much when he rejected this.
+ */
 static void draw_ring(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
                       double a, double b)
 {
     if (a < 1.0 || b < 1.0) return;
 
-    /* Flat part: one dot per column, top and bottom. */
-    for (int dx = -(int)lround(a); dx <= (int)lround(a); dx++) {
-        double xn = (double)dx / a;
-        if (xn < -1.0) xn = -1.0;
-        if (xn >  1.0) xn =  1.0;
-        double y = b * sqrt(1.0 - xn * xn);
-        if (y < 1e-9) continue;                        /* the side, not here */
-        if (b * b * fabs((double)dx) > a * a * y) continue;   /* |slope| > 1 */
-        for (int sgn = -1; sgn <= 1; sgn += 2) {
-            int row = PLOT_CY + sgn * (int)lround(y);
-            int col = PLOT_CX + dx;
-            if (cell_free(lines, row, col)) put_ch(lines, row, col, '.');
-        }
-    }
+    /* Fine enough that the limiter, not the step, decides the spacing: the
+     * longest ring is a few hundred cells around, so a few thousand samples
+     * leaves no gap unconsidered. */
+    const int STEPS = 2048;
 
-    /* Steep part: one dot per row, left and right. This is what gives a
-     * vertical run of cells at 90 and 270 - the tangent the operator asked
-     * for - because near the equator x barely changes between rows. */
-    for (int dy = -(int)lround(b); dy <= (int)lround(b); dy++) {
-        double yn = (double)dy / b;
-        if (yn < -1.0) yn = -1.0;
-        if (yn >  1.0) yn =  1.0;
-        double x = a * sqrt(1.0 - yn * yn);
-        if (x < 1e-9) continue;                        /* the top, not here */
-        if (b * b * x <= a * a * fabs((double)dy)) continue;  /* |slope| <= 1 */
-        for (int sgn = -1; sgn <= 1; sgn += 2) {
-            int row = PLOT_CY + dy;
-            int col = PLOT_CX + sgn * (int)lround(x);
-            if (cell_free(lines, row, col)) put_ch(lines, row, col, '.');
-        }
+    int first_row = INT_MIN, first_col = INT_MIN;
+    int last_row  = INT_MIN, last_col  = INT_MIN;
+
+    for (int i = 0; i < STEPS; i++) {
+        double th  = 2.0 * M_PI * (double)i / (double)STEPS;
+        int    col = PLOT_CX + (int)lround(a * sin(th));
+        int    row = PLOT_CY - (int)lround(b * cos(th));
+
+        /* ⭐ VERTICAL IS ALLOWED, HORIZONTAL AND DIAGONAL ARE NOT.
+         *
+         * A dot directly above or below its neighbour is what gives the sides
+         * their one-dot-per-row tangent at 90 and 270 - the operator asked for
+         * that in the 2026-10-08 round and his approved screenshot has it. A
+         * dot BESIDE or DIAGONAL to its neighbour is what the eye reads as a
+         * straight line welded onto the circle, and that is what he marked in
+         * red. So the rule is not "nothing touches" - that emptied the sides
+         * and lost the shape - it is "nothing touches SIDEWAYS". */
+        if (last_row != INT_MIN && touches_sideways(row, col, last_row, last_col))
+            continue;
+
+        /* The same test against the FIRST dot once we are far enough round to
+         * be closing on it: the join is the one place the neighbour test above
+         * cannot see, and a run there is as visible as anywhere else. */
+        if (first_row != INT_MIN && i > STEPS / 2 &&
+            touches_sideways(row, col, first_row, first_col)) continue;
+
+        /* A satellite already here keeps the cell - it is the more important
+         * mark, and it also reads as part of the rim. Do NOT advance `last`
+         * when the cell is taken: the spacing is about the dots that were
+         * drawn, and skipping the update keeps the next one correctly placed. */
+        if (!cell_free(lines, row, col)) continue;
+
+        put_ch(lines, row, col, '.');
+        last_row = row; last_col = col;
+        if (first_row == INT_MIN) { first_row = row; first_col = col; }
     }
 }
 
