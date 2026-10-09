@@ -13,11 +13,22 @@
 
 #include <stdbool.h>
 
+#include "gps_page.h"
+
 void gps_status_view_open(void);
 void gps_status_view_close(void);
 bool gps_status_view_is_open(void);
 
-/* Is there anything to show? True when the clock is disciplined by a GNSS
- * receiver - the Tab5's own or the QMX's. False on NTP/RTC/FT8/manual, where
- * the tap does nothing: a page of dashes is worse than no page. */
+/* Which receiver is disciplining the clock, or neither.
+ *
+ * ⛔ NTP, RTC, FT8 and manual all return false. The tap then does nothing, and
+ * /api/gps says so: a page of dashes is worse than no page, because it reads
+ * as a receiver that has failed rather than as no receiver at all.
+ *
+ * Exposed so the WEB page decides the same way the glass does - it reads
+ * time_sync only, no LVGL and no display lock, so the HTTPD task may call it.
+ * Duplicating this rule in webserver.c is how the two would come to disagree. */
+bool gps_status_source(gps_page_src_t *out);
+
+/* Is there anything to show? gps_status_source() without the answer. */
 bool gps_status_view_available(void);

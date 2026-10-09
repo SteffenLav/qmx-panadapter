@@ -65,6 +65,15 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
                      char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
                      gps_page_marker_t *markers, int *n_markers);
 
+/* gps_page_render(), then blank the cells the CALLER draws itself: the marker
+ * text and the satellite-table region. Both displays need exactly this, so it
+ * is one function rather than two copies of two loops - see the note at the
+ * definition. Use this, not gps_page_render(), unless you really do want the
+ * raw grid (the harness does). */
+void gps_page_compose(const unit_gps_info_t *in, gps_page_src_t src,
+                      char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                      gps_page_marker_t *markers, int *n_markers);
+
 /* The satellite table, as its own list.
  *
  * The page grid has room for twelve rows and a receiver routinely sees twenty,

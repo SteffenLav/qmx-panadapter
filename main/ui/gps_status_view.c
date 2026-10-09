@@ -66,7 +66,7 @@ bool gps_status_view_is_open(void) { return s_open; }
  * ⛔ NTP, RTC, FT8 and manual all return "neither". The tap then does nothing:
  * a page of dashes is worse than no page, because it reads as a receiver that
  * has failed rather than as no receiver at all. */
-static bool source_now(gps_page_src_t *out)
+bool gps_status_source(gps_page_src_t *out)
 {
     switch (time_sync_get_effective_source()) {
     case TIME_SOURCE_UNIT_GPS:
@@ -81,7 +81,7 @@ static bool source_now(gps_page_src_t *out)
     }
 }
 
-bool gps_status_view_available(void) { return source_now(NULL); }
+bool gps_status_view_available(void) { return gps_status_source(NULL); }
 
 /* The QMX reports position and time over CAT and nothing else - no satellite
  * count, no SNR, no elevation or azimuth. Those rows stay on the page and read
@@ -121,7 +121,7 @@ static void fill_from_qmx(unit_gps_info_t *in)
 static void repaint(void)
 {
     gps_page_src_t src;
-    if (!source_now(&src)) { gps_status_view_close(); return; }
+    if (!gps_status_source(&src)) { gps_status_view_close(); return; }
 
     /* Scratch lives in s_scratch (PSRAM) - see its declaration for why it is
      * neither a static nor a local. Shared safely because this view is a
@@ -138,7 +138,9 @@ static void repaint(void)
      * command. */
     if (src == GPS_PAGE_SRC_MODULE) unit_gps_get_info(info);
     else                            fill_from_qmx(info);
-    gps_page_render(info, src, lines, marks, &n_marks);
+    /* compose, not render: the shared copy of the two blanking loops that used
+     * to live below. See gps_page_compose(). */
+    gps_page_compose(info, src, lines, marks, &n_marks);
 
     /* The pin names the port in the title. Read live rather than cached: the
      * driver can be rebound to the other port at runtime (unit_gps_start_on),
@@ -146,23 +148,13 @@ static void repaint(void)
      * mislabel this replaced. */
     if (s_title) lv_label_set_text(s_title, gps_page_title(src, unit_gps_rx_gpio()));
 
-    /* Blank the cells a marker occupies before setting the row text, then draw
-     * each marker as its own coloured label on top. The row keeps the plot's
-     * dots and the table; only the satellites are coloured. Same approach
-     * qmx_term_view uses for the radio's colour runs. */
-    for (int i = 0; i < n_marks; i++) {
-        gps_page_marker_t *m = &marks[i];
-        for (int k = 0; m->text[k]; k++) {
-            if (m->col + k < GPS_PAGE_COLS) lines[m->row][m->col + k] = ' ';
-        }
-    }
-
-    /* The satellite table is drawn by the scrollable pane below, not by the
-     * grid rows - a receiver routinely sees twenty satellites and the grid has
-     * room for twelve. Blank that region here so the two do not overprint. */
-    for (int r = GPS_PAGE_TABLE_ROW0; r < GPS_PAGE_ROWS; r++) {
-        for (int c = 0; c < GPS_PAGE_SAT_COLS && c < GPS_PAGE_COLS; c++) lines[r][c] = ' ';
-    }
+    /* gps_page_compose() has already blanked the marker cells and the
+     * satellite-table region: each marker is drawn below as its own coloured
+     * label, and the table by the scrollable pane. The row keeps the plot's
+     * dots; only the satellites are coloured. Same approach qmx_term_view uses
+     * for the radio's colour runs.
+     * ⛔ The two blanking loops that stood here were copied into the web page
+     * and are now shared - do not bring them back. */
 
     for (int r = 0; r < GPS_PAGE_ROWS; r++) {
         int e = GPS_PAGE_COLS;
@@ -246,7 +238,7 @@ void gps_status_view_open(void)
      * only data path there is. */
     {
         gps_page_src_t which;
-        if (source_now(&which) && which == GPS_PAGE_SRC_QMX) {
+        if (gps_status_source(&which) && which == GPS_PAGE_SRC_QMX) {
             qmx_term_view_open_gps();
             return;
         }

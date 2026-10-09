@@ -4554,6 +4554,135 @@ static const httpd_uri_t uri_log_saved = {
     .uri = "/api/log/saved", .method = HTTP_GET, .handler = saved_log_handler,
 };
 
+/* GET /api/gps - the GPS status page, as the GLASS composes it.
+ *
+ * ⭐ THE DEVICE RENDERS THE PAGE, THE BROWSER ONLY PAINTS IT. The 80x24 grid
+ * comes out of the same gps_page_compose() that ui/gps_status_view.c draws, so
+ * the web page cannot drift from the Tab5 page: there is one layout, not two.
+ * Sending raw satellite data and laying it out in JavaScript would have been a
+ * second implementation of a layout whose whole point (2026-10-08) is to look
+ * like the radio's own "Hardware tests | GPS viewer".
+ *
+ * The markers and the satellite rows come separately because they are COLOURED
+ * and the table SCROLLS - exactly as on the glass, and for the same reason: a
+ * receiver routinely sees twenty satellites and the grid has room for twelve.
+ * The cells they occupy are already blanked in `lines`.
+ *
+ * `src` is "none" when no GNSS receiver is disciplining the clock. The browser
+ * then says so instead of drawing a page of dashes, which reads as a receiver
+ * that has failed rather than as no receiver at all - the same rule the tap on
+ * the glass follows.
+ *
+ * `src` is "qmx" when the radio's own receiver is the source. It reports
+ * position and time over CAT and nothing else, so there is no page to draw:
+ * the glass hands that case to the radio's own viewer, and the browser sends
+ * the operator to Radio menus for the same reason.
+ */
+typedef struct {
+    unit_gps_info_t   info;
+    char              lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1];
+    gps_page_marker_t marks[GPS_PAGE_MAX_MARKERS];
+    gps_page_satrow_t satrows[UNIT_GPS_MAX_SATS];
+} gps_api_scratch_t;
+
+static esp_err_t gps_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+
+    gps_page_src_t src;
+    bool have = gps_status_source(&src);
+
+    cJSON_AddStringToObject(root, "src",
+        !have ? "none" : (src == GPS_PAGE_SRC_QMX ? "qmx" : "module"));
+    cJSON_AddNumberToObject(root, "cols", GPS_PAGE_COLS);
+    cJSON_AddNumberToObject(root, "rows", GPS_PAGE_ROWS);
+    cJSON_AddNumberToObject(root, "table_row0", GPS_PAGE_TABLE_ROW0);
+
+    if (have && src == GPS_PAGE_SRC_MODULE) {
+        /* ⛔ ~4.3 kB of scratch, and it may go NEITHER in .bss NOR on this
+         * stack. Internal .bss comes out of the DMA pool and stopped the SD
+         * card mounting (2026-10-08); 4 kB on the HTTPD stack is the stack
+         * protection fault that crashed this same task the same evening. See
+         * the identical note in ui/gps_status_view.c. PSRAM, for the length of
+         * one request. */
+        gps_api_scratch_t *sc = heap_caps_malloc(sizeof(*sc),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!sc) {
+            cJSON_Delete(root);
+            return httpd_resp_send_500(req);
+        }
+        int n_marks = 0;
+        unit_gps_get_info(&sc->info);
+        gps_page_compose(&sc->info, src, sc->lines, sc->marks, &n_marks);
+
+        cJSON_AddStringToObject(root, "title",
+                                gps_page_title(src, unit_gps_rx_gpio()));
+
+        cJSON *lines = cJSON_AddArrayToObject(root, "lines");
+        for (int r = 0; lines && r < GPS_PAGE_ROWS; r++) {
+            /* Trailing blanks trimmed - the browser pads with CSS, and 24 rows
+             * of 80 columns is 2 kB of spaces on a link where the page load is
+             * already the slow part. */
+            int e = GPS_PAGE_COLS;
+            while (e > 0 && sc->lines[r][e - 1] == ' ') e--;
+            sc->lines[r][e] = '\0';
+            cJSON_AddItemToArray(lines, cJSON_CreateString(sc->lines[r]));
+        }
+
+        cJSON *marks = cJSON_AddArrayToObject(root, "marks");
+        for (int i = 0; marks && i < n_marks; i++) {
+            cJSON *m = cJSON_CreateObject();
+            if (!m) break;
+            cJSON_AddNumberToObject(m, "row", sc->marks[i].row);
+            cJSON_AddNumberToObject(m, "col", sc->marks[i].col);
+            cJSON_AddStringToObject(m, "text", sc->marks[i].text);
+            cJSON_AddNumberToObject(m, "snr", sc->marks[i].snr_db);
+            cJSON_AddBoolToObject  (m, "used", sc->marks[i].used);
+            cJSON_AddBoolToObject  (m, "compass", sc->marks[i].compass);
+            /* The colour the GLASS would use, resolved here. The browser must
+             * not own a second copy of the SNR thresholds: one satellite green
+             * in the plot and amber in the list is precisely the bug
+             * gps_page_snr_colour() exists to prevent. */
+            char col[8];
+            snprintf(col, sizeof(col), "#%06lx",
+                     (unsigned long)(sc->marks[i].compass
+                         ? 0x5B8DEFu
+                         : gps_page_snr_colour(sc->marks[i].snr_db)) & 0xFFFFFFu);
+            cJSON_AddStringToObject(m, "colour", col);
+            cJSON_AddItemToArray(marks, m);
+        }
+
+        int n_rows = gps_page_sat_rows(&sc->info, sc->satrows, UNIT_GPS_MAX_SATS);
+        cJSON *sats = cJSON_AddArrayToObject(root, "sats");
+        for (int i = 0; sats && i < n_rows; i++) {
+            cJSON *o = cJSON_CreateObject();
+            if (!o) break;
+            cJSON_AddStringToObject(o, "text", sc->satrows[i].text);
+            cJSON_AddNumberToObject(o, "snr",  sc->satrows[i].snr_db);
+            cJSON_AddBoolToObject  (o, "used", sc->satrows[i].used);
+            char col[8];
+            snprintf(col, sizeof(col), "#%06lx",
+                     (unsigned long)gps_page_snr_colour(sc->satrows[i].snr_db) & 0xFFFFFFu);
+            cJSON_AddStringToObject(o, "colour", col);
+            cJSON_AddItemToArray(sats, o);
+        }
+        heap_caps_free(sc);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_gps = {
+    .uri = "/api/gps", .method = HTTP_GET, .handler = gps_get_handler,
+};
+
 // GET /api/upload_status — check result of last QRZ or eQSL upload
 static esp_err_t upload_status_handler(httpd_req_t *req)
 {
@@ -7019,9 +7148,40 @@ static void upload_task(void *arg)
     }
 }
 
+/* ⛔ A FAILED REGISTRATION USED TO BE SILENT. httpd keeps a fixed array of
+ * max_uri_handlers, and once it is full every further httpd_register_uri_handler()
+ * returns ESP_ERR_HTTPD_HANDLERS_FULL - which the fifty call sites below all
+ * ignored. The symptom is not an error anywhere: it is one endpoint answering
+ * 404 and nothing in the log, and the endpoint that loses is whichever was
+ * added last.
+ *
+ * The comment on max_uri_handlers tried to hold the count in prose ("48 API + 5
+ * file-browser + headroom") and had rotted to 56-against-55 by 2026-10-09,
+ * which is the same rot CLAUDE.md records for the standing-patch count. A
+ * number in a comment cannot keep up with a list in code, so this counts them
+ * instead and says so at the end. Route through reg(), never
+ * httpd_register_uri_handler() directly. */
+/* Comfortably above the real list. filebrowser.c adds 5 of these and
+ * webserver_ws.c 1, neither through reg(), so the summary line below counts
+ * only this file's - which is why it names its own total rather than implying
+ * it is all of them. */
+#define WEB_MAX_URI_HANDLERS 80
+
+static int s_reg_ok, s_reg_fail;
+
+static void reg(const httpd_uri_t *u)
+{
+    esp_err_t e = httpd_register_uri_handler(s_server, u);
+    if (e == ESP_OK) { s_reg_ok++; return; }
+    s_reg_fail++;
+    ESP_LOGE(TAG, "register %s FAILED: %s - raise max_uri_handlers",
+             u->uri, esp_err_to_name(e));
+}
+
 esp_err_t webserver_start(void)
 {
     if (s_server != NULL) { ESP_LOGD(TAG, "Already running"); return ESP_OK; }
+    s_reg_ok = s_reg_fail = 0;   // webserver_stop()/start() may run again
 
     // Create background upload queue + task + mutex (priority 3: below audio/FT8, above idle)
     if (!s_upload_mutex) {
@@ -7071,12 +7231,13 @@ esp_err_t webserver_start(void)
     // stack is in PSRAM cannot run in that state - see the warning at the top
     // of util/psram_task.h, hardware-confirmed by the #218 OTA panic.
     config.stack_size      = 10240;
-    // 38 registered here + 5 in filebrowser.c = 43, so 42 was ALREADY ONE SHORT
-    // the moment /api/shortcuts was added - and httpd fails the registration
-    // silently from the endpoint's point of view, so the symptom would have been
-    // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
-    // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 55;   // 48 API (incl. rxaudio capture) + 5 file-browser + headroom
+    /* ⛔ DO NOT TRY TO KEEP THE EXACT COUNT IN THIS COMMENT. It said
+     * "48 API + 5 file-browser + headroom" against a 55 that the real list had
+     * already outgrown - 51 here + 5 in filebrowser.c + 1 for /ws is 57 - so
+     * one endpoint was being refused with nothing in the log. reg() below now
+     * counts and complains; this number only has to be comfortably above the
+     * list, and 80 costs 80 pointers of PSRAM-backed config. */
+    config.max_uri_handlers = WEB_MAX_URI_HANDLERS;
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -7169,58 +7330,68 @@ esp_err_t webserver_start(void)
         return err;
     }
 
-    httpd_register_uri_handler(s_server, &uri_root);
-    httpd_register_uri_handler(s_server, &uri_status);
-    httpd_register_uri_handler(s_server, &uri_cmd);
-    httpd_register_uri_handler(s_server, &uri_ss_bmp);
-    httpd_register_uri_handler(s_server, &uri_log);
-    httpd_register_uri_handler(s_server, &uri_log_saved);
-    httpd_register_uri_handler(s_server, &uri_adif_get);
-    httpd_register_uri_handler(s_server, &uri_rxaudio_wav);
-    httpd_register_uri_handler(s_server, &uri_slot_wav);
-    httpd_register_uri_handler(s_server, &uri_slot_json);
-    httpd_register_uri_handler(s_server, &uri_rxaudio_json);
-    httpd_register_uri_handler(s_server, &uri_adif_check);
-    httpd_register_uri_handler(s_server, &uri_adif_clear);
-    httpd_register_uri_handler(s_server, &uri_adif_import);
-    httpd_register_uri_handler(s_server, &uri_adif_import_sd);
-    httpd_register_uri_handler(s_server, &uri_adif_delete);
-    httpd_register_uri_handler(s_server, &uri_adif_edit);
-    httpd_register_uri_handler(s_server, &uri_qrz_key);
-    httpd_register_uri_handler(s_server, &uri_qrz_upload);
-    httpd_register_uri_handler(s_server, &uri_upload_status);
-    httpd_register_uri_handler(s_server, &uri_signal);
-    httpd_register_uri_handler(s_server, &uri_rxaudio_tune);
-    httpd_register_uri_handler(s_server, &uri_drawer_map_get);
-    httpd_register_uri_handler(s_server, &uri_drawer_map_post);
-    httpd_register_uri_handler(s_server, &uri_tone_get);
-    httpd_register_uri_handler(s_server, &uri_tone_post);
-    httpd_register_uri_handler(s_server, &uri_memory_get);
-    httpd_register_uri_handler(s_server, &uri_memory_post);
-    httpd_register_uri_handler(s_server, &uri_settings_get);
-    httpd_register_uri_handler(s_server, &uri_settings_post);
-    httpd_register_uri_handler(s_server, &uri_shortcuts_get);
-    httpd_register_uri_handler(s_server, &uri_shortcuts_post);
-    httpd_register_uri_handler(s_server, &uri_wspr);
-    httpd_register_uri_handler(s_server, &uri_decodes);
-    httpd_register_uri_handler(s_server, &uri_psk_rx);
-    httpd_register_uri_handler(s_server, &uri_help);
-    httpd_register_uri_handler(s_server, &uri_manual);
-    httpd_register_uri_handler(s_server, &uri_eqsl_creds);
-    httpd_register_uri_handler(s_server, &uri_qrz_lookup_creds);
-    httpd_register_uri_handler(s_server, &uri_eqsl_upload);
-    httpd_register_uri_handler(s_server, &uri_cloudlog_creds);
-    httpd_register_uri_handler(s_server, &uri_cloudlog_upload);
-    httpd_register_uri_handler(s_server, &uri_lotw_cert);
-    httpd_register_uri_handler(s_server, &uri_lotw_upload);
-    httpd_register_uri_handler(s_server, &uri_lotw_tq8);
-    httpd_register_uri_handler(s_server, &uri_forge_js);
-    httpd_register_uri_handler(s_server, &uri_config_get);
-    httpd_register_uri_handler(s_server, &uri_config_post);
-    httpd_register_uri_handler(s_server, &uri_term_get);
-    httpd_register_uri_handler(s_server, &uri_term_post);
+    reg(&uri_root);
+    reg(&uri_status);
+    reg(&uri_cmd);
+    reg(&uri_ss_bmp);
+    reg(&uri_log);
+    reg(&uri_log_saved);
+    reg(&uri_gps);
+    reg(&uri_adif_get);
+    reg(&uri_rxaudio_wav);
+    reg(&uri_slot_wav);
+    reg(&uri_slot_json);
+    reg(&uri_rxaudio_json);
+    reg(&uri_adif_check);
+    reg(&uri_adif_clear);
+    reg(&uri_adif_import);
+    reg(&uri_adif_import_sd);
+    reg(&uri_adif_delete);
+    reg(&uri_adif_edit);
+    reg(&uri_qrz_key);
+    reg(&uri_qrz_upload);
+    reg(&uri_upload_status);
+    reg(&uri_signal);
+    reg(&uri_rxaudio_tune);
+    reg(&uri_drawer_map_get);
+    reg(&uri_drawer_map_post);
+    reg(&uri_tone_get);
+    reg(&uri_tone_post);
+    reg(&uri_memory_get);
+    reg(&uri_memory_post);
+    reg(&uri_settings_get);
+    reg(&uri_settings_post);
+    reg(&uri_shortcuts_get);
+    reg(&uri_shortcuts_post);
+    reg(&uri_wspr);
+    reg(&uri_decodes);
+    reg(&uri_psk_rx);
+    reg(&uri_help);
+    reg(&uri_manual);
+    reg(&uri_eqsl_creds);
+    reg(&uri_qrz_lookup_creds);
+    reg(&uri_eqsl_upload);
+    reg(&uri_cloudlog_creds);
+    reg(&uri_cloudlog_upload);
+    reg(&uri_lotw_cert);
+    reg(&uri_lotw_upload);
+    reg(&uri_lotw_tq8);
+    reg(&uri_forge_js);
+    reg(&uri_config_get);
+    reg(&uri_config_post);
+    reg(&uri_term_get);
+    reg(&uri_term_post);
     filebrowser_register(s_server);   // /files + /api/files + /api/file
     webserver_ws_start(s_server);
+
+    /* The count, measured. A nonzero fail here is an endpoint that will 404
+     * for no visible reason - see reg(). */
+    if (s_reg_fail)
+        ESP_LOGE(TAG, "%d of %d URI handlers were REFUSED - endpoints are missing",
+                 s_reg_fail, s_reg_ok + s_reg_fail);
+    else
+        ESP_LOGI(TAG, "%d URI handlers registered here, +5 files +1 /ws (max %d)",
+                 s_reg_ok, WEB_MAX_URI_HANDLERS);
 
     ESP_LOGI(TAG, "HTTP server started");
     MEM_LEDGER("httpd + ws start");   // DMA-pool bracket, 2026-10-04

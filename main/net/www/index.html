@@ -1337,6 +1337,7 @@
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
         <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
         <a href="#" id="term-btn" title="The QMX's own menu system, on its second USB serial port - the whole radio, including everything the front panel can reach. Needed if your QMX has no control panel.">Radio menus</a>
+        <a href="#" id="gps-btn" title="The GPS status page - fix, position, grid, satellites and the sky plot. The same page the Tab5 shows when you tap the UTC clock.">GPS status</a>
       </div>
     </div>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
@@ -1654,6 +1655,31 @@
         <button class="bot-btn term-key" data-key="ctrl-q" title="Back out of a menu (the radio's own Ctrl-Q)">Back</button>
         <button class="bot-btn term-key" data-key="bksp" title="Backspace (0x08). In a numeric field the cursor sits on the rightmost digit - backspace leftward, then type the value you want">BS</button>
         <span style="color:#888; font-size:12px; margin-left:8px;">Your keyboard works too &mdash; arrows, Enter, Esc, and typing.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- The GPS status page. ⭐ THE DEVICE COMPOSES IT, THIS ONLY PAINTS IT:
+       /api/gps returns the same 80x24 grid that gps_page_compose() draws on the
+       glass, so there is no second layout here to drift from the Tab5's. The
+       markers and the satellite rows arrive separately because they are
+       coloured, with the colour resolved on the device for the same reason -
+       one satellite must not be green in the plot and amber in the list.
+       The satellite pane is positioned over the hole the device leaves at rows
+       12-23, columns 0-25, from MEASURED character metrics: the sky plot
+       occupies the same rows to the right, so the table cannot simply be moved
+       below the grid. -->
+  <div id="gps-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:1000;">
+    <div style="max-width:960px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0; color:#ffa040; flex:1;" id="gps-title">GPS status</h3>
+        <span id="gps-state" style="color:#888; font-size:12px; margin-right:12px;"></span>
+        <button id="gps-close" class="btn-neutral">Close</button>
+      </div>
+      <div id="gps-msg" style="display:none; background:#1a1a2a; border:1px solid #3a4a7a; border-radius:6px; padding:10px 12px; margin-bottom:10px; color:#c8d4ff; line-height:1.5;"></div>
+      <div id="gps-wrap" style="position:relative;">
+        <pre id="gps-screen" style="background:#000; border:1px solid #333; border-radius:6px; padding:10px 12px; margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:15px; line-height:1.15; white-space:pre;"></pre>
+        <div id="gps-sats" style="position:absolute; display:none; overflow-y:auto; overflow-x:hidden; font-family:'Consolas','DejaVu Sans Mono',monospace; white-space:pre; line-height:1.15;"></div>
       </div>
     </div>
   </div>
@@ -9362,25 +9388,35 @@ function termRender(j) {
    pre's own font, and the font size is reset to the base first so repeated
    calls cannot ratchet downward. overflow-x stays as the backstop for a window
    too narrow even at the minimum size. */
-function termFit() {
-  const pre = document.getElementById("term-screen");
-  if (!pre || !pre.offsetParent) return;          // modal not on screen
+function fit80(id) {
+  const pre = document.getElementById(id);
+  if (!pre || !pre.offsetParent) return null;     // modal not on screen
   const BASE = 15, MIN = 6;
   pre.style.fontSize = BASE + "px";
   const cs = getComputedStyle(pre);
   const avail = pre.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  if (!(avail > 0)) return;
+  if (!(avail > 0)) return null;
   const probe = document.createElement("span");
   probe.textContent = "0".repeat(80);
   probe.style.cssText = "position:absolute; visibility:hidden; white-space:pre;";
   pre.appendChild(probe);
-  const w80 = probe.getBoundingClientRect().width;
+  let w80 = probe.getBoundingClientRect().width;
   pre.removeChild(probe);
-  if (!(w80 > 0)) return;
-  if (w80 <= avail) return;                       // already fits at full size
-  const size = Math.max(MIN, Math.floor(BASE * (avail / w80) * 10) / 10);
-  pre.style.fontSize = size + "px";
+  if (!(w80 > 0)) return null;
+  let size = BASE;
+  if (w80 > avail) {                              // does not fit at full size
+    size = Math.max(MIN, Math.floor(BASE * (avail / w80) * 10) / 10);
+    pre.style.fontSize = size + "px";
+    w80 *= size / BASE;
+  }
+  /* The GPS page needs the cell size as well as the fit, to put its satellite
+     pane over the hole in the grid. Measured, never assumed: the character
+     width depends on which fallback font the browser actually picked. */
+  return { size: size, cellW: w80 / 80, lineH: size * 1.15,
+           padL: parseFloat(cs.paddingLeft), padT: parseFloat(cs.paddingTop) };
 }
+
+function termFit() { fit80("term-screen"); }
 
 window.addEventListener("resize", termFit);
 
@@ -9469,6 +9505,166 @@ document.getElementById("term-btn").addEventListener("click", (e) => {
   termOpenModal();
 });
 document.getElementById("term-close").addEventListener("click", termCloseModal);
+
+/* ───────────────────────── GPS status page ─────────────────────────────────
+   The device composes the page; this paints it. /api/gps returns the same
+   80x24 grid gps_page_compose() draws on the glass, with the marker cells and
+   the satellite-table region already blanked, so the only work here is to put
+   the coloured text back into those holes. Laying the page out in JavaScript
+   instead would be a second implementation of a layout whose whole purpose is
+   to look like the radio's own GPS viewer.
+
+   REFRESH matches the glass's own REFRESH_MS (ui/gps_status_view.c): a GNSS
+   receiver reports once a second and a faster poll would only cost HTTP. */
+let gpsTimer = null;
+const GPS_REFRESH_MS = 1000;
+
+function gpsEsc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Show or hide the grid. ⛔ Hide the WRAPPER, not just empty the <pre>: an
+   empty pre still draws its black panel and border, which reads as a page
+   that failed to load rather than as no page. */
+function gpsShowGrid(on) {
+  document.getElementById("gps-wrap").style.display = on ? "" : "none";
+  if (!on) {
+    document.getElementById("gps-screen").innerHTML = "";
+    document.getElementById("gps-sats").style.display = "none";
+    document.getElementById("gps-state").textContent = "";
+  }
+}
+
+function gpsMsg(html) {
+  const el = document.getElementById("gps-msg");
+  el.innerHTML = html || "";
+  el.style.display = html ? "" : "none";
+}
+
+/* One row, with each marker on it written back in its own colour.
+   Built column by column rather than by splicing strings: two markers can sit
+   next to each other on the same row, and the device's own blanking means the
+   cells under them are spaces. */
+function gpsRowHtml(text, marks, row, cols) {
+  const cells = (text + " ".repeat(cols)).slice(0, cols).split("");
+  const colour = new Array(cols).fill(null);
+  for (const m of marks) {
+    if (m.row !== row) continue;
+    for (let k = 0; k < m.text.length; k++) {
+      const c = m.col + k;
+      if (c < 0 || c >= cols) continue;
+      cells[c]  = m.text[k];
+      colour[c] = m.colour;
+    }
+  }
+  let html = "", run = "", runCol = null;
+  const flush = () => {
+    if (!run) return;
+    html += runCol ? '<span style="color:' + runCol + '">' + gpsEsc(run) + "</span>"
+                   : gpsEsc(run);
+    run = "";
+  };
+  for (let c = 0; c < cols; c++) {
+    if (colour[c] !== runCol) { flush(); runCol = colour[c]; }
+    run += cells[c];
+  }
+  flush();
+  return html;
+}
+
+/* The satellite pane, over the hole the device leaves at rows table_row0..23,
+   columns 0..25. It cannot simply go below the grid: the sky plot occupies the
+   same rows to the RIGHT of it. Positioned from fit80()'s measured cell size,
+   and it scrolls because a receiver routinely sees twenty satellites while the
+   hole is twelve rows tall - the same reason the pane on the glass scrolls. */
+function gpsPlaceSats(metrics, j) {
+  const pane = document.getElementById("gps-sats");
+  if (!metrics || !j.sats || !j.sats.length) { pane.style.display = "none"; return; }
+  const row0 = (j.table_row0 !== undefined) ? j.table_row0 : 12;
+  const rows = (j.rows || 24) - row0;
+  pane.style.left     = (metrics.padL) + "px";
+  pane.style.top      = (metrics.padT + row0 * metrics.lineH) + "px";
+  pane.style.width    = (26 * metrics.cellW) + "px";
+  pane.style.height   = (rows * metrics.lineH) + "px";
+  pane.style.fontSize = metrics.size + "px";
+  pane.style.display  = "";
+  pane.innerHTML = j.sats.map(
+    (r) => '<div style="color:' + r.colour + '">' + gpsEsc(r.text) + "</div>").join("");
+}
+
+async function gpsPoll() {
+  let j;
+  try {
+    j = await (await fetch("/api/gps", { cache: "no-store" })).json();
+  } catch (e) { return; }   /* a dropped poll retries; not worth a message */
+
+  const title = document.getElementById("gps-title");
+
+  if (j.src === "none") {
+    /* The same rule the tap on the glass follows: no page rather than a page
+       of dashes, which reads as a receiver that has failed instead of as no
+       receiver at all. */
+    title.textContent = "GPS status";
+    gpsShowGrid(false);
+    gpsMsg("No GPS receiver is setting the clock, so there is nothing to show. "
+         + "The clock is on NTP, the on-board RTC, FT8 or whatever you set by hand. "
+         + "Attach a Module GPS or a Unit GPS, or let the QMX's own receiver take over.");
+    return;
+  }
+
+  if (j.src === "qmx") {
+    /* Over CAT the radio gives position and time and nothing else, so a page
+       drawn from it would be three rows of data and eight of dashes. The glass
+       hands this case to the radio's own viewer; so does the browser. */
+    title.textContent = "GPS status — the radio's own receiver";
+    gpsShowGrid(false);
+    gpsMsg("The QMX's own GPS is setting the clock. Over CAT the radio reports "
+         + "position and time and nothing else &mdash; no satellites, no signal "
+         + "levels &mdash; so there is no page to draw here. Its own GPS viewer has "
+         + "all of it: open <b>Radio menus</b> and go to Hardware tests &rarr; GPS viewer.");
+    return;
+  }
+
+  gpsMsg("");
+  gpsShowGrid(true);
+  if (j.title) title.textContent = j.title;
+  document.getElementById("gps-state").textContent =
+      (j.sats ? j.sats.length : 0) + " satellites";
+
+  const cols  = j.cols || 80;
+  const marks = j.marks || [];
+  document.getElementById("gps-screen").innerHTML =
+      (j.lines || []).map((t, r) => gpsRowHtml(t, marks, r, cols)).join("\n");
+  gpsPlaceSats(fit80("gps-screen"), j);
+}
+
+function gpsOpenModal() {
+  document.getElementById("gps-modal").style.display = "";
+  gpsShowGrid(false);
+  document.getElementById("gps-state").textContent = "reading...";
+  gpsMsg("");
+  gpsPoll();
+  if (gpsTimer) clearInterval(gpsTimer);
+  gpsTimer = setInterval(gpsPoll, GPS_REFRESH_MS);
+}
+
+function gpsCloseModal() {
+  if (gpsTimer) { clearInterval(gpsTimer); gpsTimer = null; }
+  document.getElementById("gps-modal").style.display = "none";
+}
+
+document.getElementById("gps-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  const m = document.getElementById("radio-menu");
+  if (m) m.classList.remove("open");
+  gpsOpenModal();
+});
+document.getElementById("gps-close").addEventListener("click", gpsCloseModal);
+/* The pane is positioned from measured metrics, so a resize has to re-measure
+   - otherwise the satellite table slides off the hole it belongs in. */
+window.addEventListener("resize", () => {
+  if (document.getElementById("gps-modal").style.display !== "none") gpsPoll();
+});
 document.querySelectorAll(".term-key").forEach((b) => {
   b.addEventListener("click", async () => {
     await termSend("key", { key: b.dataset.key });

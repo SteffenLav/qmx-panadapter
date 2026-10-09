@@ -438,3 +438,38 @@ void gps_page_render(const unit_gps_info_t *in, gps_page_src_t src,
 
     draw_sky(lines, in, markers, n_markers);
 }
+
+
+/* ⭐ ONE composition, two displays. The glass (ui/gps_status_view.c) and the
+ * web (/api/gps) both draw the markers and the satellite table themselves -
+ * coloured, and the table scrolling because a receiver routinely sees twenty
+ * satellites while the grid has room for twelve. Both therefore have to blank
+ * the same cells first, or the grid text shows through underneath.
+ *
+ * That blanking used to be two copies of two loops. It is one copy here
+ * because the failure mode is silent: a cell blanked on one display and not
+ * the other is a page that looks right on the bench and wrong in the browser.
+ */
+void gps_page_compose(const unit_gps_info_t *in, gps_page_src_t src,
+                      char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
+                      gps_page_marker_t *markers, int *n_markers)
+{
+    int n = 0;
+    gps_page_render(in, src, lines, markers, n_markers);
+    if (n_markers) n = *n_markers;
+
+    /* The marker text, so the coloured label is not drawn over the plain one. */
+    for (int i = 0; markers && i < n; i++) {
+        for (int k = 0; markers[i].text[k]; k++) {
+            int c = markers[i].col + k;
+            if (markers[i].row >= 0 && markers[i].row < GPS_PAGE_ROWS &&
+                c >= 0 && c < GPS_PAGE_COLS)
+                lines[markers[i].row][c] = ' ';
+        }
+    }
+
+    /* The satellite-table region, which the scrolling pane owns. */
+    for (int r = GPS_PAGE_TABLE_ROW0; r < GPS_PAGE_ROWS; r++)
+        for (int c = 0; c < GPS_PAGE_SAT_COLS && c < GPS_PAGE_COLS; c++)
+            lines[r][c] = ' ';
+}
