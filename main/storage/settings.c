@@ -439,8 +439,10 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable; 23 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
-// Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
-// continuous time-sync correction, ~every 15s) and DIRTY_LAST_MODE are NOT in
+// Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
+// correction, throttled to ~5 min in write_to_rtc_and_nvs() - this comment
+// claimed ~15 s while the Unit-GPS path was in fact writing it EVERY SECOND,
+// measured on the bench 2026-10-09) and DIRTY_LAST_MODE are NOT in
 // here on purpose: re-mirroring qmx-config.txt to the SD card produces an
 // identical file (those fields aren't part of the export), so doing it on
 // their account is pure waste — and worse, SD card I/O competes with the

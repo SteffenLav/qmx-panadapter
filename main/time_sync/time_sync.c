@@ -309,8 +309,49 @@ static time_t get_date_anchor(void)
 // has no matching latency, so letting it pull the clock only drags TX late.
 // See apply_ft8_correction().
 
+/* ⛔ THROTTLED, AND THE REASON IS MEASURED.
+ *
+ * On the bench 2026-10-09 the log carried `settings: flushed dirty=...00010000`
+ * ONCE A SECOND, continuously. Bit 16 is DIRTY_LAST_TIME. settings.c's own
+ * comment says that bit is "rewritten every FT8 slot ... ~every 15s" - it was
+ * running 15x faster than the code believed.
+ *
+ * The cause is the Unit-GPS path: it locks the clock on every RMC sentence,
+ * which is 1 Hz, and called this on each one. That is an nvs_commit() AND an
+ * I2C write to the RX8130CE every second - 86,400 flash commits a day for a
+ * value whose only job is to survive a power cycle.
+ *
+ * ⭐ THROTTLE THE PERSIST, NOT THE LOCK. The per-second phase-lock is what
+ * gives the Unit GPS its good phase and must keep running; only writing it
+ * down needed bounding. Fixed HERE rather than at the Unit-GPS call site
+ * because there are eight callers and the next one added would have the same
+ * bug - the QMX-GPS path only escaped it by re-locking every 5 min.
+ *
+ * ⚠ A STEP STILL WRITES IMMEDIATELY. If the new time is not what the old one
+ * would have reached by ticking forward, that is a real correction (a manual
+ * set, a first fix, a jump) and is recorded at once however recently we wrote.
+ * Without that test the throttle would swallow exactly the corrections the
+ * stored value exists to capture.
+ *
+ * Staleness cost: last_unix_time can lag by up to the interval below. It is a
+ * monotonicity floor for distrusting a backwards RTC at boot, not a clock, so
+ * minutes of lag are harmless - and the RTC itself keeps running regardless. */
+#define PERSIST_MIN_INTERVAL_US   (5 * 60 * 1000000LL)
+#define PERSIST_STEP_TOL_US       (2 * 1000000LL)
+
+static int64_t s_last_persist_us;    /* 0 = never written this boot */
+static time_t  s_last_persist_utc;
+
 static void write_to_rtc_and_nvs(time_t utc, const char *source)
 {
+    int64_t now_us = esp_timer_get_time();
+    if (s_last_persist_us != 0) {
+        int64_t since_us  = now_us - s_last_persist_us;
+        int64_t ticked_us = (int64_t)(utc - s_last_persist_utc) * 1000000LL;
+        bool    stepped   = llabs(ticked_us - since_us) > PERSIST_STEP_TOL_US;
+        if (!stepped && since_us < PERSIST_MIN_INTERVAL_US) return;
+    }
+
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
     if (!rtc_set_time(&tm_utc)) {
@@ -319,6 +360,8 @@ static void write_to_rtc_and_nvs(time_t utc, const char *source)
     if (epoch_is_sane((int64_t)utc)) {
         settings_set_last_unix_time((uint32_t)utc);
     }
+    s_last_persist_us  = now_us;
+    s_last_persist_utc = utc;
 }
 
 static void apply_and_persist(time_t utc, const char *source)
