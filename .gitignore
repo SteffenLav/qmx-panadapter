@@ -108,6 +108,12 @@ wspr_cap_sweep.exe
 wspr_decode_harness.exe
 wspr_subtract_sweep.exe
 
+# Host harness binaries built by hand at the repo root. tools/run_harnesses.py
+# builds into a temp dir and leaves nothing behind, but building one directly
+# from its own header gcc line - which is how you run a harness against a
+# directory of your own WAVs - drops the .exe here.
+*_harness.exe
+
 # Serial capture output (cap_serial_reboot.ps1 default -Out)
 reboot.txt
 
