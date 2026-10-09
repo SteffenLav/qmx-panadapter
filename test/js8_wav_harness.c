@@ -11,6 +11,9 @@
  *       components/ft8_lib/ft8/js8_tables.c \
  *       components/ft8_lib/ft8/js8_message.c \
  *       components/ft8_lib/ft8/js8_text.c \
+ *       components/ft8_lib/ft8/js8_reasm.c \
+ *       components/ft8_lib/ft8/js8_jsc.c \
+ *       components/ft8_lib/ft8/js8_jsc_tables.c \
  *       components/ft8_lib/common/monitor.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \
  *       -lm
@@ -52,6 +55,7 @@
 #include "monitor.h"
 #include "js8.h"
 #include "js8_text.h"
+#include "ft8/js8_reasm.h"
 #include "js8_message.h"
 
 #define SR_HZ            12000
@@ -181,9 +185,62 @@ static int parse_expected(const char *path, row_t *rows, int max_rows)
     return n;
 }
 
+/* ---- free-text reassembly across consecutive slots -------------------
+ *
+ * ⛔ THIS HARNESS USED TO BE BLIND TO FREE TEXT. It linked js8_message and
+ * js8_text but not js8_reasm or js8_jsc, so a data frame was counted as
+ * "unrendered" and thrown away. Every "0 free text" reported from a corpus
+ * directory was therefore a property of the INSTRUMENT, not of the band - and
+ * free text is the whole of J7.
+ *
+ * A run spans slots, so the state is kept across the directory walk and the
+ * slot time comes from the file name. Files must be walked in time order,
+ * which they are: the corpus is named YYMMDD_HHMMSS and sorted.
+ */
+static js8_reasm_t g_reasm;
+static int         g_freetext_runs;
+
+/* The sender, as the firmware's ft8_screen_extract_call() finds it. Both
+ * shapes js8_text.c emits put the sender in the SECOND token: "HB <call>
+ * <grid>" and "<to> <from> <rest>". Good enough to attribute a run, and
+ * deliberately simple - a second copy of the real extractor here would be a
+ * copy to drift from. */
+static const char *sender_of(const char *text, char *buf, size_t len)
+{
+    const char *p = text;
+    while (*p && *p != ' ') p++;
+    while (*p == ' ') p++;
+    if (!*p) return NULL;
+    size_t i = 0;
+    while (p[i] && p[i] != ' ' && i + 1 < len) { buf[i] = p[i]; i++; }
+    buf[i] = 0;
+    return i ? buf : NULL;
+}
+
+/* UTC second from a corpus file name, YYMMDD_HHMMSS. Returns -1 if the name
+ * is not that shape, in which case the caller spaces the slots a period apart
+ * instead - adjacency is all the reassembler needs. */
+static int64_t slot_utc_from_name(const char *base)
+{
+    int y, mo, d, h, mi, se;
+    if (sscanf(base, "%2d%2d%2d_%2d%2d%2d", &y, &mo, &d, &h, &mi, &se) != 6)
+        return -1;
+    /* Days since the epoch, civil-from-days (Howard Hinnant). No timezone,
+     * no mktime: the name is UTC and must stay UTC. */
+    int64_t yy = 2000 + y;
+    yy -= mo <= 2;
+    int64_t era = (yy >= 0 ? yy : yy - 399) / 400;
+    int64_t yoe = yy - era * 400;
+    int64_t doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = era * 146097 + doe - 719468;
+    return days * 86400 + h * 3600 + mi * 60 + se;
+}
+
 /* ---- the decode, driven exactly as ft8_test.c drives it --------------- */
 
-static int decode_slot(const float *signal, int n, row_t *out, int max_out)
+static int decode_slot(const float *signal, int n, row_t *out, int max_out,
+                       int64_t slot_utc)
 {
     monitor_t mon;
     monitor_config_t cfg = {
@@ -230,7 +287,23 @@ static int decode_slot(const float *signal, int n, row_t *out, int max_out)
         if (!js8_frame_to_text(msg.payload, text, sizeof(text))) {
             int ft = (int)js8_frame_type(msg.payload);
             g_unrendered[ft & 7]++;
+            /* ⭐ NOT a dead end any more: an unrendered frame is a DATA frame,
+             * which is exactly what the reassembler wants. It still counts as
+             * unrendered, because that number is about js8_text.c. */
+            int hz = (int)(cands[i].freq_offset * (SR_HZ / 2) / mon.wf.num_bins);
+            js8_reasm_add(&g_reasm, slot_utc, hz, msg.payload,
+                          js8_frame_type(msg.payload), NULL);
             continue;
+        }
+        /* A rendered frame carries the callsign that will name a data run on
+         * the same offset, so it is fed too - exactly as ft8_test.c does, and
+         * for the same reason: without it every message is anonymous. */
+        {
+            char cbuf[16];
+            int hz = (int)(cands[i].freq_offset * (SR_HZ / 2) / mon.wf.num_bins);
+            js8_reasm_add(&g_reasm, slot_utc, hz, msg.payload,
+                          js8_frame_type(msg.payload),
+                          sender_of(text, cbuf, sizeof(cbuf)));
         }
 
         int dup = 0;
@@ -254,18 +327,39 @@ static void run_pair(const char *wav, const char *txt)
     int n = 0;
     if (load_slot_wav(wav, signal, SLOT_SAMPLES, &n) < 0) { g_fail++; return; }
 
+    const char *base = strrchr(wav, '/');
+    const char *b2   = strrchr(wav, '\\');
+    if (b2 > base) base = b2;
+    base = base ? base + 1 : wav;
+
+    /* One slot period per file when the name is not a corpus timestamp.
+     * Adjacency is all js8_reasm needs; the value only has to be monotonic
+     * and spaced by the period. */
+    static int64_t s_synth_utc = 0;
+    int64_t slot_utc = slot_utc_from_name(base);
+    if (slot_utc < 0) slot_utc = (s_synth_utc += 15);
+
     row_t exp[MAX_ROWS], got[MAX_ROWS];
     int n_exp = parse_expected(txt, exp, MAX_ROWS);
-    int n_got = decode_slot(signal, n, got, MAX_ROWS);
+    int n_got = decode_slot(signal, n, got, MAX_ROWS, slot_utc);
     if (n_got < 0) { g_fail++; return; }
 
     g_slots++;
     g_got_total += n_got;
 
-    const char *base = strrchr(wav, '/');
-    const char *b2   = strrchr(wav, '\\');
-    if (b2 > base) base = b2;
-    base = base ? base + 1 : wav;
+    /* Report a run only in the slot it took a frame in - the same rule the
+     * firmware's slot log follows (9f386b88), and for the same reason: a run
+     * lives JS8_REASM_TIMEOUT_SLOTS past its last frame, so printing every
+     * active run would print one message once per slot for a minute. */
+    js8_reasm_tick(&g_reasm, slot_utc);
+    for (int k = 0; k < js8_reasm_active(&g_reasm); k++) {
+        const js8_reasm_run_t *run = js8_reasm_at(&g_reasm, k);
+        if (!run || run->last_slot != slot_utc) continue;
+        char one[96];
+        if (!js8_reasm_describe(run, one, sizeof(one))) continue;
+        printf("        [free text] %s\n", one);
+        g_freetext_runs++;
+    }
 
     if (n_exp < 0) {
         printf("  %-20s  %d decoded   (no .txt - nothing to compare)\n",
@@ -410,7 +504,7 @@ static int selftest(void)
     synth_slot(signal, tones, nsps, base, spc, t0);
 
     row_t got[MAX_ROWS];
-    int n = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS);
+    int n = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS, 0);
     printf("selftest: %d decoded from a synthetic slot\n", n < 0 ? 0 : n);
     for (int i = 0; i < n; i++) printf("   %s\n", got[i].text);
 
@@ -440,7 +534,7 @@ static int selftest(void)
     frame[0] = (uint8_t)((frame[0] & 0x1Fu) | (4u << 5));
     js8_encode(frame, itype, tones);
     synth_slot(signal, tones, nsps, base, spc, t0);
-    int n2 = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS);
+    int n2 = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS, 15);
 
     int after = 0;
     for (int i = 0; i < 8; i++) after += g_unrendered[i];
@@ -460,6 +554,7 @@ static int selftest(void)
 
 int main(int argc, char **argv)
 {
+    js8_reasm_init(&g_reasm);
     /* No arguments is how tools/run_harnesses.py invokes every harness, so
      * that case has to be the useful one: prove the harness can hear a clean
      * signal, then hold the recorded corpus to its floor. Printing a usage
@@ -486,6 +581,13 @@ int main(int argc, char **argv)
     printf("slots      : %d\n", g_slots);
     printf("expected   : %d\n", g_exp_total);
     printf("decoded    : %d\n", g_got_total);
+    /* ⛔ THIS NUMBER USED NOT TO EXIST, and its absence was read as a fact
+     * about the band. The harness linked js8_message and js8_text but not
+     * js8_reasm or js8_jsc, so a data frame was counted as unrendered and
+     * dropped - and free text is the whole of J7. A zero here is now a
+     * statement about the recording; before, it was a statement about the
+     * harness. */
+    printf("free text  : %d  (runs, in the slot a frame arrived)\n", g_freetext_runs);
     printf("matched    : %d\n", g_match_total);
     printf("extra      : %d  (not a failure - the corpus is a floor)\n", g_extra_total);
     printf("\n%s\n", g_fail ? "FAIL - a decode present in the corpus was lost"
