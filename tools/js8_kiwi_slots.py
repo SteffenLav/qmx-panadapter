@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cut kiwirecorder output into JS8 slot WAVs in the corpus format.
 
-    # 1. record (from the kiwiclient checkout, NOT with python -I: it needs
-    #    png.py and mod_pywebsocket beside it)
+    # 1. record ONE CONTINUOUS FILE (from the kiwiclient checkout, NOT with
+    #    python -I: it needs png.py and mod_pywebsocket beside it)
     python kiwirecorder.py -s <host> -p <port> -f 7078 -m usb \
-        -L 200 -H 3000 --resample 12000 --dt-sec 15 -d <rawdir>
+        -L 200 -H 3000 --resample 12000 -u <call> -d <rawdir>
 
     # 2. cut
     python tools/js8_kiwi_slots.py <rawdir> --out test/wav_reference_js8_kiwi
@@ -26,12 +26,19 @@ and only then is the directory a regression floor. Until then it is input, not
 a baseline. See test/wav_reference_js8/README.md for why the floor is written
 down at all.
 
-⚠ THE SLOT GRID IS THE RECORDER'S LOCAL CLOCK, NOT THE SIGNAL. kiwirecorder's
---dt-sec cuts when the sec-of-day block changes at the moment the buffer is
-written, so network and buffer latency push every cut late by a fixed amount
-(typically under a second). That shows up as a constant DT in every decode,
-not as a lost decode. MEASURE it from the DT column of the first decodes, then
-pass --shift-ms to take it out. Do not guess the number.
+⛔ DO NOT RECORD WITH --dt-sec 15. It looks like the obvious way to get slots
+and it yields nothing. kiwirecorder starts a new file when the sec-of-day
+block changes at the moment a buffer is WRITTEN, so every file starts a
+fraction of a second late and holds about 15 s of audio straddling two slots.
+No whole UTC-aligned slot fits inside one, and this script emits zero files.
+Measured 2026-10-09: files at T135948Z (11.1 s) and T140000Z. Record one
+continuous file and let this script do the cutting.
+
+⚠ THE SLOT GRID IS THE RECORDER'S CLOCK, NOT THE SIGNAL. The file's start time
+comes from its name, at one-second resolution, and network and buffer latency
+push the true start later still. That shows up as a constant DT in every
+decode, not as a lost decode. MEASURE it from the DT column of the first
+decodes, then pass --shift-ms to take it out. Do not guess the number.
 """
 
 import argparse

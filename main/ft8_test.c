@@ -2095,17 +2095,33 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
              * fault. The detail is in /api/status. */
             char line[160];
             int off_l = snprintf(line, sizeof(line), "js8 free text:");
+            int n_new = 0;
             for (int k = 0; k < n_runs && off_l < (int)sizeof(line) - 1; k++) {
+                const js8_reasm_run_t* run = js8_reasm_at(&s_js8_reasm, k);
+                /* ⛔ Only runs that took a frame IN THIS SLOT. A run lives for
+                 * JS8_REASM_TIMEOUT_SLOTS (4 = 60 s) after its last frame, so
+                 * printing every active run re-prints a finished message once
+                 * a slot for a minute. Measured on air 2026-10-09: ONE data
+                 * frame ("1188 Hz: QSL", slot 40) appeared as four identical
+                 * lines in the capture, which reads as four messages. The
+                 * capture is the only record of an overnight fault, so a line
+                 * that repeats without a new frame is worse than no line. */
+                if (!run || run->last_slot != slot_sec) continue;
                 char one[48];
-                if (js8_reasm_describe(js8_reasm_at(&s_js8_reasm, k), one,
-                                       sizeof(one)))
+                if (js8_reasm_describe(run, one, sizeof(one))) {
                     off_l += snprintf(line + off_l, sizeof(line) - off_l,
                                       " %s", one);
+                    /* snprintf returns what it WOULD have written, so a
+                     * truncated append leaves off_l past the buffer and the
+                     * next call gets a negative size. Clamp it. */
+                    if (off_l > (int)sizeof(line) - 1) off_l = sizeof(line) - 1;
+                    n_new++;
+                }
             }
             if (dropped)
                 snprintf(line + off_l, sizeof(line) - off_l,
                          " (+%d frames dropped, event cap)", dropped);
-            ESP_LOGI(TAG, "%s", line);
+            if (n_new || dropped) ESP_LOGI(TAG, "%s", line);
         }
     }
 
