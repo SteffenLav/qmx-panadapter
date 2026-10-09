@@ -2092,6 +2092,12 @@ function freqToPixelX(freqHz, W) {
 }
 
 let lastSignalDbm = null;
+/* Frame counter for the WS S-meter trailer, so the browser samples at the same
+   1.7 Hz render.c does instead of the 1 Hz status tick that read low. */
+let wsSmeterTick = 0;
+/* When the WS trailer last drove the meter. The 1 Hz status tick stands down
+   while this is recent - see the status handler. */
+let lastSignalFromWsAt = 0;
 
 function updateClock() {
   if (!serverUtcAtTick) return;
@@ -6861,8 +6867,15 @@ async function tick() {
        device's fragile WiFi/httpd and jammed the whole web server, so it was
        reverted — stability beats a snappier meter. (If a faster meter is ever
        wanted, piggyback the dBm on the WS frame — zero extra connections.) */
-    lastSignalDbm = s.signal_dbm ?? null;
-    drawSmeter(lastSignalDbm);
+    /* ...but only while no WS frame is feeding it. The socket carries the same
+       dBm 10 times a second, so when it is up this 1 Hz value is strictly the
+       worse of the two - it is the undersampling signal_handler's own comment
+       warns about. Letting both drive the meter made it alternate between two
+       different instants, which looks like noise and is not. */
+    if (performance.now() - lastSignalFromWsAt > 3000) {
+      lastSignalDbm = s.signal_dbm ?? null;
+      drawSmeter(lastSignalDbm);
+    }
 
     /* Bottom-left: battery */
     const batt = s.battery;
@@ -9555,6 +9568,28 @@ function connectWs() {
          drawing correctly at 10 fps, which is how Dave KX3DX and the operator
          both saw it while decoding carried on perfectly. */
       lastViewAt = performance.now();
+    }
+    /* S-meter trailer: 2 bytes AFTER the bins, int16 LE, dBm x10, 0x8000 = no
+       reading. Absent on older firmware, which is why this is length-checked
+       rather than assumed - the frame is still perfectly valid without it.
+
+       Decimated to every 6th frame to match render.c's own S-meter tick (10 Hz
+       / 6 = 1.7 Hz) EXACTLY. Same source, same conversion, same cadence, so the
+       two meters now differ only in which instant they happened to catch.
+
+       ⚠ A peak-hold or EMA across the six frames would be a better meter than
+       either screen has today. It is deliberately NOT done here: doing it on
+       one screen only would re-open the very disagreement this closes. If it is
+       wanted, it has to land in render.c at the same time. */
+    if (buf.length >= HEADER_LEN + SPEC_W + 2) {
+      let sq = buf[HEADER_LEN+SPEC_W] | (buf[HEADER_LEN+SPEC_W+1] << 8);
+      if (sq & 0x8000) sq -= 0x10000;              /* signed */
+      wsSmeterTick = (wsSmeterTick + 1) % 6;
+      if (wsSmeterTick === 0) {
+        lastSignalDbm = (sq === -32768) ? null : sq / 10;
+        lastSignalFromWsAt = performance.now();
+        drawSmeter(lastSignalDbm);
+      }
     }
     const payload=buf.subarray(HEADER_LEN,HEADER_LEN+SPEC_W);
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,

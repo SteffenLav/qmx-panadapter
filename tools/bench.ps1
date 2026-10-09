@@ -745,6 +745,16 @@ function Cmd-Flash {
         # Best effort by design: no IP, no answer, or an older build without
         # the endpoint all just fall through to the flash, which is exactly
         # what used to happen every time anyway.
+        # Step timing. The operator measured 15-20 s between the Tab5 putting
+        # "Now turn on or reboot your QMX/+" on screen (i.e. prepare_for_flash
+        # has already finished) and esptool starting. Everything in that gap is
+        # condition-based with an early exit, so a guess about which step owns
+        # it is worthless - print the real numbers instead.
+        $swTotal = [Diagnostics.Stopwatch]::StartNew()
+        $swStep  = [Diagnostics.Stopwatch]::StartNew()
+        $timings = [ordered]@{}
+        $mark = { param($name) $timings[$name] = $swStep.Elapsed.TotalSeconds; $swStep.Restart() }
+
         if ($b.ip -and $b.ip -ne "UNKNOWN") {
             try {
                 Invoke-WebRequest -Uri "http://$($b.ip)/api/cmd" -Method POST `
@@ -756,7 +766,9 @@ function Cmd-Flash {
                 Write-Host "prepare_for_flash not answered ($($_.Exception.Message)) - flashing anyway." -ForegroundColor DarkYellow
             }
         }
+        & $mark "prepare_for_flash (incl. fixed 0.6 s)"
         if ($hadCapture) { Cmd-StopCapture $reg $b }
+        & $mark "stop capture"
         # Wait for the port to actually open, however the capture was stopped -
         # and even when there was no capture, since something else on this
         # machine may hold it. See Wait-PortFree for why a fixed sleep is not
@@ -765,7 +777,14 @@ function Cmd-Flash {
         if (-not (Wait-PortFree $b.com 20)) {
             Write-Host "$($b.com) still busy after 20 s - flashing anyway, esptool will say who holds it." -ForegroundColor Yellow
         }
+        & $mark "wait for $($b.com) to be released"
+        Write-Host ("Pre-flash took {0:N1}s:" -f $swTotal.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+        foreach ($k in $timings.Keys) {
+            Write-Host ("    {0,6:N1}s  {1}" -f $timings[$k], $k) -ForegroundColor DarkGray
+        }
         $rc = Invoke-Idf $reg $b.tree (Get-IdfArgs $b @("-p", $b.com, "flash"))
+        & $mark "esptool"
+        Write-Host ("esptool took {0:N1}s" -f $timings["esptool"]) -ForegroundColor DarkGray
         if ($rc -ne 0) { Write-Host "Flash FAILED (exit $rc)" -ForegroundColor Red }
     } finally {
         # Restarting the capture is a finally block, not a step - the crash you

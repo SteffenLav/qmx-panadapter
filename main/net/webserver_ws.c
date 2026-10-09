@@ -1,6 +1,7 @@
 #include "webserver_ws.h"
 
 #include <string.h>
+#include <math.h>        // lroundf - the S-meter trailer
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -78,7 +79,29 @@
  * 22 extra bytes on a 1026-byte frame, 10 times a second: 1.8 kbit/s. */
 #define WS_HEADER_LEN           24
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
-#define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
+
+/* S-meter TRAILER - two bytes AFTER the spectrum bins, not in the header.
+ *
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN .. +1]  signal dBm x10, int16 little-endian
+ *                                           (0x8000 = no reading)
+ *
+ * ⛔ It goes at the END on purpose. Growing the HEADER would move the payload,
+ * and a browser still running a cached index.html with the old HEADER_LEN
+ * passes its own length check, then reads the bins two bytes off and draws a
+ * shifted spectrum. Appending instead leaves every existing offset alone: the
+ * old page's `buf.length < HEADER_LEN + SPEC_W` still passes, its
+ * subarray(HEADER_LEN, HEADER_LEN + SPEC_W) is unchanged, and the two extra
+ * bytes are simply never looked at.
+ *
+ * Why it is here at all: the browser's S-meter was drawn from the 1 Hz
+ * /api/status tick, which undersamples a fluctuating signal and reads low -
+ * signal_handler's own comment says so. A faster /api/signal poller was tried
+ * and jammed httpd with extra connections, so it was reverted. This frame is
+ * already going out 10 times a second; two more bytes on 1026 is 1.6 kbit/s
+ * and costs no new connection. */
+#define WS_TRAILER_LEN          2
+#define WS_SIGNAL_NONE          ((int16_t)0x8000)
+#define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN + WS_TRAILER_LEN)
 
 static inline void ws_put_u32(uint8_t *p, uint32_t v)
 {
@@ -562,6 +585,32 @@ static void ws_push_task(void *arg)
             else if (db > WS_DB_MAX) db = WS_DB_MAX;
             int q = (int)((db - WS_DB_MIN) * scale + 0.5f);
             s_payload[WS_HEADER_LEN + i] = (uint8_t)q;
+        }
+
+        /* S-meter trailer. The SAME dsp call, bin and width the Tab5's own
+         * meter uses (render.c) and that status_handler reports, so the browser
+         * and the glass cannot be reading different numbers - which is exactly
+         * what they were doing, and what the operator reported on 2026-10-09.
+         *
+         * Sent raw, in 0.1 dB. The dBm -> S-unit conversion stays in ONE place
+         * per screen and the wire carries the measurement, not a rendering. */
+        {
+            float    sig_dbm = 0.0f;
+            int16_t  sig_q   = WS_SIGNAL_NONE;
+            int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE)
+                           + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+            if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &sig_dbm) == ESP_OK) {
+                long v = lroundf(sig_dbm * 10.0f);
+                /* Clamp clear of the no-reading sentinel: -3276.8 dBm is not a
+                   signal level anything can produce, but a sentinel that can
+                   collide with a real value is a bug waiting for the one input
+                   that produces it. */
+                if (v < -32767) v = -32767;
+                if (v >  32767) v =  32767;
+                sig_q = (int16_t)v;
+            }
+            s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN]     = (uint8_t)((uint16_t)sig_q);
+            s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 1] = (uint8_t)(((uint16_t)sig_q) >> 8);
         }
 
         // Budget for finishing a frame we are already committed to. Deliberately
