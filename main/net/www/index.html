@@ -1132,6 +1132,22 @@
              ordering, so clicking any header does not leave the operator
              wondering how to get the CQ-callers-on-top view back. -->
         <a href="#" id="dec-order-reset" style="color:var(--dim); display:none">↺ CQ callers on top</a>
+        <!-- JS8 only. The Tab5's JS8 screen carries exactly these two tabs, and
+             ⭐ Conversation is the DEFAULT there: it is the only view that can
+             show what a station actually SAID, and Stations is one tap away.
+             Hidden in FT8/FT4, which have no conversation to show. -->
+        <span id="js8-tabs" style="display:none; margin-left:auto;">
+          <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
+          <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
+        </span>
+      </div>
+      <!-- The conversation grid, composed by the DEVICE (js8_page_render, the
+           same function the glass draws) and only painted here. Newest at the
+           top, age rather than a wall clock, the flag column first - all of
+           that is js8_page.c's and is not repeated in JavaScript. -->
+      <div id="js8-conv" style="display:none; border:1px solid #333; border-radius:6px; background:#000; padding:8px 10px;">
+        <pre id="js8-screen" style="margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:14px; line-height:1.2; white-space:pre;"></pre>
+        <div id="js8-conv-hint" style="color:var(--dim); font-size:12px; margin-top:6px;"></div>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <!-- Monospace, matching the Tab5 (Gyula HA3HZ: "the font of the reception
@@ -4520,6 +4536,14 @@ const SET_FIELDS = [
      version exists, which is the part nobody wanted to lose; it just waits
      for you to ask before spending 3.3 MB. Applying an update is a separate,
      always-deliberate press either way. */
+  /* Beside WiFi, not under a Device heading, and the Tab5 drawer places it
+     the same way for the same reason: "should this thing download 3.3 MB on
+     my hotspot" is a question about what the network connection does unasked,
+     and the people who asked for the switch would not have found it filed
+     under Expert. It downloads only - it never applies an update (#239).
+     ⚠ It was in the drawer and nowhere on the web until the parity sweep. */
+  ["WiFi", "ota_autodl", "bool", "Download updates in the background",
+   "Fetches a new release quietly when one appears. It is never installed on its own."],
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
   /* Randy N4OPI, 2026-09-23: he runs a DMZ network alongside a home LAN, both
@@ -5862,6 +5886,123 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
   await sendCmd({ action: "reply", call: call });
 })
 
+/* ───────────────────────── JS8 conversation pane ───────────────────────────
+   Parity with the Tab5's JS8 screen, which carries two tabs over the same
+   right-hand pane: Stations (the decode table this page has always had) and
+   Conversation. ⭐ Conversation is the DEFAULT in JS8 on the glass, because it
+   is the only view that can show what a station actually SAID, so it is the
+   default here too.
+
+   The grid comes from /api/js8 already composed by js8_page_render() - the
+   same function the Tab5 draws. Laying it out here would be a second copy of
+   decisions that were argued out once (newest at the top, age not a wall
+   clock, the flag column first so live and truncated marks line up).
+
+   ⛔ Rows are tappable and the row -> message map comes FROM THE DEVICE. A
+   message can wrap onto several rows, so a tap cannot be turned into a message
+   by arithmetic - the glass asks for the map for exactly this reason. */
+let js8Tab = "conv";      // the Tab5's default in JS8
+let js8Timer = null;
+let js8Senders = [];
+let js8Shown = "";   // the grid currently painted - see js8Poll()
+
+function js8Esc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Show the tabs only in JS8, and only ever one pane at a time. Called from the
+   status poll, so switching the Tab5's mode from anywhere updates this page. */
+function js8TabsSync(proto) {
+  const isJs8 = (proto === "JS8");
+  document.getElementById("js8-tabs").style.display = isJs8 ? "" : "none";
+  const conv = document.getElementById("js8-conv");
+  const tbl  = document.getElementById("dec-table").parentElement;
+  const showConv = isJs8 && js8Tab === "conv";
+  conv.style.display = showConv ? "" : "none";
+  tbl.style.display  = showConv ? "none" : "";
+  /* ⭐ The glass HIDES the Stations column header in conversation view
+     (s_col_hdr, ft8_screen_view.c) and lets the tab bar name the pane. Do the
+     same: "Decode list - nothing heard yet" over a conversation is a heading
+     describing the pane that is not on screen. */
+  for (const id of ["dec-title", "dec-count", "dec-rx", "dec-order-reset"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (showConv) { el.dataset.js8Hid = "1"; el.style.visibility = "hidden"; }
+    else if (el.dataset.js8Hid) { delete el.dataset.js8Hid; el.style.visibility = ""; }
+  }
+  for (const [id, want] of [["js8-tab-conv", "conv"], ["js8-tab-stn", "stn"]]) {
+    const b = document.getElementById(id);
+    b.style.opacity = (js8Tab === want) ? "1" : "0.55";
+  }
+  if (showConv) {
+    if (!js8Timer) { js8Poll(); js8Timer = setInterval(js8Poll, 1000); }
+  } else if (js8Timer) {
+    clearInterval(js8Timer); js8Timer = null;
+  }
+}
+
+async function js8Poll() {
+  let j;
+  try { j = await (await fetch("/api/js8", { cache: "no-store" })).json(); }
+  catch (e) { return; }   /* a dropped poll retries */
+
+  const pre  = document.getElementById("js8-screen");
+  const hint = document.getElementById("js8-conv-hint");
+  if (j.mode !== "js8") {
+    js8Shown = "";
+    pre.textContent = "";
+    hint.textContent = "The Tab5 is not in JS8.";
+    return;
+  }
+  js8Senders = j.senders || [];
+  const rowMsg = j.row_msg || [];
+  /* ⛔ Do not rebuild an unchanged grid. This polls once a second, and
+     replacing innerHTML drops whatever the operator had selected to copy -
+     a callsign or a message is exactly what they select. (The glass caches
+     for a different reason, internal-heap churn; the effect to avoid here is
+     the selection.) */
+  const stamp = JSON.stringify(j.lines) + "|" + JSON.stringify(rowMsg);
+  if (stamp === js8Shown) { js8Hint(j); return; }
+  js8Shown = stamp;
+  /* Each row carries the message it belongs to, so a click can be resolved
+     without re-deriving it. data-mi = -1 for a row with no message. */
+  pre.innerHTML = (j.lines || []).map((t, r) => {
+    const mi = (r < rowMsg.length) ? rowMsg[r] : -1;
+    const who = (mi >= 0 && mi < js8Senders.length) ? js8Senders[mi] : "";
+    const tap = who ? ' style="cursor:pointer"' : "";
+    return '<span data-mi="' + mi + '" data-call="' + js8Esc(who) + '"' + tap + '>'
+         + js8Esc(t || " ") + "</span>";
+  }).join("\n");
+  js8Hint(j);
+}
+
+function js8Hint(j) {
+  document.getElementById("js8-conv-hint").textContent = j.count
+    ? "Tap a line to reply to that station. " + j.count + " in the store."
+    : "Nothing decoded yet. Heartbeats and directed messages appear here too, not only free text.";
+}
+
+document.getElementById("js8-tab-conv").addEventListener("click", () => {
+  js8Tab = "conv"; js8TabsSync("JS8");
+});
+document.getElementById("js8-tab-stn").addEventListener("click", () => {
+  js8Tab = "stn"; js8TabsSync("JS8");
+});
+
+/* Same gesture, and the same command, as clicking a row in the decode list -
+   the glass resolves a conversation tap to the Stations row with that callsign
+   and activates it, so both surfaces do one thing. ⚠ A free-text run that was
+   never attributed has no callsign (the sender reads "- - -"), and there is
+   nothing to reply to: the row simply does not respond. */
+document.getElementById("js8-screen").addEventListener("click", async (e) => {
+  const sp = e.target.closest("span[data-call]");
+  if (!sp) return;
+  const call = sp.getAttribute("data-call");
+  if (!call) return;
+  document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
+  await sendCmd({ action: "reply", call: call });
+});
+
 /* =====================================================================
    Help: guidance rows + the built-in manual, both served by the Tab5
 
@@ -6520,6 +6661,12 @@ async function tick() {
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
+
+    /* The JS8 tabs follow the DEVICE's mode, not a click on this page: the
+       operator can switch the Tab5 from the glass, from the drawer or from
+       here, and the pane must not go on offering a conversation that the
+       radio is no longer decoding. */
+    js8TabsSync(lastFtProto);
 
     /* The Pause button has to SHOW the pause, not just set it - it shipped
        without this and the operator caught it immediately ("clicking the web

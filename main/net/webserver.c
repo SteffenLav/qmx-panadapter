@@ -25,6 +25,7 @@
 #include "ui/gps_status_view.h" // the dev "gps_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
+#include "ui/js8_page.h"   // the conversation grid, composed for /api/js8
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
@@ -4683,6 +4684,95 @@ static const httpd_uri_t uri_gps = {
     .uri = "/api/gps", .method = HTTP_GET, .handler = gps_get_handler,
 };
 
+/* GET /api/js8 - the JS8 conversation pane, as the GLASS composes it.
+ *
+ * ⭐ Same rule as /api/gps: js8_page_render() draws the grid, here and on the
+ * Tab5, and the browser only paints it. The JS8 screen's own layout notes -
+ * newest at the TOP, age not a wall clock, the flag column first so live and
+ * truncated marks line up down the left edge - are decisions that belong in
+ * one place, and that place is js8_page.c.
+ *
+ * `row_msg` rides along because A MESSAGE CAN WRAP ONTO SEVERAL ROWS: a tap at
+ * row r cannot be turned into a message by arithmetic, which is exactly why
+ * the glass asks for the map rather than computing it. The browser needs it
+ * for the same reason - the operator taps a row, not a message index.
+ *
+ * `mode` is the device's own word for what is running. When it is not JS8
+ * there is no conversation, and the browser says so rather than drawing an
+ * empty grid that reads as a decoder with nothing to show.
+ */
+static esp_err_t js8_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+
+    bool is_js8 = (ft8_op_mode_get() == FT8_OP_MODE_JS8);
+    cJSON_AddStringToObject(root, "mode", is_js8 ? "js8" : "other");
+    cJSON_AddNumberToObject(root, "cols", JS8_PAGE_COLS);
+    cJSON_AddNumberToObject(root, "rows", JS8_PAGE_ROWS);
+
+    if (is_js8) {
+        /* ⛔ PSRAM, not .bss and not this stack. The grid plus the message
+         * snapshot is about 4 kB; internal .bss comes out of the DMA pool and
+         * 4 kB on the HTTPD stack is the stack-protection fault this task
+         * already took once. Same note as gps_get_handler(). */
+        typedef struct {
+            char           lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1];
+            int            row_msg[JS8_PAGE_ROWS];
+            js8_chat_msg_t msgs[JS8_CHAT_MAX_MSGS];
+        } js8_api_scratch_t;
+
+        js8_api_scratch_t *sc = heap_caps_malloc(sizeof(*sc),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!sc) { cJSON_Delete(root); return httpd_resp_send_500(req); }
+
+        int n = js8_chat_count();
+        if (n > JS8_CHAT_MAX_MSGS) n = JS8_CHAT_MAX_MSGS;
+        int have = 0;
+        for (int i = 0; i < n; i++)
+            if (js8_chat_at(i, &sc->msgs[have])) have++;
+
+        /* AGE is measured against the CALLER's clock - js8_page.c has none,
+         * and the glass passes the same system time. */
+        int64_t now_utc = (int64_t)time(NULL);
+        int used = js8_page_render(sc->msgs, have, now_utc, sc->lines, sc->row_msg);
+
+        cJSON_AddNumberToObject(root, "used", used);
+        cJSON_AddNumberToObject(root, "count", have);
+
+        cJSON *lines = cJSON_AddArrayToObject(root, "lines");
+        for (int r = 0; lines && r < JS8_PAGE_ROWS; r++) {
+            int e = JS8_PAGE_COLS;
+            while (e > 0 && sc->lines[r][e - 1] == ' ') e--;
+            sc->lines[r][e] = 0;
+            cJSON_AddItemToArray(lines, cJSON_CreateString(sc->lines[r]));
+        }
+        cJSON *rmap = cJSON_AddArrayToObject(root, "row_msg");
+        for (int r = 0; rmap && r < JS8_PAGE_ROWS; r++)
+            cJSON_AddItemToArray(rmap, cJSON_CreateNumber(sc->row_msg[r]));
+
+        /* The senders, indexed the same way row_msg points, so a tap can name
+         * the station it would target without a second request. */
+        cJSON *who = cJSON_AddArrayToObject(root, "senders");
+        for (int i = 0; who && i < have; i++)
+            cJSON_AddItemToArray(who, cJSON_CreateString(sc->msgs[i].sender));
+
+        heap_caps_free(sc);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_js8 = {
+    .uri = "/api/js8", .method = HTTP_GET, .handler = js8_get_handler,
+};
+
 // GET /api/upload_status — check result of last QRZ or eQSL upload
 static esp_err_t upload_status_handler(httpd_req_t *req)
 {
@@ -7337,6 +7427,7 @@ esp_err_t webserver_start(void)
     reg(&uri_log);
     reg(&uri_log_saved);
     reg(&uri_gps);
+    reg(&uri_js8);
     reg(&uri_adif_get);
     reg(&uri_rxaudio_wav);
     reg(&uri_slot_wav);
