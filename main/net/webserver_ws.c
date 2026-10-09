@@ -1,4 +1,5 @@
 #include "webserver_ws.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 
 #include <string.h>
 #include <math.h>        // lroundf - the S-meter trailer
@@ -148,7 +149,10 @@ static httpd_handle_t volatile s_server   = NULL;
 static int            volatile s_ws_fd    = -1;
 static volatile bool           s_session_active = false;
 
-static float          s_spec[DSP_FFT_SIZE];
+/* PSRAM: 4 KB of internal .bss for the spectrum the WebSocket pushes at a
+ * handful of frames a second. Written and read only by the push path -
+ * no DMA, no ISR. */
+static EXT_RAM_BSS_ATTR float s_spec[DSP_FFT_SIZE];
 
 // WS wire buffer: the RFC 6455 header is built directly IN FRONT of the payload
 // so header and body leave as ONE contiguous send. A split between them is one of

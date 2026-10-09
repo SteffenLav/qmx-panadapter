@@ -133,7 +133,11 @@ void factory_reset_apply_pending(void)
         // plain erase of the whole partition takes the WiFi credentials and
         // static IP with it, despite the button's own tooltip promising they
         // are kept. Save them first and write them straight back.
-        static wifi_saved_t wifi_saved[WIFI_KEY_N];
+        /* PSRAM: 5960 bytes of internal .bss for a buffer touched only
+         * during a factory reset, on a board whose internal heap idles
+         * under 30 KB. Nothing here is DMA or ISR - it is an NVS blob
+         * read and written back by the same function. */
+        static EXT_RAM_BSS_ATTR wifi_saved_t wifi_saved[WIFI_KEY_N];
         bool have_wifi = wifi_keys_read_all(wifi_saved);
 
         esp_err_t err = nvs_flash_erase_partition("user_nvs");

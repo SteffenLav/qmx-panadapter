@@ -1,4 +1,5 @@
 #include "diag_log.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 
 #include <string.h>
 #include <stdarg.h>
@@ -325,7 +326,10 @@ static void diag_persist_task(void *arg)
     }
     long pos = ftell(f);
     size_t bytes = (pos > 0) ? (size_t)pos : 0;
-    static char buf[2048];
+    /* PSRAM: a stdio read buffer for the diagnostic log, used when the
+     * operator asks for the file. FATFS does its own DMA into its own
+     * window; this is the destination of a plain fread. */
+    static EXT_RAM_BSS_ATTR char buf[2048];
     int  fail_streak = 0;
 
     for (;;) {

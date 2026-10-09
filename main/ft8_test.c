@@ -37,6 +37,7 @@
 // only way to hear the station we're working (they transmit opposite us).
 
 #include "ft8_test.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "ft8_slot_gate.h"
 
 #include <stdio.h>
@@ -120,7 +121,10 @@ static volatile bool          s_op_mode_loaded = false;   // lazy NVS load, once
 /* JS8 free-text reassembly state (J7). Touched ONLY from decode_slot's merge
  * point, which is single-threaded, and read by the status handler - see the
  * note at the merge for why it is not fed from the candidate loop. */
-static js8_reasm_t   s_js8_reasm;
+/* PSRAM: 2168 bytes of internal .bss, touched once per slot at the merge
+ * and by the status handler. Nothing on a DMA or ISR path, and internal
+ * RAM is this board's scarce resource - see the audio.c note. */
+static EXT_RAM_BSS_ATTR js8_reasm_t s_js8_reasm;
 
 void ft8_op_mode_set(ft8_op_mode_t m)
 {
@@ -1966,7 +1970,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // mutex-protected decode list. r_worker is static (one helper, one slot at a
     // time); r_main is a stack local. We block on the done semaphore before reading
     // r_worker, so neither result struct is ever touched concurrently.
-    static decode_result_t r_worker;
+    /* PSRAM, 2008 bytes: written by the core-0 worker a few times per slot
+     * (once per decoded candidate), never per sample, and read only after
+     * the join. r_main stays on the stack, which is already 64 KB. */
+    static EXT_RAM_BSS_ATTR decode_result_t r_worker;
     decode_result_t r_main;
 
     worker_job_t job = {

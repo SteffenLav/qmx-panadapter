@@ -540,10 +540,23 @@ static inline int32_t s24_to_s32(const uint8_t *p)
 // frames are not happening and the mirror images have another cause.
 static bool process_rx(void)
 {
+    /* ⭐ BOTH IN PSRAM. These two were the largest internal-RAM statics in the
+     * whole firmware - 19200 + 12804 = 31 KB of a 185 KB internal .bss - on a
+     * board that idles with under 30 KB of internal heap free and prints its
+     * own "WiFi & USB crash risk < 16KB" warning.
+     *
+     * ⛔ SAFE BECAUSE NO DMA TOUCHES THEM, and that was checked rather than
+     * assumed: uac_host_device_read() is `_ring_buffer_pop(iface->ringbuf,
+     * data, size, ...)` (uac_host.c:2555), a memcpy out of the driver's own
+     * ring buffer into whatever pointer we hand it. `decoded` is ours alone.
+     * The USB controller writes the driver's buffer, never these.
+     *
+     * The cost is a PSRAM memcpy of about 19 KB per poll - roughly 2 MB/s at
+     * this poll rate, against PSRAM bandwidth in the hundreds of MB/s. */
     // Raw 24-bit packed bytes from the QMX
-    static uint8_t raw[RX_BUF_BYTES];
+    static EXT_RAM_BSS_ATTR uint8_t raw[RX_BUF_BYTES];
     // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
-    static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
+    static EXT_RAM_BSS_ATTR int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
 
     // Whether this call moved any audio at all. NOT simply "the last read
     // returned data": the drain loop always ends on an empty read, so a healthy
