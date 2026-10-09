@@ -179,6 +179,30 @@ int ft8_op_mode_slot_ms(void);
  * logged under the wrong mode is a wrong record, not a cosmetic slip. */
 const char *ft8_op_mode_name(void);
 
+/* ---- JS8 free text, as far as it can be taken (J7) ---------------------
+ *
+ * ⛔ THERE IS NO TEXT HERE AND THERE CANNOT BE. A JS8 data frame's 70 bits
+ * decode only against the table they were packed with - a 44-entry Huffman
+ * alphabet, or JSC's 262144-word index - and both live solely in JS8Call,
+ * which is GPL-3 while this project is MIT. A word list is data, not a design
+ * idea, so a reimplementation cannot reach the same indices. See
+ * js8_reasm.h and docs/js8-feasibility.md J7.
+ *
+ * What IS available: who is sending free text, on what offset, how many
+ * frames and for how long. Before this the frames were dropped without trace,
+ * so a band busy with JS8 chat looked idle. */
+typedef struct {
+    char    sender[16];     /* "" when the run was never identified */
+    int     freq_hz;
+    int     frames;         /* frames SEEN, including any beyond the store */
+    int     secs;           /* how long the run has been going */
+    bool    compressed;     /* the coding its first frame declared */
+    bool    truncated;      /* more frames arrived than are kept */
+} ft8_js8_freetext_t;
+
+int  ft8_js8_freetext_count(void);
+bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out);
+
 /* ---- Slot-audio capture (the JS8/FT8 reference corpus, M1) --------------
  *
  * There are 35 reference WAVs for FT8 in test/wav_reference and ZERO for JS8,

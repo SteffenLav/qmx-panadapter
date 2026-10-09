@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>   /* size_t, for js8_reasm_describe */
 
 #include "js8_message.h"
 

@@ -10,6 +10,7 @@ idf_component_register(
         "ft8/encode.c"
         "ft8/js8_codec.c"
         "ft8/js8_message.c"
+        "ft8/js8_reasm.c"
         "ft8/js8_tables.c"
         "ft8/js8_text.c"
         "ft8/ldpc.c"

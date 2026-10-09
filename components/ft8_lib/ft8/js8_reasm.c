@@ -7,6 +7,18 @@
  * not: it never produces text, because the coding tables are GPL-3 and this
  * project is MIT. */
 
+/* Both sides of this copy live inside the same js8_reasm_t, so snprintf is
+ * rejected under -Werror=restrict: the compiler cannot prove the source and
+ * destination do not overlap. They never do - ident[] and runs[] are
+ * different arrays - but a bounded copy is the right answer anyway. */
+static void copy_call(char *dst, size_t dst_len, const char *src)
+{
+    size_t i = 0;
+    if (!dst || dst_len == 0) return;
+    if (src) for (; i + 1 < dst_len && src[i]; i++) dst[i] = src[i];
+    dst[i] = 0;
+}
+
 static int freq_near(int a, int b)
 {
     int d = a - b;
@@ -120,7 +132,7 @@ bool js8_reasm_add(js8_reasm_t* r, int64_t slot_utc, int freq_hz,
         run->first_slot = slot_utc;
         run->compressed = compressed;
         const char* id = lookup_ident(r, freq_hz);
-        if (id) snprintf(run->sender, sizeof(run->sender), "%s", id);
+        if (id) copy_call(run->sender, sizeof(run->sender), id);
     }
     else if (compressed != run->compressed) {
         /* ⚠ Both codings in one transmission. JS8Call picks per frame -
@@ -144,7 +156,7 @@ bool js8_reasm_add(js8_reasm_t* r, int64_t slot_utc, int freq_hz,
      * while it was already open. */
     if (!run->sender[0]) {
         const char* id = lookup_ident(r, freq_hz);
-        if (id) snprintf(run->sender, sizeof(run->sender), "%s", id);
+        if (id) copy_call(run->sender, sizeof(run->sender), id);
     }
     return true;
 }

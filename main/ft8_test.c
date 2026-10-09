@@ -60,6 +60,7 @@
 #include "ft8/constants.h"
 #include "ft8/encode.h"
 #include "ft8/js8_text.h"
+#include "ft8/js8_reasm.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
@@ -115,6 +116,11 @@ static ftx_protocol_t proto_for_mode(void);
 static volatile ft8_op_mode_t s_op_mode = FT8_OP_MODE_FT8;
 static volatile bool          s_op_mode_loaded = false;   // lazy NVS load, once
 
+/* JS8 free-text reassembly state (J7). Touched ONLY from decode_slot's merge
+ * point, which is single-threaded, and read by the status handler - see the
+ * note at the merge for why it is not fed from the candidate loop. */
+static js8_reasm_t   s_js8_reasm;
+
 void ft8_op_mode_set(ft8_op_mode_t m)
 {
 #if FT4_MODE_DISABLED
@@ -152,7 +158,13 @@ void ft8_op_mode_set(ft8_op_mode_t m)
     if (changed) {
         ft8_screen_clear();
         ft8_pileup_clear();
-        ESP_LOGI(TAG, "sub-mode changed - decode list and pileup cleared");
+        /* The free-text runs go with them. A run is keyed by audio offset, and
+         * an offset means something different under a different sub-mode - so
+         * leaving them would show FT4 traffic as a JS8 station still sending,
+         * the same class of mistake as leaving the decode list up. */
+        js8_reasm_init(&s_js8_reasm);
+        ESP_LOGI(TAG, "sub-mode changed - decode list, pileup and JS8 "
+                      "free-text runs cleared");
     }
 }
 
@@ -500,6 +512,22 @@ static void note_tx_slot(int64_t slot_sec, int slot_index)
 // the streaming STFT during capture; not needed once the waterfall is built, so
 // one buffer serves every slot (capture is strictly sequential).
 static float        *s_cap_scratch = NULL;
+
+
+int ft8_js8_freetext_count(void) { return js8_reasm_active(&s_js8_reasm); }
+
+bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out)
+{
+    const js8_reasm_run_t *run = js8_reasm_at(&s_js8_reasm, i);
+    if (!run || !out) return false;
+    snprintf(out->sender, sizeof(out->sender), "%s", run->sender);
+    out->freq_hz    = run->freq_hz;
+    out->frames     = run->n_seen;
+    out->secs       = (int)(run->last_slot - run->first_slot) + 15;
+    out->compressed = run->compressed;
+    out->truncated  = run->overflowed;
+    return true;
+}
 
 /* ---- Slot-audio capture (M1: the JS8 reference corpus) ------------------
  *
@@ -998,6 +1026,12 @@ static void reinit_pool_if_mode_changed(void)
 // ft8_screen_record_decode is mutex-protected, so the two run safely against
 // one shared monitor. See decode_slot for the fan-out/join.
 // ---------------------------------------------------------------------------
+/* Per-range JS8 frame events kept for the reassembler. A slot holds at most a
+ * handful of JS8 signals; this is sized well above that so the cap is a
+ * backstop rather than a limit in normal traffic, and an overrun is counted
+ * (js8ev_dropped) rather than dropped silently. */
+#define FT8_JS8_MAX_EVENTS 24
+
 typedef struct {
     int   n_decoded;
     int   n_attempted;
@@ -1017,6 +1051,27 @@ typedef struct {
        in the decode loop. decode_slot() skips its own end-of-slot advance when
        it is set, so advance() runs exactly ONCE per slot either way. */
     bool  early_advanced;
+
+    /* ---- JS8 frames for the free-text reassembler (J7) -------------------
+     *
+     * ⛔ RECORDED HERE RATHER THAN FED STRAIGHT IN, because the candidate loop
+     * runs on TWO threads: the decode task and its core-0 worker, each with
+     * its own decode_result_t (r_main / r_worker). js8_reasm_t is a single
+     * shared state machine with no lock, so touching it from the loop would
+     * be a data race on a structure the screen reads. Events are collected
+     * per range and drained at the merge, which is single-threaded.
+     *
+     * Both data and non-data JS8 frames go in. The non-data ones carry the
+     * callsign that names a later data run - a data frame has none - so
+     * filtering them out here would make every free-text message anonymous. */
+    struct {
+        int              freq_hz;
+        js8_frame_type_t type;
+        char             call[FT8_CALL_MAX_LEN];   /* "" for a data frame */
+        uint8_t          frame[JS8_FRAME_BYTES];
+    } js8ev[FT8_JS8_MAX_EVENTS];
+    int   n_js8ev;
+    int   js8ev_dropped;
 } decode_result_t;
 
 typedef struct {
@@ -1335,6 +1390,20 @@ static float ft8_estimate_snr_db(const monitor_t *mon, const ftx_candidate_t *ca
  * (both call sites write and discard), so the JS8 branch leaves them cleared
  * rather than inventing field positions - if a caller ever starts reading
  * them, an empty map is a visible gap, not a wrong one. */
+/* Record one JS8 frame for the free-text reassembler. See the js8ev note in
+ * decode_result_t for why this stores instead of feeding js8_reasm directly. */
+static void js8ev_record(decode_result_t *out, int freq_hz,
+                         js8_frame_type_t type, const char *call,
+                         const uint8_t *payload)
+{
+    if (out->n_js8ev >= FT8_JS8_MAX_EVENTS) { out->js8ev_dropped++; return; }
+    int k = out->n_js8ev++;
+    out->js8ev[k].freq_hz = freq_hz;
+    out->js8ev[k].type    = type;
+    snprintf(out->js8ev[k].call, sizeof(out->js8ev[k].call), "%s", call ? call : "");
+    memcpy(out->js8ev[k].frame, payload, JS8_FRAME_BYTES);
+}
+
 static bool decode_msg_to_text(const ftx_message_t *msg, ftx_protocol_t proto,
                                char *text, size_t text_len,
                                ftx_message_offsets_t *off)
@@ -1513,7 +1582,25 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
-        if (decode_msg_to_text(&msg, mon->wf.protocol, text, sizeof(text), &off)) {
+        /* ONE call, deliberately: decode_msg_to_text() runs the message
+         * unpackers, and calling it twice to get at both branches would pay
+         * that twice per candidate inside a loop that already has a
+         * FT8_DECODE_BUDGET_MS ceiling. */
+        bool rendered = decode_msg_to_text(&msg, mon->wf.protocol, text,
+                                           sizeof(text), &off);
+        if (!rendered && mon->wf.protocol == FTX_PROTOCOL_JS8 &&
+            js8_frame_is_data(js8_frame_type(msg.payload))) {
+            /* ⭐ A JS8 DATA FRAME LANDS HERE, and until now that was the end
+             * of it: the frame passed CRC-12, carried somebody's free text,
+             * and was discarded without trace. It has no renderer because the
+             * coding tables are GPL-3 and this project is MIT (see
+             * js8_reasm.h), but it can still be counted and attributed. */
+            int dfreq = (int)lroundf((mon->min_bin + cands[i].freq_offset) /
+                                     mon->symbol_period);
+            js8ev_record(out, dfreq, js8_frame_type(msg.payload), NULL,
+                         msg.payload);
+        }
+        if (rendered) {
             out->n_decoded++;
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
@@ -1572,6 +1659,16 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             // symbol_period). Omitting this put every recorded/replied tone off by
             // mon->min_bin*6.25 (200 Hz) plus a ~6.25x scale error.
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
+            /* A JS8 frame that DID render carries the callsign that will name
+             * a later data run on this offset. ft8_screen_extract_call gives
+             * the sender for both shapes the renderer emits ("HB <call> ..."
+             * and "<to> <from> <rest>"). */
+            if (mon->wf.protocol == FTX_PROTOCOL_JS8) {
+                char jcall[FT8_CALL_MAX_LEN];
+                if (!ft8_screen_extract_call(text, jcall, sizeof(jcall))) jcall[0] = 0;
+                js8ev_record(out, freq_hz, js8_frame_type(msg.payload),
+                             jcall, msg.payload);
+            }
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
             if (!sim_suppresses_real) {
@@ -1942,6 +2039,57 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
     int n_attempted = r_main.n_attempted + r_worker.n_attempted;
     int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
+
+    /* ---- JS8 free-text reassembly (J7) ---------------------------------
+     *
+     * HERE and not in the candidate loop: both halves of the decode run
+     * concurrently and js8_reasm_t has no lock. This point is after the join,
+     * so it is the first place the two ranges' events can be merged safely.
+     *
+     * ⚠ ORDER MATTERS WITHIN A SLOT. Every non-data frame must be fed before
+     * the data frames of the same slot, or a station that identifies itself
+     * and then sends text in the SAME slot starts an anonymous run. The two
+     * ranges' events are therefore swept twice - identifications first - and
+     * not merged in arrival order. */
+    if (proto_for_mode() == FTX_PROTOCOL_JS8) {
+        const decode_result_t *ranges[2] = { &r_main, &r_worker };
+        for (int pass = 0; pass < 2; pass++) {
+            for (int rr = 0; rr < 2; rr++) {
+                for (int k = 0; k < ranges[rr]->n_js8ev; k++) {
+                    bool is_data = js8_frame_is_data(ranges[rr]->js8ev[k].type);
+                    if ((pass == 0) == is_data) continue;   /* pass 0 = idents */
+                    js8_reasm_add(&s_js8_reasm, slot_sec,
+                                  ranges[rr]->js8ev[k].freq_hz,
+                                  ranges[rr]->js8ev[k].frame,
+                                  ranges[rr]->js8ev[k].type,
+                                  ranges[rr]->js8ev[k].call[0]
+                                      ? ranges[rr]->js8ev[k].call : NULL);
+                }
+            }
+        }
+        js8_reasm_tick(&s_js8_reasm, slot_sec);
+
+        int n_runs = js8_reasm_active(&s_js8_reasm);
+        int dropped = r_main.js8ev_dropped + r_worker.js8ev_dropped;
+        if (n_runs || dropped) {
+            /* One line, not one per run: this is per-slot log volume on a
+             * board whose capture file is the only record of an overnight
+             * fault. The detail is in /api/status. */
+            char line[160];
+            int off_l = snprintf(line, sizeof(line), "js8 free text:");
+            for (int k = 0; k < n_runs && off_l < (int)sizeof(line) - 1; k++) {
+                char one[48];
+                if (js8_reasm_describe(js8_reasm_at(&s_js8_reasm, k), one,
+                                       sizeof(one)))
+                    off_l += snprintf(line + off_l, sizeof(line) - off_l,
+                                      " %s", one);
+            }
+            if (dropped)
+                snprintf(line + off_l, sizeof(line) - off_l,
+                         " (+%d frames dropped, event cap)", dropped);
+            ESP_LOGI(TAG, "%s", line);
+        }
+    }
 
     // Merge both halves' timing samples, then robust (outlier-rejecting) average
     // into the system-clock error estimate. Positive = clock fast; negative = slow.
