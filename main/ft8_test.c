@@ -850,6 +850,23 @@ static void reinit_pool_if_mode_changed(void)
      * point is only reached when s_pool_proto actually moved. */
     ft8_screen_clear();
     ft8_pileup_clear();
+
+    /* The timing consensus belongs to the protocol that measured it, so it dies
+     * with the list. Observed 2026-10-09 switching FT8 -> JS8 on the dev bench:
+     * rows went to 0 as intended while /api/decodes still served
+     * dt_consensus=800ms dt_stations=12, both left over from FT8.
+     *
+     * Harmless only while the list is empty. The timing merge runs AFTER the
+     * rows are published (see decode_slot), so the first JS8 slot that decodes
+     * anything would publish its rows against an FT8 consensus and an FT8
+     * station count - a corrected DT computed from the wrong protocol's
+     * measurement, which is exactly the confident-but-meaningless number this
+     * whole change exists to stop. One render, but the wrong one.
+     *
+     * Clearing _valid is enough: every reader goes through
+     * ft8_get_last_timing_ms / _stations, and both gate on it. */
+    s_last_timing_valid    = false;
+    s_last_timing_stations = 0;
 }
 
 // ---------------------------------------------------------------------------
