@@ -52,6 +52,7 @@
 #include "monitor.h"
 #include "js8.h"
 #include "js8_text.h"
+#include "js8_message.h"
 
 #define SR_HZ            12000
 #define SLOT_SAMPLES     (SR_HZ * 15)
@@ -69,6 +70,8 @@ typedef struct {
 } row_t;
 
 static int g_fail = 0;      /* slots that lost a decode */
+/* CRC-valid frames with no renderer, by frame type. */
+static int g_unrendered[8];
 static int g_slots = 0;
 static int g_exp_total = 0, g_got_total = 0, g_match_total = 0, g_extra_total = 0;
 
@@ -217,8 +220,18 @@ static int decode_slot(const float *signal, int n, row_t *out, int max_out)
         /* The same seam the firmware uses (decode_msg_to_text, ft8_test.c:1323):
          * js8_decode_candidate leaves the 9-byte varicode frame in payload. A
          * second renderer here would keep passing after the shipped one drifted. */
+        /* ⭐ A frame can pass CRC-12 and still have no renderer. js8_frame_type()
+         * returns the top 3 bits, so there are EIGHT types; js8_text.c names
+         * four and drops 4..7 through its default:. Those are JS8's data
+         * frames - the free-text traffic J7 is about - so a drop here is not a
+         * decode failure, it is an unimplemented feature arriving. Counted
+         * separately because the two are indistinguishable in a decode total. */
         char text[JS8_TEXT_MAX];
-        if (!js8_frame_to_text(msg.payload, text, sizeof(text))) continue;
+        if (!js8_frame_to_text(msg.payload, text, sizeof(text))) {
+            int ft = (int)js8_frame_type(msg.payload);
+            g_unrendered[ft & 7]++;
+            continue;
+        }
 
         int dup = 0;
         for (int k = 0; k < got; k++)
@@ -333,6 +346,33 @@ static void run_dir(const char *dir)
     }
 }
 
+/* Plain CPFSK at the JS8 Normal rate: 79 symbols, 1920 samples each at 12 kHz
+ * (160 ms), tone spacing 1/0.160 = 6.25 Hz. Continuous phase, so there is no
+ * symbol-boundary click for the STFT to trip over. No GFSK shaping and no
+ * noise: the question the selftest asks is "does the harness hear a clean
+ * signal at all", and anything softer makes a failure ambiguous.
+ *
+ * One function rather than two copies, because the mutation test below must
+ * drive the SAME synthesiser as the positive case - two copies would let the
+ * two halves drift apart and still both pass. */
+static void synth_slot(float *signal, const uint8_t *tones, int nsps,
+                       float base, float spc, int t0)
+{
+    for (int i = 0; i < SLOT_SAMPLES; i++) signal[i] = 0.0f;
+    double phase = 0.0;
+    for (int s_i = 0; s_i < JS8_NN; s_i++) {
+        double f  = base + spc * (double)tones[s_i];
+        double dp = 2.0 * M_PI * f / (double)SR_HZ;
+        for (int k = 0; k < nsps; k++) {
+            int idx = t0 + s_i * nsps + k;
+            if (idx >= SLOT_SAMPLES) break;
+            signal[idx] = 0.25f * (float)sin(phase);
+            phase += dp;
+            if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
+        }
+    }
+}
+
 /* ---- self-test: prove the harness can hear a JS8 signal --------------
  *
  * ⚠ MUTATION-TESTED ON PURPOSE. An empty corpus directory, an unreadable WAV
@@ -367,30 +407,55 @@ static int selftest(void)
     const float base = 1000.0f;             /* audio Hz of tone 0 */
     const float spc  = (float)SR_HZ / (float)nsps;
     const int   t0   = SR_HZ / 2;           /* 0.5 s of lead-in silence */
-    for (int i = 0; i < SLOT_SAMPLES; i++) signal[i] = 0.0f;
-    double phase = 0.0;
-    for (int s_i = 0; s_i < JS8_NN; s_i++) {
-        double f = base + spc * (double)tones[s_i];
-        double dp = 2.0 * M_PI * f / (double)SR_HZ;
-        for (int k = 0; k < nsps; k++) {
-            int idx = t0 + s_i * nsps + k;
-            if (idx >= SLOT_SAMPLES) break;
-            signal[idx] = 0.25f * (float)sin(phase);
-            phase += dp;
-            if (phase > 2.0 * M_PI) phase -= 2.0 * M_PI;
-        }
-    }
+    synth_slot(signal, tones, nsps, base, spc, t0);
 
     row_t got[MAX_ROWS];
     int n = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS);
     printf("selftest: %d decoded from a synthetic slot\n", n < 0 ? 0 : n);
     for (int i = 0; i < n; i++) printf("   %s\n", got[i].text);
-    for (int i = 0; i < n; i++)
-        if (!strcmp(got[i].text, text)) { printf("selftest: PASS\n"); return 0; }
-    printf("selftest: FAIL - expected '%s'. The harness cannot hear a clean\n"
-           "          JS8 signal, so any corpus result from it is meaningless.\n",
-           text);
-    return 1;
+
+    int heard = 0;
+    for (int i = 0; i < n; i++) if (!strcmp(got[i].text, text)) heard = 1;
+    if (!heard) {
+        printf("selftest: FAIL - expected '%s'. The harness cannot hear a clean\n"
+               "          JS8 signal, so any corpus result from it is meaningless.\n",
+               text);
+        return 1;
+    }
+
+    /* ⚠ MUTATION TEST of the unrendered-frame counter.
+     *
+     * A counter reading 0 because nothing arrived is indistinguishable from
+     * one that cannot count, and this counter's only job is to say whether
+     * free-text traffic (J7) is passing through and being dropped. The whole
+     * corpus reported 0 on 2026-10-09; that number is worth nothing until the
+     * counter has been seen to move.
+     *
+     * So: take the frame that just decoded, overwrite its 3 type bits with
+     * 100 - a data frame, which js8_text.c has no renderer for - re-encode,
+     * and require that the counter moves while the decode count does not. */
+    int before = 0;
+    for (int i = 0; i < 8; i++) before += g_unrendered[i];
+
+    frame[0] = (uint8_t)((frame[0] & 0x1Fu) | (4u << 5));
+    js8_encode(frame, itype, tones);
+    synth_slot(signal, tones, nsps, base, spc, t0);
+    int n2 = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS);
+
+    int after = 0;
+    for (int i = 0; i < 8; i++) after += g_unrendered[i];
+    if (n2 != 0 || after <= before) {
+        printf("selftest: FAIL - a type-4 frame gave %d decodes and moved the\n"
+               "          unrendered counter by %d. Expected 0 and >0, so the\n"
+               "          counter cannot be trusted to report dropped data\n"
+               "          frames - the only thing it is for.\n",
+               n2, after - before);
+        return 1;
+    }
+    printf("selftest: PASS (clean signal decodes; a type-4 data frame is "
+           "counted as unrendered, +%d)\n", after - before);
+    for (int i = 0; i < 8; i++) g_unrendered[i] = 0;   /* not a corpus result */
+    return 0;
 }
 
 int main(int argc, char **argv)

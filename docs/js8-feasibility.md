@@ -503,6 +503,12 @@ settled it. Doing this RX-first buys that arbiter for free.
 hand-transcribed); a reassembly buffer keyed by sender with a timeout; a message
 view, because a 200-character message does not fit a decode-list row.
 
+**Verification:** real traffic, and M1's corpus as the regression gate.
+**Risk:** the reassembly state is new surface — a stuck partial message, a
+sender who vanishes mid-transmission, two senders interleaving. All of it is
+host-testable from the corpus.
+**Effort:** 2 sessions.
+
 ### M1 as built (2026-10-09)
 
 `test/wav_reference_js8` holds 10 slots off bench dev - 4 with decodes and 6
@@ -542,12 +548,6 @@ alone suggested. The stored WAVs are normalised; `/api/slot.json` reports
 `tools/js8_corpus.py` BEFORE touching the radio. `slotcap` holds a single slot
 and each one overwrites the last, so three 40 m slots that decoded 4, 2 and 1
 were lost on 2026-10-09 by retuning first and starting the recorder after.
-
-**Verification:** real traffic, and M1's corpus as the regression gate.
-**Risk:** the reassembly state is new surface — a stuck partial message, a
-sender who vanishes mid-transmission, two senders interleaving. All of it is
-host-testable from the corpus.
-**Effort:** 2 sessions.
 
 ### J8 — Free-text transmit and a composer
 **Goal:** send a typed message.
