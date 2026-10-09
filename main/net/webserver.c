@@ -12,6 +12,7 @@
 #include "nvs.h"
 #include "cJSON.h"
 
+#include "status.h"           // status_battery_display_level
 #include "battery.h"          // battery_get_level, battery_is_charging
 #include "util/status.h"      // status_charge_limit_active
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
@@ -490,7 +491,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     if (!root) return httpd_resp_send_500(req);
 
     cJSON *batt = cJSON_AddObjectToObject(root, "battery");
-    cJSON_AddNumberToObject(batt, "level",    battery_get_level());
+    /* status_battery_display_level(), not battery_get_level(): the browser must
+     * show the same number as the Tab5 bar, including the charge-limit cap.
+     * Two screens reading one quantity differently is the exact fault reported
+     * for DT and for the S-meter earlier on 2026-10-09. */
+    cJSON_AddNumberToObject(batt, "level",    status_battery_display_level());
     cJSON_AddNumberToObject(batt, "mv",       battery_get_mv());
     cJSON_AddBoolToObject  (batt, "charging", battery_is_charging());
     // The Tab5's own bottom bar has honoured battery_present() since the

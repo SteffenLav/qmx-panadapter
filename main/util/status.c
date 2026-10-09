@@ -86,6 +86,49 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
 
+/* The battery percentage AS SHOWN, which is not always the one the charge
+ * cutoff acts on.
+ *
+ * ⚠ Reported 2026-10-09: with the limit set to 80 %, the bar read 79-80 % while
+ * charging and then jumped to "85 % (limit)" the moment charging stopped.
+ * Measured at that moment: mv=8055 at rest, which really is 85.6 % on the
+ * 6.6 V/8.3 V map - the number was arithmetically right. The pack genuinely
+ * overshoots, because CHARGE_IR_DROP_MV is a FIXED 200 mV while the real drop
+ * halves as the charge current tapers, so the compensated reading under-reads
+ * and the cutoff fires late. Working back from the cutoff: ~8160 mV raw, versus
+ * 8055 mV at rest - about 105 mV of real drop, not 200.
+ *
+ * The operator's call, and his reasoning: what matters is the level you get
+ * when actually running on the battery, not the resting peak you never
+ * experience - and a user is owed a number that matches the limit they set,
+ * not a lecture on internal resistance.
+ *
+ * So the DISPLAY is capped at the limit; the CUTOFF still uses the raw level.
+ * min() and not a hard clamp, so once the pack really does drain below the
+ * limit the true number comes back on its own, and the hysteresis resume still
+ * sees the real value.
+ *
+ * ⛔ The overshoot itself is NOT fixed by this - it is hidden. The real fix is
+ * to scale the IR compensation by the measured charge current
+ * (ina226_read_shunt_ma() already exists, so V_drop = I x R_internal is
+ * available) instead of a fixed constant. That needs a charge cycle with the
+ * current logged to derive R_internal, which has not been done.
+ *
+ * One place, called by both the Tab5 bar and /api/status, so the two screens
+ * cannot disagree about the battery the way they did about DT and the S-meter
+ * earlier the same day. */
+int status_battery_display_level(void)
+{
+    int level = battery_get_level();
+    if (level < 0) return level;
+
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    if (cfg.charge_limit_en && level > (int)cfg.charge_limit_pct)
+        return (int)cfg.charge_limit_pct;
+    return level;
+}
+
 bool status_charge_limit_active(void)
 {
     return s_charge_cutoff_active;
@@ -447,13 +490,14 @@ static void status_task(void *arg)
         // operator's own call - nobody reading the bar needs the raw cell
         // voltage, and the battery icon already carries the level visually.
         const char *limit_suffix = s_charge_cutoff_active ? "  (limit)" : "";
-        if (level < 0) {
+        int shown = status_battery_display_level();
+        if (shown < 0) {
             snprintf(left, sizeof(left), "--%%");
         } else {
-            snprintf(left, sizeof(left), "%d%%%s%s", level,
+            snprintf(left, sizeof(left), "%d%%%s%s", shown,
                      charging ? "  " LV_SYMBOL_CHARGE : "", limit_suffix);
         }
-        const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
+        const char *batt_icon = (shown < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(shown);
 
         // --- CENTER: UTC time HH:MM:SS + time-source indicator ---
         time_t now = time(NULL);
