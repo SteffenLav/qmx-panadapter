@@ -47,6 +47,8 @@ static lv_obj_t    *s_rings[GPS_PAGE_MAX_RINGS];
  * does NOT copy the array, so it must outlive the object (hence static), and
  * nothing here is DMA or ISR, so PSRAM is safe. */
 static EXT_RAM_BSS_ATTR lv_point_precise_t s_ring_pts[GPS_PAGE_MAX_RINGS][RING_PTS];
+static lv_obj_t    *s_axes[GPS_PAGE_MAX_AXES];
+static EXT_RAM_BSS_ATTR lv_point_precise_t s_axis_pts[GPS_PAGE_MAX_AXES][2];
 /* SCRATCH IN PSRAM, NOT .bss, AND ONLY WHILE THE PAGE IS OPEN.
  *
  * These four buffers are about 4.3 kB together. As statics they sat in
@@ -347,6 +349,35 @@ void gps_status_view_open(void)
         }
     }
 
+    /* The two axes, same treatment (operator, 2026-10-09: "draw the axes as
+     * thin grey lines too"). A dotted cross beside two smooth ovals looked
+     * half-finished.
+     *
+     * ⛔ BEHIND THE TEXT, and that is the whole instruction: "make sure they
+     * are drawn first and then the sats on top of them (otherwise the lines
+     * will cover them)". lv_obj_move_background() is what guarantees it -
+     * these are created AFTER the row labels, so without it they would paint
+     * over every satellite the axes cross, which is exactly the half of the
+     * plot the operator actually reads. */
+    {
+        gps_page_axis_t ax[GPS_PAGE_MAX_AXES];
+        int na = gps_page_axes(ax, GPS_PAGE_MAX_AXES);
+        for (int i = 0; i < na && i < GPS_PAGE_MAX_AXES; i++) {
+            s_axis_pts[i][0].x = (int32_t)lround(ax[i].x0 * CELL_W);
+            s_axis_pts[i][0].y = (int32_t)lround(ax[i].y0 * ROW_H);
+            s_axis_pts[i][1].x = (int32_t)lround(ax[i].x1 * CELL_W);
+            s_axis_pts[i][1].y = (int32_t)lround(ax[i].y1 * ROW_H);
+            s_axes[i] = lv_line_create(grid);
+            lv_line_set_points(s_axes[i], s_axis_pts[i], 2);
+            lv_obj_set_style_line_width(s_axes[i], 1, 0);
+            lv_obj_set_style_line_color(s_axes[i], lv_color_hex(0x4A4A4A), 0);
+            lv_obj_set_style_line_opa(s_axes[i], LV_OPA_COVER, 0);
+            lv_obj_set_pos(s_axes[i], 0, 0);
+            lv_obj_clear_flag(s_axes[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_move_background(s_axes[i]);
+        }
+    }
+
     /* ⭐ The satellite table is a SCROLLABLE pane over the grid's table region.
      *
      * The page is 24 rows and the table starts at row 12, so the grid itself
@@ -412,6 +443,7 @@ void gps_status_view_close(void)
      * on the next open - lv_line does not copy them, so they must outlive the
      * object, which is why they are not on the stack. */
     memset(s_rings, 0, sizeof(s_rings));
+    memset(s_axes, 0, sizeof(s_axes));
     s_sat_list = NULL;
     s_title = NULL;
     ui_help_overlay_changed();

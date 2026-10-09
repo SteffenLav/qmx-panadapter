@@ -9839,11 +9839,26 @@ function gpsDrawRings(metrics, j) {
   const svg = document.getElementById("gps-rings");
   if (!svg) return;
   while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (!metrics || !j.rings || !j.rings.length) return;
+  if (!metrics || ((!j.rings || !j.rings.length) && (!j.axes || !j.axes.length))) return;
 
   const pre = document.getElementById("gps-screen");
   svg.setAttribute("width",  pre.offsetWidth);
   svg.setAttribute("height", pre.offsetHeight);
+
+  /* Axes FIRST, so they sit under everything else in the SVG - and the whole
+     SVG sits under the <pre>, so the satellites are on top of both. That
+     ordering is the operator's instruction, not an incidental: a line through
+     the plot crosses satellites, and the satellite is what he reads. */
+  for (const a of (j.axes || [])) {
+    const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    ln.setAttribute("x1", metrics.padL + a.x0 * metrics.cellW);
+    ln.setAttribute("y1", metrics.padT + a.y0 * metrics.lineH);
+    ln.setAttribute("x2", metrics.padL + a.x1 * metrics.cellW);
+    ln.setAttribute("y2", metrics.padT + a.y1 * metrics.lineH);
+    ln.setAttribute("stroke", "#4a4a4a");
+    ln.setAttribute("stroke-width", "1");
+    svg.appendChild(ln);
+  }
 
   for (const r of j.rings) {
     const el = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");

@@ -365,6 +365,23 @@ static void add_ft8_tx_status(cJSON *root)
                 cJSON_AddItemToArray(arr, o);
             }
         }
+        /* The axes, same source and same units. Drawn UNDER the text by the
+         * browser, as on the glass: a line through the plot crosses
+         * satellites, and the satellite is what the operator reads. */
+        {
+            gps_page_axis_t ax[GPS_PAGE_MAX_AXES];
+            int na = gps_page_axes(ax, GPS_PAGE_MAX_AXES);
+            cJSON *arr2 = cJSON_AddArrayToObject(root, "axes");
+            for (int i = 0; arr2 && i < na; i++) {
+                cJSON *o = cJSON_CreateObject();
+                if (!o) break;
+                cJSON_AddNumberToObject(o, "x0", ax[i].x0);
+                cJSON_AddNumberToObject(o, "y0", ax[i].y0);
+                cJSON_AddNumberToObject(o, "x1", ax[i].x1);
+                cJSON_AddNumberToObject(o, "y1", ax[i].y1);
+                cJSON_AddItemToArray(arr2, o);
+            }
+        }
     }
 
     char tx_text[32];

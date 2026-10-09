@@ -265,20 +265,19 @@ static void test_no_ring_characters_in_the_grid(void)
     for (int r = 0; r < GPS_PAGE_ROWS; r++)
         for (int c = 28; c < GPS_PAGE_COLS; c++) {
             if (lines[r][c] != '.') continue;
-            if (r == T_PLOT_CY || c == T_PLOT_CX) continue;   /* an axis */
             stray++;
             if (sr < 0) { sr = r; sc = c; }
         }
     CHECK(stray == 0,
-          "%d ring characters still in the grid (first at row %d col %d) - the "
-          "views draw the rings now, and a dotted one underneath is the look "
-          "that was rejected three times\n", stray, sr, sc);
+          "%d grid characters still in the plot (first at row %d col %d) - the "
+          "views draw the rings AND the axes now, and a dotted one underneath "
+          "is the look that was rejected three times\n", stray, sr, sc);
 
-    /* The axes are still there - this test must not pass by the plot having
-     * vanished altogether. */
-    int axis = 0;
-    for (int r = 0; r < GPS_PAGE_ROWS; r++) if (lines[r][T_PLOT_CX] == '.') axis++;
-    CHECK(axis >= 10, "the N-S axis has only %d dots - the plot is gone\n", axis);
+    /* ⚠ This test must not pass by the page having vanished. The compass
+     * labels are the plot's remaining furniture, so check one is still
+     * placed - "180" at the bottom of the N-S axis. */
+    CHECK(lines[T_PLOT_CY + T_PLOT_RY][T_PLOT_CX - 1] == '1',
+          "the compass labels are gone too - the plot is not being drawn\n");
 }
 
 /* The geometry both views draw from. Nothing checks these on the glass: a
@@ -312,6 +311,32 @@ static void test_ring_geometry(void)
               "ring %d centre is (%g,%g), expected cell centres (%g,%g)\n",
               i, rg[i].cx, rg[i].cy, (double)T_PLOT_CX + 0.5, (double)T_PLOT_CY + 0.5);
     }
+}
+
+/* The axis geometry, for the same reason as the rings: both views trust it
+ * and nothing on the glass would show a half-cell error. */
+static void test_axis_geometry(void)
+{
+    gps_page_axis_t ax[GPS_PAGE_MAX_AXES];
+    gps_page_ring_t rg[GPS_PAGE_MAX_RINGS];
+    int na = gps_page_axes(ax, GPS_PAGE_MAX_AXES);
+    int nr = gps_page_rings(rg, GPS_PAGE_MAX_RINGS);
+    CHECK(na == 2, "expected 2 axes, got %d\n", na);
+    if (na < 2 || nr < 1) return;
+
+    /* N-S is vertical through the centre, E-W horizontal, and both span the
+     * HORIZON ring exactly - a cross that stops short of the rim, or runs
+     * past it, is immediately visible and nothing else would catch it. */
+    CHECK(ax[0].x0 == ax[0].x1 && ax[0].x0 == rg[0].cx,
+          "the N-S axis is not vertical through the centre (%g..%g vs %g)\n",
+          ax[0].x0, ax[0].x1, rg[0].cx);
+    CHECK(ax[1].y0 == ax[1].y1 && ax[1].y0 == rg[0].cy,
+          "the E-W axis is not horizontal through the centre (%g..%g vs %g)\n",
+          ax[1].y0, ax[1].y1, rg[0].cy);
+    CHECK(ax[0].y0 == rg[0].cy - rg[0].ry && ax[0].y1 == rg[0].cy + rg[0].ry,
+          "the N-S axis does not span the horizon ring\n");
+    CHECK(ax[1].x0 == rg[0].cx - rg[0].rx && ax[1].x1 == rg[0].cx + rg[0].rx,
+          "the E-W axis does not span the horizon ring\n");
 }
 
 /* The QMX page must keep the rows it cannot fill, showing them empty. Hiding
@@ -412,6 +437,7 @@ int main(int argc, char **argv)
     test_sky_quadrants();
     test_no_ring_characters_in_the_grid();
     test_ring_geometry();
+    test_axis_geometry();
     test_qmx_source_keeps_its_rows();
     test_no_fix_says_so();
     test_title_names_the_port_not_a_version();

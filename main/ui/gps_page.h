@@ -96,6 +96,21 @@ typedef struct {
  * takes no snapshot, because the rings do not depend on the fix. */
 int gps_page_rings(gps_page_ring_t *out, int max);
 
+/* The N-S and E-W axes, same story and same units: the view draws them as
+ * thin grey lines too (operator, 2026-10-09). They were characters while the
+ * rings were, and a dotted cross beside two smooth ovals looked half-finished.
+ *
+ * ⛔ DRAWN FIRST, UNDER THE TEXT. A line through the middle of the plot
+ * crosses satellites, and the satellite and its number are what the operator
+ * reads - his words. Both views put these in the background. */
+typedef struct {
+    double x0, y0, x1, y1;   /* endpoints, in cells (cell CENTRES) */
+} gps_page_axis_t;
+
+#define GPS_PAGE_MAX_AXES 2
+
+int gps_page_axes(gps_page_axis_t *out, int max);
+
 /* gps_page_render(), then blank the cells the CALLER draws itself: the marker
  * text and the satellite-table region. Both displays need exactly this, so it
  * is one function rather than two copies of two loops - see the note at the

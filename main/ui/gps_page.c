@@ -122,16 +122,6 @@ static void put(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
     }
 }
 
-static void put_ch(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
-                   int row, int col, char c)
-{
-    if (row < 0 || row >= GPS_PAGE_ROWS) return;
-    if (col < 0 || col >= GPS_PAGE_COLS) return;
-    /* Never paint over a satellite with a grid dot. The satellites go down
-     * first and the dots skip anything already there. */
-    lines[row][col] = c;
-}
-
 /* Degrees and decimal MINUTES, the way both the QMX viewer and every NMEA
  * sentence write it: "55 42.869013 N". A decimal-degrees number here would be
  * read as degrees-and-minutes by eye and be wrong by a factor of 1.667 in the
@@ -146,14 +136,6 @@ static void fmt_latlon(char *buf, size_t n, double deg, bool is_lat)
     int    d = (int)a;
     double m = (a - d) * 60.0;
     snprintf(buf, n, "%d %09.6f %c", d, m, hemi);
-}
-
-/* Is the cell free of anything already drawn? */
-static bool cell_free(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1], int row, int col)
-{
-    if (row < 0 || row >= GPS_PAGE_ROWS) return false;
-    if (col < PLOT_X0 || col >= GPS_PAGE_COLS) return false;
-    return lines[row][col] == ' ';
 }
 
 /* The rings the view draws. ⛔ THE ONE PLACE THE RING GEOMETRY LIVES - the
@@ -174,6 +156,26 @@ int gps_page_rings(gps_page_ring_t *out, int max)
         out[n].rx = k * (double)PLOT_RX;
         out[n].ry = k * (double)PLOT_RY;
         out[n].elev_deg = elev;
+        n++;
+    }
+    return n;
+}
+
+/* The two axes, in the same cell units as the rings and from the same one
+ * place. Spanning the horizon ring exactly, so the cross meets the rim. */
+int gps_page_axes(gps_page_axis_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    const double cx = (double)PLOT_CX + 0.5, cy = (double)PLOT_CY + 0.5;
+    int n = 0;
+    if (n < max) {   /* N-S */
+        out[n].x0 = cx; out[n].y0 = cy - (double)PLOT_RY;
+        out[n].x1 = cx; out[n].y1 = cy + (double)PLOT_RY;
+        n++;
+    }
+    if (n < max) {   /* E-W */
+        out[n].x0 = cx - (double)PLOT_RX; out[n].y0 = cy;
+        out[n].x1 = cx + (double)PLOT_RX; out[n].y1 = cy;
         n++;
     }
     return n;
@@ -226,12 +228,9 @@ static void draw_sky(char lines[GPS_PAGE_ROWS][GPS_PAGE_COLS + 1],
     /* ⛔ NO RING DOTS. The view draws the rings as real ovals from
      * gps_page_rings() - see gps_page.h. Putting them back here is going
      * round the loop a fourth time. */
-    for (int y = PLOT_CY - PLOT_RY; y <= PLOT_CY + PLOT_RY; y++) {
-        if (cell_free(lines, y, PLOT_CX)) put_ch(lines, y, PLOT_CX, '.');
-    }
-    for (int x = PLOT_CX - PLOT_RX; x <= PLOT_CX + PLOT_RX; x++) {
-        if (cell_free(lines, PLOT_CY, x)) put_ch(lines, PLOT_CY, x, '.');
-    }
+    /* ⛔ NO AXIS DOTS EITHER. The views draw both axes from gps_page_axes(),
+     * underneath the text - see gps_page.h. The grid now carries only what is
+     * genuinely textual: the labels, the satellites and the compass points. */
 
     /* Compass labels. Azimuth, not a clock face: 0 north at the top. Emitted
      * as markers too, so the view can draw them BLUE the way the radio does. */
