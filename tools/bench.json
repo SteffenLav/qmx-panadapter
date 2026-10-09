@@ -90,7 +90,8 @@
       "branch": "n/a",
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-field.txt",
       "usb_flash": "NO",
-      "usb_flash_reason": "This unit has never been USB-flashed. That provenance is what makes an OTA result credible - it is the only board that proves an update path a real user would take. Update it over the air only. If it must ever be recovered by USB, say so explicitly and update this field, because the OTA evidence resets with it."
+      "usb_flash_reason": "PREFER OTA on this unit: it is the board that proves the update path a real user takes, so an OTA result here is worth more than on dev. Cable-flash it only when a test needs it, and expect to re-establish the OTA evidence afterwards.",
+      "usb_flash_history": "CABLE-FLASHED 2026-10-10 to put v1.16.12-79-g9fc8113e on it for the two-station JS8 test (memory project_js8_j6_tx_decoded_by_second_station). This field used to claim the unit had NEVER been USB-flashed; that was never literally true - every board is cable-flashed to receive its first firmware, as he pointed out when I quoted this line back at him as a reason not to proceed. Prose in a registry is not evidence."
     }
   ]
 }
