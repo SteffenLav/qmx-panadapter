@@ -10,7 +10,9 @@
  * wspr_unpack_message()'s internals "byte-identical" from WSJT-X's own
  * lib/wsprd/wsprd_utils.c, and sourced the pack-side grid/power formulas
  * from two other GitHub projects that turned out to also be GPL-3.0 or
- * unclear-license - none of that was safe in this MIT-licensed project.
+ * unclear-license - none of that was safe while this project was MIT.
+ * ⚠ It relicensed to GPL-3 on 2026-10-09, so the bar is lower now; this
+ * rewrite stays regardless, being clean and covered by a harness.
  * Rewritten from the WSPR message SPECIFICATION (the 6-character standard-
  * callsign template, the Maidenhead grid system, the field bit widths -
  * protocol/geographic facts, not anyone's copyrightable code), with pack

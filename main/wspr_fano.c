@@ -206,7 +206,7 @@ void wspr_build_soft_metric_table(int mettab[2][256])
  * coding-theory course notes). An earlier version of this file ported
  * WSJT-X's own fano.c (Phil Karn KA9Q 1994 / Joe Taylor K1JT) "near-
  * verbatim" - that file ships as part of the GPLv3-licensed WSJT-X source
- * tree, and this project is MIT-licensed, so that port was a licensing
+ * tree, and this project was MIT-licensed at the time, so that port was a licensing
  * mistake, caught and corrected here (see docs/wspr-phase1-status.md).
  * What follows is written from the algorithm's published RULES (which
  * aren't anyone's copyrightable expression), using this module's own data

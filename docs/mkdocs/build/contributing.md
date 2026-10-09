@@ -33,7 +33,7 @@ Send any of these to:
 
 ## Building & Modifying for Yourself
 
-The project is **[MIT-licensed](https://github.com/SteffenLav/qmx-panadapter/blob/main/LICENSE)** — you're free to build, flash, fork, and modify your own copy however you like. The "not accepting contributions" policy above is only about merging changes back into *this* repository; what you do with your own fork is entirely up to you.
+The project is **[GPL-3 licensed](https://github.com/SteffenLav/qmx-panadapter/blob/main/LICENSE)** (relicensed from MIT on 2026-10-09) — you're free to build, flash, fork, and modify your own copy however you like. If you DISTRIBUTE a modified build to other people, GPL-3 asks you to publish your source along with it; using it yourself carries no obligation at all. The "not accepting contributions" policy above is only about merging changes back into *this* repository; what you do with your own fork is entirely up to you.
 
 If you want to build from source for your own use, see **[Build from Source](build.md)** and the **[Architecture Overview](architecture.md)**.
 

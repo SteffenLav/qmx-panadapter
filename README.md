@@ -1294,4 +1294,6 @@ This is a solo project — all coding is done by the author (OZ1LAV) at his own 
 
 ## License
 
-MIT (see LICENSE). Copyright © 2026 Steffen Lav (OZ1LAV).
+GNU General Public License v3 (see LICENSE). Copyright © 2026 Steffen Lav (OZ1LAV).
+
+Relicensed from MIT on 2026-10-09. The reason was JS8: its coding tables exist only inside JS8Call, which is GPL-3, and a permissive licence put them out of reach. Nothing about using or flashing this firmware changes — the obligation falls on anyone DISTRIBUTING a modified build, who must publish their source. Everything this project depends on is one-way compatible: ESP-IDF and the Espressif components are Apache-2.0, ft8_lib and LVGL are MIT, and no proprietary binary is linked (the ESP32-P4 has no radio — WiFi lives on a separate chip over esp_hosted).
