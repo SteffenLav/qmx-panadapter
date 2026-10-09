@@ -421,9 +421,30 @@ static void status_task(void *arg)
         // CHARGE_IR_DROP_MV above), NOT the raw displayed level, so the
         // decision tracks true SoC instead of the momentarily-loaded
         // terminal voltage.
+        /* ⛔ A FAILED READ IS NOT A FLAT BATTERY. battery_get_level() returns -1
+         * when the INA226 read fails, and -1 satisfies "level < limit - 5", so
+         * a single bad read switched charging straight back on and defeated
+         * battery care. Caught in the operator's own capture on 2026-10-09:
+         *
+         *     battery care: charging resumed at -1% (limit 80%)
+         *
+         * Resuming is the SAFE direction, which is exactly why this went
+         * unnoticed - the pack charges, nothing breaks, and the limit is just
+         * quietly not enforced for a while. Hold the current state instead:
+         * neither branch may act on a level we do not have.
+         *
+         * ⚠ The guard sits on the STOP/RESUME pair only, NOT on the whole
+         * block. Putting it outside would also gate the "feature turned off"
+         * restore below, so a hard INA226 failure - battery_present() still
+         * true, every level read -1 - would leave charging disabled with no way
+         * back. The operator's escape hatch has to work when the sensor does
+         * not. */
         if (battery_present()) {
             if (cfg.charge_limit_en) {
-                if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                if (level < 0) {
+                    /* No usable reading this tick - hold whatever state we are
+                       in and wait for the next poll a second from now. */
+                } else if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
                     bsp_set_charge_en(false);
                     s_charge_cutoff_active = true;
                     ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%)",
