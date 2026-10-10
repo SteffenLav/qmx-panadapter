@@ -166,6 +166,8 @@ static const char *TAG = "settings";
 #define KEY_RELAY_LEVEL    "relay_lvl"
 #define KEY_RELAY_MS       "relay_ms"
 #define KEY_PORT_A_MODE    "port_a_mode"
+#define KEY_RX_SOURCE      "rx_source"
+#define KEY_LINEIN_GAIN    "linein_gain"
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
@@ -236,7 +238,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 134, 25 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 138, 21 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -436,7 +438,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
  * runtime bitmap indices only - nothing on flash carries them, the NVS KEY
  * strings do - so renumbering here costs nothing. 24 spare. */
 #define DIRTY_PORT_A_MODE     135  /* PORT.A owner: relay | unit_gps (#15) */
-#define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable; 23 spare */
+#define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable */
+#define DIRTY_RX_SOURCE       137  /* RX input source: qmx_usb | line_in */
+#define DIRTY_LINEIN_GAIN     138  /* line-in analogue gain, dB; 21 spare */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -478,6 +482,10 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_WIFI_STATIC_SSID,
     DIRTY_PORT_A_MODE,   /* config_io_export() prints port_a_mode; the import
                           * must land in the same mode the file left behind */
+    /* The restored unit must come up on the SAME input it was backed up on.
+     * A config file that silently moved a board back to the QMX would look
+     * like the jack had stopped working. */
+    DIRTY_RX_SOURCE, DIRTY_LINEIN_GAIN,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -739,6 +747,10 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_PORT_A_MODE))
             nvs_set_u8(s_nvs, KEY_PORT_A_MODE, snap.port_a_mode);
+        if (dirty_test(&dirty_local, DIRTY_RX_SOURCE))
+            nvs_set_u8(s_nvs, KEY_RX_SOURCE, snap.rx_source);
+        if (dirty_test(&dirty_local, DIRTY_LINEIN_GAIN))
+            nvs_set_u8(s_nvs, KEY_LINEIN_GAIN, snap.line_in_gain_db);
         if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
@@ -999,6 +1011,8 @@ static void load_from_nvs(qmx_settings_t *out)
      * never heard of the Unit GPS boots with both pins driven exactly as they
      * were before the setting existed (task 2.4's READ BACK check). */
     out->port_a_mode      = PORT_A_MODE_RELAY;
+    out->rx_source        = RX_SOURCE_QMX_USB;
+    out->line_in_gain_db  = 0;   /* see LINE_IN_GAIN_DB_MAX in settings.h */
     out->freq_sep_style   = 0;   /* #302: the punctuation the Tab5 has always
                                     shown - a stored preference is the only
                                     thing that changes it, so nobody sees a
@@ -1338,6 +1352,19 @@ static void load_from_nvs(qmx_settings_t *out)
         uint8_t pm = 0;
         nvs_get_u8(s_nvs, KEY_PORT_A_MODE, &pm);
         out->port_a_mode = port_a_mode_normalize(pm);
+    }
+    {
+        /* 0 when the key was never written, which is the QMX - so an upgrade,
+         * a wiped NVS and a deliberate "use the radio" are one value. The
+         * normalize also catches a source a NEWER build offered before the
+         * operator downgraded: it resolves to the radio rather than leaving a
+         * board with no receiver at all. */
+        uint8_t rs = 0;
+        nvs_get_u8(s_nvs, KEY_RX_SOURCE, &rs);
+        out->rx_source = rx_source_normalize(rs);
+        uint8_t lg = 0;
+        nvs_get_u8(s_nvs, KEY_LINEIN_GAIN, &lg);
+        out->line_in_gain_db = line_in_gain_db_normalize(lg);
     }
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
@@ -3559,6 +3586,70 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
     if (level) *level = s_pending.gpio_relay_level;
     if (ms)    *ms    = s_pending.gpio_relay_ms;
     xSemaphoreGive(s_mutex);
+}
+
+/* ---- RX input source ---------------------------------------------------
+ *
+ * ⛔ NEITHER SETTER TOUCHES HARDWARE FOR THE SOURCE ITSELF. app_main() reads
+ * it once, before USB host start, and the choice is latched for the session.
+ * settings_set_rx_source() returns true when a restart is needed to make the
+ * stored choice real, and every caller must say so on the surface it owns -
+ * see the comment on rx_source_t.
+ *
+ * The GAIN is different: it is one I2C register write on a running codec, so
+ * line_in.c applies it live and there is nothing to restart. */
+uint8_t settings_get_rx_source(void)
+{
+    /* The QMX before settings_init(), for the same reason port_a_mode answers
+     * relay: the boot branch reads this, and the radio is the only source
+     * that matches a board nobody has configured. */
+    if (!s_ready) return RX_SOURCE_QMX_USB;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t src = s_pending.rx_source;
+    xSemaphoreGive(s_mutex);
+    return rx_source_normalize(src);
+}
+
+bool settings_set_rx_source(uint8_t src)
+{
+    if (!s_ready) return false;
+    uint8_t want = rx_source_normalize(src);
+    if (want != src) {
+        /* Asked for a source this build does not implement. Say which, rather
+         * than silently storing the radio and leaving the operator to wonder
+         * why the selector sprang back. */
+        ESP_LOGW(TAG, "rx_source %s is declared but not implemented - staying on %s",
+                 rx_source_str(src), rx_source_str(want));
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = (s_pending.rx_source != want);
+    s_pending.rx_source = want;
+    xSemaphoreGive(s_mutex);
+    if (!changed) return false;        // already there: no restart needed
+    mark_dirty(DIRTY_RX_SOURCE);
+    ESP_LOGW(TAG, "rx_source -> %s (stored; RESTART REQUIRED to apply)",
+             rx_source_str(want));
+    return true;
+}
+
+uint8_t settings_get_line_in_gain_db(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t db = s_pending.line_in_gain_db;
+    xSemaphoreGive(s_mutex);
+    return line_in_gain_db_normalize(db);
+}
+
+void settings_set_line_in_gain_db(uint8_t db)
+{
+    if (!s_ready) return;
+    db = line_in_gain_db_normalize(db);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.line_in_gain_db == db) { xSemaphoreGive(s_mutex); return; }
+    s_pending.line_in_gain_db = db;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LINEIN_GAIN);
 }
 
 uint8_t settings_get_port_a_mode(void)

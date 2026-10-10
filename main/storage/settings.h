@@ -64,6 +64,113 @@ static inline uint8_t port_a_mode_parse(const char *val)
                                                      : PORT_A_MODE_RELAY;
 }
 
+/* ============================ RX INPUT SOURCE ==============================
+ *
+ * Where the receive samples come from. ONE field, and the sources are
+ * mutually exclusive in HARDWARE, not by policy:
+ *
+ *   The ES7210 capture side needs the I2S RX channel. Bringing it up claims a
+ *   second GDMA channel and more DMA-capable RAM, and that starves the USB
+ *   host's endpoint allocation so CDC-ACM/CAT cannot claim its endpoints
+ *   (see audio/rx_audio.c's preopen, which creates a TX-ONLY channel for
+ *   exactly this reason). So a jack source and a USB radio cannot both run.
+ *   Asked 2026-10-10, he ruled that no practical application needs both.
+ *
+ * ⛔ THE SOURCE IS LATCHED AT BOOT and a change needs a restart. USB host
+ * start and the I2S channel layout both happen once in app_main() before any
+ * of this is reachable, and tearing the USB host down live is the operation
+ * that wedges the QMX (#74). The setter therefore only records the choice.
+ *
+ * ⚠ TWO OF THE FOUR ARE DECLARED BUT NOT IMPLEMENTED. They are in the enum so
+ * the numbering never has to move underneath a persisted value, and they are
+ * shown disabled in the UI rather than hidden, so the surface does not lie
+ * about what the hardware can do. rx_source_implemented() is the gate.
+ */
+typedef enum {
+    RX_SOURCE_QMX_USB    = 0,  // QMX / QMX+ over USB UAC: 24-bit stereo IQ (default)
+    RX_SOURCE_GENERIC_IQ = 1,  // reserved: some other IQ source. NOT IMPLEMENTED
+    RX_SOURCE_LINE_IN    = 2,  // 3.5 mm jack, mic ring -> ES7210 ch3. REAL audio, one channel
+    RX_SOURCE_MIC_INT    = 3,  // internal microphones (ES7210 ch0/ch2). NOT IMPLEMENTED
+} rx_source_t;
+
+/* Does THIS build actually have a working path for the source? Everything
+ * else must fall back rather than leave the operator with a dead receiver. */
+static inline bool rx_source_implemented(uint8_t src)
+{
+    return src == RX_SOURCE_QMX_USB || src == RX_SOURCE_LINE_IN;
+}
+
+/* Is the source a REAL (single-channel) signal rather than complex IQ?
+ *
+ * This is the one bit the DSP has to branch on. A real source has no
+ * quadrature channel, so the spectrum would be mirrored about the tuned
+ * centre if it were fed to the IQ chain unchanged. line_in.c synthesises the
+ * quadrature with a Hilbert transform before the ring, and the FT8/JS8/WSPR
+ * capture branch skips its fs/4 mixer, because a real source's audio is
+ * already at baseband and there is no +12 kHz IF to move. */
+static inline bool rx_source_is_real(uint8_t src)
+{
+    return src == RX_SOURCE_LINE_IN || src == RX_SOURCE_MIC_INT;
+}
+
+/* Anything this build does not implement resolves to the QMX, which is the
+ * value an ABSENT key also reads as (0). So "no key", "NVS noise" and "a
+ * source a NEWER firmware offered before the operator downgraded" are one
+ * answer: the radio that was working before this setting existed. */
+static inline uint8_t rx_source_normalize(uint8_t raw)
+{
+    return rx_source_implemented(raw) ? raw : RX_SOURCE_QMX_USB;
+}
+
+static inline const char *rx_source_str(uint8_t src)
+{
+    switch (src) {
+    case RX_SOURCE_GENERIC_IQ: return "generic_iq";
+    case RX_SOURCE_LINE_IN:    return "line_in";
+    case RX_SOURCE_MIC_INT:    return "mic_int";
+    default:                   return "qmx_usb";
+    }
+}
+
+/* Decode half of the config-file round trip. An unknown string, or one naming
+ * a source this build cannot run, means the QMX - a hand-edited backup can
+ * never select a source that does not work. */
+static inline uint8_t rx_source_parse(const char *val)
+{
+    if (!val) return RX_SOURCE_QMX_USB;
+    if (strcasecmp(val, "line_in")    == 0) return RX_SOURCE_LINE_IN;
+    if (strcasecmp(val, "generic_iq") == 0) return rx_source_normalize(RX_SOURCE_GENERIC_IQ);
+    if (strcasecmp(val, "mic_int")    == 0) return rx_source_normalize(RX_SOURCE_MIC_INT);
+    return RX_SOURCE_QMX_USB;
+}
+
+/* Line-in analogue gain, in dB, as the ES7210 actually quantises it.
+ *
+ * ⛔ 0 dB IS THE DEFAULT AND IT IS DELIBERATE. The mic test build that Tony
+ * ran used the driver's own init value of 30 dB on all four channels
+ * (es7210.c's _es7210_set_channel_gain(codec, 0xF, 30.0)), and he reported
+ * "very sensitive, a lot of pickup on channel 3 even without anything
+ * connected" - which is what 30 dB on an unterminated input looks like, not a
+ * hardware fault. He fed it a headphone output through a 6:1 (-15.6 dB) lead
+ * and still hit nearly full scale. A line-level source therefore wants no
+ * analogue gain at all; an electret capsule is what the 30 dB was for.
+ *
+ * ⚠ The default is reasoned from Tony's one report, not measured here. The
+ * level meter beside the control is how the operator actually sets it.
+ *
+ * The part takes 3 dB steps from 0 to 30 (es7210.c's get_db()), so the
+ * control steps in 3 dB and anything else would be a number that silently
+ * rounds. The steps above 30 (34.5/36/37.5) are not offered: they exist for
+ * microphone capsules and would only invite clipping on a line input. */
+#define LINE_IN_GAIN_DB_MAX  30
+#define LINE_IN_GAIN_DB_STEP 3
+
+static inline uint8_t line_in_gain_db_normalize(uint8_t raw)
+{
+    if (raw > LINE_IN_GAIN_DB_MAX) return LINE_IN_GAIN_DB_MAX;
+    return (uint8_t)((raw / LINE_IN_GAIN_DB_STEP) * LINE_IN_GAIN_DB_STEP);
+}
+
 typedef struct {
     bool incl_en[2];
     char incl_text[2][FT8_FILTER_TEXT_LEN];
@@ -647,6 +754,12 @@ typedef struct {
      * receiver is on neither of those pins. Default 0 so an upgrade changes
      * nothing. */
     uint8_t  gnss_mbus_en;
+    /* Where the receive samples come from - see rx_source_t. Latched at boot:
+     * changing it marks NVS dirty and nothing else, because USB host start and
+     * the I2S channel layout are both one-shot in app_main(). Default 0 =
+     * the QMX over USB, so an upgrade changes nothing. */
+    uint8_t  rx_source;
+    uint8_t  line_in_gain_db;   // ES7210 analogue gain for the jack, 0..30 in 3 dB steps (default 0)
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -1209,6 +1322,19 @@ uint8_t settings_get_port_a_mode(void);
 bool settings_get_gnss_mbus_en(void);
 void settings_set_gnss_mbus_en(bool en);
 bool    settings_set_port_a_mode(uint8_t mode);
+
+/* RX input source. Narrow accessors for the same reason as the GNSS pair:
+ * app_main() reads the source on a small stack, before anything that could
+ * afford to copy qmx_settings_t.
+ *
+ * ⛔ settings_set_rx_source() DOES NOT SWITCH ANYTHING. It records the choice
+ * and returns true if a restart is now needed to apply it - the source is
+ * latched at boot (see rx_source_t). Every caller must tell the operator;
+ * silently storing it would be a control that looks like it did something. */
+uint8_t settings_get_rx_source(void);
+bool    settings_set_rx_source(uint8_t src);
+uint8_t settings_get_line_in_gain_db(void);
+void    settings_set_line_in_gain_db(uint8_t db);
 
 /* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a
  * multi-hundred-byte struct and CLAUDE.md records four crash-loops from doing

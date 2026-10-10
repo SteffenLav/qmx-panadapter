@@ -112,6 +112,12 @@ char *config_io_export(size_t *out_len)
        the order the importer applies it - though the importer buffers the mode
        anyway, because an edited file has no such order. */
     APP("port_a_mode        = %s\n", port_a_mode_str(c.port_a_mode));
+    /* Which input the board listens to, and the jack's analogue gain.
+       The source is LATCHED AT BOOT, so a restored backup needs a restart
+       before it is actually listening to what this line says - the import
+       logs that rather than leaving it to be discovered. */
+    APP("rx_source          = %s\n", rx_source_str(c.rx_source));
+    APP("line_in_gain_db    = %u\n", (unsigned)c.line_in_gain_db);
     /* #302: 0 = 14.074.000, 1 = 14,074,000 */
     APP("freq_sep_style     = %u\n", (unsigned)c.freq_sep_style);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
@@ -354,6 +360,9 @@ int config_io_import(char *text)
     uint8_t port_mode = cur.port_a_mode;
     bool    port_touched = false;
 
+    uint8_t rx_src     = cur.rx_source;
+    bool    rx_touched = false;
+
     section_t sec = SEC_NONE;
     int applied = 0;
 
@@ -463,6 +472,15 @@ int config_io_import(char *text)
                 port_mode    = port_a_mode_parse(val);
                 port_touched = true;
             }
+            /* Buffered like the port owner, and applied at the end for the
+               same reason: the source decides which hardware comes up, so it
+               must not be read before the gain key it governs. */
+            else if (!strcasecmp(key, "rx_source")) {
+                rx_src     = rx_source_parse(val);
+                rx_touched = true;
+            }
+            else if (!strcasecmp(key, "line_in_gain_db"))
+                settings_set_line_in_gain_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "freq_sep_style"))    settings_set_freq_sep_style((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
@@ -680,6 +698,13 @@ int config_io_import(char *text)
        either hands PORT.A to the UART or re-drives the relay pins depending on
        the mode. */
     if (port_touched) settings_set_port_a_mode(port_mode);
+    /* Stored, never switched: settings_set_rx_source() returns true when the
+       stored choice differs from the running one, and the only way to apply
+       it is a restart. Say so in the log - a restored backup that quietly
+       keeps listening to the old input is the confusing case. */
+    if (rx_touched && settings_set_rx_source(rx_src))
+        ESP_LOGW(TAG, "imported rx_source=%s - RESTART REQUIRED before it is used",
+                 rx_source_str(rx_src));
     settings_flush();
     /* The RX-audio keys above are STORED by their setters but not heard: the
      * DSP holds its own live copies. Without this a restored backup shows the
