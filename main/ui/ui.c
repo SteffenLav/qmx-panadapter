@@ -14039,20 +14039,23 @@ static void drawer_build(void)
 
     // IF calibration section (per-unit QMX oscillator trim)
     /* CW keyer speed, directly above IF calibration (POTA operator via him,
-       2026-10-10). Mirrors the IF-cal row's shape deliberately: header, a
-       value label that reports the RADIO's figure, and a slider. */
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_KEYER, y, 130);
-        lv_obj_t *ks_hdr = lv_label_create(sec);
-        lv_label_set_text(ks_hdr, "CW keyer speed");
-        lv_obj_set_style_text_color(ks_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(ks_hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(ks_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+       2026-10-10).
 
+       ⛔ SHAPED LIKE QMX VOLUME AND RF GAIN, NOT LIKE IF CALIBRATION. The
+       first version copied the IF-cal row - a green section header, then a
+       white value label, then the slider - which on the glass put "CW keyer
+       speed" and "Keyer: 18 WPM" on two lines saying the same thing, and
+       made the row half as tall again as the two sliders directly above it.
+       Operator, 2026-10-10: "please keep same format as other sliders".
+
+       The gain rows are the pattern: ONE label carrying both the name and
+       the value, at y=10, and the slider at y=40 in a 96 px section. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_KEYER, y, 96);
         s_lbl_keyer = lv_label_create(sec);
         lv_obj_set_style_text_color(s_lbl_keyer, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_keyer, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_keyer, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_align(s_lbl_keyer, LV_ALIGN_TOP_LEFT, 0, 10);
 
         s_slider_keyer = lv_slider_create(sec);
         lv_obj_set_size(s_slider_keyer, DRAWER_W - 32, 30);
@@ -14062,13 +14065,13 @@ static void drawer_build(void)
            range, so the radio is the authority and this is only the knob's
            span. */
         lv_slider_set_range(s_slider_keyer, 0, 60);
-        lv_obj_align(s_slider_keyer, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_align(s_slider_keyer, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_add_event_cb(s_slider_keyer, drawer_slider_keyer_cb,
                             LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_slider_keyer, drawer_slider_keyer_cb,
                             LV_EVENT_RELEASED, NULL);
         paint_keyer(cat_get_keyer_wpm());
-        y += 130;
+        y += 96;
     }
 
     {
@@ -15442,20 +15445,23 @@ static void paint_qmx_vol(int ag)
 static void paint_keyer(int wpm)
 {
     if (!s_lbl_keyer) return;
+    /* The label carries the control's NAME as well as its value, because
+     * there is no section header above it any more - same as "QMX volume:
+     * 23 dB" two rows up. */
     if (wpm < 0) {
         /* -1 is "the radio has not answered", which is NOT 0 - 0 is straight
          * key. Say so rather than drawing a speed nobody set. */
-        lv_label_set_text(s_lbl_keyer, "Keyer: no CAT link");
+        lv_label_set_text(s_lbl_keyer, "CW keyer: no CAT link");
         return;
     }
     if (wpm == 0) {
         /* QMX operation manual 4.5: speed 0 selects Straight Key mode
          * whatever the keyer mode says. Name it, or the operator reads 0 as
          * a broken control. */
-        lv_label_set_text(s_lbl_keyer, "Keyer: 0 - straight key");
+        lv_label_set_text(s_lbl_keyer, "CW keyer: 0 (straight key)");
     } else {
         char b[32];
-        snprintf(b, sizeof(b), "Keyer: %d WPM", wpm);
+        snprintf(b, sizeof(b), "CW keyer: %d WPM", wpm);
         lv_label_set_text(s_lbl_keyer, b);
     }
     if (s_slider_keyer) {
@@ -15482,10 +15488,10 @@ static void drawer_slider_keyer_cb(lv_event_t *e)
     lv_obj_t *sld = lv_event_get_target(e);
     int wpm = lv_slider_get_value(sld);
     if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
-        if (wpm == 0) lv_label_set_text(s_lbl_keyer, "Keyer: 0 - straight key");
+        if (wpm == 0) lv_label_set_text(s_lbl_keyer, "CW keyer: 0 (straight key)");
         else {
             char b[32];
-            snprintf(b, sizeof(b), "Keyer: %d WPM", wpm);
+            snprintf(b, sizeof(b), "CW keyer: %d WPM", wpm);
             lv_label_set_text(s_lbl_keyer, b);
         }
         return;
