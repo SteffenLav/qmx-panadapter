@@ -83,17 +83,17 @@
       "mac": "80:F1:B2:D1:45:92",
       "ip": "192.168.1.174",
       "ip_note": "DHCP. Was .178 and had drifted by 2026-10-10 - found by sweeping the subnet for /api/status. The board prints its own address at boot; this field is a convenience, not the authority.",
-      "com": "COM10 - BORROWED, NOT ASSIGNED",
+      "com": "COM10",
       "com_note": "⛔ TEMPORARY. COM10 is the WAVESHARE's socket - he unplugged that board and put this Tab5 on its USB-C on 2026-10-10 for the two-station JS8 test. COM FOLLOWS THE SOCKET, NOT THE BOARD, so this number stops being true the moment either board is moved back. MAC-verified 80:F1:B2:D1:45:92 while it was there. VERIFY BY MAC BEFORE FLASHING ANYTHING HERE. This field previously said UNASSIGNED while the board was plugged in and talking, which cost a subnet sweep; writing a borrowed socket in as if it were permanent would be the same mistake in the other direction.",
       "com_planned": "COM22",
       "radio": "QMX+ on a DUMMY LOAD (1_04_004)",
       "radio_note": "Added 2026-10-10 as the second station for the JS8 two-station test. NOTE its QMX firmware is 1_04_004, older than dev's 1_04_010.",
-      "tree": "n/a - runs the last RELEASE, EXCEPT when borrowed as station 2",
+      "tree": "n/a - runs the last RELEASE, EXCEPT when borrowed as station 2. Point it at the main checkout ONLY for a deliberate cable flash, then put it back.",
       "branch": "n/a",
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-field.txt",
       "usb_flash": "NO",
       "usb_flash_reason": "PREFER OTA on this unit: it is the board that proves the update path a real user takes, so an OTA result here is worth more than on dev. Cable-flash it only when a test needs it, and expect to re-establish the OTA evidence afterwards.",
-      "usb_flash_history": "CABLE-FLASHED 2026-10-10 to put v1.16.12-79-g9fc8113e on it for the two-station JS8 test (memory project_js8_j6_tx_decoded_by_second_station). This field used to claim the unit had NEVER been USB-flashed; that was never literally true - every board is cable-flashed to receive its first firmware, as he pointed out when I quoted this line back at him as a reason not to proceed. Prose in a registry is not evidence."
+      "usb_flash_history": "CABLE-FLASHED 2026-10-10 AGAIN to put v1.16.12-96-gf25a9e95 on it (decode-dedup + the 4-char grid fix); MAC-verified 80:f1:b2:d1:45:92 on COM10 before writing, as com_note demands. ⚠ THE OTA EVIDENCE ON THIS UNIT IS NOW STALE - re-establish it at the next release. Earlier: CABLE-FLASHED 2026-10-10 to put v1.16.12-79-g9fc8113e on it for the two-station JS8 test (memory project_js8_j6_tx_decoded_by_second_station). This field used to claim the unit had NEVER been USB-flashed; that was never literally true - every board is cable-flashed to receive its first firmware, as he pointed out when I quoted this line back at him as a reason not to proceed. Prose in a registry is not evidence."
     }
   ]
 }
