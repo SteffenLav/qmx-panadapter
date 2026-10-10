@@ -109,6 +109,7 @@ idf_component_register(
         "qmx_term.c"
         "ft8_test.c"
         "js8_chat.c"
+        "js8_ftx.c"
         "ft8_tx.c"
         "ft8_hash.c"
         "ft8_msg_guard.c"

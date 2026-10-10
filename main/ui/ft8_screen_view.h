@@ -52,6 +52,13 @@ const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count);
 
 void ft8_screen_view_request_cq(void);
 
+/* Ask the Tab5 to transmit `text` as JS8 free text, from the browser. Records
+ * the request only; the 1 Hz LVGL timer encodes and arms it, and the outcome
+ * comes back through ft8_screen_view_freetext_result() in /api/status - a
+ * toast on the glass is invisible from another room. */
+void ft8_screen_view_request_freetext(const char *text);
+void ft8_screen_view_freetext_result(char *out, size_t out_len);
+
 // CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
 // TXCQ button and the web page drive the SAME state - set is deferred to the
 // LVGL task, get is a plain read.

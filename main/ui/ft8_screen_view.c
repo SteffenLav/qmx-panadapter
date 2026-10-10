@@ -31,6 +31,7 @@
 // state indicator (armed/active, tap to cancel/abort) lives in the left
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
+#include "js8_ftx.h"
 #include "ft8_qso.h"
 #include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
 #include "ft8_pileup.h"
@@ -1279,6 +1280,14 @@ static void t_slotbar_cb(lv_timer_t *t)
 
 static void start_cq_run(bool interactive);          // defined below
 static volatile bool s_web_cq_pending;               // set from the HTTP task
+
+/* JS8 free-text send requested from the browser. Same deferral as the CQ flag
+ * and for the same reason: the HTTP task leaves the text behind and the 1 Hz
+ * LVGL timer acts on it. The result travels back through /api/status, because
+ * a toast on the Tab5 is invisible to someone in another room. */
+static char          s_web_ftx_text[256];
+static volatile bool s_web_ftx_pending;
+static char          s_web_ftx_result[64];
 // Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
 // browser operator could start a CQ but not say which window it went out in.
 // -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
@@ -1662,6 +1671,24 @@ static void t_clock_cb(lv_timer_t *t)
         update_parity_btns();
         ESP_LOGI(TAG, "web set CQ parity: %s",
                  s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+    }
+
+    /* ⛔ DRIVE THE FREE-TEXT RUN FROM HERE, on the LVGL task, because
+     * ft8_tx_arm() blocks briefly and must never run on the HTTP task - the
+     * same deferral every other TX path in this file uses. Cheap when no run
+     * is active: one bool. */
+    js8_ftx_tick();
+
+    if (s_web_ftx_pending) {
+        s_web_ftx_pending = false;
+        char err[64];
+        if (!js8_ftx_start(s_web_ftx_text, 0, err, sizeof(err))) {
+            ESP_LOGW(TAG, "web free text refused: %s", err);
+            snprintf(s_web_ftx_result, sizeof(s_web_ftx_result), "%s", err);
+        } else {
+            snprintf(s_web_ftx_result, sizeof(s_web_ftx_result), "sending");
+        }
+        s_web_ftx_text[0] = ' ';
     }
 
     if (s_web_cq_pending) {
@@ -2549,6 +2576,24 @@ static void start_cq_run(bool interactive)
 void ft8_screen_view_request_cq(void)
 {
     s_web_cq_pending = true;
+}
+
+/* JS8 free text from the browser. Only records the request - the 1 Hz LVGL
+ * timer starts it, because js8_ftx_start() encodes and arms, and neither
+ * belongs on the HTTP task. */
+void ft8_screen_view_request_freetext(const char *text)
+{
+    if (!text) return;
+    snprintf(s_web_ftx_text, sizeof(s_web_ftx_text), "%s", text);
+    s_web_ftx_result[0] = ' ';
+    s_web_ftx_pending = true;
+}
+
+/* What became of it, for /api/status. "" until the timer has acted. */
+void ft8_screen_view_freetext_result(char *out, size_t out_len)
+{
+    if (!out || !out_len) return;
+    snprintf(out, out_len, "%s", s_web_ftx_result);
 }
 
 // -1 = any, 0 = EVEN only, 1 = ODD only. Applied by the 1 Hz timer so the Tab5

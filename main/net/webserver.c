@@ -27,7 +27,8 @@
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "ui/js8_page.h"   // the conversation grid, composed for /api/js8
-#include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
+#include "ft8_tx.h"
+#include "js8_ftx.h"           // JS8 free-text run (J8)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
@@ -238,6 +239,22 @@ static void add_ft8_tx_status(cJSON *root)
     // not just set it - a toggle that cannot read the current value is a second
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
+
+    /* ⭐ THE FREE-TEXT RUN, because it is the one transmission that lasts
+     * MINUTES rather than one slot. A browser operator who cannot see how far
+     * through it is, and cannot tell whether their send was accepted, has no
+     * way to decide whether to cancel - and cancelling is the whole reason the
+     * progress is worth showing. */
+    {
+        int sent = 0, total = 0;
+        bool run = js8_ftx_active(&sent, &total);
+        cJSON_AddBoolToObject(f,   "ftx_active", run);
+        cJSON_AddNumberToObject(f, "ftx_sent",   run ? sent + 1 : 0);
+        cJSON_AddNumberToObject(f, "ftx_total",  total);
+        char res[64];
+        ft8_screen_view_freetext_result(res, sizeof(res));
+        cJSON_AddStringToObject(f, "ftx_result", res);
+    }
 
     /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same
      * argument as cq_parity above, and I shipped the web Pause button without
@@ -1658,6 +1675,47 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
                                    : "{\"ok\":false,\"error\":\"mode must be ft8, ft4 or js8\"}");
         return ESP_OK;
+    } else if (action && strcmp(action, "js8_text_plan") == 0) {
+        /* What a message would COST, without transmitting any of it. The
+         * operator agrees to the air time before the radio is keyed, not
+         * after - a 3-frame message is 45 seconds of holding a frequency.
+         *   {"action":"js8_text_plan","text":"..."} */
+        const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        int frames = 0, secs = 0;
+        char norm[256];
+        bool ok = js8_ftx_plan(txt ? txt : "", &frames, &secs, norm, sizeof(norm));
+        cJSON_Delete(root);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "ok", ok);
+        cJSON_AddNumberToObject(o, "frames", frames);
+        cJSON_AddNumberToObject(o, "secs", secs);
+        /* The NORMALISED text, deliberately: upper-cased, whitespace
+         * collapsed, unsendable characters dropped. What will go out is not
+         * always what was typed, and the operator should see which. */
+        cJSON_AddStringToObject(o, "text", norm);
+        char *js = cJSON_PrintUnformatted(o);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, js ? js : "{\"ok\":false}");
+        cJSON_free(js);
+        cJSON_Delete(o);
+        return ESP_OK;
+    } else if (action && strcmp(action, "js8_text") == 0) {
+        /* Transmit free text. Deferred to the LVGL task exactly like cq_start
+         * - js8_ftx_start() encodes and arms, and ft8_tx_arm() blocks briefly,
+         * so neither may run here. The outcome returns via /api/status. */
+        const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (!txt || !txt[0]) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"no text\"}");
+            return ESP_OK;
+        }
+        ft8_screen_view_request_freetext(txt);
+    } else if (action && strcmp(action, "js8_text_cancel") == 0) {
+        /* ⛔ Reachable while transmitting, on purpose. A run holds the
+         * frequency for up to three minutes and the operator must be able to
+         * stop it from wherever they are. */
+        js8_ftx_cancel();
     } else if (action && strcmp(action, "cq_start") == 0) {
         // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out
         // or hit its call limit otherwise needs a walk back to the Tab5. Deferred to
