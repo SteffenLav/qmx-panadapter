@@ -3030,6 +3030,11 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * the Tab5's own module and the QMX's internal one, which it reaches through
  * the radio's menus. Operator, 2026-10-09. */
 #define DRAWER_SEC_GPSSTATS   48
+/* CW keyer speed. A POTA operator asked for it on the Tab5 as well as the web
+ * (2026-10-10, after Ralph Hellmig asked for the web control): in the field
+ * the radio is in a bag and the Tab5 is the thing in your hand, so walking to
+ * the QMX's own encoder is exactly what you cannot do. */
+#define DRAWER_SEC_KEYER      49
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
 // size array indexed by an enum will be overrun" section. IDs are 0..47.
 //
@@ -3043,7 +3048,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     49
+#define N_DRAWER_SECTIONS     50
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3052,6 +3057,7 @@ _Static_assert(DRAWER_SEC_REBOOT  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_SDEJECT < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3092,6 +3098,11 @@ static const drawer_item_t GRP_RADIO[] = {
      * as the CW centre sitting under it - and CLAUDE.md records a whole field
      * report (Roy KI0ER, #165) where a stale CW offset and this trim had to be
      * reasoned about together. */
+    /* Directly above IF calibration, where he asked for it. It is a
+       setting you reach for while operating, so it goes above the per-unit
+       trim you set once - and it is marked Basic, unlike the trim, because
+       changing speed mid-activation is ordinary use rather than setup. */
+    { DRAWER_SEC_KEYER, "CW keyer speed", true },
     { DRAWER_SEC_IFCAL, "IF calibration", false },
     { DRAWER_SEC_CW, "CW centre & transmit offset", false },
     { DRAWER_SEC_CWPROF, "CW profiles", false },
@@ -3452,6 +3463,8 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
 }
 
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
+static lv_obj_t *s_slider_keyer = NULL;
+static lv_obj_t *s_lbl_keyer    = NULL;
 static lv_obj_t *s_slider_qmx_vol = NULL;
 static lv_obj_t *s_lbl_qmx_vol    = NULL;
 static lv_obj_t *s_slider_qmx_rf  = NULL;
@@ -3632,6 +3645,11 @@ static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
 static void drawer_refresh_cw_profiles(void);
+/* Keyer speed row. Defined beside drawer_refresh_qmx_vol(), which it mirrors,
+ * but built far earlier in drawer_build() - hence the forward declarations. */
+static void paint_keyer(int wpm);
+static void drawer_refresh_keyer(void);
+static void drawer_slider_keyer_cb(lv_event_t *e);
 static lv_obj_t *s_check_cw_decode;
 static lv_obj_t *s_check_pskrep;
 static lv_obj_t *s_check_wspr_net;
@@ -14020,6 +14038,39 @@ static void drawer_build(void)
      * window, long-press the top bar to reach it. */
 
     // IF calibration section (per-unit QMX oscillator trim)
+    /* CW keyer speed, directly above IF calibration (POTA operator via him,
+       2026-10-10). Mirrors the IF-cal row's shape deliberately: header, a
+       value label that reports the RADIO's figure, and a slider. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_KEYER, y, 130);
+        lv_obj_t *ks_hdr = lv_label_create(sec);
+        lv_label_set_text(ks_hdr, "CW keyer speed");
+        lv_obj_set_style_text_color(ks_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ks_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(ks_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_lbl_keyer = lv_label_create(sec);
+        lv_obj_set_style_text_color(s_lbl_keyer, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_keyer, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_keyer, LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_slider_keyer = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_keyer, DRAWER_W - 32, 30);
+        /* 0..60. 0 is straight key and is a real setting (op manual 4.5), so
+           the range starts there rather than at a "sensible" minimum. The
+           firmware does NOT clamp what it sends - the CAT manual states no
+           range, so the radio is the authority and this is only the knob's
+           span. */
+        lv_slider_set_range(s_slider_keyer, 0, 60);
+        lv_obj_align(s_slider_keyer, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_keyer, drawer_slider_keyer_cb,
+                            LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_slider_keyer, drawer_slider_keyer_cb,
+                            LV_EVENT_RELEASED, NULL);
+        paint_keyer(cat_get_keyer_wpm());
+        y += 130;
+    }
+
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IFCAL, y, 130);
         lv_obj_t *ifcal_hdr = lv_label_create(sec);
@@ -14896,6 +14947,7 @@ static void drawer_open(void)
 #endif
     lv_anim_start(&a);
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
+    drawer_refresh_keyer();     // same: the QMX's own encoder moves this too
     drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
     gain_resolve_start();       // ...and repaint whichever of those answers late
@@ -15381,6 +15433,67 @@ static void paint_qmx_vol(int ag)
             lv_label_set_text(s_lbl_qmx_vol, b);
         }
     }
+}
+
+/* Paint the keyer row from whatever the RADIO last said, not from our last
+ * write - the operator can turn the speed with the QMX's own encoder, and a
+ * Tab5 that disagrees with the radio is the one thing this control must not
+ * do. Same reasoning as paint_qmx_vol() above. */
+static void paint_keyer(int wpm)
+{
+    if (!s_lbl_keyer) return;
+    if (wpm < 0) {
+        /* -1 is "the radio has not answered", which is NOT 0 - 0 is straight
+         * key. Say so rather than drawing a speed nobody set. */
+        lv_label_set_text(s_lbl_keyer, "Keyer: no CAT link");
+        return;
+    }
+    if (wpm == 0) {
+        /* QMX operation manual 4.5: speed 0 selects Straight Key mode
+         * whatever the keyer mode says. Name it, or the operator reads 0 as
+         * a broken control. */
+        lv_label_set_text(s_lbl_keyer, "Keyer: 0 - straight key");
+    } else {
+        char b[32];
+        snprintf(b, sizeof(b), "Keyer: %d WPM", wpm);
+        lv_label_set_text(s_lbl_keyer, b);
+    }
+    if (s_slider_keyer) {
+        /* The slider spans 0..60; a radio set faster than that with its own
+         * encoder pins the knob, but the LABEL above still reports the true
+         * speed - the label is what has to agree with the radio. */
+        int knob = wpm > 60 ? 60 : wpm;
+        lv_slider_set_value(s_slider_keyer, knob, LV_ANIM_OFF);
+    }
+}
+
+static void drawer_refresh_keyer(void)
+{
+    if (!s_slider_keyer) return;
+    paint_keyer(cat_get_keyer_wpm());
+    cat_query_keyer_wpm();   // ask again for next time the drawer opens
+}
+
+/* RELEASED, not VALUE_CHANGED: a drag would otherwise stream sixty KS writes
+ * down the CAT pipe, the same reason the RF gain slider below uses RELEASED.
+ * The label follows the drag so the number moves under the finger. */
+static void drawer_slider_keyer_cb(lv_event_t *e)
+{
+    lv_obj_t *sld = lv_event_get_target(e);
+    int wpm = lv_slider_get_value(sld);
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        if (wpm == 0) lv_label_set_text(s_lbl_keyer, "Keyer: 0 - straight key");
+        else {
+            char b[32];
+            snprintf(b, sizeof(b), "Keyer: %d WPM", wpm);
+            lv_label_set_text(s_lbl_keyer, b);
+        }
+        return;
+    }
+    cat_request_keyer_wpm((uint16_t)wpm);
+    /* The poll task reads back automatically after the write, so the next
+     * drawer open shows what the radio actually took. */
+    ESP_LOGI(TAG, "keyer speed -> %d WPM from the drawer", wpm);
 }
 
 static void drawer_refresh_qmx_vol(void)
