@@ -581,8 +581,33 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
         strncpy(out_req->target_call, target_call, sizeof(out_req->target_call) - 1);
     }
 
-    // Third field: explicit extra overrides my_grid for QSO exchange messages.
-    const char *third = extra ? extra : s.my_grid;
+    /* Third field: explicit extra overrides my_grid for QSO exchange messages.
+     *
+     * ⛔ THE GRID GOES OUT AS FOUR CHARACTERS, NEVER SIX.
+     *
+     * FT8's standard message and JS8's heartbeat both carry a 4-character
+     * locator; neither has a field for the subsquare. Passing the stored grid
+     * straight through does not merely lose the extra two characters - in JS8
+     * it loses the CALLSIGN. js8_text_rest_is_grid() tests strlen()==4, so
+     * "JO65TR" is not recognised as a grid, is not stripped, and then passes
+     * the "looks like a callsign" test (it has letters and digits), so it is
+     * taken AS the callsign and the real one is discarded:
+     *
+     *   'CQ OZ2LAV JO65TR' -> frame -> 'CQ JO65TR'
+     *
+     * Measured on the field Tab5 (OZ2LAV, JO65TR) 2026-10-10: the round-trip
+     * guard refused every CQ, so the station could not call CQ at all. The
+     * guard was right; the input was wrong.
+     *
+     * ⚠ The stored setting is NOT truncated - wspr_rx.c and ft8_screen_view.c
+     * feed it to maidenhead_to_latlon() for distance, where the subsquare is
+     * worth having. Only the transmitted form is cut.
+     *
+     * wspr_tx.c:151 already did exactly this, with the same reasoning. The
+     * idiom existed; FT8/JS8 just never adopted it. */
+    char grid4[5];
+    snprintf(grid4, sizeof(grid4), "%.4s", s.my_grid);
+    const char *third = extra ? extra : grid4;
     if (!third[0]) {
         if (out_err) snprintf(out_err, out_err_len, "No grid set (Settings)");
         return false;
@@ -721,6 +746,33 @@ bool ft8_tx_build_request_text(const char *message_text,
         if (!trimmed[0]) {
             if (out_err) snprintf(out_err, out_err_len, "Empty message");
             return false;
+        }
+        /* ⛔ A SAVED PRESET CAN STILL CARRY A SIX-CHARACTER GRID.
+         *
+         * Truncating my_grid where the default preset is built (ft8_cq_modal)
+         * fixes new text only. A preset the operator saved earlier keeps the
+         * six-character locator in its STRING, and would still be refused by
+         * the round-trip guard below - the instance fixed, the class not.
+         *
+         * So cut it here as well, where every text path passes: if the last
+         * token is a full LL##LL locator, drop the subsquare. Both FT8's
+         * standard message and JS8's heartbeat carry four characters, so
+         * nothing that could have been transmitted is lost.
+         *
+         * Only the LAST token, and only a complete 6-character locator - a
+         * CQ qualifier ("CQ POTA OZ1LAV JO65") must not be touched, and a
+         * 4-character grid is already right. */
+        {
+            char *last = strrchr(trimmed, ' ');
+            char *tok  = last ? last + 1 : trimmed;
+            if (strlen(tok) == 6 &&
+                tok[0] >= 'A' && tok[0] <= 'R' && tok[1] >= 'A' && tok[1] <= 'R' &&
+                tok[2] >= '0' && tok[2] <= '9' && tok[3] >= '0' && tok[3] <= '9' &&
+                tok[4] >= 'A' && tok[4] <= 'X' && tok[5] >= 'A' && tok[5] <= 'X') {
+                ESP_LOGI(TAG, "grid '%s' -> '%.4s' (the wire carries 4 characters)",
+                         tok, tok);
+                tok[4] = '\0';
+            }
         }
         message_text = trimmed;
     }

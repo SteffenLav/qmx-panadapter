@@ -69,13 +69,19 @@ static void trim_inplace(char *s)
     ft8_msg_normalize(s);
 }
 
-// Build "CQ <call> <grid>" from stored identity (or "CQ" if unset).
+/* Build "CQ <call> <grid>" from stored identity (or "CQ" if unset).
+ *
+ * ⛔ FOUR characters of grid, never six - see the long note at ft8_tx.c's
+ * grid4. A six-character locator costs JS8 the CALLSIGN, not just the
+ * subsquare, and the round-trip guard then refuses every CQ. The three sites
+ * in this file all feed text that is transmitted or that PROMISES what will
+ * be transmitted, so all three cut it the same way. */
 static void build_default_cq(char *out, size_t len)
 {
     qmx_settings_t s;
     settings_load_all(&s);
     if (s.my_callsign[0] && s.my_grid[0]) {
-        snprintf(out, len, "CQ %s %s", s.my_callsign, s.my_grid);
+        snprintf(out, len, "CQ %s %.4s", s.my_callsign, s.my_grid);
     } else {
         snprintf(out, len, "CQ");
     }
@@ -322,7 +328,7 @@ static void add_suffix_cb(lv_event_t *e)
     lv_textarea_set_cursor_pos(ta, LV_TEXTAREA_CURSOR_LAST);
     if (len > 0 && cur[len - 1] != ' ') lv_textarea_add_text(ta, " ");
     char tail[24];
-    snprintf(tail, sizeof(tail), "%s %s", s.my_callsign, s.my_grid);
+    snprintf(tail, sizeof(tail), "%s %.4s", s.my_callsign, s.my_grid);
     lv_textarea_add_text(ta, tail);
 }
 
@@ -560,7 +566,8 @@ void ft8_cq_modal_show(void)
     if (s_add_lbl) {
         char lbl[32];
         if (s.my_callsign[0] && s.my_grid[0]) {
-            snprintf(lbl, sizeof(lbl), "+ %s %s", s.my_callsign, s.my_grid);
+            /* The label must promise exactly what the insert will add. */
+            snprintf(lbl, sizeof(lbl), "+ %s %.4s", s.my_callsign, s.my_grid);
         } else {
             snprintf(lbl, sizeof(lbl), "+ Call Grid (set ID)");
         }
