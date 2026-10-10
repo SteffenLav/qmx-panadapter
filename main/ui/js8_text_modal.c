@@ -43,7 +43,6 @@ static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
     if (s_keyboard) lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    if (s_ta) ui_kbd_note_unfocus(s_ta);
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_open = false;
 }
@@ -92,7 +91,6 @@ static void ta_changed_cb(lv_event_t *e)
 static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
-    ui_kbd_note_focus(ta);
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
@@ -130,6 +128,15 @@ static void stop_cb(lv_event_t *e)
     modal_close();
 }
 
+/* The keyboard's own tick and cross. READY is the tick - the operator has
+ * finished typing, and in a one-field dialog that means send. */
+static void keyboard_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY)       send_cb(NULL);
+    else if (code == LV_EVENT_CANCEL) modal_close();
+}
+
 static void modal_build(void)
 {
     if (s_modal) return;
@@ -151,7 +158,10 @@ static void modal_build(void)
      * 720 px screen, and a centred panel ends up behind it. */
     s_panel = lv_obj_create(s_modal);
     lv_obj_set_size(s_panel, 760, 300);
-    lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 24);
+    /* y=70 clears the top bar (band/mode/freq/S-meter); at 24 the title row
+     * was drawn behind it. 300 tall ends at 370, well above the 280 px
+     * keyboard that starts at 440. */
+    lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 70);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x101010), 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x404040), 0);
     lv_obj_set_style_border_width(s_panel, 1, 0);
@@ -169,6 +179,10 @@ static void modal_build(void)
     lv_textarea_set_placeholder_text(s_ta, "Message to send...");
     lv_textarea_set_one_line(s_ta, false);
     lv_textarea_set_max_length(s_ta, 160);
+    /* Also registers ui_theme_ta_kbd_focus_cb, which is what records this field
+     * as the physical keyboards' target - so ui_kbd_note_focus() is NOT called
+     * by hand here. One owner for that bookkeeping. */
+    ui_theme_style_textarea(s_ta);
     lv_obj_add_event_cb(s_ta, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
     lv_obj_add_event_cb(s_ta, ta_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -210,10 +224,34 @@ static void modal_build(void)
      * comment on the registry in ui.c. */
     ui_kbd_set_buttons(s_btn_send, btn_cancel);
 
+    /* ⛔ THE SAME KEYBOARD AS EVERY OTHER MODAL. A bare lv_keyboard_create()
+     * gets LVGL's default white keys at the default font, which is what shipped
+     * to the bench and was immediately spotted. The project's look is three
+     * calls - the key style, ui_theme_style_keyboard() and the 28 px font - and
+     * they are copied here from ft8_filter_modal.c rather than reinvented. */
     s_keyboard = lv_keyboard_create(s_modal);
-    lv_obj_set_size(s_keyboard, LV_PCT(100), LV_PCT(45));
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
+    }
+    lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_keyboard);
+    lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+    /* Start in caps: JS8 free text goes on the air upper-cased anyway, so
+     * showing lower-case keys would misrepresent what is being typed. */
+    ui_theme_keyboard_attach_caps_cycle_upper(s_keyboard);
+    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);
+    lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_CANCEL, NULL);
 }
 
 void js8_text_modal_init(void)
@@ -232,9 +270,11 @@ void js8_text_modal_show(void)
     lv_obj_move_foreground(s_modal);
     s_open = true;
 
-    /* Open with the keyboard already up: the one thing the operator came here to
-     * do is type, so making them tap the field first is a wasted tap. */
-    ui_kbd_note_focus(s_ta);
-    lv_keyboard_set_textarea(s_keyboard, s_ta);
-    ui_osk_show(s_keyboard);
+    /* ⛔ NO PRE-FOCUS, AND NO KEYBOARD, UNTIL THE FIELD IS TAPPED. I opened with
+     * both - "making them tap the field first is a wasted tap" - which is the
+     * exact reasoning the tombstone in ui_theme.h was written to kill. A cursor
+     * before the operator has chosen anything cannot mean "type here", and
+     * add_state(FOCUSED) paints a cursor without sending LV_EVENT_FOCUSED, so
+     * the blinking field need not even be the one receiving keystrokes. The tap
+     * raises the keyboard through ta_focused_cb. */
 }
