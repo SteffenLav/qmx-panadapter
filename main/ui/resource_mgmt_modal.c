@@ -5,6 +5,8 @@
 #include "ui.h"
 #include "settings.h"
 #include "audio/rx_audio.h"
+#include "audio/line_in.h"      // line_in_running/_set_gain_db/_peak_dbfs
+#include "storage/settings.h"   // rx_source_t and the line-in gain rules
 #include "lvgl.h"
 #include "esp_log.h"
 #include <string.h>
@@ -527,6 +529,208 @@ static const row_def_t ROW_DEFS[ROW_COUNT] = {
     { ROW_PSKTX,   "PSK Reporter - report my decodes",    psktx_cb },
 };
 
+/* ===================== AUDIO INPUT SOURCE =============================
+ *
+ * Placed at the TOP of this window, above everything else, because it decides
+ * whether the rest of the window applies at all: on the 3.5 mm jack there is
+ * no RX audio output and no CAT, so half the controls below are moot.
+ *
+ * (-) THE SELECTOR DOES NOT SWITCH ANYTHING LIVE. The source is latched at
+ * boot - the USB host and the I2S channel layout are both one-shot in
+ * app_main(), and tearing the USB host down mid-session is the operation that
+ * wedges the QMX (#74). So the dropdown records a choice and the note under
+ * it says a restart is needed. A control that looked like it had switched the
+ * input and had not would be worse than no control.
+ *
+ * (!) TWO ENTRIES ARE SHOWN BUT CANNOT BE CHOSEN. Generic IQ and the internal
+ * microphones are declared in rx_source_t and have no code behind them. They
+ * are listed rather than hidden so the window says what the hardware can and
+ * cannot do; picking one snaps back and says why. Hiding them would make the
+ * same question get asked again.
+ */
+static lv_obj_t *s_dd_source     = NULL;
+static lv_obj_t *s_lbl_src_note  = NULL;
+static lv_obj_t *s_sld_lin_gain  = NULL;
+static lv_obj_t *s_lbl_lin_gain  = NULL;
+static lv_obj_t *s_bar_lin_level = NULL;
+static lv_obj_t *s_lbl_lin_level = NULL;
+static lv_timer_t *s_level_timer = NULL;
+
+/* Dropdown order IS rx_source_t's numbering, so no mapping table can drift
+ * out of step with the enum. */
+static const char *SRC_OPTIONS =
+    "QMX / QMX+  (USB)\n"
+    "Generic IQ  (not yet)\n"
+    "Line in  -  3.5 mm jack\n"
+    "Internal mics  (not yet)";
+
+static void src_note_set(const char *txt, uint32_t colour)
+{
+    if (!s_lbl_src_note) return;
+    lv_label_set_text(s_lbl_src_note, txt);
+    lv_obj_set_style_text_color(s_lbl_src_note, lv_color_hex(colour), 0);
+}
+
+static void source_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t want = (uint8_t)lv_dropdown_get_selected(dd);
+
+    if (!rx_source_implemented(want)) {
+        /* Say what is missing and put the control back where it was, rather
+         * than storing a source that would boot into nothing. */
+        lv_dropdown_set_selected(dd, settings_get_rx_source());
+        src_note_set(LV_SYMBOL_WARNING " That source is not implemented yet - "
+                     "it is listed so you can see the hardware supports it.",
+                     0xFFA040);
+        return;
+    }
+
+    if (settings_set_rx_source(want)) {
+        src_note_set(LV_SYMBOL_WARNING " Saved. RESTART the Tab5 to listen to "
+                     "the new source - it is chosen once at boot.", 0xFFA040);
+        ESP_LOGW(TAG, "rx_source -> %s (restart required)", rx_source_str(want));
+    } else {
+        src_note_set("Already the selected source.", UI_COLOR_TEXT_SECONDARY);
+    }
+}
+
+static void lin_gain_cb(lv_event_t *e)
+{
+    int v = lv_slider_get_value(lv_event_get_target(e));
+    uint8_t db = line_in_gain_db_normalize((uint8_t)v);
+    settings_set_line_in_gain_db(db);
+    /* Live, unlike the source: one I2C register write on a running codec.
+     * No-op when the jack is not the running source. */
+    if (line_in_running()) line_in_set_gain_db(db);
+    if (s_lbl_lin_gain) lv_label_set_text_fmt(s_lbl_lin_gain, "%u dB", (unsigned)db);
+}
+
+/* The level meter. THIS is how the gain actually gets set - the right value
+ * depends entirely on what the operator has plugged in, and no default can
+ * know that. Peak over the last ~100 ms, straight from line_in.c.
+ *
+ * Only runs while the window is open: a 10 Hz timer walking LVGL objects
+ * behind a hidden modal is exactly the kind of idle cost this panel exists
+ * to control. */
+static void level_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_bar_lin_level || !line_in_running()) return;
+    if (!s_modal || lv_obj_has_flag(s_modal, LV_OBJ_FLAG_HIDDEN)) return;
+
+    float db = line_in_peak_dbfs();
+    int shown = (int)(db < -60.0f ? -60.0f : db);
+    lv_bar_set_value(s_bar_lin_level, shown, LV_ANIM_OFF);
+    lv_label_set_text_fmt(s_lbl_lin_level, "%d dBFS", shown);
+
+    /* Red near clipping, amber with little headroom left, green otherwise -
+     * the same three-band rule the mic test build used, because that is the
+     * one Tony already read off a screen. */
+    uint32_t col = (db > -3.0f) ? 0xE05050 : (db > -12.0f ? 0xE0C040 : 0x40C040);
+    lv_obj_set_style_bg_color(s_bar_lin_level, lv_color_hex(col), LV_PART_INDICATOR);
+}
+
+/* Builds the source block at the top of the scrolling strip and advances y. */
+static void build_source_block(int *py)
+{
+    const int ROW_H = 46;
+    const int SLD_X = 210, SLD_W = 700, SLD_VAL_X = 930;
+    int y = *py;
+
+    lv_obj_t *cap = lv_label_create(s_scroll);
+    lv_label_set_text(cap, "Audio source");
+    lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y + 6);
+
+    s_dd_source = lv_dropdown_create(s_scroll);
+    lv_dropdown_set_options_static(s_dd_source, SRC_OPTIONS);
+    lv_obj_set_width(s_dd_source, SLD_W);
+    lv_obj_align(s_dd_source, LV_ALIGN_TOP_LEFT, SLD_X, y);
+    lv_dropdown_set_selected(s_dd_source, settings_get_rx_source());
+    lv_obj_add_event_cb(s_dd_source, source_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += ROW_H + 8;
+
+    s_lbl_src_note = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(s_lbl_src_note, &lv_font_montserrat_20, 0);
+    lv_label_set_long_mode(s_lbl_src_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_src_note, SLD_X + SLD_W);
+    lv_obj_align(s_lbl_src_note, LV_ALIGN_TOP_LEFT, 0, y);
+    src_note_set("Chosen once at boot. The jack and the radio cannot both be "
+                 "live - the USB host and the audio input need the same memory.",
+                 UI_COLOR_TEXT_SECONDARY);
+    y += ROW_H;
+
+    /* Gain and meter only exist for the jack. Built always (so the layout
+     * does not jump when the source changes) but disabled unless the jack is
+     * the RUNNING source - the stored setting is not what the codec is
+     * using until the restart has happened. */
+    const bool jack_live = line_in_running();
+    const uint8_t g0 = settings_get_line_in_gain_db();
+
+    lv_obj_t *gcap = lv_label_create(s_scroll);
+    lv_label_set_text(gcap, "Line-in gain");
+    lv_obj_set_style_text_color(gcap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(gcap, &lv_font_montserrat_24, 0);
+    lv_obj_align(gcap, LV_ALIGN_TOP_LEFT, 0, y);
+
+    s_sld_lin_gain = lv_slider_create(s_scroll);
+    lv_obj_set_size(s_sld_lin_gain, SLD_W, 14);
+    lv_obj_align(s_sld_lin_gain, LV_ALIGN_TOP_LEFT, SLD_X, y + 10);
+    lv_slider_set_range(s_sld_lin_gain, 0, LINE_IN_GAIN_DB_MAX);
+    lv_slider_set_value(s_sld_lin_gain, g0, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_sld_lin_gain, lin_gain_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_lbl_lin_gain = lv_label_create(s_scroll);
+    lv_label_set_text_fmt(s_lbl_lin_gain, "%u dB", (unsigned)g0);
+    lv_obj_set_style_text_color(s_lbl_lin_gain, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_lbl_lin_gain, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lbl_lin_gain, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
+    y += ROW_H;
+
+    lv_obj_t *lcap = lv_label_create(s_scroll);
+    lv_label_set_text(lcap, "Input level");
+    lv_obj_set_style_text_color(lcap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(lcap, &lv_font_montserrat_24, 0);
+    lv_obj_align(lcap, LV_ALIGN_TOP_LEFT, 0, y);
+
+    s_bar_lin_level = lv_bar_create(s_scroll);
+    lv_obj_set_size(s_bar_lin_level, SLD_W, 14);
+    lv_obj_align(s_bar_lin_level, LV_ALIGN_TOP_LEFT, SLD_X, y + 10);
+    lv_bar_set_range(s_bar_lin_level, -60, 0);
+    lv_bar_set_value(s_bar_lin_level, -60, LV_ANIM_OFF);
+
+    s_lbl_lin_level = lv_label_create(s_scroll);
+    lv_label_set_text(s_lbl_lin_level, jack_live ? "--" : "jack not active");
+    lv_obj_set_style_text_color(s_lbl_lin_level, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_lbl_lin_level, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lbl_lin_level, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
+    y += ROW_H;
+
+    if (!jack_live) {
+        lv_obj_add_state(s_sld_lin_gain, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(gcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_color(lcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    } else if (!s_level_timer) {
+        /* 100 ms matches line_in.c's publish interval - polling faster would
+         * redraw the same number. */
+        s_level_timer = lv_timer_create(level_timer_cb, 100, NULL);
+    }
+
+    /* A separator so the source block reads as its own thing rather than as
+     * the first two feed rows. */
+    lv_obj_t *sep = lv_obj_create(s_scroll);
+    lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD - 2 * 2 - SCROLL_PAD_R, 2);
+    lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(sep, 0, 0);
+    lv_obj_clear_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
+    y += 20;
+
+    *py = y;
+}
+
 static void close_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -615,6 +819,9 @@ static void modal_build(void)
 
     int y = 16;   // relative to s_scroll now, not s_panel
     const int ROW_H = 46;
+
+    /* First, because it decides whether anything below it applies. */
+    build_source_block(&y);
     for (int i = 0; i < ROW_COUNT; i++) {
         const row_def_t *d = &ROW_DEFS[i];
 

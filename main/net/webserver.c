@@ -20,6 +20,7 @@
 #include "cw_decode.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"
 #include "audio.h"          // audio_ring_backlog_pairs - spectrum staleness               // ui_get_*, ui_set_zoom
+#include "line_in.h"        // running state, live gain and the level meter
 #include "qmx_term.h"         // /api/term
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ui/gps_status_view.h" // the dev "gps_view" action
@@ -1072,6 +1073,29 @@ static esp_err_t status_handler(httpd_req_t *req)
                 cJSON_AddItemToObject(port, "gps", gps);
             }
             cJSON_AddItemToObject(root, "port", port);
+        }
+
+        /* Which input this session is actually listening to, and - separately
+         * - which one is STORED. They differ exactly when the operator has
+         * changed the source and not yet restarted, and that is the case a
+         * page has to be able to show. Reporting only one of them is what
+         * would make a selector lie. */
+        {
+            cJSON *src = cJSON_CreateObject();
+            uint8_t stored = cfg.rx_source;
+            cJSON_AddStringToObject(src, "stored", rx_source_str(stored));
+            cJSON_AddStringToObject(src, "running",
+                line_in_running() ? "line_in" : "qmx_usb");
+            cJSON_AddBoolToObject(src, "restart_required",
+                (stored == RX_SOURCE_LINE_IN) != line_in_running());
+            cJSON_AddNumberToObject(src, "line_in_gain_db",
+                (double)cfg.line_in_gain_db);
+            /* Only while the jack is the running source: a peak level from a
+             * codec that is not open would be a number with no meaning. */
+            if (line_in_running())
+                cJSON_AddNumberToObject(src, "line_in_peak_dbfs",
+                    (double)line_in_peak_dbfs());
+            cJSON_AddItemToObject(root, "rx_source", src);
         }
 
         /* M-Bus GNSS (Module GPS v2.1). It does not use port_a_mode, so it
@@ -5424,6 +5448,40 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                 "PORT.A mode not changed: a relay pulse or power cycle is running, or the Unit GPS UART failed to start");
             return ESP_FAIL;
+        }
+    }
+
+    /* RX input source. Unlike port_a_mode this switches NOTHING live: the
+     * source is latched at boot (rx_source_t), so the store always succeeds
+     * and the only honest answer is to say a restart is needed. The reply
+     * carries "restart_required" so a page cannot show the new source as if
+     * the board were already listening to it.
+     *
+     * A source this build does not implement is REFUSED with a 400 rather
+     * than silently coerced to the radio: over HTTP there is no dropdown to
+     * snap back, so a quiet substitution would leave a script believing it
+     * had selected the jack. */
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rx_source")))) {
+        uint8_t want = rx_source_parse(s);
+        if (strcasecmp(s, rx_source_str(want)) != 0) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "rx_source: unknown or not implemented in this build "
+                "(qmx_usb and line_in are the working sources)");
+            return ESP_FAIL;
+        }
+        if (settings_set_rx_source(want))
+            ESP_LOGW(TAG, "rx_source -> %s over HTTP (restart required)",
+                     rx_source_str(want));
+    }
+    {
+        cJSON *it = cJSON_GetObjectItem(root, "line_in_gain_db");
+        if (cJSON_IsNumber(it)) {
+            uint8_t db = line_in_gain_db_normalize((uint8_t)it->valueint);
+            settings_set_line_in_gain_db(db);
+            /* Live on a running codec, so unlike the source this one really
+             * has taken effect by the time the reply is sent. */
+            if (line_in_running()) line_in_set_gain_db(db);
         }
     }
 
