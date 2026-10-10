@@ -65,6 +65,35 @@ static inline bool js8_frame_is_data(js8_frame_type_t t)
     return t == JS8_FRAME_DATA || t == JS8_FRAME_DATA_COMPRESSED;
 }
 
+/* ---- the 3-bit transmission type (itype) ------------------------------
+ *
+ * ⛔ THIS IS NOT THE FRAME TYPE. js8_frame_type_t above is read from the
+ * FIRST BITS OF THE 72-BIT FRAME and says what the frame carries. These three
+ * bits are a SEPARATE field appended after the frame, before the CRC
+ * (js8_pack_payload), and they say where the frame sits in a multi-frame
+ * TRANSMISSION. Confusing the two is easy and silent.
+ *
+ * From JS8Call's varicode.h, verbatim:
+ *
+ *     enum TransmissionType {
+ *         JS8Call      = 0, // [000] <- any other frame of the message
+ *         JS8CallFirst = 1, // [001] <- the first frame of a message
+ *         JS8CallLast  = 2, // [010] <- the last frame of a message
+ *         JS8CallData  = 4, // [100] <- flagged frame (no frame type header)
+ *     };
+ *
+ * and mainwindow.cpp sets them per frame as it sends:
+ *
+ *     if (m_txFrameCountSent > 0)   bits &= ~Varicode::JS8CallFirst;
+ *     if (m_txFrameQueue.isEmpty()) bits |=  Varicode::JS8CallLast;
+ *
+ * so they are FLAGS, and a single-frame message is FIRST|LAST. Zero means a
+ * middle frame - the one value a standalone message must NOT use. */
+#define JS8_ITYPE_MIDDLE  0
+#define JS8_ITYPE_FIRST   1
+#define JS8_ITYPE_LAST    2
+#define JS8_ITYPE_SINGLE  (JS8_ITYPE_FIRST | JS8_ITYPE_LAST)   /* 3 */
+
 #define JS8_FRAME_BYTES 9     /* 72 bits, MSB first */
 
 /* The directed-command vocabulary, by its index. Only the ones a plain QSO

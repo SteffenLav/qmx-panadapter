@@ -113,10 +113,16 @@ int js8_jsc_text_to_frame(const char* text, uint8_t frame[9]);
 /* Encode a whole message into consecutive frames. `frames` is `max_frames` x 9
  * bytes. Returns the number of frames written.
  *
+ * ⛔ THE itypes ARE NOT OPTIONAL. They carry JS8_ITYPE_FIRST / _LAST, which is
+ * how the receiving station knows where the message begins and ends; sending
+ * every frame as 0 marks them all as MIDDLE frames and the far end waits for
+ * an end that never comes. See the note at JS8_ITYPE_* in js8_message.h.
+ *
  * ⚠ EACH FRAME IS ONE SLOT. A three-frame message is 45 seconds of
  * transmission in JS8 Normal, and the operator must be told that BEFORE the
  * radio is keyed, not after. */
-int js8_jsc_text_to_frames(const char* text, uint8_t* frames, int max_frames);
+int js8_jsc_text_to_frames(const char* text, uint8_t* frames, uint8_t* itypes,
+                           int max_frames);
 
 #ifdef __cplusplus
 }

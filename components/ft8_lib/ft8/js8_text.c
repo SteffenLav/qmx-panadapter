@@ -202,7 +202,22 @@ bool js8_frame_to_text(const uint8_t frame[JS8_FRAME_BYTES], char* out, size_t o
 bool js8_text_to_frame(const char* text, uint8_t frame[JS8_FRAME_BYTES], uint8_t* itype)
 {
     if (!text || !frame) return false;
-    if (itype) *itype = 0; /* Normal, single frame */
+    /* ⛔ FIRST|LAST, NOT ZERO. Every line this function builds is a complete
+     * one-frame transmission, and JS8Call's encoder marks such a frame as both
+     * the first and the last of its message (mainwindow.cpp: it clears FIRST
+     * only once a frame has already been sent, and sets LAST when the queue is
+     * empty - for a single frame neither applies, so both stay set).
+     *
+     * This said 0 until 2026-10-10, and 0 is the value varicode.h documents as
+     * "any other frame of the message" - a MIDDLE frame. Our CQs decoded
+     * anyway, which is why it went unnoticed; JS8Call's heartbeat path does not
+     * consult the bits. Its BUFFERED-COMMAND path does (mainwindow.cpp:4115
+     * holds a command until a frame carries LAST), so a directed message of
+     * ours could be held waiting for an end that never came.
+     *
+     * ⚠ UNVERIFIED ON AIR at the time of writing - the CQ that a real JS8Call
+     * decoded earlier that day was sent with the old value. */
+    if (itype) *itype = JS8_ITYPE_SINGLE;
 
     char a[16], b[16], rest[24];
     if (!split3(text, a, sizeof(a), b, sizeof(b), rest, sizeof(rest))) return false;

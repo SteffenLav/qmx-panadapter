@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "js8_jsc.h"
+#include "js8_message.h"
 
 static int g_fail;
 
@@ -36,8 +37,21 @@ static int roundtrip(const char* text, int expect_ok)
     char norm[512];
     js8_jsc_normalize(text, norm, sizeof(norm));
 
-    uint8_t frames[8 * 9];
-    int n = js8_jsc_text_to_frames(text, frames, 8);
+    uint8_t frames[8 * 9], itypes[8];
+    int n = js8_jsc_text_to_frames(text, frames, itypes, 8);
+
+    /* The flags are what makes the far end join the frames, so they are part
+     * of the contract this test checks - not an afterthought. */
+    for (int i = 0; i < n; i++) {
+        int want = JS8_ITYPE_MIDDLE;
+        if (i == 0)     want |= JS8_ITYPE_FIRST;
+        if (i == n - 1) want |= JS8_ITYPE_LAST;
+        if (itypes[i] != want) {
+            printf("  FAIL: frame %d/%d itype %d, expected %d\n",
+                   i, n, itypes[i], want);
+            g_fail++;
+        }
+    }
 
     char got[1024];
     got[0] = '\0';
@@ -109,10 +123,10 @@ int main(void)
         /* Every frame we emit must contain a zero somewhere after the flags,
          * or js8_jsc_unpad() cannot find the end of the content. Checked on a
          * text long enough to push a frame right up to the limit. */
-        uint8_t frames[8 * 9];
+        uint8_t frames[8 * 9], itypes[8];
         int n = js8_jsc_text_to_frames(
             "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
-            frames, 8);
+            frames, itypes, 8);
         check(n > 0, "a long single-character run encodes");
         for (int i = 0; i < n; i++) {
             char part[JS8_JSC_TEXT_MAX + 1];
@@ -123,11 +137,18 @@ int main(void)
 
     /* ---- nothing encodable --------------------------------------------- */
     {
-        uint8_t frames[9];
-        int n = js8_jsc_text_to_frames("~~~~", frames, 1);
+        uint8_t frames[9], itypes[1];
+        int n = js8_jsc_text_to_frames("~~~~", frames, itypes, 1);
         check(n == 0, "text with nothing sendable produces no frames");
-        n = js8_jsc_text_to_frames("", frames, 1);
+        n = js8_jsc_text_to_frames("", frames, itypes, 1);
         check(n == 0, "empty text produces no frames");
+
+        /* A one-frame message is FIRST|LAST, never 0 - 0 is a MIDDLE frame
+         * and would leave the receiver waiting for an end. */
+        uint8_t f1[9], it1[1];
+        int n1 = js8_jsc_text_to_frames("QSL", f1, it1, 1);
+        check(n1 == 1 && it1[0] == JS8_ITYPE_SINGLE,
+              "a single-frame message is FIRST|LAST");
     }
 
     /* ---- fuzz, because ten hand-picked strings prove very little -------
@@ -171,8 +192,8 @@ int main(void)
             char norm[256];
             if (js8_jsc_normalize(msg, norm, sizeof(norm)) <= 0) continue;
 
-            uint8_t frames[12 * 9];
-            int nf = js8_jsc_text_to_frames(msg, frames, 12);
+            uint8_t frames[12 * 9], itypes[12];
+            int nf = js8_jsc_text_to_frames(msg, frames, itypes, 12);
             if (nf <= 0) { printf("  FAIL: fuzz produced no frames for '%s'\n", norm); g_fail++; break; }
 
             char got[512];

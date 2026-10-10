@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "js8_text.h"
+#include "js8_message.h"   /* JS8_ITYPE_* - the transmission-type flags */
 
 static int g_fail = 0;
 
@@ -74,7 +75,13 @@ static void expect_round_trip(const char* text)
         printf("  FAIL: '%s' would not pack\n", text);
         return;
     }
-    CHECK(itype == 0, "'%s' gave itype %d, expected 0\n", text, (int)itype);
+    /* ⛔ FIRST|LAST, not 0. Every line js8_text_to_frame() builds is a
+     * complete one-frame transmission, and JS8Call marks such a frame as both
+     * the first and the last of its message. This asserted 0 until 2026-10-10,
+     * which varicode.h documents as "any other frame of the message" - a
+     * MIDDLE frame. The test was faithfully pinning a bug. */
+    CHECK(itype == JS8_ITYPE_SINGLE, "'%s' gave itype %d, expected %d\n",
+          text, (int)itype, JS8_ITYPE_SINGLE);
 
     char back[JS8_TEXT_MAX];
     if (!js8_frame_to_text(frame, back, sizeof(back)))

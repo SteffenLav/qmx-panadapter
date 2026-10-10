@@ -30,6 +30,7 @@
  */
 
 #include "js8_jsc.h"
+#include "js8_message.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -286,9 +287,10 @@ int js8_jsc_text_to_frame(const char* text, uint8_t frame[9])
     return consumed;
 }
 
-int js8_jsc_text_to_frames(const char* text, uint8_t* frames, int max_frames)
+int js8_jsc_text_to_frames(const char* text, uint8_t* frames, uint8_t* itypes,
+                           int max_frames)
 {
-    if (!text || !frames || max_frames <= 0) return -1;
+    if (!text || !frames || !itypes || max_frames <= 0) return -1;
 
     char norm[JS8_JSC_TEXT_MAX * 4];
     if (js8_jsc_normalize(text, norm, sizeof(norm)) <= 0) return 0;
@@ -304,5 +306,17 @@ int js8_jsc_text_to_frames(const char* text, uint8_t* frames, int max_frames)
         p += used;
         n++;
     }
+    if (n <= 0) return n;
+
+    /* ⛔ THE FLAGS ARE WHAT MAKES THE FAR END JOIN THE FRAMES. Set after the
+     * fact, because only now is it known which frame is last - exactly the
+     * order JS8Call's own sender works in (it clears FIRST once a frame has
+     * gone out and sets LAST when its queue empties).
+     *
+     * A one-frame message therefore gets FIRST|LAST, not 0; 0 means a middle
+     * frame and would leave the receiver waiting for an end. */
+    for (int i = 0; i < n; i++) itypes[i] = JS8_ITYPE_MIDDLE;
+    itypes[0]     |= JS8_ITYPE_FIRST;
+    itypes[n - 1] |= JS8_ITYPE_LAST;
     return n;
 }
