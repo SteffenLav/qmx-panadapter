@@ -99,6 +99,11 @@ static char   s_qmx_uid[28] = {0};
 // decibels"), so dB = this / 4 and the drawer slider works in dB to match the
 // radio's display exactly.
 static volatile int s_af_gain = -1;
+/* Last keyer speed read back via KS;, in WPM. -1 = never read.
+ * ⛔ NOT 0 for "unknown": 0 is straight-key mode on this radio (op
+ * manual 4.5), so a 0 sentinel here would make a real setting
+ * indistinguishable from never having asked. */
+static volatile int s_keyer_wpm = -1;
 // Last RF gain read back via RG;, in dB (the radio's own unit here - unlike AG
 // there is no quarter-dB scaling). -1 = never read. This is the per-band "RF
 // gain (dB)" from the QMX's Band Configuration, 0-99, default 54.
@@ -294,6 +299,11 @@ static volatile bool s_force_rx_pending = false;
 static volatile uint32_t s_pending_af_gain_p1 = 0;
 // Set when someone wants the radio's current AF gain read back (drawer open).
 static volatile bool s_af_gain_query_pending = false;
+/* +1 encoded for the same reason as the AF gain above: 0 has to mean
+ * "nothing pending" while a genuine request of 0 WPM (straight key)
+ * still goes through. */
+static volatile uint32_t s_pending_keyer_p1 = 0;
+static volatile bool s_keyer_query_pending = false;
 /* Pending CW profile (#359), drained by the poll task. centre_hz 0 = nothing
  * queued. One slot: a second request before the first is applied simply
  * replaces it, which is what a picker's double-tap should do anyway. */
@@ -511,6 +521,8 @@ void cat_user_pause_set(bool paused)
         s_pending_rf_gain_p1    = 0;
         s_af_gain_query_pending = false;
         s_rf_gain_query_pending = false;
+        s_pending_keyer_p1      = 0;
+        s_keyer_query_pending   = false;
         ESP_LOGI(TAG, "CAT paused by operator - radio released (no polling)");
     } else {
         // Coming back: the radio may have been through its own menu, which can
@@ -523,6 +535,22 @@ void cat_user_pause_set(bool paused)
 }
 
 int cat_get_af_gain(void) { return s_af_gain; }
+
+void cat_request_keyer_wpm(uint16_t wpm)
+{
+    /* No clamp. The CAT manual states no range for KS, so a ceiling here
+     * would be invented, and an invented ceiling silently refusing a speed
+     * the radio would have accepted is worse than letting the radio answer
+     * for itself. The read-back below is what the surfaces then show. */
+    s_pending_keyer_p1 = (uint32_t)wpm + 1;
+}
+
+void cat_query_keyer_wpm(void)
+{
+    s_keyer_query_pending = true;
+}
+
+int cat_get_keyer_wpm(void) { return s_keyer_wpm; }
 
 void cat_query_af_gain(void)
 {
@@ -1033,6 +1061,12 @@ static void process_cat_message(const char *msg, size_t len)
         }
         ui_update_passband_width(hz);
         s_cat_ready = true;
+        /* Ask for the keyer speed once the link is up, so the web settings
+         * page and anything else that shows it already has a real number the
+         * first time it is opened. Without this the first page load reports
+         * -1 (never read) and only the SECOND one shows the speed, which
+         * reads as a broken field rather than as a pending answer. */
+        s_keyer_query_pending = true;
         return;
     }
     /* GP response: GPS coordinates + date + time, straight from the receiver
@@ -1121,6 +1155,18 @@ static void process_cat_message(const char *msg, size_t len)
         if (v >= 0 && v <= CAT_AF_GAIN_MAX) {
             s_af_gain = v;
             ESP_LOGI(TAG, "AF gain read back: %d (%.2f dB)", v, v * 0.25);
+        }
+        return;
+    }
+    /* KS response: "KSnnn;" - keyer speed in WPM. The radio is the authority
+     * on what it accepted, so this is what every surface displays, not the
+     * number that was sent. 0 is straight-key mode and is a legal answer. */
+    if (len >= 3 && msg[0] == 'K' && msg[1] == 'S') {
+        int v = atoi(msg + 2);
+        if (v >= 0 && v <= 999) {
+            s_keyer_wpm = v;
+            if (v == 0) ESP_LOGI(TAG, "Keyer speed read back: 0 (straight key)");
+            else        ESP_LOGI(TAG, "Keyer speed read back: %d WPM", v);
         }
         return;
     }
@@ -2060,6 +2106,33 @@ static void poll_task(void *arg)
             ESP_LOGI(TAG, "AF gain -> %s (%.2f dB) (%s)", cmd, ag * 0.25,
                      err == ESP_OK ? "ok" : "fail");
             if (err == ESP_OK) s_af_gain_query_pending = true;   // see the RF gain branch
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_keyer_query_pending) {
+            s_keyer_query_pending = false;
+            static const char q[] = "KS;";
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, 3, 200);
+            ESP_LOGI(TAG, "Keyer speed query KS; (%s)", err == ESP_OK ? "sent" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint32_t ks_p1 = s_pending_keyer_p1;
+        if (ks_p1 != 0) {
+            s_pending_keyer_p1 = 0;
+            unsigned ks = (unsigned)(ks_p1 - 1);
+            /* 3 digits, the Kenwood TS-480 form this radio emulates and the
+             * same shape its AG/RG commands use. */
+            char cmd[16];
+            int n = snprintf(cmd, sizeof cmd, "KS%03u;", ks);
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                          (size_t)n, 200);
+            ESP_LOGI(TAG, "Keyer speed -> %s (%s)", cmd, err == ESP_OK ? "ok" : "fail");
+            /* ⛔ ALWAYS READ BACK. A successful CDC write only proves the
+             * bytes reached the radio - the lesson Q9/IQ mode taught the hard
+             * way - and here it also resolves the undocumented range: if the
+             * QMX clamps, the surfaces show what it clamped to. */
+            if (err == ESP_OK) s_keyer_query_pending = true;
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }

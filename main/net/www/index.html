@@ -4445,6 +4445,12 @@ const SET_FIELDS = [
      "The radio's achievable CW filter centres are 500-950 in 25 Hz steps, and which of them are offered depends on the CW passband in use - the QMX picks the nearest achievable one. Also sets the radio's own CW centre, so its sidetone and offset follow"],
   ["Radio & display", "if_cal_hz",          "num",  "IF calibration (Hz)",
      "Per-unit trim, -200 to +200, so a CW signal sits exactly under the cursor. Default -60"],
+  /* Keyer speed (Ralph Hellmig, 2026-10-10). Goes straight to the radio over
+     CAT and is read back, so the box shows what the QMX accepted rather than
+     what was typed. Not stored here - the radio owns it, and its own encoder
+     changes it behind the browser's back. */
+  ["Radio & display", "keyer_wpm",          "num",  "CW keyer speed (WPM)",
+     "Sent to the radio over CAT and read back, so this shows what the QMX accepted. 0 selects Straight Key mode regardless of the keyer mode setting, which is the quick way to key down for a tune-up. Needs the CAT link up"],
 
   ["Radio & display", "charge_limit_en",    "bool", "Battery care (stop charging early)",
      "Stopping short of full is easier on a lithium pack left plugged in"],

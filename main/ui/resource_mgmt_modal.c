@@ -857,7 +857,10 @@ bool resource_mgmt_modal_reopen_pending(void)
 static void save_restart_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(1200));   /* long enough to read the toast */
+    /* Just long enough for LVGL to paint the window closing, so the
+     * last frame is not a half-dismissed dialog. Was 1200 ms when a
+     * toast had to be read; there is no toast now. */
+    vTaskDelay(pdMS_TO_TICKS(250));
     display_set_brightness(0);
     vTaskDelay(pdMS_TO_TICKS(80));
     esp_restart();
@@ -904,15 +907,13 @@ static void save_btn_cb(lv_event_t *e)
     ESP_LOGW(TAG, "SAVE: rx_source -> %s, restarting now (reopen=%d)",
              rx_source_str(s_src_pending), (int)to_real);
 
-    /* ⛔ SAY IT IS DELIBERATE. An unannounced reboot is how he spots a
-     * CRASH, so one the firmware caused on purpose has to be labelled - and
-     * the QMX does not survive a Tab5 reset (#74) whichever way the source
-     * is going. */
-    ui_toast_ms(to_real
-        ? "Saved. Restarting into Line in - this window reopens so you can "
-          "set the level. Power-cycle the QMX afterwards."
-        : "Saved. Restarting into the QMX input. Power-cycle the QMX "
-          "afterwards.", 1200);
+    /* ⛔ NO TOAST HERE, DELIBERATELY (his call, 2026-10-10 - the first
+     * version had one). The operator pressed Save on a dialog that says it
+     * restarts, so the reboot is already announced by the button they just
+     * used; a toast that appears for one second and then vanishes into a
+     * reboot is unreadable and says nothing new. The usual "announce a
+     * reboot so it is not mistaken for a crash" rule is satisfied by the
+     * press itself. The log line above is the durable record. */
 
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 

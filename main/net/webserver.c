@@ -5174,6 +5174,15 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     // limit matters most when the Tab5 is somewhere you are not.
     cJSON_AddNumberToObject(root, "tune_snap_hz",   (double)settings_get_tune_snap_hz());
     cJSON_AddNumberToObject(root, "cw_pitch_hz",     (double)ui_get_cw_pitch_hz());
+    /* CW keyer speed (Ralph Hellmig, 2026-10-10). Live from the radio, not a
+     * stored setting - the QMX owns it and its front-panel encoder changes it
+     * behind our back. -1 means it has not answered yet (the link may be
+     * down), and is sent as -1 rather than as 0, because 0 is straight-key
+     * mode and would read as a real speed. The GET also ASKS, so a page that
+     * has just been opened shows the radio's current value instead of
+     * whatever it was when the link came up. */
+    cat_query_keyer_wpm();
+    cJSON_AddNumberToObject(root, "keyer_wpm",       (double)cat_get_keyer_wpm());
     /* CW PROFILES (#359, Uwe DL8UG). Four slots of {name, centre, filter mask}.
      * An empty slot is centre 0 and is sent as such, so the page renders it as
      * empty rather than inventing a default the operator never chose.
@@ -5466,6 +5475,27 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * than silently coerced to the radio: over HTTP there is no dropdown to
      * snap back, so a quiet substitution would leave a script believing it
      * had selected the jack. */
+    {
+        /* CW keyer speed -> the radio, over CAT. Not persisted: the QMX owns
+         * it, and storing a copy here would fight the radio's own encoder.
+         * 0 is passed through, because 0 is straight-key mode (op manual
+         * 4.5) and clamping it away would remove the one setting that is
+         * genuinely useful for a tune-up. */
+        cJSON *it = cJSON_GetObjectItem(root, "keyer_wpm");
+        if (cJSON_IsNumber(it)) {
+            int wpm = it->valueint;
+            if (wpm < 0)   wpm = 0;
+            if (wpm > 999) wpm = 999;   /* the 3-digit CAT field, nothing more */
+            if (!cat_is_ready()) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                    "keyer speed: no CAT link to the radio");
+                return ESP_FAIL;
+            }
+            cat_request_keyer_wpm((uint16_t)wpm);
+        }
+    }
+
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rx_source")))) {
         uint8_t want = rx_source_parse(s);
         if (strcasecmp(s, rx_source_str(want)) != 0) {

@@ -395,6 +395,34 @@ void cat_query_af_gain(void);
  * Divide by 4 for the dB figure the QMX displays. */
 int cat_get_af_gain(void);
 
+/* ---- CW keyer speed (KS), in words per minute --------------------------
+ *
+ * Asked for by Ralph Hellmig on the group, 2026-10-10: there was no way to
+ * set the keyer speed from anything but the radio's own encoder.
+ *
+ * ⭐ 0 IS A REAL VALUE, NOT "unset". The QMX operation manual, section 4.5:
+ * "Setting speed to 0 enables Straight Key mode regardless of the keyer mode
+ * setting". So 0 must pass through to the radio rather than being clamped
+ * away as an empty field, and anything that caches this must not use 0 as
+ * its sentinel - see the cache-sentinel rule that BP_CW already broke once.
+ *
+ * ⚠ THE RADIO IS THE AUTHORITY ON THE RANGE. The CAT manual documents KS as
+ * "the specified number of words per minute" and states no limits, so this
+ * sends what it is given and READS BACK what the radio settled on. Whatever
+ * the QMX clamps to is what gets displayed, rather than a ceiling guessed
+ * here and then shown as if it were the radio's. */
+void cat_request_keyer_wpm(uint16_t wpm);
+
+/* Ask the radio for its current keyer speed; the answer lands in
+ * cat_get_keyer_wpm(). Same drawer-open/page-load read-back reasoning as AF
+ * gain: a surface that shows a stale value is worse than one that shows
+ * none. */
+void cat_query_keyer_wpm(void);
+
+/* Last keyer speed read back from the radio, in WPM. -1 until it has
+ * answered - NOT 0, which is straight-key mode. */
+int cat_get_keyer_wpm(void);
+
 /* ---- RF gain (RG), Stan's suggestion via Samuel W7STF, 2026-08-07 ----------
  *
  * The QMX's per-band "RF gain (dB)" from its Band Configuration screen, exposed
