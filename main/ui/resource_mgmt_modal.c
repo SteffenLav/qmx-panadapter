@@ -571,6 +571,20 @@ static void src_note_set(const char *txt, uint32_t colour)
     lv_obj_set_style_text_color(s_lbl_src_note, lv_color_hex(colour), 0);
 }
 
+/* The OPEN option list is a separate object with its own style, so setting a
+ * font on the dropdown alone leaves the list at the LVGL default - which is
+ * what made this unreadable. Same treatment the drawer's dropdowns get
+ * (ui.c's drawer_dropdown_cmap_open_cb): montserrat_28, and the height cap
+ * lifted so four options show at once instead of scrolling. */
+static void source_list_open_cb(lv_event_t *e)
+{
+    lv_obj_t *list = lv_dropdown_get_list(lv_event_get_target(e));
+    if (!list) return;
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
+    lv_obj_set_height(list, LV_SIZE_CONTENT);
+}
+
 static void source_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -622,13 +636,23 @@ static void level_timer_cb(lv_timer_t *t)
     float db = line_in_peak_dbfs();
     int shown = (int)(db < -60.0f ? -60.0f : db);
     lv_bar_set_value(s_bar_lin_level, shown, LV_ANIM_OFF);
-    lv_label_set_text_fmt(s_lbl_lin_level, "%d dBFS", shown);
 
-    /* Red near clipping, amber with little headroom left, green otherwise -
-     * the same three-band rule the mic test build used, because that is the
-     * one Tony already read off a screen. */
-    uint32_t col = (db > -3.0f) ? 0xE05050 : (db > -12.0f ? 0xE0C040 : 0x40C040);
+    /* ⭐ CLIP BEATS THE NUMBER. Past full scale the samples stop growing, so
+     * the peak reading parks at 0 dBFS and looks like a strong clean signal
+     * while the waveform is being flattened. Say CLIP instead of the figure,
+     * because the figure is the thing that misleads. */
+    const bool clipping = line_in_clip_count() > 0;
+    if (clipping) lv_label_set_text(s_lbl_lin_level, "CLIP - turn it down");
+    else          lv_label_set_text_fmt(s_lbl_lin_level, "%d dBFS", shown);
+
+    /* Red while clipping or within 3 dB of it, amber with little headroom
+     * left, green otherwise - the same three-band rule the mic test build
+     * used, because that is the one Tony has already read off a screen. */
+    uint32_t col = (clipping || db > -3.0f) ? 0xE05050
+                 : (db > -12.0f            ? 0xE0C040 : 0x40C040);
     lv_obj_set_style_bg_color(s_bar_lin_level, lv_color_hex(col), LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(s_lbl_lin_level,
+        lv_color_hex(clipping ? 0xE05050 : UI_COLOR_TEXT), 0);
 }
 
 /* Builds the source block at the top of the scrolling strip and advances y. */
@@ -642,15 +666,21 @@ static void build_source_block(int *py)
     lv_label_set_text(cap, "Audio source");
     lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
-    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y + 6);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y + 12);
 
     s_dd_source = lv_dropdown_create(s_scroll);
     lv_dropdown_set_options_static(s_dd_source, SRC_OPTIONS);
-    lv_obj_set_width(s_dd_source, SLD_W);
+    /* 50 px tall and montserrat_28 - the same shape every dropdown in the
+     * drawer uses (ui.c's PORT.A and sleep pickers). The first version set
+     * no font at all and inherited LVGL's default, which the operator could
+     * not read on a 1280x720 panel at arm's length. */
+    lv_obj_set_size(s_dd_source, SLD_W, 50);
     lv_obj_align(s_dd_source, LV_ALIGN_TOP_LEFT, SLD_X, y);
+    lv_obj_set_style_text_font(s_dd_source, &lv_font_montserrat_28, 0);
     lv_dropdown_set_selected(s_dd_source, settings_get_rx_source());
     lv_obj_add_event_cb(s_dd_source, source_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += ROW_H + 8;
+    lv_obj_add_event_cb(s_dd_source, source_list_open_cb, LV_EVENT_CLICKED, NULL);
+    y += 50 + 10;
 
     s_lbl_src_note = lv_label_create(s_scroll);
     lv_obj_set_style_text_font(s_lbl_src_note, &lv_font_montserrat_20, 0);
@@ -661,6 +691,31 @@ static void build_source_block(int *py)
                  "live - the USB host and the audio input need the same memory.",
                  UI_COLOR_TEXT_SECONDARY);
     y += ROW_H;
+
+    /* ⭐ WHICH CONTACTS. Tony A (tony1tf), GitHub #17, with the plug in his
+     * hand: "a 4way 3.5mm plug with Mic on the nearest ring". The ring
+     * nearest the body is ring 2, so signal is ring 2 and screen is the
+     * sleeve. M5Stack publish no Tab5 schematic and their own Module Audio
+     * page states the CTIA/OMTP convention in a way that contradicts the
+     * usual definition, so the standard's NAME is deliberately not printed -
+     * the physical contact is what somebody wiring a lead needs.
+     *
+     * The 3-pole warning follows from the same fact and is the failure
+     * people will actually hit: an ordinary TRS plug puts its sleeve across
+     * the socket's ring 2 and sleeve, so the input is shorted to ground and
+     * the meter simply never moves. Without this line that reads as a dead
+     * feature. */
+    lv_obj_t *wire = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(wire, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(wire, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_long_mode(wire, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(wire, SLD_X + SLD_W);
+    lv_obj_align(wire, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_label_set_text(wire,
+        "Jack wiring: 4-pole (TRRS) plug only. Signal on the ring nearest the "
+        "plug body, screen on the sleeve. A 3-pole plug shorts the input to "
+        "ground and reads nothing.");
+    y += ROW_H + 10;
 
     /* Gain and meter only exist for the jack. Built always (so the layout
      * does not jump when the source changes) but disabled unless the jack is
@@ -706,6 +761,20 @@ static void build_source_block(int *py)
     lv_obj_set_style_text_color(s_lbl_lin_level, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_lbl_lin_level, &lv_font_montserrat_20, 0);
     lv_obj_align(s_lbl_lin_level, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
+    y += ROW_H;
+
+    /* The meter is not decoration - it is the control. No default gain can
+     * know what the operator has plugged in, so say what to aim for rather
+     * than leaving a bar graph to be interpreted. */
+    lv_obj_t *hint = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(hint, SLD_X + SLD_W);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_label_set_text(hint,
+        "Live peak, updated 10x a second. Raise the gain until speech or "
+        "noise peaks sit around -12 dB (amber), and back off if it says CLIP.");
     y += ROW_H;
 
     if (!jack_live) {

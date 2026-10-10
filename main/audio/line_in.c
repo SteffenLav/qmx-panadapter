@@ -70,10 +70,25 @@ static int16_t *s_iq;         /* LI_CHUNK * 2, interleaved for the ring */
 static fir_f32_t s_fir;
 static uint32_t s_idelay_pos;
 
-/* Level meter state. Peak over the last ~100 ms, published as dBFS. */
-static volatile float s_peak_dbfs = -99.0f;
+/* Level meter state. Peak over the last ~100 ms, published as dBFS.
+ *
+ * ⭐ A PEAK METER ALONE CANNOT SHOW CLIPPING, which is the one thing the
+ * operator most needs to see. Once the input is driven past full scale the
+ * samples stop growing - they flatten at +/-32767 - so the meter simply
+ * parks at 0 dBFS and looks like a healthy strong signal while the waveform
+ * is being destroyed. s_clip counts samples that reached the rail, so the
+ * display can say CLIP rather than leave the operator reading 0 dB as good
+ * news. */
+static volatile float   s_peak_dbfs = -99.0f;
+static volatile uint32_t s_clip_n   = 0;    /* clipped samples in the last window */
 static int32_t  s_peak_acc;
 static uint32_t s_peak_frames;
+static uint32_t s_clip_acc;
+
+/* 32700 rather than 32767: the last few codes are already in the region
+ * where an analogue stage is compressing, and a converter that never emits
+ * the exact rail would otherwise hide the fault completely. */
+#define LI_CLIP_LEVEL 32700
 
 static void free_scratch(void)
 {
@@ -114,7 +129,9 @@ static void publish_level(int n)
         s_peak_dbfs = (s_peak_acc > 0)
             ? 20.0f * log10f((float)s_peak_acc / 32768.0f)
             : -99.0f;
+        s_clip_n      = s_clip_acc;
         s_peak_acc    = 0;
+        s_clip_acc    = 0;
         s_peak_frames = 0;
     }
 }
@@ -170,6 +187,7 @@ static void line_in_task(void *arg)
              * cost that only shows up as a core-0 margin. */
             int32_t a = i_s < 0 ? -(int32_t)i_s : (int32_t)i_s;
             if (a > s_peak_acc) s_peak_acc = a;
+            if (a >= LI_CLIP_LEVEL) s_clip_acc++;
         }
         publish_level(LI_CHUNK);
 
@@ -250,3 +268,5 @@ esp_err_t line_in_set_gain_db(uint8_t db)
 }
 
 float line_in_peak_dbfs(void) { return s_peak_dbfs; }
+
+uint32_t line_in_clip_count(void) { return s_clip_n; }

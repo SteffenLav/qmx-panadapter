@@ -1092,9 +1092,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                 (double)cfg.line_in_gain_db);
             /* Only while the jack is the running source: a peak level from a
              * codec that is not open would be a number with no meaning. */
-            if (line_in_running())
+            if (line_in_running()) {
                 cJSON_AddNumberToObject(src, "line_in_peak_dbfs",
                     (double)line_in_peak_dbfs());
+                /* The peak alone cannot show clipping - past full scale it
+                 * parks at 0 dBFS and reads like a strong clean signal. */
+                cJSON_AddNumberToObject(src, "line_in_clipped",
+                    (double)line_in_clip_count());
+            }
             cJSON_AddItemToObject(root, "rx_source", src);
         }
 

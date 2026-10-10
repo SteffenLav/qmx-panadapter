@@ -51,3 +51,11 @@ esp_err_t line_in_set_gain_db(uint8_t db);
  * reads, and it is the ONLY honest way to set the gain - the right value
  * depends on whatever the operator has plugged in. */
 float line_in_peak_dbfs(void);
+
+/* Samples that reached the converter's rail during the last ~100 ms window.
+ *
+ * ⭐ THE PEAK METER ALONE CANNOT SHOW CLIPPING. Past full scale the samples
+ * stop growing, so the meter parks at 0 dBFS and reads like a strong healthy
+ * signal while the waveform is being flattened. Non-zero here means back the
+ * gain off, whatever the peak says. */
+uint32_t line_in_clip_count(void);
