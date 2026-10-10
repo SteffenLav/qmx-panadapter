@@ -1372,7 +1372,31 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
  * the signal vanishes - it tends to about +4.3. That bias is currently
  * inside this constant.
  */
-#define FT8_SNR_CAL_OFFSET_DB  15.0f
+#define FT8_SNR_CAL_OFFSET_DB  23.0f
+/* ⭐ 23.0f, and this time it is a CURVE, not one reading.
+ *
+ * METHOD, because the number is only as good as it: 12 real 20 m FT8 slots
+ * were recorded off the board with /api/slot.wav (the decoder's OWN 12 kHz
+ * input), then the SAME samples were decoded by WSJT-X's jt9 and by this
+ * estimator ported into a host harness (scratchpad/wfsweep). Same input, same
+ * gain - which is exactly what the earlier sound-card-vs-USB comparison
+ * failed to control, and why it gave the wrong sign.
+ *
+ *   packing      n    mean(ours-jt9)   trend
+ *   2/240      145       -4.2 dB      -0.285 dB/dB
+ *   2/200      154       -7.7 dB      -0.105 dB/dB
+ *
+ * With the waterfall window moved (WF_DB_BIAS 200) the error is very nearly a
+ * CONSTANT -7.7 dB, so a constant is now the right instrument: 15 + 7.7 = 23.
+ * At the stock packing it was not - the -0.285 dB/dB trend was the uint8
+ * waterfall CLIPPING the strongest signals, and no offset can fix a slope.
+ *
+ * ⚠ What is left: a residual -0.105 dB/dB and sd 3.0 dB, so a very strong
+ * signal still reads a few dB low. One band, one afternoon, 154 points.
+ * Re-run scratchpad/snr_compare.py on a fresh corpus to check it.
+ *
+ * ⛔ THIS NUMBER IS TIED TO WF_DB_BIAS. Change the packing and this is wrong
+ * again. */
 
 // Mean noise power across the whole slot's waterfall, in dB. Signals occupy a
 // small fraction of bins, so the mean tracks the noise floor closely.

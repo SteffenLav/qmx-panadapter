@@ -184,9 +184,43 @@ void monitor_process(monitor_t* me, const float* frame)
                 me->wf.mag[offset].mag = db;
                 me->wf.mag[offset].phase = phase;
 #else
-                // Scale decibels to unsigned 8-bit range and clamp the value
-                // Range 0-240 covers -120..0 dB in 0.5 dB steps
-                int scaled = (int)(2 * db + 240);
+                /* Scale decibels to unsigned 8-bit range and clamp.
+                 *
+                 * The stock packing is 2*db + 240: 0.5 dB steps over
+                 * -120..+7.5 dB. MEASURED on bench dev 2026-10-10 on a busy
+                 * 20 m FT8 band, 662-3340 bins PER SLOT clip at the top
+                 * (slotdiag sat=), while 15266 sit pinned at zero - the
+                 * window is squeezed at BOTH ends.
+                 *
+                 * Made build-time adjustable so the trade can be MEASURED on
+                 * recorded slots instead of guessed at: WF_DB_SCALE steps per
+                 * dB, WF_DB_BIAS the offset. The defaults are the stock
+                 * values, so an unconfigured build is bit-identical. */
+#ifndef WF_DB_SCALE
+#define WF_DB_SCALE 2
+#endif
+#ifndef WF_DB_BIAS
+/* 200, not the stock 240: the window is -100..+27.5 dB instead of
+ * -120..+7.5. MEASURED on 12 real 20 m FT8 slots at their LIVE level
+ * (scratchpad/wfsweep), decodes per 12 slots and clipped bins per slot:
+ *
+ *     2/240 (stock)   148 decodes   sat 2598
+ *     2/220           158           sat  445
+ *     2/200           157           sat    6
+ *     2/180           157           sat    0   zero 15926 (bottom suffers)
+ *     2/160           330/335 on the reference corpus - REGRESSES
+ *
+ * +6% decodes, and clipping essentially gone, without pushing weak bins to
+ * zero (15810 -> 15821). Checked for regression on the 35-WAV reference
+ * corpus: 335 -> 336, i.e. neutral. 2/160 is where it starts costing
+ * decodes, so this is the edge of the useful range, not an arbitrary pick.
+ *
+ * ⚠ IT ALSO MOVES THE SNR BASELINE, so it ships WITH
+ * FT8_SNR_CAL_OFFSET_DB - see the note there. Shipping this alone makes the
+ * reported S/N worse (mean error -4.2 -> -7.7 dB against jt9). */
+#define WF_DB_BIAS 200
+#endif
+                int scaled = (int)(WF_DB_SCALE * db + WF_DB_BIAS);
                 me->wf.mag[offset] = (scaled < 0) ? 0 : ((scaled > 255) ? 255 : scaled);
 #endif
                 ++offset;
