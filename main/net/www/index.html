@@ -1148,6 +1148,25 @@
       <div id="js8-conv" style="display:none; border:1px solid #333; border-radius:6px; background:#000; padding:8px 10px;">
         <pre id="js8-screen" style="margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:14px; line-height:1.2; white-space:pre;"></pre>
         <div id="js8-conv-hint" style="color:var(--dim); font-size:12px; margin-top:6px;"></div>
+
+        <!-- The free-text composer. ⭐ The air time is shown BEFORE the radio is
+             keyed: a 12-frame message holds the frequency for three minutes, and
+             the operator agrees to that first. The normalised text comes from the
+             DEVICE (js8_text_plan), not from JavaScript - upper-casing, whitespace
+             collapsing and dropping unsendable characters is the encoder's rule and
+             is not reimplemented here, the same reasoning as the grid above. -->
+        <div id="js8-tx" style="display:none; margin-top:10px; border-top:1px solid #333; padding-top:10px;">
+          <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+            <input type="text" id="js8-tx-text" maxlength="160" placeholder="Free text to send&hellip;"
+                   autocomplete="off" spellcheck="false"
+                   style="flex:1 1 260px; min-width:0; background:#000; color:#d8d8d8; border:1px solid #333;
+                          border-radius:6px; padding:8px 10px; font-family:'Consolas','DejaVu Sans Mono',monospace;
+                          font-size:14px;">
+            <button type="button" id="js8-tx-send" class="bot-btn">Send</button>
+            <button type="button" id="js8-tx-cancel" class="bot-btn" style="display:none;">Stop</button>
+          </div>
+          <div id="js8-tx-plan" style="color:var(--dim); font-size:12px; margin-top:6px; min-height:1.2em;"></div>
+        </div>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <!-- Monospace, matching the Tab5 (Gyula HA3HZ: "the font of the reception
@@ -6026,10 +6045,109 @@ function js8TabsSync(proto) {
     const b = document.getElementById(id);
     b.style.opacity = (js8Tab === want) ? "1" : "0.55";
   }
+  /* The composer belongs to the conversation pane: it is where you are reading
+     what was said, which is where you answer. */
+  document.getElementById("js8-tx").style.display = showConv ? "" : "none";
   if (showConv) {
     if (!js8Timer) { js8Poll(); js8Timer = setInterval(js8Poll, 1000); }
   } else if (js8Timer) {
     clearInterval(js8Timer); js8Timer = null;
+  }
+}
+
+/* ---- the free-text composer -------------------------------------------
+   ⭐ THE PLAN COMES FROM THE DEVICE. js8_text_plan returns the frame count,
+   the air time AND the normalised text - upper-cased, whitespace collapsed,
+   unsendable characters dropped. Showing the device's own answer means the
+   operator sees exactly what will go out, and the encoder's rules are not
+   duplicated in JavaScript where they would drift. */
+let js8PlanTimer = null;
+let js8PlanSeq = 0;
+
+async function js8PlanNow() {
+  const txt  = document.getElementById("js8-tx-text").value;
+  const out  = document.getElementById("js8-tx-plan");
+  const send = document.getElementById("js8-tx-send");
+  if (!txt.trim()) { out.textContent = ""; send.disabled = true; return; }
+  const seq = ++js8PlanSeq;
+  let j;
+  try {
+    j = await (await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "js8_text_plan", text: txt })
+    })).json();
+  } catch (e) { out.textContent = "(could not reach the Tab5)"; return; }
+  if (seq !== js8PlanSeq) return;   /* a later keystroke already answered */
+  if (!j.ok) {
+    out.textContent = "Nothing sendable in that.";
+    send.disabled = true;
+    return;
+  }
+  send.disabled = false;
+  const mins = j.secs >= 60 ? " (" + Math.floor(j.secs / 60) + " min " + (j.secs % 60) + " s)" : "";
+  out.textContent = j.frames + (j.frames === 1 ? " frame, " : " frames, ") +
+                    j.secs + " s of air time" + mins + "  →  " + j.text;
+}
+
+function js8TxInit() {
+  const ta     = document.getElementById("js8-tx-text");
+  const send   = document.getElementById("js8-tx-send");
+  const cancel = document.getElementById("js8-tx-cancel");
+  if (!ta || ta.dataset.wired) return;
+  ta.dataset.wired = "1";
+  send.disabled = true;
+
+  /* Debounced: one plan per pause in typing, not one per keystroke. */
+  ta.addEventListener("input", () => {
+    if (js8PlanTimer) clearTimeout(js8PlanTimer);
+    js8PlanTimer = setTimeout(js8PlanNow, 250);
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !send.disabled) { e.preventDefault(); send.click(); }
+  });
+
+  send.addEventListener("click", async () => {
+    const txt = ta.value;
+    if (!txt.trim()) return;
+    send.disabled = true;
+    try {
+      await fetch("/api/cmd", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "js8_text", text: txt })
+      });
+      ta.value = "";
+      document.getElementById("js8-tx-plan").textContent = "Sending…";
+    } catch (e) {
+      document.getElementById("js8-tx-plan").textContent = "(could not reach the Tab5)";
+      send.disabled = false;
+    }
+  });
+
+  /* ⛔ Reachable mid-transmission on purpose: a run holds the frequency for up
+     to three minutes and must be stoppable from wherever the operator is. */
+  cancel.addEventListener("click", async () => {
+    try {
+      await fetch("/api/cmd", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "js8_text_cancel" })
+      });
+    } catch (e) { /* the status poll will show whether it stopped */ }
+  });
+}
+
+/* Progress, from the status the device already publishes. Called from the
+   status poll rather than polling again - ft8.ftx_* is already in /api/status. */
+function js8TxStatus(ft8) {
+  const box = document.getElementById("js8-tx");
+  if (!box || box.style.display === "none") return;
+  const cancel = document.getElementById("js8-tx-cancel");
+  const send   = document.getElementById("js8-tx-send");
+  const plan   = document.getElementById("js8-tx-plan");
+  const run    = !!(ft8 && ft8.ftx_active);
+  cancel.style.display = run ? "" : "none";
+  send.style.display   = run ? "none" : "";
+  if (run && ft8.ftx_total) {
+    plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total + "…";
   }
 }
 
@@ -6759,6 +6877,8 @@ async function tick() {
        here, and the pane must not go on offering a conversation that the
        radio is no longer decoding. */
     js8TabsSync(lastFtProto);
+    js8TxInit();
+    js8TxStatus(d.ft8);
 
     /* The Pause button has to SHOW the pause, not just set it - it shipped
        without this and the operator caught it immediately ("clicking the web

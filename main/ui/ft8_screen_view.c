@@ -5,6 +5,7 @@
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
 #include "ft8_filter_modal.h"
+#include "js8_text_modal.h"   // the JS8 free-text composer, opened below
 #include "ft8_tone_modal.h"
 
 #include <stdio.h>
@@ -265,6 +266,7 @@ static lv_obj_t *s_lbl_pause           = NULL;  // its label - text changes Paus
 static lv_obj_t *s_btn_parity   = NULL;
 static lv_obj_t *s_lbl_parity   = NULL;
 static lv_obj_t *s_btn_filter   = NULL;  // "Filter" button — opens exclude-prefix modal
+static lv_obj_t *s_btn_js8_text = NULL;  // "Free text" - JS8 only, opens the composer
 static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button - swaps to "Pileup" when ft8_pileup_count() > 0
 static int        s_cq_parity   = -1;
 
@@ -2474,6 +2476,16 @@ static void filter_btn_cb(lv_event_t *e)
     ft8_filter_modal_show();  // opens the exclude-prefix + future filters modal
 }
 
+/* ⭐ The JS8 composer. JS8 free-text transmit worked for a whole release with
+ * no way to reach it but POST /api/cmd - "how can users be happy for an api?"
+ * This is the button. JS8 only: js8_tabs_apply() hides it in FT8 and FT4,
+ * where there is no free text to send. */
+static void js8_text_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    js8_text_modal_show();
+}
+
 static void tx_tone_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -3550,6 +3562,13 @@ static void js8_tabs_apply(void)
     const bool js8 = js8_mode_now();
     const int  top = js8 ? TABBAR_H : 0;
 
+    /* Free text is a JS8 idea only - FT8 and FT4 carry a fixed exchange, so
+     * the button has nothing to mean there. */
+    if (s_btn_js8_text) {
+        if (js8) lv_obj_clear_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);
+        else     lv_obj_add_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);
+    }
+
     if (s_tabbar) {
         if (js8) lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
         else     lv_obj_add_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
@@ -4007,6 +4026,26 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_cq_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
+
+    /* "Free text" - one row below Call CQ, same full width, and shown only in
+     * JS8 (js8_tabs_apply). y=393 is the next slot on the 60+8 grid. */
+    s_btn_js8_text = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_js8_text, 288, 60);
+    lv_obj_set_pos(s_btn_js8_text, 0, 393);
+    lv_obj_set_style_bg_color(s_btn_js8_text, lv_color_hex(JS8_ACCENT_HEX), 0);
+    lv_obj_set_style_border_color(s_btn_js8_text, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    lv_obj_set_style_border_width(s_btn_js8_text, 2, 0);
+    lv_obj_set_style_radius(s_btn_js8_text, 8, 0);
+    lv_obj_add_event_cb(s_btn_js8_text, js8_text_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);   /* js8_tabs_apply decides */
+    {
+        lv_obj_t *ftl = lv_label_create(s_btn_js8_text);
+        lv_label_set_text(ftl, "Free text");
+        lv_obj_set_style_text_color(ftl, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(ftl, &lv_font_montserrat_24, 0);
+        lv_obj_center(ftl);
+    }
+
 
     // "Active: N" removed (operator, 2026-07-29: not useful information) - the
     // status text below moved up into the line it occupied, which is the label
