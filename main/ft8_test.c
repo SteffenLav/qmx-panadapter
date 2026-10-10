@@ -1337,9 +1337,35 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
 
 // WSJT-X reports SNR referenced to a 2500 Hz noise bandwidth.
 #define FT8_SNR_REF_BW_HZ      2500.0f
-// Empirical fudge factor - nudge this if a real WSJT-X comparison ever
-// becomes available; everything else here is derived from first principles.
-#define FT8_SNR_CAL_OFFSET_DB  15.0f
+/* Empirical offset. Everything else in ft8_estimate_snr_db() is derived from
+ * first principles; this is the one fitted term.
+ *
+ * It was +15.0f, with a comment asking for "a real WSJT-X comparison" that
+ * nobody had. 2026-10-10 produced one, and it said we were reporting 22 dB
+ * too high:
+ *
+ *   JS8Call 2.3.1   -14 dB     (WSJT-X convention, the standard)
+ *   Tab5            +8 dB
+ *
+ * Same QMX, same signal, same dummy load - only the USB cable moved between
+ * the PC and the Tab5, so neither the path nor the radio changed. 15 - 22
+ * gives -7.
+ *
+ * ⚠ ONE POINT, ONE SIGNAL LEVEL. Stated plainly because this feeds every S/N
+ * on the FT8 and JS8 screens and every PSK Reporter spot: it is a single
+ * paired observation, not a calibration curve, and in that same slot this
+ * estimator reported -22 to -34 dB for sidelobe copies of the SAME energy, so
+ * its spread is wide. Confirm across three or four power levels before
+ * trusting it to a dB.
+ *
+ * ⭐ A structural term a future derivation should fold in, which would shrink
+ * what is left for this constant to absorb: the signal loop takes the MAX of
+ * 8 tone bins per block while the noise floor is the MEAN over all bins. For
+ * noise alone the expected max of 8 iid bins is H_8 = 2.718, i.e. +4.34 dB,
+ * so sig_db - noise_db does not go to zero as the signal vanishes - it goes
+ * to about +4.3. That bias is currently buried in this offset.
+ */
+#define FT8_SNR_CAL_OFFSET_DB  (-7.0f)
 
 // Mean noise power across the whole slot's waterfall, in dB. Signals occupy a
 // small fraction of bins, so the mean tracks the noise floor closely.
