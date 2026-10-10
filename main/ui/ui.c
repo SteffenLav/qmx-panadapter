@@ -2182,6 +2182,15 @@ bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
          * live dial only before any audio has been processed. */
         uint32_t cap = dsp_get_spectrum_dial_hz();
         c->dial_hz = (int64_t)(cap ? cap : s_last_qmx_freq_hz);
+        /* ⛔ A REAL SOURCE HAS NO DIAL. The 3.5 mm jack delivers audio, and
+         * line_in.c makes it analytic, so bin 0 IS 0 Hz audio and the axis
+         * reads audio frequency directly. Leaving the QMX's last dial here
+         * would label an audio spectrum with an RF frequency nothing in it
+         * relates to - a readout that is not merely useless but wrong.
+         *
+         * The negative half of the span stays empty, and that is honest: it
+         * is the half one channel cannot tell you about. */
+        if (dsp_source_is_real()) c->dial_hz = 0;
     }
     c->if_offset_hz      = ui_get_if_offset_hz();
     c->zoom              = s_zoom_factor;

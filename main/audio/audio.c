@@ -19,6 +19,7 @@
 #include "iq_balance.h"
 #include "psram_task.h"
 #include "ui.h"
+#include "storage/settings.h"   // rx_source_is_real: which producer feeds the ring
 
 static const char *TAG = "audio";
 
@@ -208,6 +209,24 @@ esp_err_t audio_init(void)
     // see heap_watchdog_task's comment).
     psram_task_create(heap_watchdog_task, "heap_wd", 3072, NULL, 1, tskNO_AFFINITY);
 
+    /* ⛔ A REAL SOURCE GETS THE RING AND NOTHING ELSE.
+     *
+     * The ES7210 capture channel and the USB host cannot coexist: bringing up
+     * the I2S RX side claims a second GDMA channel and the DMA-capable RAM
+     * the host needs for its endpoints, so CDC-ACM/CAT cannot claim theirs
+     * (the same reason rx_audio.c's preopen creates a TX-ONLY channel).
+     * Installing the driver here and then never opening a device would still
+     * spend that RAM and leave a background task polling nothing.
+     *
+     * Returning here leaves the ring, the IQ-balance state and the heap
+     * watchdog exactly as the USB path has them, so line_in.c only has to
+     * supply samples. */
+    if (rx_source_is_real(settings_get_rx_source())) {
+        ESP_LOGW(TAG, "RX source is %s - UAC host driver NOT installed",
+                 rx_source_str(settings_get_rx_source()));
+        return ESP_OK;
+    }
+
     const uac_host_driver_config_t cfg = {
         .create_background_task = true,
         .task_priority = 5,
@@ -325,6 +344,34 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
     size_t pairs = got_bytes / (sizeof(int16_t) * 2);
     s_pairs_read += pairs;
     return pairs;
+}
+
+/* Push I/Q pairs into the same ring the UAC path feeds.
+ *
+ * ⛔ THE ONLY OTHER PRODUCER, and it exists so that everything downstream -
+ * the FFT, the waterfall, zoom, the S-meter, the FT8/JS8/WSPR capture ring -
+ * stays exactly as it was. line_in.c synthesises the quadrature channel with
+ * a Hilbert transform and hands the result over here, so the shape of what
+ * reaches the ring is identical to what the QMX sends: interleaved int16
+ * I,Q at 48 kHz. Nothing after this point has to know which one is running.
+ *
+ * ⛔ NEVER BOTH AT ONCE. The two sources are mutually exclusive at boot (see
+ * rx_source_t) - audio_init() does not even install the UAC driver when a
+ * real source is selected - so there is no second writer to serialise with.
+ *
+ * Drops are counted on the same counters as the UAC path, so the existing
+ * "DROPPED=" diagnostics mean the same thing for either source. */
+void audio_push_pairs(const int16_t *iq, size_t pairs)
+{
+    if (!s_ring || !iq || pairs == 0) return;
+    size_t bytes = pairs * sizeof(int16_t) * 2;
+    if (xRingbufferSend(s_ring, iq, bytes, 0) == pdTRUE) {
+        s_pairs_written       += pairs;
+        s_samples_this_period += pairs;
+    } else {
+        s_dropped_this_period += pairs;
+        s_dropped_total       += pairs;
+    }
 }
 
 size_t audio_ring_backlog_pairs(void)

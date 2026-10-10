@@ -82,6 +82,7 @@ idf_component_register(
         "cat/cat.c"
         "audio/audio.c"
         "audio/rx_audio.c"
+        "audio/line_in.c"
         "dsp/dsp.c"
         "dsp/iq_balance.c"
         "dsp/spur_map.c"

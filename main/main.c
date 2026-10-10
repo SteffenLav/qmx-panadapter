@@ -21,6 +21,7 @@
 #include "cat.h"
 #include "cw_decode.h"
 #include "audio.h"
+#include "line_in.h"   // the 3.5 mm jack as a receive source
 #include "rx_audio.h"
 #include "util/mic_probe.h"   // one-shot ES7210 channel probe (GitHub #17)
 #include "dsp.h"
@@ -484,29 +485,59 @@ void app_main(void)
      * runs: it reboots into a normal session. */
     mic_probe_run_if_pending();
 
-    rx_audio_preopen();
-    MEM_LEDGER("rx_audio_preopen (I2S)");
+    /* ⛔ THE INPUT SOURCE IS LATCHED HERE, FOR THE WHOLE SESSION.
+     *
+     * A real source (the 3.5 mm jack) and the QMX over USB cannot coexist:
+     * the ES7210 capture channel claims a second GDMA channel and the
+     * DMA-capable RAM the USB host needs for its endpoints, so CDC-ACM/CAT
+     * cannot claim theirs. He ruled on 2026-10-10 that nothing needs both.
+     *
+     * ⛔ rx_audio_preopen() IS SKIPPED TOO, and that is not an oversight.
+     * It claims the I2S port with a TX-only channel and keeps its own
+     * data_if, so bsp_audio_codec_microphone_init() would then find the
+     * port taken and fail. The cost is that RX audio to the speaker is not
+     * available in line-in mode - monitoring an audio source through the
+     * Tab5 is a separate job, not a line this branch can quietly add.
+     *
+     * Switching back needs a restart, which settings_set_rx_source() says
+     * and every surface that offers the choice repeats.
+     */
+    const bool rx_src_real = rx_source_is_real(settings_get_rx_source());
+    if (!rx_src_real) {
+        rx_audio_preopen();
+        MEM_LEDGER("rx_audio_preopen (I2S)");
 
-    ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
-    MEM_LEDGER("usb_host_start");
-    ESP_LOGI(TAG, "USB host started");
-    // Make every firmware-initiated reboot tear the USB link down properly, so
-    // the QMX is told we are going rather than finding out (see usb_shutdown.h).
-    usb_shutdown_install_handler();
+        ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+        MEM_LEDGER("usb_host_start");
+        ESP_LOGI(TAG, "USB host started");
+        // Make every firmware-initiated reboot tear the USB link down properly, so
+        // the QMX is told we are going rather than finding out (see usb_shutdown.h).
+        usb_shutdown_install_handler();
 
-    // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
-    // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
-    // descriptor bytes after some warm reboots) is QMX-firmware-side and
-    // survives every host-side cue - bus resets, root-port power cycles,
-    // USB5V_EN cuts up to 8 s. A boot replug can't cure it, and aborting a
-    // healthy first enumeration (which normally succeeds) risks INDUCING
-    // the wedge. usb_replug() remains available via the hidden /api/cmd
-    // action for experiments; the task below detects the wedge and tells
-    // the operator to power-cycle the QMX instead of leaving a dead screen.
-    usb_replug_watchdog_start();
+        // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
+        // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
+        // descriptor bytes after some warm reboots) is QMX-firmware-side and
+        // survives every host-side cue - bus resets, root-port power cycles,
+        // USB5V_EN cuts up to 8 s. A boot replug can't cure it, and aborting a
+        // healthy first enumeration (which normally succeeds) risks INDUCING
+        // the wedge. usb_replug() remains available via the hidden /api/cmd
+        // action for experiments; the task below detects the wedge and tells
+        // the operator to power-cycle the QMX instead of leaving a dead screen.
+        usb_replug_watchdog_start();
+    } else {
+        ESP_LOGW(TAG, "RX source is %s - NO USB host, NO CAT, NO RX audio out",
+                 rx_source_str(settings_get_rx_source()));
+    }
 
     ESP_ERROR_CHECK(audio_init());
     MEM_LEDGER("audio_init (UAC ring)");
+    /* The ring exists now, so the jack has somewhere to push. audio_init()
+     * skipped the UAC driver for this source; line_in.c is the only
+     * producer. A failure here is logged and left: the board still boots,
+     * with a dead spectrum and a log line saying why, which beats a crash
+     * loop on a unit whose operator cannot see a console. */
+    if (rx_src_real && line_in_start() != ESP_OK)
+        ESP_LOGE(TAG, "line input failed to start - no samples this session");
     iq_balance_set_enabled(cfg->iq_enabled);
     ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
@@ -565,13 +596,20 @@ void app_main(void)
         }
     }
     cw_decode_init();
-    ESP_ERROR_CHECK(cat_init());
-    MEM_LEDGER("cat_init (CDC)");
+    /* No USB host means no CDC-ACM to find. Starting CAT anyway leaves its
+     * link task retrying a device that cannot appear, and the UI showing a
+     * radio that is not there. */
+    if (!rx_src_real) {
+        ESP_ERROR_CHECK(cat_init());
+        MEM_LEDGER("cat_init (CDC)");
+    }
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
     // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
     // via a powered hub. No-op if no mouse/hub is present.
-    usb_hid_mouse_init();
+    /* The HID driver installs onto the USB host, which is not running in
+     * this mode. */
+    if (!rx_src_real) usb_hid_mouse_init();
 
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
@@ -678,8 +716,13 @@ void app_main(void)
     // polling every 120 ms even when idle) cost FT8 decode yield, and how
     // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
     // before this call was re-enabled (memory project_rx_audio_track.md).
-    rx_audio_init();
-    MEM_LEDGER("rx_audio_init");
+    /* Skipped for the same reason preopen was: the I2S port belongs to the
+     * ES7210 capture side in this mode, and rx_audio demodulates IQ, which
+     * a one-channel source does not produce. */
+    if (!rx_src_real) {
+        rx_audio_init();
+        MEM_LEDGER("rx_audio_init");
+    }
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew
