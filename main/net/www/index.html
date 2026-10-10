@@ -6878,7 +6878,15 @@ async function tick() {
        radio is no longer decoding. */
     js8TabsSync(lastFtProto);
     js8TxInit();
-    js8TxStatus(d.ft8);
+    /* ⛔ `s`, NOT `d`. This read `d.ft8` and shipped in v1.17.0. There is no `d`
+       in tick() - the parsed status is `const s` - so every poll threw a
+       ReferenceError here, the catch below turned it into one suppressed
+       console line, and EVERYTHING AFTER THIS POINT never ran: the band, mode
+       and BW pills stayed "--", lastScreen stayed null so the page never left
+       the panadapter, and switching the Tab5's mode did nothing on the web
+       page. Randy N4OPI reported it within hours of the release.
+       The name came from js8Poll(), where the fetch result IS `d`. */
+    js8TxStatus(s.ft8);
 
     /* The Pause button has to SHOW the pause, not just set it - it shipped
        without this and the operator caught it immediately ("clicking the web
@@ -7374,9 +7382,32 @@ async function tick() {
         console.error("status paint failed (values left stale):", e);
       else if (statusPaintErrs === 4)
         console.error("status paint still failing - further errors suppressed");
+      /* ⛔ AND SAY SO ON THE PAGE, not only in the console. The comment above
+         was written after this exact failure in September and fixed it to a
+         console line - which is a place nobody looks, because the page goes on
+         looking plausible: a live spectrum (it is a separate WebSocket) over
+         fields frozen at "--". It then shipped AGAIN in v1.17.0 and a user
+         found it, not me. A dead status poll is now stated where the operator
+         is already looking. */
+      if (statusPaintErrs === 3) showPaintFailureBanner(e);
     }
   }
   finally { statusInFlight = false; }
+}
+
+/* The banner for a status poll that is throwing. Built on demand so it costs
+   nothing on a healthy page, and it does not clear itself: the condition is a
+   bug in this file, so it is fixed by a new build, not by waiting. */
+function showPaintFailureBanner(e) {
+  if (document.getElementById("paint-fail")) return;
+  const b = document.createElement("div");
+  b.id = "paint-fail";
+  b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;background:#962020;" +
+                    "color:#fff;font:14px/1.4 system-ui,sans-serif;padding:10px 14px;text-align:center";
+  b.textContent = "This page has stopped reading the radio's status - band, mode and bandwidth " +
+                  "below are stale. The spectrum is a separate stream and is still live. " +
+                  "Please report this: " + (e && e.message ? e.message : String(e));
+  document.body.appendChild(b);
 }
 
 function updateFreqAxis() {
