@@ -1065,9 +1065,85 @@ static void reinit_pool_if_mode_changed(void)
  * (js8ev_dropped) rather than dropped silently. */
 #define FT8_JS8_MAX_EVENTS 24
 
+/* ⭐ ONE TRANSMISSION MUST PUBLISH ONE DECODE.
+ *
+ * Several candidates lock onto the same signal - adjacent time bins, and
+ * sidelobe offsets of a strong carrier - and each one passes CRC-12 carrying
+ * the IDENTICAL payload. Without a check, every copy is published.
+ *
+ * MEASURED on the field Tab5, 2026-10-10, one CQ from the shack at 20 m:
+ *
+ *   slot 10  cand=140  dec=23     slot 12  cand=140  dec=23
+ *   slot 14  cand=140  dec=22     slot 16  cand=140  dec=20
+ *
+ * All 'CQ OZ1LAV JO65'. The real signal sat at 1494 Hz (+8 dB); the other
+ * ~21 copies were the same frame at -22 to -34 dB, mostly on a 100 Hz grid
+ * (16 bins x 6.25 Hz), each also appearing at two adjacent dt values. A real
+ * JS8Call on the same radio, same signal, decoded it ONCE.
+ *
+ * ft8_lib's own reference decoder has this check (demo/decode_ft8.c, the
+ * decoded_hashtable / found_duplicate block). We never carried it over.
+ *
+ * ⚠ FT8 hid it: ft8_screen_record_decode() keys by callsign, so 23 decodes
+ * collapsed into one row with heard_count 23. It surfaced only in JS8, where
+ * data frames bypass that and reach js8_reasm.c as 23 fragments on 23
+ * different frequencies. The tcall[] comment below records the same bug from
+ * the other side - Randy N4OPI's "one station five times in a slot".
+ *
+ * ⛔ The harness cannot catch this class: js8_wav_harness.c's decode_slot()
+ * drops repeats by text before anything counts them.
+ *
+ * Compared on the raw payload, not the rendered text, so JS8 data frames -
+ * which never render - dedup too. The hash is only a fast pre-filter; a hash
+ * hit is confirmed with memcmp, because dropping a REAL decode on a collision
+ * would be worse than the duplicates this exists to remove.
+ *
+ * Shared by both halves of the dual-core fan-out, so it carries its own
+ * spinlock. Search and insert happen inside one critical section - two cores
+ * decoding the same payload simultaneously would otherwise both find it
+ * absent and both publish. */
+typedef struct {
+    portMUX_TYPE lock;
+    int          n;
+    uint32_t     hash[FT8_MAX_CANDIDATES];
+    uint8_t      payload[FT8_MAX_CANDIDATES][FTX_PAYLOAD_LENGTH_BYTES];
+} slot_dedup_t;
+
+/* True if this payload was already published in this slot; records it if not.
+ * Returns with the payload recorded either way the caller needs it: a `true`
+ * return means DROP. */
+static bool slot_dedup_seen(slot_dedup_t *d, const uint8_t *payload)
+{
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < FTX_PAYLOAD_LENGTH_BYTES; i++) {
+        h ^= (uint32_t)payload[i];
+        h *= 16777619u;
+    }
+    bool seen = false;
+    portENTER_CRITICAL(&d->lock);
+    for (int i = 0; i < d->n; i++) {
+        if (d->hash[i] == h &&
+            memcmp(d->payload[i], payload, FTX_PAYLOAD_LENGTH_BYTES) == 0) {
+            seen = true;
+            break;
+        }
+    }
+    /* Full is not an error: FT8_MAX_CANDIDATES distinct payloads in one slot
+     * cannot happen on air. Stop recording and let the rest through rather
+     * than silently suppressing real decodes. */
+    if (!seen && d->n < FT8_MAX_CANDIDATES) {
+        d->hash[d->n] = h;
+        memcpy(d->payload[d->n], payload, FTX_PAYLOAD_LENGTH_BYTES);
+        d->n++;
+    }
+    portEXIT_CRITICAL(&d->lock);
+    return seen;
+}
+
 typedef struct {
     int   n_decoded;
     int   n_attempted;
+    int   n_dup;                       // identical payloads suppressed (see slot_dedup_t)
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
     int   n_timing;
     /* Sender-callsign hash for each timing sample, parallel to timing[].
@@ -1119,6 +1195,8 @@ typedef struct {
      * decode_candidate_range(). */
     volatile int            next_cand;
     portMUX_TYPE            cand_lock;
+    /* Shared duplicate table - both halves check it before publishing. */
+    slot_dedup_t           *dedup;
     int                     start_off_ms;
     int                     start;        // first candidate index
     int                     step;         // index stride (2 for the dual-core split)
@@ -1478,6 +1556,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    int64_t t_start_us, int start_off_ms,
                                    bool may_early_advance,
                                    volatile int *cursor, portMUX_TYPE *cursor_lock,
+                                   slot_dedup_t *dedup,
                                    decode_result_t *out)
 {
     /* ⛔ EVERY COUNTER IN decode_result_t IS RESET HERE, and the list is not
@@ -1490,6 +1569,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     out->early_advanced = false;
     out->n_decoded   = 0;
     out->n_attempted = 0;
+    out->n_dup       = 0;
     out->n_timing    = 0;
     out->n_js8ev     = 0;
     out->js8ev_dropped = 0;
@@ -1622,6 +1702,15 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         ftx_message_t msg;
         ftx_decode_status_t st;
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
+        /* ⭐ ONE TRANSMISSION, ONE DECODE - see slot_dedup_t for the
+         * measurement. Checked HERE, before decode_msg_to_text(), so a
+         * duplicate costs nothing beyond the LDPC that already ran, and so
+         * BOTH branches below are covered: the rendered one and the JS8
+         * data-frame one that feeds the reassembler. */
+        if (dedup && slot_dedup_seen(dedup, msg.payload)) {
+            out->n_dup++;
+            continue;
+        }
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
         /* ONE call, deliberately: decode_msg_to_text() runs the message
@@ -1881,7 +1970,8 @@ static void ft8_decode_worker_task(void *arg)
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
                                job->start_off_ms, true,
-                               &job->next_cand, &job->cand_lock, job->result);
+                               &job->next_cand, &job->cand_lock,
+                               job->dedup, job->result);
         xSemaphoreGive(ctx->done);
     }
     /* MEASURE IT, so the 65536 above stops being a judgement call. This task
@@ -2003,12 +2093,19 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     static EXT_RAM_BSS_ATTR decode_result_t r_worker;
     decode_result_t r_main;
 
+    /* One duplicate table per SLOT, shared by both halves. A stack local
+     * rather than a static: decode_slot is the only writer, the decode task's
+     * stack is already 64 KB, and a static would have to be cleared anyway -
+     * with the cross-instance hazard worker_ctx_t exists to avoid. ~2 KB. */
+    slot_dedup_t dedup = { .lock = portMUX_INITIALIZER_UNLOCKED, .n = 0 };
+
     worker_job_t job = {
         .mon = mon, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
         .slot_sec = slot_sec, .t_start_us = t_start, .start_off_ms = start_off_ms,
         .start = 1, .step = 2, .result = &r_worker,
         /* Both halves walk this one cursor - see decode_candidate_range(). */
         .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
+        .dedup = &dedup,
     };
     /* ⭐⭐ DO NOT HAND WORK TO A CORE THAT CANNOT DO IT.
      *
@@ -2069,7 +2166,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
                            t_start, start_off_ms, true,
                            dispatched ? &job.next_cand : NULL,
-                           dispatched ? &job.cand_lock : NULL, &r_main);
+                           dispatched ? &job.cand_lock : NULL, &dedup, &r_main);
     int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
@@ -2078,12 +2175,19 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         // No helper (or <=1 candidate): decode the odd half inline too.
         /* Inline fallback: this is still the DECODE TASK, so it may early-advance
            on the same terms as the even half above. */
+        /* Same dedup table as the even half above: a duplicate must be caught
+           across the two ranges, not only within one. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, true, NULL, NULL, &r_worker);
+                               t_start, start_off_ms, true, NULL, NULL,
+                               &dedup, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
     int n_attempted = r_main.n_attempted + r_worker.n_attempted;
+    /* Reported in the slot line: without it the fix is invisible, and a
+     * decoder that suddenly publishes one row instead of twenty-three looks
+     * exactly like a decoder that stopped working. */
+    int n_dup       = r_main.n_dup       + r_worker.n_dup;
     int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
 
     /* ---- JS8 free-text reassembly (J7) ---------------------------------
@@ -2346,10 +2450,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
+        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
-        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
+        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_dup, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
         s_last_timing_valid ? s_last_timing_stations : 0,
