@@ -42,6 +42,28 @@ extern "C" {
  * own drift would split into several. */
 #define JS8_REASM_FREQ_TOL_HZ   15
 
+/* ⭐ ATTRIBUTION is a STRONGER CLAIM than joining, so it gets a tighter
+ * tolerance of its own.
+ *
+ * MEASURED ON AIR 2026-10-10: a real station (OZ7TKM) called CQ on 1494 Hz.
+ * Our own anonymous free text, sent from a second station of ours on 1506 Hz,
+ * was 12 Hz away - inside JS8_REASM_FREQ_TOL_HZ - so the receiver displayed
+ * OUR message as "OZ7TKM: STATUSCHK". The operator's reaction was the right
+ * one: "could be anybody".
+ *
+ * A free-text frame carries NO callsign (see the header comment above), so
+ * attribution by offset is the only mechanism there is, and it is always a
+ * guess. The trade is therefore between a WRONG name and NO name, and a wrong
+ * one is worse: it puts words in a named amateur's mouth. Below this, attribute;
+ * above it, leave the run unidentified and let the UI show the offset, which it
+ * already does ("1506 Hz [data 1f]").
+ *
+ * 8 Hz, not 15: the legitimate case in the harness is an identifying frame on
+ * 1200 Hz naming data on 1203 Hz - 3 Hz of ordinary drift, well inside this -
+ * while the 12 Hz miss above is outside it. Not tightened further because the
+ * candidate search quantises to ~6.25 Hz, so one bin of drift must survive. */
+#define JS8_REASM_IDENT_TOL_HZ  8
+
 /* How many slots of silence close a transmission. A sender pauses between
  * frames more often than you would think - a slot lost to QSB, or JS8Call's
  * own gap before a continuation - so closing on the first missed slot

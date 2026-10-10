@@ -55,11 +55,22 @@ static void remember_ident(js8_reasm_t* r, int64_t slot, int freq_hz,
                            const char* call)
 {
     if (!call || !call[0]) return;
-    /* Overwrite the entry on this offset if there is one: the newest
-     * identification wins, because a station that has just replaced another
-     * on the same frequency is the one whose data frames follow. */
+    /* Reuse the entry on this offset when it is the SAME station re-identifying,
+     * or when a LATER slot has genuinely replaced an earlier occupant of the
+     * frequency - the newest identification wins there, because the station
+     * that has just taken the offset is the one whose data frames follow.
+     *
+     * ⛔ BUT NOT when a DIFFERENT callsign turns up in the SAME slot. Those two
+     * stations coexist; neither replaced the other, and overwriting silently
+     * handed one station's offset to the other. Measured by the harness
+     * 2026-10-10: OZ7TKM on 1496 and OZ2LAV on 1502, 6 Hz apart in one slot,
+     * left ONE entry reading OZ2LAV - so a data frame between them was
+     * attributed with total confidence to a station picked by arrival order.
+     * Letting both stand is what allows lookup_ident() to see the ambiguity
+     * and decline to name anyone. */
     for (int i = 0; i < JS8_REASM_MAX_ACTIVE; i++) {
-        if (r->ident[i].used && freq_near(r->ident[i].freq_hz, freq_hz)) {
+        if (r->ident[i].used && freq_near(r->ident[i].freq_hz, freq_hz)
+            && (!strcmp(r->ident[i].call, call) || r->ident[i].slot < slot)) {
             r->ident[i].slot = slot;
             r->ident[i].freq_hz = freq_hz;
             snprintf(r->ident[i].call, sizeof(r->ident[i].call), "%s", call);
@@ -85,12 +96,51 @@ static void remember_ident(js8_reasm_t* r, int64_t slot, int freq_hz,
     snprintf(r->ident[oldest].call, sizeof(r->ident[oldest].call), "%s", call);
 }
 
+static int ident_near(int a, int b)
+{
+    int d = a - b;
+    if (d < 0) d = -d;
+    return d <= JS8_REASM_IDENT_TOL_HZ;
+}
+
+/* The callsign to attribute a data run on this offset to, or NULL to leave it
+ * unidentified.
+ *
+ * ⚠ THIS USED TO RETURN THE FIRST MATCH AT THE FULL 15 Hz TOLERANCE, and both
+ * halves of that were wrong:
+ *
+ *  - FIRST, not nearest. find_run() immediately above already carries the
+ *    comment explaining why that is wrong ("with a 15 Hz tolerance two runs
+ *    can both be near a new frame"), and was fixed. This function was the
+ *    same bug left standing in the same file.
+ *  - 15 Hz. Measured on air 2026-10-10: OZ7TKM identified on 1494 Hz and our
+ *    own anonymous free text on 1506 Hz was displayed as "OZ7TKM: STATUSCHK".
+ *    See JS8_REASM_IDENT_TOL_HZ for why attribution is now 8 Hz.
+ *
+ * AMBIGUITY YIELDS NOTHING. If two DIFFERENT callsigns are both in range, no
+ * guess is honest, so the run stays unidentified - the same choice made for
+ * the DT heading, which blanks rather than average two distinct senders. Two
+ * entries carrying the SAME call are not ambiguous; that is one station whose
+ * offset moved. */
 static const char* lookup_ident(const js8_reasm_t* r, int freq_hz)
 {
-    for (int i = 0; i < JS8_REASM_MAX_ACTIVE; i++)
-        if (r->ident[i].used && freq_near(r->ident[i].freq_hz, freq_hz))
-            return r->ident[i].call;
-    return NULL;
+    const char* best = NULL;
+    int best_d = JS8_REASM_IDENT_TOL_HZ + 1;
+
+    for (int i = 0; i < JS8_REASM_MAX_ACTIVE; i++) {
+        if (!r->ident[i].used) continue;
+        if (!ident_near(r->ident[i].freq_hz, freq_hz)) continue;
+
+        int d = r->ident[i].freq_hz - freq_hz;
+        if (d < 0) d = -d;
+
+        if (best && strcmp(best, r->ident[i].call) != 0) {
+            /* A second, DIFFERENT station is just as plausible. Refuse. */
+            return NULL;
+        }
+        if (d < best_d) { best_d = d; best = r->ident[i].call; }
+    }
+    return best;
 }
 
 bool js8_reasm_add(js8_reasm_t* r, int64_t slot_utc, int freq_hz,

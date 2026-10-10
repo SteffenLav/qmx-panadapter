@@ -128,6 +128,75 @@ static void test_a_run_takes_its_name_from_an_earlier_frame(void)
     CHECK(!strcmp(line, "OZ9JEP [data 3f]"), "line '%s'\n", line);
 }
 
+/* ⭐ THE ON-AIR CASE, 2026-10-10. A real station called CQ on 1494 Hz; our own
+ * anonymous free text on 1506 Hz was displayed as "OZ7TKM: STATUSCHK". The
+ * operator said "could be anybody" and was right. 12 Hz is inside the 15 Hz
+ * JOIN tolerance but outside the 8 Hz ATTRIBUTION tolerance, which is the
+ * whole reason the two are now separate numbers. */
+static void test_a_distant_identification_does_not_name_our_run(void)
+{
+    printf("attribution: 12 Hz away is NOT close enough to borrow a callsign\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dir[JS8_FRAME_BYTES], dat[JS8_FRAME_BYTES];
+    mk(dir, 3, 0x11);
+    mk_notext(dat, 4);
+
+    /* OZ7TKM identifies on 1494 Hz. */
+    js8_reasm_add(&r, 3000, 1494, dir, JS8_FRAME_DIRECTED, "OZ7TKM");
+    /* Somebody else's free text lands on 1506 Hz - 12 Hz away. */
+    CHECK(js8_reasm_add(&r, 3015, 1506, dat, JS8_FRAME_DATA, NULL),
+          "the data frame is still taken\n");
+
+    const js8_reasm_run_t* run = js8_reasm_at(&r, 0);
+    CHECK(run && !run->sender[0], "run must stay UNIDENTIFIED, got '%s'\n",
+          run ? run->sender : "(null)");
+
+    char line[64];
+    js8_reasm_describe(run, line, sizeof(line));
+    CHECK(!strcmp(line, "1506 Hz [data 1f]"), "reported by offset, got '%s'\n", line);
+}
+
+/* Two different stations both inside the attribution tolerance. No guess is
+ * honest, so the run stays unidentified rather than picking whichever sat
+ * earlier in the array - which is exactly what the old first-match did. */
+static void test_two_candidate_callsigns_name_nobody(void)
+{
+    printf("attribution: two plausible callsigns -> no sender, not a coin toss\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dir[JS8_FRAME_BYTES], dat[JS8_FRAME_BYTES];
+    mk(dir, 3, 0x11);
+    mk_notext(dat, 4);
+
+    js8_reasm_add(&r, 4000, 1496, dir, JS8_FRAME_DIRECTED, "OZ7TKM");
+    js8_reasm_add(&r, 4000, 1502, dir, JS8_FRAME_DIRECTED, "OZ2LAV");
+    js8_reasm_add(&r, 4015, 1500, dat, JS8_FRAME_DATA, NULL);
+
+    const js8_reasm_run_t* run = js8_reasm_at(&r, 0);
+    CHECK(run && !run->sender[0], "ambiguous -> unidentified, got '%s'\n",
+          run ? run->sender : "(null)");
+}
+
+/* The nearest of two identifications wins - the same rule find_run() already
+ * used, and the one lookup_ident() was missing. Same call twice is NOT
+ * ambiguous: one station whose offset moved. */
+static void test_nearest_identification_wins(void)
+{
+    printf("attribution: nearest identification wins, repeats are not ambiguous\n");
+    js8_reasm_t r; js8_reasm_init(&r);
+    uint8_t dir[JS8_FRAME_BYTES], dat[JS8_FRAME_BYTES];
+    mk(dir, 3, 0x11);
+    mk_notext(dat, 4);
+
+    /* Same station seen twice, 6 Hz apart - its offset drifted one bin. */
+    js8_reasm_add(&r, 5000, 1494, dir, JS8_FRAME_DIRECTED, "OZ2LAV");
+    js8_reasm_add(&r, 5000, 1500, dir, JS8_FRAME_DIRECTED, "OZ2LAV");
+    js8_reasm_add(&r, 5015, 1499, dat, JS8_FRAME_DATA, NULL);
+
+    const js8_reasm_run_t* run = js8_reasm_at(&r, 0);
+    CHECK(run && !strcmp(run->sender, "OZ2LAV"), "named '%s'\n",
+          run ? run->sender : "(null)");
+}
+
 static void test_unidentified_run_says_the_frequency(void)
 {
     printf("attribution: with no callsign the run is reported by offset\n");
@@ -463,6 +532,9 @@ int main(void)
     test_a_stale_identification_is_forgotten();
     test_text_accumulates_across_frames();
     test_a_truncated_message_says_so_even_in_a_short_buffer();
+    test_a_distant_identification_does_not_name_our_run();
+    test_two_candidate_callsigns_name_nobody();
+    test_nearest_identification_wins();
 
     printf("\n%s\n", g_fail ? "FAIL" : "PASS");
     return g_fail ? 1 : 0;
