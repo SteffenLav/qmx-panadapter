@@ -2516,7 +2516,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     if (heap_i < FT8_SLOT_LBLK_EMERGENCY_KB)
         heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
-    ft8_status_set("RX: %d decoded", n_decoded);
+    /* ⛔ THE THIRD CONSUMER of n_decoded, and the only one the OPERATOR sees.
+     * It read "RX: 0 decoded" through a whole JS8 free-text conversation while
+     * the messages were arriving and rendering in the pane, because a data
+     * frame never increments n_decoded. The slot line and the stuck-RX reset
+     * had the same root cause; this one was missed in that pass and is the
+     * one that reaches the glass.
+     *
+     * n_js8ev covers BOTH JS8 shapes - js8ev_record() runs on the rendered
+     * branch as well as the data-frame branch - so in JS8 it is always >=
+     * n_decoded and is the right total. It is 0 in FT8/FT4, so the max()
+     * keeps those protocols reporting exactly what they did before and no
+     * protocol guard is needed. */
+    int n_shown = (n_js8ev > n_decoded) ? n_js8ev : n_decoded;
+    ft8_status_set("RX: %d decoded", n_shown);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
