@@ -12,7 +12,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.17.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.17.1.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > **Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.** Reading your QMX's band list means walking the radio's own **Band config.** menus, and leaving those menus drops the radio on 160 m in whatever mode they left behind — on every CAT link-up, to everyone, for as long as the band list has existed *(John W5JSS)*. Frequency and mode are now saved before the scan and put back after it. ⭐ The second one cost him more: with more than one transmit cycle in a WSPR group, the first cycle never went out, and the burst it missed **slid into the next cycle** — which at the end of a group is a receive cycle, so the beacon keyed off its own schedule and published that to wsprnet. The arming was being done by the receive loop, which arrives about a second and a half into every cycle while key-down has to happen within one. It now runs in a task of its own that waits on the clock and nothing else: **5 to 49 ms** into the cycle on the bench instead of 1,437, both cycles of a group transmitting, receive cycles silent. Also: the five-minutely clock read no longer takes the CAT link away from a burst in progress; the screenshot link opens in a tab again *(John W5JSS)*; the "turn on your QMX" prompt waits until it is safe to obey *(Dennis WN4FLA, Gyula HA3HZ)*; other stations' CQ calls can stay visible while you run your own CQ, and the TX tone panel updates while you watch it *(Randy N4OPI)*; and switching RX audio on mid-session now tells you it needs a restart *(Samuel W7STF)*.
 >
@@ -42,7 +42,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.17.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.17.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -94,6 +94,19 @@ for resources, so open **Audio Settings** from the settings drawer, where it is 
 on and off. This is a first implementation and is
 **beta**, with the same features planned for the web interface — sending only the I/Q to
 the PC and doing the work there. See [Audio](docs/mkdocs/guide/audio.md).
+
+**Receive from the 3.5 mm jack** *(beta — Tony, @tony1tf, #17)* — The panadapter can take
+its signal from the Tab5's own headphone jack instead of the radio's USB audio. Tony asked
+for an audio input for digital modes and then ran a test build on his own Tab5 to find
+where the jack lands: the mic ring arrives on the audio chip's third channel, which is the
+fact the feature is built on. The jack is one real audio channel, not I/Q, so the second
+channel is synthesised by a 255-tap filter that builds the quadrature pair the decoders
+need. There is a level meter, a clip indicator and the jack wiring drawn on screen.
+⚠ **No signal has been decoded through it yet** — the path runs and the levels read
+correctly, and that is the whole of what is proven. ⛔ In this mode the USB radio
+connection is off by design, so CAT, the S-meter and the band/mode display go quiet.
+Changing the source needs a restart, which the Tab5 performs itself on **Save**.
+See [Audio](docs/mkdocs/guide/audio.md).
 
 **QMX CAT control** — Live frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware
 1.04+), SSB filter bandwidth, CW passband, passband overlay, TX power and SWR readout,
@@ -180,6 +193,23 @@ the radio's *second* USB serial port so the panadapter keeps decoding while you 
 there. For a QMX+ with no control panel it is the only way in. Leaving hands the radio
 back properly and restores your frequency and mode.
 
+**CW keyer speed** *(Ralph Hellmig)* — A slider in the settings drawer directly above IF
+calibration, and the same control on the web page. It sets the radio's keyer speed over
+CAT and then shows what the radio actually took, because the radio is the authority here
+and does not store the value itself. ⛔ **A speed of 0 means a straight key**, not "no
+speed set". See [Radio Menus](docs/mkdocs/guide/radio-menus.md).
+
+**A GPS of your own, and a sky view** — Two receivers work, and both are confirmed on
+hardware: an **M5Stack Unit GPS v1.1** on PORT.A
+and a **Module GPS v2.1** on the 30-pin M-Bus. Either gives you UTC **and the full date**
+with no internet and no radio — every other offline source on this device gives a time of
+day only, so the day itself was always a guess. Your station grid fills itself from the
+fix, and never overwrites a grid you typed by hand. **GPS Stats** is a page of its own
+under Radio in the drawer and on the web: the satellites in use drawn on an elevation-ring
+sky view, with the fix, the satellite count and which receiver is answering. The clock now
+also says whether the time came from a GPS on the Tab5 or from the radio.
+See [Time sync](docs/mkdocs/guide/time-sync.md).
+
 **Updating from the device** *(needs WiFi)* — A new release is fetched quietly in the
 background and offered once, in a window in the middle of the screen, with **Restart now**
 or **Later**. Nothing is ever installed without you asking, and the automatic download can
@@ -231,8 +261,7 @@ when offline.
 
 **A GPS of your own** *(new in v1.16.12)* — Plug an **M5Stack Unit GPS v1.1** into PORT.A
 and set **Settings ▸ Device ▸ Port mode** to *Unit GPS v1.1*: the satellite gives you UTC
-**and the full date**, offline, with nothing to answer. Contributed by Eric
-(@ericmoritz). A GPS-equipped QMX+ on radio firmware 1.04_004 or later now hands over
+**and the full date**, offline, with nothing to answer. A GPS-equipped QMX+ on radio firmware 1.04_004 or later now hands over
 the date too, so that route is also complete offline. The date itself is no longer taken
 on trust from a running clock — see [Time sync](#time-sync).
 
@@ -310,10 +339,12 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
+- [JS8](#js8) — keyboard mode on the device: decode, free text, CQ (beta)
 - [Time sync](#time-sync) — Unit GPS on PORT.A, WiFi/SNTP, Tab5 RTC, POTA/offline use
 - [Settings](#settings) — every drawer control, group by group
 - [WSPR](#wspr) — two-minute propagation beacon: where your signal actually goes
 - [Radio menus](#radio-menus) — the QMX's own menu system on the Tab5
+- [Troubleshooting](#troubleshooting) — symptoms, causes and what to do
 - [Reference](#reference) — gestures, web API, hardware
 - [Build from source](#build-from-source)
 - [Under the hood](#under-the-hood) — DSP, I/Q correction, quirks
@@ -1042,6 +1073,15 @@ menus.
 
 ---
 
+## Troubleshooting
+
+Symptoms, their causes and what to do about them — the QMX not appearing, no decodes, a
+clock that is wrong, WiFi that will not hold, a card that stops being written.
+
+> **On the Tab5 itself:** swipe in from the right edge and tap **Need guidance?**. It
+> lists these symptoms in plain words, highlights the ones it can already see happening,
+> and opens the manual at the matching section.
+
 ## Reference
 
 ### Gestures
@@ -1230,7 +1270,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.17.0 is here.** Next on the bench:
+**v1.17.1 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, unattended.** Receiving and sending free text are both proven on air; the automatic exchange that turns them into a QSO is not written yet. Compound callsigns go with it.
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
@@ -1275,24 +1315,33 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 | **CQ** | General call to any station (not directed at anyone specific) |
 | **CW** | Continuous Wave — Morse code mode |
 | **dBm** | Decibel-milliwatts — absolute signal power (0 dBm = 1 mW); used on the spectrum scale and S-meter |
+| **Directed message** | A JS8 message aimed at one station, shown with the sender's callsign |
 | **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
+| **DT** | In the decode list, how far a station's transmission sits from the slot boundary, in seconds. It measures THEIR clock against yours, so it stays blank until at least two separate stations have been heard |
 | **DX** | A distant station, or distance worked. **BEST DX** on the WSPR page is the furthest station that heard you, or that you heard, this session |
 | **DXCC** | DX Century Club — the ARRL award programme, and by extension its list of ~340 "entities" (countries plus separately-counted islands and territories) |
 | **eQSL** | Electronic QSL — online service for confirming and exchanging QSO records |
 | **FFT** | Fast Fourier Transform — algorithm that converts time-domain audio into a frequency spectrum |
-| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). Both fully supported (FT4 re-enabled in v0.21.0). |
-| **GFSK** | Gaussian Frequency-Shift Keying — the modulation scheme FT8 and FT4 use |
+| **Free text** | A plain typed message rather than a fixed exchange. JS8 carries it; FT8 and FT4 fit only 13 characters |
+| **FT8 / FT4** | Digital modes for weak-signal HF contacts, trading a short fixed exchange in 15-second (FT8) or 7.5-second (FT4) slots. Both decode and transmit on the device. |
+| **GFSK** | Gaussian Frequency-Shift Keying — the modulation FT8, FT4 and JS8 all use |
+| **GNSS / GPS** | A satellite navigation receiver, which gives the Tab5 UTC and the date with no internet - an M5Stack Unit GPS on PORT.A, a Module GPS on the 30-pin bus, or a GPS-equipped QMX+ answering over CAT |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
+| **Heartbeat** | The periodic `HB <call> <grid>` a JS8 station sends to say it is listening |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
 | **IF** | Intermediate Frequency — the QMX presents the VFO signal at a +12 kHz offset in baseband |
 | **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |
-| **LDPC** | Low-Density Parity-Check — the error-correcting code used in FT8/FT4 decoding |
+| **JS8** | A keyboard mode built on FT8's modulation that carries free text, so stations hold short conversations. Decoded and transmitted on the device, as a sub-mode of the FT8/FT4 page |
+| **LDPC** | Low-Density Parity-Check — the error-correcting code that recovers a damaged FT8, FT4 or JS8 message |
 | **LoTW** | Logbook of The World — ARRL's online QSO-confirmation service |
 | **LSB / USB (mode)** | Lower / Upper Sideband — the two SSB voice modes (note: "USB" also means Universal Serial Bus, below) |
 | **LVGL** | Light and Versatile Graphics Library — open-source embedded UI toolkit used for the display |
 | **Maidenhead / grid** | The locator system amateurs use for position, e.g. `JO65`. Four characters is a ~100 km square, six is finer. FT8 and WSPR both carry one |
+| **NMEA** | The sentence format a GNSS receiver speaks - what the Tab5 reads for time, date and position |
 | **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
 | **PA** | Power Amplifier — the radio's final transmit stage. **Max. PA voltage** sets how hard it is driven, and so how much power comes out; see [WSPR](docs/mkdocs/guide/wspr.md) and Calibrate Power |
+| **OTA** | Over-The-Air update - the Tab5 fetching and installing new firmware over WiFi, with no cable |
+| **Pileup** | Everyone calling you at once. The Tab5 collects them in a list so you can work them in turn |
 | **POTA** | Parks on the Air — portable operating activity from designated parks |
 | **PSK Reporter** | A worldwide database of who heard whom. The panadapter can send it your decodes, and reads it back to show who has heard **you** |
 | **PSRAM** | Pseudo-SRAM — extra RAM on the Tab5 (used for large buffers like waterfall history) |
@@ -1303,6 +1352,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 | **RBN** | Reverse Beacon Network — automated receivers ("skimmers") that continuously report the CW and digital signals they hear. One of SelfSpotter's three sources |
 | **RIT** | Receiver Incremental Tuning — shifts what you *hear* without moving what you would *transmit* on. The QMX has RIT but no XIT |
 | **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
+| **Slot** | The fixed window a digital mode transmits in - 15 s for FT8 and JS8, 7.5 s for FT4. Every station starts together, which is why the clock must be right |
 | **SNR** | Signal-to-Noise Ratio — signal strength relative to the noise floor; the FT8/FT4 signal report |
 | **SNTP** | Simple Network Time Protocol — synchronizes the system clock via WiFi/internet |
 | **SOTA** | Summits on the Air — portable operating activity from mountain summits |

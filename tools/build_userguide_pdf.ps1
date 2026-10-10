@@ -18,6 +18,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $readme   = Join-Path $repoRoot "README.md"
 $docsDir  = Join-Path $repoRoot "docs"
 $guideDir = Join-Path (Join-Path $docsDir "mkdocs") "guide"
+$refDir   = Join-Path (Join-Path $docsDir "mkdocs") "reference"
 $mdSlice  = Join-Path $docsDir "_userguide_full.md"
 $htmlOut  = Join-Path $docsDir "_userguide_full.html"
 $cssFile  = Join-Path $docsDir "_userguide_full.css"
@@ -170,7 +171,8 @@ $chapters = @(
     @{ Id = "settings";      Title = "Settings";       Num = 10; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
     @{ Id = "wspr";          Title = "WSPR";           Num = 11; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
     @{ Id = "radio-menus";   Title = "Radio menus";    Num = 12; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 13; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "troubleshooting"; Title = "Troubleshooting"; Num = 13; GuideFile = (Join-Path $refDir "troubleshooting.md"); Desc = "symptoms, causes and what to do" },
+    @{ Id = "reference";     Title = "Reference";      Num = 14; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(

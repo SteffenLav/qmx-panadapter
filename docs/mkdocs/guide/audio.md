@@ -210,8 +210,10 @@ clip indicator beside it.
 | Generic I/Q | Declared, not implemented. Selecting it is refused. |
 | Internal mics | Declared, not implemented. Selecting it is refused. |
 
-**Line in** feeds the panadapter from the Tab5's own 3.5 mm headphone jack instead of
-the radio's USB. The jack is a single real audio channel, not I/Q, so the second
+**Line in** *(asked for by Tony, @tony1tf, in issue #17)* feeds the panadapter from the
+Tab5's own 3.5 mm headphone jack instead of the radio's USB. Tony ran a test build on his
+own Tab5 to find where the jack lands — the mic ring arrives on the audio chip's third
+channel — which is the measurement the whole feature rests on. The jack is a single real audio channel, not I/Q, so the second
 channel is synthesised: a 255-tap filter builds the quadrature pair the decoders need.
 The jack wiring is drawn on screen so you can see which contact carries what.
 
@@ -224,9 +226,11 @@ does the restart itself when you press **Save**.
 both - so CAT, the S-meter and the band/mode display go quiet while line in is
 selected.
 
-## Future Work — Web Audio (IQ Streaming)
+## Not implemented: audio in the browser
 
-The next phase will stream **I/Q channels only** from the Tab5 to a PC browser, allowing the browser's own CPU to do the audio processing locally. This approach:
+Audio does **not** reach the web page in this release, and there is no date for it. The
+shape it would take is to stream **I/Q channels only** to the browser and let the PC's own
+CPU do the audio work, because:
 
 - **Reduces Tab5 load** — the device sends raw I/Q data (~768 kbps at 48 kHz stereo), no processing
 - **Offloads processing to the PC** — your computer does the heavy lifting

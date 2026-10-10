@@ -33,6 +33,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   200 Hz there is little separation**, because the signals then share too much of the
   audio passband. Long-press the top bar on the Panadapter page for **Resource
   Management**, where audio is switched on and off. See [Audio](guide/audio.md).
+- **Receive from the 3.5 mm jack** *(beta — Tony, @tony1tf, #17)* — the panadapter can take
+  its signal from the Tab5's own headphone jack instead of the radio's USB audio. The jack
+  is one real audio channel, not I/Q, so the second is synthesised by a 255-tap filter.
+  Level meter, clip indicator, and the jack wiring drawn on screen.
+  ⚠ **Nothing has been decoded through it yet** — the path runs and the levels read
+  correctly, and that is all that is proven. ⛔ The USB radio connection is off in this
+  mode by design. See [Audio](guide/audio.md).
 - **QMX control** — frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware 1.04+),
   SSB filter width, CW passband, TX power and SWR, and QMX volume in decibels matching
   the radio's own display. Band presets with per-band frequency recall, 32 memory
@@ -108,6 +115,18 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   power-off, the QMX's clock as an offline fallback, automatic GPS phase-lock if your QMX
   has one, a manual set-and-sync panel, and FT8 timing that self-corrects from the decoded
   band consensus.
+- **A GPS of your own, and a sky view** — two receivers work and both are confirmed on
+  hardware: an **M5Stack Unit GPS v1.1** on PORT.A,
+  and a **Module GPS v2.1** on the 30-pin bus. Either gives you UTC **and the full date**
+  offline, which no other offline source on this device does, and fills your grid from the
+  fix without ever overwriting one you typed. **GPS Stats** — its own page under Radio in
+  the drawer, and on the web — draws the satellites in use on an elevation-ring sky view
+  beside the fix, the satellite count and which receiver is answering.
+  See [Time sync](guide/time-sync.md).
+- **CW keyer speed** *(Ralph Hellmig)* — a slider in the drawer above IF calibration, and
+  the same control in the browser. It sets the speed over CAT and shows what the radio
+  actually took, because the radio is the authority and does not store it. **0 means a
+  straight key**, not "unset". See [Radio menus](guide/radio-menus.md).
 - **microSD backup** — insert a card (restart afterwards) and your ADIF log, full config,
   LoTW certificate and key, and diagnostic log are mirrored automatically. Continuous with
   WiFi off; one complete backup per start-up with WiFi on. The SD dot is green while writes
@@ -133,11 +152,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.17.0 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
+**v1.17.1 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **JS8 Normal is new in v1.17.0 and is a beta**, and **audio on the Tab5 is a beta** — see below. **v1.17.0** decodes JS8 off air and sends free text back, adds a JS8 page with Stations and Conversation tabs, a GPS Stats page with a live sky view, CW keyer speed from the browser and the Tab5, and the 3.5 mm jack as a receive source; **v1.16.12** added support for a GPS receiver on PORT.A and reads the date from a GPS-equipped QMX+ over CAT; **v1.16.11** keeps the WiFi link alive on a busy network and lets you eject the microSD card safely; **v1.16.10** stops the Tab5 moving your radio to 160 m every time it connects, and makes WSPR transmit in the cycle it was scheduled for rather than sliding into a receive cycle; **v1.16.9** fixes SD card writes stopping about 30 seconds after boot with WiFi on - a fault that stood under ⚠ for five releases.
+and in daily use. **JS8 Normal is new in v1.17.0 and is a beta**, and **audio on the Tab5 is a beta** — see below. **v1.17.1** fixes a web page that stopped reading the radio's status altogether in v1.17.0, and documents JS8 properly; **v1.17.0** decodes JS8 off air and sends free text back, adds a JS8 page with Stations and Conversation tabs, a GPS Stats page with a live sky view, CW keyer speed from the browser and the Tab5, and the 3.5 mm jack as a receive source; **v1.16.12** added support for a GPS receiver on PORT.A and reads the date from a GPS-equipped QMX+ over CAT; **v1.16.11** keeps the WiFi link alive on a busy network and lets you eject the microSD card safely; **v1.16.10** stops the Tab5 moving your radio to 160 m every time it connects.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -307,7 +326,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.17.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.17.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
