@@ -29,6 +29,15 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 
 # Stacks
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# The system event task. 2304 is the IDF default; measured 2026-10-10 at only
+# 544 B free of it - 76% used, the tightest stack in the whole system.
+# ⛔ IT IS OUR DEPTH, not IDF's: webserver_start() is called from the WiFi
+# got-IP event handler (wifi.c:739), and an event handler runs ON THIS TASK -
+# so httpd_start, 57 URI registrations and a task creation all sit on this
+# stack. That deep path HAS already run, so 544 B is the real worst case and
+# one more call in that handler overflows it.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
 
 # Cache
 # 256 KB - the hardware default for pre-V3 P4 silicon, and RESTORED here after
