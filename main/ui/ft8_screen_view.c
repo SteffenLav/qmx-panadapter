@@ -2869,6 +2869,13 @@ const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count)
 // glance across the room - the mode label is the only thing on the screen that
 // says which protocol is about to be transmitted.
 #define JS8_ACCENT_HEX 0xE040FB
+/* The accent is a MARKER colour - a tab border, a mode word on black - and at
+ * full saturation it is wrong as a 288x60 fill: white text on it is hard to
+ * read and it is the loudest thing on the screen. Same hue, saturation 52%
+ * instead of 75%, which puts white text at about 5.7:1 - the same contrast the
+ * green Call CQ button above it already has. The accent stays on the border,
+ * so the button is still recognisably the JS8 colour. */
+#define JS8_BTN_HEX    0x8A4FA3
 
 // The accent and the label for a sub-mode, in ONE place each. The colour and
 // the text used to be written as a ternary at every site, which is how a third
@@ -3569,6 +3576,13 @@ static void js8_tabs_apply(void)
         else     lv_obj_add_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* ⛔ THE BUTTON AND THE STATUS LINE WERE BOTH AT y=393. The button is
+     * created later, so it was drawn ON TOP of "RX: N decoded" and the
+     * operator saw the text through its edges. The status line moves down one
+     * grid slot (60+8) in JS8 only. 461 + two wrapped lines at font 24 ends at
+     * 509, clear of the override button row that starts at pane-local 540. */
+    if (s_lbl_tx) lv_obj_set_pos(s_lbl_tx, 0, js8 ? 461 : 393);
+
     if (s_tabbar) {
         if (js8) lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
         else     lv_obj_add_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
@@ -4032,8 +4046,8 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_btn_js8_text = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_js8_text, 288, 60);
     lv_obj_set_pos(s_btn_js8_text, 0, 393);
-    lv_obj_set_style_bg_color(s_btn_js8_text, lv_color_hex(JS8_ACCENT_HEX), 0);
-    lv_obj_set_style_border_color(s_btn_js8_text, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    lv_obj_set_style_bg_color(s_btn_js8_text, lv_color_hex(JS8_BTN_HEX), 0);
+    lv_obj_set_style_border_color(s_btn_js8_text, lv_color_hex(JS8_ACCENT_HEX), 0);
     lv_obj_set_style_border_width(s_btn_js8_text, 2, 0);
     lv_obj_set_style_radius(s_btn_js8_text, 8, 0);
     lv_obj_add_event_cb(s_btn_js8_text, js8_text_btn_cb, LV_EVENT_CLICKED, NULL);
@@ -4062,6 +4076,8 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
     lv_obj_set_pos(s_lbl_tx, 0, 393);   // the "Active: N" line paid for the mini strip above
+                                        // ⛔ js8_tabs_apply() MOVES THIS to 461 in JS8 - the
+                                        // Free text button owns 393 there.
 
     // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
     // LVGL v9 dropped in-label recolor markup, so a distinct colour from the
