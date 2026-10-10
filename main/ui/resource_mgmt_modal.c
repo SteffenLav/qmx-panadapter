@@ -6,6 +6,10 @@
 #include "settings.h"
 #include "audio/rx_audio.h"
 #include "audio/line_in.h"      // line_in_running/_set_gain_db/_peak_dbfs
+#include "esp_attr.h"           // RTC_NOINIT_ATTR - the reopen one-shot
+#include "esp_system.h"         // esp_restart
+#include "display/display.h"   // go dark before the restart
+#include "util/psram_task.h"    // the restart delay must leave the LVGL task
 #include "storage/settings.h"   // rx_source_t and the line-in gain rules
 #include "lvgl.h"
 #include "esp_log.h"
@@ -585,27 +589,48 @@ static void source_list_open_cb(lv_event_t *e)
     lv_obj_set_height(list, LV_SIZE_CONTENT);
 }
 
+/* ⛔ THE DROPDOWN STORES NOTHING. It holds a PENDING choice that Save
+ * commits and Cancel throws away.
+ *
+ * That is the whole reason this window gained Save/Cancel in place of Close:
+ * changing the source has to be followed by a restart, so an immediate store
+ * left the board in a state where the window said one thing and the hardware
+ * was doing another until the operator happened to reboot. Save now does the
+ * restart itself.
+ *
+ * ⚠ SAVE AND CANCEL GOVERN THE SOURCE ONLY. Every other control in this
+ * window - the feed check boxes, the volume and AGC sliders, the line-in
+ * gain - is live and already stored the moment it is touched, exactly as
+ * before. Making all of them transactional would be a much larger change to
+ * controls whose whole point is that you hear the effect while you drag
+ * them. The note by the buttons says so, rather than leaving it to be
+ * discovered by pressing Cancel and finding the volume did not go back. */
+static uint8_t s_src_pending;
+
 static void source_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
     uint8_t want = (uint8_t)lv_dropdown_get_selected(dd);
 
     if (!rx_source_implemented(want)) {
-        /* Say what is missing and put the control back where it was, rather
-         * than storing a source that would boot into nothing. */
-        lv_dropdown_set_selected(dd, settings_get_rx_source());
+        /* Put the control back rather than letting Save commit a source that
+         * would boot into nothing. */
+        lv_dropdown_set_selected(dd, s_src_pending);
         src_note_set(LV_SYMBOL_WARNING " That source is not implemented yet - "
                      "it is listed so you can see the hardware supports it.",
                      0xFFA040);
         return;
     }
 
-    if (settings_set_rx_source(want)) {
-        src_note_set(LV_SYMBOL_WARNING " Saved. RESTART the Tab5 to listen to "
-                     "the new source - it is chosen once at boot.", 0xFFA040);
-        ESP_LOGW(TAG, "rx_source -> %s (restart required)", rx_source_str(want));
+    s_src_pending = want;
+    if (want != settings_get_rx_source()) {
+        src_note_set(LV_SYMBOL_WARNING " Press Save to change the input. The "
+                     "Tab5 restarts, because the source is chosen at boot.",
+                     0xFFA040);
     } else {
-        src_note_set("Already the selected source.", UI_COLOR_TEXT_SECONDARY);
+        src_note_set("Chosen once at boot. The jack and the radio cannot both "
+                     "be live - the USB host and the audio input need the "
+                     "same memory.", UI_COLOR_TEXT_SECONDARY);
     }
 }
 
@@ -677,7 +702,8 @@ static void build_source_block(int *py)
     lv_obj_set_size(s_dd_source, SLD_W, 50);
     lv_obj_align(s_dd_source, LV_ALIGN_TOP_LEFT, SLD_X, y);
     lv_obj_set_style_text_font(s_dd_source, &lv_font_montserrat_28, 0);
-    lv_dropdown_set_selected(s_dd_source, settings_get_rx_source());
+    s_src_pending = settings_get_rx_source();
+    lv_dropdown_set_selected(s_dd_source, s_src_pending);
     lv_obj_add_event_cb(s_dd_source, source_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_dd_source, source_list_open_cb, LV_EVENT_CLICKED, NULL);
     y += 50 + 10;
@@ -800,10 +826,100 @@ static void build_source_block(int *py)
     *py = y;
 }
 
-static void close_btn_cb(lv_event_t *e)
+/* ⛔ ONE-SHOT: REOPEN THIS WINDOW AFTER THE RESTART.
+ *
+ * Changing to the jack means a restart, and the first thing the operator
+ * needs afterwards is the level meter - which lives in this window. Making
+ * them find it again, on a board that has just rebooted and lost its radio,
+ * is the kind of small friction that makes a feature feel broken.
+ *
+ * RTC_NOINIT rather than NVS, the same pattern as factory_reset.c and
+ * mic_probe.c: RTC RAM survives esp_restart() but NOT a power cycle, which
+ * is exactly the lifetime wanted. An NVS flag would reopen this window days
+ * later after an unrelated power-on, and would cost a flash write.
+ *
+ * ⛔ The magic word is what makes a request real - a cold boot leaves
+ * garbage here - and it is CONSUMED BEFORE the window opens, so a crash in
+ * the open path cannot turn this into a reboot loop. */
+RTC_NOINIT_ATTR static uint32_t s_reopen_magic;
+#define REOPEN_MAGIC 0x7210A5D1u
+
+bool resource_mgmt_modal_reopen_pending(void)
+{
+    if (s_reopen_magic != REOPEN_MAGIC) return false;
+    s_reopen_magic = 0;            /* consume FIRST - see above */
+    return true;
+}
+
+/* Restart, having already stored everything. Mirrors ota_modal.c: go dark
+ * first, or the panel stays lit from this run and shows an empty screen for
+ * the 2-3 s before display_init() turns it off. */
+static void save_restart_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1200));   /* long enough to read the toast */
+    display_set_brightness(0);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    esp_restart();
+}
+
+static void cancel_btn_cb(lv_event_t *e)
 {
     (void)e;
+    /* Put the dropdown back to what the board is actually set to. Nothing
+     * else is reverted, because nothing else was pending - see source_cb. */
+    s_src_pending = settings_get_rx_source();
+    if (s_dd_source) lv_dropdown_set_selected(s_dd_source, s_src_pending);
+    src_note_set("Chosen once at boot. The jack and the radio cannot both be "
+                 "live - the USB host and the audio input need the same "
+                 "memory.", UI_COLOR_TEXT_SECONDARY);
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void save_btn_cb(lv_event_t *e)
+{
+    (void)e;
+
+    /* No source change: Save is just Close. Rebooting on every Save would
+     * make the window unusable for the volume and AGC controls that share
+     * it. */
+    if (s_src_pending == settings_get_rx_source()) {
+        if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    const bool to_real = rx_source_is_real(s_src_pending);
+    settings_set_rx_source(s_src_pending);
+    /* ⛔ FLUSH BEFORE RESTARTING. The dirty-bit writer is debounced, so a
+     * restart a few hundred ms later would come back on the OLD source and
+     * read as "Save did nothing". */
+    settings_flush();
+
+    /* Only when moving TO a source whose level has to be set - his call,
+     * 2026-10-10: going back to the QMX just restarts. There is nothing to
+     * set up on the radio, so reopening this window there would be one more
+     * thing to dismiss. */
+    if (to_real) s_reopen_magic = REOPEN_MAGIC;
+
+    ESP_LOGW(TAG, "SAVE: rx_source -> %s, restarting now (reopen=%d)",
+             rx_source_str(s_src_pending), (int)to_real);
+
+    /* ⛔ SAY IT IS DELIBERATE. An unannounced reboot is how he spots a
+     * CRASH, so one the firmware caused on purpose has to be labelled - and
+     * the QMX does not survive a Tab5 reset (#74) whichever way the source
+     * is going. */
+    ui_toast_ms(to_real
+        ? "Saved. Restarting into Line in - this window reopens so you can "
+          "set the level. Power-cycle the QMX afterwards."
+        : "Saved. Restarting into the QMX input. Power-cycle the QMX "
+          "afterwards.", 1200);
+
+    if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+
+    /* Off the LVGL task: this sleeps, and sleeping on the LVGL task freezes
+     * the toast it was posted to show. */
+    psram_task_create(save_restart_task, "src_restart", 3072, NULL, 3,
+                      tskNO_AFFINITY);
 }
 
 static void modal_build(void)
@@ -876,7 +992,9 @@ static void modal_build(void)
     // 2*2 border) plus a 16 px gap above it. Everything in between scrolls.
     s_scroll = lv_obj_create(s_panel);
     lv_obj_set_pos(s_scroll, 0, 100);
-    lv_obj_set_size(s_scroll, LV_PCT(100), 648 - 100 - 64 - 16);
+    /* 64 button + 16 gap, plus 28 for the Save/Cancel note line above
+     * them - without it the note draws over the last scrolled row. */
+    lv_obj_set_size(s_scroll, LV_PCT(100), 648 - 100 - 64 - 16 - 28);
     lv_obj_set_style_bg_opa(s_scroll, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_scroll, 0, 0);
     lv_obj_set_style_pad_all(s_scroll, 0, 0);
@@ -1121,14 +1239,38 @@ static void modal_build(void)
         }
     }
 
+    /* Save and Cancel in place of the old single Close (his call,
+     * 2026-10-10). Green left, red right. They govern the AUDIO SOURCE; the
+     * line under them says so, because every other control here is live and
+     * pressing Cancel will not put the volume back. */
+    lv_obj_t *btn_note = lv_label_create(s_panel);
+    lv_obj_set_style_text_font(btn_note, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(btn_note, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(btn_note,
+        "Save / Cancel apply to the audio source. Everything else here takes "
+        "effect as you change it.");
+    lv_obj_align(btn_note, LV_ALIGN_BOTTOM_MID, 0, -72);
+
+    lv_obj_t *save_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(save_btn, 200, 64);
+    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_MID, -110, 0);
+    lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x2E8B40), 0);
+    lv_obj_set_style_radius(save_btn, 8, 0);
+    lv_obj_add_event_cb(save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(save_btn);
+    lv_label_set_text(save_lbl, "Save");
+    lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(save_lbl);
+
     lv_obj_t *close_btn = lv_btn_create(s_panel);
     lv_obj_set_size(close_btn, 200, 64);
-    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 110, 0);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0xA03030), 0);
     lv_obj_set_style_radius(close_btn, 8, 0);
-    lv_obj_add_event_cb(close_btn, close_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(close_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *close_lbl = lv_label_create(close_btn);
-    lv_label_set_text(close_lbl, "Close");
+    lv_label_set_text(close_lbl, "Cancel");
     lv_obj_set_style_text_color(close_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(close_lbl);

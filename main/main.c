@@ -22,6 +22,7 @@
 #include "cw_decode.h"
 #include "audio.h"
 #include "line_in.h"   // the 3.5 mm jack as a receive source
+#include "resource_mgmt_modal.h"  // reopened at boot after a source change
 #include "rx_audio.h"
 #include "util/mic_probe.h"   // one-shot ES7210 channel probe (GitHub #17)
 #include "dsp.h"
@@ -734,6 +735,27 @@ void app_main(void)
      * pins driven from boot rather than left floating. The ledger label
      * lost its "+ gpio_relay" with it. */
     MEM_LEDGER("cpu_stats");
+
+    /* ⭐ REOPEN AUDIO SETTINGS IF THE RESTART CAME FROM ITS SAVE BUTTON.
+     *
+     * Save switching to the 3.5 mm jack restarts the board, and the first
+     * thing needed afterwards is the level meter - which lives in that
+     * window. Reopening it here puts the meter in front of the operator
+     * instead of three taps away on a board that has just rebooted and has
+     * no radio. Going back to the QMX does NOT set the flag: there is
+     * nothing to set up there, so the window would only be dismissed.
+     *
+     * Last, after everything else is up, and under display_lock because
+     * this builds LVGL objects from the main task. One-shot and consumed
+     * inside the call, so a failure here cannot loop. */
+    if (resource_mgmt_modal_reopen_pending()) {
+        if (display_lock(1000)) {
+            resource_mgmt_modal_open();
+            display_unlock();
+        } else {
+            ESP_LOGW(TAG, "reopen Audio Settings: display lock timed out");
+        }
+    }
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     /* Only now may the "Now turn on or reboot your QMX/+" prompt appear.
