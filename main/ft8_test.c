@@ -1337,35 +1337,42 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
 
 // WSJT-X reports SNR referenced to a 2500 Hz noise bandwidth.
 #define FT8_SNR_REF_BW_HZ      2500.0f
-/* Empirical offset. Everything else in ft8_estimate_snr_db() is derived from
- * first principles; this is the one fitted term.
+/* Empirical fudge factor - everything else here is derived from first
+ * principles. The old comment invited a nudge "if a real WSJT-X comparison
+ * ever becomes available". Read the dead end below before accepting one.
  *
- * It was +15.0f, with a comment asking for "a real WSJT-X comparison" that
- * nobody had. 2026-10-10 produced one, and it said we were reporting 22 dB
- * too high:
+ * ⛔ TRIED AND REVERTED 2026-10-10: +15 -> -7, on ONE comparison.
  *
- *   JS8Call 2.3.1   -14 dB     (WSJT-X convention, the standard)
- *   Tab5            +8 dB
+ * A JS8Call 2.3.1 station and a Tab5 heard the same transmission from the
+ * same QMX on the same dummy load, with only the USB cable moved between
+ * them: JS8Call said -14 dB, we said +8. That looked like a clean 22 dB
+ * error. It was not usable, for two reasons found afterwards:
  *
- * Same QMX, same signal, same dummy load - only the USB cable moved between
- * the PC and the Tab5, so neither the path nor the radio changed. 15 - 22
- * gives -7.
+ * 1. ⛔ DIFFERENT AUDIO PATHS. JS8Call took the QMX's SOUND CARD; we take
+ *    its USB IQ stream. Two interfaces, two gains. The radio and the path
+ *    were identical; the levels were not, and 22 dB is well inside what that
+ *    difference can account for. "Only the cable moved" is true of the
+ *    antenna and false of the gain.
  *
- * ⚠ ONE POINT, ONE SIGNAL LEVEL. Stated plainly because this feeds every S/N
- * on the FT8 and JS8 screens and every PSK Reporter spot: it is a single
- * paired observation, not a calibration curve, and in that same slot this
- * estimator reported -22 to -34 dB for sidelobe copies of the SAME energy, so
- * its spread is wide. Confirm across three or four power levels before
- * trusting it to a dB.
+ * 2. ⛔ IT BREAKS THE ORDINARY CASE. Off-air stations decoded in the same
+ *    session read -5, -8, -10, -11, -13 dB with +15 - entirely plausible
+ *    WSJT-X numbers. Subtracting 22 puts them at -27 to -35, where nothing
+ *    decodes at all. One constant cannot be right at both ends, so the
+ *    discrepancy is not an offset and must not be fixed with one.
  *
- * ⭐ A structural term a future derivation should fold in, which would shrink
- * what is left for this constant to absorb: the signal loop takes the MAX of
- * 8 tone bins per block while the noise floor is the MEAN over all bins. For
- * noise alone the expected max of 8 iid bins is H_8 = 2.718, i.e. +4.34 dB,
- * so sig_db - noise_db does not go to zero as the signal vanishes - it goes
- * to about +4.3. That bias is currently buried in this offset.
+ * ⭐ THE TEST THAT WOULD SETTLE IT, and it needs no hardware: capture one
+ * slot to a WAV and run the SAME samples through our harness and through a
+ * reference decoder. Identical input removes the interface gain, which is
+ * the variable that invalidated the comparison above.
+ *
+ * ⚠ A structural term worth folding in when someone does that: the signal
+ * loop takes the MAX of 8 tone bins per block while the noise floor is the
+ * MEAN over all bins. For noise alone the expected max of 8 iid bins is
+ * H_8 = 2.718, i.e. +4.34 dB, so sig_db - noise_db does not tend to zero as
+ * the signal vanishes - it tends to about +4.3. That bias is currently
+ * inside this constant.
  */
-#define FT8_SNR_CAL_OFFSET_DB  (-7.0f)
+#define FT8_SNR_CAL_OFFSET_DB  15.0f
 
 // Mean noise power across the whole slot's waterfall, in dB. Signals occupy a
 // small fraction of bins, so the mean tracks the noise floor closely.
