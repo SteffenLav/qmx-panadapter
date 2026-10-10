@@ -51,7 +51,14 @@ static int s_baud = UNIT_GPS_BAUD;          /* whichever rate this run is using 
 static volatile uint32_t s_rx_bytes;        /* raw bytes since this start */
 static volatile uint32_t s_rx_lines;        /* newline-terminated lines seen */
 
-#define UNIT_GPS_TASK_STACK  4096
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 1352 B of 4096 (67% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and the NMEA paths that run only on a
+ * fix/no-fix transition are the ones a quiet session never reaches.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
+#define UNIT_GPS_TASK_STACK  8192
 #define UNIT_GPS_TASK_PRIO   5
 /* Core 1. Not tskNO_AFFINITY, and not core 0. Core 0 of this board is
  * busy: taskLVGL uses about 74% of it, plus audio_task and the USB

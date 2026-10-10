@@ -207,7 +207,14 @@ esp_err_t audio_init(void)
 
     // Start the periodic internal-heap watchdog (every 10 s; v2 = O(1)-only,
     // see heap_watchdog_task's comment).
-    psram_task_create(heap_watchdog_task, "heap_wd", 3072, NULL, 1, tskNO_AFFINITY);
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 780 B of 3072 (75% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and this task's DEEP path is the emergency
+ * heap dump below the low-heap threshold, which had NOT run.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
+    psram_task_create(heap_watchdog_task, "heap_wd", 6144, NULL, 1, tskNO_AFFINITY);
 
     /* ⛔ A REAL SOURCE GETS THE RING AND NOTHING ELSE.
      *

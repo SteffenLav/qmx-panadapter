@@ -110,7 +110,14 @@ static void cpu_stats_task(void *arg)
 
 esp_err_t cpu_stats_init(void)
 {
-    TaskHandle_t h = psram_task_create(cpu_stats_task, "cpu_stats", 3072,
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 920 B of 3072 (70% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and nothing here establishes that the
+ * widest sampling path had run in that session.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
+    TaskHandle_t h = psram_task_create(cpu_stats_task, "cpu_stats", 6144,
                                        NULL, 1, tskNO_AFFINITY);
     if (!h) {
         ESP_LOGE(TAG, "task create failed; CPU stats disabled");

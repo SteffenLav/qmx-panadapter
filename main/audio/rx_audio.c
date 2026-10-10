@@ -1912,8 +1912,15 @@ void rx_audio_init(void)
      * wakes at 4 Hz, does two I2C transactions and sleeps. It has no latency
      * requirement and touches no DMA buffer. It also never exits, so there is
      * no vTaskDeleteWithCaps site to get wrong. */
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 1212 B of 3072 (60% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and a jack insert/removal path that may not
+ * have been exercised in that session is exactly what it misses.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
     BaseType_t hp = xTaskCreatePinnedToCoreWithCaps(rx_audio_headphone_task, "rx_hp",
-                                                    3072, NULL, 1, NULL, 0,
+                                                    6144, NULL, 1, NULL, 0,
                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (hp != pdPASS)
         ESP_LOGW(TAG, "headphone follower task not created - speaker/jack "
