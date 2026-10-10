@@ -2245,6 +2245,17 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
      * decoder that suddenly publishes one row instead of twenty-three looks
      * exactly like a decoder that stopped working. */
     int n_dup       = r_main.n_dup       + r_worker.n_dup;
+    /* JS8 frames recorded for the reassembler. A free-text DATA frame never
+     * renders, so it does NOT reach n_decoded (see the js8_frame_is_data
+     * branch in decode_range). Two consumers need to know it arrived:
+     *   - the slot line, where dec=0 on a slot that decoded a perfectly good
+     *     3-frame message reads as a failure. Measured 2026-10-10: JS8Call's
+     *     free text arrived as dec=0 dup=28, and the message reassembled.
+     *   - the stuck-RX heuristic below, which soft-resets audio+IQ on
+     *     consecutive zero-decode slots. A station receiving nothing but free
+     *     text scores zero in every slot and had its receiver reset under it.
+     * Zero in FT8/FT4, so neither consumer needs a protocol guard. */
+    int n_js8ev     = r_main.n_js8ev     + r_worker.n_js8ev;
     int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
 
     /* ---- JS8 free-text reassembly (J7) ---------------------------------
@@ -2507,10 +2518,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d dup=%d skip=%d "
+        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
-        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_dup, n_skipped,
+        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_js8ev, n_dup, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
         s_last_timing_valid ? s_last_timing_stations : 0,
@@ -2561,7 +2572,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             // the operator has paused CAT to use the radio's own menu - the
             // radio stops streaming, so every slot decodes zero by design.
             s_stuck_slots = 0;   // never reset mid-exchange or mid-pause
-        } else if (n_cand > 20 && n_decoded == 0) {
+        } else if (n_cand > 20 && n_decoded == 0 && n_js8ev == 0) {
             s_stuck_slots++;
             if (s_stuck_slots >= stuck_thresh) {
                 ESP_LOGW(TAG, "%s: %d consecutive zero-decode idle RX slots "
