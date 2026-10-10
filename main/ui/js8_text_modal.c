@@ -19,6 +19,13 @@
 // second copy of its rules here. A 12-frame message is three minutes of holding
 // a frequency and is not something to discover afterwards.
 
+// ⛔ EVERY COLOUR AND EVERY FONT COMES FROM ui_theme.h. The first cut used bare
+// hex (0x101010 panel, 0x909090 plan text) and LVGL's default 14 px font for
+// the title, the field and the buttons, and it was rejected on sight. The
+// readers of this display are mostly over 60: 14 px body text on a 5" panel at
+// arm's length is not readable. montserrat_24 for body, 28 for the title, and
+// the panel/button geometry follows from that, not the other way round.
+//
 #include "js8_text_modal.h"
 #include "ft8_screen_view.h"
 #include "js8_ftx.h"
@@ -157,32 +164,40 @@ static void modal_build(void)
     /* Top-aligned, not centred: the on-screen keyboard owns the bottom 45% of a
      * 720 px screen, and a centred panel ends up behind it. */
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 760, 300);
+    /* 900x340, and both numbers follow from the font. At montserrat_24 the
+     * three 180 px buttons, the plan label's three wrapped lines and the
+     * textarea do not fit the 760x300 the first cut used. */
+    lv_obj_set_size(s_panel, 900, 340);
     /* y=70 clears the top bar (band/mode/freq/S-meter); at 24 the title row
-     * was drawn behind it. 300 tall ends at 370, well above the 280 px
-     * keyboard that starts at 440. */
+     * was drawn behind it. 340 tall ends at 410, above the 280 px keyboard
+     * that starts at 440. */
     lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 70);
-    lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x101010), 0);
-    lv_obj_set_style_border_color(s_panel, lv_color_hex(0x404040), 0);
-    lv_obj_set_style_border_width(s_panel, 1, 0);
-    lv_obj_set_style_radius(s_panel, 8, 0);
-    lv_obj_set_style_pad_all(s_panel, 16, 0);
+    lv_obj_set_style_bg_color(s_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_panel, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_panel, 2, 0);
+    lv_obj_set_style_radius(s_panel, 10, 0);
+    lv_obj_set_style_pad_all(s_panel, 20, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "JS8 free text");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_ta = lv_textarea_create(s_panel);
-    lv_obj_set_size(s_ta, LV_PCT(100), 96);
-    lv_obj_align(s_ta, LV_ALIGN_TOP_LEFT, 0, 34);
+    lv_obj_set_size(s_ta, LV_PCT(100), 72);
+    lv_obj_align(s_ta, LV_ALIGN_TOP_LEFT, 0, 44);
     lv_textarea_set_placeholder_text(s_ta, "Message to send...");
     lv_textarea_set_one_line(s_ta, false);
     lv_textarea_set_max_length(s_ta, 160);
+    lv_obj_set_style_text_font(s_ta, &lv_font_montserrat_24, 0);
     /* Also registers ui_theme_ta_kbd_focus_cb, which is what records this field
      * as the physical keyboards' target - so ui_kbd_note_focus() is NOT called
      * by hand here. One owner for that bookkeeping. */
     ui_theme_style_textarea(s_ta);
+    lv_obj_set_style_text_color(s_ta, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_event_cb(s_ta, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
     lv_obj_add_event_cb(s_ta, ta_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -190,34 +205,43 @@ static void modal_build(void)
     s_plan_lbl = lv_label_create(s_panel);
     lv_label_set_long_mode(s_plan_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_plan_lbl, LV_PCT(100));
-    lv_obj_align(s_plan_lbl, LV_ALIGN_TOP_LEFT, 0, 138);
-    lv_obj_set_style_text_color(s_plan_lbl, lv_color_hex(0x909090), 0);
+    lv_obj_align(s_plan_lbl, LV_ALIGN_TOP_LEFT, 0, 128);
+    lv_obj_set_style_text_font(s_plan_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_plan_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_label_set_text(s_plan_lbl, "");
 
-    s_btn_send = lv_button_create(s_panel);
-    lv_obj_set_size(s_btn_send, 150, 48);
-    lv_obj_align(s_btn_send, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    lv_obj_add_event_cb(s_btn_send, send_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *l = lv_label_create(s_btn_send);
-    lv_label_set_text(l, "Send");
-    lv_obj_center(l);
+    /* ⛔ Stop TX is NOT the Cancel red. Cancel is UI_COLOR_DANGER in every
+     * other modal, and two identical red buttons side by side on a dialog that
+     * can key the radio is the wrong thing to hand a hurried operator.
+     * UI_COLOR_TX_ACTIVE is the colour transmit already has on this display. */
+    struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_align_t al; int dx; } btns[3] = {
+        { "Send",    UI_COLOR_SUCCESS,   send_cb,   LV_ALIGN_BOTTOM_RIGHT, 0    },
+        { "Cancel",  UI_COLOR_DANGER,    cancel_cb, LV_ALIGN_BOTTOM_RIGHT, -196 },
+        { "Stop TX", UI_COLOR_TX_ACTIVE, stop_cb,   LV_ALIGN_BOTTOM_LEFT,  0    },
+    };
+    lv_obj_t *btn_cancel = NULL;
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *b = lv_button_create(s_panel);
+        lv_obj_set_size(b, 180, 64);
+        lv_obj_align(b, btns[i].al, btns[i].dx, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        /* An explicit bg_color survives LV_STATE_DISABLED, so a greyed-out
+         * Send would still be green without this. */
+        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_BT_OFF), LV_STATE_DISABLED);
+        lv_obj_add_event_cb(b, btns[i].cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, btns[i].lbl);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_STATE_DISABLED);
+        lv_obj_center(l);
+        if (i == 0)      s_btn_send = b;
+        else if (i == 1) btn_cancel = b;
+    }
     lv_obj_add_state(s_btn_send, LV_STATE_DISABLED);
-
-    lv_obj_t *btn_cancel = lv_button_create(s_panel);
-    lv_obj_set_size(btn_cancel, 150, 48);
-    lv_obj_align(btn_cancel, LV_ALIGN_BOTTOM_RIGHT, -164, 0);
-    lv_obj_add_event_cb(btn_cancel, cancel_cb, LV_EVENT_CLICKED, NULL);
-    l = lv_label_create(btn_cancel);
-    lv_label_set_text(l, "Cancel");
-    lv_obj_center(l);
-
-    lv_obj_t *btn_stop = lv_button_create(s_panel);
-    lv_obj_set_size(btn_stop, 150, 48);
-    lv_obj_align(btn_stop, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_add_event_cb(btn_stop, stop_cb, LV_EVENT_CLICKED, NULL);
-    l = lv_label_create(btn_stop);
-    lv_label_set_text(l, "Stop TX");
-    lv_obj_center(l);
 
     /* Enter sends, Esc closes. The registry picks whichever modal is ACTUALLY
      * on screen, so registering once at build time is correct - see the
@@ -236,9 +260,9 @@ static void modal_build(void)
         lv_style_init(&style_kb_btn);
         lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
         lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_text_color(&style_kb_btn, lv_color_hex(UI_COLOR_TEXT));
         lv_style_set_border_width(&style_kb_btn, 1);
-        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(UI_COLOR_BORDER));
         kb_btn_style_inited = true;
     }
     lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
