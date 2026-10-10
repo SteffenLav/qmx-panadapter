@@ -191,7 +191,7 @@ which also covers setting the seconds — the part that matters with no WiFi and
 
 **QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source. A clock the Tab5 has itself pushed into the radio is never accepted as evidence of GPS — see [Time Sync](../guide/time-sync.md#4-qmx-gps-time-sync-auto-detected).
 
-**Unit GPS (PORT.A)** — not set here. Choose it under **Device -> [Port mode](#port-mode-port-a)**, since the first question is what is plugged into the connector. When it is on, it beats the QMX's GPS and SNTP while it has a fresh lock, and it is the only offline source that also gives the date. See [Unit GPS Time Source](time-sync.md#unit-gps-time-source-port-a).
+**Unit GPS (PORT.A)** — not set here. Choose it under **Device -> [Port mode](#port-mode-porta)**, since the first question is what is plugged into the connector. When it is on, it beats the QMX's GPS and SNTP while it has a fresh lock, and it is the only offline source that also gives the date. See [Unit GPS Time Source](time-sync.md#unit-gps-time-source-porta).
 
 ## Display
 
@@ -228,7 +228,7 @@ to restart.
 **Advanced -> Device.** One connector, two possible owners, so there is one setting with two values:
 
 - **Relay (default)** — the remote power-cycle relay drives GPIO53/54, exactly as it always has. A board that has never seen this setting is on **Relay**, so nothing changes when you update.
-- **Unit GPS v1.1** — the M5Stack Unit GPS owns those pins as a UART instead, and disciplines the clock from the satellite: time **and the full date**, with no internet. See [Unit GPS Time Source](time-sync.md#unit-gps-time-source-port-a).
+- **Unit GPS v1.1** — the M5Stack Unit GPS owns those pins as a UART instead, and disciplines the clock from the satellite: time **and the full date**, with no internet. See [Unit GPS Time Source](time-sync.md#unit-gps-time-source-porta).
 
 Switching is live — the pins are handed straight over, and a toast confirms which side has PORT.A. It is refused while a relay pulse or power cycle is running (finish it first), and refused if the GPS UART cannot be brought up (the mode then stays as it was, rather than changing to something that is not working).
 

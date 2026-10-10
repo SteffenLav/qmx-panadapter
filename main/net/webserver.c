@@ -2247,7 +2247,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * flash per attempt. Neither is stored - only the on/off flag is -
          * so a reboot returns to the compiled-in GPIO2 @ 115200. Remove both
          * with the instrument in unit_gps.c once the receiver is known good.
-         *   {"action":"gnss_mbus","on":true,"gpio":2,"baud":9600} */
+         *   {"action":"gnss_mbus","on":true,"gpio":38,"baud":9600} */
         cJSON *jo = cJSON_GetObjectItem(root, "on");
         cJSON *jg = cJSON_GetObjectItem(root, "gpio");
         cJSON *jb = cJSON_GetObjectItem(root, "baud");

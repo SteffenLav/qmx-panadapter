@@ -57,7 +57,7 @@ static const char *TAG = "settings";
 #define KEY_LAST_MODE  "last_mode"
 #define KEY_LAST_TIME  "last_time"
 #define KEY_DATE_SRC   "date_src"   /* who last set the DATE - date_src_t */
-#define KEY_GNSS_MBUS  "gnss_mbus"  /* Module GPS v2.1 on the M-Bus (GPIO2) */
+#define KEY_GNSS_MBUS  "gnss_mbus"  /* Module GPS v2.1 on the M-Bus (GPIO38) */
 #define KEY_CQ_MSG0    "cq_msg0"
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"

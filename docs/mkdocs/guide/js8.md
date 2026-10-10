@@ -33,18 +33,24 @@ A free-text frame carries **no callsign of its own** — that is how JS8 works, 
 
 ### 4. Sending free text
 
-⚠ **There is no box to type a message in yet** — not on the Tab5, not in the browser. The composer is the next piece of this feature. Until then free text is sent by asking the device directly, which works from a browser's console, `curl`, or any script on your network:
+**On the Tab5:** tap **Free text**, the button under Call CQ. It is shown in JS8 only. Type the message, and the window tells you how many frames it takes and how many seconds it holds the frequency *before* anything is keyed, along with the text exactly as it will go out. **Send** starts it; **Stop TX** aborts a run that is already going out, and stays reachable while transmitting.
+
+**In the browser:** the same composer sits under the conversation pane on the FT8/JS8 page, with the same plan line and the same Send and Stop.
+
+The text is upper-cased, runs of spaces are collapsed and anything JS8 cannot carry is dropped. That is the encoder's own rule, and what the plan line shows you is the encoder's answer rather than a second copy of the rule — so what you read is what goes on the air.
+
+⚠ **A long message is a long transmission.** One frame goes out per 15-second slot, so a twelve-frame message holds the frequency for three minutes. Read the plan line before you send.
+
+The same three actions are scriptable, which is how the feature worked before the composer existed:
 
 ```
 POST /api/cmd   {"action": "js8_text", "text": "HELLO FROM THE PANADAPTER"}
 ```
 
-Two companions:
+- `{"action": "js8_text_plan", "text": "..."}` reports the frame count and the seconds **without transmitting**.
+- `{"action": "js8_text_cancel"}` stops a run that is already going out.
 
-- `{"action": "js8_text_plan", "text": "..."}` reports how many frames the message needs and how many seconds it will take, **without transmitting**. Worth doing first — a long message holds the frequency for minutes.
-- `{"action": "js8_text_cancel"}` stops a run that is already going out. This is deliberately reachable mid-transmission: a run can last up to three minutes and you must be able to stop it from wherever you are.
-
-The air time is reported before the first frame goes out, so you know what you are committing to. Progress is in `/api/status` under `ft8.ftx_sent` and `ft8.ftx_total`.
+Progress is in `/api/status` under `ft8.ftx_sent` and `ft8.ftx_total`.
 
 ### 5. Calling CQ
 

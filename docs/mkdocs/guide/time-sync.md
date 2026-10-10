@@ -11,7 +11,7 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 5. **FT8/FT4-derived** — offline fallback only (ignored while GPS/SNTP is up)
 6. **Manual set** — enter time manually via the settings drawer
 
-GPS and SNTP are the accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual). The Unit GPS outranks the others while it has a fresh lock — see [Unit GPS Time Source](#unit-gps-time-source-port-a).
+GPS and SNTP are the accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual). The Unit GPS outranks the others while it has a fresh lock — see [Unit GPS Time Source](#unit-gps-time-source-porta).
 
 !!! note "Both GPS sources show `UTC(GPS)`"
 
@@ -43,9 +43,9 @@ The bottom-bar **GPS indicator** — one GPS symbol, coloured by state, the same
 
 Locking takes 30 s to a few minutes from cold with a clear sky. **Switch the mode before plugging the GPS in** (enable-then-plug); see [Settings](settings.md) for why.
 
-### Module GPS v2.1 on the 30-pin bus — untested
+### Module GPS v2.1 on the 30-pin bus
 
-!!! warning "Supported in the code, never run on hardware"
+!!! warning "Works, but there is no control for it on screen"
 
     A **Module GPS v2.1 (M5Stack M003-V21)** stacked on the 30-pin bus is
     handled by the same driver as the Unit GPS — it is the same AT6668
@@ -67,15 +67,17 @@ Locking takes 30 s to a few minutes from cold with a clear sky. **Switch the mod
     Being on the 30-pin bus, it does not conflict with the PORT.A relay, so
     both can be fitted at once.
 
-    A fix has not yet been seen on this receiver, only valid NMEA. Use the
-    **Unit GPS on PORT.A** if you want one that has been used in anger.
+    Measured on the bench with the antenna at a window: a lock, a fix 64 ms
+    old, about 530 bytes per second of well-formed NMEA, and the clock
+    taking it every second. Indoors it sat without a fix for three minutes,
+    which is normal for this receiver.
 
 
 ### 2. Offline (POTA / Portable)
 
 If you're operating **without WiFi** (POTA, portable, SOTA):
 
-0. **Best: take a Unit GPS.** With Port mode set to *Unit GPS v1.1*, the satellite gives you time **and the date** with no internet, no RTC remembered from home and no question to answer — see [Unit GPS Time Source](#unit-gps-time-source-port-a). Everything below is what to do when you have no Unit GPS.
+0. **Best: take a Unit GPS.** With Port mode set to *Unit GPS v1.1*, the satellite gives you time **and the date** with no internet, no RTC remembered from home and no question to answer — see [Unit GPS Time Source](#unit-gps-time-source-porta). Everything below is what to do when you have no Unit GPS.
 1. **Set the Tab5 RTC before you leave home** (settings -> Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
@@ -128,7 +130,7 @@ No internet needed — FT8 timing works offline.
     The **Unit GPS on PORT.A is the exception**: its sentences carry the
     satellite date, so the date is verified by the fix itself and the question
     never has to be asked. See
-    [Unit GPS Time Source](#unit-gps-time-source-port-a).
+    [Unit GPS Time Source](#unit-gps-time-source-porta).
 
     The **Set and Sync the Clock** window also shows the date on its second
     line, marked *(unverified)* when it has not been checked. Tap that line to

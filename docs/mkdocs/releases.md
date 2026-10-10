@@ -4,27 +4,41 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.16.12** - 2026-10-08
+**v1.17.0** - 2026-10-10
 
-**GPS time and date from a receiver on PORT.A or from a QMX+'s own GPS, and a check on the date before it is trusted.**
+**JS8 Normal arrives: the Tab5 decodes JS8 off air and can send free text back, with a conversation page of its own. A GPS Stats page with a live sky view. And the 3.5 mm jack can now be the receive source instead of the radio's USB.**
 
-- ⭐ **A GPS receiver on the Tab5 itself, contributed by Eric (@ericmoritz)** *(#15)*. Plug an M5Stack Unit GPS v1.1 into PORT.A, set **Settings -> Device -> Port mode** to *Unit GPS v1.1*, and the satellite gives you UTC **and the full date** offline, with no question to answer. A GPS symbol on the bottom bar shows what the receiver is doing.
-- ⭐ **A GPS-equipped QMX+ now hands over the date as well as the time.** On radio firmware 1.04_004 and later the Tab5 asks the GPS receiver directly instead of reading the radio's clock, so an offline QMX+ with a sky view also answers the date question by itself - and whether your radio has a GPS is settled by the radio's own answer rather than inferred from a clock that agrees with ours.
-- ⭐ **The Tab5 no longer sets the clock of a radio that has its own GPS** *(#174)*. The push left the radio about a second slow, which is the very disagreement the GPS test looks for, so it failed again and pushed again. Only a power cycle of the radio escaped it.
-- ⭐ **Three faults in the date check** *(royord, #18)*. The supercap clock still running is no longer taken as the date being right - it says the battery held, not who wrote it, and another firmware can leave a date a century out. The question no longer closes itself when **you** opened it to change the date. And both clock windows drew text underneath their own buttons.
-- **SD Files on the web page works again** - the fault listed under ⚠ in v1.16.11. A read that could not get the memory it needed came back short and the browser was handed a truncated file as though it were whole.
-- **The waterfall is smoother, and its speed is set in rows per second** (1 to 40, in the drawer). The band-plan strip was redrawing 6.7 times a second to produce an identical picture - 20% of all the drawing the Tab5 did.
-- **The web waterfall no longer stalls** - it was stopped 4.2% of the time, by my own code rather than the network.
-- **Three settings the browser saved but never applied**: TX tone hold, CW pitch and CW calibration.
-- **The web page no longer offers bands your radio does not have** *(Brian WA6JFK)*.
-- **FT8 decoding is about twice as fast on a busy band**, and answers a caller faster during a CQ run.
-- **Long messages on screen are no longer cut off** *(Samuel W7STF)*, and the RX-audio restart warning is now a window you dismiss rather than one that fades.
+- ⭐⭐ **JS8 Normal — receive.** JS8 joins FT8 and FT4 in the preset picker, and the Tab5 decodes it on its own: sync, LDPC error correction and the CRC check, all on the device. Proven on air against real stations, including other people's free text arriving intact (`F6HCM: SQUARESDR2, 20W, EF ANTENNA 10/(15/)20`). Directed messages and heartbeats are read and shown with the sender's callsign and grid.
+- ⭐⭐ **JS8 Normal — transmit free text.** Type a message, see what it will cost, and send it. There is a **Free text** button under Call CQ on the Tab5 and a composer under the conversation on the web page. Before anything is keyed both tell you how many frames the message takes and how many seconds it holds the frequency, and show the text exactly as it will go out — upper-cased, spaces collapsed, anything unsendable dropped. A twelve-frame message is three minutes of transmitting and is not something to find out afterwards. A real JS8Call at the other end reassembled a three-frame message of mine and showed it complete, with the end-of-message marker it draws for a finished transmission. A CQ from the Tab5 was decoded by a second station.
+- ⭐ **A JS8 page.** Stations and Conversation as two tabs: who is on the band, and what has been said. Rows are tappable, and the same page is in the browser.
+- ⭐ **GPS Stats.** A page of its own under Radio in the drawer, and on the web. It draws a live sky view — the satellites in use, elevation rings and the compass axes — alongside the fix, the satellite count and which receiver is answering. The clock itself now says whether time came from a GPS on the Tab5 or from the radio.
+- ⭐ **Your grid, filled in from the fix.** If the GPS has a position, the station grid fills itself. It will never undo a correction you typed by hand.
+- ⭐ **Both GPS receivers now work, and both are confirmed on hardware.** The **Unit GPS v1.1** on PORT.A — contributed by Eric (@ericmoritz) — gives you UTC and the full date offline: plug it in and set **Port mode (relay / Unit GPS)** in the drawer to *Unit GPS v1.1*. And the **Module GPS v2.1** on the 30-pin M-Bus is now actually running rather than supported on paper, which is what v1.16.12 had to say about it. For that one it is **DIP switch 6** — the silkscreen group reads backwards until you realise it is named from the host's side, not the module's. Either receiver drives the clock, the date and the sky view below.
+- ⭐ **CW keyer speed, from the browser and the Tab5** *(Ralph Hellmig)*. A slider in the drawer above IF calibration, and the same control on the web page. It sets the speed over CAT and reads back what the radio actually took, because the radio is the authority and does not store it.
+- ⭐ **The 3.5 mm jack as a receive source — declared beta.** An input selector lets you feed the panadapter from the headphone jack instead of the radio's USB audio, with a level meter, a clip indicator and the jack wiring drawn on screen. The signal path is real and measured, built around a 255-tap filter that a test harness caught me getting 33 dB wrong at 300 Hz before any of it ran. ⚠ **No signal has been decoded through it yet.** The path runs, the samples flow and the levels read correctly with nothing plugged in; that is as far as it is proven. In this mode the USB radio connection is off by design.
+- **Tap and hold a frequency preset** to highlight it, slide to the one you want, and release to tune. No more mis-taps on a moving train.
+- **+6% more decodes**, by opening the top end of the waterfall the decoder searches. Signal reports are also recalibrated against the reference decoder `jt9`, from 154 paired decodes rather than a guess.
+- **One transmission is one line in the list again.** A single station's call could appear up to 23 times in one slot. The decoder now recognises the same message found at several frequencies as one message.
+- **The S-meter read a whole S-unit high below S9**, and the browser was right all along. Fixed on the glass.
+- **"DT" meant two different things under one heading** *(Randy N4OPI)* — the Tab5 and the browser showed different numbers for it. They now agree, and it stays blank until at least two separate stations have been heard, because one station cannot tell you whether your clock or theirs is off.
+- **The battery percentage was wrong in two ways.** A charge limit of 80% put "85% (limit)" on the bar, and the percentage truncated so 79.59% read as 79. Both fixed against a measured internal resistance on two packs rather than a guessed one. A failed battery-chip read also counted as a flat pack and restarted charging.
+- **A GPS-equipped Tab5 no longer writes its settings once a second.** The Unit GPS was committing to flash and setting the clock every single second — 86,400 times a day.
+- **More room inside the firmware.** 47 KB moved out of the scarce internal memory, and seven task stacks that were sized on measurements taken before their deepest code had ever run — two of them 87% and 91% full — given proper margins. None of this is visible; all of it is the difference between a unit that stays up and one that does not.
+- **In the browser, to match the Tab5:** the RX audio settings, the dB-range presets, the JS8 conversation pane, and update downloads that continue in the background.
 
-⚠ **A Module GPS v2.1 on the 30-pin bus is in the code and has never been run on hardware.** No control on screen, API only. The Unit GPS on PORT.A is the one that has been used.
+⚠ **JS8 is new, and I am calling it a beta.** Receiving is proven on air. Sending free text is proven on air. A full automatic two-way JS8 QSO has **not** been completed yet — that is the next piece of work. Compound callsigns are not handled.
 
-⚠ The waterfall blanks for one frame each time it scrolls a row, which reads as a flicker *(Bryan N0LUF)*. Audio still breaks up with a web page open. **AM produces no audio** *(Samuel W7STF)* - the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing between cycles *(Samuel W7STF)*.
+⚠ **Still unfixed and honestly stated:** the waterfall blanks for a single frame each time it scrolls a row, which reads as a flicker *(Bryan N0LUF)* — the real fix is a second frame buffer, which is not a small change. **AM produces no audio** *(Samuel W7STF)*. The WSPR waterfall shows nothing during the wait between cycles, unlike WSJT-X *(Samuel W7STF)*.
+
+⚠ **If you are upgrading from v1.16.11 or older**, your waterfall rate will read 10 rows/s once, because v1.16.12 changed how that setting is stored. Set it again and it stays.
+
+⛔ **The licence changed from MIT to GPL-3** on 2026-10-09. Nothing about using or flashing this firmware changes. The obligation falls on anyone **distributing a modified build**, who must publish their source. The reason was JS8: the coding tables it needs exist only inside JS8Call, which is GPL-3, and a permissive licence put them out of reach.
 
 ## Previous Releases
+
+### v1.16.12 - 2026-10-08
+
+GPS time and date from a receiver on PORT.A or from a QMX+'s own GPS, and a check on the date before it is trusted. A GPS receiver on the Tab5 itself, contributed by Eric (@ericmoritz) *(#15)*; a GPS-equipped QMX+ hands over the date over CAT; the Tab5 no longer sets the clock of a radio that has its own GPS *(#174)*; three faults in the date check *(royord, #18)*. SD Files on the web page works again. The waterfall is smoother and its speed is set in rows per second. FT8 decoding about twice as fast on a busy band.
 
 ### v1.16.11 - 2026-10-03
 
@@ -988,7 +1002,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.16.12.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.17.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

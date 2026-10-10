@@ -12,7 +12,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.16.12.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.17.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > **Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.** Reading your QMX's band list means walking the radio's own **Band config.** menus, and leaving those menus drops the radio on 160 m in whatever mode they left behind — on every CAT link-up, to everyone, for as long as the band list has existed *(John W5JSS)*. Frequency and mode are now saved before the scan and put back after it. ⭐ The second one cost him more: with more than one transmit cycle in a WSPR group, the first cycle never went out, and the burst it missed **slid into the next cycle** — which at the end of a group is a receive cycle, so the beacon keyed off its own schedule and published that to wsprnet. The arming was being done by the receive loop, which arrives about a second and a half into every cycle while key-down has to happen within one. It now runs in a task of its own that waits on the clock and nothing else: **5 to 49 ms** into the cycle on the bench instead of 1,437, both cycles of a group transmitting, receive cycles silent. Also: the five-minutely clock read no longer takes the CAT link away from a burst in progress; the screenshot link opens in a tab again *(John W5JSS)*; the "turn on your QMX" prompt waits until it is safe to obey *(Dennis WN4FLA, Gyula HA3HZ)*; other stations' CQ calls can stay visible while you run your own CQ, and the TX tone panel updates while you watch it *(Randy N4OPI)*; and switching RX audio on mid-session now tells you it needs a restart *(Samuel W7STF)*.
 >
@@ -42,7 +42,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.16.12.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.17.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -928,7 +928,7 @@ With JS8 selected the right pane carries two tappable tabs: **Stations** (who is
 
 ⚠ **JS8 is new in v1.17.0 and declared a beta.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been completed**, and compound callsigns are not handled.
 
-⚠ **There is no box to type a free-text message in yet**, on the Tab5 or in the browser. Until the composer exists, send one by asking the device: `POST /api/cmd {"action":"js8_text","text":"..."}`. Use `js8_text_plan` first to see how many frames and seconds it needs without transmitting, and `js8_text_cancel` to stop a run - a long message holds the frequency for minutes.
+**Sending free text.** Tap **Free text** under Call CQ on the Tab5 (JS8 only), or use the composer under the conversation pane on the web page. Both report how many frames the message takes and how many seconds it holds the frequency before anything is keyed, and show the normalised text the encoder will actually send - upper-cased, whitespace collapsed, unsendable characters dropped. One frame per 15-second slot, so a twelve-frame message is three minutes of transmitting. **Stop TX** aborts a run in flight and stays reachable while transmitting. Scriptable as `POST /api/cmd {"action":"js8_text","text":"..."}`, with `js8_text_plan` for the frame/second count without transmitting and `js8_text_cancel` to stop.
 
 A free-text frame carries **no callsign** - that is JS8's design. The Tab5 names a message after a station that identified itself on the same audio frequency, and shows the **frequency instead of a name** when two stations are equally plausible. A wrong callsign on somebody else's words is worse than none.
 
@@ -1219,8 +1219,9 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.16.12 is here.** Next on the bench:
+**v1.17.0 is here.** Next on the bench:
 
+- **A full two-way JS8 QSO, unattended.** Receiving and sending free text are both proven on air; the automatic exchange that turns them into a QSO is not written yet. Compound callsigns go with it.
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 
@@ -1231,7 +1232,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of
   the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
-- **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
+- **RTTY mode.** See `docs/rtty-feasibility.md`. JS8 shipped in v1.17.0.
 - **AM audio.** The demodulator handles CW, USB and LSB; AM is silent, so an AM
   station means putting the radio in USB *(Samuel W7STF)*. The signal path already
   produces what AM needs, so this is a small job - the work is in the levels, not the
