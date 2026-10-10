@@ -267,6 +267,37 @@ def main():
     for script, rel, note in absent:
         print("check_patches: SKIP %s (%s) - %s" % (rel, script, note))
 
+    # A patch that could not be CHECKED is not a patch known to be present.
+    #
+    # This used to print every skip and then still say "all 25 standing patches
+    # present" and return 0. Seen twice on 2026-10-10: 12 of the 25 skipped for
+    # a missing IDF_PATH and the summary still read as a clean pass, which is
+    # the worst possible output - it is the exact reassurance the caller asked
+    # for, with none of the checking behind it.
+    #
+    # An unset IDF_PATH is therefore FATAL rather than a skip. It is never a
+    # legitimate state for this check: the IDF-tree patches are over a third of
+    # the list, and a release re-fetches managed_components/, which is the one
+    # time a component upgrade can break a standing patch.
+    no_idf = [a for a in absent if a[2] == "IDF_PATH is not set"]
+    if no_idf:
+        print("")
+        print("=" * 78)
+        print("check_patches: CANNOT CHECK %d OF %d PATCHES - IDF_PATH is not set"
+              % (len(no_idf), len(PATCHES)))
+        print("=" * 78)
+        print("")
+        print("  This is NOT a pass. Those patches were not looked at.")
+        print("  Activate ESP-IDF first, then re-run:")
+        print("")
+        print("    & \"C:/esp/v5.4.4/esp-idf/export.ps1\" | Out-Null")
+        print("    python tools/check_patches.py")
+        print("")
+        print("  On a fresh non-interactive shell, prepend the IDF venv to PATH")
+        print("  before export.ps1 or `python` resolves to the Store stub.")
+        print("")
+        return 2
+
     if missing:
         print("")
         print("=" * 78)
@@ -286,7 +317,17 @@ def main():
         print("")
         return 1
 
-    print("check_patches: all %d standing patches present" % len(PATCHES))
+    # Report what was VERIFIED, never the size of the list. The old line said
+    # "all %d standing patches present" % len(PATCHES) - the TOTAL - so skipped
+    # entries were silently counted as verified.
+    checked = len(PATCHES) - len(absent)
+    if absent:
+        print("check_patches: %d of %d standing patches verified present; "
+              "%d NOT CHECKED (listed above)" % (checked, len(PATCHES), len(absent)))
+        print("check_patches: treat this as INCOMPLETE, not as a pass.")
+        return 1
+
+    print("check_patches: all %d standing patches verified present" % checked)
     return 0
 
 
