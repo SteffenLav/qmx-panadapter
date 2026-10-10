@@ -918,6 +918,26 @@ Every tap of **LoTW ↑** afterwards signs and uploads everything logged since t
 
 ---
 
+## JS8
+
+**JS8 Normal runs on the Tab5 itself** - decoder, error correction and transmitter, no PC. JS8 is a keyboard mode on FT8's modulation: it carries free text instead of FT8's fixed exchange, so stations hold short conversations.
+
+Pick **JS8** from the **Preset** dropdown in the FT8 view - the dropdown is three wide now. Only **JS8 Normal** (15-second slots) is supported; Fast, Turbo and Slow are not, and Turbo is unreachable over CAT anyway.
+
+With JS8 selected the right pane carries two tappable tabs: **Stations** (who is on the band, with grid and age) and **Conversation** (what has been said - AGE, Hz, CALL, MESSAGE). Both appear in the browser too.
+
+⚠ **JS8 is new in v1.17.0 and declared a beta.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been completed**, and compound callsigns are not handled.
+
+⚠ **There is no box to type a free-text message in yet**, on the Tab5 or in the browser. Until the composer exists, send one by asking the device: `POST /api/cmd {"action":"js8_text","text":"..."}`. Use `js8_text_plan` first to see how many frames and seconds it needs without transmitting, and `js8_text_cancel` to stop a run - a long message holds the frequency for minutes.
+
+A free-text frame carries **no callsign** - that is JS8's design. The Tab5 names a message after a station that identified itself on the same audio frequency, and shows the **frequency instead of a name** when two stations are equally plausible. A wrong callsign on somebody else's words is worse than none.
+
+Your grid goes on the air as **four characters** always: a six-character grid in a JS8 CQ is read by other stations as a callsign.
+
+Full detail, including exactly what is and is not proven: the JS8 chapter of the user guide.
+
+---
+
 ## Time sync
 
 The Tab5 needs accurate UTC for FT8 slot timing. Sources in priority order (highest first):

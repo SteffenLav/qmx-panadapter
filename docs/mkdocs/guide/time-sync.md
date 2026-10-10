@@ -291,6 +291,36 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 - ±1 s error -> very few decodes, transmit often off-time
 - ±2 s error or worse -> FT8 doesn't work
 
+### 8b. GPS Stats - the sky view (new in v1.17.0)
+
+**Tap the UTC clock** on the bottom bar, or open **Radio -> GPS Stats** in the drawer, and
+the Tab5 draws what the GPS receiver can see:
+
+- A **sky view** - the satellites in use plotted by bearing and elevation, with elevation
+  rings and the compass axes drawn behind them
+- The fix itself, the satellite count, and **which receiver answered**
+- The same page is in the browser, composed by the device so the two cannot drift
+
+The bottom-bar clock now distinguishes its source: **U-GPS** for a GPS attached to the
+Tab5, **GPS** for a GPS-equipped QMX+ answering over CAT.
+
+**Two receivers work, and both are confirmed on hardware:**
+
+| Receiver | Where | How to enable |
+|---|---|---|
+| **Unit GPS v1.1** | PORT.A | Drawer -> **Port mode (relay / Unit GPS)** -> *Unit GPS v1.1* |
+| **Module GPS v2.1** | 30-pin M-Bus | **DIP switch 6** |
+
+⚠ On the Module GPS v2.1 the silkscreen DIP labels read backwards until you realise the
+groups are named from the **host's** side, not the module's. v1.16.12 shipped with this
+receiver supported in code but never run on hardware; it runs now.
+
+**Your grid fills itself from the fix.** If the GPS has a position, the station grid is
+filled in for you - and a grid you have typed by hand is never overwritten.
+
+⛔ The Unit GPS and the remote power-cycle relay share PORT.A. One cable, two uses: the
+relay cannot fire while the GPS owns the port, so unplug the GPS before switching back.
+
 ### 9. Time Sources Summary
 
 | Source | Accuracy | Updates | Works Offline? |

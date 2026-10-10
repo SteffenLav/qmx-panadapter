@@ -138,6 +138,21 @@ browser both your Backspace and Delete keys do this.
     Virtual U3S values all edit this way. *(Randy N4OPI worked this out from PuTTY
     and told us — it is how the radio has always behaved, not a Tab5 limitation.)*
 
+### 4b. CW keyer speed (new in v1.17.0)
+
+*Asked for by Ralph Hellmig.*
+
+The radio's **CW keyer speed** is now a slider in the drawer, directly above IF
+calibration, and the same control is on the web page - so you can change it without
+walking into the radio's own menus.
+
+It sets the speed over CAT and then **reads back what the radio actually took**. The
+radio is the authority here: it does not store the keyer speed itself, so the read-back
+is the only honest answer about where the speed ended up.
+
+⛔ **A speed of 0 means a straight key**, not "no speed set" - the keyer is off and the
+radio keys straight through. That is a real setting, so the slider treats it as one.
+
 ### 5. What it does not do
 
 - **It does not transmit.** Nothing here keys the radio.

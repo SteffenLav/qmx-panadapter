@@ -3795,6 +3795,80 @@ what makes the cable release above announce itself instead of failing.
 
 ---
 
+### Shipped in v1.15.0 — 2026-09-18
+
+**This one needs the USB-C cable, once.** It rewrites the partition table, which
+an over-the-air update cannot do — that limit is deliberate, and it is what stops
+a failed download taking the flash layout with it. So v1.15.0 arrives as a
+flasher download, over the same cable and the same script you used to install the
+firmware the first time. Everything after it is over the air again, with more
+than twice the room.
+
+There is no over-the-air image attached to this release on purpose. If you tap
+the update notice it will simply say the download could not be reached — that is
+the release refusing to be installed the wrong way, not a fault.
+
+**Your settings, memory channels, QSO log and LoTW certificate are kept.** Press
+**Enter** at the flash-type prompt, never **E**. Brand-new users are unaffected:
+a first install already uses the flasher and lands on the new layout directly.
+
+**What the cable buys.** The firmware had 47 KB of room left in its 4 MB slot —
+about one feature from refusing to build. Dropping a third, never-used copy of
+the firmware leaves two slots of 6.81 MB, with **2.87 MB free**. Over-the-air
+updates keep working exactly as before, alternating between the two.
+
+**The band-plan slider is a window you drag, not a dial you scrub.** Grab the
+framed block and the whole picture travels with it — the block, the frequency
+marker and the filter passband move together and stay where you let go, with the
+radio following. It used to write a frequency and let the display decide where to
+land, so the box sprang back the moment you lifted your finger. The grab area is
+also about 8 mm tall now instead of 4, because the strip alone was never a
+finger, and the filter passband fades back in twice as fast when you release.
+
+**Your settings backup was missing thirty-one of them, including the power
+calibration.** The Config download is a complete backup again: the measured
+per-band power calibration, your per-band power target, the WSPR schedule and
+band hopping, Field Day class and section, the activation reference, the FT8
+transmit tone, and twenty more. The calibration is an hour at a dummy load per
+band and was the one thing in the whole file that could not be recreated from
+memory — it had never been included. Two settings, the transmit tone and its
+hold, were worse than missing: the file would accept them but never wrote them,
+so saving and restoring quietly reverted both.
+
+Band names in that file are now case-insensitive, and an empty value removes a
+band, so the file can be edited by hand without creating invisible duplicates.
+
+**Three settings reached the web page** that had been on the Tab5 only: waterfall
+speed, WSPR band hopping, and whether your QMX has GPS. The last is not cosmetic
+— claiming it stops the Tab5 keeping the radio's clock.
+
+**WSPR will not beacon while the radio is in split.** In split the radio
+transmits on VFO B while still reporting VFO A, so every spot you publish names a
+frequency your signal was never on. The Tab5 now asks the radio before each
+transmission and holds the burst with **TX held - radio is in SPLIT, clear VFO B**
+on the screen. It will not clear it for you — that is your setting, and on the
+QMX it cannot be cleared over the cable anyway.
+
+**The WSPR transmit block was unreadable.** Red text on an orange background
+measures 1.15 to 1 for contrast; it is black on orange now. The same block
+sometimes kept the orange of a finished transmission while merely counting down.
+
+**The on-screen keyboard came back on a second tap.** Tapping a text field that
+was already selected did nothing, because the keyboard was tied to a field
+*gaining* focus. Reported by Samuel W7STF; it affected nine fields across seven
+windows.
+
+**A missing SD card says so.** The card indicator is crossed out in grey when no
+card is present, and tapping it opens a page explaining what a card is for. A tap
+on the bottom bar used to open the updater wherever you touched it.
+
+**The WSPR transmit schedule is two plain counts.** "1 in 5" meant different
+things to different people, so it is now the number of transmit cycles and the
+number of receive cycles in a group that repeats — with the result written out in
+words underneath as you change it.
+
+---
+
 ### Shipped in v1.15.1 — 2026-09-19
 
 **WSPR was deaf on a busy band, and the reason was memory - not the band, not
@@ -3867,77 +3941,289 @@ decode none of them. It predates this release and none of the above touches it.
 
 ---
 
-### Shipped in v1.15.0 — 2026-09-18
+### Shipped in v1.16.0 — 2026-09-21
 
-**This one needs the USB-C cable, once.** It rewrites the partition table, which
-an over-the-air update cannot do — that limit is deliberate, and it is what stops
-a failed download taking the flash layout with it. So v1.15.0 arrives as a
-flasher download, over the same cable and the same script you used to install the
-firmware the first time. Everything after it is over the air again, with more
-than twice the room.
+## Audio on the Tab5, as a beta — and a Pause button during a QSO
 
-There is no over-the-air image attached to this release on purpose. If you tap
-the update notice it will simply say the download could not be reached — that is
-the release refusing to be installed the wrong way, not a fault.
+**You can listen to the radio through the Tab5.** The I/Q the QMX already sends is turned into sound on the device. This is new ground, and the whole audio part is a **beta**: it is there to be tried and reported on, not to be relied on yet.
 
-**Your settings, memory channels, QSO log and LoTW certificate are kept.** Press
-**Enter** at the flash-type prompt, never **E**. Brand-new users are unaffected:
-a first install already uses the flasher and lands on the new layout directly.
+**Panoramic CW split.** Two stations on different frequencies are placed left and right across the stereo image instead of landing on top of each other. Three controls are live while you listen — **pan width** (how far apart they sit), **pan blend** (how much of the effect is mixed in) and **overlap** (how wide a slice each side takes). You adjust them by ear, mid-QSO, not in a menu.
 
-**What the cable buys.** The firmware had 47 KB of room left in its 4 MB slot —
-about one feature from refusing to build. Dropping a third, never-used copy of
-the firmware leaves two slots of 6.81 MB, with **2.87 MB free**. Over-the-air
-updates keep working exactly as before, alternating between the two.
+**Binaural CW is a first implementation.** Use it at **300 Hz bandwidth and up**. **Below 200 Hz do not expect much separation** — at that point the two signals share too much of the audio passband for any amount of panning to pull them apart. That is a limit of the bandwidth, not of the setting.
 
-**The band-plan slider is a window you drag, not a dial you scrub.** Grab the
-framed block and the whole picture travels with it — the block, the frequency
-marker and the filter passband move together and stay where you let go, with the
-radio following. It used to write a frequency and let the display decide where to
-land, so the box sprang back the moment you lifted your finger. The grab area is
-also about 8 mm tall now instead of 4, because the strip alone was never a
-finger, and the filter passband fades back in twice as fast when you release.
+**Audio costs resources, so not everything can be on at once.** **Long-press the top bar on the Panadapter page** to open **Resource Management** — that is where audio is switched on and off, and where you can see what it is competing with. Expect to turn something else down to make room.
 
-**Your settings backup was missing thirty-one of them, including the power
-calibration.** The Config download is a complete backup again: the measured
-per-band power calibration, your per-band power target, the WSPR schedule and
-band hopping, Field Day class and section, the activation reference, the FT8
-transmit tone, and twenty more. The calibration is an hour at a dummy load per
-band and was the one thing in the whole file that could not be recreated from
-memory — it had never been included. Two settings, the transmit tone and its
-hold, were worse than missing: the file would accept them but never wrote them,
-so saving and restoring quietly reverted both.
+**What is planned next:** the same audio features in the **web interface**, with only the I/Q channels sent to the PC and the processing done there — so your computer does the work instead of the Tab5.
 
-Band names in that file are now case-insensitive, and an empty value removes a
-band, so the file can be edited by hand without creating invisible duplicates.
+**I am looking forward to the feedback.** What works, what does not, which bandwidth you actually use, and where you hit the resource limits.
 
-**Three settings reached the web page** that had been on the Tab5 only: waterfall
-speed, WSPR band hopping, and whether your QMX has GPS. The last is not cosmetic
-— claiming it stops the Tab5 keeping the radio's clock.
+**A Pause button during a QSO** *(Randy N4OPI)*. Skip a single transmission to check whether your slot is still clear, then carry on with the same message. Cancel breaks the exchange; Pause does not. It sits alongside Re-send / RR73 / 73 and appears only while an exchange is running.
 
-**WSPR will not beacon while the radio is in split.** In split the radio
-transmits on VFO B while still reporting VFO A, so every spot you publish names a
-frequency your signal was never on. The Tab5 now asks the radio before each
-transmission and holds the burst with **TX held - radio is in SPLIT, clear VFO B**
-on the screen. It will not clear it for you — that is your setting, and on the
-QMX it cannot be cleared over the cable anyway.
+---
 
-**The WSPR transmit block was unreadable.** Red text on an orange background
-measures 1.15 to 1 for contrast; it is black on orange now. The same block
-sometimes kept the orange of a finished transmission while merely counting down.
+This updates over the air from v1.15.0 onwards. If you are still on v1.14.x or earlier you need the one-time USB-C flasher first — see the v1.15.0 notes.
 
-**The on-screen keyboard came back on a second tap.** Tapping a text field that
-was already selected did nothing, because the keyboard was tied to a field
-*gaining* focus. Reported by Samuel W7STF; it affected nine fields across seven
-windows.
+Full guide: <https://tab5.lav.dk> — the audio chapter covers the controls, the bandwidth limits and what is coming.
 
-**A missing SD card says so.** The card indicator is crossed out in grey when no
-card is present, and tapping it opens a page explaining what a card is for. A tap
-on the bottom bar used to open the updater wherever you touched it.
+---
 
-**The WSPR transmit schedule is two plain counts.** "1 in 5" meant different
-things to different people, so it is now the number of transmit cycles and the
-number of receive cycles in a group that repeats — with the result written out in
-words underneath as you change it.
+### Shipped in v1.16.1 — 2026-09-22
+
+## The fixes you asked for after v1.16.0
+
+Thank you to everyone who reported something in the first day. Nearly all of this is your finding, not mine.
+
+**The Pause button is actually there now.** I wrote it up in the v1.16.0 notes and then placed it just off the edge of its panel, so nobody could find it — Randy N4OPI reported it missing and he was right. It is the fourth button in the mid-QSO row, it now works **while calling CQ** as well as mid-exchange, and it reads **Paused** while armed so you can see it did something. Skipping a slot on purpose no longer counts against giving up on the contact either.
+
+**A Gain control for the audio.** Several of you said the audio was very quiet even with the volume at maximum *(Samuel W7STF, Bruce N9JCV)*. That was the automatic gain's ceiling rather than your volume control, and there was no way to reach it. It is now a slider on the **RX Audio** line in Resource Management.
+
+**The three panoramic CW controls are real controls.** Pan **Width**, **Blend** and **Overlap** were described in the v1.16.0 notes as adjustable while you listen, and in truth had no control anywhere on the device — I had been setting them over the network while developing. They sit under Binaural CW now. All four settings survive a restart and travel in a config backup.
+
+**SSB is intelligible again.** *(Gyula HA3HZ)* The automatic gain was reacting about eight times too slowly for speech, clipping the start of every syllable and then staying turned down through the ones that followed. Morse never showed it, because a steady tone never tests how quickly the control moves.
+
+**WSPR keeps to its minutes.** *(John W5JSS)* A 20-minute schedule could walk off the minutes it started on after a few hours. It is now anchored to the clock, so a missed cycle or a restart no longer shifts it.
+
+**Resource Management** is easier to read, and controls that cannot do anything yet are properly greyed out instead of looking live.
+
+---
+
+⚠ **Switch your QMX on only after the Tab5 has settled** — wait until the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting up leaves it short of memory for the rest of the session, and the web interface may stop responding. This is a limitation of the firmware, not something you are doing wrong, and it is being worked on.
+
+**Audio and binaural CW remain a beta.** Binaural works best at **300 Hz bandwidth and up**; below 200 Hz there is little separation to be had. Keep the reports coming.
+
+This updates over the air from v1.15.0 onwards.
+
+---
+
+### Shipped in v1.16.2 — 2026-09-22
+
+## The audio is finally listenable
+
+Nearly all of this came from what you sent me in a single day. Thank you.
+
+**The break-ups in the audio are gone, and they were never the processor.** Your QMX sends about 47,885 samples a second over USB. The Tab5's codec plays exactly 48,000, from its own crystal. Nothing reconciled the two, so the buffer ran a little dry every second and a fragment of silence was played instead — roughly every three seconds — and not one error was recorded anywhere, which is why this took so long to find. The output is now locked to the clock and the difference is absorbed invisibly.
+
+**A strong signal can no longer take your ears off.** The automatic gain lifted everything to within a hair of full scale, so a loud station arrived at maximum and anything faster than the gain could follow ran into a hard clip — loud *and* harsh at the same time. There is a proper peak limiter after it now. It holds the peaks down and leaves the average level alone, so quiet stations are exactly as loud as they were.
+
+**LSB is fixed.** *(Gyula HA3HZ)* The audio was being taken from the wrong side of the dial, so you heard whatever happened to be mirrored there rather than the station on your screen. The spectrum had always drawn it correctly; only the audio was wrong.
+
+**If your audio is too quiet, check which slider you are on.** *(Samuel W7STF)* The ones marked **Volume** stop at 100. The control that decides how hard weak signals are lifted is **Gain**, on the **RX Audio** line in Resource Management, and it runs from 50 to 800. That you could look in two places and find neither was my fault, and the guide now says where it is.
+
+**A working microSD card is no longer thrown away.** *(Dennis WN4FLA)* The card mounted, the Tab5 wrote its first entry to the diagnostic log, that one write failed, and after five tries it decided the card had been removed — green dot, then yellow, then grey with a line through it, for the rest of the session. The card was never gone: every other file on it wrote perfectly at the same moment. The diagnostic log also never rotated at its 5 MB limit on any unit with WiFi on, so it grew without bound, and the Tab5 now tells you how full your card is when a write fails.
+
+**Pause is on the web page.** *(Randy N4OPI)* It went onto the Tab5 in v1.16.1, and Randy runs his station from another room and rarely touches it. Pause now sits with Re-send, RR73 and 73 in the browser, shows a pause symbol normally and a play symbol on yellow while a transmission is being skipped, and pressing it again takes the pause straight back. The Tab5's own button behaves identically and wears the same symbols.
+
+**Pausing no longer costs you the contact.** *(Gyula HA3HZ)* The quiet slot a pause creates was being counted against the six cycles before the Tab5 gives up, so pausing twice could lose you a QSO.
+
+**You can reboot the Tab5 from the browser** *(Randy N4OPI)*, in the Miscellaneous menu. It was previously only offered after a firmware update, which is no use when you are in another room and something is stuck.
+
+**KM and AGE no longer run into each other** on the decode list *(Gyula HA3HZ)*.
+
+---
+
+⚠ **Audio still stutters while a browser has the panadapter open.** That is the Tab5's first processor running out of room; it is measured and it is the next thing I am working on. Close the web page while you are listening.
+
+⚠ **Switch your QMX on only after the Tab5 has settled** — wait until the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting up leaves it short of memory for the rest of the session.
+
+**Audio and binaural CW remain a beta.** Binaural works best at **300 Hz bandwidth and up**; below 200 Hz there is little separation to be had. Keep the reports coming — this release is almost entirely made of them.
+
+This updates over the air from v1.15.0 onwards.
+
+---
+
+### Shipped in v1.16.3 — 2026-09-23
+
+**The audio fix that v1.16.2 was supposed to be, every audio control on one page, and three things that were quietly lying about their own state.**
+
+- **The crackle is actually gone — and v1.16.2's "fix" was still audible.** That release shipped the first of five attempts: a spliced sample once per frame, measured afterwards at **31.3 dB SNDR against 113 dB clean**. Four more attempts followed, each found only by ear after flashing. The real fault was not the rate arithmetic at all: `s_out` carried **one pair of headroom**, sized for the old spliced corrector, while the continuous resampler needs ~2.5 extra samples to stretch an ordinary frame — so the output cap was hit on *normal* frames, not edge cases. Worse, the phase accumulator decremented unconditionally afterwards, including when the cap rather than the phase had ended the loop, driving it negative so the next sample **extrapolated** far outside the real waveform and compounded every frame. That is why it appeared on a silent band with no signal to distort. Fixed with 64 pairs of real headroom and a decrement gated on the interpolation genuinely finishing. ⭐ Found by reading the whole modified block end to end rather than simulating the rate maths a fifth time.
+- **All four RX audio controls are now in one window.** RX Volume moved out of the settings drawer into **Resource Management**, beside the AGC controls that decide the same audible result — "it is confusing to have it two places". ⚠ The drawer's RX Audio section is gone completely, **including its on/off box**: Resource Management (long-press the top bar) is now the only place to switch RX audio on or off.
+- **"Gain" is renamed AGC Ceiling, and its range reaches 1500.** It never was a plain gain — it is the ceiling on the AGC's own weak-signal boost — and the wrong name led to a request for "an AGC to replace the simple Gain" when the AGC was already what that slider drove. 800 → 1500 because the Tab5's internal speaker wants more headroom than the old ceiling allowed.
+- **AGC Attack (1–50 ms) and Release (10–500 ms) are adjustable for the first time**, in milliseconds rather than raw per-sample coefficients. Both persist and travel in a config backup.
+- **A GPS that locks late is no longer invisible for the whole session** (John W5JSS, and reproduced here). Auto-detection ran **once**, about 45 seconds after boot, and latched its verdict — a receiver still acquiring at that instant was recorded as "no GPS" and never re-checked short of a reboot. Measured on the bench: a QMX+ with a genuine fix failed the one-shot three times and then locked, and the panadapter picked it up **25 minutes after boot**, which the old code could never have reached. Retrying is safe because the existing guard already refuses to treat a clock the Tab5 itself set as evidence of GPS.
+- **WSPR gives the radio back the mode it borrowed.** WSPR must transmit in DiGi, so arming switched the radio there — and nothing ever switched it back. On a scheduled beacon the mode was overwritten every cycle and simply left, and since the QMX keeps the mode in its own memory it then powered up in DiGi too. Reported as "the mode is always waking up in DiGi", which reads like a setting failing to persist; it was the opposite. Every path that ends a burst now restores it, and only when WSPR was the one that changed it.
+- **The Preferred network field is reachable** (Randy N4OPI, who runs a DMZ alongside a house network). The Tab5 remembers up to six networks, but the fallback always took whichever was **loudest**. Set a preferred SSID and it wins whenever it is reachable; leave it empty and nothing changes. Checked on every fallback, so it wins again the moment that network returns. ⚠ Not carried in a config backup — set it per unit.
+- **The SD dot reports whether writes are landing, not whether a card mounted.** It went yellow about ten seconds into any WiFi session and stayed yellow for the rest of it, whatever the card was doing — identical on a healthy unit and on one where every write failed for 53 minutes. Green now means a write succeeded within 90 seconds, yellow means none has, grey with a stroke still means no card. 90 s is three missed 30 s cycles, so one bad cycle followed by a good one does not flicker it.
+- **Documentation corrected against the code**, not recollection: the Audio page described Resource Management as showing "current resource usage, available headroom and warnings", none of which it has ever displayed, and named a "CW Audio" control that does not exist.
+
+⚠ **Known and unfixed: audio breaks up while a web page is open.** Measured this cycle — LATE I2S writes roughly triple with a browser attached (4/450 → 10-11/450 frames), same bench, same firmware, sequential capture. A promising cause was tested and **disproved**: `ws_push_task` shares priority 3 with `rx_audio_task` and `render_task` and is not pinned to a core, but pinning it to core 0 raised core-1 idle from 25% to 40-47% and made LATE writes *worse* (20-24/450). Close the web page if you need clean audio.
+
+⚠ **Known: on a unit with WiFi on, SD writes stop within about 30 seconds of boot.** The `MALLOC_CAP_DMA` pool collapses once WiFi comes up — measured 58 KB free / 31 KB largest block at mount, 83 B / 20 B seventy seconds later — and every SD open then fails with EIO. The boot snapshot always lands; nothing after it does. This is why the SD dot change above matters. Not fixed.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.4 — 2026-09-24
+
+**Four faults found by operators in their own shacks, the headphone jack behaving as everyone expected it to, and the memory measurement that finally explains the SD card.**
+
+- **A station answering your CQ is now answered in the very next slot — every time, not half the time** (Gyula HA3HZ). Decoding is split across both processors, and only one half was permitted to interrupt the slot when it spotted a station calling you. Which half happened to find your caller was chance, so the identical situation replied immediately about half the time and a full 30-second cycle late the rest. That is precisely what he reported — *"sometimes it works well, other times the transmission is delayed"* — and the variability was the fault itself, not noise around it. The decision point now serialises properly and either half may take it. Verified on the air over three contacts, every message going out in the immediate slot, including one where both halves genuinely raced for the same decode.
+- **Waiting for a busy station is capped at six minutes, as it always claimed to be.** When the station you called is working somebody else the Tab5 stands by rather than transmitting over their exchange — correct, and documented as ending after about six minutes. It never did: the counter reset instead of latching, so it could wait **over half an hour**. Worse, every held slot cancelled the call it had just queued, so it never got back to calling them either. One defect, both symptoms — the sluggish answer *and* "it continues to wait rather than calling again after an RR73", which Gyula correctly suspected were the same thing.
+- **Headphones silence the internal speaker** (Roy KI0ER). Sound used to come out of both at once. The speaker and the jack share the same codec output, so no amount of register work could separate them — the speaker's amplifier is what had to be switched, and its control line is recorded in exactly one comment inside M5Stack's own board support code. Plug in, the speaker goes quiet; unplug, it returns.
+- **Resource Management is now called Audio Settings, and has a door of its own.** It is volume, AGC, binaural and the panoramic split — the old name described the mechanism rather than the purpose. It now opens from a button in the settings drawer, directly below SelfSpotter. The top-bar long-press still works, but it shared its area with the Band, Mode, BW and Frequency pickers, so it was easy to open the wrong thing.
+- **Preferred network actually decides which WiFi you join** (Randy N4OPI). Introduced in v1.16.3, it was consulted **only after two failed connects** — so it worked when your usual network was down and did nothing in the case it was written for: both up, the usual one answers first, and you wanted the other. It also needed a reboot. Now read when the Tab5 connects, and saving it moves the unit immediately. Separately, typing a **Network name** with the password left blank silently discarded it, although that field tells you to leave it blank to keep the stored password. Both fields now list the networks your Tab5 actually remembers, which nothing had ever shown.
+- **The FT8 transmit tone saves from the settings page.** It answered *Saved*, wrote the value down, and never told the radio — bursts kept going out on the old tone until a restart. Found on the bench while setting up a test, and audited across all 64 settings on that page; it was the last one of its kind.
+- **A restart caused by a power brownout says so** (Samuel W7STF). His unit rebooted repeatedly while listening and he reasonably suspected the hardware; his diagnostic logs carried **ten brownout resets** — the supply rail dipping below the processor's own threshold, which is not a crash and not a fault in the Tab5. The firmware had identified every one of them and written it only to a log file nobody reads until they think to send it. It is now on screen at start-up, and in the web status.
+
+⭐ **The SD card was never the problem.** The recurring *"SD dot goes yellow and writes stop"*, going back to around v1.16.1, is now root-caused: the card driver is **refused a memory buffer** — `esp_dma_capable_malloc` fails in the same millisecond as the mirror failure — so the write never reaches a card that is mounted and perfectly healthy. This is why reformatting, reseating and replacing cards has never helped anyone.
+
+⭐ **And the memory it is short of is now measured.** Every diagnostic log opens with a start-up ledger showing what each subsystem takes. The audio output stage alone accounts for **46.5 KB** of directly-transferable memory and halves the largest unbroken block from 92 KB to 46 KB — and it is that second figure the card driver and Bluetooth actually fail against. The same shortage silently prevents **Bluetooth** starting when it cannot get a contiguous 24 KB, which is why the symbol can read grey with the box still ticked. Diagnosed, documented, **not yet reduced**: the remedy trades against audio buffering depth and deserves a soak rather than a hurried change.
+
+⚠ **Still unfixed and honestly stated:** audio breaks up while a web page is open (close the page while you listen), and with WiFi on the SD writes stop for the reason above.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.5 — 2026-09-25
+
+**The decoder stops taking two slots to do one slot's work, three things operators asked for while operating, and a crash nobody had hit yet.**
+
+- ⭐ **Decoding is two to three times faster, and stops dropping stations on a busy band.** On a crowded band a slot's decode was taking **11 to 14 seconds** — longer than an FT8 slot and nearly twice an FT4 one — so the answer to the message that decides your next transmission routinely arrived after the moment to send it had passed. The cause was not the decoder. Work is split across both processors, and the split was decided **before either had run**: half the candidates each. On this board the second processor also carries USB, WiFi and the whole display, and measurement put it at **0.1% of its own capacity** while drawing the spectrum — so one half finished in 1.4 seconds and then waited nine more for the other. The work is now taken as each processor becomes free, and the slower one is left out entirely when it is contributing nothing. Measured on the same saturated band: **11-14 s → 2.7-5.9 s**, **nothing dropped** where 56-68 candidates per slot were being abandoned, and **3-15 stations decoded per slot instead of 0-3**. An FT4 decode now finishes inside its own 7.5 second slot, which it could not do before.
+- **FT4 stops listening to an empty slot before deciding what to say.** FT8 has cut its capture short since v1.14 so the decode can run and the reply can be armed in time; FT4 never got it, for no reason beyond the report that prompted it having come from an FT8 operator. FT4's transmission ends at 5.0 seconds of a 7.5 second slot, so **2.5 seconds of silence** were being recorded before the decode could even start, landing the result about 2.0 seconds into the next slot against a 2.06 second deadline — every reply within 60 milliseconds of missing its turn. Now cut at 5.6 seconds, the same one-guard-past-the-signal rule FT8 uses.
+- **Pick your next station while the closing 73 is still going out** (Randy N4OPI). Clicking a caller during that window answered *"Busy: working …"* and threw the choice away — and because the exchange is settled by then but not finished, that window is most of a minute, long enough for the station to disappear from the list. The choice is now held and acted on the moment the machine is free. It remembers the callsign rather than the prepared message, so the reply is built fresh when it is actually sent. The same applies to **Auto Pounce** on the Tab5 itself.
+- **A station that calls you out of the blue now starts a full automatic QSO** (Randy N4OPI). It armed a single message and left the rest of the exchange to be clicked by hand — the automatic sequencer ran only when answering a CQ. That was backwards: someone calling you while you are in another exchange is exactly the case where nobody is at the screen. Closing messages still go out on their own, as before.
+- **AGC presets — Fast, Med, Slow and Off** (Samuel W7STF), in Audio Settings, with the sliders remaining as the Custom setting. Fast suits CW, Slow and Med suit SSB. **Off** is a genuine bypass and not simply a very slow setting: the gain law follows the signal at every attack and release value, so Off pins the gain at the AGC Ceiling and that slider becomes a plain manual gain. ⚠ Worth knowing what to expect: the AGC only begins regulating once a signal is strong enough, and below that it already sits at the ceiling — so on a quiet band every preset sounds the same, correctly. The difference is heard in the noise between signals when the band is busy.
+- **The WiFi page says which network you are actually on.** The fields show the credentials that are *stored*, and a Preferred network joins without changing them — both correct, and together they meant the page could name one network while the unit sat on another, with nothing to explain it. It now shows the live connection, and warns when a preferred network will take over at the next restart *(Randy N4OPI, who spent a reboot working out why)*.
+- **Switching between FT8 and FT4 could crash the unit.** The monitor buffers were freed after a four second wait whether or not the decoder had finished with them — and on a busy band it had not, because a decode there takes longer than that. The wait expired, the memory went back, and the decoder carried on reading it. Non-deterministic, which is why it survived: the same session switched successfully at one moment and panicked at the next. It now waits properly and, if the decoder will not let go, stops feeding it and tries again on the following slot rather than freeing anything.
+- **One bad reading no longer switches the speaker.** The headphone detector is a single reading on a shared internal bus, and it was wired straight to the speaker amplifier: measured here, one wrong sample let the speaker sound for a second while headphones were plugged in. Three consecutive agreeing readings are now required, and the jack is followed **off the audio path entirely** — which also removed a cost the audio was paying for it: late writes to the sound hardware fell from about 7% to under 2%, and the worst case from 91 ms to 37 ms. Audio is measurably cleaner than v1.16.4 even with the jack untouched.
+
+⚠ **Still unfixed and honestly stated:** audio breaks up while a web page is open (close the page while you listen); with WiFi on, SD writes stop within about 30 seconds of boot; and the display occupies so much of the second processor that the decoder cannot use it on a busy band — the change above works around that rather than curing it.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.6 — 2026-09-25
+
+**A hotfix for a crash that is older than the release it was found on.**
+
+- **The unit could abort while sitting idle.** Found on the bench 400 seconds into an idle panadapter session on v1.16.5: a background task asked the C library for a lock, there was not enough of the small internal memory pool left to make one, and the firmware stopped. ⭐ **Not new in v1.16.5, and not caused by it** — that pool has run with a recorded minimum of zero on essentially every build since v1.16.0, and the same abort has happened twice before in other tasks. The retry already built in for exactly this case did retry; the memory never came back. **If you are on v1.16.4 or earlier you have the same exposure.**
+- **What is fixed here:** v1.16.5 moved the headphone-jack check onto its own task — a large improvement to audio timing — and that task took 3 KB of the scarce internal pool. Its working memory now lives in the plentiful external memory instead. It gives back what the previous release borrowed from the margin.
+
+⚠ **This reduces the exposure, it does not remove it.** The underlying shortage is unchanged and is measured in every diagnostic log's start-up ledger: the audio output stage alone accounts for 46.5 KB and halves the largest unbroken block. The remedy for that trades against audio buffering depth and deserves a soak rather than a hurried change.
+
+Everything in v1.16.5 is unchanged and still applies — see its entry above.
+
+---
+
+### Shipped in v1.16.7 — 2026-09-26
+
+**The idle abort is root-caused and fixed, and the cause turned out to be the web interface quietly eating the memory everything else needs.**
+
+- ⭐ **The idle abort is solved, not merely reduced.** v1.16.6 gave back 3 KB and said plainly that the underlying shortage was unchanged. It was, and the unit aborted again - twice more, in the same background task, 641 seconds into one session and 401 into another. Measuring it properly settled two things at once. First, **there is no leak**: across 20.5 hours untouched, free internal memory trends *upward* by 0.07 KB per hour. Second, the pool was being emptied **24 times a minute**, for 60 to 360 milliseconds at a time, down to as little as 143 bytes - far too briefly for the once-every-ten-seconds instrument to see, which is why it had looked like a slow drift for weeks.
+- ⭐ **The cause was the JSON the web interface builds.** Every status reply, every settings page, every poll from a browser assembled its answer in the scarce internal pool - 495 separate pieces of one reply, caught in the act taking **8.7 KB across 311 allocations** - while 14 MB of the plentiful external memory sat unused. It now builds there instead. Measured on the bench, same build otherwise: **24.1 memory droughts per minute became none at all in nine minutes**, and free internal memory at rest went from 28 KB to 56 KB.
+- **The safety net that should have caught it was too short, and that is fixed too.** When a task cannot get a lock the firmware waits and retries before giving up. The wait was 80 milliseconds - chosen before anyone had measured how long these droughts last, and shorter than most of them. It is now two seconds, more than five times the worst case measured. Nothing was ever wrong with the task that died; it was simply the one that asked at the wrong moment.
+- **A static IP address now belongs to a network, not to the unit** *(Randy N4OPI)*. Set one at home, take the Tab5 somewhere else, and the old address was still applied - so it joined the new network, had no usable route, and the status simply read **Off** with nothing to explain it. That is also a good way to lock yourself out of a unit you reach over WiFi. The address is now tied to the network it first works on: your own network behaves exactly as before, everywhere else falls back to DHCP, and the log says why. Changing or clearing the address unties it again.
+- **WSPR says which band it refused, and warns before it can cost you the finals** *(John W5JSS)*. A refusal to transmit named the PA voltage but never the band, so with two bands in play there was no way to tell which one to calibrate - it cost an operator an evening. It now leads with the band and the dial frequency. ⚠ And **arming WSPR above 1 W now warns on screen**: a WSPR transmission is 110.6 seconds of continuous key-down, about nine times an FT8 slot with no gap to cool, and **turning the PA voltage down does not shorten it**. The warning existed but lived in a drawer you had to open. The QMX's own beacon runs at 1 W.
+- **A refused transmission now says so on the screen** *(John W5JSS)*. A WSPR beacon that will not go out because the band is uncalibrated used to report that only to a log file nobody reads while operating.
+- **The top bar follows WSPR when it retunes the radio** *(John W5JSS)*. It kept showing the frequency from before the band change.
+- **The date editor moves in months and years, not only days** *(John Dusek)*. A unit that has never been online starts three years out, and stepping there one day at a time is not a repair.
+- **If the headphone detector cannot be read, the speaker is turned on rather than left off** *(Samuel W7STF)*, and **the automatic mute can be switched off entirely** in Audio Settings. A convenience that cannot be verified must not be the only thing standing between you and hearing anything.
+
+⚠ **Still unfixed and honestly stated:** with WiFi on, SD card writes can stop within about 30 seconds of boot - a separate shortage in the memory usable by hardware, confirmed again this cycle and untouched by the fix above. Audio still breaks up while a web page is open. The display still occupies so much of the second processor that the decoder cannot lean on it during a busy band.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.8 — 2026-09-29
+
+**Static IP finally does what it says, a screenshot that doesn't tear, WSPR that doesn't lie about transmitting, and FT8 that doesn't forget a pileup mid-QSO.**
+
+- ⭐ **Static IP and preferred network are now genuinely reliable — the whole story.** v1.16.7 tied a static address to the network it belongs to; that was one fix in a chain, not the end of it. Randy N4OPI spent several days running one test build after another so this could actually be nailed down, and every round turned up a real, distinct bug underneath the last one: the **Reset WiFi** and **Reset settings** buttons were erasing the wrong NVS partition entirely (WiFi credentials live in a different one than PHY calibration); importing a saved config left the static address bound to no network at all; saving *any* setting re-triggered the static-IP logic even when nothing about it had changed; and — the one that took the longest to see — switching the preferred network from the web UI **killed the very HTTP connection that had just asked for the switch**, because the reconnect ran synchronously inside the request handler that was still trying to answer it. The same bug existed a second time in the CQ-run reconnect path and got fixed there too. Underneath all of that, DHCP was never being restarted when a static IP no longer applied, and a static address could survive into a boot-time network roam it didn't belong to. None of these were the same bug wearing a different hat — each one was masking the next, which is why it took five field-tested builds to get all the way through. **It works now, confirmed on his bench**: setting a static address, switching preferred networks, and moving between them no longer needs a reboot, and a static address never follows you onto the wrong network.
+- **Screenshots download as PNG, and no longer tear.** `/ss.bmp` used to stream the panel while it was still being drawn, so a moving screen came out visibly torn; it now freezes the region into its own buffer first. The web download itself converts to PNG client-side rather than handing you a raw bitmap.
+- **WSPR no longer logs a burst as "transmitted" when the radio was never keyed.** A flaky CAT link could let the key-down command silently fail while the tone sequence played out on schedule — the Tab5 said "burst complete" and the radio sat in receive the whole time. The key-down is now verified before any tones are sent; a failure aborts the burst and says so on screen instead of reporting a phantom transmission. Tone-loss mid-burst is now counted too and reported as a **degraded** burst rather than a clean one.
+- **FT8's "they never heard my final" re-send now tracks up to four partners at once, not one.** If you finished with station A and immediately worked station B while A was still re-sending their report, the single-partner tracking meant working B silently dropped A — no more re-sends to them, ever, even though the mechanism believed it was still helping. This is exactly the shape of a real pileup. It now holds up to four partners independently, each on its own timer and budget, so finishing with one caller and moving straight to the next no longer costs the first one their re-sends.
+- **The Audio Settings top-bar shortcut is gone** *(Gyula HA3HZ)*. Long-pressing anywhere across the whole top bar opened it, which made it easy to trigger by accident while just working the Band/Mode/BW/Frequency pickers. It is still one tap away from the settings drawer, which is a deliberate, not an accidental, way in.
+
+⚠ **Still unfixed and honestly stated:** with WiFi on, SD card writes can stop within about 30 seconds of boot. Audio still breaks up while a web page is open. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)* — a real feature request, not a quick one, since it would need its own continuous audio path independent of the decode capture; not attempted this cycle.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.9 — 2026-09-30
+
+**With WiFi on, SD card writes no longer stop about 30 seconds after boot.**
+
+- ⭐ **With WiFi on, SD card writes no longer stop about 30 seconds after boot** *(Gyula HA3HZ, Randy N4OPI)*. This has been listed as a known fault under ⚠ in five straight releases, and v1.16.4 got as far as proving the card was innocent without finding what was eating the memory. Both are answered now. The card sits on the SPI bus, and its driver needs a small block of a special kind of memory — the sort the hardware can transfer directly to and from — for **every single 512-byte block it moves**. It asks for that block part of the way *through* the transfer, after the card has already started sending data. When the request fails, the driver drops the chip-select with the card still mid-block, and from that instant the two are out of step: every later command comes back as nonsense, the Tab5 counts five failures in a row and unmounts the card, and that is the crossed-out SD symbol. One momentary shortage costs you the card for the rest of the session, which is exactly why a restart clears it and why it looks random. What was consuming that memory is **RX audio** — the demodulated audio on the speaker or headphones. It needs about 29 KB, and 24 KB of that was a buffer I had placed in the one kind of memory the card driver was competing for, when it never needed to be there at all. Moved to external memory, where there are 14 MB spare.
+- **Measured both ways on the bench, deliberately.** My own bench never showed this fault in months of trying, for the simple reason that I had RX audio switched off — which is also why it reached two operators before it reached me. With RX audio on and the old buffer in place, the card failed in **40 seconds**, with **87 bytes** of that memory left and a largest usable piece of **20 bytes**. With the buffer moved, the same unit ends start-up with 25,791 bytes free instead of 9,215 and has been writing steadily ever since. Gyula's unit finished booting with 8,179 bytes; the reproduction here landed on 9,215, which is the same fault on the same settings.
+- **Turning RX audio off is no longer the price of a working SD card.** That was the honest workaround until now, and it is not needed any more.
+
+⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)* — a real feature request, not a quick one, since it would need its own continuous audio path independent of the decode capture; not attempted this cycle.
+
+⭐ **Confirmed in the field** *(Randy N4OPI, 2026-10-01)*. Three of his units are on this release and the card works on all three. The test that matters is that he switched RX audio **on** — the state that triggered the fault — on all three and rebooted them, and the card stayed accessible. With RX audio off the fault cannot occur at all, which is why my own bench never showed it.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.10 — 2026-10-02
+
+**Connecting the Tab5 no longer moves your radio to 160 m, and WSPR transmits in the cycle it was scheduled for.**
+
+- ⭐ **The band scan puts the radio back where it found it** *(John W5JSS)*. On every CAT link-up the Tab5 reads your QMX's band list by walking the radio's own "Band config." menus — and leaving those menus drops the radio on 160 m, in whatever mode the menus left behind. It had done that to everyone, on every connection, since the band list existed. John's WSPR page was set to 20 m and his radio kept turning up on 1.837700 MHz in CW. I blamed his CAT link first and then his Virtual U3S beacon, and both were wrong; he disabled a beacon that was innocent, and it was his own beacon schedule that forced me to read the log properly. The frequency and mode are now saved before the scan and put back after it, and only if the scan actually moved them.
+- ⭐ **WSPR transmits in its own cycle, and never in one the schedule forbids** *(John W5JSS)*. With more than one transmit cycle in a group, the first cycle of every group never went out: his beacon appeared at :02, :22 and :42 and never at :00. Worse, the burst it missed did not vanish — it slid into whatever cycle came next, and at the end of a group that is a **receive** cycle, so the beacon keyed off its own schedule and published that to wsprnet under his callsign. A spot landed at :16 against a schedule that only allows :00 and :02. The cause was that the transmission was armed from the receive loop, which arrives about one and a half seconds into every cycle — the previous capture ends exactly on the boundary and handing it to the decoder costs that long — while key-down has to happen within one second. No amount of reordering inside that loop could fix it, so the arming moved into a task of its own that waits on the clock and nothing else. On the bench it now arms **5 to 49 milliseconds** into the cycle instead of 1,437, both cycles of a group transmit, and the receive cycles stay silent.
+- **The time sync no longer interrupts a transmission.** A WSPR or FT8 burst takes exclusive use of the CAT link for its whole duration. The QMX clock read, which runs every five minutes, could take that link over and then hand it back while the burst was still running — so for the last 80 seconds of a 110-second transmission the Tab5 was polling the radio 20 times a second while it was keyed. Nothing visibly broke, and it was wrong anyway. Ownership of the link is now counted rather than being a single flag that the last caller could clear.
+- **The WSPR page says when the radio has left the page's band.** Set the page to 20 m, tune the radio to 40 m, and it now tells you rather than appearing to work.
+- **The screenshot link opens in a tab again** *(John W5JSS)*. It had been changed to download a PNG, and he was right that the tab was faster. Timed against a real device: converting to PNG costs 62 milliseconds and the **download** costs 7.7 seconds, because the screen is sent uncompressed. Waiting for the whole thing before drawing anything left you looking at a blank tab for seven seconds; a plain link lets the browser paint it as it arrives. The PNG conversion is still there on "(save PNG)", where waiting is expected.
+- **"Now turn on or reboot your QMX/+" waits until it is safe to obey** *(Dennis WN4FLA, Gyula HA3HZ)*. It appeared the instant the screen did, which is both too early to mean anything — the Tab5 is not listening yet — and actively harmful, because powering the radio on during start-up starves the Tab5 of memory for the rest of the session. The prompt now waits for start-up to finish and for WiFi to settle. It also no longer waits **forever** on a unit whose WiFi never connects, which is a fault I introduced earlier in this same cycle and caught by measuring rather than by anyone reporting it.
+- **FT8: other stations' CQ calls can stay visible while you run your own CQ** *(Randy N4OPI)*. They were hidden for the whole of a CQ run so that replies to you are not buried, and that was not a setting — there was nothing to turn off, which is why Randy went looking through the filters and found nothing that explained it. There is now a **Show CQs in my run** filter, off by default, so nothing changes unless you want it. He wanted to spot an interesting station calling CQ during his listening slot and break off to work them, which seems exactly right.
+- **The Tab5's TX tone panel updates while you watch it** *(Randy N4OPI)*. It drew the band occupancy when you opened it and then never again, so picking a clear slot meant closing and reopening it to see the current picture. The web version was right because the browser polls. It now repaints every second.
+- **Switching RX audio on mid-session now tells you it needs a restart** *(Samuel W7STF)*. The audio hardware claims its memory at start-up, before the USB host takes that pool, so it is started at boot or not at all — turning audio on later genuinely cannot work. That was already true and correct; what was wrong is that the switch said nothing, so Samuel spent fifteen minutes wondering before rebooting. It now says so on screen.
+- **A dead hosted WiFi link is recovered without a reboot** *(Bryan N0LUF)*. His WiFi dies and only a restart brings it back; his SD-card log shows the WiFi co-processor running further and further ahead and then going silent altogether. The Tab5 now checks the link every 30 seconds and, after six consecutive failures — about three minutes — power-cycles the co-processor and re-links, at most three times in a session before it stops and says a reboot is needed. ⚠ **This has never been seen to rescue a real wedge**: the fault exists only in Bryan's log and I have not been able to reproduce it here. The checking runs on every unit; the recovery has not run against the thing it is written for.
+
+⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. **AM and FM produce no audio at all** *(Samuel W7STF)* — the demodulator handles CW, USB and LSB only, so listening to an AM station means putting the radio in USB; I have looked at what AM needs and it is a small job rather than a large one, but it is not started. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)*.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.11 — 2026-10-03
+
+**The WiFi link no longer dies when the co-processor hands over a full queue, and the microSD card can be ejected safely.**
+
+- ⭐ **WiFi no longer dies on a busy network, and the cause was my own safety check** *(Randy N4OPI, Bryan N0LUF)*. The Tab5 talks to its WiFi co-processor over a four-wire bus, and when that chip has data waiting it says how much. I had put a guard in that path to refuse an impossibly large amount — a sensible-looking precaution. It was set at 24,576 bytes, and a genuinely full queue is 25,942. So every time the network got busy enough to fill the queue, the guard refused the read **and advanced the counter anyway**, as if the data had been taken. From that moment the Tab5 and the co-processor disagreed about how far through the stream they were, and they never recovered. The link was dead until a reboot. Reproduced here on the bench with a flood of traffic: before the fix the link died and stayed dead; after it, 2,029 of those full queues were handled with no deaths at all.
+- ⭐ **The WiFi co-processor is no longer power-cycled over a reading that never happened.** The health check that decides a link is wedged could count a failed read as a bad answer rather than as no answer, so a unit that was perfectly healthy could have its WiFi chip restarted underneath it. It now only acts on a reply it actually received.
+- **The microSD card is let go of before anything resets the Tab5.** A reset pulls the rug out from under the card mid-transaction, and the card keeps that confusion across the reset — there is no way to power it down separately, so it stays unreachable until the whole unit is powered off. That is why a card could take several attempts to mount after an update, or not come back at all. The Tab5 now releases the card first, on a firmware restart and ahead of an update.
+- **Eject microSD and Restart the Tab5, in the settings drawer.** Eject puts the card down cleanly so you can pull it out without losing what was being written; it tells you when it is safe in a window you have to close, not a message that fades while you are looking at the card slot. Restart is a clean reboot from the screen instead of the power button.
+- **The SD symbol follows the card, not the Tab5's patience.** It went grey when the Tab5 stopped retrying, which looked like the card had gone away when it had not.
+- **Fixed a crash that could take the screen down about a minute after boot.** A new entry in the settings drawer was written one past the end of its list.
+
+⚠ **SD Files on the web page is temporarily not working.** It shows an empty folder or says a file is missing, on a card that is fine. Your files are on the card and the Tab5 reads and writes them normally — only the web browser view is affected. Use the card in a PC until this is fixed.
+
+⚠ **Still unfixed and honestly stated:** audio still breaks up while a web page is open. **AM produces no audio** *(Samuel W7STF)* — the demodulator handles CW, USB and LSB only, so listening to an AM station means putting the radio in USB. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)*.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
+
+### Shipped in v1.16.12 — 2026-10-07
+
+**GPS time and date from a receiver on PORT.A or from a QMX+'s own GPS, and a check on the date before it is trusted.**
+
+- ⭐ **A GPS receiver on the Tab5 itself, contributed by Eric (@ericmoritz)** *(#15)*. Plug an **M5Stack Unit GPS v1.1** into PORT.A, set **Settings -> Device -> Port mode** to *Unit GPS v1.1*, and the satellite gives you UTC **and the full date** with no internet, no radio and no question to answer. That last part is what makes it worth having: every other offline source on this device gives a time of day only, so the day itself was always a guess. Eric wrote and tested the driver; I merged it, moved its stack into external memory, moved the work onto the second core, and un-routed the transmit pin so the receiver cannot be talked to by accident. A GPS symbol at the right-hand end of the bottom bar shows what the receiver is doing — amber while acquiring, green when locked, red when a lock has gone stale.
+- ⭐ **A QMX+ with its own GPS now hands over the date as well as the time.** On radio firmware 1.04_004 and later the Tab5 asks the GPS receiver directly instead of reading the radio's clock, and that answer carries the date. So an offline QMX+ with a sky view also answers the date question by itself. This also settles whether your radio has a GPS at all from the radio's own answer, rather than inferring it from a clock that agrees with ours — which never worked offline and could be fooled by a clock we had set ourselves.
+- ⭐ **The Tab5 no longer sets the clock of a radio that has its own GPS** *(#174)*. If the Tab5 could not prove a radio was GPS-disciplined it pushed its own time in to set the radio's clock. On a radio that already had GPS that push left the clock about a second slow, which is exactly the disagreement the GPS test looks for — so the next test failed too, and the radio was pushed again. The only way out was a power cycle of the radio. The Tab5 now asks the radio whether it has a GPS fitted before deciding to set its clock.
+- ⭐ **Three faults in the date check, all reported by royord** *(#18)*. The supercap clock reporting itself as valid was being taken as the date being right — it is not; it only means the battery never went flat, and another firmware writing that clock leaves no trace. royord flashed the M5 demo (which sets 1901), came back to this firmware, and the panadapter was certain about a date over a century out. The clock is now believed only when our own record backs it up, has not gone backwards, and is not so old that nobody has been watching. Second, the question closed itself the moment WiFi arrived **even when you had opened it deliberately** to change the date, which made it impossible to set a date by hand on a unit with working WiFi. Third, both clock windows drew their text underneath their own buttons.
+- **SD Files on the web page works again.** The previous release shipped with this listed as broken. The card was never the problem: a file is read in large blocks and the memory those reads need has to be of a particular kind, so a read that could not get it came back short — and the browser was handed a truncated file as though it were whole. Reads no longer need that memory per block, and a short read is now an error instead of a silent half-file.
+- **The waterfall is smoother, and you can set how fast it scrolls in rows per second.** The band-plan strip along the spectrum was being redrawn 6.7 times a second to produce an identical picture, which was 20% of all the drawing work the Tab5 did; it now draws when something changes. The drawer's **Rate** control is in rows per second (1 to 40) instead of a 1–4× multiplier, so you can go slower than the old floor of 10.
+- **The web waterfall no longer stalls for a second at a time** — it was stopped 4.2% of the time, and by my own code pausing the stream rather than by the network.
+- **Three settings the browser saved but never applied**: TX tone hold, CW pitch and CW calibration. The page said Saved, the value went into storage, and the running firmware carried on with the old one until the next restart. A CQ run kept transmitting onto a tone that the same firmware had just reported as occupied by ten stations.
+- **The web page no longer offers bands your radio does not have** *(Brian WA6JFK)*. Picking 6 m, 10 m or 12 m from the browser tuned his QMX nowhere near the band. Every screen on the Tab5 already filtered its buttons against the radio's own band list; the web server served a fixed table instead.
+- **FT8 decoding is about twice as fast on a busy band.** Two separate pieces of wasted work: a second-chance decode pass that ran on every candidate that had already failed and, measured over 35 reference recordings, recovered **not one decode** in 494 ms of extra work; and candidates that will never decode burning all 30 of their error-correction rounds instead of being abandoned when they stop improving.
+- **FT8 answers a caller faster when you are running CQ**, not only when you are calling someone — the step that puts your partner's signal at the front of the queue was switched on for one of those and not the other.
+- **Long messages on screen are no longer cut off** *(Samuel W7STF)*, and the warning that switching RX audio on needs a restart is now a window you have to dismiss rather than a message that fades after twelve seconds. Samuel lost fifteen minutes to that message the first time around, which a notice you can miss does not fix.
+- **The User Guide PDF button on the website was a 404.**
+- **The QMX has no FM, and the documentation said it did.**
+- ⚠ **A Module GPS v2.1 on the 30-pin bus is supported in the code and has never been run on hardware.** It is the same receiver as the Unit GPS and the only difference is which pin it arrives on, but nothing about it is verified and there is no control for it on screen — it is switched on over the API only (`{"action":"gnss_mbus","on":true}`). Treat it as untested. The Unit GPS on PORT.A is the one that has been used.
+
+⚠ **Still unfixed and honestly stated:** the waterfall blanks for a single frame each time it scrolls a row, which reads as a flicker *(Bryan N0LUF)* — the panel is reading the same picture the Tab5 is drawing into, and the real fix is a second buffer, which is not a small change. Audio still breaks up while a web page is open. **AM produces no audio** *(Samuel W7STF)* — the demodulator handles CW, USB and LSB only. The WSPR waterfall shows nothing during the wait between cycles rather than a live view of the band, unlike WSJT-X *(Samuel W7STF)*.
+
+Audio and binaural CW remain a **declared beta**.
+
+---
 
 ## Appendix - archived engineering notes from CLAUDE.md
 

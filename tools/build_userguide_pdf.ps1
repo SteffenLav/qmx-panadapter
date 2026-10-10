@@ -165,11 +165,12 @@ $chapters = @(
     @{ Id = "web-ui";        Title = "Web UI";         Num = 5; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
     @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 6; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
     @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 7; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 8; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "settings";      Title = "Settings";       Num = 9; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "wspr";          Title = "WSPR";           Num = 10; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 11; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 12; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "js8";           Title = "JS8";            Num = 8; GuideFile = (Join-Path $guideDir "js8.md");         Desc = "keyboard mode on the device - decode, free text, CQ (beta)" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 9; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 10; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "wspr";          Title = "WSPR";           Num = 11; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 12; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "reference";     Title = "Reference";      Num = 13; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(
