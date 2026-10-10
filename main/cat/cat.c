@@ -1060,13 +1060,20 @@ static void process_cat_message(const char *msg, size_t len)
             hz = hz * 10 + (d - '0');
         }
         ui_update_passband_width(hz);
+        /* ⛔ ON THE EDGE, NOT ON EVERY FW. This handler runs for every FW
+         * response, and the poll task cycles FA/MD/FW continuously - so
+         * setting the query here unconditionally asked the radio for its
+         * keyer speed every 200 ms forever. MEASURED on the bench the first
+         * time it was flashed: a KS; query and a read-back on every poll
+         * cycle, filling the log and spending the CAT pipe on a value that
+         * changes when the operator turns a knob.
+         *
+         * Ask once, when the link actually comes up, so the web settings
+         * page has a real number the first time it is opened rather than
+         * reporting -1 and only showing the speed on a second load. */
+        bool was_ready = s_cat_ready;
         s_cat_ready = true;
-        /* Ask for the keyer speed once the link is up, so the web settings
-         * page and anything else that shows it already has a real number the
-         * first time it is opened. Without this the first page load reports
-         * -1 (never read) and only the SECOND one shows the speed, which
-         * reads as a broken field rather than as a pending answer. */
-        s_keyer_query_pending = true;
+        if (!was_ready) s_keyer_query_pending = true;
         return;
     }
     /* GP response: GPS coordinates + date + time, straight from the receiver
