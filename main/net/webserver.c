@@ -2192,10 +2192,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         /* TEMP INSTRUMENT 2026-10-04 - dev only, on demand, costs nothing.
          *
          * httpd + ws_push_task cost 21.6-23.1 KB of the DMA-capable pool
-         * (34bd189, measured over three boots), and 14336 B of that is just
-         * the two task stacks: config.stack_size = 10240 here and 4096 for
-         * ws_push_task. Both numbers were chosen, not measured against a
-         * loaded server.
+         * (34bd189, measured over three boots), of which the two task stacks
+         * are WEB_HTTPD_STACK_SIZE + WEB_WS_PUSH_STACK_SIZE (webserver.h).
+         * ⚠ That used to read "14336 B ... 10240 here and 4096 for
+         * ws_push_task" - hardcoded in prose, and both numbers changed on
+         * 2026-10-10. Name the constants, never restate their values here.
          *
          * This handler RUNS ON THE httpd TASK, so uxTaskGetStackHighWaterMark
          * (NULL) is exactly the figure wanted - no task-walk, no interrupts
@@ -2208,14 +2209,20 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_Delete(root);
         unsigned httpd_free = (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
         unsigned ws_free    = webserver_ws_push_stack_headroom();
+        /* Report the REAL configured size. These were hardcoded 10240 literals
+         * while config.stack_size was raised to 14336, so the instrument would
+         * have kept reporting the old size and the headroom percentage would
+         * have been wrong in the one place anyone looks. */
         ESP_LOGW(TAG, "STACK HWM: httpd task %u B free of %u B configured; "
-                      "ws_push %u B free of 4096 B",
-                 httpd_free, (unsigned)10240, ws_free);
+                      "ws_push %u B free of %u B",
+                 httpd_free, (unsigned)WEB_HTTPD_STACK_SIZE,
+                 ws_free, (unsigned)WEB_WS_PUSH_STACK_SIZE);
         char buf[160];
         snprintf(buf, sizeof(buf),
-                 "{\"ok\":true,\"httpd_free\":%u,\"httpd_size\":10240,"
-                 "\"ws_push_free\":%u,\"ws_push_size\":4096}",
-                 httpd_free, ws_free);
+                 "{\"ok\":true,\"httpd_free\":%u,\"httpd_size\":%u,"
+                 "\"ws_push_free\":%u,\"ws_push_size\":%u}",
+                 httpd_free, (unsigned)WEB_HTTPD_STACK_SIZE,
+                 ws_free, (unsigned)WEB_WS_PUSH_STACK_SIZE);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, buf);
         return ESP_OK;
@@ -7609,17 +7616,34 @@ esp_err_t webserver_start(void)
 
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
-    // 10240, not 12288: measured on hardware 2026-08-28 with util/dma_owners
-    // (#283/#284) the httpd task's stack high-water mark was 8,056 B FREE of a
-    // 12,800 B block - a peak use of ~4.7 KB - while the whole MALLOC_CAP_DMA
-    // pool had 1.9 KB left and the SD card could no longer be mounted. This
-    // still leaves ~5.5 KB spare.
+    // ⚠ 14336, RAISED 2026-10-10. The history matters, because the number was
+    // cut on a measurement that no longer holds:
+    //   2026-08-28 (util/dma_owners, #283/#284): HWM 8,056 B FREE of 12,800 B,
+    //     a peak use of ~4.7 KB, while the MALLOC_CAP_DMA pool had 1.9 KB left
+    //     and the SD card could no longer be mounted. 10240 was chosen then,
+    //     and this comment claimed it "still leaves ~5.5 KB spare".
+    //   2026-10-10 (action stack_hwm, v1.16.12-104): 1,412 B free at idle,
+    //     1,300 B free after serving 1.84 MB of /ss.bmp, 177 KB of /, 73 KB of
+    //     forge.min.js and three passes of every safe GET. Peak use is
+    //     therefore ~8.94 KB, NOT 4.7 KB. The "~5.5 KB spare" line was false by
+    //     a factor of four and is the reason this was nearly shipped at 87%
+    //     stack use.
+    // ⛔ 8.94 KB is a FLOOR, not the peak: the deepest handlers named below
+    // (/api/lotw_cert and the ADIF clear/delete SPIFFS writes) did NOT run in
+    // that session, and neither did any TLS upload. Overflow here is a crash,
+    // so the margin is deliberately generous rather than incremental.
+    // Cost is ~4 KB of the DMA-capable pool, which measured 29.7 KB free at
+    // T+120s settle - 25.6 KB after this, still far above the 1.9 KB at which
+    // the August SD-mount failure happened.
+    // ⛔ Do NOT "reclaim" it from ws_push_task because its watermark looks
+    // roomy (3,164 B free of 4,096 on the same run). A watermark only reports
+    // paths already taken - see the warning in the stack_hwm handler.
     // ⛔ Do NOT move this stack to PSRAM via config.task_caps. Several handlers
     // write SPIFFS on the httpd task itself (/api/lotw_cert, the ADIF clear and
     // delete paths), flash writes run with the cache off, and a task whose
     // stack is in PSRAM cannot run in that state - see the warning at the top
     // of util/psram_task.h, hardware-confirmed by the #218 OTA panic.
-    config.stack_size      = 10240;
+    config.stack_size      = WEB_HTTPD_STACK_SIZE;
     /* ⛔ DO NOT TRY TO KEEP THE EXACT COUNT IN THIS COMMENT. It said
      * "48 API + 5 file-browser + headroom" against a 55 that the real list had
      * already outgrown - 51 here + 5 in filebrowser.c + 1 for /ws is 57 - so

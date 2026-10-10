@@ -1,4 +1,5 @@
 #include "webserver_ws.h"
+#include "webserver.h"   // WEB_WS_PUSH_STACK_SIZE - sized and justified there
 #include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 
 #include <string.h>
@@ -731,15 +732,22 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // capture. At priority 5 this task could preempt it every 100 ms
         // whenever a browser tab is open, the same hazard class that
         // regressed FT8 decode yield via cw_audio_task (see CLAUDE.md).
-        // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
-        // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
-        // names ws_push_task as latency-critical.
-        /* 3072 -> 4096: measured 2026-09-06 with 364 B of headroom left. This
-           stack stays INTERNAL deliberately - CLAUDE.md lists ws_push_task
-           among the latency-critical tasks that must not take a PSRAM stack -
-           so the extra 1 KB is paid out of the scarce pool on purpose, because
-           an overflow here corrupts a neighbour and, with canary-only checking,
-           says nothing when it does. */
+        /* Size is WEB_WS_PUSH_STACK_SIZE in webserver.h, with the full
+           measurement history. The short version, because the sequence is the
+           lesson:
+             2026-08-28 (#284): "peak use 848 B" -> cut 4352 to 3072.
+             2026-09-06: raised back to 4096, with only 364 B of headroom left
+               - so the real peak was ~3.7 KB, four times the 848 B the cut had
+               been based on. The 848 B was a watermark taken before the deep
+               path ran.
+             2026-10-10: 3,164 B free again, which is NOT reassurance - it is
+               the same roomy-looking watermark as in August. Raised to 6144.
+           This stack stays INTERNAL deliberately - CLAUDE.md lists
+           ws_push_task among the latency-critical tasks that must not take a
+           PSRAM stack - so it is paid out of the scarce pool on purpose,
+           because an overflow here corrupts a NEIGHBOUR and, with canary-only
+           checking, says nothing when it does. That silence is why the margin
+           is generous instead of fitted. */
         /* ⛔ TRIED core-1-vs-core-0 pinning here, 2026-09-23 - REVERTED, it made
          * LATE writes WORSE, not better. Theory was that this task, unpinned,
          * lands on core 1 and round-robins at equal priority (3) with
@@ -752,7 +760,7 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
          * contention with THIS task is not the mechanism - do not re-try this
          * exact change without new evidence. The actual cause of the browser-
          * attached breakup is still open. */
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", WEB_WS_PUSH_STACK_SIZE, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;
