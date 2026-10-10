@@ -14834,6 +14834,15 @@ static void drawer_build(void)
         s_slider_wf_black, s_slider_wf_contrast,
         s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
         s_slider_cwtxoff, s_outpwr_slider,
+        /* ⛔ A SLIDER LEFT OUT OF THIS LIST LOOKS WRONG AND NOTHING SAYS SO.
+           The keyer row was added without it and rendered a 30 px track
+           beside the 14 px ones it sits between - MEASURED off /ss.bmp as
+           y 356..385 against QMX volume at 172..185. It also missed the 28 px
+           touch area and the scroll-chain fix, so its knob would have been
+           the one slider in the drawer that is hard to catch and easy to lose
+           mid-drag. The per-section lv_obj_set_size(..., 30) is NOT the
+           height that ships; this loop is. */
+        s_slider_keyer,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
