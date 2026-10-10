@@ -11,6 +11,7 @@ idf_component_register(
         "ft8/js8_codec.c"
         "ft8/js8_message.c"
         "ft8/js8_jsc.c"
+        "ft8/js8_jsc_encode.c"
         "ft8/js8_jsc_tables.c"
         "ft8/js8_reasm.c"
         "ft8/js8_tables.c"

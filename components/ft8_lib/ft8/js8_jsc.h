@@ -91,6 +91,33 @@ int js8_jsc_unpad(const uint8_t* bits, int n_bits);
  * data frame or if nothing could be read from it. */
 bool js8_jsc_frame_to_text(const uint8_t frame[9], char* out, size_t out_len);
 
+/* ---- encoding (J8), in js8_jsc_encode.c ------------------------------- */
+
+/* Fold `in` into what JS8 can actually carry: upper case, runs of whitespace
+ * collapsed to one space, leading/trailing space removed, and any character
+ * with no Huffman code dropped. Returns the length written, or -1.
+ *
+ * Call this before showing the operator a frame count - what they typed and
+ * what will be sent are not the same string, and the count belongs to the
+ * second one. */
+int js8_jsc_normalize(const char* in, char* out, size_t out_len);
+
+/* Encode as much of `text` as fits into ONE frame. Returns the number of
+ * CHARACTERS consumed (so the caller can advance), or -1.
+ *
+ * Both codings are tried and the one that carries more characters wins, which
+ * is what the reference encoder does and why a real transmission mixes them.
+ * `text` should already be normalised. */
+int js8_jsc_text_to_frame(const char* text, uint8_t frame[9]);
+
+/* Encode a whole message into consecutive frames. `frames` is `max_frames` x 9
+ * bytes. Returns the number of frames written.
+ *
+ * ⚠ EACH FRAME IS ONE SLOT. A three-frame message is 45 seconds of
+ * transmission in JS8 Normal, and the operator must be told that BEFORE the
+ * radio is keyed, not after. */
+int js8_jsc_text_to_frames(const char* text, uint8_t* frames, int max_frames);
+
 #ifdef __cplusplus
 }
 #endif
