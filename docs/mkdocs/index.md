@@ -2,7 +2,7 @@
 
 A standalone real-time panadapter — spectrum analyser and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver.
 
-Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display), the panadapter connects to the QMX as a USB host, decodes the I/Q in real time, and renders a touch-driven interface with tap-to-tune, pinch-zoom, onboard FT8/FT4 decoding and transmit, ADIF logging, and a matching browser web UI.
+Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display), the panadapter connects to the QMX as a USB host, decodes the I/Q in real time, and renders a touch-driven interface with tap-to-tune, pinch-zoom, onboard FT8/FT4/JS8 decoding and transmit, ADIF logging, and a matching browser web UI.
 
 **By Steffen Lav (OZ1LAV)**
 
@@ -42,7 +42,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   there. For a QMX+ with no control panel it is the only way in.
   See [Radio Menus](guide/radio-menus.md).
 - **FT8 & FT4 receive** — continuous on-device decoding of both modes, in the same view
-  as the panadapter. Callsign, country, signal report, slot-timing offset, audio tone,
+  as the panadapter (**JS8** is a third sub-mode of this page; see below). Callsign, country, signal report, slot-timing offset, audio tone,
   distance and bearing; include/exclude filters; band-aware worked-before exclusion; a
   pileup tracker; and the station you are working held at the top of the list.
 - **FT8 & FT4 transmit** — tap a station to send the correct *next* message; call CQ from
@@ -51,6 +51,16 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   polite hold for a station already working someone else; grey-listing; an optional
   unattended auto-answer robot; a drag-to-pick TX tone with a live occupancy strip, TX
   Hold and an ANY/EVEN/ODD time-window choice; and ARRL Field Day mode.
+- **JS8 — a keyboard mode, on the device** *(beta)*. JS8 carries **free text** on FT8's
+  modulation, so stations hold short conversations instead of trading a fixed exchange.
+  The whole of it runs on the Tab5: sync, LDPC error correction and the CRC check on the
+  way in, and the encoder and transmitter on the way out. It is a sub-mode of the same
+  page as FT8 and FT4 — pick **JS8** in the preset picker — and it adds a **Conversation**
+  tab beside **Stations**, so you can read what has been said as well as who is on the
+  band. To send, tap **Free text** under Call CQ, or use the composer on the web page;
+  both tell you how many frames the message takes and how many seconds it holds the
+  frequency *before* the radio is keyed. Directed messages and heartbeats are read and
+  shown with the sender's callsign and grid. See [JS8](guide/js8.md).
 - **WSPR** — a third page, reached by the same swipe. A propagation beacon rather than a
   contact mode: a very slow, very weak signal carrying your callsign, grid and power,
   which stations worldwide report hearing. What was heard each two-minute cycle with band,

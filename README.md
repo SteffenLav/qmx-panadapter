@@ -4,7 +4,7 @@
 
 A standalone real-time panadapter — spectrum analyser and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display).
 
-The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8/FT4 decoding and transmit, ADIF logging, and a matching browser web UI.
+The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8/FT4/JS8 decoding and transmit, ADIF logging, and a matching browser web UI.
 
 **Documentation:** [tab5.lav.dk](https://tab5.lav.dk) — the user guide, quick-start, and reference as plain web pages. A more approachable read than this page if you just want to set the device up; the source code and release downloads stay here on GitHub.
 
@@ -102,7 +102,8 @@ QMX volume in decibels matching the radio's own display, and an Antenna Tune but
 and 32 memory channels in a 4×8 grid holding any frequency and mode.
 
 **FT8 and FT4, receive** — Continuous on-device decoding in the same view as the
-panadapter: FT8 (15 s slots) and FT4 (7.5 s slots). The decode list shows callsign,
+panadapter: FT8 (15 s slots) and FT4 (7.5 s slots). **JS8** is a third sub-mode of this
+page - see below. The decode list shows callsign,
 country, signal report, slot-timing offset (DT), audio tone (HZ), distance and bearing,
 with the station you are working held at the top. Include/exclude filters match anything
 in the message text, worked-before stations can be excluded band-by-band, and a pileup
@@ -145,7 +146,17 @@ you. **SWR protection** cuts a transmission short and latches the transmitter of
 your chosen limit, because an FT8 burst is thirteen seconds of key-down into whatever the
 antenna is doing.
 
-**WSPR** — A third page, reached by the same swipe: **Panadapter → FT8/FT4 → WSPR**. WSPR
+**JS8 — a keyboard mode, on the device** *(beta)* — JS8 carries **free text** on FT8's
+modulation, so stations hold short conversations rather than trading a fixed exchange.
+All of it runs on the Tab5: sync, LDPC error correction and the CRC check on receive, the
+encoder and transmitter on send. It is a sub-mode of the FT8/FT4 page - pick **JS8** in
+the preset picker - and adds a **Conversation** tab beside **Stations**, so you can read
+what has been said as well as who is on the band. To send, tap **Free text** under Call
+CQ, or use the composer on the web page; both report how many frames the message takes
+and how many seconds it holds the frequency before the radio is keyed. Directed messages
+and heartbeats are shown with the sender's callsign and grid. Full detail in [JS8](#js8).
+
+**WSPR** — A third page, reached by the same swipe: **Panadapter → FT8/FT4/JS8 → WSPR**. WSPR
 is a propagation beacon rather than a contact mode — a very slow, very weak signal
 carrying only your callsign, grid and power, which stations worldwide report hearing, so
 over an evening you get a picture of where your antenna and your band actually reach at
@@ -365,7 +376,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 
 | Gesture | From | Does |
 |---------|------|------|
-| Swipe → | Left edge | Cycle Panadapter → FT8/FT4 → WSPR |
+| Swipe → | Left edge | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
 | Swipe ← | Right edge | Open settings drawer |
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
@@ -986,7 +997,7 @@ hunt for.
 
 A propagation beacon rather than a contact mode: a very slow, very weak signal
 carrying only your callsign, grid and declared power, reported by stations
-worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4 → WSPR**.
+worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4/JS8 → WSPR**.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
 **Calibrate Power measures what your QMX actually does, on your antenna
@@ -1043,7 +1054,7 @@ menus.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
 | Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
-| Swipe → from left edge | Left edge strip | Cycle Panadapter → FT8/FT4 → WSPR |
+| Swipe → from left edge | Left edge strip | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |
