@@ -127,11 +127,13 @@ There is no separate "allow transmitting" setting. The **TX** button on the page
 
 Before Declared power can offer anything real, the current band needs calibrating. **Calibrate Power** sweeps the QMX's *Max. PA voltage* on a **dummy load** — not the antenna — and records the real RF output at each step with the radio's own `PC;` readback. The result is saved for that band and used from then on.
 
-*(v1.16.0)* **The sweep always runs the full 1.0–12.0 V range**, whatever your Max. PA voltage is set to at the time, and it puts your voltage back when it finishes. This is deliberate. The calibration describes what the radio can do — it is a property of the radio, not of today's settings — and Declared power, Output power and WSPR all write that same Max. PA voltage setting, so the figure sitting in it is usually one this app put there rather than a limit you chose. Capping the sweep at it measured a fraction of the radio and then held you there: one station swept a 600 mW ceiling because a WSPR session had left the radio at 6.0 V, and every reconnect re-applied it.
+**The sweep runs the full 1.0–12.0 V range** unless you tell it not to, and it puts your Max. PA voltage back when it finishes.
 
-For a short time (v1.14.4 to v1.15.x) the sweep did stop at your Max. PA voltage. It no longer does, so **expect the window to say 12.0 V even if you have set yours lower.**
+It does not stop at your Max. PA voltage, and it is worth knowing why. Declared power, the Output power slider and WSPR all write that same setting, so the figure in it is usually one this app put there rather than a limit you chose — one station swept a 600 mW ceiling because a WSPR session had left his radio at 6.0 V, and every reconnect re-applied it. Capping the sweep at it measured a fraction of the radio.
 
-What protects a 9 V radio, or one on a small supply, is the other limit: the sweep **stops early once the measured power stops rising**. Above your supply voltage every further step would re-measure the same watts for minutes of pointless key-down, so it is detected and the sweep ends. That is measured rather than assumed, which is why it works without the app knowing which radio it is talking to. Bruce N9JCV found this.
+**If your radio must never see a certain voltage, set "Never exceed PA voltage"** in the Output power section. That is a setting of your own that nothing else writes, so the sweep obeys it, and the window tells you the range it will actually cover before you start. Use it for a 9 V build, a radio with a known weakness in the finals, or any PA you do not want driven to 12 V. It is off by default.
+
+The sweep also **stops early once the measured power stops rising**, which is what happens above your supply voltage: on an 8 V supply every step above ~8 V would otherwise re-measure the same watts for minutes of pointless key-down. That is measured rather than assumed, so it works without the app knowing your radio. Bruce N9JCV found it. Note what it does and does not protect: it stops a radio that *cannot* reach a voltage, not one that can reach it but should not — that is what the limit above is for.
 
 Because the sweep can end early, a shorter results table is normal rather than a failure — the window says what ended it.
 

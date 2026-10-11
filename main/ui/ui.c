@@ -2636,6 +2636,17 @@ static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi
  * reason - see output_power_area_refresh()'s own header. */
 static lv_obj_t *s_outpwr_nc_lbl   = NULL;
 static lv_obj_t *s_outpwr_cal_btn  = NULL;
+/* The operator's own PA-voltage ceiling control - see pa_ceiling_x10 in
+ * settings.h for why this is a setting of ours and not the radio's register. */
+static lv_obj_t *s_pacap_dd  = NULL;
+static lv_obj_t *s_pacap_lbl = NULL;
+/* 0 means "No limit" and is deliberately FIRST, because it is the default and
+ * the behaviour every build since v1.16.0 has had. 0.5 V steps from 5.0: finer
+ * than that is false precision for a protection limit, and below 5.0 a sweep
+ * has almost nothing left to measure. */
+static const uint16_t s_pacap_x10[] = { 0, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115 };
+#define PACAP_N  ((int)(sizeof(s_pacap_x10) / sizeof(s_pacap_x10[0])))
+
 static lv_obj_t *s_outpwr_recal_btn = NULL;  /* mirror of s_outpwr_cal_btn - see its own header
                                                * on the WSPR side (s_wspr_dbm_recal_btn) for why
                                                * this exists: the standalone "Calibrate Power"
@@ -2841,6 +2852,23 @@ static void output_power_area_refresh(void)
 
 // Live label/warning only while dragging - no CAT write until release, same
 // discipline as every other slider in this drawer that touches the radio.
+/* ⛔ THE ONE PLACE THE CEILING IS WRITTEN. Everything else in this app writes
+ * the RADIO's Max. PA voltage, which is why that register cannot be trusted as
+ * a statement of intent and why this setting exists at all. If a second writer
+ * is ever added here, this setting acquires the same problem the register has. */
+static void drawer_dropdown_pacap_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t i = lv_dropdown_get_selected(dd);
+    if ((int)i >= PACAP_N) return;
+    settings_set_pa_ceiling_x10(s_pacap_x10[i]);
+    if (s_pacap_x10[i])
+        ESP_LOGI(TAG, "PA voltage ceiling set to %u.%uV by the operator",
+                 (unsigned)(s_pacap_x10[i] / 10), (unsigned)(s_pacap_x10[i] % 10));
+    else
+        ESP_LOGI(TAG, "PA voltage ceiling cleared - the sweep will run the full range");
+}
+
 static void drawer_slider_outpwr_preview_cb(lv_event_t *e)
 {
     lv_obj_t *sl = lv_event_get_target(e);
@@ -12021,6 +12049,8 @@ static void outpwr_relayout(void)
     wspr_dbm_stack(s_outpwr_nc_lbl,    &y, 8);
     wspr_dbm_stack(s_outpwr_slider,    &y, 8);
     wspr_dbm_stack(s_outpwr_val_lbl,   &y, 8);
+    wspr_dbm_stack(s_pacap_lbl,        &y, 8);
+    wspr_dbm_stack(s_pacap_dd,         &y, 8);
     wspr_dbm_stack(s_outpwr_cal_btn,   &y, 0);
     wspr_dbm_stack(s_outpwr_warn_lbl,  &y, 10);
     wspr_dbm_stack(s_outpwr_recal_btn, &y, 0);
@@ -13328,6 +13358,46 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(val, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(val, &lv_font_montserrat_24, 0);
         lv_obj_align(val, LV_ALIGN_TOP_LEFT, 0, 76);
+
+        /* The operator's own PA-voltage ceiling. It lives in this section
+         * because this is where Calibrate Power is reached from, which is the
+         * moment it matters: the sweep keys the PA at every step up to it.
+         *
+         * ⚠ ALWAYS VISIBLE, unlike the slider and the warning around it. A
+         * protection limit that only appeared once a band was calibrated would
+         * be missing exactly when someone with a fragile radio is about to run
+         * their first sweep. */
+        {
+            lv_obj_t *cap_lbl = lv_label_create(sec);
+            s_pacap_lbl = cap_lbl;
+            lv_label_set_text(cap_lbl, "Never exceed PA voltage");
+            lv_obj_set_style_text_color(cap_lbl, lv_color_hex(0xB0B0B0), 0);
+            lv_obj_set_style_text_font(cap_lbl, &lv_font_montserrat_20, 0);
+
+            lv_obj_t *dd = lv_dropdown_create(sec);
+            s_pacap_dd = dd;
+            char opts[PACAP_N * 10];
+            int  o = 0;
+            for (int k = 0; k < PACAP_N; k++) {
+                const char *sep = k ? "\n" : "";
+                if (s_pacap_x10[k] == 0)
+                    o += snprintf(opts + o, sizeof(opts) - o, "%sNo limit", sep);
+                else
+                    o += snprintf(opts + o, sizeof(opts) - o, "%s%u.%u V", sep,
+                                  (unsigned)(s_pacap_x10[k] / 10),
+                                  (unsigned)(s_pacap_x10[k] % 10));
+            }
+            lv_dropdown_set_options(dd, opts);
+            const uint16_t cur = settings_get_pa_ceiling_x10();
+            for (int k = 0; k < PACAP_N; k++)
+                if (s_pacap_x10[k] == cur) { lv_dropdown_set_selected(dd, k); break; }
+            lv_obj_set_size(dd, DRAWER_W - 32, 50);
+            lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+            lv_obj_add_event_cb(dd, drawer_dropdown_pacap_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            /* The option LIST is its own object with its own font - every
+             * dropdown in this drawer needs this or it opens tiny. */
+            lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        }
 
         lv_obj_t *warn = lv_label_create(sec);
         s_outpwr_warn_lbl = warn;

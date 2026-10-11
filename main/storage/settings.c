@@ -153,6 +153,7 @@ static const char *TAG = "settings";
 #define KEY_PWR_CAL        "pwrcal"
 #define KEY_RADIO_UID      "radiouid"   /* UI; of the radio the table above belongs to */
 #define KEY_PWR_TARGET     "pwrtarget"
+#define KEY_PA_CEILING     "pacap"
 #define KEY_WSPR_TONE      "wsprtone"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
@@ -414,6 +415,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 #define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
 #define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
+#define DIRTY_PA_CEILING     139  /* operator's own PA-voltage ceiling - see pa_ceiling_x10 in settings.h */
 #define DIRTY_WF_SPEED       121
 #define DIRTY_WSPR_BURST     122  /* consecutive cycles per scheduled WSPR transmission */
 #define DIRTY_WSPR_TONE      123  /* pinned WSPR TX tone, 0 = random per burst */
@@ -619,6 +621,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_PWR_CAL))      nvs_set_blob(s_nvs, KEY_PWR_CAL, &snap.pwr_cal, sizeof(snap.pwr_cal));
         if (dirty_test(&dirty_local, DIRTY_PWR_TARGET))   nvs_set_blob(s_nvs, KEY_PWR_TARGET, &snap.pwr_target, sizeof(snap.pwr_target));
+        if (dirty_test(&dirty_local, DIRTY_PA_CEILING))   nvs_set_u16(s_nvs, KEY_PA_CEILING, snap.pa_ceiling_x10);
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
@@ -1229,6 +1232,11 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     sz = sizeof(out->pwr_target);
     nvs_get_blob(s_nvs, KEY_PWR_TARGET, &out->pwr_target, &sz);
+
+    /* Absent means no ceiling, which is the default and the behaviour every
+     * build since v1.16.0 has had - so an upgrade changes nothing until the
+     * operator sets one. */
+    nvs_get_u16(s_nvs, KEY_PA_CEILING, &out->pa_ceiling_x10);
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
@@ -3346,6 +3354,25 @@ void settings_set_wspr_net_en(bool v)
     s_pending.wspr_net_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_NET);
+}
+
+void settings_set_pa_ceiling_x10(uint16_t v_x10)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.pa_ceiling_x10 == v_x10) { xSemaphoreGive(s_mutex); return; }
+    s_pending.pa_ceiling_x10 = v_x10;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PA_CEILING);
+}
+
+uint16_t settings_get_pa_ceiling_x10(void)
+{
+    if (!s_ready) return 0;   /* no ceiling - the documented default */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.pa_ceiling_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_wspr_tx_dbm(int8_t v)

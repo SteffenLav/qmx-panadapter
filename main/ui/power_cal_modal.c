@@ -80,12 +80,18 @@ static const char *TAG = "power_cal";
 // it physically cannot reach, and it writes 12.0 V to a radio whose operator
 // deliberately set a lower ceiling. Two independent limits now stop it.
 //
-// 1. ⛔ THE CEILING IS GONE - THE SWEEP ALWAYS RUNS THE FULL 1.0-12.0 V TABLE.
-//    It used to stop at the radio's current Max. PA voltage, called "the
-//    operator's own ceiling". That WAS true once. It stopped being true when
-//    WSPR's declared power and the Output power slider both started writing
-//    that same setting: the value on the radio is then OURS, not a statement
-//    of intent, and capping at it calibrates a fraction of the radio.
+// 1. ⛔ THE RADIO'S Max. PA voltage IS NOT A CEILING - THE SWEEP IGNORES IT.
+//    It used to stop there, calling it "the operator's own ceiling". That WAS
+//    true once. It stopped being true when WSPR's declared power and the
+//    Output power slider both started writing that same setting: the value on
+//    the radio is then OURS, not a statement of intent, and capping at it
+//    calibrates a fraction of the radio.
+//
+//    ⭐ A REAL CEILING EXISTS AGAIN, AS OUR OWN SETTING - see
+//    last_step_for_ceiling() and settings_get_pa_ceiling_x10(). Nothing but
+//    the operator writes it, so unlike the radio's register it means what it
+//    says, and a radio that must never see 12 V can say so. Default 0, no
+//    ceiling, which is exactly the behaviour below.
 //
 //    Two field cases, one day apart, both this: Rick W5NR found his QMX+ at
 //    6.0 V (a WSPR session's leftover), swept a 600 mW ceiling, and every
@@ -446,7 +452,38 @@ static void begin_step(int step)
     status_set_text(buf);
 }
 
-// Highest table index at or below the operator's ceiling. Always returns a
+// Highest table index at or below the operator's own ceiling, or the last
+// index when he has not set one.
+//
+// ⛔ THE CEILING IS OURS, NOT THE RADIO'S "Max. PA voltage". That register is
+// written constantly by Declared power, the Output power slider and WSPR, so a
+// low figure in it is usually one of ours rather than a statement of intent -
+// which is why capping at it was removed in v1.16.0 after it swept a 600 mW
+// ceiling for Rick W5NR. settings_get_pa_ceiling_x10() is written by nobody
+// but the operator, so it means what it says and can be obeyed.
+//
+// ⚠ THE PLATEAU DETECTOR IS NOT A SUBSTITUTE. It stops the sweep when the
+// measured power stops RISING, which protects a radio that CANNOT reach a
+// voltage. A radio that can reach 12 V but must not - worn finals, a known
+// fault, a modified PA - rises all the way and nothing stops it. Steffen
+// OZ1LAV, 2026-10-11: "What if there is a special reason for never exceeding
+// the set max? Maybe they have a special qmx that have issues with their
+// finals with a higher voltage?" This is that stop.
+//
+// Always returns a valid index: a ceiling below the first step would otherwise
+// sweep nothing, and one step is a truthful - if useless - calibration where
+// an empty sweep is a crash.
+static int last_step_for_ceiling(void)
+{
+    const uint16_t cap_x10 = settings_get_pa_ceiling_x10();
+    if (cap_x10 == 0) return PWRCAL_STEPS - 1;        // no ceiling set
+    int last = 0;
+    for (int i = 0; i < PWRCAL_STEPS; i++) {
+        if (s_test_voltage_x10[i] <= cap_x10) last = i;
+        else break;                                    // the table ascends
+    }
+    return last;
+}
 
 // Called once per completed step. A step with NO reading (w == 0) is not
 // evidence either way and leaves the run untouched - a single failed settle
@@ -738,17 +775,24 @@ static void start_btn_cb(lv_event_t *e)
         ui_toast("Could not read the current PA voltage - will restore to 12.0V when done");
     }
 
-    // ALWAYS THE WHOLE TABLE - see reason 1 in this file's header for why the
-    // radio's current Max. PA voltage is no longer a statement of intent. The
-    // plateau detector below is what stops a radio that cannot reach the top.
+    // The whole table unless the operator has set his OWN ceiling - see
+    // last_step_for_ceiling(), and reason 1 in this file's header for why the
+    // radio's own Max. PA voltage is not that ceiling. The plateau detector
+    // below is what stops a radio that cannot reach the top; the ceiling is
+    // what stops one that must not.
     if (s_idle_timer) { lv_timer_del(s_idle_timer); s_idle_timer = NULL; }
-    s_last_step     = PWRCAL_STEPS - 1;
+    s_last_step     = last_step_for_ceiling();
     s_max_w_x100    = 0;
     s_plateau_run   = 0;
     s_stopped_early = false;
     s_aborted       = false;
-    ESP_LOGI(TAG, "sweep %d of %d steps (full range) - pre-sweep PA %u.%uV will be restored",
-             s_last_step + 1, PWRCAL_STEPS, s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);
+    {
+        const uint16_t cap_x10 = settings_get_pa_ceiling_x10();
+        ESP_LOGI(TAG, "sweep %d of %d steps (%s) - pre-sweep PA %u.%uV will be restored",
+                 s_last_step + 1, PWRCAL_STEPS,
+                 cap_x10 ? "operator ceiling" : "full range",
+                 s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);
+    }
 
     strncpy(s_band, adif_log_band_for_freq(cat_get_frequency()), sizeof(s_band) - 1);
     s_band[sizeof(s_band) - 1] = '\0';
@@ -946,10 +990,10 @@ static void modal_build(void)
     ESP_LOGI(TAG, "Calibrate Power modal built");
 }
 
-// The pre-Start line. The ceiling is whatever the radio currently holds, and
-// that is exactly the thing worth seeing before committing to a sweep: a WSPR
-// session leaves it at 2.3 V quite legitimately, and calibrating 1.0-2.3 V is
-// not what anyone pressing Start has in mind.
+// The pre-Start line. It must state the range the sweep will ACTUALLY cover,
+// because that is the thing worth seeing before committing to minutes of
+// key-down - and because getting it wrong is what sent Bryan N0LUF looking:
+// the manual promised one range and the window announced another.
 static void idle_status_refresh(void)
 {
     if (s_state != PC_IDLE && s_state != PC_DONE) return;
@@ -960,15 +1004,23 @@ static void idle_status_refresh(void)
     // box and cannot grow one (see its LONG_DOT note), so the longest form
     // here - "Calibrated. Sweeps 1.0-12.0V (radio max)." - is 41 characters.
     if (pa >= 0) {
-        /* ⛔ NO LONGER REPORTS A CEILING, because there is not one - the sweep
-         * runs the whole table (see reason 1 in this file's header). This used
-         * to print "Sweeps 1.0-6.0V (radio max)" and, below 10.0 V, a warning
-         * to raise it first. Both described a cap that has been removed; the
-         * warning in particular would now be telling the operator to fix a
-         * problem that no longer exists. */
+        /* ⛔ THE CEILING REPORTED HERE IS THE OPERATOR'S OWN SETTING, never the
+         * radio's Max. PA voltage. An earlier version printed "Sweeps
+         * 1.0-6.0V (radio max)" from that register and, below 10.0 V, a
+         * warning to raise it first - both describing a cap that was removed
+         * in v1.16.0 because the register is usually holding one of OUR
+         * writes. The setting below is written by nobody but him, so stating
+         * it is a promise this window can keep. */
+        const uint16_t cap_x10 = settings_get_pa_ceiling_x10();
         status_set_warn(false);
-        snprintf(buf, sizeof(buf), "%s. Sweeps the full 1.0-12.0V.",
-                 have ? "Calibrated" : "Ready");
+        if (cap_x10) {
+            snprintf(buf, sizeof(buf), "%s. Sweeps 1.0-%u.%uV (your limit).",
+                     have ? "Calibrated" : "Ready",
+                     (unsigned)(cap_x10 / 10), (unsigned)(cap_x10 % 10));
+        } else {
+            snprintf(buf, sizeof(buf), "%s. Sweeps the full 1.0-12.0V.",
+                     have ? "Calibrated" : "Ready");
+        }
     } else {
         status_set_warn(false);
         snprintf(buf, sizeof(buf), "%s", have ? "Calibrated. Start to re-measure." : "Ready.");

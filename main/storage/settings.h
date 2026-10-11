@@ -625,6 +625,30 @@ typedef struct {
     uint16_t wspr_tx_tone_hz;
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
+    /* ⛔ THE OPERATOR'S OWN PA-VOLTAGE CEILING, and the reason it is OURS and
+     * not the radio's "Max. PA voltage" register.
+     *
+     * That register carries two different meanings at once: a permanent
+     * statement about the radio ("these finals must never see more than
+     * 10 V") and today's output power, which Declared power, the Output power
+     * slider and WSPR all write constantly. They cannot be told apart, so
+     * v1.16.0 resolved the collision by distrusting the register entirely and
+     * always sweeping the full range - which fixed one operator's 600 mW
+     * ceiling (Rick W5NR, a WSPR leftover of 6.0 V) and in the same move threw
+     * away the only protection a fragile radio had.
+     *
+     * ⚠ THE PLATEAU DETECTOR DOES NOT COVER THIS. It stops the sweep when
+     * measured power stops RISING, so it protects a radio that CANNOT reach a
+     * voltage. A radio that can reach 12 V but must not - worn finals, a known
+     * fault, a modified PA - keeps rising all the way and nothing stops it.
+     * This project has already paid that bill once: a QMX had its finals worn
+     * down by WSPR at full power and went away to be re-finalled.
+     *
+     * So the ceiling lives here, where nothing but the operator writes it, and
+     * the radio's register goes on being whatever the power controls last set.
+     * 0 = no ceiling, sweep the full table (the default and the v1.16.0
+     * behaviour). Otherwise in units of 0.1 V, as the sweep table is. */
+    uint16_t pa_ceiling_x10;
     /* Captured windows still to be written to the SD card as WAV.
      *
      * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
@@ -1130,6 +1154,13 @@ bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEP
 // false (watts_x100 untouched) if `band` has no target set yet.
 void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100);
 bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100);
+
+/* The operator's own PA-voltage ceiling - see pa_ceiling_x10 in the struct for
+ * why this is not the radio's Max. PA voltage register. 0 = none set, which is
+ * the default: the sweep then runs the whole table as it has since v1.16.0.
+ * Units of 0.1 V. */
+void     settings_set_pa_ceiling_x10(uint16_t v_x10);
+uint16_t settings_get_pa_ceiling_x10(void);
 // Narrow read of just the callsign - out is NUL'd first, always safe to print
 // even if settings aren't ready yet. See pskr_self.c's mqtt_event_handler(),
 // which runs on esp-mqtt's OWN internal task (not ours to resize) and used
