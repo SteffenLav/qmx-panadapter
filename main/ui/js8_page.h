@@ -50,6 +50,10 @@
 #define JS8_PAGE_COL_AGE     2
 #define JS8_PAGE_W_AGE       4
 #define JS8_PAGE_COL_HZ      7
+/* ⚠ The Hz width was a bare 4 in js8_page.c's put() call while every other
+ * column had a define. The conversation header centres its titles over these
+ * widths, so a literal here is a drift waiting to happen. */
+#define JS8_PAGE_W_HZ        4
 #define JS8_PAGE_COL_BAND    12
 #define JS8_PAGE_W_BAND      4
 #define JS8_PAGE_COL_SENDER  17

@@ -3445,6 +3445,7 @@ static lv_obj_t *s_col_hdr;              /* the Stations column header       */
 static lv_obj_t *s_tabbar;
 static lv_obj_t *s_tab_btn_stations;
 static lv_obj_t *s_tab_btn_conv;
+static lv_obj_t *s_tab_btn_flush;   /* clears the conversation store - an ACTION, not a tab */
 static lv_obj_t *s_conv_pane;
 static lv_obj_t *s_conv_rows[JS8_PAGE_ROWS];
 static lv_obj_t *s_conv_hits[JS8_PAGE_ROWS];
@@ -3658,6 +3659,25 @@ static void tab_conv_cb(lv_event_t *e)
     log_tab();
 }
 
+/* ⛔ FLUSH EMPTIES THE CONVERSATION STORE - and it is deliberately NOT a
+ * tab. tab_paint() colours Conversation and Stations by which one is showing;
+ * this one performs an action and then looks exactly as it did, so it is left
+ * out of that function and keeps the unselected palette permanently. A button
+ * that lit up as "selected" would claim to be a third view.
+ *
+ * ⚠ NO CONFIRMATION, because the operator asked for a button that removes
+ * the list. The cost of a mis-tap is the conversation history, which is a
+ * display store rather than the log: js8_chat is what the page shows, the QSOs
+ * are in ADIF. Worth revisiting if a mis-tap ever actually costs him something.
+ */
+static void tab_flush_cb(lv_event_t *e)
+{
+    (void)e;
+    js8_chat_clear();
+    conv_repaint();
+    ESP_LOGI(TAG, "js8 conversation flushed by the operator");
+}
+
 bool ft8_screen_view_js8_tab_is_conversation(void)
 {
     return s_tab_conversation;
@@ -3672,11 +3692,16 @@ static void build_js8_tabs(void)
     lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
 
-    struct { lv_obj_t **out; const char *text; int x; lv_event_cb_t cb; } tabs[2] = {
+    /* Conversation | Flush | Stations, on the 192 + 8 pitch the first two
+     * already used. Flush sits between them at the operator's request
+     * (2026-10-11) and is built here so it shares the size, radius, border and
+     * font - it has to read as one of this row, not as a stray control. */
+    struct { lv_obj_t **out; const char *text; int x; lv_event_cb_t cb; } tabs[3] = {
         { &s_tab_btn_conv,     "Conversation", 8,   tab_conv_cb     },
-        { &s_tab_btn_stations, "Stations",     208, tab_stations_cb },
+        { &s_tab_btn_flush,    "Flush",        208, tab_flush_cb    },
+        { &s_tab_btn_stations, "Stations",     408, tab_stations_cb },
     };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         lv_obj_t *b = lv_btn_create(s_tabbar);
         lv_obj_set_size(b, 192, 40);
         lv_obj_set_pos(b, tabs[i].x, 2);
@@ -3689,6 +3714,12 @@ static void build_js8_tabs(void)
         lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
         lv_obj_center(l);
         *tabs[i].out = b;
+    }
+    /* Set once: tab_paint() deliberately skips Flush, so nothing else will
+     * ever colour it. Same two colours an unselected tab wears. */
+    if (s_tab_btn_flush) {
+        lv_obj_set_style_bg_color(s_tab_btn_flush, lv_color_hex(0x14181c), 0);
+        lv_obj_set_style_border_color(s_tab_btn_flush, lv_color_hex(0x303840), 0);
     }
 
     s_conv_pane = lv_obj_create(s_right_pane);
@@ -3712,17 +3743,35 @@ static void build_js8_tabs(void)
         lv_obj_set_pos(ch, 0, 0);
         lv_obj_add_style(ch, &s_style_header, 0);
         lv_obj_clear_flag(ch, LV_OBJ_FLAG_SCROLLABLE);
-        struct { const char *t; int col; } ct[4] = {
-            { "AGE",     JS8_PAGE_COL_AGE    },
-            { "Hz",      JS8_PAGE_COL_HZ     },
-            { "CALL",    JS8_PAGE_COL_SENDER },
-            { "MESSAGE", JS8_PAGE_COL_TEXT   },
+        /* ⛔ BAND HAS A HEADING TOO. The column shipped without one, so the
+         * band sat under the Hz heading and read as part of the offset -
+         * operator, 2026-10-11, from the glass.
+         *
+         * Each title is CENTRED over its column's own width, which is why the
+         * widths are here rather than just the start columns. MESSAGE stays
+         * LEFT: it heads a 37-column field of variable-length text that begins
+         * at the left edge, so a centred title would float away from the first
+         * word it describes. */
+        struct { const char *t; int col; int w; bool centre; } ct[5] = {
+            { "AGE",     JS8_PAGE_COL_AGE,    JS8_PAGE_W_AGE,    true  },
+            { "Hz",      JS8_PAGE_COL_HZ,     JS8_PAGE_W_HZ,     true  },
+            { "BAND",    JS8_PAGE_COL_BAND,   JS8_PAGE_W_BAND,   true  },
+            { "CALL",    JS8_PAGE_COL_SENDER, JS8_PAGE_W_SENDER, true  },
+            { "MESSAGE", JS8_PAGE_COL_TEXT,   JS8_PAGE_W_TEXT,   false },
         };
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             lv_obj_t *l = lv_label_create(ch);
             lv_obj_add_style(l, &s_style_header_label, 0);
             lv_label_set_text(l, ct[i].t);
             lv_obj_set_x(l, 6 + ct[i].col * CONV_CELL_W);
+            if (ct[i].centre) {
+                /* The cell is the column's width in grid cells; centring the
+                 * TEXT inside a label of exactly that width puts the title
+                 * over the characters it names, whatever its own length.
+                 * "BAND" is 4 and its column is 4, so it fills it exactly. */
+                lv_obj_set_width(l, ct[i].w * CONV_CELL_W);
+                lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+            }
         }
     }
 

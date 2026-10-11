@@ -111,7 +111,7 @@ int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
 
         char hz[6];
         snprintf(hz, sizeof(hz), "%4d", m->freq_hz);
-        put(lines[row], JS8_PAGE_COL_HZ, hz, 4);
+        put(lines[row], JS8_PAGE_COL_HZ, hz, JS8_PAGE_W_HZ);
 
         /* The band the conversation ran on, stamped when the entry was
          * created - NOT the current dial. See js8_chat_msg_t.band. */
