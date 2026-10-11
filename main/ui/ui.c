@@ -2768,7 +2768,8 @@ static void output_power_area_refresh(void)
     // is "louder than expected", never "silently far too quiet".
     int idx = s_outpwr_n - 1;
     uint16_t target_w;
-    if (band && band[0] && settings_get_pwr_target_watts(band, &target_w)) {
+    const bool have_target = band && band[0] && settings_get_pwr_target_watts(band, &target_w);
+    if (have_target) {
         int best_gap = 0x7FFFFFFF;
         for (int k = 0; k < s_outpwr_n; k++) {
             int gap = abs((int)s_outpwr_w[k] - (int)target_w);
@@ -2794,11 +2795,32 @@ static void output_power_area_refresh(void)
     outpwr_set_value_text(s_outpwr_w[idx]);
     outpwr_update_warning(s_outpwr_w[idx]);
 
-    // Persist AND apply even when this is just restoring what was already
-    // stored - a band change is exactly the moment the radio needs
-    // re-telling, same reasoning as wspr_dbm_area_refresh(). Skip the
-    // actual CAT write (not the persistence) if a burst is keyed right
-    // now - see outpwr_tx_busy()'s own header.
+    // ⛔ NOTHING STORED MEANS NOTHING TO SAY. This used to persist and write
+    // on every refresh even when the operator had never chosen an output
+    // power - so opening the drawer COMMANDED the radio to a figure this
+    // control had just invented, and then recorded that invention as his
+    // target so it stuck.
+    //
+    // Bryan N0LUF, 2026-10-11: "my Max PA Voltage has changed from 11.5
+    // (default) to 12" after calibrating. The sweep was not at fault - it
+    // restores the pre-sweep voltage and confirms it by read-back. This
+    // function then ran on the next drawer open, found no stored target
+    // (calibration measures the curve and sets no target of its own), picked
+    // a calibrated step and wrote it over the 11.5 the sweep had just put
+    // back.
+    //
+    // ⚠ THE PREVIOUS FIX CHANGED THE WRONG THING, and this is the lesson.
+    // Gyula HA3HZ hit the same code writing the LOWEST step; it was fixed by
+    // making the fallback the highest instead. That corrected which wrong
+    // value was sent and left the unconditional write alone - so the defect
+    // survived with a different number in it, which is exactly what Bryan
+    // then reported. A control with no stored setting must DISPLAY, not
+    // command.
+    //
+    // Persist and apply only when a target really was stored: a band change
+    // is exactly the moment the radio needs re-telling, same reasoning as
+    // wspr_dbm_area_refresh(). Skip the CAT write (not the persistence) if a
+    // burst is keyed right now - see outpwr_tx_busy()'s own header.
     //
     // ⛔ AND skip it outright while WSPR is running - it owns Max. PA
     // voltage then, via its own Declared-power calibration. This control
@@ -2810,8 +2832,10 @@ static void output_power_area_refresh(void)
     // wspr_rx_running(), not the current UI mode - the WSPR page can be
     // left showing while another screen is up front, same reasoning as
     // wspr_pa_guard_periodic_check()'s own "running, not visible" test.
-    settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
-    if (!outpwr_tx_busy() && !wspr_rx_running()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+    if (have_target) {
+        settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
+        if (!outpwr_tx_busy() && !wspr_rx_running()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+    }
     outpwr_relayout();
 }
 

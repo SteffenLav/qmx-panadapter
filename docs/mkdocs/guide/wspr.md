@@ -127,9 +127,13 @@ There is no separate "allow transmitting" setting. The **TX** button on the page
 
 Before Declared power can offer anything real, the current band needs calibrating. **Calibrate Power** sweeps the QMX's *Max. PA voltage* on a **dummy load** — not the antenna — and records the real RF output at each step with the radio's own `PC;` readback. The result is saved for that band and used from then on.
 
-*(v1.14.4)* The sweep **stops at your own Max. PA voltage**, and the window shows that figure before you start — so a 9 V QMX, or one you have deliberately limited, is never driven past the setting you chose. It also **stops early once the measured power stops rising**, which is what happens above your supply voltage: on an 8 V supply every step above ~8 V would otherwise re-measure the same watts for minutes of pointless key-down. Bruce N9JCV found both.
+*(v1.16.0)* **The sweep always runs the full 1.0–12.0 V range**, whatever your Max. PA voltage is set to at the time, and it puts your voltage back when it finishes. This is deliberate. The calibration describes what the radio can do — it is a property of the radio, not of today's settings — and Declared power, Output power and WSPR all write that same Max. PA voltage setting, so the figure sitting in it is usually one this app put there rather than a limit you chose. Capping the sweep at it measured a fraction of the radio and then held you there: one station swept a 600 mW ceiling because a WSPR session had left the radio at 6.0 V, and every reconnect re-applied it.
 
-Because the sweep can end early, a shorter results table is normal rather than a failure — the window says which of the two limits ended it.
+For a short time (v1.14.4 to v1.15.x) the sweep did stop at your Max. PA voltage. It no longer does, so **expect the window to say 12.0 V even if you have set yours lower.**
+
+What protects a 9 V radio, or one on a small supply, is the other limit: the sweep **stops early once the measured power stops rising**. Above your supply voltage every further step would re-measure the same watts for minutes of pointless key-down, so it is detected and the sweep ends. That is measured rather than assumed, which is why it works without the app knowing which radio it is talking to. Bruce N9JCV found this.
+
+Because the sweep can end early, a shorter results table is normal rather than a failure — the window says what ended it.
 
 You reach it two ways: the **"Calibrate this band"** button that appears in place of Declared power (or Output power, on other modes) whenever the current band has no data yet, or **"Recalibrate this band"** in the same place once it does — for redoing a band after a change to your antenna or feedline.
 
