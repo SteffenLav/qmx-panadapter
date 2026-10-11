@@ -52,6 +52,21 @@ typedef struct {
     bool    active;         /* still in flight - the page marks it          */
     bool    truncated;      /* text was cut: the buffer or the codebook     */
     bool    compressed;     /* the coding the first frame declared          */
+    /* ⛔ THE BAND THE CONVERSATION RAN ON, stamped when the entry is first
+     * created and never re-stamped. `freq_hz` above is the AUDIO OFFSET, which
+     * says nothing about the band - two conversations a band apart can both
+     * sit at 1500 Hz. Without this a session that worked several bands merges
+     * into one list that cannot be attributed afterwards.
+     *
+     * ⚠ FIRST slot, not latest. A free-text run is fed again every slot it
+     * takes a frame in, and the dial can move underneath it; the band a QSO
+     * belongs to is where it STARTED. js8_chat_add() carries these two fields
+     * over on an upsert for exactly that reason.
+     *
+     * `band` is the adif_log_band_for_freq() string ("40m") - the ONE band
+     * table. Both are 0 / "" when the dial was not known. */
+    uint32_t dial_hz;       /* dial at the first frame, 0 = unknown          */
+    char    band[8];        /* adif_log_band_for_freq(dial_hz), "" = unknown */
     char    sender[JS8_CHAT_CALL_LEN];   /* "" when never identified        */
     char    text[JS8_CHAT_TEXT_MAX];
 } js8_chat_msg_t;

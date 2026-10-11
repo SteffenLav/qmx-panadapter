@@ -25,12 +25,23 @@
 
 /* Column geometry. One row of a message reads:
  *
- *   *  12s 1275 HB9BV    F6HCM HB9BV HEARTBEAT SNR
- *   ^  ^   ^    ^        ^
- *   0  2   7    12       22
+ *   *  12s 1275 40m  HB9BV    F6HCM HB9BV HEARTBEAT SNR
+ *   ^  ^   ^    ^    ^        ^
+ *   0  2   7    12   17       27
  *
  * The flag column is first so the live and truncated marks line up down the
  * left edge and can be found without reading the rows.
+ *
+ * ⛔ BAND IS A COLUMN, and it cost the text column 5 characters (42 -> 37).
+ * The grid was exactly full, so there was nowhere else for it to come from.
+ * It is worth the 5: the offset column next to it is the AUDIO offset, so
+ * before this the page could not say which band a conversation ran on, and a
+ * session that worked several bands rendered as one unattributable list.
+ * Operator asked for it 2026-10-11. "F6HCM HB9BV HEARTBEAT SNR" is 26
+ * characters, so the common structured row still fits on one line; long free
+ * text wraps one row sooner than it used to.
+ *
+ * ⚠ FOUR WIDE, not three. "160m" and "70cm" are both 4.
  *
  * ⭐ AGE, NOT A WALL CLOCK. The Stations list next to this one shows AGE and
  * no clock, and 64 columns do not hold both: clock + age + offset + sender
@@ -39,10 +50,16 @@
 #define JS8_PAGE_COL_AGE     2
 #define JS8_PAGE_W_AGE       4
 #define JS8_PAGE_COL_HZ      7
-#define JS8_PAGE_COL_SENDER  12
+#define JS8_PAGE_COL_BAND    12
+#define JS8_PAGE_W_BAND      4
+#define JS8_PAGE_COL_SENDER  17
 #define JS8_PAGE_W_SENDER    9
-#define JS8_PAGE_COL_TEXT    22
-#define JS8_PAGE_W_TEXT      (JS8_PAGE_COLS - JS8_PAGE_COL_TEXT)   /* 42 */
+#define JS8_PAGE_COL_TEXT    27
+#define JS8_PAGE_W_TEXT      (JS8_PAGE_COLS - JS8_PAGE_COL_TEXT)   /* 37 */
+
+/* Shown in the band column when the dial was not known at the time - an old
+ * stored entry, or CAT down in that slot. Must not read as a band. */
+#define JS8_PAGE_UNKNOWN_BAND    "-"
 
 /* ⛔ NO TITLE ROW. The first version drew "JS8 - conversation" and a rule into
  * rows 0 and 1, and the view draws its own header above the grid with the

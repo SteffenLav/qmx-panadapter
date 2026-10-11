@@ -151,6 +151,57 @@ static void t_tick_clears_active(void)
     CHECK(!got.active, "still live 60 s after the last frame");
 }
 
+/* ⛔ THE BAND STAMP IS THE RUN'S IDENTITY, like first_utc - it must survive
+ * the upsert. js8_chat_add() assigns the whole struct on an update, so the
+ * caller's current dial would otherwise overwrite the band the run started on,
+ * and a conversation that straddled a band change would be filed under
+ * wherever the dial ended up. That is precisely the attribution the field was
+ * added for, so it is worth its own test.
+ *
+ * Mutation-tested 2026-10-11: removing the keep_dial/keep_band carry-over in
+ * js8_chat.c fails this. */
+static void t_band_stamp_survives_the_upsert(void)
+{
+    printf("the band a run started on survives later feeds\n");
+    js8_chat_clear();
+
+    js8_chat_msg_t a = mk(JS8_CHAT_FREETEXT, 1000, 1000, 1188, "", "HELLO", 1, true);
+    a.dial_hz = 7078000;
+    snprintf(a.band, sizeof(a.band), "40m");
+    js8_chat_add(&a);
+
+    /* Same run, fed a slot later - but the operator has moved the dial to 20 m
+     * in between, so the caller stamps the NEW band. */
+    js8_chat_msg_t b = mk(JS8_CHAT_FREETEXT, 1000, 1015, 1188, "", "HELLO THERE", 2, true);
+    b.dial_hz = 14078000;
+    snprintf(b.band, sizeof(b.band), "20m");
+    js8_chat_add(&b);
+
+    js8_chat_msg_t got;
+    CHECK(js8_chat_count() == 1, "the run split into %d messages", js8_chat_count());
+    CHECK(js8_chat_at(0, &got), "nothing at index 0");
+    CHECK(strcmp(got.text, "HELLO THERE") == 0,
+          "the text did not update: '%s'", got.text);
+    CHECK(strcmp(got.band, "40m") == 0,
+          "band is '%s', want the band the run STARTED on (40m)", got.band);
+    CHECK(got.dial_hz == 7078000,
+          "dial_hz is %u, want the first dial", (unsigned)got.dial_hz);
+
+    /* ⚠ BUT AN UNSTAMPED FIRST FEED MUST STILL BE FILLABLE. CAT can be down
+     * in the slot a run starts in; the band learned a slot later is better
+     * than none, so the carry-over only applies when there IS a stamp. */
+    js8_chat_clear();
+    js8_chat_msg_t c = mk(JS8_CHAT_FREETEXT, 2000, 2000, 1500, "", "X", 1, true);
+    js8_chat_add(&c);
+    js8_chat_msg_t d = mk(JS8_CHAT_FREETEXT, 2000, 2015, 1500, "", "XY", 2, true);
+    d.dial_hz = 7078000;
+    snprintf(d.band, sizeof(d.band), "40m");
+    js8_chat_add(&d);
+    CHECK(js8_chat_at(0, &got), "nothing at index 0 after the second feed");
+    CHECK(strcmp(got.band, "40m") == 0,
+          "an unstamped run never learned its band: '%s'", got.band);
+}
+
 static void t_empty_store_is_safe(void)
 {
     printf("the accessors are safe on an empty store\n");
@@ -172,6 +223,7 @@ int main(void)
     t_kinds_do_not_merge();
     t_ring_keeps_the_newest();
     t_tick_clears_active();
+    t_band_stamp_survives_the_upsert();
     t_empty_store_is_safe();
 
     printf(fails ? "\nFAIL (%d)\n" : "\nPASS\n", fails);

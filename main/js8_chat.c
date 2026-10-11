@@ -81,7 +81,19 @@ void js8_chat_add(const js8_chat_msg_t *m)
         if (k < 0) break;
         if (s_store->msg[k].kind != m->kind) continue;
         if (!same_run(&s_store->msg[k], m)) continue;
+        /* ⛔ THE BAND STAMP SURVIVES THE UPSERT. This assignment replaces the
+         * whole struct, so the caller's current dial would overwrite the one
+         * the run started on - and a run that straddles a band change would
+         * then be filed under wherever the dial ended up. Keep the first
+         * stamp; it is the run's identity, like first_utc. */
+        uint32_t keep_dial = s_store->msg[k].dial_hz;
+        char     keep_band[sizeof(s_store->msg[k].band)];
+        memcpy(keep_band, s_store->msg[k].band, sizeof(keep_band));
         s_store->msg[k] = *m;
+        if (keep_dial || keep_band[0]) {
+            s_store->msg[k].dial_hz = keep_dial;
+            memcpy(s_store->msg[k].band, keep_band, sizeof(keep_band));
+        }
         return;
     }
 

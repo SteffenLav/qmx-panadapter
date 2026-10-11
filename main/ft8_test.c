@@ -83,6 +83,9 @@
 #include "time_sync.h"
 #include "ft8_status.h"
 #include "ui/ui.h"
+/* adif_log_band_for_freq() - the ONE band table, so the JS8 chat store files
+ * a conversation under the same band string the log and the spot map use. */
+#include "adif/adif_log.h"
 
 static const char *TAG = "ft8_test";
 
@@ -2309,6 +2312,15 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
          * FT8_DECODE_BUDGET_MS, which is what the "ONE call, deliberately"
          * note in that loop is protecting. */
         if (js8_chat_init()) {
+            /* ⛔ STAMP THE BAND AT CREATION, not at render time. The pane and
+             * the API both draw from this store minutes later, by which point
+             * the dial may have moved - so the band has to be captured in the
+             * slot the frame arrived in. Read once per slot rather than per
+             * message: both loops below file entries from the same slot, so
+             * they belong to the same dial by construction. */
+            const uint32_t js8_dial_hz = cat_get_frequency();
+            const char *js8_band = js8_dial_hz ? adif_log_band_for_freq(js8_dial_hz) : "";
+
             const decode_result_t *src[2] = { &r_main, &r_worker };
             for (int rr = 0; rr < 2; rr++) {
                 int nev = src[rr]->n_js8ev;
@@ -2331,6 +2343,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                     cm.freq_hz   = src[rr]->js8ev[k].freq_hz;
                     cm.frames    = 1;
                     cm.snr_db    = JS8_CHAT_NO_SNR;
+                    cm.dial_hz   = js8_dial_hz;
+                    snprintf(cm.band, sizeof(cm.band), "%s", js8_band ? js8_band : "");
                     snprintf(cm.sender, sizeof(cm.sender), "%s",
                              src[rr]->js8ev[k].call);
                     snprintf(cm.text, sizeof(cm.text), "%s", jtext);
@@ -2348,6 +2362,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                 cm.freq_hz    = run->freq_hz;
                 cm.frames     = run->n_seen;
                 cm.snr_db     = JS8_CHAT_NO_SNR;
+                cm.dial_hz    = js8_dial_hz;
+                snprintf(cm.band, sizeof(cm.band), "%s", js8_band ? js8_band : "");
                 cm.active     = (run->last_slot == slot_sec);
                 /* Both ways a message can be cut, as js8_reasm_describe spells
                  * them: the text buffer filled, or frames arrived past the cap.

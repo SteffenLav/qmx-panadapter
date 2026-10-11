@@ -224,6 +224,55 @@ static void t_row_map_names_the_message_each_row_belongs_to(void)
         CHECK(M[r] == -1, "empty row %d maps to %d, want -1", r, M[r]);
 }
 
+/* ⛔ THE BAND COLUMN, by LITERAL position - not through JS8_PAGE_COL_BAND.
+ *
+ * Every other check in this file compares against the column defines, which is
+ * right for catching an off-by-one in the renderer but is blind to the whole
+ * column being moved or dropped: change the define and the test follows it.
+ * The band column was added because the page could not say which band a
+ * conversation ran on, so the thing worth pinning is that it is THERE and that
+ * it does not eat its neighbours. Hence the hard-coded 12, 17 and 27.
+ *
+ * Mutation-tested 2026-10-11: deleting the put() in js8_page.c fails this,
+ * and so does widening the column to 5. */
+static void t_band_column(void)
+{
+    printf("the band column says which band the conversation ran on\n");
+    js8_chat_msg_t m = mk(1791554040, 1188, "HB9BV", "F6HCM HB9BV HEARTBEAT SNR",
+                          false, false);
+    snprintf(m.band, sizeof(m.band), "40m");
+    m.dial_hz = 7078000;
+    js8_page_render(&m, 1, NOW, L, M);
+
+    const int r = JS8_PAGE_ROW0;
+    CHECK(at(r, 12, "40m "), "band is not at column 12: '%.5s'", &L[r][12]);
+    CHECK(at(r, 17, "HB9BV"), "sender is not at column 17: '%.9s'", &L[r][17]);
+    CHECK(at(r, 27, "F6HCM HB9BV HEARTBEAT SNR"),
+          "text is not at column 27: '%.25s'", &L[r][27]);
+    /* The gap either side, so the band cannot run into age/offset or sender. */
+    CHECK(L[r][11] == ' ', "no gap before the band column");
+    CHECK(L[r][16] == ' ', "no gap after the band column");
+    /* The common structured row must still fit on ONE line after the cut from
+     * 42 to 37 - that was the argument for affording the column at all. */
+    CHECK(M[r + 1] == -1, "a 25-character message wrapped onto a second row");
+
+    /* ⚠ FOUR WIDE. "160m" is the longest real band string and must not be
+     * clipped to "160" - that reads as a different band. */
+    js8_chat_msg_t w = mk(1791554040, 1188, "HB9BV", "X", false, false);
+    snprintf(w.band, sizeof(w.band), "160m");
+    js8_page_render(&w, 1, NOW, L, M);
+    CHECK(at(JS8_PAGE_ROW0, 12, "160m"), "160m was clipped: '%.4s'",
+          &L[JS8_PAGE_ROW0][12]);
+    CHECK(L[JS8_PAGE_ROW0][16] == ' ', "160m ran into the sender column");
+
+    /* An entry stamped before the dial was known must not read as a band. */
+    js8_chat_msg_t u = mk(1791554040, 1188, "HB9BV", "X", false, false);
+    js8_page_render(&u, 1, NOW, L, M);
+    CHECK(at(JS8_PAGE_ROW0, 12, JS8_PAGE_UNKNOWN_BAND),
+          "an unknown band is blank rather than marked: '%.4s'",
+          &L[JS8_PAGE_ROW0][12]);
+}
+
 static void t_rows_for_agrees_with_render(void)
 {
     printf("js8_page_rows_for agrees with what render draws\n");
@@ -253,6 +302,7 @@ int main(void)
     t_empty_text_still_takes_a_row();
     t_overflow_stops_at_the_last_row();
     t_row_map_names_the_message_each_row_belongs_to();
+    t_band_column();
     t_rows_for_agrees_with_render();
 
     printf(fails ? "\nFAIL (%d)\n" : "\nPASS\n", fails);

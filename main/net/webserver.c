@@ -354,6 +354,14 @@ static void add_ft8_tx_status(cJSON *root)
                     cJSON_AddStringToObject(o, "sender", cm.sender);
                     cJSON_AddStringToObject(o, "text",   cm.text);
                     cJSON_AddNumberToObject(o, "hz",     cm.freq_hz);
+                    /* ⛔ THE BAND THE CONVERSATION RAN ON. "hz" above is the
+                     * AUDIO OFFSET, so the client cannot work the band out
+                     * from this response, and /api/log DRAINS on read - it
+                     * cannot be reconstructed later either. It has to be in
+                     * the JSON. Emitted even when empty, so a client can tell
+                     * "not known" from "field missing in an old build". */
+                    cJSON_AddStringToObject(o, "band",   cm.band);
+                    cJSON_AddNumberToObject(o, "dial_hz", cm.dial_hz);
                     cJSON_AddNumberToObject(o, "utc",    (double)cm.first_utc);
                     cJSON_AddNumberToObject(o, "frames", cm.frames);
                     cJSON_AddBoolToObject(o,   "active", cm.active);
@@ -382,23 +390,6 @@ static void add_ft8_tx_status(cJSON *root)
                 cJSON_AddBoolToObject(o, "compressed", ft.compressed);
                 cJSON_AddBoolToObject(o, "truncated",  ft.truncated);
                 cJSON_AddItemToArray(arr, o);
-            }
-        }
-        /* The axes, same source and same units. Drawn UNDER the text by the
-         * browser, as on the glass: a line through the plot crosses
-         * satellites, and the satellite is what the operator reads. */
-        {
-            gps_page_axis_t ax[GPS_PAGE_MAX_AXES];
-            int na = gps_page_axes(ax, GPS_PAGE_MAX_AXES);
-            cJSON *arr2 = cJSON_AddArrayToObject(root, "axes");
-            for (int i = 0; arr2 && i < na; i++) {
-                cJSON *o = cJSON_CreateObject();
-                if (!o) break;
-                cJSON_AddNumberToObject(o, "x0", ax[i].x0);
-                cJSON_AddNumberToObject(o, "y0", ax[i].y0);
-                cJSON_AddNumberToObject(o, "x1", ax[i].x1);
-                cJSON_AddNumberToObject(o, "y1", ax[i].y1);
-                cJSON_AddItemToArray(arr2, o);
             }
         }
     }
@@ -4777,6 +4768,39 @@ static esp_err_t gps_get_handler(httpd_req_t *req)
             }
         }
 
+        /* ⛔ THE N-S AND E-W AXES, and they belong HERE - in the handler the
+         * sky plot actually polls.
+         *
+         * This block existed and was correct, but it had been written into
+         * add_ft8_tx_status() in the /api/status handler instead: it put
+         * "axes" on the STATUS root, and only while the FT8 screen was up.
+         * The GPS modal polls /api/gps, so the key was never in the response
+         * it reads and the plot drew rings with no bearing reference.
+         * Measured 2026-10-11: "axes" present in /api/status on the FT8
+         * screen, absent on the panadapter, absent from /api/gps always.
+         * The browser painter (gpsDrawRings) had always iterated j.axes and
+         * needed no change - which is why this read as a missing feature
+         * rather than as a misplaced twenty lines.
+         *
+         * Same source and same cell units as the rings above, so the browser
+         * and the glass cannot disagree about where north is. The browser
+         * draws them UNDER the text, as the glass does: a line through the
+         * plot crosses satellites, and the satellite is what he reads. */
+        {
+            gps_page_axis_t ax[GPS_PAGE_MAX_AXES];
+            int na = gps_page_axes(ax, GPS_PAGE_MAX_AXES);
+            cJSON *arr2 = cJSON_AddArrayToObject(root, "axes");
+            for (int i = 0; arr2 && i < na; i++) {
+                cJSON *o = cJSON_CreateObject();
+                if (!o) break;
+                cJSON_AddNumberToObject(o, "x0", ax[i].x0);
+                cJSON_AddNumberToObject(o, "y0", ax[i].y0);
+                cJSON_AddNumberToObject(o, "x1", ax[i].x1);
+                cJSON_AddNumberToObject(o, "y1", ax[i].y1);
+                cJSON_AddItemToArray(arr2, o);
+            }
+        }
+
         cJSON *lines = cJSON_AddArrayToObject(root, "lines");
         for (int r = 0; lines && r < GPS_PAGE_ROWS; r++) {
             /* Trailing blanks trimmed - the browser pads with CSS, and 24 rows
@@ -4913,6 +4937,13 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
         cJSON *who = cJSON_AddArrayToObject(root, "senders");
         for (int i = 0; who && i < have; i++)
             cJSON_AddItemToArray(who, cJSON_CreateString(sc->msgs[i].sender));
+
+        /* The band each message was heard on, indexed the same way `senders`
+         * and `row_msg` are. The rendered `lines` carry it too, but a client
+         * that wants to GROUP by band must not have to parse a text grid. */
+        cJSON *bands = cJSON_AddArrayToObject(root, "bands");
+        for (int i = 0; bands && i < have; i++)
+            cJSON_AddItemToArray(bands, cJSON_CreateString(sc->msgs[i].band));
 
         heap_caps_free(sc);
     }

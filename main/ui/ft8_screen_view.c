@@ -3576,12 +3576,19 @@ static void js8_tabs_apply(void)
         else     lv_obj_add_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* ⛔ THE BUTTON AND THE STATUS LINE WERE BOTH AT y=393. The button is
-     * created later, so it was drawn ON TOP of "RX: N decoded" and the
-     * operator saw the text through its edges. The status line moves down one
-     * grid slot (60+8) in JS8 only. 461 + two wrapped lines at font 24 ends at
-     * 509, clear of the override button row that starts at pane-local 540. */
-    if (s_lbl_tx) lv_obj_set_pos(s_lbl_tx, 0, js8 ? 461 : 393);
+    /* ⛔ THE STATUS LINE STAYS AT 393 IN BOTH MODES - do not re-add a shift.
+     *
+     * The history, because it was wrong twice. The Free text button was first
+     * created at (0,393), the status line's own position; being created later
+     * it drew ON TOP of "RX: N decoded" and the text showed through its edges.
+     * c84c1150 fixed that by pushing the STATUS LINE down to 461 in JS8, which
+     * stopped the overlap but left the text with 461..509 (two wrapped lines
+     * at font 24) against an override row starting at 540 - so it was squeezed
+     * exactly when TX made it worth reading. Operator, 2026-10-11.
+     *
+     * The button moved to the TXCQ parity cell instead (see its creation), so
+     * 393 is clear in JS8 too and the status line keeps its whole slot. */
+    if (s_lbl_tx) lv_obj_set_pos(s_lbl_tx, 0, 393);
 
     if (s_tabbar) {
         if (js8) lv_obj_clear_flag(s_tabbar, LV_OBJ_FLAG_HIDDEN);
@@ -4041,15 +4048,40 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
-    /* "Free text" - one row below Call CQ, same full width, and shown only in
-     * JS8 (js8_tabs_apply). y=393 is the next slot on the 60+8 grid. */
+    /* "Free text" - JS8 only (js8_tabs_apply), and it sits in the TXCQ parity
+     * button's cell: same position, same size.
+     *
+     * ⭐ THE CELL IS FREE EXACTLY WHEN THIS BUTTON IS SHOWN. s_btn_parity is
+     * hidden in JS8 (parity is an FT8 convention - see the measurement in
+     * js8_tabs_apply), so (0,197) 140x52 is empty in the one mode that has a
+     * Free text button. Nothing had to move to make room.
+     *
+     * ⛔ IT USED TO BE AT (0,393), 288x60, AND THAT WAS THE SECOND WRONG
+     * PLACE. First it was drawn over the RX status line; c84c1150 then pushed
+     * the status label down to 461 to clear it. But 461 plus two wrapped lines
+     * at font 24 runs to 509, against an override button row starting at 540 -
+     * so during TX the status text was boxed into what was left, which is what
+     * the operator reported on 2026-10-11. Moving the BUTTON instead of the
+     * TEXT gives the status line its whole slot back; js8_tabs_apply no longer
+     * shifts it.
+     *
+     * ⚠ FONT 24 IN A 140 px CELL, at the operator's request 2026-10-11 (it
+     * shares the row with "TX 1500 Hz" at font 20, which is smaller). Nine
+     * characters at 24 is close to the cell width, so the button's horizontal
+     * padding is zeroed and the label is bounded to the button: without both,
+     * the glyphs run over the rounded edge instead of being clipped. Measured
+     * on /ss.bmp afterwards rather than assumed - see below. */
     s_btn_js8_text = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_js8_text, 288, 60);
-    lv_obj_set_pos(s_btn_js8_text, 0, 393);
+    lv_obj_set_size(s_btn_js8_text, 140, 52);
+    lv_obj_set_pos(s_btn_js8_text, 0, 197);
     lv_obj_set_style_bg_color(s_btn_js8_text, lv_color_hex(JS8_BTN_HEX), 0);
     lv_obj_set_style_border_color(s_btn_js8_text, lv_color_hex(JS8_ACCENT_HEX), 0);
     lv_obj_set_style_border_width(s_btn_js8_text, 2, 0);
     lv_obj_set_style_radius(s_btn_js8_text, 8, 0);
+    /* The default button padding would leave font 24 about 20 px short of the
+     * cell. The label is centred in the button either way, so giving it the
+     * full 140 px costs nothing and is what lets the larger font fit. */
+    lv_obj_set_style_pad_hor(s_btn_js8_text, 0, 0);
     lv_obj_add_event_cb(s_btn_js8_text, js8_text_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_btn_js8_text, LV_OBJ_FLAG_HIDDEN);   /* js8_tabs_apply decides */
     {
@@ -4057,6 +4089,11 @@ void ft8_screen_view_init(lv_obj_t *parent)
         lv_label_set_text(ftl, "Free text");
         lv_obj_set_style_text_color(ftl, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(ftl, &lv_font_montserrat_24, 0);
+        /* Bound to the button and centred as TEXT, the same rule the override
+         * row learned: lv_obj_center() alone centres the label BLOCK, so a
+         * block wider than 140 px would straddle the button's edges. */
+        lv_obj_set_width(ftl, 140);
+        lv_obj_set_style_text_align(ftl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(ftl);
     }
 
