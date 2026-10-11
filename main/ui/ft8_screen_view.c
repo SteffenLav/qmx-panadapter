@@ -3747,16 +3747,20 @@ static void build_js8_tabs(void)
          * band sat under the Hz heading and read as part of the offset -
          * operator, 2026-10-11, from the glass.
          *
-         * Each title is CENTRED over its column's own width, which is why the
-         * widths are here rather than just the start columns. MESSAGE stays
-         * LEFT: it heads a 37-column field of variable-length text that begins
-         * at the left edge, so a centred title would float away from the first
-         * word it describes. */
+         * A title is centred over its column's own width, which is why the
+         * widths are here rather than just the start columns.
+         *
+         * ⚠ CENTRED ONLY WHERE THE DATA FILLS THE CELL. AGE, Hz and BAND are
+         * fixed-width fields that nearly fill theirs, so a centred title sits
+         * over its own numbers. CALL and MESSAGE hold variable-length text
+         * LEFT-ALIGNED in a wide cell - 9 and 37 columns - so a centred title
+         * floats away from the first character it names: "CALL" sat well to
+         * the right of M9LOV on the glass, 2026-10-11. Both stay left. */
         struct { const char *t; int col; int w; bool centre; } ct[5] = {
             { "AGE",     JS8_PAGE_COL_AGE,    JS8_PAGE_W_AGE,    true  },
             { "Hz",      JS8_PAGE_COL_HZ,     JS8_PAGE_W_HZ,     true  },
             { "BAND",    JS8_PAGE_COL_BAND,   JS8_PAGE_W_BAND,   true  },
-            { "CALL",    JS8_PAGE_COL_SENDER, JS8_PAGE_W_SENDER, true  },
+            { "CALL",    JS8_PAGE_COL_SENDER, JS8_PAGE_W_SENDER, false },
             { "MESSAGE", JS8_PAGE_COL_TEXT,   JS8_PAGE_W_TEXT,   false },
         };
         for (int i = 0; i < 5; i++) {
