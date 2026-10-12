@@ -743,10 +743,11 @@ worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4/JS8 → 
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
 **Calibrate Power measures what your QMX actually does, on your antenna
-system, at every setting — instead of guessing from a rule of thumb.** From
-the drawer (**Radio → Antenna Tune → Calibrate Power**, or "Calibrate this
-band" the first time you open Declared power / Output power on an
-uncalibrated band), it sweeps *Max. PA voltage* up through the table on a
+system, at every setting — instead of guessing from a rule of thumb.** You reach it
+from the drawer, in the Declared power section on the WSPR page or the Output
+power section elsewhere: **"Calibrate this band"** appears there while the
+band has no data, and **"Recalibrate this band"** once it has. From there it
+sweeps *Max. PA voltage* up through the table on a
 **dummy load** and records the real RF output at each step with the QMX's own
 `PC;` readback. Takes a few minutes per band; results are saved per band and
 used from then on. The window tells you how many steps it will key, and how
