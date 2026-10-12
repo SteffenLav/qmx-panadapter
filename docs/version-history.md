@@ -3953,6 +3953,8 @@ decode none of them. It predates this release and none of the above touches it.
 
 - **Pause Button** for mid-QSO — Skip one transmission to check if the QSO slot is still open, then resume with the same message. Shown in the mid-QSO button row (alongside Re-send / RR73 / 73) during active FT8/FT4 exchanges (WAIT_RPT / WAIT_ROGER / WAIT_RR73).
 
+- **Calibrate Power now sweeps the full 1.0–12.0 V range** on every radio, and puts your *Max. PA voltage* back when it finishes. It used to stop at whatever that setting held. The trouble is that Declared power, the Output power slider and WSPR all write that same setting, so the figure in it is usually one this app put there rather than a limit you chose — one station calibrated a 600 mW ceiling because a WSPR session had left his radio at 6.0 V, and every reconnect re-applied it *(Rick W5NR)*. What protects a radio that cannot reach the top of the range is the measured plateau: the sweep stops early once the power stops rising. ⚠ **This line was added on 2026-10-12.** The change shipped here and was recorded in no release entry, so the manual went on describing the old behaviour until Bryan N0LUF asked why the window announced 12 V when he had set 10.
+
 - **Audio is BETA** — First-generation implementation subject to further development. Real-world feedback shapes the next iterations. See [Audio Features](docs/mkdocs/guide/audio.md) for detailed docs, bandwidth requirements, limitations, and future work (web I/Q streaming to your PC for local audio processing).
 
 All audio and UI changes tested on hardware. v1.16.0 includes the taskLVGL PSRAM fix (internal RAM 7 KB → 50 KB) from v1.15.4 soaked overnight on the dev bench.

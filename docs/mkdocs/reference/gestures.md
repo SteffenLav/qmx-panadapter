@@ -38,6 +38,7 @@ Tap any item on the top bar to open its selector:
 |---|---|
 | **Tap** | Tune to that frequency |
 | **Drag (1 finger)** | Pan left/right |
+| **Hold ~250 ms, then drag** | Precise tune: a cyan cursor appears and snaps grid-to-grid as you move, and the radio follows when you lift. The hold is what separates it from a pan - a quick drag pans, a held drag tunes |
 | **Pinch (2 fingers)** | Zoom in/out |
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
