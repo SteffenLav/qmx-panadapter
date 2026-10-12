@@ -268,19 +268,30 @@ void adif_log_init(void)
     // (runs once, at boot, before any file is opened) and self-healing, so
     // it costs nothing on an already-healthy card and fixes this class of
     // fault on one that isn't.
-    esp_err_t chk = esp_spiffs_check("storage");
-    if (chk != ESP_OK) {
-        ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
-    }
-    // check() fixes CONSISTENCY (an orphaned/corrupt index entry); it does
-    // not promise to reclaim space. gc() is the one that actively walks
-    // pages looking to free some - request enough for the delete-record
-    // temp file (a full copy of the log) plus real headroom. Field-tested
-    // 2026-08-25: check() alone reported success but a subsequent delete
-    // still hit ENOSPC, so both are needed, not either alone.
+    // ⛔ GC FIRST, THEN CHECK - THE OTHER ORDER WAS A MEASURED NO-OP.
+    // This ran check() then gc() until 2026-10-12. A repair is a WRITE, so on
+    // a partition with no free block check() cannot apply what it finds: over
+    // 979 boots in one capture it printed the same unrepaired object every
+    // single time and fixed it never -
+    //   E SPIFFS: CHECK: type:PAGE, report:DELETE BAD FILE, 8003:0
+    // 86 times at mount, 245 more at runtime, 0 successes. gc() reclaims the
+    // blocks first, so check() then has somewhere to write.
+    //
+    // Both calls are still needed, which is the part 2026-08-25 got right:
+    // check() fixes CONSISTENCY (an orphaned or corrupt index entry) and does
+    // not promise to reclaim space; gc() actively walks pages to free some and
+    // does not fix an index. check() alone reported success and a subsequent
+    // delete still hit ENOSPC. Only the ORDER was wrong.
+    //
+    // 65536 is enough for the delete-record temp file (a full copy of the log)
+    // plus headroom.
     esp_err_t gc = esp_spiffs_gc("storage", 65536);
     if (gc != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS gc: %s (continuing anyway)", esp_err_to_name(gc));
+    }
+    esp_err_t chk = esp_spiffs_check("storage");
+    if (chk != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
     }
 
     // Check free space and warn if low (< 64 KB).
@@ -878,8 +889,11 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     FILE *out = fopen(TMP_PATH, "w");
     if (!out && errno == ENOSPC) {
         // Same live self-heal as the single-record path above.
-        esp_spiffs_check("storage");
+        // gc before check - see adif_log_init(): a full partition cannot
+        // write a repair, so check() first is a no-op on exactly the
+        // condition that brought us here.
         esp_spiffs_gc("storage", 65536);
+        esp_spiffs_check("storage");
         out = fopen(TMP_PATH, "w");
     }
     if (!out) {
@@ -983,8 +997,10 @@ bool adif_log_delete_record(int idx)
         // then retry once.
         size_t t0 = 0, u0 = 0, t1 = 0, u1 = 0;
         esp_spiffs_info("storage", &t0, &u0);
-        esp_err_t chk = esp_spiffs_check("storage");
+        // gc BEFORE check - see adif_log_init(). A repair is a write, and
+        // ENOSPC is precisely the state in which it cannot land.
         esp_err_t gc  = esp_spiffs_gc("storage", 65536);
+        esp_err_t chk = esp_spiffs_check("storage");
         esp_spiffs_info("storage", &t1, &u1);
         ESP_LOGW(TAG, "delete record #%d: %s ENOSPC on open - check=%s gc=%s, "
                       "used %zuKB/%zuKB -> %zuKB/%zuKB, retrying once",

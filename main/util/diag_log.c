@@ -13,7 +13,7 @@
 #include "esp_heap_caps.h"
 #include "psram_task.h"
 #include "esp_app_desc.h"
-#include "esp_spiffs.h"   // esp_spiffs_check() on the recovery path
+#include "esp_spiffs.h"   // esp_spiffs_gc() after a rotation
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -304,13 +304,36 @@ size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_ne
 // guarantee the log survives power-off with NO card, a background task also
 // appends the ring to a small rolling file on the internal SPIFFS flash.
 //
-// Kept deliberately small (256 KB, one rotation) since SPIFFS (1 MB) is shared
-// with the ADIF QSO log, and flushed only every 30 s and only when there are
-// new bytes, so flash wear is proportional to actual log volume (≈0 at the
-// deduplicated steady state). Served to the web UI via /api/log/saved.
+// Flushed only every 30 s and only when there are new bytes, so flash wear is
+// proportional to actual log volume (≈0 at the deduplicated steady state).
+// Served to the web UI via /api/log/saved.
+//
+// ⛔ 128 KB, NOT 256 KB - AND THE 256 KB BUDGET NEVER DELIVERED ITS HISTORY.
+// Two generations at 256 KB is 512 KB live on a partition SPIFFS reports as
+// 934 KB usable, and SPIFFS cannot garbage-collect without whole free blocks
+// to relocate live pages into. Measured 2026-10-12 over 979 boots in one
+// capture:
+//
+//   diag.0.log  median 262,520 B  (the cap, as designed)
+//   partition   median 512 KB used, PEAK 743 KB of 934 KB
+//   esp_spiffs_gc() at mount returned SPIFFS_ERR_FULL (-10001) on 82 boots
+//   "flash-persist: rotated to free space" (the ENOSPC path) fired 251 times
+//
+// So at the 512 KB budget the log rotates on ENOSPC - DISCARDING a whole
+// generation early - a few hundred times rather than at its own cap, and the
+// surviving history is both smaller than 512 KB and unpredictable. 128 KB caps
+// live at 256 KB, which leaves ~450 KB for SPIFFS to collect in.
+//
+// ⚠ This is the SECOND attempt at the same fault. CONFIG_SPIFFS_GC_MAX_RUNS
+// was raised 10 -> 32 on 2026-08-18 for exactly this (see sdkconfig.defaults),
+// which treated the symptom: GC still cannot free a block that does not exist.
+// Do not raise it again instead of shrinking the budget.
+//
+// ⚠ THE TRADE IS REAL: the flash copy now holds 256 KB of history instead of
+// a nominal 512 KB. A microSD card is still the answer for a long session.
 #define DIAG_FLASH_PATH     "/spiffs/diag.log"
 #define DIAG_FLASH_PATH_0   "/spiffs/diag.0.log"
-#define DIAG_FLASH_MAX      (256 * 1024)
+#define DIAG_FLASH_MAX      (128 * 1024)
 #define DIAG_FLASH_FLUSH_MS 30000
 
 static uint64_t s_flash_cursor = 0;   // position in s_total space
@@ -409,13 +432,25 @@ static void diag_persist_task(void *arg)
                  * nothing will free. */
                 if (werr == ENOSPC || !f || fail_streak >= 15) {
                     if (f) fclose(f);
-                    /* Give SPIFFS a chance to reclaim orphaned index pages
-                     * before assuming the space is really gone - the same
-                     * check/gc adif_log_init() runs at mount, which is what
-                     * made a merely-fragmented partition self-heal there. */
-                    esp_spiffs_check("storage");
+                    /* ⛔ esp_spiffs_check() USED TO RUN HERE, BEFORE THE ROTATE,
+                     * and it was a measured no-op 331 times out of 331. On a
+                     * FULL filesystem the check has nowhere to write its
+                     * repair, so every call printed the same unrepaired object
+                     * at error level and changed nothing:
+                     *
+                     *   E SPIFFS: CHECK: type:PAGE, report:DELETE BAD FILE, 8003:0
+                     *
+                     * - 331 identical lines across one capture, 245 of them at
+                     * runtime, one per ENOSPC rotation. It also scans the whole
+                     * partition each time, on the task that is trying to write.
+                     *
+                     * Free the space FIRST, then collect. gc() is the call that
+                     * reclaims a deleted generation's blocks; check() repairs
+                     * consistency and belongs at mount, where adif_log_init()
+                     * already runs it with room to work. */
                     remove(DIAG_FLASH_PATH_0);
                     rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
+                    esp_spiffs_gc("storage", DIAG_FLASH_MAX);
                     f = fopen(DIAG_FLASH_PATH, "w");
                     bytes = 0;
                     fail_streak = 0;
@@ -439,7 +474,20 @@ static void diag_persist_task(void *arg)
                 fclose(f);
                 remove(DIAG_FLASH_PATH_0);
                 rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
+                /* Collect the generation we just dropped. SPIFFS only garbage-
+                 * collects when it needs a page and only for
+                 * CONFIG_SPIFFS_GC_MAX_RUNS attempts, so without this the
+                 * deleted pages stay counted as used until a write FAILS - and
+                 * that failure is the ENOSPC path below, which is what the 251
+                 * measured early rotations were. Right after a rename is the
+                 * cheap moment: whole blocks have just become free. */
+                esp_spiffs_gc("storage", DIAG_FLASH_MAX);
                 f = fopen(DIAG_FLASH_PATH, "w");
+                /* This rotation was SILENT until 2026-10-12, which is why the
+                 * capture could only count the ENOSPC ones. Saying which of
+                 * the two happened is the instrument for the budget change. */
+                ESP_LOGI(TAG, "flash-persist: rotated at the %u KB cap",
+                         (unsigned)(DIAG_FLASH_MAX / 1024));
                 bytes = 0;
                 if (!f) {
                     ESP_LOGW(TAG, "flash-persist: reopen after rotate failed (%s)", strerror(errno));
