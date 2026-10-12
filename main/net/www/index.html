@@ -702,6 +702,16 @@
   }
   #ft8-actions button:hover:not(:disabled),
   #ft8-actions select:hover,
+  /* The WSPR page owns the dial, so the top bar's Band/Mode/BW/Zoom are inert
+     while it is up - the same rule the Tab5 has always had, and what
+     guide/wspr.md has always said. pointer-events:none is the part that
+     matters: these pills LOOKED inactive to John W5JSS and still fired,
+     because nothing stopped the click. Freq is deliberately NOT in this set. */
+  .pill.dial-locked {
+    opacity: .45;
+    pointer-events: none;
+    cursor: default;
+  }
   #wspr-actions button:hover:not(:disabled),
   #wspr-actions select:hover { background: var(--accent); color: #000; }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
@@ -6959,6 +6969,20 @@ async function tick() {
          else: neither decode page produces them, so both hide for FT8 and for
          WSPR alike. One rule for the page - show what the Tab5 is showing. */
       const noPan = isFt8 || isWspr;
+      /* Band/Mode/BW/Zoom belong to the panadapter's idea of the radio; on
+         the WSPR page that page owns the dial. Disabled rather than merely
+         dimmed - the firmware refuses these four with a reason now, and a
+         control that is offered and then refused is worse than one that is
+         plainly unavailable. Freq stays live on purpose, so a beacon off the
+         standard dial frequency can still be chased. */
+      ["band", "mode", "bw", "zoom"].forEach((id) => {
+        const pill = document.getElementById("pill-" + id);
+        if (!pill) return;
+        pill.classList.toggle("dial-locked", isWspr);
+        pill.title = isWspr
+          ? "The WSPR page owns the dial - use its own band button, or leave the page"
+          : "";
+      });
       document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
       document.getElementById("split-handle").style.display  = noPan ? "none" : "";

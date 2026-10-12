@@ -1418,6 +1418,58 @@ static esp_err_t status_handler(httpd_req_t *req)
     return err;
 }
 
+/* ⛔ THE WSPR PAGE OWNS THE DIAL, AND THE BROWSER USED TO IGNORE THAT.
+ *
+ * On the Tab5 the top bar's Band, Mode, BW and Zoom are greyed out and inert
+ * while the WSPR page is up (ui.c greys them on UI_MODE_WSPR), and
+ * guide/wspr.md documents exactly that. The web page drew the same controls
+ * grey and then acted on them anyway, because nothing here ever asked which
+ * screen was in front.
+ *
+ * John W5JSS, 2026-10-12, v1.17.1: he picked 20 m from the browser's top row.
+ * set_band wrote the band CENTRE - 14074000, the FT8 frequency - while WSPR
+ * kept its own dial of 1.8366 MHz, so the radio was on 20 m FT8 while WSPR
+ * carried on capturing and labelling its spots 160 m. No spots, a mismatch
+ * warning he had to go and read on the glass, and his own signal reported on
+ * a band he was not on. He also changed Mode from DiGi to LSB the same way.
+ *
+ * ⚠ THE GUIDE ALREADY DESCRIBED THIS FAILURE. It is written up as a
+ * v1.12.0 bug where the top bar overlapped the WSPR panel and took the touch:
+ * "picking a band from it wrote an FT8 frequency to the radio while WSPR
+ * carried on capturing and labelling its spots with the band it thought it
+ * was on." That was fixed on the TOUCH path only. The identical consequence
+ * sat in the API for ten releases because the fix stopped at the instance.
+ *
+ * Decided by the operator 2026-10-13: REFUSE, as the Tab5 does - "nothing
+ * else makes sense". Not redirect: a band change that silently moved the WSPR
+ * dial would be a third behaviour for one control.
+ *
+ * ⭐ Freq is NOT guarded, deliberately. The guide says "Only Freq stays
+ * live, so a beacon found off the standard dial frequency can still be chased
+ * by typing it in", and that is a real operating need.
+ *
+ * It answers with a REASON rather than ok:false alone. A silent refusal is
+ * what the greyed-but-live control already was. */
+static bool wspr_owns_the_dial(httpd_req_t *req, cJSON *root, const char *what)
+{
+    if (ui_mode_get() != UI_MODE_WSPR) return false;
+    /* 256, not 160: -Werror=format-truncation caught the longer wording
+     * overflowing by ten bytes, which would have shipped a refusal whose
+     * own JSON was cut mid-string. */
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             /* ⚠ The advice has to fit ALL FOUR. The first wording said
+              * "use the WSPR page's own band button", which is only true for
+              * Band - that page has no Mode, BW or Zoom control at all. */
+             "{\"ok\":false,\"error\":\"the WSPR page owns the dial - %s is "
+             "inactive there, as it is on the Tab5. That page sets its own band; "
+             "leave it to reach the panadapter's controls.\"}", what);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, buf);
+    return true;
+}
+
 static esp_err_t cmd_handler(httpd_req_t *req)
 {
     char buf[256];
@@ -1502,6 +1554,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             ui_request_bandplan_view((int64_t)item->valuedouble);
         }
     } else if (action && strcmp(action, "set_band") == 0) {
+        if (wspr_owns_the_dial(req, root, "Band")) return ESP_OK;
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
             uint32_t center_hz = (uint32_t)item->valuedouble;
@@ -1526,6 +1579,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             ui_update_frequency(want);
         }
     } else if (action && strcmp(action, "set_mode") == 0) {
+        if (wspr_owns_the_dial(req, root, "Mode")) return ESP_OK;
         const char *mode = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
         /* ⛔ cat_request_mode(), NOT cat_set_mode(). This was the direct
          * call, whose return value was discarded - and cat_set_mode() SHARES
@@ -1548,6 +1602,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * radio stayed in the previous mode. cat_request_mode is retried". */
         if (mode) cat_request_mode(mode);
     } else if (action && strcmp(action, "set_bw") == 0) {
+        if (wspr_owns_the_dial(req, root, "BW")) return ESP_OK;
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
             uint32_t bw = (uint32_t)item->valuedouble;
@@ -1576,6 +1631,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         settings_set_still_notice_done(true);
         ESP_LOGI(TAG, "web: still display -> %s", v ? "on" : "off");
     } else if (action && strcmp(action, "set_zoom") == 0) {
+        if (wspr_owns_the_dial(req, root, "Zoom")) return ESP_OK;
         cJSON *item = cJSON_GetObjectItem(root, "zoom");
         if (cJSON_IsNumber(item)) {
             if (display_lock(50)) {
