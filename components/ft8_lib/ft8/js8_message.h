@@ -106,10 +106,32 @@ static inline bool js8_frame_is_data(js8_frame_type_t t)
 #define JS8_CMD_NO         26
 #define JS8_CMD_YES        27
 #define JS8_CMD_73         28
+/* 29 is the heartbeat-network variant of SNR. It carries a number in the same
+ * 6 bits as plain SNR and is the ONLY other command that does, which is why
+ * js8_pack_cmd() has to know about it. */
+#define JS8_CMD_HEARTBEAT_SNR 29
 
 /* "No number in this frame". packNum maps -30..+31 onto 1..62, so 0 is free
  * and is what the reference sends when the command carries no number. */
 #define JS8_NUM_NONE (-128)
+
+/* "This frame carries no command". The vocabulary fills 0..31 and index 0 is
+ * a real command (SNR?), so the sentinel cannot be 0 - see
+ * feedback_cache_sentinel_must_not_collide. */
+#define JS8_CMD_NONE 0xFFu
+
+/* The Compound frames' 16-bit `extra` field is partitioned, not a single
+ * value. From varicode.cpp:
+ *
+ *   nbasegrid = 180*180  = 32400   extra <= this        -> a packed grid
+ *   nusergrid = +10      = 32410   this <= extra < max  -> a packed command
+ *   nmaxgrid  = (1<<15)-1 = 32767  extra == this        -> neither
+ *
+ * ⚠ The band 32401..32409 means NEITHER and is not reachable from the
+ * packer. A frame carrying one is not corrupt, it just says nothing extra. */
+#define JS8_NBASEGRID 32400u
+#define JS8_NUSERGRID 32410u
+#define JS8_NMAXGRID  0x7FFFu
 
 typedef struct {
     char    from[16];      /* our callsign, or a group token like "@ALLCALL" */
@@ -138,6 +160,56 @@ bool js8_unpack_directed(const uint8_t frame[JS8_FRAME_BYTES], js8_directed_t* o
  * for none. The bottom 3 bits of the last byte are the wording index. */
 bool js8_pack_heartbeat(const js8_heartbeat_t* msg, uint8_t frame[JS8_FRAME_BYTES]);
 bool js8_unpack_heartbeat(const uint8_t frame[JS8_FRAME_BYTES], js8_heartbeat_t* out);
+
+/* ---- the two Compound frames (J9) ---------------------------------------
+ *
+ * ⭐ WHY THESE EXIST AT ALL. js8_frame_to_text() refused both outright
+ * until 2026-10-12, which was the right refusal for the wrong duration:
+ * rendering a compound callsign through the 28-bit codec would put a
+ * DIFFERENT station on the screen, but refusing meant every portable,
+ * special-event and compound-prefix station was silently invisible. The 50-bit
+ * codec that carries them has been here since J2 (js8_pack_alnum50) - only the
+ * two layouts were missing.
+ *
+ * ⛔ THE LAYOUT IS THE HEARTBEAT'S, BIT FOR BIT: [3][50][11],[5][3] = 72.
+ * varicode.cpp uses ONE function, packCompoundFrame(), for FrameHeartbeat,
+ * FrameCompound and FrameCompoundDirected. Only the reading of the 16-bit
+ * `extra` differs, and it differs completely:
+ *
+ *   Heartbeat: bit 15 = isAlt (CQ vs HB), bits 14..0 = packGrid
+ *   Compound:  the WHOLE 16 bits are one number, partitioned by the three
+ *              constants above into a grid, a command, or nothing
+ *
+ * So a Heartbeat's grid and a Compound's grid are NOT the same field read
+ * twice - treating them as such would read a command as a locator in the
+ * southern hemisphere.
+ *
+ * ⚠ THE TYPE DOES NOT PICK THE BRANCH. unpackCompoundMessage() decides
+ * grid-or-command from `extra` alone and ignores which of the two frame types
+ * it was handed, so this does the same. FrameCompound with a command, and
+ * FrameCompoundDirected with a grid, both occur. */
+typedef struct {
+    char    call[16];   /* up to 11 characters; '/' is legal at 3 and 7 */
+    char    grid[5];    /* 4 characters, or "" */
+    uint8_t cmd;        /* a directed_cmds index, or JS8_CMD_NONE */
+    int     num;        /* -30..+31 with an SNR command, else JS8_NUM_NONE */
+    uint8_t bits3;      /* 0..7, the wording index the reference passes as 0 */
+    bool    directed;   /* false = FrameCompound, true = FrameCompoundDirected */
+} js8_compound_t;
+
+/* A command wins over a grid: the reference's packCompoundMessage() sets
+ * `extra` from the command when there is one and only then falls back to the
+ * grid, so a struct carrying both packs the command. Returns false when the
+ * callsign will not pack (packed == 0), as the 28-bit path does. */
+bool js8_pack_compound(const js8_compound_t* msg, uint8_t frame[JS8_FRAME_BYTES]);
+bool js8_unpack_compound(const uint8_t frame[JS8_FRAME_BYTES], js8_compound_t* out);
+
+/* The 8-bit command field inside `extra`. Split out because the SNR encoding
+ * is not the obvious one: an SNR command sets bit 7 and carries packNum's
+ * 1..62 in the low 6 bits, so cmd and num share one byte. `num6` is the
+ * PACKED number (js8_pack_num), not the dB value. */
+uint8_t js8_pack_cmd(uint8_t cmd, uint8_t num6);
+uint8_t js8_unpack_cmd(uint8_t value, uint8_t* out_num6);
 
 /* The frame type without unpacking the rest - the first 3 bits. */
 js8_frame_type_t js8_frame_type(const uint8_t frame[JS8_FRAME_BYTES]);

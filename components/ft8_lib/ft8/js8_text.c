@@ -168,10 +168,72 @@ bool js8_frame_to_text(const uint8_t frame[JS8_FRAME_BYTES], char* out, size_t o
 
     case JS8_FRAME_COMPOUND:
     case JS8_FRAME_COMPOUND_DIRECTED:
-        /* Out of scope (docs/js8-feasibility.md). Refusing is right: these
-         * carry compound callsigns, and rendering one with the 28-bit codec
-         * would put a DIFFERENT station's callsign on the screen. */
-        return false;
+    {
+        /* J9. These refused outright until 2026-10-12, and the refusal's
+         * REASON was sound - rendering a compound callsign through the 28-bit
+         * codec puts a DIFFERENT station on the screen - but the cost was that
+         * every portable, special-event and compound-prefix station was
+         * silently invisible. js8_unpack_compound() uses the 50-bit codec,
+         * which is the one that carries them.
+         *
+         * \u26d4 THE SHAPE IS NOT THE REFERENCE'S. unpackCompoundMessage()
+         * emits "<call>", "<call> <grid>" or "<call> <CMD>", and feeding that
+         * to this project would name the WRONG STATION: ft8_screen.c's
+         * extract_call() takes TOKEN 2 by default and returns false on a
+         * one-token line, so "PJ4/K1ABC JO65" enters the station table as
+         * "JO65" and a bare callsign is dropped. extract_grid() reads the LAST
+         * token. So each form is rendered in a shape those two already parse
+         * correctly, and the round-trip harness holds it. */
+        js8_compound_t c;
+        if (!js8_unpack_compound(frame, &c)) return false;
+        if (!c.call[0]) return false;
+
+        if (c.cmd != JS8_CMD_NONE)
+        {
+            /* A command with no addressee. "<....>" is the REFERENCE'S OWN
+             * spelling for "no callsign here" (varicode.cpp's basecalls, and
+             * js8_unpack_callsign already answers it), so it is not an
+             * invention - and putting it in the `to` slot is what makes
+             * extract_call() pick token 2, the sender. A compound DIRECTED
+             * frame carries only one callsign: JS8Call sends the recipient in
+             * a separate frame of the same transmission, which this does not
+             * yet join up. Showing the command under the right sender beats
+             * dropping it. */
+            /* ⛔ 24, NOT 16. The longest command text is "HEARTBEAT SNR"
+             * at 13, and with a report that is 17 characters plus the
+             * terminator. At 16 the harness printed "HEARTBEAT SNR +" - the
+             * command intact and the REPORT silently cut to its sign. */
+            char rest[24];
+            if ((c.cmd == JS8_CMD_SNR || c.cmd == JS8_CMD_HEARTBEAT_SNR) &&
+                c.num != JS8_NUM_NONE)
+            {
+                char r[8];
+                js8_fmt_report(c.num, r, sizeof(r));
+                snprintf(rest, sizeof(rest), "%s %s", js8_cmd_text(c.cmd), r);
+            }
+            else
+            {
+                snprintf(rest, sizeof(rest), "%s", js8_cmd_text(c.cmd));
+            }
+            snprintf(out, out_len, "<....> %s %s", c.call, rest);
+            return true;
+        }
+
+        /* Call plus grid, or the call on its own. "HB" and NOT "CQ": a
+         * Compound frame is a station identifying itself, usually as one half
+         * of a compound transmission, and spelling it CQ would invite the
+         * operator and the auto-answer gate to reply to something that never
+         * called. The same distinction JS8_FRAME_HEARTBEAT already draws.
+         *
+         * The lead token also does the parsing work: it fills the slot
+         * extract_call() skips, so token 2 is the callsign and token 3 is the
+         * locator, which is where extract_grid() looks. */
+        if (c.grid[0])
+            snprintf(out, out_len, "HB %s %s", c.call, c.grid);
+        else
+            snprintf(out, out_len, "HB %s", c.call);
+        return true;
+    }
 
     case JS8_FRAME_DATA:
     case JS8_FRAME_DATA_COMPRESSED:

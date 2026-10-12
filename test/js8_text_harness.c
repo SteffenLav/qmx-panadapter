@@ -251,19 +251,374 @@ static void test_report_range(void)
     CHECK(strcmp(buf, "+31") == 0, "99 clamped to '%s', expected +31\n", buf);
 }
 
-/* An unimplemented frame type must refuse rather than be rendered with the
- * wrong codec - it would put a different station's callsign on the screen. */
-static void test_compound_frames_refuse(void)
+/* ---- J9: the Compound frames ---------------------------------------------
+ *
+ * ft8_screen.c picks the station and the grid out of the RENDERED LINE, not
+ * out of the frame, so the shape js8_text.c chooses is a contract with it.
+ * Those two rules are reimplemented here, exactly as split_msg3() is above:
+ * if they drift, a compound station enters the table under its own locator and
+ * nothing fails loudly.
+ */
+
+/* ft8_screen.c extract_call(): token 2, or token 3 when token 1 is "CQ" and
+ * token 2 has no digit. Fewer than two tokens is a refusal. */
+static int screen_extract_call(const char* msg, char* out, size_t cap)
 {
+    const char* t[3] = {0,0,0};
+    size_t len[3] = {0,0,0};
+    int n = 0;
+    while (*msg == ' ') msg++;
+    while (*msg && n < 3) {
+        t[n] = msg;
+        size_t l = 0;
+        while (msg[l] && msg[l] != ' ') l++;
+        len[n] = l; n++; msg += l;
+        while (*msg == ' ') msg++;
+    }
+    if (n < 2) return 0;
+    int pick = 1;
+    int first_is_cq = (len[0] == 2 && t[0][0] == 'C' && t[0][1] == 'Q');
+    if (first_is_cq && n >= 3) {
+        int has_digit = 0;
+        for (size_t i = 0; i < len[1]; i++)
+            if (t[1][i] >= '0' && t[1][i] <= '9') has_digit = 1;
+        if (!has_digit) pick = 2;
+    }
+    size_t o = len[pick];
+    if (o >= cap) o = cap - 1;
+    memcpy(out, t[pick], o);
+    out[o] = '\0';
+    return o > 0;
+}
+
+/* ft8_screen.c extract_grid(): the LAST token, if it looks like a locator. */
+static void screen_extract_grid(const char* msg, char* out, size_t cap)
+{
+    out[0] = '\0';
+    const char* p = msg;
+    const char* last = 0; size_t ll = 0;
+    while (*p == ' ') p++;
+    while (*p) {
+        const char* tok = p; size_t l = 0;
+        while (p[l] && p[l] != ' ') l++;
+        last = tok; ll = l; p += l;
+        while (*p == ' ') p++;
+    }
+    if (!last || ll != 4) return;
+    if (last[0] < 'A' || last[0] > 'R') return;
+    if (last[1] < 'A' || last[1] > 'R') return;
+    if (last[2] < '0' || last[2] > '9') return;
+    if (last[3] < '0' || last[3] > '9') return;
+    size_t o = ll; if (o >= cap) o = cap - 1;
+    memcpy(out, last, o); out[o] = '\0';
+}
+
+/* A compound call with a grid. The station must come out of the rendered line
+ * as the STATION and not as its locator - which is what "<call> <grid>", the
+ * reference's own shape, would have given. */
+static void test_compound_with_grid(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "PJ4/K1ABC");
+    snprintf(c.grid, sizeof(c.grid), "JO65");
+    c.cmd = JS8_CMD_NONE;
+    c.num = JS8_NUM_NONE;
+
     uint8_t frame[JS8_FRAME_BYTES];
     char out[JS8_TEXT_MAX];
-    for (int t = 1; t <= 2; t++)
+    CHECK(js8_pack_compound(&c, frame), "pack compound+grid\n");
+    CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render compound+grid\n");
+    CHECK(strcmp(out, "HB PJ4/K1ABC JO65") == 0, "got '%s'\n", out);
+
+    char call[24] = "", grid[8] = "";
+    CHECK(screen_extract_call(out, call, sizeof(call)), "extract_call refused '%s'\n", out);
+    CHECK(strcmp(call, "PJ4/K1ABC") == 0, "station read as '%s'\n", call);
+    screen_extract_grid(out, grid, sizeof(grid));
+    CHECK(strcmp(grid, "JO65") == 0, "grid read as '%s'\n", grid);
+
+    /* NOT "CQ". A Compound frame is a station identifying itself, and
+     * spelling it CQ would invite a reply to something that never called. */
+    CHECK(strncmp(out, "CQ ", 3) != 0, "must not read as a CQ: '%s'\n", out);
+
+    js8_compound_t back;
+    CHECK(js8_unpack_compound(frame, &back), "unpack compound+grid\n");
+    CHECK(strcmp(back.call, "PJ4/K1ABC") == 0, "call round-trip '%s'\n", back.call);
+    CHECK(strcmp(back.grid, "JO65") == 0, "grid round-trip '%s'\n", back.grid);
+    CHECK(back.cmd == JS8_CMD_NONE, "cmd should be none, got %u\n", back.cmd);
+    CHECK(back.directed == false, "type should be FrameCompound\n");
+}
+
+/* No grid and no command: the 16-bit extra is nmaxgrid, which means NEITHER.
+ * Two tokens, so extract_call still works - a one-token line would be dropped
+ * by it outright. */
+static void test_compound_bare_call(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "OZ1LAV/P");
+    c.cmd = JS8_CMD_NONE;
+    c.num = JS8_NUM_NONE;
+
+    uint8_t frame[JS8_FRAME_BYTES];
+    char out[JS8_TEXT_MAX];
+    CHECK(js8_pack_compound(&c, frame), "pack bare compound\n");
+    CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render bare compound\n");
+    CHECK(strcmp(out, "HB OZ1LAV/P") == 0, "got '%s'\n", out);
+
+    char call[24] = "";
+    CHECK(screen_extract_call(out, call, sizeof(call)), "extract_call refused '%s'\n", out);
+    CHECK(strcmp(call, "OZ1LAV/P") == 0, "station read as '%s'\n", call);
+
+    js8_compound_t back;
+    CHECK(js8_unpack_compound(frame, &back), "unpack bare compound\n");
+    CHECK(back.grid[0] == '\0', "grid should be empty, got '%s'\n", back.grid);
+    CHECK(back.cmd == JS8_CMD_NONE, "cmd should be none\n");
+}
+
+/* A compound DIRECTED frame carries a command and ONE callsign. The lead
+ * "<....>" fills the addressee slot so extract_call() still reads token 2. */
+static void test_compound_directed_command(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "PJ4/K1ABC");
+    c.cmd = JS8_CMD_73;
+    c.num = JS8_NUM_NONE;
+    c.directed = true;
+
+    uint8_t frame[JS8_FRAME_BYTES];
+    char out[JS8_TEXT_MAX];
+    CHECK(js8_pack_compound(&c, frame), "pack compound 73\n");
+    CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render compound 73\n");
+    CHECK(strcmp(out, "<....> PJ4/K1ABC 73") == 0, "got '%s'\n", out);
+
+    char call[24] = "";
+    CHECK(screen_extract_call(out, call, sizeof(call)), "extract_call refused '%s'\n", out);
+    CHECK(strcmp(call, "PJ4/K1ABC") == 0, "station read as '%s'\n", call);
+
+    js8_compound_t back;
+    CHECK(js8_unpack_compound(frame, &back), "unpack compound 73\n");
+    CHECK(back.cmd == JS8_CMD_73, "cmd round-trip %u\n", back.cmd);
+    CHECK(back.directed == true, "type should be FrameCompoundDirected\n");
+    CHECK(back.grid[0] == '\0', "a command frame carries no grid, got '%s'\n", back.grid);
+}
+
+/* SNR shares its byte with the number: bit 7 marks the SNR commands and the
+ * low 6 bits carry packNum's 1..62. Getting that wrong reports a different
+ * signal strength, which is exactly the kind of error nothing on air flags. */
+static void test_compound_snr_round_trips(void)
+{
+    static const int reports[] = { -30, -7, 0, +5, +31 };
+    for (unsigned i = 0; i < sizeof(reports) / sizeof(reports[0]); i++)
     {
-        memset(frame, 0x5A, sizeof(frame));
-        frame[0] = (uint8_t)((frame[0] & 0x1Fu) | (t << 5));
-        CHECK(!js8_frame_to_text(frame, out, sizeof(out)),
-              "frame type %d should refuse to render\n", t);
+        js8_compound_t c;
+        memset(&c, 0, sizeof(c));
+        snprintf(c.call, sizeof(c.call), "PJ4/K1ABC");
+        c.cmd = JS8_CMD_SNR;
+        c.num = reports[i];
+        c.directed = true;
+
+        uint8_t frame[JS8_FRAME_BYTES];
+        char out[JS8_TEXT_MAX], want[64], rpt[8];
+        CHECK(js8_pack_compound(&c, frame), "pack SNR %d\n", reports[i]);
+        CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render SNR %d\n", reports[i]);
+        js8_fmt_report(reports[i], rpt, sizeof(rpt));
+        snprintf(want, sizeof(want), "<....> PJ4/K1ABC SNR %s", rpt);
+        CHECK(strcmp(out, want) == 0, "SNR %d: got '%s' want '%s'\n",
+              reports[i], out, want);
+
+        js8_compound_t back;
+        CHECK(js8_unpack_compound(frame, &back), "unpack SNR %d\n", reports[i]);
+        CHECK(back.cmd == JS8_CMD_SNR, "SNR %d: cmd %u\n", reports[i], back.cmd);
+        CHECK(back.num == reports[i], "SNR %d: num %d\n", reports[i], back.num);
     }
+
+    /* HEARTBEAT SNR is the only other number-carrying command, and it is
+     * selected by bit 6 of the same byte. If js8_pack_cmd() forgot it, this
+     * would come back as plain SNR with the right number - a wrong command
+     * that reads as plausible. */
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "OZ1LAV/P");
+    c.cmd = JS8_CMD_HEARTBEAT_SNR;
+    c.num = -12;
+    uint8_t frame[JS8_FRAME_BYTES];
+    js8_compound_t back;
+    CHECK(js8_pack_compound(&c, frame), "pack HEARTBEAT SNR\n");
+    CHECK(js8_unpack_compound(frame, &back), "unpack HEARTBEAT SNR\n");
+    CHECK(back.cmd == JS8_CMD_HEARTBEAT_SNR, "cmd %u, not HEARTBEAT SNR\n", back.cmd);
+    CHECK(back.num == -12, "num %d\n", back.num);
+}
+
+/* The 16-bit extra is a PARTITION, and the boundaries are where an off-by-one
+ * turns a command into a locator. nbasegrid is inclusive on the grid side;
+ * 32401..32409 and nmaxgrid itself mean neither. */
+static void test_extra_partition_boundaries(void)
+{
+    struct { uint16_t extra; const char* what; } cases[] = {
+        { 0,                  "grid"    },
+        { JS8_NBASEGRID,      "grid"    },   /* inclusive */
+        { JS8_NBASEGRID + 1,  "neither" },
+        { JS8_NUSERGRID - 1,  "neither" },
+        { JS8_NUSERGRID,      "cmd"     },
+        { JS8_NMAXGRID - 1,   "cmd"     },
+        { JS8_NMAXGRID,       "neither" },
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        /* Build the frame by hand: the packer cannot reach the "neither"
+         * band, and that band is precisely what a real station's frame may
+         * carry. */
+        uint16_t extra = cases[i].extra;
+        uint64_t call = js8_pack_alnum50("OZ1LAV/P");
+        CHECK(call != 0, "pack alnum50\n");
+        uint8_t frame[JS8_FRAME_BYTES];
+        memset(frame, 0, sizeof(frame));
+        int pos = 0;
+        #define PUT(v, n) do { for (int b = (n) - 1; b >= 0; b--) { \
+            if (((uint64_t)(v) >> b) & 1u) frame[pos / 8] |= (uint8_t)(0x80u >> (pos % 8)); \
+            pos++; } } while (0)
+        PUT(JS8_FRAME_COMPOUND, 3);
+        PUT(call, 50);
+        PUT((extra >> 5) & 0x7FFu, 11);
+        PUT((uint8_t)((extra & 0x1Fu) << 3), 8);
+        #undef PUT
+        CHECK(pos == 72, "built %d bits\n", pos);
+
+        js8_compound_t c;
+        CHECK(js8_unpack_compound(frame, &c), "unpack extra=%u\n", extra);
+        int is_grid = (c.grid[0] != '\0');
+        int is_cmd  = (c.cmd != JS8_CMD_NONE);
+        if (strcmp(cases[i].what, "grid") == 0)
+            CHECK(is_grid && !is_cmd, "extra=%u should be a grid (grid='%s' cmd=%u)\n",
+                  extra, c.grid, c.cmd);
+        else if (strcmp(cases[i].what, "cmd") == 0)
+            CHECK(is_cmd && !is_grid, "extra=%u should be a command (grid='%s' cmd=%u)\n",
+                  extra, c.grid, c.cmd);
+        else
+            CHECK(!is_cmd && !is_grid, "extra=%u should be neither (grid='%s' cmd=%u)\n",
+                  extra, c.grid, c.cmd);
+    }
+}
+
+/* A Heartbeat's extra and a Compound's extra are the SAME 16 bits read two
+ * completely different ways. Reading one as the other is the mistake this
+ * guards: bit 15 is the CQ flag in a Heartbeat and part of the number in a
+ * Compound, so a Compound command would decode as a southern-hemisphere grid
+ * and a CQ. */
+static void test_heartbeat_and_compound_read_extra_differently(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "OZ1LAV/P");
+    c.cmd = JS8_CMD_73;
+    c.num = JS8_NUM_NONE;
+    uint8_t frame[JS8_FRAME_BYTES];
+    CHECK(js8_pack_compound(&c, frame), "pack compound 73\n");
+
+    /* The same bits, read as a Heartbeat, must be REFUSED - the frame type
+     * guard is what stops the misreading, so it has to be there. */
+    js8_heartbeat_t hb;
+    CHECK(!js8_unpack_heartbeat(frame, &hb),
+          "a Compound frame must not unpack as a Heartbeat\n");
+
+    /* And the converse. */
+    js8_heartbeat_t h2;
+    memset(&h2, 0, sizeof(h2));
+    snprintf(h2.call, sizeof(h2.call), "OZ1LAV");
+    snprintf(h2.grid, sizeof(h2.grid), "JO65");
+    h2.is_cq = true;
+    uint8_t hframe[JS8_FRAME_BYTES];
+    js8_compound_t c2;
+    CHECK(js8_pack_heartbeat(&h2, hframe), "pack heartbeat\n");
+    CHECK(!js8_unpack_compound(hframe, &c2),
+          "a Heartbeat frame must not unpack as a Compound\n");
+}
+
+/* The longest line J9 can produce must still fit the row that stores it.
+ * ft8_test.c drops rather than truncates, so one character over is a decode
+ * that silently never appears - the exact fault J9 exists to end. */
+static void test_longest_line_fits_the_row(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    /* 11 characters, the field's absolute maximum - and it has to have its
+     * slashes AT POSITIONS 3 AND 7, because that is the only 11-character
+     * shape the 50-bit codec can carry. "PJ4/K1ABC/P" is 11 characters too
+     * and is REFUSED, which is the point of alnum50_can_carry(). */
+    snprintf(c.call, sizeof(c.call), "PJ4/K1A/BCD");
+    c.cmd = JS8_CMD_HEARTBEAT_SNR;
+    c.num = 31;
+    c.directed = true;
+
+    uint8_t frame[JS8_FRAME_BYTES];
+    char out[JS8_TEXT_MAX];
+    CHECK(js8_pack_compound(&c, frame), "pack longest\n");
+    CHECK(js8_frame_to_text(frame, out, sizeof(out)), "render longest\n");
+    /* ⛔ ASSERT THE WHOLE STRING, NOT JUST THE LENGTH. A length-only
+     * check passed a mutant that put rest[] back to 16 characters: the
+     * line came out as "... HEARTBEAT SNR +" - 33 characters, comfortably
+     * under the limit, with the REPORT cut to its sign. Shorter than the
+     * bound and wrong is exactly the failure a bound cannot see. */
+    CHECK(strcmp(out, "<....> PJ4/K1A/BCD HEARTBEAT SNR +31") == 0,
+          "got '%s'\n", out);
+    /* FT8_TEXT_MAX_LEN is 40 in main/ui/ft8_screen.h; 39 usable. Hardcoded
+     * here because the harness does not include firmware headers. */
+    CHECK(strlen(out) < 39, "longest line is %u chars: '%s'\n",
+          (unsigned)strlen(out), out);
+    printf("  longest J9 line: %u chars '%s'\n", (unsigned)strlen(out), out);
+}
+
+/* A callsign that will not pack must refuse, not shorten: a truncated
+ * callsign is a different station. */
+static void test_unpackable_callsign_refuses(void)
+{
+    js8_compound_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.call, sizeof(c.call), "   ");     /* nothing in the alphabet */
+    c.cmd = JS8_CMD_NONE;
+    c.num = JS8_NUM_NONE;
+    uint8_t frame[JS8_FRAME_BYTES];
+    CHECK(!js8_pack_compound(&c, frame), "an empty callsign must refuse\n");
+
+    /* A report outside packNum's range is not the report we would log. */
+    js8_compound_t d;
+    memset(&d, 0, sizeof(d));
+    snprintf(d.call, sizeof(d.call), "OZ1LAV/P");
+    d.cmd = JS8_CMD_SNR;
+    d.num = 40;
+    CHECK(!js8_pack_compound(&d, frame), "+40 must refuse, not clamp\n");
+
+    /* A callsign the 50-bit FIELD cannot hold. "PJ4/K1ABC/P" is 11
+     * characters, which looks like it fits, but the field allows '/' only at
+     * positions 3 and 7 - the packer inserts a space at 7 and the last
+     * character falls off, so it would transmit as "PJ4/K1ABC/". A different
+     * station. It must refuse, in BOTH packers that use this codec. */
+    js8_compound_t e;
+    memset(&e, 0, sizeof(e));
+    snprintf(e.call, sizeof(e.call), "PJ4/K1ABC/P");
+    e.cmd = JS8_CMD_NONE;
+    e.num = JS8_NUM_NONE;
+    CHECK(!js8_pack_compound(&e, frame),
+          "a callsign the field cannot carry must refuse\n");
+
+    js8_heartbeat_t h;
+    memset(&h, 0, sizeof(h));
+    snprintf(h.call, sizeof(h.call), "PJ4/K1ABC/P");
+    snprintf(h.grid, sizeof(h.grid), "JO65");
+    h.is_cq = true;
+    CHECK(!js8_pack_heartbeat(&h, frame),
+          "the Heartbeat packer has the same field and must refuse too\n");
+
+    /* And the 11-character shape that IS carryable must still pack. */
+    js8_compound_t g;
+    memset(&g, 0, sizeof(g));
+    snprintf(g.call, sizeof(g.call), "PJ4/K1A/BCD");
+    g.cmd = JS8_CMD_NONE;
+    g.num = JS8_NUM_NONE;
+    CHECK(js8_pack_compound(&g, frame),
+          "slashes at 3 and 7 are carryable and must NOT refuse\n");
 }
 
 /* Any command we did not map is still spelled out, so an operator sees what
@@ -296,7 +651,14 @@ int main(void)
     test_cq_qualifier_before_the_callsign();
     test_cq_without_a_callsign_is_refused();
     test_report_range();
-    test_compound_frames_refuse();
+    test_compound_with_grid();
+    test_compound_bare_call();
+    test_compound_directed_command();
+    test_compound_snr_round_trips();
+    test_extra_partition_boundaries();
+    test_heartbeat_and_compound_read_extra_differently();
+    test_longest_line_fits_the_row();
+    test_unpackable_callsign_refuses();
     test_unmapped_command_is_spelled();
 
     if (g_fail) { printf("\nFAILED: %d check(s)\n", g_fail); return 1; }

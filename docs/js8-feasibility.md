@@ -310,6 +310,7 @@ that don't fit a panadapter's FT8-style UI:
 
 - **Compound callsigns** (`FrameCompound`/`FrameCompoundDirected`) — non-standard calls
   like `PJ4/W1ABC` needing the 50-bit codec in Directed-style exchanges too.
+  **Built 2026-10-12 — see J9.**
 - **Multi-frame free-text chat** (`FrameData`/`FrameDataCompressed`) — Huffman/Varicode
   alphabet across consecutive frames with continuation bits. This is JS8's "killer
   feature" but is a chat-client UX, not a QSO-ladder UX.
@@ -562,18 +563,54 @@ because the operator must know a 3-frame message costs 45 seconds of air time.
 operator needs the cost shown *before* transmitting, not after.
 **Effort:** 2 sessions.
 
-### J9 — Compound callsigns
+### J9 — Compound callsigns — **BUILT 2026-10-12, NOT YET SEEN ON AIR**
 **Goal:** stop silently discarding stations.
 **Why here:** this is not a feature, it is a **correctness gap**.
-`js8_frame_to_text()` currently refuses `FrameCompound` and
-`FrameCompoundDirected` outright, which is right — rendering them with the
+`js8_frame_to_text()` refused `FrameCompound` and `FrameCompoundDirected`
+outright, which was right for the wrong duration — rendering them with the
 28-bit codec would put a different station's callsign on the screen — but it
-means every portable, special-event or compound-prefix station is invisible to
-us. Cheap relative to what it recovers, and RX-first provable.
-**Needs built:** the two compound layouts, and the 50-bit codec applied in
-Directed-style exchanges.
-**Verification:** real traffic; a compound call appears and round-trips.
-**Effort:** 1 session.
+meant every portable, special-event or compound-prefix station was invisible to
+us.
+
+**What was built.** `js8_pack_compound()` / `js8_unpack_compound()` in
+js8_message.c, and the rendering in js8_text.c. Three things turned out to
+matter more than the layout:
+
+- **The layout IS the Heartbeat's, bit for bit** — `[3][50][11],[5][3]`.
+  varicode.cpp uses one function, `packCompoundFrame()`, for all three types.
+  Only the reading of the 16-bit `extra` differs, and it differs completely: a
+  Heartbeat puts the CQ flag in bit 15 and a grid in the low 15, while a
+  Compound treats all 16 bits as one number partitioned into a grid
+  (`<= nbasegrid`), a command (`nusergrid <= x < nmaxgrid`) or nothing. Reading
+  one as the other decodes a command as a southern-hemisphere grid.
+- **The frame TYPE does not pick the branch.** `unpackCompoundMessage()`
+  decides grid-or-command from `extra` alone, so this does too. `FrameCompound`
+  with a command and `FrameCompoundDirected` with a grid both occur.
+- **The rendered SHAPE is not the reference's.** `unpackCompoundMessage()`
+  emits `"<call>"`, `"<call> <grid>"` or `"<call> <CMD>"`, and ft8_screen.c
+  reads the station out of TOKEN 2 of the rendered line — so
+  `"PJ4/K1ABC JO65"` would have entered the station table as `"JO65"`, and a
+  bare callsign would have been dropped for having only one token. The frames
+  render as `"HB <call> <grid>"` and `"<....> <call> <CMD>"` instead, and the
+  harness reimplements both of ft8_screen.c's token rules so a drift fails
+  loudly.
+
+⛔ **Two faults the harness found that were NOT in the layout.**
+`js8_pack_alnum50()` returns a valid-looking number for a callsign the field
+cannot carry — `'/'` is allowed only at positions 3 and 7, so `"PJ4/K1ABC/P"`
+packs and unpacks as `"PJ4/K1ABC/"`, a different station. It also accepts a
+callsign of nothing but spaces. Both packers that use the 50-bit codec now go
+through `alnum50_can_carry()`, **the Heartbeat one included** — the same latent
+fault had been sitting on the TX path since J2. And the decode buffer in
+ft8_test.c was `FTX_MAX_MESSAGE_LENGTH` (35) while the longest J9 line is 36;
+since that path drops rather than truncates, the longest form would have been
+silently invisible, which is the exact fault J9 exists to end.
+
+**Verification:** 11 mutants of the implementation, 0 survivors. ⛔ **No
+compound station has been decoded off air yet** — that is what settles it, and
+it is still owed. The pack direction is for the round-trip guard only; nothing
+transmits a compound frame.
+**Effort:** 1 session (as estimated).
 
 ### J10 — The full directed-command vocabulary, with auto-responders
 **Goal:** answer `SNR?`, `GRID?`, `HEARING?`, `STATUS?` and the rest of the 32

@@ -493,10 +493,188 @@ bool js8_unpack_directed(const uint8_t frame[JS8_FRAME_BYTES], js8_directed_t* o
     return true;
 }
 
+/* ---- is this callsign REPRESENTABLE at all? -----------------------------
+ *
+ * ⛔ js8_pack_alnum50() RETURNS A VALID-LOOKING NUMBER FOR A CALLSIGN IT
+ * CANNOT CARRY, and that is not a bug in it - it is the field's shape. The
+ * 11-character field allows '/' only at positions 3 and 7, so the packer
+ * inserts a space to push a call into that shape and anything past character
+ * 11 falls off the end. "PJ4/K1ABC/P" becomes "PJ4/K1A BC/" and unpacks as
+ * "PJ4/K1ABC/" - a DIFFERENT STATION, silently.
+ *
+ * It also accepts a callsign made entirely of spaces, because ' ' is in the
+ * alphabet: "   " packs to a large non-zero value and unpacks to "".
+ *
+ * Caught 2026-10-12 by the J9 harness on its own longest-line case, not on
+ * air. Both packers that use the 50-bit codec go through this.
+ *
+ * The two tests are deliberately different in kind. The round trip asks
+ * whether the FIELD can hold it; the digit-and-letter test asks whether it is
+ * a callsign at all, which is the same rule js8_text.c's CQ path applies for
+ * the same reason - the codec is alphanumeric and refuses almost nothing. */
+static bool alnum50_can_carry(const char* call)
+{
+    if (!call || !call[0]) return false;
+
+    bool has_digit = false, has_alpha = false;
+    for (const char* c = call; *c; c++)
+    {
+        char u = up(*c);
+        if (u >= '0' && u <= '9') has_digit = true;
+        else if (u >= 'A' && u <= 'Z') has_alpha = true;
+    }
+    if (!has_digit || !has_alpha) return false;
+
+    uint64_t packed = js8_pack_alnum50(call);
+    if (packed == 0) return false;
+
+    char back[16];
+    js8_unpack_alnum50(packed, back);
+
+    /* Compare case-insensitively: the packer upper-cases, so a lower-case
+     * input is not a mismatch. */
+    const char* a = call;
+    const char* b = back;
+    while (*a && *b)
+    {
+        if (up(*a) != up(*b)) return false;
+        a++; b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* ---- the Compound frames ------------------------------------------------- */
+
+/* varicode.cpp packCmd(). The SNR commands are the awkward case: cmd and num
+ * share one byte, with bit 7 marking "this is an SNR command" and bit 6
+ * selecting HEARTBEAT SNR over plain SNR, so the command index itself is NOT
+ * stored - it is reconstructed as 25 or 29 on the way out.
+ *
+ * \u26a0 THE REFERENCE'S OWN COMMENT CONTRADICTS ITS CODE here: it says the
+ * digits are zeroed for HEARTBEAT SNR, but unpackCmd reads the low 6 bits
+ * before it tests bit 6, so they are not. The code is what is on the air, so
+ * the code is what this follows. */
+uint8_t js8_pack_cmd(uint8_t cmd, uint8_t num6)
+{
+    if (cmd == JS8_CMD_SNR || cmd == JS8_CMD_HEARTBEAT_SNR)
+    {
+        uint8_t v = (uint8_t)(0x80u | ((cmd == JS8_CMD_HEARTBEAT_SNR) ? 0x40u : 0u));
+        return (uint8_t)(v | (num6 & 0x3Fu));
+    }
+    return (uint8_t)(cmd & 0x7Fu);
+}
+
+uint8_t js8_unpack_cmd(uint8_t value, uint8_t* out_num6)
+{
+    if (value & 0x80u)
+    {
+        if (out_num6) *out_num6 = (uint8_t)(value & 0x3Fu);
+        return (value & 0x40u) ? (uint8_t)JS8_CMD_HEARTBEAT_SNR : (uint8_t)JS8_CMD_SNR;
+    }
+    if (out_num6) *out_num6 = 0;
+    return (uint8_t)(value & 0x7Fu);
+}
+
+bool js8_pack_compound(const js8_compound_t* msg, uint8_t frame[JS8_FRAME_BYTES])
+{
+    if (!msg || !frame) return false;
+
+    if (!alnum50_can_carry(msg->call)) return false;
+    uint64_t call = js8_pack_alnum50(msg->call);
+    if (call == 0) return false;
+
+    uint16_t extra;
+    if (msg->cmd != JS8_CMD_NONE)
+    {
+        if (msg->cmd > 31) return false;
+        /* js8_pack_num() clamps, which is right for a report but wrong here:
+         * a command whose number was clamped is not the command we would log,
+         * so refuse instead - the same rule js8_text.c applies to Directed. */
+        if (msg->num != JS8_NUM_NONE && (msg->num < -30 || msg->num > 31)) return false;
+        uint8_t num6 = (msg->num == JS8_NUM_NONE) ? 0u : js8_pack_num(msg->num);
+        extra = (uint16_t)(JS8_NUSERGRID + js8_pack_cmd(msg->cmd, num6));
+        /* packCmd is 8 bits, so nusergrid + 255 = 32665 < nmaxgrid. The
+         * assert-by-refusal is here anyway: an extra that reached nmaxgrid
+         * would decode as "nothing" and lose the command silently. */
+        if (extra >= JS8_NMAXGRID) return false;
+    }
+    else if (msg->grid[0])
+    {
+        extra = js8_pack_grid(msg->grid);
+        /* js8_pack_grid() answers NMAXGRID for a locator it cannot pack. In a
+         * Heartbeat that is the legitimate "no grid"; here it collides with
+         * the partition's "neither" slot, so a bad locator must not be sent
+         * as if it were an empty one. */
+        if (extra > JS8_NBASEGRID) return false;
+    }
+    else
+    {
+        extra = JS8_NMAXGRID;
+    }
+
+    uint16_t hi11 = (uint16_t)((extra >> 5) & 0x7FFu);
+    uint8_t  lo5  = (uint8_t)(extra & 0x1Fu);
+    uint8_t  last = (uint8_t)((lo5 << 3) | (msg->bits3 & 7u));
+
+    memset(frame, 0, JS8_FRAME_BYTES);
+    int pos = 0;
+    put_bits(frame, &pos, msg->directed ? JS8_FRAME_COMPOUND_DIRECTED
+                                        : JS8_FRAME_COMPOUND, 3);
+    put_bits(frame, &pos, call, 50);
+    put_bits(frame, &pos, hi11, 11);
+    put_bits(frame, &pos, last, 8);
+    return pos == 72;
+}
+
+bool js8_unpack_compound(const uint8_t frame[JS8_FRAME_BYTES], js8_compound_t* out)
+{
+    if (!frame || !out) return false;
+    memset(out, 0, sizeof(*out));
+    out->cmd = JS8_CMD_NONE;
+    out->num = JS8_NUM_NONE;
+
+    int pos = 0;
+    uint64_t t = get_bits(frame, &pos, 3);
+    if (t != JS8_FRAME_COMPOUND && t != JS8_FRAME_COMPOUND_DIRECTED) return false;
+    out->directed = (t == JS8_FRAME_COMPOUND_DIRECTED);
+
+    uint64_t call = get_bits(frame, &pos, 50);
+    uint16_t hi11 = (uint16_t)get_bits(frame, &pos, 11);
+    uint8_t  last = (uint8_t)get_bits(frame, &pos, 8);
+
+    uint16_t extra = (uint16_t)((hi11 << 5) | ((last >> 3) & 0x1Fu));
+    out->bits3 = (uint8_t)(last & 7u);
+
+    js8_unpack_alnum50(call, out->call);
+    if (!out->call[0]) return false;
+
+    /* \u26d4 BRANCH ON `extra`, NOT ON THE FRAME TYPE - see js8_message.h.
+     * The order matters too: the grid test is <=, so it must run before the
+     * command test, exactly as unpackCompoundMessage() does. */
+    if (extra <= JS8_NBASEGRID)
+    {
+        js8_unpack_grid(extra, out->grid);
+    }
+    else if (extra >= JS8_NUSERGRID && extra < JS8_NMAXGRID)
+    {
+        uint8_t num6 = 0;
+        out->cmd = js8_unpack_cmd((uint8_t)(extra - JS8_NUSERGRID), &num6);
+        if (out->cmd == JS8_CMD_SNR || out->cmd == JS8_CMD_HEARTBEAT_SNR)
+            out->num = js8_unpack_num(num6);
+    }
+    /* else: the 32401..32409 band and nmaxgrid itself - neither, and not an
+     * error. The callsign alone is the message. */
+    return true;
+}
+
 bool js8_pack_heartbeat(const js8_heartbeat_t* msg, uint8_t frame[JS8_FRAME_BYTES])
 {
     if (!msg || !frame) return false;
 
+    /* The Compound path's guard, applied here too: this is the same 50-bit
+     * field, so "CQ PJ4/K1ABC/P JO65" would have gone out naming
+     * "PJ4/K1ABC/". The sibling, not just the instance. */
+    if (!alnum50_can_carry(msg->call)) return false;
     uint64_t call = js8_pack_alnum50(msg->call);
     if (call == 0) return false;
 

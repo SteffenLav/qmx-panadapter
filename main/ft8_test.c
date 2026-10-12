@@ -1771,7 +1771,15 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             out->n_dup++;
             continue;
         }
-        char text[FTX_MAX_MESSAGE_LENGTH];
+        /* ⛔ FT8_TEXT_MAX_LEN (40), NOT FTX_MAX_MESSAGE_LENGTH (35).
+         * 35 is FT8's own ceiling and it SILENTLY DROPPED long JS8 lines:
+         * decode_msg_to_text() refuses rather than truncate (truncating puts a
+         * different message on the screen), so a Directed frame between two
+         * 11-character compound calls, and J9's longest Compound line
+         * "<....> PJ4/K1ABC/P HEARTBEAT SNR +31" at 36, never reached the
+         * list at all. 40 is what ft8_screen.c's row already stores, so this
+         * widens nothing downstream - it stops throwing away what fits. */
+        char text[FT8_TEXT_MAX_LEN];
         ftx_message_offsets_t off;
         /* ONE call, deliberately: decode_msg_to_text() runs the message
          * unpackers, and calling it twice to get at both branches would pay
