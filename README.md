@@ -55,6 +55,8 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 Everything below is in the firmware **today**. Nothing here needs a PC, and only the
 items marked *(needs WiFi)* need a network.
 
+### See the band
+
 **Real-time panadapter** — Spectrum and waterfall across a 48 kHz window centred on the
 QMX VFO, at 30 Hz, with 12 kHz IF-offset compensation. Tap or drag to tune (mode-aware
 snapping), pinch to zoom ×1–×24 with a true zoom-FFT, one-finger drag to pan and retune.
@@ -76,9 +78,7 @@ the view stays centred on the dial, because the view is already the whole 48 kHz
 sends. The band above dial+12 kHz is hatched on both screens — the radio genuinely cannot
 hear it, and drawing something there would be inventing signal.
 
-**RIT** — Pull in a caller answering off your frequency without moving transmit: arm it,
-tap the caller, and a marker shows where you are listening while the gold line goes on
-meaning the dial. A long press parks the offset and restores it.
+### Hear the band
 
 **Audio, and binaural CW** *(beta)* — The I/Q the radio already sends is turned into sound
 on the device. The **panoramic CW split** places two stations on different frequencies to
@@ -108,11 +108,66 @@ connection is off by design, so CAT, the S-meter and the band/mode display go qu
 Changing the source needs a restart, which the Tab5 performs itself on **Save**.
 See [Audio](docs/mkdocs/guide/audio.md).
 
+**Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
+panadapter shows the Morse the radio is decoding, with an estimate of the sending
+speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
+the panadapter no processing at all and does not touch the spectrum or FT8. Works on
+QMX firmware 1.03 and later, on the Tab5 and in the browser, and switches off in the
+settings drawer under Radio *(suggested by Uwe DL8UG)*. With a card in the slot it is
+also written to `qmx-panadapter/cw-decode.txt` with timestamps, so a half-caught
+callsign can be resolved afterwards *(Michael K Johnson KZ4LY)*.
+
+### Tune and control the radio
+
 **QMX CAT control** — Live frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware
 1.04+), SSB filter bandwidth, CW passband, passband overlay, TX power and SWR readout,
 QMX volume in decibels matching the radio's own display, and an Antenna Tune button on
 1.04+. Round-trip CAT latency under 50 ms. Band presets with per-band frequency recall,
 and 32 memory channels in a 4×8 grid holding any frequency and mode.
+
+**RIT** — Pull in a caller answering off your frequency without moving transmit: arm it,
+tap the caller, and a marker shows where you are listening while the gold line goes on
+meaning the dial. A long press parks the offset and restores it.
+
+**Radio menus** — The QMX's own 80×24 menu system, on the Tab5 and in the browser, over
+the radio's *second* USB serial port so the panadapter keeps decoding while you are in
+there. For a QMX+ with no control panel it is the only way in. Leaving hands the radio
+back properly and restores your frequency and mode.
+
+**CW keyer speed** *(Ralph Hellmig)* — A slider in the settings drawer directly above IF
+calibration, and the same control on the web page. It sets the radio's keyer speed over
+CAT and then shows what the radio actually took, because the radio is the authority here
+and does not store the value itself. ⛔ **A speed of 0 means a straight key**, not "no
+speed set". See [Radio Menus](docs/mkdocs/guide/radio-menus.md).
+
+**Touch, keyboard, mouse** — Edge-swipe navigation with breathing grip handles, an
+on-screen keyboard, and optional support for the M5Stack Tab5 70-key snap-on keyboard —
+which drives the radio's own menus, works in every window with buttons, scrolls the
+settings drawer and the manual, and carries Ctrl shortcuts you can reassign yourself. It
+can be attached or reattached at any time, not only at boot. A **Bluetooth keyboard** does
+the same: every text box, Enter and Esc in every window, Tab between fields and the arrow
+keys, with the on-screen keyboard stepping aside while one is connected. A keyboard and a
+mouse can be connected at once, in either order. ⚠ Bluetooth keyboards are **US layout
+only** — a Bluetooth keyboard reports key *positions* rather than characters, so letters,
+digits, Enter and the arrows are right on any keyboard while punctuation on a non-US
+layout will not be. Plus USB mouse support. *(The mouse and the QMX cannot share the single USB host port — the
+ESP32-P4's USB stack lacks the Transaction Translator a hub would need — so the mouse is
+for setup, log review and reading the manual with the radio unplugged.)*
+
+**Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
+mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
+wheel that scrolls whatever is under the pointer — **and over the spectrum or waterfall,
+that wheel tunes**: 10 Hz a click in CW and the digital modes, so a signal can be
+zero-beaten by ear, and 100 Hz in SSB *(Roy KI0ER, John Dusek)*. It stops at the band
+edges, and anything on top of the panadapter — a modal, the settings drawer — takes the
+wheel instead, so the dial never moves under something you are reading.
+**The mouse must be Bluetooth 4.0 or
+later (Bluetooth Low Energy).** The Tab5's Bluetooth comes from a co-processor with no
+Bluetooth Classic radio, so an older Classic mouse cannot work and no firmware change can
+help — it never appears to the Tab5 at all. Most mice sold since about 2014 qualify; a
+dual-mode mouse works on its Low Energy channel.
+
+### Work the digital modes
 
 **FT8 and FT4, receive** — Continuous on-device decoding in the same view as the
 panadapter: FT8 (15 s slots) and FT4 (7.5 s slots). **JS8** is a third sub-mode of this
@@ -130,34 +185,6 @@ already working someone else, grey-listing for stations that never answer, and a
 optional unattended auto-answer robot. Your TX tone is a permanent on-screen button with
 a live occupancy strip, drag-to-pick tone selection, **TX Hold**, and a cycling
 **TXCQ ANY / EVEN / ODD** time-window choice. ARRL Field Day exchange mode included.
-
-**QSO logging and upload** — Every contact is written to an ADIF log on the device, with
-timestamp, callsign, grid, frequency, band, mode, both signal reports and distance
-(never a report that was not actually exchanged). Read the log on the Tab5 or in the
-browser, delete single records or all of them, and upload *(needs WiFi)* to **QRZ
-Logbook**, **eQSL**, **ARRL LoTW** and **your own Cloudlog or Wavelog** — LoTW QSOs are
-signed on the device itself with your own callsign certificate. A signal report or a
-park/summit reference can be corrected after the fact from the browser's log table. The
-browser's **ADIF restore** merges a previously downloaded (or any logger's) ADIF file
-back in — contacts already logged are skipped — so an erase-and-reinstall does not cost
-you your worked-station history. Or **restore straight from the microSD card**, on the
-Tab5 itself with no computer at all. **Search the log** on either screen — by callsign,
-country, band, mode, date or park — and in the browser **tick rows and export just
-those** as their own ADIF file.
-
-**Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
-**RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
-the station is actually using. The cluster is where phone activity comes from — skimmers
-are machines, and no machine recognises a callsign spoken into a microphone. One station
-is one entry, however many sources report it. Grey means you have already worked them on
-that band. Press and drag to pick one, lift to tune it *with the right mode*. Spots fade
-with age and are gone after 30 minutes; corner counts take you to the ones just off-screen.
-
-**Knowing you are getting out** *(needs WiFi)* — **Who is hearing me** asks PSK Reporter
-which receivers have copied *your* call, with distance, bearing and the report they gave
-you. **SWR protection** cuts a transmission short and latches the transmitter off above
-your chosen limit, because an FT8 burst is thirteen seconds of key-down into whatever the
-antenna is doing.
 
 **JS8 — a keyboard mode, on the device** *(beta)* — JS8 carries **free text** on FT8's
 modulation, so stations hold short conversations rather than trading a fixed exchange.
@@ -188,16 +215,59 @@ slider for every other mode (FT8, CW, SSB, ...), shares the same calibration but
 of WSPR's way entirely — Declared power always owns the radio there. What you hear can be
 published to wsprnet.org *(needs WiFi)*.
 
-**Radio menus** — The QMX's own 80×24 menu system, on the Tab5 and in the browser, over
-the radio's *second* USB serial port so the panadapter keeps decoding while you are in
-there. For a QMX+ with no control panel it is the only way in. Leaving hands the radio
-back properly and restores your frequency and mode.
+### Who is out there, and who hears you
 
-**CW keyer speed** *(Ralph Hellmig)* — A slider in the settings drawer directly above IF
-calibration, and the same control on the web page. It sets the radio's keyer speed over
-CAT and then shows what the radio actually took, because the radio is the authority here
-and does not store the value itself. ⛔ **A speed of 0 means a straight key**, not "no
-speed set". See [Radio Menus](docs/mkdocs/guide/radio-menus.md).
+**Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
+**RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
+the station is actually using. The cluster is where phone activity comes from — skimmers
+are machines, and no machine recognises a callsign spoken into a microphone. One station
+is one entry, however many sources report it. Grey means you have already worked them on
+that band. Press and drag to pick one, lift to tune it *with the right mode*. Spots fade
+with age and are gone after 30 minutes; corner counts take you to the ones just off-screen.
+
+**Knowing you are getting out** *(needs WiFi)* — **Who is hearing me** asks PSK Reporter
+which receivers have copied *your* call, with distance, bearing and the report they gave
+you. **SWR protection** cuts a transmission short and latches the transmitter off above
+your chosen limit, because an FT8 burst is thirteen seconds of key-down into whatever the
+antenna is doing.
+
+**PSK Reporter spotting** *(needs WiFi)* — The stations you decode are reported to
+[PSK Reporter](https://pskreporter.info) the way WSJT-X does, so you appear on the map as
+a monitoring station. **On by default**; sends your call and grid plus each decoded
+station's call, grid, frequency, report and mode, batched at most once every five
+minutes — over the internet only, **never on the air**. One checkbox turns it off, and it
+is inert until your callsign and grid are set, and in simulation mode.
+
+### Log it and confirm it
+
+**QSO logging and upload** — Every contact is written to an ADIF log on the device, with
+timestamp, callsign, grid, frequency, band, mode, both signal reports and distance
+(never a report that was not actually exchanged). Read the log on the Tab5 or in the
+browser, delete single records or all of them, and upload *(needs WiFi)* to **QRZ
+Logbook**, **eQSL**, **ARRL LoTW** and **your own Cloudlog or Wavelog** — LoTW QSOs are
+signed on the device itself with your own callsign certificate. A signal report or a
+park/summit reference can be corrected after the fact from the browser's log table. The
+browser's **ADIF restore** merges a previously downloaded (or any logger's) ADIF file
+back in — contacts already logged are skipped — so an erase-and-reinstall does not cost
+you your worked-station history. Or **restore straight from the microSD card**, on the
+Tab5 itself with no computer at all. **Search the log** on either screen — by callsign,
+country, band, mode, date or park — and in the browser **tick rows and export just
+those** as their own ADIF file.
+
+**Activation logging** — Start a **POTA** or **SOTA** activation and every contact is
+stamped with the reference as it is logged, counted against the threshold, with chases
+tagged from spots already seen and a single-reference ADIF export for uploading.
+
+### Run it from somewhere else
+
+**Web UI** *(needs WiFi)* — The whole panadapter in any browser on the LAN: live
+spectrum and waterfall at ~10 fps, click or drag to tune, mouse-wheel pan and tune,
+band/mode/bandwidth/zoom control, a graphical S-meter and the whole-band plan strip. In
+FT8/FT4 mode it shows a live TX status banner and a **Call CQ** button instead of the
+stream. Also: the QSO log as a sortable table, config download/upload as an editable text
+file, a microSD file browser, screenshots, and the diagnostic log.
+
+### Know what time it is
 
 **A GPS of your own, and a sky view** — Two receivers work, and both are confirmed on
 hardware: an **M5Stack Unit GPS v1.1** on PORT.A
@@ -210,73 +280,25 @@ sky view, with the fix, the satellite count and which receiver is answering. The
 also says whether the time came from a GPS on the Tab5 or from the radio.
 See [Time sync](docs/mkdocs/guide/time-sync.md).
 
-**Updating from the device** *(needs WiFi)* — A new release is fetched quietly in the
-background and offered once, in a window in the middle of the screen, with **Restart now**
-or **Later**. Nothing is ever installed without you asking, and the automatic download can
-be switched off if you are on a metered connection. The spectrum, waterfall and FT8
-decoding keep running throughout.
-
-**Activation logging** — Start a **POTA** or **SOTA** activation and every contact is
-stamped with the reference as it is logged, counted against the threshold, with chases
-tagged from spots already seen and a single-reference ADIF export for uploading.
-
-**Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
-mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
-wheel that scrolls whatever is under the pointer — **and over the spectrum or waterfall,
-that wheel tunes**: 10 Hz a click in CW and the digital modes, so a signal can be
-zero-beaten by ear, and 100 Hz in SSB *(Roy KI0ER, John Dusek)*. It stops at the band
-edges, and anything on top of the panadapter — a modal, the settings drawer — takes the
-wheel instead, so the dial never moves under something you are reading.
-**The mouse must be Bluetooth 4.0 or
-later (Bluetooth Low Energy).** The Tab5's Bluetooth comes from a co-processor with no
-Bluetooth Classic radio, so an older Classic mouse cannot work and no firmware change can
-help — it never appears to the Tab5 at all. Most mice sold since about 2014 qualify; a
-dual-mode mouse works on its Low Energy channel.
-
-**PSK Reporter spotting** *(needs WiFi)* — The stations you decode are reported to
-[PSK Reporter](https://pskreporter.info) the way WSJT-X does, so you appear on the map as
-a monitoring station. **On by default**; sends your call and grid plus each decoded
-station's call, grid, frequency, report and mode, batched at most once every five
-minutes — over the internet only, **never on the air**. One checkbox turns it off, and it
-is inert until your callsign and grid are set, and in simulation mode.
-
-**Web UI** *(needs WiFi)* — The whole panadapter in any browser on the LAN: live
-spectrum and waterfall at ~10 fps, click or drag to tune, mouse-wheel pan and tune,
-band/mode/bandwidth/zoom control, a graphical S-meter and the whole-band plan strip. In
-FT8/FT4 mode it shows a live TX status banner and a **Call CQ** button instead of the
-stream. Also: the QSO log as a sortable table, config download/upload as an editable text
-file, a microSD file browser, screenshots, and the diagnostic log.
-
-**Built-in user manual** — This entire guide is compiled into the firmware, so it opens
-instantly with no WiFi, no card and no download, and can never describe a different
-version than the one you are running. It opens at the chapter for the screen you are on,
-warning banners are tappable, and a **Need guidance?** panel lets you pick your symptom
-in plain words. See [Getting help](#getting-help).
-
 **Time and date, with or without a network** — SNTP when WiFi is up *(needs WiFi)*, the
 Tab5's own supercap-backed RTC across power-off, the QMX's clock as an offline fallback,
 GPS detected and phase-locked automatically if your QMX has one, and a manual
 set-and-sync panel. FT8/FT4 timing also self-corrects from the decoded band consensus
 when offline.
 
-**A GPS of your own** *(new in v1.16.12)* — Plug an **M5Stack Unit GPS v1.1** into PORT.A
-and set **Settings ▸ Device ▸ Port mode** to *Unit GPS v1.1*: the satellite gives you UTC
-**and the full date**, offline, with nothing to answer. A GPS-equipped QMX+ on radio firmware 1.04_004 or later now hands over
-the date too, so that route is also complete offline. The date itself is no longer taken
-on trust from a running clock — see [Time sync](#time-sync).
+### Keep it working
 
-**Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
-panadapter shows the Morse the radio is decoding, with an estimate of the sending
-speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
-the panadapter no processing at all and does not touch the spectrum or FT8. Works on
-QMX firmware 1.03 and later, on the Tab5 and in the browser, and switches off in the
-settings drawer under Radio *(suggested by Uwe DL8UG)*. With a card in the slot it is
-also written to `qmx-panadapter/cw-decode.txt` with timestamps, so a half-caught
-callsign can be resolved afterwards *(Michael K Johnson KZ4LY)*.
+**Updating from the device** *(needs WiFi)* — A new release is fetched quietly in the
+background and offered once, in a window in the middle of the screen, with **Restart now**
+or **Later**. Nothing is ever installed without you asking, and the automatic download can
+be switched off if you are on a metered connection. The spectrum, waterfall and FT8
+decoding keep running throughout.
 
-**Frequency format** — The frequency readout, preset buttons, WSPR band picker, keypad
-and spectrum scale can be punctuated `14.074.000` (the default, and what the QMX shows
-on its own LCD) or `14,074,000` *(Don N2VGU)*. Settings drawer, under Advanced.
+**Built-in user manual** — This entire guide is compiled into the firmware, so it opens
+instantly with no WiFi, no card and no download, and can never describe a different
+version than the one you are running. It opens at the chapter for the screen you are on,
+warning banners are tappable, and a **Need guidance?** panel lets you pick your symptom
+in plain words. See [Getting help](#getting-help).
 
 **microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) and your
 whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
@@ -302,31 +324,22 @@ firmware and how far into the session, so a diagnostic download is enough to ans
 real encode/decode pipeline, so you can rehearse a full QSO with **no radio connected**
 — and with a hard interlock that never keys a QMX even if one is attached.
 
-**Touch, keyboard, mouse** — Edge-swipe navigation with breathing grip handles, an
-on-screen keyboard, and optional support for the M5Stack Tab5 70-key snap-on keyboard —
-which drives the radio's own menus, works in every window with buttons, scrolls the
-settings drawer and the manual, and carries Ctrl shortcuts you can reassign yourself. It
-can be attached or reattached at any time, not only at boot. A **Bluetooth keyboard** does
-the same: every text box, Enter and Esc in every window, Tab between fields and the arrow
-keys, with the on-screen keyboard stepping aside while one is connected. A keyboard and a
-mouse can be connected at once, in either order. ⚠ Bluetooth keyboards are **US layout
-only** — a Bluetooth keyboard reports key *positions* rather than characters, so letters,
-digits, Enter and the arrows are right on any keyboard while punctuation on a non-US
-layout will not be. Plus USB mouse support. *(The mouse and the QMX cannot share the single USB host port — the
-ESP32-P4's USB stack lacks the Transaction Translator a hub would need — so the mouse is
-for setup, log review and reading the manual with the radio unplugged.)*
-
 **Settings you decide the shape of** — Every setting appears on the Tab5 and in the
 browser, and the drawer has a **Basic** and an **Advanced** view. Which sections appear in
 which is yours to set, from a **Tab5 config** button in the web UI's Settings window; a
 firmware update that adds a setting shows it rather than hiding it behind a layout saved
 before it existed.
 
+**Frequency format** — The frequency readout, preset buttons, WSPR band picker, keypad
+and spectrum scale can be punctuated `14.074.000` (the default, and what the QMX shows
+on its own LCD) or `14,074,000` *(Don N2VGU)*. Settings drawer, under Advanced.
+
+### The hardware it runs on
+
 **Built for the field** — WiFi is entirely optional, and can be given a static address if
 you want the browser bookmark to keep working; battery percentage with a charge limit for
 battery care; display sleep and a 180° flip for awkward mounting; config backup and
 restore as a text file; and a settings reset that does not need a reflash.
-
 ---
 
 ## Contents
