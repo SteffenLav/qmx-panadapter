@@ -59,6 +59,33 @@ PDF_SCRIPT = os.path.join(REPO, "tools", "build_userguide_pdf.ps1")
 # claim about the present.
 EXEMPT = {"version-history.md", "releases.md"}
 
+# Pages deliberately kept OUT of the printable guide. The PDF is the operator's
+# manual; these are for people working on the source, and they are reachable on
+# the website and in the on-device manual.
+#
+# ⛔ EXEMPT MEANS "DECIDED", NOT "IGNORED". A page listed here must have a
+# reason beside it. The coverage warning is only useful if everything in it is
+# genuinely wrong - a list with permanent residents in it stops being read,
+# which is exactly how guide/audio.md went missing from the PDF unnoticed.
+# Pages whose content reaches the PDF through a README-authored chapter
+# rather than through a guide file. They ARE printed - they just do not arrive
+# by injection, so the injection test cannot see them. The README section that
+# carries each one is named, so a future cut of that section is a decision
+# someone has to make deliberately.
+README_SOURCED = {
+    "quick-start.md":   "README '## Quick Guide'",
+    "getting-help.md":  "README '## Getting help'",
+    "gestures.md":      "README '## Reference'",
+    "hardware.md":      "README '## Reference'",
+    "glossary.md":      "README '## Glossary'",
+    "build.md":         "README '## Build from source'",
+}
+
+PDF_EXEMPT = {
+    "architecture.md",   # developer material - module map, task layout, DSP chain
+    "contributing.md",   # how to send a patch, not how to operate the radio
+}
+
 # Words that carry no subject: the two trees title the same thing differently
 # ("Quick Start" vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and
 # matching on these would either match everything or nothing.
@@ -66,6 +93,15 @@ GENERIC_WORDS = {
     "reference", "overview", "guide", "controls", "configuration", "settings",
     "start", "started", "getting", "introduction", "intro", "notes", "page",
     "the", "and", "your",
+    # A word that could head ANY page is not evidence that a subject is
+    # covered. "features" cost us the whole audio chapter: audio.md is titled
+    # "Audio Features - Tab5 Real-Time Decoding (Beta)", README has a
+    # "## Features" heading, the single shared word satisfied the match, and
+    # the check reported clean while the PDF carried none of the page.
+    # Measured 2026-10-12 with pdftotext: zero occurrences of "Panoramic CW
+    # Split" in the printed guide.
+    "features", "feature", "beta", "advanced", "basics", "using", "about",
+    "tab5", "qmx", "panadapter",
 }
 
 # Phrases that are true only until the next release and never become false again.
@@ -147,7 +183,12 @@ def _pdf_injected_guides():
     if not os.path.isfile(PDF_SCRIPT):
         return set()
     src = _read(PDF_SCRIPT)
-    return set(re.findall(r'Join-Path \$guideDir "([a-z0-9-]+\.md)"', src))
+    # ⛔ BOTH DIRECTORIES. This matched only $guideDir, so every chapter
+    # injected from $refDir - troubleshooting, and web-api since 2026-10-12 -
+    # read as uninjected. It stayed hidden because a README heading used to
+    # count as coverage and masked it.
+    return set(re.findall(
+        r'Join-Path \$(?:guideDir|refDir) "([a-z0-9-]+\.md)"', src))
 
 
 def _nav_pages():
@@ -168,6 +209,40 @@ def _nav_pages():
     return pages
 
 
+def _banner_version():
+    """The version README's banner claims, as (major, minor). None if absent."""
+    if not os.path.isfile(README):
+        return None
+    m = re.search(r"\*\*(?:Beta|Release) \u2014 v(\d+)\.(\d+)\.\d+",
+                  _read(README))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def check_stale_version_markers():
+    """"(new in vX.Y.Z)" markers older than the last release cycle.
+
+    A pinned version marker has the same shelf life as "new in the next
+    release" and nothing was watching it. The current minor and the one before
+    are left alone, so a marker gets a full cycle before it is called stale.
+    """
+    warnings = []
+    cur = _banner_version()
+    if not cur:
+        return warnings
+    for path in _md_files():
+        text = _read(path)
+        for m in re.finditer(r"new in v(\d+)\.(\d+)\.\d+", text):
+            ver = (int(m.group(1)), int(m.group(2)))
+            if ver >= (cur[0], cur[1] - 1):
+                continue
+            line = text[: m.start()].count("\n") + 1
+            warnings.append(
+                "%s:%d '%s' - the banner says v%d.%d, so this marker has "
+                "outlived its release" % (_rel(path), line, m.group(0),
+                                          cur[0], cur[1]))
+    return warnings
+
+
 def check_pdf_coverage():
     """Site pages that never reach the printable guide."""
     warnings = []
@@ -176,27 +251,31 @@ def check_pdf_coverage():
 
     for page in _nav_pages():
         base = os.path.basename(page)
-        if base in EXEMPT or base == "index.md":
+        if (base in EXEMPT or base in PDF_EXEMPT or base in README_SOURCED
+                or base == "index.md"):
             continue
         if base in injected:
             continue
         path = os.path.join(MKDOCS_DIR, page.replace("/", os.sep))
         if not os.path.isfile(path):
             continue
-        # Does README cover this subject anywhere under its own heading?
+        # ⛔ A README HEADING IS NOT COVERAGE ANY MORE.
         #
-        # Matched on shared SUBJECT WORDS rather than on the whole title: the
-        # two trees name the same thing differently on purpose ("Quick Start"
-        # vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and a check
-        # that flags those is noise - and a noisy check is one nobody reads,
-        # which is how the docs got into this state to begin with.
-        title = _headings(_read(path), levels=(1,))
-        title_key = list(title.keys())[0] if title else _normalise_heading(base[:-3])
-        subject = set(title_key.split()) - GENERIC_WORDS
-        if not subject:
-            continue
-        if any(subject & (set(k.split()) - GENERIC_WORDS) for k in readme_headings):
-            continue
+        # It was, when README carried the manual. Now README is a landing page:
+        # each chapter is a short lede and a link, and the guide file is the
+        # single source the PDF prints. So the only thing that puts a page in
+        # the printed guide is being INJECTED by the builder.
+        #
+        # This check used to accept a shared subject word with any README
+        # heading. Measured 2026-10-12, that hid a chapter that was nearly
+        # empty: README's Web UI section had been cut to a lede while the
+        # web-ui chapter still had GuideFile = $null, so the printed chapter
+        # lost the relay, the file browser, config backup and Tab5Shot - and
+        # this check said CLEAN, because "## Web UI" was still there.
+        #
+        # Deliberately kept out of the printed guide? Put it in PDF_EXEMPT,
+        # with the reason, where the decision is visible.
+        _ = readme_headings
         warnings.append(
             "%s is on the website and in the on-device manual, but nothing in "
             "the PDF covers it - it is neither injected by the PDF builder nor "
@@ -284,6 +363,7 @@ def run(verbose=True):
     bad_links = check_pdf_links()
     missing = check_pdf_coverage()
     dupes = check_duplicate_coverage()
+    stale = check_stale_version_markers()
 
     if verbose:
         if errors:
@@ -302,10 +382,14 @@ def run(verbose=True):
             print("check_docs: described in BOTH trees (%d) - drift surface:" % len(dupes))
             for d in dupes:
                 print("  " + d)
-        if not (errors or bad_links or missing or dupes):
+        if stale:
+            print("check_docs: STALE VERSION MARKERS (%d):" % len(stale))
+            for s in stale:
+                print("  " + s)
+        if not (errors or bad_links or missing or dupes or stale):
             print("check_docs: clean")
 
-    return errors + bad_links, missing + dupes
+    return errors + bad_links, missing + dupes + stale
 
 
 if __name__ == "__main__":

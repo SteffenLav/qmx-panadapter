@@ -121,6 +121,25 @@ Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts 
 
 **CQ tone selection** — the panadapter automatically picks a quiet frequency (6.25 Hz tone spacing, 200–2800 Hz audio range, no other stations nearby). If your chosen tone gets busy during a QSO, the panadapter **auto-relocates to the nearest clear frequency** to avoid stepping on other stations.
 
+## What the TX status line is telling you
+
+The left pane carries a persistent status line under the slot countdown. The
+colour is the quickest read; the text says which station and which tone.
+
+| Colour | Line | Meaning |
+|--------|------|---------|
+| **Red** | `TRANSMITTING: <message>` | A burst is going out, with your audio tone on its own line. Tap to abort. |
+| **Amber** | `TX armed: <message>` then `nnnn Hz -> EVEN/ODD, ~Ns` | Waiting for the slot. Tap to cancel. |
+| **Red-orange** | `FREQ BUSY` | Your tone is occupied (+/-50 Hz guard), and the warning names the frequency. During a CQ run this self-heals - the next cycle hops to the nearest clear tone. Mid-exchange, move it yourself with the TX tone control. |
+| **Amber** | `working <call> - waiting` + `TAP TO CANCEL` | The station you are calling is mid-exchange with somebody else. Nothing transmits until they sign off or call CQ again. |
+| **Green** | QSO complete | |
+| **Orange** | QSO timed out | Tap to clear. |
+| **Dim white** | capturing / decoding / symbol count | The engine's own status, passed through. Nothing is armed. |
+
+!!! note "Amber means armed, not transmitting"
+    An armed burst has not keyed the radio yet. Cancelling an amber line costs
+    nothing; cancelling a red one aborts a transmission in progress.
+
 **CQ auto-stop** — by default the panadapter keeps calling until someone answers. If you'd rather call a few times and then pause (a common courtesy on a quiet band), long-press **Call CQ** and tap the **CQ stop** button at the top-right of the preset editor: it cycles through never / 1 / 2 / 3 / 4 / 5 / 10 calls and applies immediately, no Save needed. While calling, the TX status shows the progress ("call 2 of 4"); after the last unanswered call the panadapter listens through one more receive slot (an answer to your final call still starts the QSO normally), then stops and goes idle. Applies to every CQ run, including the automatic resume after a completed or timed-out QSO — each fresh CQ sequence starts the count over.
 
 **Listening slot** - while you are transmitting you are deaf to your own time window, so
