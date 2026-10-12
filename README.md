@@ -963,13 +963,13 @@ main/
   adif/eqsl_upload.c        eQSL.cc upload (batched, multiple records per request)
   rtc/rtc.c                 RX8130CE supercap RTC driver
   time_sync/time_sync.c     Time sync orchestrator
-  render/render.c           30 Hz render task, EMA smoothing
+  render/render.c           10 Hz render task, EMA smoothing
   render/render_waterfall.c Waterfall scroll (double-height canvas)
   screenshot/screenshot.c   RGB565 framebuffer capture for /ss.bmp
   storage/settings.c        NVS-backed settings with debounced flush
   wifi/wifi.c               C6 co-processor WiFi + SNTP
   net/webserver.c           HTTP server + WebSocket
-  util/fps.c                FPS counter
+  util/cpu_stats.c          Idle %, frame rate and invalidation reporting
   util/diag_log.c           Diagnostic log ring buffer (vprintf hook)
 ```
 

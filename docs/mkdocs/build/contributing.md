@@ -39,7 +39,7 @@ If you want to build from source for your own use, see **[Build from Source](bui
 
 ## Areas I'm Working On
 
-Curious where the project is headed? The long-term direction lives in the **[ROADMAP](https://github.com/SteffenLav/qmx-panadapter/blob/main/README.md#roadmap)**. Current focus areas include FT8/FT4 TX soak testing, LoTW upload, and the native-portrait FPS rewrite. Feature requests that line up with that direction are especially welcome.
+Curious where the project is headed? The long-term direction lives in the **[ROADMAP](https://github.com/SteffenLav/qmx-panadapter/blob/main/README.md#roadmap)**. Current focus areas are the unattended two-way JS8 QSO (with compound callsigns), web-UI audio streaming, and the CW page. Feature requests that line up with that direction are especially welcome.
 
 ---
 

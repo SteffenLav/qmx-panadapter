@@ -152,6 +152,101 @@ def check_forward_looking():
     return errors
 
 
+# Names the docs may use that are NOT files in this repo: ESP-IDF tooling,
+# upstream sources quoted for reference, and HTTP responses that merely look
+# like filenames.
+#
+# ⛔ KEEP THIS LIST SHORT AND SPECIFIC. A wildcard here is how the rule
+# below stops catching anything, which is the failure mode every other rule in
+# this file has already had once.
+FOREIGN_SOURCES = {
+    # ESP-IDF / toolchain
+    "idf.py", "export.ps1", "export.sh", "esptool.py", "espefuse.py",
+    "idf_monitor.py", "setup.py",
+    # upstream sources quoted in the docs
+    "varicode.cpp", "varicode.h", "mainwindow.cpp", "genjs8.f90", "JS8.cpp",
+    "bootloader_utility.c", "spiffs.h", "esp_spiffs.h",
+    # an HTTP response, not a file on disk
+    "toc.json",
+}
+
+_SRC_RE = re.compile(
+    r"(?<![\w./-])((?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*"
+    r"\.(?:c|h|cpp|py|ps1|f90))(?![\w/-])"
+)
+
+_REPO_SKIP_DIRS = {".git", "build", "managed_components", "graphify-out",
+                   ".claude", "__pycache__", "scratchpad", "node_modules"}
+
+_real_paths = None
+_real_names = None
+
+
+def _repo_index():
+    """Every source path in the tree, by full relative path and by basename.
+
+    Resolving by BASENAME as well is deliberate. The docs name files both bare
+    ("cat.c") and prefixed ("main/cat/cat.c"), and a hardcoded list of
+    directory prefixes went stale the first time it was written - it missed
+    main/cat/ and main/audio/ and reported two real files as ghosts.
+    """
+    global _real_paths, _real_names
+    if _real_paths is not None:
+        return _real_paths, _real_names
+    _real_paths, _real_names = set(), set()
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in _REPO_SKIP_DIRS]
+        for fn in files:
+            rel = os.path.relpath(os.path.join(root, fn), REPO).replace("\\", "/")
+            _real_paths.add(rel)
+            _real_names.add(fn)
+    return _real_paths, _real_names
+
+
+def check_named_source_files():
+    """A doc that names a source file which exists nowhere in the tree.
+
+    ⭐ WHY THIS RULE EXISTS. README's project-layout block listed
+    `util/fps.c` - a file that has never existed here - and
+    build/architecture.md said `util/` holds an "FPS counter". The frame rate
+    is `display_fps_x10()` in display/display.c, reported by util/cpu_stats.c.
+    Both statements survived the 2026-10-12 restructure and check_docs
+    reported CLEAN, because nothing here had ever asked whether a path the
+    prose names is real.
+
+    ⚠ IT CATCHES WRONG NAMES, NOT WRONG FACTS. The same pass found
+    `render/render.c` described as a "30 Hz render task" against
+    RENDER_PERIOD_MS 100. A wrong number in a true filename is invisible to
+    this rule and still has to be read.
+    """
+    paths, names = _repo_index()
+    out = []
+    for path in _md_files():
+        for n, line in enumerate(_read(path).splitlines(), 1):
+            for m in _SRC_RE.finditer(line):
+                named = m.group(1)
+                base = named.rsplit("/", 1)[-1]
+                if named in FOREIGN_SOURCES or base in FOREIGN_SOURCES:
+                    continue
+                # A path WITH a directory must match a real path, whole or
+                # by tail: "main/nope/cat.c" is wrong even though cat.c is
+                # real. Only a BARE basename falls back to "does this name
+                # exist anywhere", because the docs legitimately write both
+                # "cat.c" and "main/cat/cat.c" for the same file and a
+                # hardcoded prefix list went stale the first time it was
+                # written.
+                if "/" in named:
+                    if named in paths or any(q.endswith("/" + named) for q in paths):
+                        continue
+                elif base in names:
+                    continue
+                out.append(
+                    "%s:%d: names %s, which exists nowhere in this tree"
+                    % (_rel(path), n, named)
+                )
+    return out
+
+
 def _normalise_heading(text):
     """Reduce a heading to something comparable across two writing styles.
 
@@ -364,6 +459,7 @@ def run(verbose=True):
     missing = check_pdf_coverage()
     dupes = check_duplicate_coverage()
     stale = check_stale_version_markers()
+    ghosts = check_named_source_files()
 
     if verbose:
         if errors:
@@ -386,10 +482,14 @@ def run(verbose=True):
             print("check_docs: STALE VERSION MARKERS (%d):" % len(stale))
             for s in stale:
                 print("  " + s)
-        if not (errors or bad_links or missing or dupes or stale):
+        if ghosts:
+            print("check_docs: NAMED SOURCE FILES THAT DO NOT EXIST (%d):" % len(ghosts))
+            for g in ghosts:
+                print("  " + g)
+        if not (errors or bad_links or missing or dupes or stale or ghosts):
             print("check_docs: clean")
 
-    return errors + bad_links, missing + dupes + stale
+    return errors + bad_links + ghosts, missing + dupes + stale
 
 
 if __name__ == "__main__":

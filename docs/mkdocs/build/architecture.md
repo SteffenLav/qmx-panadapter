@@ -14,14 +14,14 @@
 | `ft8_test.c` | FT8 RX: slot loop, capture, decode, state machine |
 | `ft8_sim.c` | FT8 simulation mode (phantom stations) |
 | `ft8_qso.c` | FT8 QSO state machine (pounce + CQ-run) |
-| `render/` | 30 Hz render task, spectrum smoothing, waterfall |
+| `render/` | 10 Hz render task, spectrum smoothing, waterfall |
 | `wifi/` | WiFi + SNTP |
 | `net/webserver.c` | HTTP server, web UI endpoints, WebSocket |
 | `adif/` | ADIF logging, QRZ/eQSL upload |
 | `storage/` | NVS settings, config I/O |
 | `rtc/` | RTC driver (RX8130CE) |
 | `time_sync/` | Time orchestrator (SNTP/RTC/QMX/manual) |
-| `util/` | FPS counter, diagnostic logging, bandplan |
+| `util/` | Diagnostic logging, bandplan, CPU/frame-rate reporting |
 | `espressif__usb_host_uac/` | UAC + CDC-ACM coexistence (patched) |
 | `espressif__esp_lcd_touch_st7123/` | ST7121/ST7123 compatibility (patched) |
 
