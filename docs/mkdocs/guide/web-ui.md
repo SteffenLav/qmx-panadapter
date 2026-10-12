@@ -531,6 +531,41 @@ on the very keyboard you are configuring.
     A button you deliberately press is one thing; a two-key combination that a
     slipped finger can produce is another.
 
+## Config backup, restore and edit
+
+The **Config down / Config up** buttons in the bottom bar save every setting to
+a plain text file, so you can edit it on a PC, put it back, or share part of it.
+
+**Config down** downloads `qmx-config.txt`, an INI-style file grouped into
+sections:
+
+| Section | What is in it |
+|---------|---------------|
+| `[settings]` | Callsign, grid, WiFi SSID and password, CW pitch, IF trim, I/Q balance, flat spectrum, zoom, colour map, brightness, dB range, EMA, GPS toggle, keypad layout, QRZ key, eQSL user and password |
+| `[cq]` | The three FT8 CQ-message presets, and which one is active |
+| `[ft8_filters]` | The CQ-run include/exclude filter terms and toggles |
+| `[memories]` | The 32 memory channels, one per line: `slot = freq_hz, mode, label` |
+
+**Config up** picks an edited file and **merges** it back. Only the keys and
+sections actually present in the file change; everything else is left alone, and
+unknown keys are ignored, so a file from a newer firmware still loads. Memory
+channels apply at once, other settings after a restart.
+
+!!! danger "The file contains your passwords in clear text"
+    It holds your **WiFi password** and your **QRZ and eQSL credentials**
+    unencrypted, because it is meant to work as a complete backup. Keep it
+    private, and strip those lines before sending the file to anyone.
+
+Three things it is good for:
+
+1. **Back up before a clean flash.** Config down, erase and flash, Config up -
+   seconds instead of re-typing everything on glass.
+2. **Edit with a real keyboard.** Faster for callsign, grid, CQ messages, or
+   entering a batch of memory channels.
+3. **Share a band plan.** Copy just the `[memories]` section into a message;
+   another operator pastes it into their own file and uploads it, and their
+   other settings are untouched.
+
 ## LoTW Upload
 
 Uploading to ARRL's **Logbook of The World** requires an existing LoTW account and a callsign certificate (made with ARRL's TQSL program).
