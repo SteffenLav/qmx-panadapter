@@ -251,9 +251,24 @@ foreach ($c in $chapters) {
 
         $allSubsections[$c.Id] = $subsections
 
-        # Append guide content after the chapter header
-        # Use string replacement instead of regex to avoid escaping issues
-        $userGuidePart = $userGuidePart -replace "(?m)^## $([regex]::Escape($numbered))$", "## $numbered`n`n$guideContent"
+        # Replace the WHOLE README section with the guide chapter.
+        #
+        # This used to insert the guide content after the heading and leave
+        # README's own prose below it, so every topic was printed twice from
+        # two sources that had drifted apart - the Live spots chapter said
+        # "POTA, RBN and DX cluster" and then "Two sources feed the same
+        # display" a few paragraphs later. README now carries only a short
+        # lede per chapter, for people reading it on GitHub; the guide file is
+        # the single source and it is what gets printed.
+        $escaped = [regex]::Escape($numbered)
+        $sectionRe = New-Object System.Text.RegularExpressions.Regex(
+            "(?ms)^## $escaped\r?\n.*?(?=^## |\z)")
+        if ($sectionRe.IsMatch($userGuidePart)) {
+            $userGuidePart = $sectionRe.Replace($userGuidePart,
+                "## $numbered`n`n$guideContent`n`n", 1)
+        } else {
+            Write-Error "PDF builder: no '## $numbered' section in README to attach $($c.Id) to."
+        }
     }
 }
 

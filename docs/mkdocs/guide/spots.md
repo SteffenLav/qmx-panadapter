@@ -68,7 +68,16 @@ preference to older ones.
 
 ### 2. Tapping a spot
 
-**Tap a callsign** and the radio tunes to it *and* switches mode:
+**Press, slide, lift.** Put a finger on a callsign and it highlights. Keep the
+finger down and slide along the lane and the highlight follows, so you can
+correct your aim on a crowded band instead of mistuning. Lift, and the radio
+tunes to whichever spot is highlighted.
+
+A quick tap is simply the short version of that. And if you change your mind,
+slide off the lane before lifting: the selection is abandoned and nothing is
+tuned.
+
+Either way the radio tunes to the station *and* switches mode:
 
 | Spot mode | Radio goes to |
 |-----------|---------------|

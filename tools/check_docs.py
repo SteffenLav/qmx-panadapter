@@ -59,6 +59,19 @@ PDF_SCRIPT = os.path.join(REPO, "tools", "build_userguide_pdf.ps1")
 # claim about the present.
 EXEMPT = {"version-history.md", "releases.md"}
 
+# Pages deliberately kept OUT of the printable guide. The PDF is the operator's
+# manual; these are for people working on the source, and they are reachable on
+# the website and in the on-device manual.
+#
+# ⛔ EXEMPT MEANS "DECIDED", NOT "IGNORED". A page listed here must have a
+# reason beside it. The coverage warning is only useful if everything in it is
+# genuinely wrong - a list with permanent residents in it stops being read,
+# which is exactly how guide/audio.md went missing from the PDF unnoticed.
+PDF_EXEMPT = {
+    "architecture.md",   # developer material - module map, task layout, DSP chain
+    "contributing.md",   # how to send a patch, not how to operate the radio
+}
+
 # Words that carry no subject: the two trees title the same thing differently
 # ("Quick Start" vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and
 # matching on these would either match everything or nothing.
@@ -66,6 +79,15 @@ GENERIC_WORDS = {
     "reference", "overview", "guide", "controls", "configuration", "settings",
     "start", "started", "getting", "introduction", "intro", "notes", "page",
     "the", "and", "your",
+    # A word that could head ANY page is not evidence that a subject is
+    # covered. "features" cost us the whole audio chapter: audio.md is titled
+    # "Audio Features - Tab5 Real-Time Decoding (Beta)", README has a
+    # "## Features" heading, the single shared word satisfied the match, and
+    # the check reported clean while the PDF carried none of the page.
+    # Measured 2026-10-12 with pdftotext: zero occurrences of "Panoramic CW
+    # Split" in the printed guide.
+    "features", "feature", "beta", "advanced", "basics", "using", "about",
+    "tab5", "qmx", "panadapter",
 }
 
 # Phrases that are true only until the next release and never become false again.
@@ -176,7 +198,7 @@ def check_pdf_coverage():
 
     for page in _nav_pages():
         base = os.path.basename(page)
-        if base in EXEMPT or base == "index.md":
+        if base in EXEMPT or base in PDF_EXEMPT or base == "index.md":
             continue
         if base in injected:
             continue
@@ -195,7 +217,13 @@ def check_pdf_coverage():
         subject = set(title_key.split()) - GENERIC_WORDS
         if not subject:
             continue
-        if any(subject & (set(k.split()) - GENERIC_WORDS) for k in readme_headings):
+        # ⛔ TWO shared words, not one, when the subject has them to give.
+        # One shared word is how "Audio Features" matched "## Features". A
+        # single-word subject ("WSPR", "JS8") can still match on its one word,
+        # because that word IS the subject.
+        need = 1 if len(subject) == 1 else 2
+        if any(len(subject & (set(k.split()) - GENERIC_WORDS)) >= need
+               for k in readme_headings):
             continue
         warnings.append(
             "%s is on the website and in the on-device manual, but nothing in "
