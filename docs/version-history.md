@@ -4211,6 +4211,28 @@ Audio and binaural CW remain a **declared beta**.
 
 ⚠ **Everything in v1.17.0 still stands**, including that JS8 is a beta and that nothing has yet been decoded through the 3.5 mm jack.
 
+### Shipped in v1.18.0 — 2026-10-12
+
+**Your radio can now be told a PA voltage it must never exceed, and the Output power control has stopped inventing one.**
+
+- ⭐ **"Never exceed PA voltage"**, a new setting in the Output power section of the drawer. Set it and Calibrate Power's sweep stops there, and the window tells you how many steps it will key before you start. It is off by default, so nothing changes until you set one. This is the only PA-voltage setting that nothing but you writes — Declared power, Output power and WSPR all write the radio's own *Max. PA voltage*, which is exactly why that one cannot be used as a limit. Use it for a 9 V build, a radio with a known weakness in the finals, or any PA you do not want driven to 12 V. Proven on hardware: a sweep into a dummy load with the limit at 11.5 V ran 43 of the 45 steps and put the radio back where it started.
+
+- ⛔ **Opening the drawer could change your Max. PA voltage, and store the change** *(Bryan N0LUF)*. Bryan ran Calibrate Power and found his Max. PA voltage had gone from 11.5 V to 12. The sweep was not at fault — it reads the voltage, restores it and confirms that by read-back. What overwrote it was the **Output power** control on the next drawer open: calibration deliberately sets no target of its own, so that control found nothing stored, picked a calibrated step anyway, sent it to the radio and then saved it as Bryan's own per-band setting, where it survived a reboot. A control with nothing stored now displays and sends nothing. ⚠ An earlier fix for the same code changed which wrong value was sent instead of stopping it being sent at all, which is why this came back with a different number in it.
+
+- **Calibrate Power promised 45 steps when it was going to run 43.** The dummy-load warning was written once when the window was built and never looked at your limit. The step count is what you use to judge whether you have time for the sweep, and the minutes scale with it, so both now follow the limit.
+
+- ⭐ **Portable and special-event stations were invisible in JS8, and now they are not.** `G0ABC/P`, `W1ABC/4` and special-event calls travel in a frame that needs a different codec, and until now the Tab5 refused that frame rather than risk putting somebody else's callsign on your screen. It reads them now. ⚠ **Not yet confirmed on air** — no compound station has been heard here to prove it end to end, so it is checked against the protocol and against eleven deliberate faults in the implementation, and nothing more than that. The same work found that a compound callsign in a *transmitted* CQ could have gone out one character short, which is a different station; that cannot happen now.
+
+- **The saved diagnostic log was quietly throwing away history.** `qmx-log-saved.txt` is the copy that survives a power-off, and it was set to hold two generations of 256 KB on a partition of 934 KB. SPIFFS cannot reclaim space without a whole free block to work in, so it ran out long before reaching that size and dropped a whole generation each time, a few hundred times over. What you actually got was smaller than the 512 KB it was aiming at, and unpredictable. It now holds 256 KB that it keeps. On the same partition, the boot-time repair that is supposed to tidy a damaged filesystem could never write its repair down while the partition was full, so it reported the same fault at every boot for weeks and fixed it never; it now runs after the space is freed rather than before.
+
+- **Your PA-voltage limit now survives a backup.** It was missing from `GET /api/config`, so restoring a backup silently put you back to no limit — on the one setting that exists to protect the radio.
+
+- ⭐ **The manual had become two manuals, and the printed guide was printing both.** The README and the guide pages had drifted into separate accounts of the same features, and the PDF builder pulled from both into the same chapter — about an eighth of the printed guide was a stale copy of itself. Receive-from-the-jack and the web API had no chapter at all. The checker that is supposed to catch this had four blind spots and was reporting clean. All fixed, and the checker now also refuses a document that names a source file which does not exist — which is how `util/fps.c`, a file that has never existed, sat in the project layout, and how both trees came to describe a 10 Hz task as running at 30.
+
+⚠ **If you have set "Never exceed PA voltage"**, remember it caps the calibration sweep too. A band calibrated under a limit only describes the radio up to that limit, so raise it and recalibrate if you later want the full curve.
+
+⚠ **Everything said about JS8 in v1.17.0 still stands**: it is a beta, a full automatic two-way QSO has not been completed, and nothing has yet been decoded through the 3.5 mm jack.
+
 ---
 
 ## Appendix - archived engineering notes from CLAUDE.md

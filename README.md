@@ -180,7 +180,7 @@ levels where nothing else would be heard at all. Nobody replies and nothing goes
 log. The page lists what was heard each two-minute cycle with the band, distance and
 bearing, and the furthest of the session. Receiving is the default; transmitting is opt-in, refuses to
 key without your callsign and grid, and has a transmit schedule and optional band hopping.
-**Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output
+**Calibrate Power** sweeps *Max. PA voltage* on a dummy load and measures real RF output, and **Never exceed PA voltage** keeps that sweep away from a limit you set yourself
 at each step, per band. **Declared power** then only offers the standard WSPR dBm steps
 your calibration actually reaches — each one labelled with its real measured wattage, not
 a textbook figure — so what you declare (published worldwide with every spot) matches
@@ -679,7 +679,7 @@ Pick **JS8** from the **Preset** dropdown in the FT8 view - the dropdown is thre
 
 With JS8 selected the right pane carries two tappable tabs: **Stations** (who is on the band, with grid and age) and **Conversation** (what has been said - AGE, Hz, CALL, MESSAGE). Both appear in the browser too.
 
-⚠ **JS8 is new in v1.17.0 and declared a beta.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been completed**, and compound callsigns are not handled.
+⚠ **JS8 is a beta, new in v1.17.0.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been completed.** Compound callsigns — `G0ABC/P`, `W1ABC/4`, special-event calls — are **read** from v1.18.0, where before they were discarded without trace, but no compound station has yet been decoded off air here to confirm it.
 
 **Sending free text.** Tap **Free text** under Call CQ on the Tab5 (JS8 only), or use the composer under the conversation pane on the web page. Both report how many frames the message takes and how many seconds it holds the frequency before anything is keyed, and show the normalised text the encoder will actually send - upper-cased, whitespace collapsed, unsendable characters dropped. One frame per 15-second slot, so a twelve-frame message is three minutes of transmitting. **Stop TX** aborts a run in flight and stays reachable while transmitting. Scriptable as `POST /api/cmd {"action":"js8_text","text":"..."}`, with `js8_text_plan` for the frame/second count without transmitting and `js8_text_cancel` to stop.
 
@@ -746,10 +746,25 @@ Receiving is the default and worth doing on its own; transmitting is opt-in.
 system, at every setting — instead of guessing from a rule of thumb.** From
 the drawer (**Radio → Antenna Tune → Calibrate Power**, or "Calibrate this
 band" the first time you open Declared power / Output power on an
-uncalibrated band), it sweeps *Max. PA voltage* through 45 points on a
-**dummy load** and records the real RF output at each with the QMX's own
+uncalibrated band), it sweeps *Max. PA voltage* up through the table on a
+**dummy load** and records the real RF output at each step with the QMX's own
 `PC;` readback. Takes a few minutes per band; results are saved per band and
-used from then on.
+used from then on. The window tells you how many steps it will key, and how
+long that takes, before you start.
+
+**If your radio must never see a certain voltage, set "Never exceed PA
+voltage"** in the Output power section of the drawer. The sweep obeys it and
+stops there, and the step count in the window follows it. Use it for a 9 V
+build, a radio with a known weakness in the finals, or any PA you do not want
+driven to 12 V. It is off by default, and it is the only PA-voltage setting
+nothing but you writes — Declared power, Output power and WSPR all write the
+radio's own *Max. PA voltage*, which is why that one cannot be used as a limit.
+
+The sweep also stops early once the measured power stops rising, which is what
+happens above your supply voltage. So a shorter results table is normal rather
+than a failure, and the window says which of the two ended it. Note the
+difference: that one stops a radio that *cannot* reach a voltage, while the
+setting above stops one that can reach it but should not.
 
 **Declared power** (the WSPR drawer) then only offers the standard dBm steps
 your calibration actually reaches on the current band — no more picking

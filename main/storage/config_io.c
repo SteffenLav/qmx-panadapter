@@ -88,6 +88,13 @@ char *config_io_export(size_t *out_len)
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    /* ⛔ THE ONE SETTING THAT EXISTS TO PROTECT THE RADIO, and it was
+     * missing from the backup until 2026-10-12, the same cycle that added
+     * it. A restore silently returned the operator to "no ceiling", on a
+     * radio he had said must never see 12 V. Adding state and serving it
+     * are one step - see power_cal_modal.c's header for the two field
+     * cases the ceiling came from. 0 = no ceiling, sweep the full table. */
+    APP("pa_ceiling_x10     = %u\n", (unsigned)c.pa_ceiling_x10);  // 0 = none, else x10 (115 = 11.5 V)
     APP("rxaud_gain_d10     = %u\n", (unsigned)c.rxaud_gain_d10);       // AGC ceiling / 10 (20 = 200)
     APP("rxaud_pan_width    = %u\n", (unsigned)c.rxaud_pan_width_x10);  // stereo width x10 (18 = 1.8)
     APP("rxaud_pan_blend    = %u\n", (unsigned)c.rxaud_pan_blend_x100); // cross-feed x100  (15 = 0.15)
@@ -438,6 +445,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "pa_ceiling_x10"))    settings_set_pa_ceiling_x10((uint16_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_gain_d10"))    settings_set_rxaud_gain_d10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_width"))   settings_set_rxaud_pan_width_x10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_blend"))   settings_set_rxaud_pan_blend_x100((uint8_t)atoi(val));
