@@ -658,7 +658,7 @@ sooner.
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
 
-### Taking the card out, and restarting the Tab5 (new in v1.16.11)
+### Taking the card out, and restarting the Tab5
 
 Two buttons in the settings drawer:
 

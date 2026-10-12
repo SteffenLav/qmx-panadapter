@@ -178,7 +178,7 @@ While an exchange is running, a **Mid-QSO** row appears under the FT8 controls:
 
 - **Re-send** — send the current message again
 - **RR73** / **73** — jump straight to either
-- **Pause** — skip exactly one transmission and keep the exchange (new in v1.16.2)
+- **Pause** — skip exactly one transmission and keep the exchange
 - **Cancel** — stop transmitting and end the exchange
 
 **Pause** is the one to reach for when you want to listen on your own slot: to
@@ -417,7 +417,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
-- **Reboot the Tab5** (new in v1.16.2) — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
+- **Reboot the Tab5** — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
 - **Port mode** (new in v1.17.0) — chooses what owns PORT.A, the same connector the relay below uses: **Relay** or **Unit GPS v1.1**. It sits directly above the relay row because it decides whether that row can do anything. Switching is applied live through the same sequencer the Tab5 drawer uses, so both screens always agree; a refusal comes back as `refused: PORT.A mode not changed: a relay pulse or power cycle is running, or the Unit GPS UART failed to start`, and the row snaps back to what the device is actually in. When **Unit GPS** owns the port the whole relay row greys out with the reason in its tooltip. See [Settings ▸ Port mode](settings.md#port-mode-porta) and [Unit GPS Time Source](time-sync.md#unit-gps-time-source-porta).
 - **Power-cycle relay** — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 

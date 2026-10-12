@@ -4,21 +4,37 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.17.1** - 2026-10-11
+**v1.18.0** - 2026-10-12
+
+**Your radio can now be told a PA voltage it must never exceed, and the Output power control has stopped inventing one.**
+
+- ⭐ **"Never exceed PA voltage"**, a new setting in the Output power section of the drawer. Set it and Calibrate Power's sweep stops there, and the window tells you how many steps it will key before you start. It is off by default, so nothing changes until you set one. This is the only PA-voltage setting that nothing but you writes - Declared power, Output power and WSPR all write the radio's own *Max. PA voltage*, which is exactly why that one cannot be used as a limit. Use it for a 9 V build, a radio with a known weakness in the finals, or any PA you do not want driven to 12 V. Proven on hardware: a sweep into a dummy load with the limit at 11.5 V ran 43 of the 45 steps and put the radio back where it started.
+
+- ⛔ **Opening the drawer could change your Max. PA voltage, and store the change** *(Bryan N0LUF)*. Bryan ran Calibrate Power and found his Max. PA voltage had gone from 11.5 V to 12. The sweep was not at fault - it reads the voltage, restores it and confirms that by read-back. What overwrote it was the **Output power** control on the next drawer open: calibration deliberately sets no target of its own, so that control found nothing stored, picked a calibrated step anyway, sent it to the radio and then saved it as Bryan's own per-band setting, where it survived a reboot. A control with nothing stored now displays and sends nothing.
+
+- ⭐ **Portable and special-event stations were invisible in JS8, and now they are not.** `G0ABC/P`, `W1ABC/4` and special-event calls travel in a frame that needs a different codec, and until now the Tab5 refused that frame rather than risk putting somebody else's callsign on your screen. It reads them now, proven on air: `SV2BBO/A` was decoded twice on 20 m and appeared in the station list under its full callsign. Three of the 52 JS8 decodes in that three-hour listen were frames of this kind, so it was a steady trickle of stations you could not see rather than a rare corner.
+
+- **Calibrate Power promised 45 steps when it was going to run 43.** The dummy-load warning was written once when the window was built and never looked at your limit. The step count is what you use to judge whether you have time for the sweep, so it now follows the limit.
+
+- **The saved diagnostic log was quietly throwing away history.** `qmx-log-saved.txt` is the copy that survives a power-off, and it was set to hold two generations of 256 KB on a partition of 934 KB. SPIFFS cannot reclaim space without a whole free block to work in, so it ran out long before reaching that size and dropped a whole generation each time, a few hundred times over. What you actually got was smaller than the 512 KB it was aiming at, and unpredictable. It now holds 256 KB that it keeps.
+
+- **Your PA-voltage limit now survives a backup.** It was missing from the configuration backup, so restoring one silently put you back to no limit - on the one setting that exists to protect the radio.
+
+- ⭐ **The manual had become two manuals, and the printed guide was printing both.** The README and the guide pages had drifted into separate accounts of the same features, and the PDF builder pulled from both into the same chapter - about an eighth of the printed guide was a stale copy of itself. Receive-from-the-jack and the web API had no chapter at all. The checker meant to catch this had four blind spots and was reporting clean. All fixed.
+
+⚠ **If you have set "Never exceed PA voltage"**, remember it caps the calibration sweep too. A band calibrated under a limit only describes the radio up to that limit, so raise it and recalibrate if you later want the full curve.
+
+⚠ **Everything said about JS8 in v1.17.0 still stands**: it is a beta, a full automatic two-way QSO has not been completed, and nothing has yet been decoded through the 3.5 mm jack.
+
+## Previous Releases
+
+### v1.17.1 - 2026-10-11
 
 **The web page stopped reading the radio's status in v1.17.0. This fixes it, and fills in the documentation JS8 should have had when it shipped.**
 
-- ⛔ **The web page showed no band, no mode and no bandwidth, and never followed the Tab5** *(Randy N4OPI)*. On v1.17.0 the status poll threw an error on every single tick, so everything it paints was left at whatever it had — the band, mode and bandwidth fields stuck at `--`, the page stuck on the panadapter whatever the Tab5 was doing, and the Pause state never updating. The spectrum and waterfall kept running because they arrive over a separate connection, which is exactly why it looked alive but stuck. A reload did not help and nor did rebooting the Tab5, because the fault was in the page. One wrong variable name, in a line added for the JS8 composer.
-- **A page that stops reading status now says so.** Three failures in a row put a banner across the top naming the error. The same kind of fault hid in the browser console once before and shipped again; the console is not where anyone looks while the page still looks healthy.
-- ⭐ **JS8 is in the documentation now, where it should have been.** It was a chapter nobody was pointed at: the front page of the manual and the website both still described an FT8/FT4 station, the feature lists did not mention JS8, the table of contents left it out, and Quick Start Step 8 described one mode. JS8 now sits beside FT8 and FT4 everywhere — what the mode is, that it is a sub-mode of the same page and how you reach it, the Conversation tab, the Free text button and the composer.
-- **Eleven terms readers meet in the guide were not in the glossary**, including **DT**, which appears on eleven pages and had never been defined, and **OTA**, which appears on fifteen. JS8, free text, heartbeat, directed message, GNSS, NMEA, pileup and slot are defined too, and the FT8/FT4, GFSK and LDPC entries were out of date.
-- **The User Guide PDF now has a Troubleshooting chapter.** The website and the manual inside the firmware both had one; the printable guide — the copy you take somewhere with no internet — did not.
-- **Receive from the 3.5 mm jack was missing from the README entirely**, so it never reached the PDF either. It is written up now, with the beta warning it carries, and Tony is credited for it: he asked for the feature and then ran a test build on his own Tab5 to find where the jack lands, which is the measurement the whole thing rests on.
-- **GPS Stats and CW keyer speed** were likewise absent from the README and the PDF. Both are now described where the rest of the features are.
-
-⚠ **Everything in v1.17.0 still stands**, including that JS8 is a beta and that nothing has yet been decoded through the 3.5 mm jack.
-
-## Previous Releases
+- ⛔ **The web page showed no band, no mode and no bandwidth, and never followed the Tab5** *(Randy N4OPI)*. The status poll threw an error on every tick, so everything it paints stuck at whatever it had. The spectrum and waterfall kept running because they arrive over a separate connection, which is exactly why it looked alive but stuck.
+- **A page that stops reading status now says so**, with a banner naming the error.
+- ⭐ **JS8 is in the documentation now**, with a chapter the manual actually points at, eleven missing glossary terms including **DT**, a Troubleshooting chapter in the PDF, and receive-from-the-jack, GPS Stats and CW keyer speed written up in the README where the rest of the features are.
 
 ### v1.17.0 - 2026-10-10
 
@@ -1016,7 +1032,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.17.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.18.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
