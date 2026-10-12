@@ -67,11 +67,11 @@ Stated plainly, because "beta" on its own tells you nothing:
 - Receiving. Real stations decoded off air, including other people's free text arriving intact.
 - Sending free text. A real JS8Call at the other end reassembled a three-frame message and displayed it complete, with the end-of-message marker it draws for a finished transmission.
 - Calling CQ. A CQ from the Tab5 was decoded by a second station.
+- **Compound callsigns.** `G0ABC/P`, `W1ABC/4` and special-event calls used to be discarded without trace — the frame that carries them needs a different codec, and before v1.18.0 the Tab5 refused that frame rather than risk putting somebody else's callsign on your screen. `SV2BBO/A` was decoded twice on 20 m and appeared in the station list under its full callsign, slash and all.
 
 **Not proven:**
 
 - **A full automatic two-way JS8 QSO has not been completed.** That is the next piece of work.
-- **Compound callsigns are read from v1.18.0, but not yet confirmed on air.** `G0ABC/P`, `W1ABC/4` and special-event calls used to be discarded without trace — the frame that carries them needs a different codec, and until v1.18.0 the Tab5 refused it rather than risk showing you somebody else's callsign. It now decodes them, checked against 11 deliberate faults in the implementation, but no compound station has yet been heard off air here to prove it end to end.
 - The fix that stops a message being shown under the wrong callsign (section 3) was built from a real on-air case but has **not** itself been re-tested on air — reproducing it needs a third station on a nearby frequency, which is not something that can be arranged to order.
 
 ### 7. Signal reports
