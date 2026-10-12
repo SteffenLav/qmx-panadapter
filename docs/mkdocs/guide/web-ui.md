@@ -531,6 +531,17 @@ on the very keyboard you are configuring.
     A button you deliberately press is one thing; a two-key combination that a
     slipped finger can produce is another.
 
+## Tab5Shot - what the screen looks like right now
+
+**Tab5Shot** in the bottom bar opens a live `/ss.bmp` capture of the Tab5's
+screen in a new tab. It is the quickest way to put what you are seeing into a
+bug report or a message to the group, without a camera and without reaching for
+the device.
+
+!!! note "It stops animations while it reads"
+    The capture comes from the live framebuffer, so the waterfall pauses for the
+    moment it takes. Nothing else is affected.
+
 ## Config backup, restore and edit
 
 The **Config down / Config up** buttons in the bottom bar save every setting to

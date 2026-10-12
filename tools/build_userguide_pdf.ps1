@@ -161,18 +161,20 @@ function Convert-Admonitions([string]$md) {
 $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
     @{ Id = "panadapter";    Title = "Panadapter";     Num = 2; GuideFile = (Join-Path $guideDir "panadapter.md");    Desc = "spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels" },
-    @{ Id = "spots";         Title = "Live spots";     Num = 3; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
-    @{ Id = "spot-map";      Title = "Spot map";       Num = 4; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
-    @{ Id = "web-ui";        Title = "Web UI";         Num = 5; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
-    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 6; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
-    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 7; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "js8";           Title = "JS8";            Num = 8; GuideFile = (Join-Path $guideDir "js8.md");         Desc = "keyboard mode on the device - decode, free text, CQ (beta)" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 9; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "settings";      Title = "Settings";       Num = 10; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "wspr";          Title = "WSPR";           Num = 11; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 12; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "troubleshooting"; Title = "Troubleshooting"; Num = 13; GuideFile = (Join-Path $refDir "troubleshooting.md"); Desc = "symptoms, causes and what to do" },
-    @{ Id = "reference";     Title = "Reference";      Num = 14; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "audio";         Title = "Audio";          Num = 3; GuideFile = (Join-Path $guideDir "audio.md");        Desc = "binaural CW and panoramic split - the part that is not a picture (beta)" },
+    @{ Id = "spots";         Title = "Live spots";     Num = 4; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
+    @{ Id = "spot-map";      Title = "Spot map";       Num = 5; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
+    @{ Id = "web-ui";        Title = "Web UI";         Num = 6; GuideFile = (Join-Path $guideDir "web-ui.md");      Desc = "browser panadapter, file browser, config backup, remote power-cycle" },
+    @{ Id = "web-api";       Title = "Web API";        Num = 7; GuideFile = (Join-Path $refDir "web-api.md");       Desc = "drive the radio from a script - every endpoint the browser page uses" },
+    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 8; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
+    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 9; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
+    @{ Id = "js8";           Title = "JS8";            Num = 10; GuideFile = (Join-Path $guideDir "js8.md");         Desc = "keyboard mode on the device - decode, free text, CQ (beta)" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 11; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 12; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "wspr";          Title = "WSPR";           Num = 13; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 14; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "troubleshooting"; Title = "Troubleshooting"; Num = 15; GuideFile = (Join-Path $refDir "troubleshooting.md"); Desc = "symptoms, causes and what to do" },
+    @{ Id = "reference";     Title = "Reference";      Num = 16; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(

@@ -560,6 +560,21 @@ Switch it off under **Settings → Radio & display → Still spectrum**. At ×1 
 
 ---
 
+## Audio
+
+*(beta)* The I/Q the radio already sends can be turned into sound on the Tab5
+itself, with no extra hardware: **binaural CW**, which places two stations at
+different points across the stereo image so your ears separate them the way
+they separate voices in a room, and a **panoramic CW split** that pans the two
+halves of the passband hard left and right.
+
+This is the part of the panadapter that is not a picture. On a crowded CW band
+it does something no amount of screen resolution can.
+
+Full chapter: [tab5.lav.dk/guide/audio](https://tab5.lav.dk/guide/audio/)
+
+---
+
 ## Live spots
 
 Other stations drawn straight onto your spectrum at the frequency they are
@@ -607,356 +622,63 @@ grid square.
 
 ## Web UI
 
-With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is shown in the bottom status bar on the Tab5.
+With the Tab5 on WiFi, open `http://<tab5-ip>` in any browser - the IP is in the
+bottom status bar. The browser panadapter is a view in its own right, not a
+window onto the Tab5: more waterfall history on a big monitor, and a mouse,
+which beats a finger for precise tuning.
 
-The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Files ▲ → Diagnostic download ↓** for the diagnostic logs, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
+It also carries the things that want a keyboard or a real screen - settings,
+the microSD file browser, config backup and restore, ADIF upload, and a remote
+power-cycle relay for the QMX.
 
-**microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
+Full chapter: [tab5.lav.dk/guide/web-ui](https://tab5.lav.dk/guide/web-ui/)
 
-**Eject microSD and Restart the Tab5 (new in v1.16.11).** Both are in the settings drawer. **Eject microSD** finishes the write in progress, closes the card and tells you when it is safe to pull it out — in a window that stays until you close it, not a message that fades while you are looking at the card slot. **Restart the Tab5** reboots cleanly from the screen. The card is also released automatically before a firmware update: before v1.16.11 a reset caught the card mid-transaction and, since the Tab5 cannot power the card down on its own, it stayed unreachable until the whole unit was powered off.
+---
 
-**Remote QMX power-cycle relay (v1.10.9, sequenced in this release).** **Miscellaneous ▲ → Remote relay** pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54 — the board's otherwise-unused Grove/EXT header). Drive an optoisolator from the pin and take its output to your QMX's PWR_ON/GND **signals**, and you can power-cycle the radio from anywhere on the LAN — the missing piece for a fully remote firmware upgrade, since a Tab5 flash always needs the QMX power-cycled afterward. **Pulse** fires a single pulse for the chosen duration and level — since PWR_ON is a toggle, this turns the QMX off *or* back on with no way to tell which from the LAN. **Power-cycle QMX** runs the whole sequence instead: off-pulse, wait, on-pulse, wait, then checks over CAT and tells you "QMX responded" or "no response from QMX". Scriptable as `POST /api/cmd {"action":"gpio_pulse", ...}` (single pulse) or `{"action":"gpio_power_cycle", "pin":53, "level":1, "ms":1000}` (the full sequence).
+## Web API
 
-**Building the interface — Randy N4OPI's design**, published here with his permission. Two components and a connector, plus one modification inside the radio.
+Every control the browser page uses is a plain HTTP endpoint, so anything that
+can make a request can drive the radio - a script, a macro pad, home
+automation, or your own client. Tune, read status, pull the decode list, fetch
+the ADIF log, stream the spectrum over a WebSocket.
 
-![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](docs/mkdocs/img/relay-schematic-n4opi.png)
+Read-only to start with: `GET /api/status` tells you everything the bottom bar
+knows.
 
-The QMX has **no PWR_ON/GND jack from the factory** — fitting one is the job. Wire a **2.5 mm TRS jack** into the case with **tip to PWR_ON and sleeve to GND** (Randy brought his out on the rear panel beside the ATU RF input). Then build the interface: a **4-pin Grove plug** into the Tab5's EXT socket, the chosen pin (**G53** or **G54**) through **R1, 100 Ω ¼ W** into a **PC817C optoisolator**, and the optoisolator's phototransistor across **J1, a 3.5 mm stereo audio jack** on the module, which reaches the radio's 2.5 mm jack through a **3.5 mm to 2.5 mm TRS patch lead** — so a pulse briefly connects PWR_ON to GND. The `EXT 5V` pin is unused, and the phototransistor side is polarity-sensitive — follow the schematic. Randy: *"with just 2 components it could just as easily be connected point to point and sealed up inside a piece of heatshrink tubing. Make sure you insulate your wires so the heatshrink doesn't squeeze them together and create a short."* Settings that work: the pin you wired, active level **High**, **2000 ms**.
-
-The optoisolator is what keeps the Tab5 and the radio electrically apart, and it is why only **G53/G54** are offered: they sit on a *keyed* connector and are held as driven outputs from boot. The bottom-edge Dupont pins would give a neater cable run, but that connector is unkeyed and sits beside 12 V IN — Randy's own reason for dropping the idea — and `G0`/`G1` are the snap-on keyboard's I2C bus.
-
-**Whole-band plan strip & adjustable split (new in v0.20.0).** Along the bottom of the browser view (above the status bar), a colour-coded CW/Digi/Phone strip spans the entire band with a draggable "visible window" (drag or tap to retune) and a VFO marker, mirroring the Tab5's own strip. Drag the divider between the spectrum and the waterfall to give either more room — the split is remembered in the browser. **Tab5Shot** now captures any open pop-up (band/mode dropdown) too, and the frequency keypad is draggable with a standard 10-key layout.
-
-**In FT8/FT4 mode the live stream pauses (new in v0.20.0).** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. While you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier. Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
-
-**Live TX status, and Call CQ from the browser.** In FT8/FT4 mode that same panel carries a **TX status banner** (v1.3.6) mirroring the Tab5's own label — red while transmitting including the "call 2 of 4" counter, amber armed, green on QSO complete, orange on timeout, plus the persistent "CQ stopped after N calls - no answer"; the browser tab title shows a red dot while transmitting, visible even in a background tab. Under it is a **Call CQ** button (v1.5.0, Dennis WN4FLA), so a CQ run that timed out or reached its call limit can be restarted without walking back to the radio. It **confirms first** — it keys the radio, and a mis-click from another room should not put a carrier on the air — then uses exactly what the Tab5 would: the active CQ preset, the current TX tone (honouring TX Hold) and the TXCQ ANY/EVEN/ODD parity, sharing one code path with the Tab5's own button so the two cannot drift. The request is handed to the display task, so the button greys out for a moment; watch the banner rather than the button. A request arriving while the Tab5 is not in FT8 is discarded, never queued. Replies and pounces are still initiated on the Tab5, where the decode list is.
-
-**Click or drag to tune.** Click or drag on the spectrum or waterfall — a cyan cursor appears with a live frequency readout and commits on release.
-
-**Mouse-wheel to pan or tune.** Rolling the mouse wheel over the spectrum or waterfall **pans** the view when zoomed in, letting you survey the band without touching the Tab5. At zoom ×1 the wheel **tunes** with mode-aware snap (CW 10 Hz, SSB 500 Hz, DiGi 100 Hz, AM 1 kHz).
-
-**Band / Mode / BW / Zoom** dropdown pills in the top bar send commands to the QMX via `/api/cmd` — the same effect as using the Tab5 top bar.
-
-**Zoom sync.** The browser renders the same zoomed window as the Tab5.
-
-**QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). **Search** (v1.11.0) filters as you type across callsign, band, mode, date, grid and reference, and says plainly when nothing matches — the answer to "have I worked this one". **Tick rows and press Export selected** to save just those contacts as their own ADIF file; the header tick box takes everything currently shown, so a search plus one tick gives you a single day, band or park. The menu is only shown when the log contains data.
-
-Three columns can be corrected by clicking them: the two **reports**, and **Their ref** — the park or summit the *other* station was activating. That last one is how a Park-to-Park contact gets into the log at all: while you are operating, the other activator's park number is on the POTA spots page on your phone and not in anything the radio sends, so you note it down and enter it when you get home *(Don Adams WB0LQW)*. It also fills itself in when the contact came from a spot, and it does that whether or not you were activating — the ADIF field records *their* activity, and a hunter's log should say which park they worked. It is Park-to-Park only when you were in a park as well, which is why the column is not called that. **An empty cell is not a fault**: the reference is matched from the POTA spot feed on the exact callsign, and not every digital-mode activator registers the activation — some just start calling `CQ POTA` — so where there is no spot there is no reference, which is better than a wrong one *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme (POTA, SOTA or WWFF) from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go again. Nothing else is editable: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so a wrong one is a delete-and-re-log.
-
-**QRZ / eQSL upload.** Two more buttons appear alongside the ADIF link once you have logged QSOs — see [QSO logging](#qso-logging-adif) for the full picture.
-
-### Config backup, restore & edit
-
-The **Config ↓ / Config ↑** buttons in the bottom bar let you save every setting to a plain text file, edit it on your PC, restore it, or share parts of it.
-
-- **Config ↓** downloads `qmx-config.txt` — a human-readable [INI-style](https://en.wikipedia.org/wiki/INI_file) file with everything the Tab5 remembers, grouped into sections:
-  - `[settings]` — callsign, grid, WiFi SSID/password, CW pitch, IF trim, IQ balance, flat-spectrum, zoom, colour map, brightness, dB range, EMA, GPS toggle, keypad layout, QRZ key, eQSL user/pass.
-  - `[cq]` — the three FT8 CQ-message presets and which is active.
-  - `[ft8_filters]` — the CQ-run include/exclude filter terms and toggles.
-  - `[memories]` — the 32 memory channels, one per line: `slot = freq_hz, mode, label`.
-- **Config ↑** picks an edited file and **merges** it back: only the keys and sections present in the file are changed — everything else is left as-is. Unknown keys are ignored (so a file from a newer firmware still loads). Memory channels apply immediately; other settings take effect after a restart.
-
-Three things you can do with it:
-
-1. **Back up before a clean flash.** Hit **Config ↓** first, do the clean/erase flash, then **Config ↑** to restore everything in seconds — instead of re-typing it all on glass.
-2. **Edit in a text editor instead of on the touchscreen.** Faster for callsign, grid, CQ messages, or punching in a batch of memory channels.
-3. **Share a band plan.** Copy just the `[memories]` section into a message — another operator pastes it into their file and uploads it to get the same channels (their other settings untouched).
-
-> The downloaded file contains your **WiFi password** and **QRZ/eQSL credentials in clear text** (so it works as a full backup). Keep it private; strip those lines before sharing a file with anyone.
-
-### Endpoints
-
-| Endpoint | Method | Returns |
-|----------|--------|---------|
-| `/` | GET | Browser panadapter (HTML) |
-| `/api/status` | GET | JSON status (see below) |
-| `/api/cmd` | POST | Send Band/Mode/BW/Zoom commands |
-| `/api/log` | GET | Diagnostic log download (`qmx-log.txt`) |
-| `/api/log/saved` | GET | Flash-persisted diagnostic log from before the last reboot/power-off |
-| `/api/adif` | GET | ADIF QSO log download (`qso.adi`) |
-| `/api/adif/clear` | POST | Wipe ADIF log and worked-call cache; resets the QRZ/eQSL/LoTW upload positions |
-| `/api/adif/delete` | POST | Delete one record: `?idx=<n>&call=<CALL>` — both must match the record or it answers 409 |
-| `/api/qrz_key` | POST | Save QRZ Logbook API key (body = raw key text) |
-| `/api/qrz_upload` | POST | Upload pending QSOs to QRZ Logbook; returns `{uploaded, failed, error}` |
-| `/api/eqsl_creds` | POST | Save eQSL username/password (JSON body `{"user","pswd"}`) |
-| `/api/eqsl_upload` | POST | Upload pending QSOs to eQSL (batched); returns `{uploaded, failed, error}` |
-| `/api/config` | GET | Download all settings + memory channels as editable INI (`qmx-config.txt`) |
-| `/api/config` | POST | Upload an INI config; merges into NVS; returns `{applied}` |
-| `/ss.bmp` | GET | 1280×720 RGB565 BMP screenshot |
-| `/ws` | WS | Binary spectrum stream (~10 fps) |
-
-### `/api/status`
-
-```json
-{
-  "battery":     { "level": 100, "mv": 8320, "charging": true, "present": true, "limit": false },
-  "wifi":        { "ssid": "MyNet", "rssi": -44, "ip": "192.168.1.213" },
-  "freq_hz":     14074000,
-  "mode":        "USB",
-  "band":        "20m",
-  "passband_hz": 2700,
-  "signal_dbm":  -87.4,
-  "zoom":        1.0,
-  "pan_bins":    0,
-  "flat_mode":   false,
-  "utc_epoch":   1750000000,
-  "qso_count":   12,
-  "qrz_key_set": false,
-  "eqsl_creds_set": false,
-  "tab5_fw":     "v0.18.8",
-  "qmx_fw":      "1_03_002QMX"
-}
-```
-
-Polled at 1 Hz by the landing page; safe to consume from monitoring scripts, home automation, etc. `qmx_fw` is read from the QMX via the `VN;` CAT command at link-up (empty until the radio responds). `signal_dbm` is the peak dBm around the IF-shifted VFO bin (null if DSP has no data yet). `qrz_key_set` / `eqsl_creds_set` tell the web UI whether to prompt for credentials before the next upload.
-
-### `/ws` — binary spectrum WebSocket
-
-Single-client endpoint. Each binary frame is 1026 bytes:
-
-| Bytes | Meaning |
-|-------|---------|
-| `0` | Frame type: `0x01` = spectrum |
-| `1` | Zoom decimation factor (1 = base 1024-bin spectrum, >1 = zoom-FFT with that decimation) |
-| `2–1025` | 1024 unsigned bytes, one per bin, quantised −130 dBm (0) to −30 dBm (255) |
-
-Bins are pre-shifted server-side so byte 2 is the leftmost screen pixel. Push rate ≈10 fps.
-
-### Screenshots
-
-```powershell
-Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
-```
-
-### Who is hearing me
-
-*(needs WiFi)* **Miscellaneous → Who is hearing me** asks PSK Reporter which receivers have copied **your** callsign recently, and lists them by distance with the country, bearing, and the signal report they gave you.
-
-This is the reverse of the reports the panadapter *sends*, and the two are separate settings — you can have either without the other. Switch it on in the browser under **Settings → Spots & reporting**; there is deliberately no Tab5 control, because the answer is a table of distances and bearings that wants a screen you are already sitting in front of.
-
-It answers the one question no amount of local processing can: **am I actually getting out?** The valuable case is the mismatch. Stations you can hear that cannot hear you is a transmit-side problem — antenna, power, a bad connector — and from the receiving side alone that looks exactly like a dead band.
-
-It is read-only, and asks at most once every five minutes because that is the rate PSK Reporter requests. An empty list is the normal answer until you have transmitted: nobody can report hearing a station that has not been on the air.
+Full chapter: [tab5.lav.dk/reference/web-api](https://tab5.lav.dk/reference/web-api/)
 
 ---
 
 ## FT8 Receive
 
-![FT8 RX in action on 20 m — decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_v0.15.7.png)
+![FT8 RX in action on 20 m - decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_v0.15.7.png)
 
-*Live FT8 reception on 20 m (v0.15.7). Left pane: MODE / Preset freq / UTC / slot countdown with parity and progress bar / TX parity preference / operator identity / Call CQ / decode summary. Right pane: scrollable decode list.*
+*Live FT8 reception on 20 m. Left pane: mode, preset frequency, UTC, the slot
+countdown with parity, your identity and Call CQ. Right pane: the decode list.*
 
-Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15-second FT8 slots directly on the ESP32-P4 — no PC, no WSJT-X.
+Swipe in from the left edge to reach the FT8 screen. The Tab5 decodes 15-second
+FT8 slots on the ESP32-P4 itself - no PC, no WSJT-X - and shows each station
+with its country, distance, bearing and signal report.
 
-### Prerequisites
+FT4 is the same screen: pick it from the preset list and the slots become 7.5
+seconds.
 
-- **WiFi configured** — recommended for accurate UTC time. Without it the Tab5 falls back to its supercap RTC or the QMX clock. See [Time sync](#time-sync).
-- **Callsign and grid** set in the drawer → **Identity** if you want distance/bearing columns or plan to transmit.
-
-### The FT8 screen
-
-**Left pane:** MODE label · **Preset** frequency button (tap to pick a band's conventional FT8 dial frequency) · UTC clock · 15-second slot countdown with current parity (EVEN blue / ODD amber) and a gliding progress bar · **live mini occupancy strip** (the audio window as 50 Hz cells, same data and colours as the tone picker) · **TXCQ ANY / EVEN / ODD** parity-preference button (one button, cycles) · **TX nnnn Hz** tone button · **Call CQ** button · last-slot decode summary and TX status.
-
-**Right pane — decode list:**
-
-| Column | Content |
-|--------|---------|
-| SL | Slot parity: **E** (blue, :00/:30) or **O** (amber, :15/:45) |
-| CALL | Extracted callsign |
-| MESSAGE | Full decoded FT8 message text |
-| COUNTRY | Country, spelled out where it fits and shortened where it does not - never a 3-letter code. 227 DXCC entities, with 18,365 further prefixes resolved at country level |
-| SNR | FFT-based estimate, colour-banded: green ≥0 / white −5..−1 / orange −15..−6 / grey <−15 |
-| DT | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 |
-| HZ | The station's audio tone (its offset within the FT8 passband) |
-| KM | Great-circle distance from your grid. A leading `~` means the station sent no grid and the distance comes from its country — approximate, and marked as such |
-| HRD | Times decoded since last appearance |
-
-CQ calls always appear at the top sorted strongest-SNR first; all other rows follow by SNR descending.
-
-**Row colour scheme** (CALL + MESSAGE columns): **white** for ordinary traffic, **green** for plain `CQ` calls, **dim grey** for callsigns already worked **on the current band** (a station you worked on 20 m still shows normally on 40 m — see [Reply filter](#reply-filter) for hiding them entirely), and **inverted red fill + white text** for any message containing your own callsign — your highest-priority rows literally pop off the screen instead of relying on red-on-black text, which field testing found hard to read at a glance.
-
-**Live view.** Stations not re-decoded within 60 seconds drop off the list automatically, even while the band is quiet — the list is who's on frequency *now*, not a cumulative history. (The "Active: N" counter that used to say so was dropped in v1.3.4; the wrapping TX/QSO status text took its line.)
-
-### Performance
-
-On a busy 20 m FT8 slot the decoder regularly yields 25–50 callsigns per slot. Both EVEN and ODD slots decode every cycle via a ping-pong dual-buffer architecture — a TX slot never causes the opposite parity to be skipped. Heap is stable across long sessions (≈39 KB internal RAM free, 25 MB PSRAM free during decoding).
+Full chapter: [tab5.lav.dk/guide/ft8-rx](https://tab5.lav.dk/guide/ft8-rx/)
 
 ---
 
 ## FT8 Transmit
 
-The Tab5 transmits FT8 via the QMX's `TA<freq>;` CAT command — no PC audio path, no WSJT-X. The QMX does all DDS synthesis and envelope shaping; the Tab5 sends the 79 tone-frequency commands at 160 ms cadence, bracketed by `TX;` / `TA0;` / `RX;`.
+Transmit goes out through the QMX's own `TA<freq>;` CAT command - no PC audio
+path and no WSJT-X. The QMX does the synthesis and the envelope shaping; the
+Tab5 sends the 79 tone commands.
 
-### Replying to a station
+Hold a row in the decode list and the panadapter builds the correct *next*
+message for that station from what they last sent, the same semantics as a
+double-click in WSJT-X. Hand the whole exchange to the auto-engine, or send it
+a message at a time. A completed QSO logs itself to ADIF.
 
-1. In the decode list, **hold your finger on a row** for ~250 ms. A dim highlight appears after ~80 ms so you can see which row you're targeting. List scroll locks once the gate fires; drag up or down to land on the right row.
-3. **Lift** — a confirmation modal shows the exact message that will go on air, the audio frequency, and the target slot parity.
-4. Tap **Auto Pounce** to hand the full QSO to the auto-engine, or **Transmit** for a single manual message.
-5. Tap **Cancel** (in the modal, or the armed indicator in the left pane) to disarm without transmitting.
-
-**Transmit is intelligent (v1.3.0):** it builds the correct *next* message for that station from what they last sent — the same semantics as a WSJT-X double-click. Their CQ → your grid (or your report directly, if **Skip TX1** is on); their grid → your report; their report → `R`+your report; their `R`-report → `RR73`; their `RR73`/`73` → `73`. The report value is always your live measurement of their signal. You can walk an entire QSO step by step with nothing but Transmit taps — and when you send the closing `RR73`/`73`, the QSO **logs to ADIF** exactly like an auto-engine contact. Auto Pounce is offered on any first reply; mid-QSO rows get Transmit only.
-
-Slot parity is set automatically — if you heard them on an EVEN slot, your reply goes on ODD so they're listening when you transmit.
-
-**The auto-engine** works the full exchange: TX1 (grid) → wait for their report → TX2 (R+report) → wait for RR73/73 → TX3 (73) → DONE. At every step it re-sends the current message for up to 4 consecutive slots if the other station doesn't respond. If no reply comes after 4 slots, the QSO times out (orange status, tap to clear).
-
-**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Options editor, a pounce opens with your signal report immediately instead of the grid exchange — saving one round trip. If the station has already aged out of the decode list, it falls back to the normal grid TX1 automatically.
-
-### Working a pile-up
-
-When you call CQ or work a run, more than one station may answer at once — and a caller who replies while you're mid-QSO with someone else used to vanish from the live decode list once they stopped transmitting. They're now held in a **Pileup** list so you don't lose them:
-
-- Whenever callers are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, reverting once the list empties.
-- Tap **Pileup** to see everyone who has called you and isn't worked yet. Tap a station to work them (the same confirmation modal as a decode-list tap), or tap the **✕** to dismiss one.
-- **Hold the button to open the ADIF log** — the log is always reachable this way, even while the button reads "Pileup" (v1.3.0; a one-time hint appears the first time the button flips).
-- A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
-- Working a caller from the pileup sends the correct *next* message for that station, built from whatever they actually last transmitted — the same laddering as tapping a decode-list row (v1.3.2). Previously it always opened with a signal report, which could never produce the `R`+report a station needs when they come back minutes later with a report of their own.
-- Worked-before stations appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer, so dupes you're willing to work stay visible.
-
-The tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did* transmit, check **Auto-work pileup** in the Options editor: when your current QSO completes (or immediately, if you check it with callers already waiting and nothing else going on), the strongest waiting caller is pounced automatically, draining the pile one contact at a time. It carries the same unattended-TX warning as the robot.
-
-### Calling CQ — CQ-run mode
-
-Tap **Call CQ**. No confirmation modal. The engine:
-1. Scans the current decode list for occupied 50 Hz audio bins.
-2. Picks the nearest unoccupied bin to 1500 Hz (standard FT8 sub-band centre).
-3. Arms the CQ on the matching slot parity and waits for the boundary.
-
-From there it's fully automatic:
-- The opposite-parity slot is decoded while CQ runs so replies are never missed.
-- The moment a station replies with your callsign, CQing stops and the exchange starts automatically — best-SNR caller chosen if multiple stations answer simultaneously.
-- After the exchange completes (RR73 → 73 → logged), CQ resumes on the same frequency.
-- A mid-exchange timeout also resumes CQ rather than dropping the frequency.
-- While CQ-run is active, other stations' `CQ` rows are hidden so replies to you stand out.
-
-Tap **Cancel** in the TX status bar at any time to stop.
-
-### FT8 Options
-
-Tap **Options** in the left pane to open the FT8 Options panel — everything that only means anything in FT8 mode, in one place rather than scattered through a general settings list (v1.9.4; was called **Filter**, renamed because the panel already held real behaviour toggles like Auto-work pileup and grey-listing, not just filters). Controls which stations CQ-run auto-answers, which rows appear in the decode list, and (on the web UI) the CQ message presets too.
-
-The web UI has the same panel behind its own **Options** button, shown only in FT8 mode next to **TX tone** — CQ messages and FT8 filters were pulled out of the general Settings list into it. The button carries a count badge of how many settings are currently on rather than a plain active/inactive colour (a colour would always read "on" for anyone who runs filters permanently, which tells you nothing); hovering it lists which ones. Inside the panel, an active checkbox gets an amber border/fill in addition to its own tick mark, so "what's already set" is never a colour-only signal.
-
-- **Include 1 / Include 2** — if either field has text, only messages containing one of its terms are eligible. Space- or comma-separated (e.g. `POTA SOTA` or `JA, VK`), matched against the *whole* decoded message text so POTA/SOTA tags, grid squares, country prefixes, `/P` suffixes etc. all work.
-- **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped even if they'd otherwise match.
-- **Exclude plain CQ callers** — hides bare `CQ ...` rows so only replies and exchanges remain visible.
-- **Show CQs in my run** — off by default. While you run your own CQ, other stations' plain `CQ ...` rows are hidden so replies addressed to you are not buried. Turn this on to keep seeing them, so an interesting station calling CQ in your listening slot is something you can break off and work. Display only — it does not change who the robot or Auto-work-pileup answers.
-- **Exclude worked-before** — hides callsigns already worked **on the current band** (per-band, from your ADIF log) from the list and from CQ-run auto-replies; the same station on a different band is treated as not worked.
-- **Skip TX1** — when you pounce a station, open with your signal report instead of the grid exchange for a quicker QSO (falls back to the grid exchange if the station has aged out of the decode list).
-- **Allow grey-listing** — off by default. When enabled, a station that times out two of your pounces in a row is set aside: the robot and Auto-work-pileup skip it, its decode row turns violet, and tapping it offers to clear it rather than opening the TX dialog. Useful on a busy band where one station simply never comes back. The list lives in RAM only and is forgotten at power-off.
-
-Tap **Save** to persist (NVS) and apply immediately.
-
-### Auto-answer CQ (robot)
-
-**⚠ Transmits unattended — never leave it running unsupervised.** When enabled, the robot picks a CQ caller every slot (filtered the same way as above, plus a worked-before skip) and runs the full exchange itself — no per-QSO confirmation, no tap required. Pick a **Priority**: Strongest signal, Weakest signal, or Most distant grid. Same TX1→report→RR73→73→ADIF-log flow as a manually-tapped reply; you just aren't the one tapping. You remain responsible for everything it transmits under your callsign, same as any other unattended digital-mode software.
-
-### TX status indicator
-
-The left pane shows a persistent status line below the slot countdown:
-
-| Colour | Meaning |
-|--------|---------|
-| **Red** | `TRANSMITTING: <message>` — burst in progress, with your **audio tone on its own line**; tap to abort |
-| **Amber** | `TX armed: <message>` then `nnnn Hz → EVEN/ODD, ~Ns` — waiting for slot; tap to cancel |
-| **Red-orange ⚠ FREQ BUSY** | Your tone is occupied (±50 Hz guard), and the warning names the frequency so you can act on it. During CQ-run this self-heals — the next cycle hops to the nearest clear tone automatically. Mid-exchange you can now move it yourself: see **TX audio frequency** below |
-| **Amber, `working <call> - waiting` + `TAP TO CANCEL`** | The station you are calling is mid-exchange with somebody else. Nothing is transmitted until they sign off or call CQ again — or tap to cancel the pounce and work someone else (v1.3.5). See **Waiting for a busy station** below |
-| **Green** | QSO complete |
-| **Orange** | QSO timed out — tap to clear |
-| **Dim white** | FT8 engine status passthrough (capturing / decoding / symbol count / …) |
-
-### TX audio frequency
-
-Your transmit tone is chosen automatically — the nearest clear 50 Hz slot to 1500 Hz, scanned against the stations currently decoded. From v1.3.3 you can both **see** it and **change** it.
-
-The **TX nnnn Hz** button in the FT8 left pane always shows it — to the right of the `TXCQ` parity button — and tapping it opens the picker. The picker repaints every second while it is open (v1.16.10), so you are choosing against the live occupancy rather than a snapshot taken when you tapped it. A **mini occupancy strip** under the slot countdown shows the same picture at a glance. (Before v1.3.4 this was a chip that appeared only while a CQ or QSO was running, and the tone was also repeated on the TX status line.)
-
-| Control | What it does |
-|---------|--------------|
-| **Occupancy strip** | The whole 200-2800 Hz window as 52 slots. **Green** free, **red** occupied, **white** you, **pink** your QSO partner |
-| **Touch and drag** | Pick a slot by dragging along the strip. The bar goes grey and follows your finger, the readout tracks it live, and it commits when you lift off |
-| **-50 / +50** | Nudge one slot at a time |
-| **Find clear slot** | Scans outward from where you are and jumps to the nearest free slot |
-| **Apply nnnn Hz** | Sends it to the radio |
-
-The readout also says in words whether the slot you have picked is clear or occupied, and the free slots nearest you are listed as numbers underneath.
-
-It applies **between** bursts. If a burst is on the air, Apply refuses and tells you to try again after it — the same rule WSJT-X operators are used to. Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange; your partner tracks the slot, not the frequency.
-
-> **The strip shows decoded stations, not raw spectrum.** A station too weak to decode will not show as occupied, and an all-grey strip means nothing has been heard yet rather than "the band is clear".
-
-### QSO override buttons
-
-During an active auto-QSO exchange (any state between first reply and final 73), three buttons appear in the left pane:
-
-| Button | What it does |
-|--------|--------------|
-| **Re-send / &lt;field&gt;** (amber) | Re-arms the current outgoing message immediately. The label shows what will go out — e.g. **Re-send / JO45** when waiting for their report, **Re-send / -07** when waiting for RR73 |
-| **RR73** (blue) | Skips straight to RR73, bypassing the report step |
-| **73** (green) | Fires the 73 sign-off and closes the QSO immediately |
-
-These are deliberate operator nudges for busy-band edge cases where the auto-engine falls a slot behind or you can see the exchange is further along than the state machine knows. The auto-engine handles the normal case; these exist for when a quick nudge is faster than waiting through the 4-slot retry cycle.
-
-### TX power / SWR readout
-
-After each burst the Tab5 queries `PC;`/`SW;` for instantaneous forward power and SWR and shows the result briefly in the status line: `Last TX: X.XW SWRx.xx [Ns]`. If SWR > 4.0 (indicating the QMX SWR-protection latch tripped), the firmware automatically cycles `TX;` / 150 ms / `RX;` to clear the latch so the radio is ready for the next TX slot without operator intervention.
-
-### CQ message presets
-
-Long-press the **Call CQ** button to open the preset editor. Three message slots with radio buttons — check the active one. A `+ <call> <grid>` quick-insert appends your identity. Standard CQ constructions (`CQ DX OZ1LAV JO65FR`, `CQ POTA …`) and ≤13-char free text both encode via the general ft8_lib encoder. Presets persist to NVS. The Call CQ button label shows the selected message; a short tap transmits it.
-
-**CQ auto-stop** (v1.3.5, Don WB0LQW's "I usually send CQ 2-4 times and then pause"). The editor's top-right **CQ stop** button cycles never / 1 / 2 / 3 / 4 / 5 / 10 calls and applies the moment you tap it — no Save needed. While calling, the TX status shows the counter live ("call 2 of 4"). After the last unanswered call the Tab5 listens through one more receive slot — an answer to your final call still starts the QSO normally — then stops and goes idle. The limit applies to every CQ run, including the automatic resume after a completed or timed-out contact; each fresh sequence starts the count over. Persists across power cycles and travels in the config backup.
-
-### QSO logging (ADIF)
-
-Every completed FT8 QSO — pounce or CQ-run — is automatically written to an ADIF v3.1.4 file at `/spiffs/qso.adi` on the Tab5's internal flash. The log survives reboots and re-flashes.
-
-**Download.** The web UI bottom bar shows the **QSO Logs** menu once the first QSO is logged. **ADIF download ↓** fetches `qso.adi` for import into any logging software (WSJT-X, Log4OM, DXKeeper, …) or for POTA.app, which has no upload API (see below); **View / edit log** opens it as a sortable table with per-record delete and Delete-all — see [Web UI](#web-ui).
-
-**View and edit on the Tab5.** The **ADIF Log** button on the FT8 screen (long-press always works, even while it reads "Pileup") opens the on-device viewer: a Today/All filter with a POTA activation counter (the title turns green at 10 QSOs today), long-press a row to delete that single record, and — new in v1.3.5 — **Delete all**, next to Close: the first tap arms it and shows the live count ("ALL 34?"), a second tap within five seconds erases the log, waiting disarms it. Clearing the log (from either the Tab5 or the browser) also resets the QRZ/eQSL/LoTW upload positions, so QSOs logged afterwards upload normally. The clear-first workflow is the practical POTA tool: start the activation with an empty log and the ADIF at the end is exactly what you submit.
-
-**Upload to QRZ Logbook / eQSL — directly from the Tab5.** Two more buttons appear next to the ADIF download link once you've logged a QSO: **"QRZ ↑"** and **"eQSL ↑"**. Tap either the first time and it prompts for credentials (QRZ: API key from *Logbook Data → API Key* on qrz.com; eQSL: your username and password — eQSL has no API-key scheme) and saves them on the Tab5, not just in the browser. Every tap after that uploads everything logged since the last successful upload — no need to re-enter credentials, and no risk of duplicate uploads, since the Tab5 tracks how far it's gotten into the log. If a record is rejected (bad credentials, quota, etc.) the run stops and reports the reason rather than skipping past it; fix the cause and tap again to resume from where it left off. eQSL accepts a whole batch of QSOs per request; QRZ's API takes one at a time, so a big log takes one HTTP round trip per QSO.
-
-**Upload to ARRL LoTW — also directly from the Tab5.** The Tab5 signs your QSOs on-device with your own LoTW callsign certificate, so no TQSL and no PC are involved. The bottom bar shows **"LoTW setup"** until it is configured, then **"LoTW ↑"**.
-
-Setup is a two-page guided flow. Page one points you at ARRL's own "Save the Callsign Certificate" instructions — you export a `.p12` file from TQSL, which most people did once, years ago. Page two takes that file, its password, and your DXCC entity number:
-
-| Field | Notes |
-|-------|-------|
-| **.p12 file + password** | Parsed **in your browser**, not on the Tab5 — the password never reaches the device. Only the certificate and key are sent |
-| **DXCC entity number** | Required. The same one your TQSL station location uses (Denmark = 221, USA = 291) |
-| **CQ zone / ITU zone** | Optional |
-| **US state / county** | **US stations only** (v1.3.3). Without them your QSOs earn no Worked All States and no county credit — for you or for the stations you work. The county is the name on its own (`Arlington`), not `VA,Arlington` |
-
-Every tap of **LoTW ↑** afterwards signs and uploads everything logged since the last successful upload. Ctrl-click **LoTW ↑** to re-run setup — a certificate is typically valid three years. Re-importing the *same* certificate no longer re-uploads your whole log; only an actually-changed certificate resets the upload position, since a new key means everything has to be re-signed.
-
-> Uploads are queued at ARRL's end. If a QSO does not appear immediately, check [the LoTW queue status](https://www.arrl.org/logbook-queue-status) before assuming a problem — the queue has run hours behind at busy times. LoTW rejects a malformed file at upload time, so anything that reaches the queue was signed correctly.
-
-**POTA.app** has no upload API at all (browser login or email only), so use the ADIF download above for that.
-
-**Fields in each record:**
-
-| ADIF field | Content |
-|------------|---------|
-| CALL | Their callsign |
-| FREQ | Dial frequency in MHz (3 d.p., e.g. `14.074`) |
-| BAND | Amateur band (e.g. `20M`) |
-| MODE | `FT8`, or `MFSK` for an FT4 contact — ADIF defines FT8 as a mode in its own right but FT4 only as a submode of MFSK, and this is the form WSJT-X writes and other software expects to read *(Don Adams WB0LQW)* |
-| SUBMODE | `FT4` on an FT4 contact, absent otherwise. Never a copy of MODE: QRZ rejects that pairing outright |
-| RST_SENT | Our SNR estimate (e.g. `−07`). **Omitted entirely if no report was exchanged** — writing a placeholder `599` into an FT8 log, as versions before v1.3.4 did, fabricates a measurement that then gets uploaded to QRZ/eQSL/LoTW |
-| RST_RCVD | Signal report received |
-| QSO_DATE | UTC date `YYYYMMDD` |
-| TIME_ON | UTC time `HHMMSS` |
-| STATION_CALLSIGN | Your callsign (from Identity in the drawer). This is the ADIF field POTA reads; the older `MY_CALL` spelling made POTA warn *"No station_callsign field, assuming operator …"* on every upload |
-| MY_GRIDSQUARE | Your grid |
-| GRIDSQUARE | Their grid (from the decoded FT8 message) |
-| MY_SIG, MY_SIG_INFO | The programme and reference **you** were activating (`POTA` / `US-1241`), when an activation is set — this is what POTA and SOTA credit the activation from |
-| SIG, SIG_INFO | The programme and reference **they** were activating. Filled in automatically when the QSO came from a spot, or by hand afterwards in **View / edit log** — and correct to record whether or not you were activating too; it is a Park-to-Park contact only when both of you were. Absent when the other station never registered the activation, which is why the column can be legitimately empty |
-| CONTEST_ID, STX_STRING, SRX_STRING, ARRL_SECT, MY_ARRL_SECT | Field Day mode only: contest ID `ARRL-FD`, your/their literal `<class> <section>` exchange text, and their/your section alone |
-
-**Clear.** `GET /api/adif/clear` from the web UI wipes the file and resets the worked-call cache.
-
-> Set your callsign and grid in the settings drawer → **Identity** before your first QSO so they appear correctly in logged records.
+Full chapter: [tab5.lav.dk/guide/ft8-tx](https://tab5.lav.dk/guide/ft8-tx/)
 
 ---
 
