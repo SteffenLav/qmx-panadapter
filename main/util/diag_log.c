@@ -336,6 +336,27 @@ size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_ne
 #define DIAG_FLASH_MAX      (128 * 1024)
 #define DIAG_FLASH_FLUSH_MS 30000
 
+/* ⛔ esp_spiffs_gc(label, len) IS NOT "COLLECT NOW". It means "make sure len
+ * bytes can be written", and IDF 5.4's spiffs_gc_check() decides what to do
+ * from len alone:
+ *
+ *   if (free_blocks > 3 && len < free_pages * PAGE)  return OK;   // no work
+ *   if (needed_pages > free_pages + stats_p_deleted) return FULL;  // no work
+ *   ... only between those two does the collection loop run
+ *
+ * So a request that is too LARGE returns SPIFFS_ERR_FULL *before* collecting
+ * anything - and IDF logs that at ERROR level itself, which is the same noise
+ * this change set out to remove. Asking for DIAG_FLASH_MAX (128 KB) did
+ * exactly that: measured 2026-10-12, gc failed 62 ms before the rotation it
+ * was meant to tidy up after, having done nothing.
+ *
+ * 32 KB is a THRESHOLD, not a target. While the partition has room the call
+ * returns OK and collects nothing, which is correct - there is nothing to do.
+ * Once free space falls under ~32 KB the request lands in the middle window
+ * and the loop runs, which is the only state that ever mattered. */
+#define DIAG_GC_REQUEST     (32 * 1024)
+
+
 static uint64_t s_flash_cursor = 0;   // position in s_total space
 
 static void diag_persist_task(void *arg)
@@ -450,7 +471,7 @@ static void diag_persist_task(void *arg)
                      * already runs it with room to work. */
                     remove(DIAG_FLASH_PATH_0);
                     rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
-                    esp_spiffs_gc("storage", DIAG_FLASH_MAX);
+                    esp_spiffs_gc("storage", DIAG_GC_REQUEST);
                     f = fopen(DIAG_FLASH_PATH, "w");
                     bytes = 0;
                     fail_streak = 0;
@@ -481,7 +502,7 @@ static void diag_persist_task(void *arg)
                  * that failure is the ENOSPC path below, which is what the 251
                  * measured early rotations were. Right after a rename is the
                  * cheap moment: whole blocks have just become free. */
-                esp_spiffs_gc("storage", DIAG_FLASH_MAX);
+                esp_spiffs_gc("storage", DIAG_GC_REQUEST);
                 f = fopen(DIAG_FLASH_PATH, "w");
                 /* This rotation was SILENT until 2026-10-12, which is why the
                  * capture could only count the ENOSPC ones. Saying which of

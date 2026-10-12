@@ -285,6 +285,16 @@ void adif_log_init(void)
     //
     // 65536 is enough for the delete-record temp file (a full copy of the log)
     // plus headroom.
+    //
+    // ⚠ ESP_ERR_NOT_FINISHED HERE IS "65536 BYTES ARE NOT AVAILABLE", NOT
+    // "gc could not collect". IDF 5.4's spiffs_gc_check() returns SPIFFS_ERR_FULL
+    // from the request size alone, before the collection loop, when
+    // needed_pages > free_pages + stats_p_deleted - and it also returns OK
+    // without collecting when there is already room. So this call is a
+    // THRESHOLD: it does work only when free space has fallen below what is
+    // asked for and the deleted pages can still cover it. A too-large request
+    // reports a scary error and does nothing, which is what the diag log's own
+    // 128 KB request was doing until 2026-10-12 (see DIAG_GC_REQUEST).
     esp_err_t gc = esp_spiffs_gc("storage", 65536);
     if (gc != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS gc: %s (continuing anyway)", esp_err_to_name(gc));
