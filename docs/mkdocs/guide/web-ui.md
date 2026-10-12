@@ -56,7 +56,7 @@ Click anywhere on the spectrum to tune to that frequency. The waterfall updates 
 
 **Adjustable split.** Drag the divider between the spectrum and the waterfall to give either one more room. Your chosen split is remembered in the browser.
 
-> **In FT8 or FT4 mode the live stream pauses.** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. This is deliberate — while you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier (new in v0.20.0). Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
+> **In FT8 or FT4 mode the live stream pauses.** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. This is deliberate — while you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier. Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
 
 ## FT8 Control
 
@@ -64,7 +64,7 @@ When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum strea
 
 **Band presets.** A dropdown beside the TX tone lists the standard FT8 or FT4 calling frequencies — the same list the Tab5's own **Preset** button offers, and it switches sub-mode and frequency together, so picking an FT4 frequency puts the Tab5 into FT4. The list follows whichever mode the Tab5 is in.
 
-The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
+The status banner mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
 **A finished QSO waits for you.** When an exchange completes, the browser shows
 `<callsign>  QSO complete` in green and **leaves it there** until you do
@@ -399,13 +399,13 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: the `qrz_key`, `eqsl_user` and `eqsl_pass` lines are in there in plain text, and an edited file uploaded back takes effect on the next upload with no restart. Note it holds your WiFi password in plain text too, so treat the file accordingly
 - **Config upload ↑** — restore settings from a backup file
-- **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
+- **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
 **Miscellaneous ▲** also carries **Prepare for flashing** — closes the USB host cleanly before you unplug the radio or reflash the Tab5, so the QMX is not left half-open.
 
-**Radio ▲** (new in v1.6.0) — the things that reach the radio itself:
+**Radio ▲** — the things that reach the radio itself:
 
 - **Switch to FT8/FT4** / **Switch to Panadapter** — changes the Tab5's own screen from the browser. The label always says where you are going, and it follows the Tab5 if you switch there instead
 - **Memory channels** — your 32 channels: click one to tune to it, drag one onto another slot to move it, or onto the bin to clear it
@@ -419,7 +419,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
 - **Reboot the Tab5** (new in v1.16.2) — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
 - **Port mode** (new in v1.17.0) — chooses what owns PORT.A, the same connector the relay below uses: **Relay** or **Unit GPS v1.1**. It sits directly above the relay row because it decides whether that row can do anything. Switching is applied live through the same sequencer the Tab5 drawer uses, so both screens always agree; a refusal comes back as `refused: PORT.A mode not changed: a relay pulse or power cycle is running, or the Unit GPS UART failed to start`, and the row snaps back to what the device is actually in. When **Unit GPS** owns the port the whole relay row greys out with the reason in its tooltip. See [Settings ▸ Port mode](settings.md#port-mode-porta) and [Unit GPS Time Source](time-sync.md#unit-gps-time-source-porta).
-- **Power-cycle relay** (new in v1.10.9) — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
+- **Power-cycle relay** — pulses one of two Tab5 GPIO pins (GPIO53 or GPIO54) for a chosen level and duration. Wire an external relay's trigger input to the pin and its contacts to your QMX's PWR_ON/GND **signals**, and this lets you power-cycle the radio remotely — the piece a remote firmware upgrade otherwise needs someone at the bench for, since the QMX always needs a manual power cycle after a Tab5 flash.
 
     !!! warning "Experimenter feature — you fit the connector yourself"
         **The QMX does not have a PWR_ON/GND jack.** Those signals have to be
@@ -588,7 +588,7 @@ Uploading to ARRL's **Logbook of The World** requires an existing LoTW account a
 
 After setup the button reads **LoTW ↑**. Each click signs all not-yet-uploaded QSOs on the device with your certificate and uploads them to lotw.arrl.org.
 
-**US stations: fill in state and county** (new in v1.3.3). These were not being sent at all before, which meant US operators' uploaded QSOs earned **no Worked All States and no county credit** — for them or for the stations they worked. Fill them in if your TQSL station location has them. The county is the **name on its own** (`Arlington`), not `VA,Arlington`. Operators outside the US can leave both blank.
+**US stations: fill in state and county**. These were not being sent at all before, which meant US operators' uploaded QSOs earned **no Worked All States and no county credit** — for them or for the stations they worked. Fill them in if your TQSL station location has them. The county is the **name on its own** (`Arlington`), not `VA,Arlington`. Operators outside the US can leave both blank.
 
 **Certificate renewal** — LoTW certificates expire roughly every 3 years. Use the **↳ Change LoTW certificate** row beneath the upload button to re-run setup (**Ctrl-click** on **LoTW ↑** still works, and was the only way in before v1.10.5). From v1.3.3, re-submitting the *same* certificate no longer re-uploads your whole log — only an actually-changed certificate resets the upload position, because a new key means every QSO has to be re-signed. So you can go back in to add a state and county without resending everything.
 

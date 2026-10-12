@@ -433,7 +433,7 @@ Reported by Samuel W7STF after a seven-hour session; a reboot fixed it immediate
 If a reboot does *not* fix it, the usual causes are a charge-only USB-C cable or a
 serial monitor still holding the port.
 
-### Clearing a stuck configuration (web-based reset, new in v0.21.0)
+### Clearing a stuck configuration (web-based reset)
 
 **Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.
 

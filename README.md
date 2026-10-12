@@ -108,7 +108,7 @@ connection is off by design, so CAT, the S-meter and the band/mode display go qu
 Changing the source needs a restart, which the Tab5 performs itself on **Save**.
 See [Audio](docs/mkdocs/guide/audio.md).
 
-**Decoded CW** *(new in v1.11.1)* — In CW or CW-R, a line along the bottom of the
+**Decoded CW** ** — In CW or CW-R, a line along the bottom of the
 panadapter shows the Morse the radio is decoding, with an estimate of the sending
 speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
 the panadapter no processing at all and does not touch the spectrum or FT8. Works on

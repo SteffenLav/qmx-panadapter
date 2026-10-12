@@ -209,6 +209,40 @@ def _nav_pages():
     return pages
 
 
+def _banner_version():
+    """The version README's banner claims, as (major, minor). None if absent."""
+    if not os.path.isfile(README):
+        return None
+    m = re.search(r"\*\*(?:Beta|Release) \u2014 v(\d+)\.(\d+)\.\d+",
+                  _read(README))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def check_stale_version_markers():
+    """"(new in vX.Y.Z)" markers older than the last release cycle.
+
+    A pinned version marker has the same shelf life as "new in the next
+    release" and nothing was watching it. The current minor and the one before
+    are left alone, so a marker gets a full cycle before it is called stale.
+    """
+    warnings = []
+    cur = _banner_version()
+    if not cur:
+        return warnings
+    for path in _md_files():
+        text = _read(path)
+        for m in re.finditer(r"new in v(\d+)\.(\d+)\.\d+", text):
+            ver = (int(m.group(1)), int(m.group(2)))
+            if ver >= (cur[0], cur[1] - 1):
+                continue
+            line = text[: m.start()].count("\n") + 1
+            warnings.append(
+                "%s:%d '%s' - the banner says v%d.%d, so this marker has "
+                "outlived its release" % (_rel(path), line, m.group(0),
+                                          cur[0], cur[1]))
+    return warnings
+
+
 def check_pdf_coverage():
     """Site pages that never reach the printable guide."""
     warnings = []
@@ -329,6 +363,7 @@ def run(verbose=True):
     bad_links = check_pdf_links()
     missing = check_pdf_coverage()
     dupes = check_duplicate_coverage()
+    stale = check_stale_version_markers()
 
     if verbose:
         if errors:
@@ -347,10 +382,14 @@ def run(verbose=True):
             print("check_docs: described in BOTH trees (%d) - drift surface:" % len(dupes))
             for d in dupes:
                 print("  " + d)
-        if not (errors or bad_links or missing or dupes):
+        if stale:
+            print("check_docs: STALE VERSION MARKERS (%d):" % len(stale))
+            for s in stale:
+                print("  " + s)
+        if not (errors or bad_links or missing or dupes or stale):
             print("check_docs: clean")
 
-    return errors + bad_links, missing + dupes
+    return errors + bad_links, missing + dupes + stale
 
 
 if __name__ == "__main__":
