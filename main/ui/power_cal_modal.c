@@ -190,6 +190,7 @@ static int               s_last_step      = PWRCAL_STEPS - 1; // highest step th
 static uint16_t          s_max_w_x100     = 0;        // best output seen this sweep
 static int               s_plateau_run    = 0;        // consecutive steps that did not beat it
 static bool              s_stopped_early  = false;    // plateau ended the sweep, not the table
+static lv_obj_t         *s_warn_lbl       = NULL;     // the dummy-load line - step count depends on the ceiling
 static lv_timer_t       *s_idle_timer     = NULL;     // polls the ceiling for the pre-Start line
 static int               s_idle_ticks     = 0;        // reset when that timer is created
 static char              s_band[8]        = "";
@@ -899,6 +900,7 @@ static void modal_build(void)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     lv_obj_t *warn = lv_label_create(s_panel);
+    s_warn_lbl = warn;
     {
         static char warn_txt[128];
         snprintf(warn_txt, sizeof(warn_txt),
@@ -994,6 +996,27 @@ static void modal_build(void)
 // because that is the thing worth seeing before committing to minutes of
 // key-down - and because getting it wrong is what sent Bryan N0LUF looking:
 // the manual promised one range and the window announced another.
+/* The dummy-load warning states how many steps will be keyed, so it has to
+ * follow the operator's ceiling like the status line does. It was built once
+ * from PWRCAL_STEPS and said 45 while the sweep ran 43 - seen on the glass
+ * 2026-10-12. The step count is what he uses to judge whether he has time for
+ * this, and the minutes scale with it. */
+static void warn_refresh(void)
+{
+    if (!s_warn_lbl) return;
+    const int steps = last_step_for_ceiling() + 1;
+    static char warn_txt[128];
+    snprintf(warn_txt, sizeof(warn_txt),
+             LV_SYMBOL_WARNING " Connect a DUMMY LOAD, not the antenna.\n"
+             "Keys a real carrier at %d steps - %d to %d minutes.",
+             /* Per-step seconds derived from the figure the original line
+              * carried for the full table - 45 steps was "5 to 8 minutes",
+              * i.e. 6.7 to 10.7 s each - so a full sweep still reads exactly
+              * 5 to 8 and a capped one scales from the same measurement. */
+             steps, (steps * 20 / 3 + 30) / 60, (steps * 32 / 3 + 30) / 60);
+    lv_label_set_text(s_warn_lbl, warn_txt);
+}
+
 static void idle_status_refresh(void)
 {
     if (s_state != PC_IDLE && s_state != PC_DONE) return;
@@ -1067,6 +1090,7 @@ void power_cal_modal_show(void)
         // discovered afterwards from a short results table.
         cat_query_pa_voltage();
         idle_status_refresh();
+        warn_refresh();
         if (!s_idle_timer) {
             s_idle_ticks = 0;
             s_idle_timer = lv_timer_create(idle_timer_cb, 200, NULL);
