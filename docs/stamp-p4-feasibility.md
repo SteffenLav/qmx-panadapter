@@ -129,6 +129,44 @@ frequency the radio is on without `ui.c`.** So "the UI half does not compile
 in" - the claim that made the first version of this document optimistic - is
 simply false. A headless build needs most of that file.
 
+## 4a. ⛔ THE AUDIO QUESTION, WHICH IS THE BIGGEST ONE
+
+⛔ **The first version of this document wrote off local audio with "you listen
+on the radio". That is wrong, and it is the most important error in it.**
+
+The Tab5 is not a screen bolted to a receiver. It is an audio renderer, and
+some of what it renders the radio cannot produce at all:
+
+- **Panoramic CW is SHIPPED** (`rx_audio.c`, 2026-09-20). It splits the CW
+  passband into its lower and upper halves and pans each hard L/R, so two CW
+  stations sitting either side of the tuned pitch separate **spatially**
+  instead of landing on one mono note. It is switchable from the Tab5's
+  resource modal and from `{"binaural":true}` over the API, and the pan shape
+  has its own persisted sliders. **A QMX cannot do this. The Tab5 does.**
+- **The RX audio path** generally - listening to CW and SSB through the Tab5's
+  own filtering rather than the radio's.
+- **Line-in** (the 3.5 mm jack, ES7210 channel 3) for a non-USB source.
+- **AM demodulation** - Sam W7STF's one genuine want, and the Tab5 is silent
+  in AM today. If it is implemented, the audio has to come out somewhere.
+
+⛔ **A headless stamp has no audio output at all.** So on that board, every one
+of those either does not exist, or it goes out over the network. There is no
+third option.
+
+⭐ **Which means A1 web audio stops being a wish and becomes the stamp's only
+possible audio path.** If the stamp is a direction, the roadmap order changes:
+web audio is no longer "the thing Sam has been waiting for since July", it is
+the prerequisite for a stamp having any audio at all - including AM, if that
+gets built.
+
+⚠ **And binaural does not ride along for free.** `docs/web-audio-feasibility.md`
+plans **mono** - µ-law at 12 kHz, **96 kbps** - and its own risk section calls
+the combined ~180 kbps with the spectrum stream "a duty cycle it has never
+soaked under". Panoramic CW is a **stereo** feature: carrying it doubles the
+audio payload to ~192 kbps, roughly **274 kbps combined**, over the same
+SDIO-to-C6 link that is already the measured bottleneck. That wants soaking
+before anybody promises spatial CW in a browser.
+
 ## 4b. How much code actually moves
 
 ⚠ **Counted with comments and blank lines EXCLUDED.** This project is 33%
