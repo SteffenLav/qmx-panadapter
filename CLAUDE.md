@@ -58,23 +58,15 @@ python tools/check_patches.py     # the authority - refuses the build if any is 
 ## ⛔ What can key the radio is a FILE, not a memory
 
 ```powershell
-python tools/check_unattended_tx.py    # the authority over docs/unattended-tx-inventory.md
+python tools/check_unattended_tx.py    # authority over docs/unattended-tx-inventory.md
 ```
 
-11 arming sites today; **6 can transmit with nobody deciding at that moment**.
-Add an `ft8_tx_arm`/`wspr_tx_arm` call and this refuses until the inventory says
-what triggers it.
-
-⚠ **Run it at every release, and if the table changed, say so in the release
-notes in the operator's terms** - *"your station will now answer X on its own,
-and here is the switch"*. 2026-10-13 he had to admit in public that he did not
-know his own shipped firmware answers JS8 callers unattended: the JS8 plan said
-that arrived at J10 when J4 had already done it, and the v1.17.0 note said "not
-completed" meaning *not proven* and was read as *not implemented*. See
-[the full rule](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
-
-⛔ **Never describe a capability as "not completed" / "not yet".** Say
-implemented or not, then separately proven or not. They are different claims.
+11 arming sites; **6 transmit with nobody deciding**. Run it at every release, and
+if the table changed say so in the notes: *"your station will now answer X on its
+own, and here is the switch"*. ⛔ **Never say a capability is "not completed"
+or "not yet"** - say implemented or not, then proven or not. 2026-10-13 he had to
+admit in public he did not know his own release answers JS8 callers unattended.
+See [the full rule](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
 
 They live in git-ignored `managed_components/`, so `idf.py fullclean`, a dependency
 refresh, or the release's `rm -r managed_components/` wipes them. All are idempotent.
