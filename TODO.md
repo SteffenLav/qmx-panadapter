@@ -48,17 +48,25 @@ for everyone.
 | # | What | State |
 |---|---|---|
 | **B1** | **The saved diagnostic log destroys 4 bytes in every 32-byte block** (John W5JSS) | ⛔ **OPEN, NOT REPRODUCED.** 9,740 events, ~11% of a 343 KB file. The RAM copy from the same download is CLEAN, so it is the SPIFFS path, not HTTP or the browser. Not reproducible on the bench (199 KB, 2 runs, no stride). **Next lead: his answer on whether he was band hopping.** This is the evidence channel for every field report, so it costs every future diagnosis |
-| **B2** | **JS8 frame counter is invisible outside the Free text composer** (Ryan KK6DZB) | ▶ Ready to do. The state EXISTS - `js8_ftx_active(sent,total)`, served, and the page already prints "Sending frame N of M" - but into `#js8-tx-plan` inside `#js8-tx`, which is `display:none` until the composer is open. He called CQ and saw nothing. ⚠ A single-frame CQ has no frames to count, so it needs a plain *transmitting / done* as well |
-| **B3** | **JS8 CQ repeats because FT8 does** (Ryan KK6DZB) | ⏸ **WAITING ON HIM.** JS8 convention is to call once and wait. He offered to say how it should behave; do not pick a default for him |
+| **B2** | **Ryan KK6DZB's JS8 UI draft** (full list received 2026-10-13 evening) | ✅ **BEHAVIOUR HALF DONE, NOT FLASHED** `9f440da9`. Tap selects (no TX), SNR + GRID buttons, conversation filters to the selection, free text opens "THEM US ", JS8 CQ calls once. ⛔ **The old claim in this row was WRONG**: the frame counter was never composer-only - `display_text` carried it to both surfaces all along. The real defects were the wording, no "finished" message, and `ftx_result` discarded by the browser. ▶ **STILL OPEN: the three-pane layout** (stations / this station's messages / type box, losing the Free text button) and **printing the message as it sends** - cheap, see the commit message |
+| **B3** | **JS8 CQ repeats because FT8 does** (Ryan KK6DZB) | ✅ **ANSWERED BY HIM AND DONE** `9f440da9`, not flashed. His words: "Calling CQ only once. You must hit CQ again to send again." FT8 untouched |
 | **B4** | **JS8 canned messages / macros, one-button recall** (Gyula HA3HZ) | ⏸ **WAITING ON HIM** for which substitutions he actually uses. ⭐ Half built: `cq_msg[3][28]` in `settings.h:361` is persisted and in the `[cq]` config backup - same mechanism. Sizing: free text takes **160** chars so presets want to be longer than 28, and three is too few. ⚠ `js8_presets` in the API is FREQUENCY presets, not messages |
-| **B5** | ⚠ **JS8 AUTO-QSO IS LIVE AND UNAUDITED** (Gyula HA3HZ, corrected 2026-10-13) | ⛔ **Not what this row said yesterday.** I claimed a JS8 query gets silence; his logs show the Tab5 automatically transmitting JS8 reports to **four stations** (`'IU2ITE HA3HZ -14'`, `'HB9ETH HA3HZ -07'`, `'DM3ME HA3HZ -18'`, `'9A3SWO HA3HZ -15'`). `ft8_qso.c` handles JS8 deliberately - branches at 510, 588, 1642. So the thing J10 was meant to gate behind interlocks **already happens through the FT8 auto-QSO path**, and nobody has tested what it looks like from the far end. ▶ **Decide: is unattended JS8 answering intended?** The narrow gap that IS real: the explicit directed command `SNR?` (cmd 0) is unhandled |
+| **B5** | ⚠ **JS8 AUTO-QSO IS LIVE AND UNAUDITED** (Gyula HA3HZ) | ▶ **PARTLY ADDRESSED** `9f440da9`: a JS8 tap/click can no longer start an exchange, so the hand-operated path is now press-per-message. ⛔ **THE ROBOT IS UNTOUCHED** - `ft8_robot` -> `ft8_qso_start()` is what answered Gyula's four callers, it is opt-in (`robot_en`), and nobody has yet tested what it looks like from the far end. The unattended count is STILL 6. The narrow real gap remains: the directed command `SNR?` (cmd 0) is unhandled |
 | **B6** | ~~The browser bypassed the WSPR page's top-bar guard~~ | ✅ **FIXED AND VERIFIED** `057a98b1`. Four of John's six reports were this one bug |
 
 ### C. Decisions owed by the operator
 
-1. **Push?** 3 commits unpushed on top of v1.18.0 (`057a98b1`, `3ea89dc7`,
-   `d3a17722`).
-2. **The I/Q server** - is it a direction, or is A1 the end of it? They are
+1. **Push?** 12 commits unpushed on top of v1.18.0. ⚠ A count in prose rots -
+   `git log --oneline origin/main..HEAD` is the authority.
+2. **Randy N4OPI: an ESP32-P4 stamp running the web UI only**, tucked inside the
+   QMX+ (M5Stamp ESP32P4 + Stamp C6, ~$20). His own words say it is not a
+   demand. ⚠ It needs a USB HOST connector the module does not fit, and
+   GPIO53/54 do not exist on it. NOT ASSESSED - no port has been looked at.
+3. **Bruce N9JCV: let an operator turn the web UI OFF** to give the Tab5 the
+   whole CPU. No such setting exists today (no `web_en` in `settings.h`). Small
+   and self-contained; wants deciding alongside Randy's idea, since they pull
+   in opposite directions.
+4. **The I/Q server** - is it a direction, or is A1 the end of it? They are
    different things and should not be conflated: A1 is **96 kbps** and needs
    none of the I/Q measurement.
 
