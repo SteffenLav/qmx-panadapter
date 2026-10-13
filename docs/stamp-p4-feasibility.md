@@ -78,10 +78,35 @@ About half the tree, and it is the half that took the longest:
 
 ## 4. What is genuinely lost, and what only LOOKS lost
 
-**Genuinely gone:** the display and touch, the on-screen keyboard, the BLE HID
-mouse and cursor, `/ss.bmp` screenshots (also a diagnostic), the ES7210
-mic/line-in, the speaker, the battery gauge and PMU, the SD slot, and the MBUS
-Module GPS.
+⚠ **"Not on the module" and "gone" are different things, and the first cut of
+this document ran them together.**
+
+**Gone, because they depend on a screen:** the display and touch, the
+on-screen keyboard, the BLE HID mouse and cursor, and `/ss.bmp` screenshots -
+which are also a diagnostic tool, so that one costs support as well as
+convenience.
+
+**Not fitted, but addable as carrier-board parts.** The Stamp-P4 carries no
+audio codec, amplifier, headphone jack, microphone or card slot (M5Stack's own
+spec page lists none of them), and no battery gauge or PMU. But the P4's
+peripherals are still there behind the 44 exposed GPIOs, so a carrier could add
+them. Inside a QMX+ most would be pointless: you listen on the radio.
+
+⭐ **The one genuine capability loss in that group is the LINE-IN path** - the
+3.5 mm jack is ES7210 channel 3, and it is how audio from a non-USB radio or a
+second receiver gets in. A stamp build is USB-only.
+
+⛔ **The SD card deserves care, and "it loses the SD" was too glib.** The
+ESP32-P4 has **two SDMMC slots**, both routable through the GPIO matrix, so a
+card CAN be wired to the stamp's pins. The real problem is contention, and this
+project already has it on the Tab5: `settings.c` records that "SD card I/O
+competes with the WiFi co-processor's SDIO link for the same shared SDMMC host
+peripheral", and an unnecessary 15-second SD write was found to be "a standing,
+unintentional trigger for that same hazard". On a stamp, where the C6 takes the
+BTB SDIO interface and Wi-Fi is the entire point of the board, that contention
+is something to design away from rather than into.
+
+**And the MBUS Module GPS**, which has the clean answer below.
 
 ⭐ The Module GPS has a clean answer, and it is the OPERATOR's point, not
 Randy's - Randy never mentions GPS anywhere in his message. The **QMX+ internal
