@@ -5011,11 +5011,11 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!sc) { cJSON_Delete(root); return httpd_resp_send_500(req); }
 
-        int n = js8_chat_count();
-        if (n > JS8_CHAT_MAX_MSGS) n = JS8_CHAT_MAX_MSGS;
-        int have = 0;
-        for (int i = 0; i < n; i++)
-            if (js8_chat_at(i, &sc->msgs[have])) have++;
+        /* The same filtered copy the glass draws - one selection, one list,
+         * both surfaces. See js8_chat_copy(). */
+        char sel[FT8_CALL_MAX_LEN];
+        js8_target_get(sel, sizeof(sel));
+        int have = js8_chat_copy(sel, sc->msgs, JS8_CHAT_MAX_MSGS);
 
         /* AGE is measured against the CALLER's clock - js8_page.c has none,
          * and the glass passes the same system time. */

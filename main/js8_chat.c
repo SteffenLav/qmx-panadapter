@@ -126,3 +126,18 @@ bool js8_chat_at(int i, js8_chat_msg_t *out)
     *out = s_store->msg[k];
     return true;
 }
+
+int js8_chat_copy(const char *sel, js8_chat_msg_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = js8_chat_count();
+    if (n > max) n = max;
+    int have = 0;
+    for (int i = 0; i < n; i++) {
+        js8_chat_msg_t m;
+        if (!js8_chat_at(i, &m)) continue;
+        if (sel && sel[0] && strcmp(m.sender, sel) != 0) continue;
+        out[have++] = m;
+    }
+    return have;
+}

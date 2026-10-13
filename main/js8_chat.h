@@ -94,4 +94,23 @@ void js8_chat_tick(int64_t now_utc, int quiet_s);
 int  js8_chat_count(void);
 bool js8_chat_at(int i, js8_chat_msg_t *out);
 
+/* Copy out the conversation, optionally only what ONE station said.
+ *
+ * ⛔ THE FILTER LIVES HERE BECAUSE THERE ARE THREE READERS, and the first cut
+ * of it filtered exactly one. The Tab5 pane (conv_repaint) and /api/js8 both
+ * draw the conversation and must agree, and on 2026-10-14 they did not: the
+ * glass filtered and the browser showed everything, which was MEASURED on the
+ * bench by selecting a station that had said nothing and watching the web pane
+ * keep both messages. [[feedback-sweep-the-class-not-what-i-noticed]].
+ *
+ * `sel` NULL or "" copies everything. A message whose sender is "" (a
+ * free-text run nothing identified) can never match a selection, so it is
+ * dropped while one is active. Returns how many were written.
+ *
+ * ⚠ THE THIRD READER IS DELIBERATELY NOT THIS: /api/status carries an
+ * 8-message `chat` preview so the operator can see decodes arriving without
+ * looking at the glass. That is a status readout, not the conversation pane,
+ * and filtering it would hide live traffic from a diagnostic. */
+int  js8_chat_copy(const char *sel, js8_chat_msg_t *out, int max);
+
 void js8_chat_clear(void);

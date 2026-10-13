@@ -3769,31 +3769,18 @@ static void conv_repaint(void)
             return;
         }
     }
-    int n = js8_chat_count();
-    if (n > JS8_CHAT_MAX_MSGS) n = JS8_CHAT_MAX_MSGS;
     /* ⭐ FILTERED TO THE SELECTED STATION, which is what Ryan KK6DZB asked
      * for in as many words: "anytime you click on a call sign in the
      * conversation mode it clears the conversations out and becomes a directed
      * message to the call sign you clicked on. Nothing else in the
      * conversation window."
      *
-     * The filter is applied while COPYING out of the store, not inside
-     * js8_page.c: the layout module takes a list of messages and knows nothing
-     * about who is selected, and that is the line worth keeping - the same
-     * list, filtered here, is what the browser gets from /api/js8.
-     *
-     * ⚠ A message with no sender (a free-text run nothing identified) is
-     * dropped by the filter, because it cannot be attributed to the selection
-     * either way. With no selection everything shows, as before. */
+     * ⛔ THE FILTER IS IN js8_chat_copy() AND NOT HERE, because /api/js8
+     * draws this same pane for the browser and the first cut filtered only
+     * this one. Measured on the bench: the glass filtered, the web did not. */
     char sel[FT8_CALL_MAX_LEN];
     js8_target_get(sel, sizeof(sel));
-    int have = 0;
-    for (int i = 0; i < n; i++) {
-        js8_chat_msg_t m;
-        if (!js8_chat_at(i, &m)) continue;
-        if (sel[0] && strcmp(m.sender, sel) != 0) continue;
-        s_conv->msgs[have++] = m;
-    }
+    int have = js8_chat_copy(sel, s_conv->msgs, JS8_CHAT_MAX_MSGS);
 
     js8_page_render(s_conv->msgs, have, (int64_t)time(NULL),
                     s_conv->lines, s_conv->row_msg);
