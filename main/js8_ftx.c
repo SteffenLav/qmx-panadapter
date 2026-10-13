@@ -167,16 +167,21 @@ void js8_ftx_tick(void)
         s_run.sent++;
         if (s_run.sent >= s_run.total) {
             ESP_LOGI(TAG, "free text complete: %d frame(s) sent", s_run.sent);
-            /* ⭐ SAY THAT IT FINISHED. Until now the run simply stopped:
-             * the TX line vanished, the status box went back to idle, and
-             * nothing anywhere said the message had gone out in full. An
-             * operator watching a 7-frame message cannot tell that from a run
-             * that died halfway (Ryan KK6DZB, 2026-10-12). ft8_status_set is
-             * the one line BOTH surfaces show while idle - the Tab5 label's
-             * idle branch and /api/status's idle passthrough - so one call
-             * reaches the glass and the browser. */
-            ft8_status_set("Free text sent - %d frame%s", s_run.sent,
-                           s_run.sent == 1 ? "" : "s");
+            /* ⛔ THE COMPLETION MESSAGE IS NOT SET HERE, AND THE FIRST CUT
+             * OF IT WAS. ft8_status_set() looked like the right home - it is
+             * the one line both surfaces show while idle - but the decode loop
+             * writes "RX: capturing..." to that same line every slot, so the
+             * message was gone inside a second.
+             *
+             * MEASURED on the bench, 2026-10-14: a two-frame run finished and
+             * /api/status already read "RX: capturing..." at the first poll
+             * after it. The operator would have seen nothing, which is the
+             * complaint this was meant to answer.
+             *
+             * ft8_screen_view watches this run go active -> idle on its 1 Hz
+             * timer and says so there, in the two places that persist: a toast
+             * on the glass and the STICKY web result, the same one a completed
+             * QSO uses precisely because it must not expire unasked. */
             memset(&s_run, 0, sizeof(s_run));
             return;
         }

@@ -1700,6 +1700,36 @@ static void t_clock_cb(lv_timer_t *t)
      * the same "one piece of state, both surfaces" rule as cq_parity. */
     js8_tx_bar_sync();
 
+    /* ⭐ SAY WHEN A FREE-TEXT RUN FINISHES. Ryan KK6DZB's complaint was that he
+     * "could not tell if it had transmitted my full message yet": the TX line
+     * simply vanished when the last frame landed, which reads exactly like a
+     * run that died halfway.
+     *
+     * Watched as an EDGE here rather than announced from js8_ftx.c, because
+     * the shared status line is overwritten by the decode loop within a second
+     * (measured - see the note there). These two homes persist: a toast, and
+     * the sticky web result that a completed QSO uses for the same reason.
+     *
+     * The total is remembered while the run is up, because js8_ftx zeroes the
+     * run the moment it completes and there would be nothing left to count. */
+    {
+        static bool s_ftx_was_active;
+        static int  s_ftx_last_total;
+        int sent = 0, total = 0;
+        bool now_active = js8_ftx_active(&sent, &total);
+        if (now_active) s_ftx_last_total = total;
+        if (s_ftx_was_active && !now_active && s_ftx_last_total > 0) {
+            char b[48];
+            snprintf(b, sizeof(b), "Free text sent - %d frame%s",
+                     s_ftx_last_total, s_ftx_last_total == 1 ? "" : "s");
+            ui_toast(b);
+            web_result_set_sticky("%s", b);
+            ESP_LOGI(TAG, "%s", b);
+            s_ftx_last_total = 0;
+        }
+        s_ftx_was_active = now_active;
+    }
+
     // Drain a web CQ request BEFORE the visibility gate below, so it is consumed
     // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
     // request left pending would otherwise fire the moment the operator next
