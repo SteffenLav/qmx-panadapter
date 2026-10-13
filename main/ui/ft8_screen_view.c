@@ -3608,8 +3608,13 @@ static void js8_tx_bar_sync(void)
     char call[FT8_CALL_MAX_LEN];
     js8_target_get(call, sizeof(call));
     char b[32];
+    /* ⚠ "tap a call" AND NOT "tap a station", MEASURED ON THE GLASS: the
+     * chip is 136 px between the Stations tab (ends at 600) and SNR (starts at
+     * 752), and at font 20 the longer wording rendered as "> tap a stat...".
+     * A callsign is at most 15 characters but a real one is 4-6, so the
+     * selected form fits with room to spare. */
     if (call[0]) snprintf(b, sizeof(b), "> %s", call);
-    else         snprintf(b, sizeof(b), "> tap a station");
+    else         snprintf(b, sizeof(b), "tap a call");
     if (strcmp(lv_label_get_text(s_js8_chip_lbl), b) != 0)
         lv_label_set_text(s_js8_chip_lbl, b);
     js8_macro_btn_enable(s_btn_js8_snr,  call[0] != ' ');
