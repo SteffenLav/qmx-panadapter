@@ -1053,6 +1053,23 @@ static void rearm_current(void)
         // Two narrow byte-sized reads instead.
         uint8_t cq_max_calls    = settings_get_cq_max_calls();
         uint8_t cq_listen_every = settings_get_cq_listen_every();
+        /* ⭐ JS8 CALLS CQ ONCE. Ryan KK6DZB, after a real QSO: "Calling CQ
+         * only once. You must hit CQ again to send again." That is the JS8
+         * convention - a CQ is a knock, not a beacon - and ours had simply
+         * inherited FT8's continuous calling, which is correct for FT8 and
+         * wrong here.
+         *
+         * ⚠ IT OVERRIDES THE SETTING RATHER THAN CHANGING IT. cq_max_calls
+         * is one value shared with FT8, where 0 (keep calling) is both the
+         * default and a deliberate choice, so there is no way to tell an unset
+         * JS8 limit from an intentional one. Forcing 1 in JS8 keeps FT8
+         * untouched, which is what he asked for too: "Works in FT8 :) but not
+         * so much in JS8 Call."
+         *
+         * An operator who really wants a JS8 CQ run can still set a limit
+         * above 1 - that is an explicit number and it is honoured. */
+        if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8 && cq_max_calls == 0)
+            cq_max_calls = 1;
         if (cq_max_calls > 0 && cq_sent >= cq_max_calls) {
             lock(); s_cq_exhausted = true; unlock();
             ft8_status_set("CQ %d of %d sent - listening", cq_sent, cq_max_calls);

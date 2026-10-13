@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 
+#include "ft8_status.h"
 #include "ft8_tx.h"
 #include "ft8_test.h"
 #include "ft8/js8.h"
@@ -19,6 +20,10 @@ static const char *TAG = "js8_ftx";
  * operator is agreeing to is frames x this, which is the number they must see
  * before anything is keyed. */
 #define JS8_FTX_SLOT_SECS 15
+
+/* display_text is 32 bytes and the frame counter has to fit in it with room
+ * for "free text, frame NN of NN" - see js8_ftx_start(). */
+_Static_assert(JS8_FTX_MAX_FRAMES < 100, "frame counter assumes two digits");
 
 typedef struct {
     ft8_tx_request_t req[JS8_FTX_MAX_FRAMES];
@@ -115,9 +120,21 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
         js8_encode(&fr[(size_t)i * JS8_FRAME_BYTES], it[i], r->tones);
         /* What the status line shows for this frame. The whole message does
          * not fit, and the frame number is what tells the operator how much
-         * is left to go. */
+         * is left to go.
+         *
+         * ⚠ THIS STRING IS THE FRAME COUNTER ON BOTH SURFACES. It becomes
+         * tx_text in ft8_tx_get_status(), which the Tab5 label (t_clock_cb)
+         * and /api/status both build their TX line from - so it is read by an
+         * operator, not by a developer, and "2/7" was too terse to be one.
+         * Ryan KK6DZB held a JS8 QSO on v1.18.0 and said he "could not tell
+         * if it had transmitted my full message yet". */
+        /* ⚠ THE MODULO IS FOR THE COMPILER, not for the arithmetic. n is
+         * at most JS8_FTX_MAX_FRAMES (12) - see the loop bound and the
+         * static assert below - but -Werror=format-truncation reasons about
+         * `int`, so a 10-digit frame number against a 32-byte field is a
+         * build failure without it. */
         snprintf(r->display_text, sizeof(r->display_text),
-                 "free text %d/%d", i + 1, n);
+                 "free text, frame %d of %d", (i + 1) % 100, n % 100);
     }
 
     char err[64];
@@ -150,6 +167,16 @@ void js8_ftx_tick(void)
         s_run.sent++;
         if (s_run.sent >= s_run.total) {
             ESP_LOGI(TAG, "free text complete: %d frame(s) sent", s_run.sent);
+            /* ⭐ SAY THAT IT FINISHED. Until now the run simply stopped:
+             * the TX line vanished, the status box went back to idle, and
+             * nothing anywhere said the message had gone out in full. An
+             * operator watching a 7-frame message cannot tell that from a run
+             * that died halfway (Ryan KK6DZB, 2026-10-12). ft8_status_set is
+             * the one line BOTH surfaces show while idle - the Tab5 label's
+             * idle branch and /api/status's idle passthrough - so one call
+             * reaches the glass and the browser. */
+            ft8_status_set("Free text sent - %d frame%s", s_run.sent,
+                           s_run.sent == 1 ? "" : "s");
             memset(&s_run, 0, sizeof(s_run));
             return;
         }
@@ -166,6 +193,8 @@ void js8_ftx_tick(void)
          * worse than an obvious failure. */
         ESP_LOGW(TAG, "free text stopped at frame %d/%d: %s",
                  s_run.sent + 1, s_run.total, err);
+        ft8_status_set("Free text STOPPED at frame %d of %d: %s",
+                       s_run.sent + 1, s_run.total, err);
         memset(&s_run, 0, sizeof(s_run));
         return;
     }
@@ -176,6 +205,8 @@ void js8_ftx_cancel(void)
 {
     if (!s_run.active) return;
     ESP_LOGI(TAG, "free text cancelled at frame %d/%d", s_run.sent + 1, s_run.total);
+    ft8_status_set("Free text cancelled at frame %d of %d",
+                   s_run.sent + 1, s_run.total);
 
     /* Disarm what has not started; wind down anything already on the air so
      * the radio is never left keyed. One of the two is a no-op. */
@@ -189,11 +220,4 @@ bool js8_ftx_active(int *sent, int *total)
     if (sent)  *sent  = s_run.sent;
     if (total) *total = s_run.total;
     return s_run.active;
-}
-
-void js8_ftx_status(char *out, size_t out_len)
-{
-    if (!out || !out_len) return;
-    if (!s_run.active) { out[0] = '\0'; return; }
-    snprintf(out, out_len, "free text %d/%d", s_run.sent + 1, s_run.total);
 }

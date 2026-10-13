@@ -63,8 +63,5 @@ bool js8_ftx_active(int *sent, int *total);
  * no harm; the next frame is armed when TX goes idle, not on a timer. */
 void js8_ftx_tick(void);
 
-/* One line for the status surfaces, e.g. "free text 2/3". Writes "" when no
- * run is active. */
-void js8_ftx_status(char *out, size_t out_len);
 
 #endif /* _INCLUDE_JS8_FTX_H_ */

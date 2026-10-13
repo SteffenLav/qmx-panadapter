@@ -29,6 +29,7 @@
 #include "js8_text_modal.h"
 #include "ft8_screen_view.h"
 #include "js8_ftx.h"
+#include "js8_target.h"
 #include "ui_theme.h"
 #include "ui.h"
 #include "lvgl.h"
@@ -288,7 +289,16 @@ void js8_text_modal_show(void)
     modal_build();
     if (s_open) return;
 
-    lv_textarea_set_text(s_ta, "");
+    /* ⭐ OPENS ADDRESSED. "THEM US " when a station is selected, "US "
+     * otherwise - js8_target.h holds the rule and Ryan KK6DZB's words for why.
+     * The cursor sits after it, so the operator types the message and nothing
+     * else. Clearing the line is still one key away if they want raw text. */
+    {
+        char pre[48];
+        js8_text_prefix(pre, sizeof(pre));
+        lv_textarea_set_text(s_ta, pre);
+        lv_textarea_set_cursor_pos(s_ta, LV_TEXTAREA_CURSOR_LAST);
+    }
     plan_refresh();
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);

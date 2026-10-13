@@ -59,6 +59,15 @@ void ft8_screen_view_request_cq(void);
 void ft8_screen_view_request_freetext(const char *text);
 void ft8_screen_view_freetext_result(char *out, size_t out_len);
 
+/* The JS8 macro buttons from the browser: 0 = SNR, 1 = GRID. Records the
+ * request only - both end in ft8_tx_arm() or js8_ftx_start(), which belong to
+ * the LVGL task, the same deferral as the free text above. The outcome lands
+ * in the same web-result line the page already shows.
+ *
+ * ⛔ THESE ARE THE ONLY WAY A JS8 REPORT LEAVES THIS STATION BY HAND NOW. A
+ * row click selects and transmits nothing - see js8_target.h. */
+void ft8_screen_view_request_js8_macro(int which);
+
 // CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
 // TXCQ button and the web page drive the SAME state - set is deferred to the
 // LVGL task, get is a plain read.

@@ -33,6 +33,7 @@
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
 #include "js8_ftx.h"
+#include "js8_target.h"
 #include "ft8_qso.h"
 #include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
 #include "ft8_pileup.h"
@@ -633,6 +634,14 @@ static void row_activate_ex(int idx, bool direct);
 /* Defined with the JS8 panes, far below; the 1 Hz clock timer drives it. */
 static void conv_repaint(void);
 static void js8_tabs_apply(void);
+static bool js8_mode_now(void);
+/* The JS8 TX bar - the target chip and the SNR/GRID macro buttons. Defined
+ * with the JS8 panes; a row tap up here has to refresh it. */
+static void js8_tx_bar_sync(void);
+/* The two macro sends. Workers rather than callbacks, because the browser
+ * presses them too and needs the refusal text - see their definitions. */
+static bool js8_send_snr(char *out, size_t out_len);
+static bool js8_send_grid(char *out, size_t out_len);
 
 static void row_activate(int idx) { row_activate_ex(idx, false); }
 
@@ -650,6 +659,28 @@ static void row_activate_ex(int idx, bool direct)
 
     const char *call = lv_label_get_text(r->l_call);
     if (!call || !call[0]) return;
+
+    /* ⛔ IN JS8 A TAP SELECTS AND TRANSMITS NOTHING - not the modal, and
+     * not the long-press auto-pounce either. See js8_target.h for the two
+     * operator reports behind this; the short version is Ryan KK6DZB's, who
+     * held a real QSO: "anytime I would click on a call it would auto start
+     * sending the SNR which is not handy in this mode. Works in FT8 :) but not
+     * so much in JS8 Call."
+     *
+     * `direct` (the long press) is deliberately NOT an exception. It starts the
+     * full auto-sequencer, which is the one thing JS8 operators do not want
+     * happening without a press per message. The SNR and GRID buttons are the
+     * explicit sends, and the free-text box is addressed to this selection. */
+    if (js8_mode_now()) {
+        js8_target_set(call);
+        s_confirmed_row_idx = idx;
+        char tb[48];
+        snprintf(tb, sizeof(tb), "Working %s - SNR / GRID to send", call);
+        ui_toast(tb);
+        conv_repaint();          /* the pane filters to this station */
+        js8_tx_bar_sync();       /* the macro buttons and the target chip */
+        return;
+    }
 
     // A grey-listed station's row offers "Clear from grey-list" instead of
     // the TX modal (the auto pickers skip it; a manual pounce needs the
@@ -1290,6 +1321,9 @@ static volatile bool s_web_cq_pending;               // set from the HTTP task
 static char          s_web_ftx_text[256];
 static volatile bool s_web_ftx_pending;
 static char          s_web_ftx_result[64];
+/* The JS8 SNR/GRID macros from the browser. -1 = nothing pending, 0 = SNR,
+ * 1 = GRID. Same deferral and the same reason as the free text above. */
+static volatile int  s_web_js8_macro = -1;
 // Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
 // browser operator could start a CQ but not say which window it went out in.
 // -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
@@ -1661,6 +1695,10 @@ static void t_clock_cb(lv_timer_t *t)
      * every slot, so 1 Hz is the right cadence - the 500 ms list refresh is
      * for the Stations table and does nothing here. */
     conv_repaint();
+    /* The selection can be made from the BROWSER too, so the chip and the two
+     * macro buttons are refreshed on the clock rather than only on a tap -
+     * the same "one piece of state, both surfaces" rule as cq_parity. */
+    js8_tx_bar_sync();
 
     // Drain a web CQ request BEFORE the visibility gate below, so it is consumed
     // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
@@ -1680,6 +1718,29 @@ static void t_clock_cb(lv_timer_t *t)
      * same deferral every other TX path in this file uses. Cheap when no run
      * is active: one bool. */
     js8_ftx_tick();
+
+    /* The macro buttons, drained on this task because both of them arm the
+     * radio. Reuses the Tab5 button callbacks rather than copying what they
+     * do - one implementation of "send the report", one of "send the grid",
+     * whichever surface pressed it. */
+    if (s_web_js8_macro >= 0) {
+        int which = s_web_js8_macro;
+        s_web_js8_macro = -1;
+        if (!js8_mode_now()) {
+            web_result_set("Not in JS8 mode");
+        } else if (!js8_target_any()) {
+            web_result_set("Click a station first");
+        } else {
+            /* ⛔ REPORT WHAT HAPPENED, not that it was asked for. The arm can
+             * still be refused (busy, station aged out of the heard table, no
+             * grid set) and the browser operator is the one person who cannot
+             * see the radio - so the refusal is the message, verbatim. */
+            char msg[80];
+            bool ok = (which == 0) ? js8_send_snr(msg, sizeof(msg))
+                                   : js8_send_grid(msg, sizeof(msg));
+            web_result_set("%s%s", ok ? "" : "Refused: ", msg);
+        }
+    }
 
     if (s_web_ftx_pending) {
         s_web_ftx_pending = false;
@@ -2601,6 +2662,12 @@ void ft8_screen_view_request_freetext(const char *text)
     s_web_ftx_pending = true;
 }
 
+void ft8_screen_view_request_js8_macro(int which)
+{
+    if (which != 0 && which != 1) return;
+    s_web_js8_macro = which;
+}
+
 /* What became of it, for /api/status. "" until the timer has acted. */
 void ft8_screen_view_freetext_result(char *out, size_t out_len)
 {
@@ -3502,6 +3569,186 @@ static void conv_row_clicked_cb(lv_event_t *e)
     ui_toast("Station no longer heard");
 }
 
+/* ===================================================================
+   THE JS8 TX BAR - the selected station, and the two macro sends
+
+   ⛔ THESE BUTTONS EXIST BECAUSE THE TAP NO LONGER TRANSMITS. Ryan KK6DZB,
+   after a real QSO on v1.18.0: "we need a button that will send the SNR and a
+   button to send GRID as macros". A tap selects (js8_target.h); nothing goes
+   on the air until one of these is pressed.
+
+   They live in the JS8 tab bar, which is 960 px wide with its three tabs
+   ending at 600 - so the chip and both buttons fit in the free 344 px without
+   taking a single row from the conversation grid, which has 10 px of slack in
+   580 and could not have given one up.
+   =================================================================== */
+
+static lv_obj_t *s_js8_chip;       /* who is selected; tap to clear */
+static lv_obj_t *s_js8_chip_lbl;
+static lv_obj_t *s_btn_js8_snr;
+static lv_obj_t *s_btn_js8_grid;
+
+/* Grey a macro button out when there is nobody to send it to. Disabled state
+ * AND opacity: LV_STATE_DISABLED alone still looks pressable on this theme. */
+static void js8_macro_btn_enable(lv_obj_t *b, bool on)
+{
+    if (!b) return;
+    if (on) {
+        lv_obj_clear_state(b, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(b, LV_OPA_COVER, 0);
+    } else {
+        lv_obj_add_state(b, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(b, LV_OPA_40, 0);
+    }
+}
+
+static void js8_tx_bar_sync(void)
+{
+    if (!s_js8_chip_lbl) return;
+    char call[FT8_CALL_MAX_LEN];
+    js8_target_get(call, sizeof(call));
+    char b[32];
+    if (call[0]) snprintf(b, sizeof(b), "> %s", call);
+    else         snprintf(b, sizeof(b), "> tap a station");
+    if (strcmp(lv_label_get_text(s_js8_chip_lbl), b) != 0)
+        lv_label_set_text(s_js8_chip_lbl, b);
+    js8_macro_btn_enable(s_btn_js8_snr,  call[0] != ' ');
+    js8_macro_btn_enable(s_btn_js8_grid, call[0] != ' ');
+}
+
+/* Arm ONE message, the way the TX modal's Transmit button does - never
+ * ft8_qso_start(), which would hand the exchange to the auto-sequencer and put
+ * back exactly the behaviour these buttons replace. */
+static bool js8_arm_one(ft8_tx_request_t *req, char *err, size_t err_len)
+{
+    char busy_target[24];
+    if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        if (busy_target[0]) snprintf(err, err_len, "Busy: working %s", busy_target);
+        else                snprintf(err, err_len, "Busy: calling CQ");
+        return false;
+    }
+    if (!ft8_tx_arm(req, err, err_len)) return false;
+    if (req->target_call[0]) ft8_qso_note_manual_target(req->target_call);
+    return true;
+}
+
+/* SNR: the JS8-native signal report, built by the same code the FT8 ladder
+ * uses - ft8_qso_build_manual_reply() takes the JS8 branch at ft8_qso.c:510
+ * and formats the report through js8_fmt_report(), whose -30..+31 range is
+ * wider than FT8's. So this is the proven path, moved from the tap to a
+ * button, not a second copy of it. */
+static bool js8_send_snr(char *out, size_t out_len)
+{
+    char call[FT8_CALL_MAX_LEN];
+    js8_target_get(call, sizeof(call));
+    if (!call[0]) { snprintf(out, out_len, "Tap a station first"); return false; }
+
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) { snprintf(out, out_len, "Internal: no snapshot buffer"); return false; }
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    const ft8_call_t *match = NULL;
+    for (int i = 0; i < n; i++)
+        if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
+    if (!match) { snprintf(out, out_len, "%s no longer heard", call); return false; }
+
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, NULL,
+                                    err, sizeof(err))) {
+        snprintf(out, out_len, "%s", err[0] ? err : "Could not build the report");
+        return false;
+    }
+    if (!js8_arm_one(&req, err, sizeof(err))) {
+        snprintf(out, out_len, "%s", err);
+        ESP_LOGW(TAG, "JS8 SNR macro refused: %s", err);
+        return false;
+    }
+    snprintf(out, out_len, "Armed: %s", req.display_text);
+    ESP_LOGI(TAG, "JS8 SNR macro armed: '%s'", req.display_text);
+    return true;
+}
+
+static void js8_snr_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    char msg[80];
+    js8_send_snr(msg, sizeof(msg));
+    ui_toast(msg);
+}
+
+/* GRID goes out as FREE TEXT, and that is a protocol fact rather than a
+ * shortcut.
+ *
+ * ⛔ A Directed frame has no locator field: js8_text_to_frame() refuses a
+ * grid `rest` outright (js8_text.c, "No JS8 Directed form"), because inventing
+ * a frame for it would key the radio with something no JS8Call station
+ * answers. JS8_CMD_GRID exists in the vocabulary (js8_message.h) but neither
+ * direction is implemented at the text seam, and implementing it blind is the
+ * one thing this project will not do - only a real JS8Call station settles
+ * what it should look like.
+ *
+ * The free-text path, by contrast, HAS been read by a real JS8Call (J8, proven
+ * on air 2026-10-10), and "THEM US GRID" is the shape Ryan asked for anyway.
+ *
+ * ⚠ FOUR characters. A six-character locator cost a station its whole JS8
+ * CQ once already - 517acc69. */
+static bool js8_send_grid(char *out, size_t out_len)
+{
+    char call[FT8_CALL_MAX_LEN];
+    js8_target_get(call, sizeof(call));
+    if (!call[0]) { snprintf(out, out_len, "Tap a station first"); return false; }
+
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    if (!cfg.my_callsign[0] || !cfg.my_grid[0]) {
+        snprintf(out, out_len, "Set your callsign and grid first");
+        return false;
+    }
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%s %s %.4s", call, cfg.my_callsign, cfg.my_grid);
+
+    char err[64];
+    if (!js8_ftx_start(msg, 0, err, sizeof(err))) {
+        snprintf(out, out_len, "%s", err[0] ? err : "Could not send the grid");
+        ESP_LOGW(TAG, "JS8 GRID macro refused: %s", err);
+        return false;
+    }
+    snprintf(out, out_len, "Sending: %s", msg);
+    ESP_LOGI(TAG, "JS8 GRID macro: '%s'", msg);
+    return true;
+}
+
+static void js8_grid_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    char msg[80];
+    if (!js8_send_grid(msg, sizeof(msg))) {
+        /* The one refusal with somewhere to go: no callsign or grid set yet
+         * means the identity modal, the same as a failed manual reply. */
+        qmx_settings_t cfg;
+        settings_load_all(&cfg);
+        if (!cfg.my_callsign[0] || !cfg.my_grid[0]) {
+            ui_toast(msg);
+            identity_config_modal_show();
+            return;
+        }
+    }
+    ui_toast(msg);
+}
+
+/* Tapping the chip clears the selection, which also unfilters the pane. The
+ * only way back to the whole conversation, so it is not optional. */
+static void js8_chip_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!js8_target_any()) return;
+    js8_target_set(NULL);
+    ui_toast("Showing all stations");
+    conv_repaint();
+    js8_tx_bar_sync();
+}
+
 static void conv_repaint(void)
 {
     if (!s_conv_pane || !js8_mode_now() || !s_tab_conversation) return;
@@ -3519,9 +3766,29 @@ static void conv_repaint(void)
     }
     int n = js8_chat_count();
     if (n > JS8_CHAT_MAX_MSGS) n = JS8_CHAT_MAX_MSGS;
+    /* ⭐ FILTERED TO THE SELECTED STATION, which is what Ryan KK6DZB asked
+     * for in as many words: "anytime you click on a call sign in the
+     * conversation mode it clears the conversations out and becomes a directed
+     * message to the call sign you clicked on. Nothing else in the
+     * conversation window."
+     *
+     * The filter is applied while COPYING out of the store, not inside
+     * js8_page.c: the layout module takes a list of messages and knows nothing
+     * about who is selected, and that is the line worth keeping - the same
+     * list, filtered here, is what the browser gets from /api/js8.
+     *
+     * ⚠ A message with no sender (a free-text run nothing identified) is
+     * dropped by the filter, because it cannot be attributed to the selection
+     * either way. With no selection everything shows, as before. */
+    char sel[FT8_CALL_MAX_LEN];
+    js8_target_get(sel, sizeof(sel));
     int have = 0;
-    for (int i = 0; i < n; i++)
-        if (js8_chat_at(i, &s_conv->msgs[have])) have++;
+    for (int i = 0; i < n; i++) {
+        js8_chat_msg_t m;
+        if (!js8_chat_at(i, &m)) continue;
+        if (sel[0] && strcmp(m.sender, sel) != 0) continue;
+        s_conv->msgs[have++] = m;
+    }
 
     js8_page_render(s_conv->msgs, have, (int64_t)time(NULL),
                     s_conv->lines, s_conv->row_msg);
@@ -3715,6 +3982,52 @@ static void build_js8_tabs(void)
         lv_obj_center(l);
         *tabs[i].out = b;
     }
+    /* The TX bar - see "THE JS8 TX BAR" above for why it goes here. The three
+     * tabs end at 600; this uses 608..944 of the 960 and takes nothing from
+     * the conversation grid. Children of s_tabbar, so they appear and vanish
+     * with it and js8_tabs_apply needs no extra case. */
+    {
+        s_js8_chip = lv_obj_create(s_tabbar);
+        lv_obj_remove_style_all(s_js8_chip);
+        lv_obj_set_size(s_js8_chip, 136, 40);
+        lv_obj_set_pos(s_js8_chip, 608, 2);
+        lv_obj_clear_flag(s_js8_chip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_js8_chip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_js8_chip, js8_chip_cb, LV_EVENT_CLICKED, NULL);
+        s_js8_chip_lbl = lv_label_create(s_js8_chip);
+        lv_label_set_long_mode(s_js8_chip_lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(s_js8_chip_lbl, 136);
+        lv_obj_set_style_text_font(s_js8_chip_lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_js8_chip_lbl, lv_color_hex(JS8_ACCENT_HEX), 0);
+        lv_label_set_text(s_js8_chip_lbl, "> tap a station");
+        lv_obj_center(s_js8_chip_lbl);
+
+        struct { lv_obj_t **out; const char *text; int x; lv_event_cb_t cb; } mac[2] = {
+            { &s_btn_js8_snr,  "SNR",  752, js8_snr_btn_cb  },
+            { &s_btn_js8_grid, "GRID", 852, js8_grid_btn_cb },
+        };
+        for (int i = 0; i < 2; i++) {
+            lv_obj_t *b = lv_btn_create(s_tabbar);
+            lv_obj_set_size(b, 92, 40);
+            lv_obj_set_pos(b, mac[i].x, 2);
+            lv_obj_set_style_radius(b, 6, 0);
+            lv_obj_set_style_border_width(b, 2, 0);
+            lv_obj_set_style_bg_color(b, lv_color_hex(JS8_BTN_HEX), 0);
+            lv_obj_set_style_border_color(b, lv_color_hex(JS8_ACCENT_HEX), 0);
+            lv_obj_set_style_pad_hor(b, 0, 0);
+            lv_obj_add_event_cb(b, mac[i].cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, mac[i].text);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_width(l, 92);
+            lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_center(l);
+            *mac[i].out = b;
+        }
+        js8_tx_bar_sync();      /* greyed out until a station is tapped */
+    }
+
     /* Set once: tab_paint() deliberately skips Flush, so nothing else will
      * ever colour it. Same two colours an unselected tab wears. */
     if (s_tab_btn_flush) {

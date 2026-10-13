@@ -28,7 +28,8 @@
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "ui/js8_page.h"   // the conversation grid, composed for /api/js8
 #include "ft8_tx.h"
-#include "js8_ftx.h"           // JS8 free-text run (J8)
+#include "js8_ftx.h"
+#include "js8_target.h"           // who the operator is working in JS8
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "ui/wspr_screen_view.h" // wspr_bands - ONE band table for both screens
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
@@ -254,6 +255,22 @@ static void add_ft8_tx_status(cJSON *root)
         char res[64];
         ft8_screen_view_freetext_result(res, sizeof(res));
         cJSON_AddStringToObject(f, "ftx_result", res);
+    }
+
+    /* ⭐ WHO IS SELECTED IN JS8, AND THE OPENING THAT FOLLOWS FROM IT. A tap
+     * on the Tab5 and a click in the browser set the same one piece of state
+     * (js8_target.h), so the browser has to be able to READ it or the two
+     * surfaces disagree about who is being worked - the same mistake the web
+     * Pause button shipped with. js8_prefix is served rather than assembled in
+     * JavaScript for the same reason js8_text_plan is: the rule for what a
+     * message opens with belongs to the device. */
+    {
+        char tgt[FT8_CALL_MAX_LEN];
+        js8_target_get(tgt, sizeof(tgt));
+        cJSON_AddStringToObject(f, "js8_target", tgt);
+        char pre[48];
+        js8_text_prefix(pre, sizeof(pre));
+        cJSON_AddStringToObject(f, "js8_prefix", pre);
     }
 
     /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same
@@ -1807,7 +1824,38 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // cq_start; the outcome comes back through /api/status's ft8 block
         // (web_r), because a Tab5 toast is invisible from another room.
         const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
-        if (call && call[0]) ft8_screen_view_request_reply(call);
+        /* ⛔ IN JS8 THIS SELECTS AND TRANSMITS NOTHING, and the gate is HERE
+         * rather than only in the page.
+         *
+         * The page is cached and gzipped in flash, but a browser that has the
+         * OLD page open keeps sending "reply" on every row click, and on that
+         * page a click meant "transmit now". Gating in JavaScript alone would
+         * leave the behaviour Ryan KK6DZB reported ("anytime I would click on
+         * a call it would auto start sending the SNR") alive for every tab
+         * that was open across the update - and the far end sees it as
+         * Gyula HA3HZ did, as a station answering on its own.
+         *
+         * So the server decides. js8_target.h carries the whole reasoning. */
+        if (call && call[0]) {
+            if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+                js8_target_set(call);
+            } else {
+                ft8_screen_view_request_reply(call);
+            }
+        }
+    } else if (action && strcmp(action, "js8_select") == 0) {
+        /* Select, or clear with an empty/absent call. The explicit action the
+         * current page sends; "reply" above is the same thing for a page that
+         * predates it. */
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        js8_target_set(call);
+    } else if (action && strcmp(action, "js8_snr") == 0) {
+        /* The SNR macro. One message, armed - never the auto-sequencer, which
+         * is what these buttons exist to replace. Deferred to the LVGL task
+         * like every other arming path. */
+        ft8_screen_view_request_js8_macro(0);
+    } else if (action && strcmp(action, "js8_grid") == 0) {
+        ft8_screen_view_request_js8_macro(1);
     } else if (action && strcmp(action, "qso_override") == 0) {
         // Mid-QSO override from the browser (#205, Randy N4OPI). Same deferral as
         // "reply": the QSO machine belongs to the LVGL task, and the outcome comes

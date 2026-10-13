@@ -1147,6 +1147,16 @@
              show what a station actually SAID, and Stations is one tap away.
              Hidden in FT8/FT4, which have no conversation to show. -->
         <span id="js8-tabs" style="display:none; margin-left:auto;">
+          <!-- Who is selected, and the two macro sends. JS8 only, and they are
+               the ONLY way a report leaves the station by hand now: a row click
+               selects (ft8RowClicked). Ryan KK6DZB: "we need a button that will
+               send the SNR and a button to send GRID as macros". -->
+          <a href="#" id="js8-target" title="The station you are working - click to clear"
+             style="color:#e040fb; margin-right:8px; text-decoration:none;">&gt; click a station</a>
+          <button type="button" id="js8-snr"  class="bot-btn" disabled
+                  title="Send this station a signal report">SNR</button>
+          <button type="button" id="js8-grid" class="bot-btn" disabled
+                  title="Send this station your grid">GRID</button>
           <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
           <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
         </span>
@@ -5971,8 +5981,7 @@ async function pollDecodes() {
         const call = a.getAttribute("data-pcall");
         /* No confirm - working a caller out of the pileup is the point of the
            pileup list. See the note on the mid-QSO Cancel. */
-        document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
-        sendCmd({ action: "reply", call: call });
+        ft8RowClicked(call);
       }));
 
     /* The grey-list: who the auto pickers are skipping, and the way out. */
@@ -5991,6 +6000,37 @@ async function pollDecodes() {
 }
 setInterval(pollDecodes, 2000);
 
+/* ⛔ IN JS8 A CLICK SELECTS. IT DOES NOT TRANSMIT.
+ *
+ * Ryan KK6DZB, after holding a real JS8 QSO on v1.18.0: "anytime I would click
+ * on a call it would auto start sending the SNR which is not handy in this
+ * mode. Works in FT8 :) but not so much in JS8 Call." Gyula HA3HZ saw the same
+ * thing from the far end - stations being answered with no human in the loop.
+ *
+ * So every place this page can click a callsign goes through here. In FT8
+ * nothing changes: "reply" still runs the intelligent Transmit. In JS8 it
+ * selects the station, the conversation filters to them, and the report goes
+ * out only when SNR or GRID is pressed.
+ *
+ * ⚠ The DEVICE enforces this too (webserver.c's "reply" action), because a
+ * browser tab left open across an update would otherwise keep transmitting on
+ * a click. This is the surface, not the guard. */
+async function ft8RowClicked(call) {
+  if (!call) return;
+  const wr = document.getElementById("ft8-webr");
+  if (ft8Proto() === "JS8") {
+    js8Target = call;                 /* optimistic: the poll confirms it */
+    if (wr) wr.textContent = "Working " + call + " - press SNR or GRID to send";
+    js8BarSync();
+    await sendCmd({ action: "js8_select", call: call });
+    js8Shown = "";                    /* force the filtered grid to repaint */
+    js8Poll();
+    return;
+  }
+  if (wr) wr.textContent = "Asking the Tab5 to reply to " + call + "...";
+  await sendCmd({ action: "reply", call: call });
+}
+
 /* Click a decode row to WORK that station - the same intelligent Transmit a
    Tab5 row-tap runs: their fresh CQ starts the full auto-QSO, anything
    mid-exchange sends the one correct next message. It keys the radio, so it
@@ -6002,9 +6042,9 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
   const call = tr.getAttribute("data-call");
   if (!call) return;
   /* No confirm - clicking a station in the decode list to work it is the
-     primary gesture of this page. See the note on the mid-QSO Cancel. */
-  document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
-  await sendCmd({ action: "reply", call: call });
+     primary gesture of this page. See the note on the mid-QSO Cancel.
+     In JS8 it selects instead of transmitting - see ft8RowClicked. */
+  await ft8RowClicked(call);
 })
 
 /* ───────────────────────── JS8 conversation pane ───────────────────────────
@@ -6023,6 +6063,11 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
    message can wrap onto several rows, so a tap cannot be turned into a message
    by arithmetic - the glass asks for the map for exactly this reason. */
 let js8Tab = "conv";      // the Tab5's default in JS8
+/* The selected station, mirrored from /api/status (ft8.js8_target) so the Tab5
+   and this page cannot disagree about who is being worked - one piece of state,
+   two surfaces, the rule cq_parity had to learn the hard way. */
+let js8Target = "";
+let js8Prefix = "";      // what a free-text message opens with, from the device
 let js8Timer = null;
 let js8Senders = [];
 let js8Shown = "";   // the grid currently painted - see js8Poll()
@@ -6063,6 +6108,67 @@ function js8TabsSync(proto) {
   } else if (js8Timer) {
     clearInterval(js8Timer); js8Timer = null;
   }
+}
+
+/* ⭐ THE BOX OPENS ADDRESSED - "THEM US " with a station selected, "US "
+   without one. Ryan KK6DZB: "in the free text window if you type a message
+   directed to another station the outgoing message always starts with their
+   call followed by yours... If you type a free text message not directed at
+   anyone it starts with your call." Before this he had to type both callsigns
+   by hand, which is why he called free text "very difficult to use".
+
+   ⛔ THE RULE IS THE DEVICE'S (js8_text_prefix, served as ft8.js8_prefix) and
+   is not restated here, the same reasoning as js8_text_plan: one definition of
+   what a message opens with, two surfaces.
+
+   Only ever rewrites a box that is EMPTY or still holds nothing but a prefix.
+   Anything the operator has typed is theirs - a poll must never edit it. */
+let js8PrefixShown = "";
+function js8ComposerPrefill() {
+  const ta = document.getElementById("js8-tx-text");
+  if (!ta || !js8Prefix) return;
+  const v = ta.value;
+  if (v === "" || v === js8PrefixShown) {
+    if (v !== js8Prefix) ta.value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+  }
+}
+
+/* The target chip and the two macro buttons. Enabled only with a station
+   selected: a macro with nobody to send it to is a button that can only fail. */
+function js8BarSync() {
+  const t = document.getElementById("js8-target");
+  if (t) t.textContent = js8Target ? "> " + js8Target : "> click a station";
+  for (const id of ["js8-snr", "js8-grid"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !js8Target;
+  }
+}
+
+/* Clicking the chip clears the selection, which also unfilters the pane - the
+   only way back to the whole conversation, so it is not optional. */
+document.getElementById("js8-target").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!js8Target) return;
+  js8Target = "";
+  js8BarSync();
+  await sendCmd({ action: "js8_select", call: "" });
+  js8Shown = "";
+  js8Poll();
+});
+
+/* The macros. The device arms them (one message, never the auto-sequencer) and
+   answers with what actually happened, refusal included - see
+   ft8_screen_view_request_js8_macro. It lands on the same banner line every
+   other browser-initiated outcome uses. */
+for (const [id, act, what] of [["js8-snr", "js8_snr", "signal report"],
+                               ["js8-grid", "js8_grid", "grid"]]) {
+  document.getElementById(id).addEventListener("click", async () => {
+    if (!js8Target) return;
+    const wr = document.getElementById("ft8-webr");
+    if (wr) wr.textContent = "Sending your " + what + " to " + js8Target + "...";
+    await sendCmd({ action: act });
+  });
 }
 
 /* ---- the free-text composer -------------------------------------------
@@ -6125,7 +6231,12 @@ function js8TxInit() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "js8_text", text: txt })
       });
-      ta.value = "";
+      /* ⛔ DO NOT CLEAR THE BOX HERE. The device can still refuse this
+         (not in JS8, something already armed, nothing sendable) and the
+         refusal used to arrive with the text already discarded, so the
+         operator had to retype a 160-character message to try again. It is
+         cleared on the first poll that reports the run accepted - see
+         js8TxStatus. */
       document.getElementById("js8-tx-plan").textContent = "Sending…";
     } catch (e) {
       document.getElementById("js8-tx-plan").textContent = "(could not reach the Tab5)";
@@ -6145,9 +6256,32 @@ function js8TxInit() {
   });
 }
 
+let js8TxResultShown = "";   /* the last ftx_result put on screen */
+
 /* Progress, from the status the device already publishes. Called from the
-   status poll rather than polling again - ft8.ftx_* is already in /api/status. */
+   status poll rather than polling again - ft8.ftx_* is already in /api/status.
+
+   ⚠ THIS IS NOT THE ONLY PLACE THE FRAME COUNT APPEARS, and it must not be
+   the only one: this line lives inside #js8-tx, which is display:none unless
+   the conversation pane is up, so a run started from anywhere else would be
+   invisible here. The always-visible copy comes from the DEVICE - js8_ftx.c
+   writes "free text, frame N of M" into the request's display_text, which
+   becomes the TX line in the top status box and on the Tab5's own label. */
 function js8TxStatus(ft8) {
+  /* ⚠ BEFORE THE VISIBILITY GATE BELOW. The selection and the prefix are
+     not the composer's business - the chip and the macro buttons sit in the tab
+     row and must track the Tab5 even while the composer is closed, or a station
+     tapped on the glass leaves this page's buttons dead. */
+  {
+    const t = (ft8 && typeof ft8.js8_target === "string") ? ft8.js8_target : "";
+    if (t !== js8Target) {
+      js8Target = t;
+      js8BarSync();
+      js8Shown = "";          /* the pane's filter changed under us */
+    }
+    js8Prefix = (ft8 && typeof ft8.js8_prefix === "string") ? ft8.js8_prefix : "";
+    js8ComposerPrefill();
+  }
   const box = document.getElementById("js8-tx");
   if (!box || box.style.display === "none") return;
   const cancel = document.getElementById("js8-tx-cancel");
@@ -6158,6 +6292,31 @@ function js8TxStatus(ft8) {
   send.style.display   = run ? "none" : "";
   if (run && ft8.ftx_total) {
     plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total + "…";
+    js8TxResultShown = "";          /* a new run: the last outcome is history */
+    /* Accepted - see the Send handler. Back to the ADDRESSED empty state, not
+       a blank box: the next message in a conversation goes to the same
+       station. */
+    document.getElementById("js8-tx-text").value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+    return;
+  }
+  /* ⭐ THE OUTCOME, which the page has been receiving and discarding since
+     free text shipped. ftx_result carries js8_ftx_start()'s refusal verbatim -
+     "Not in JS8 mode", "A transmission is already armed", "Nothing sendable in
+     that message" - and the Send handler left the line reading "Sending..."
+     forever when the device had in fact refused. Shown once per change, so it
+     cannot overwrite the plan the operator is typing. */
+  const res = (ft8 && ft8.ftx_result) || "";
+  /* Accepted, but the run already finished between two polls - still the
+     moment to let go of the text. */
+  if (res === "sending") {
+    document.getElementById("js8-tx-text").value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+  }
+  if (res && res !== "sending" && res !== js8TxResultShown) {
+    js8TxResultShown = res;
+    plan.textContent = res;
+    send.disabled = false;
   }
 }
 
@@ -6219,8 +6378,7 @@ document.getElementById("js8-screen").addEventListener("click", async (e) => {
   if (!sp) return;
   const call = sp.getAttribute("data-call");
   if (!call) return;
-  document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
-  await sendCmd({ action: "reply", call: call });
+  await ft8RowClicked(call);
 });
 
 /* =====================================================================
