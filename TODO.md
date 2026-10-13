@@ -1,12 +1,87 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-13
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
-**Repo state:** **v1.17.1 released 2026-10-11.** Prior: v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
+**Repo state:** **v1.18.0 released 2026-10-12** (PA-voltage ceiling, Bryan N0LUF's Output power write fix, JS8 compound callsigns proven on air, the SPIFFS diag-log budget). Prior: v1.17.1 (2026-10-11), v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
 
 ⛔ **THE HEADLINE IN THIS FILE WAS TEN DAYS AND FOUR RELEASES STALE** (it read "v1.5.0 released 2026-08-06", then "v1.16.10 is out"). A version banner in prose cannot keep up with a release cadence of days, which is the same rot `CLAUDE.md` records for its patch count. **Read `git tag --sort=-creatordate` for what shipped; read this file only for what is OPEN.**
+
+---
+
+## ▶▶ THE WORK QUEUE, 2026-10-13 — READ THIS FIRST
+
+Agreed order, written after replying to five operators. **The order in A is
+what Sam W7STF has been TOLD**, in a reply that was sent, so it is not free to
+re-shuffle without telling him again.
+
+⛔ **Before assessing any of these, read the document that already exists.**
+`docs/web-audio-feasibility.md` (271 lines, written for A1 on the day it was
+asked) and `docs/remote-iq-assessment.md` (the I/Q-server idea, with its own
+suggested order) answer most of the "how big is it" questions. On 2026-10-13 I
+re-derived both from git archaeology and got a WORSE answer - see
+`feedback_read_docs_before_assessing` in memory.
+
+### A. Sam W7STF's list, oldest first — the order he has been promised
+
+| # | What | Size | Where the thinking already is |
+|---|---|---|---|
+| **A1** | **Web-UI audio + server mode.** His since **2026-07-15** (TODO #43). ⚠ The roadmap claimed for three months that this was "already working in development, held back for a soak". It was not: one WIP commit, 1702 behind, and the "restart" branch is EMPTY. Corrected in `d3a17722` | Medium — but **a reimplementation of a known design, not a restart**. The demodulator ships (the `dsp.c` FT8 branch IS a USB demodulator); `/ws` already carries binary frames and `webserver_ws.c:409` says an older browser ignores an unknown frame type; `ws_push_task` already runs. So: µ-law encode, frame type `0x02`, an AudioWorklet. **96 kbps** on top of the existing ~82. Gate is an overnight WiFi soak - the SDIO link is the scarce resource, not CPU | `docs/web-audio-feasibility.md` |
+| **A2** | **AM audio.** ⚠ **The Tab5 is SILENT in AM today**, confirmed in code: `mode_from_cat_str()` (`rx_audio.c:75`) returns `RXAUD_MODE_NONE` for AM. His words: *"AM is silent, so an AM station means putting the radio in USB"* | Small, self-contained. An `RXAUD_MODE_AM` branch, magnitude + DC block, and an AM case in `ui.c`'s `compute_passband_edges_hz()` | TODO row I(4) |
+| **A3** | **CW decode, two rows to four.** ⚠ I told him "one line" and he corrected me - it is `CW_LINE_ROWS 2` x `CW_LINE_COLS 72` on both surfaces | Nearly free. One constant; `CW_GRID_CELLS` derives from it and both the buffer and the Tab5 paint (`ui.c:4493`) loop over it. ⛔ The **browser hardcodes two row elements** (`rowEls`), and `ui.c` static-asserts `84 - CW_PREFIX_COLS == CW_LINE_COLS` - do not touch the column count | |
+| **A4** | PSD amplitude peak hold, adjustable persistence; then CW-Tune; then the CW peak filter | Moderate, render/DSP | |
+| **A5** | Digital noise reduction for AM and SSB | Largest, and it wants A2 done first. ⭐ The feasibility note says DNR can run **client-side** (RNNoise-class WASM) on demodulated audio and never needs to fit on the P4 | `docs/web-audio-feasibility.md` |
+
+⭐ **Already done, he did not know:** his biggest architectural ask - make
+disabled digital modes computationally inert. `ft8_test.c:2939` is literally
+`while (ui_mode_get() == UI_MODE_FT8)` and exits when the operator leaves the
+page; WSPR gates on `s_run`/`wspr_en`. The remaining cost is the RENDER, so the
+honest form is "make the waterfall cheaper" = #285's open taskLVGL/DMA work.
+
+⛔ **Declined:** "do not even LOAD a feature unless enabled" - that means
+compile-time config and different binaries for different operators. One image
+for everyone.
+
+### B. This week's reports
+
+| # | What | State |
+|---|---|---|
+| **B1** | **The saved diagnostic log destroys 4 bytes in every 32-byte block** (John W5JSS) | ⛔ **OPEN, NOT REPRODUCED.** 9,740 events, ~11% of a 343 KB file. The RAM copy from the same download is CLEAN, so it is the SPIFFS path, not HTTP or the browser. Not reproducible on the bench (199 KB, 2 runs, no stride). **Next lead: his answer on whether he was band hopping.** This is the evidence channel for every field report, so it costs every future diagnosis |
+| **B2** | **JS8 frame counter is invisible outside the Free text composer** (Ryan KK6DZB) | ▶ Ready to do. The state EXISTS - `js8_ftx_active(sent,total)`, served, and the page already prints "Sending frame N of M" - but into `#js8-tx-plan` inside `#js8-tx`, which is `display:none` until the composer is open. He called CQ and saw nothing. ⚠ A single-frame CQ has no frames to count, so it needs a plain *transmitting / done* as well |
+| **B3** | **JS8 CQ repeats because FT8 does** (Ryan KK6DZB) | ⏸ **WAITING ON HIM.** JS8 convention is to call once and wait. He offered to say how it should behave; do not pick a default for him |
+| **B4** | **JS8 canned messages / macros, one-button recall** (Gyula HA3HZ) | ⏸ **WAITING ON HIM** for which substitutions he actually uses. ⭐ Half built: `cq_msg[3][28]` in `settings.h:361` is persisted and in the `[cq]` config backup - same mechanism. Sizing: free text takes **160** chars so presets want to be longer than 28, and three is too few. ⚠ `js8_presets` in the API is FREQUENCY presets, not messages |
+| **B5** | **A station that queries us with `SNR?` gets SILENCE** | ⛔ Open, and a courtesy issue on air rather than only a missing feature. `JS8_CMD_SNR_QUERY` is defined (`js8_message.h:102`) and **used nowhere**. This is JS8 **J10**, deliberately unbuilt: it is the first phase where the radio transmits with no human deciding to, so it needs real interlocks first |
+| **B6** | ~~The browser bypassed the WSPR page's top-bar guard~~ | ✅ **FIXED AND VERIFIED** `057a98b1`. Four of John's six reports were this one bug |
+
+### C. Decisions owed by the operator
+
+1. **Push?** 3 commits unpushed on top of v1.18.0 (`057a98b1`, `3ea89dc7`,
+   `d3a17722`).
+2. **The I/Q server** - is it a direction, or is A1 the end of it? They are
+   different things and should not be conflated: A1 is **96 kbps** and needs
+   none of the I/Q measurement.
+
+### D. The one measurement that gates the big idea
+
+⛔ **Can `esp_hosted` → C6 → lwIP → httpd websocket sustain ~1.5 Mbit/s
+with low enough jitter? NOBODY HAS MEASURED IT**, and
+`docs/remote-iq-assessment.md` says everything else waits on the answer. Full
+I/Q is 48 kHz x 2 x 16-bit = 1.54 Mbit/s and the PC needs all of it.
+
+The experiment is small: a streaming-mode boot path that starts nothing but USB
+host, CAT, WiFi and a websocket sink, then measure throughput and jitter. It is
+a branch in `app_main` and a socket.
+
+⭐ **A fallback is already identified** if the number comes back bad: stream
+only a downconverted passband (NCO shift, reuse the existing decimate-by-8,
+**~192 kbit/s**), which keeps the full panadapter view. Rejected as the
+*destination* because it leaves the decoders on the Tab5, but sound as a
+fallback.
+
+⚠ **Boot mode, not a runtime switch** - nothing in this codebase has a
+teardown path, and the early allocations are deliberately early. Persist the
+mode to NVS and reboot into it.
 
 ---
 
