@@ -83,9 +83,10 @@ mouse and cursor, `/ss.bmp` screenshots (also a diagnostic), the ES7210
 mic/line-in, the speaker, the battery gauge and PMU, the SD slot, and the MBUS
 Module GPS.
 
-⭐ The Module GPS has a clean answer and Randy supplied it himself: the **QMX+
-internal GPS** replaces it, and that path already ships - the dev bench runs on
-it today and reports `QMX GPS source: QMX+ Internal`.
+⭐ The Module GPS has a clean answer, and it is the OPERATOR's point, not
+Randy's - Randy never mentions GPS anywhere in his message. The **QMX+ internal
+GPS** replaces it, and that path already ships: the dev bench runs on it today
+and reports `QMX GPS source: QMX+ Internal`.
 
 ⛔ **What only LOOKS lost is the hard part.** `main/ui/ui.c` is **17,582
 lines - the largest file in the project - and only 19% of its lines touch
@@ -102,6 +103,54 @@ The browser reads and writes all of that. **`/api/status` cannot answer what
 frequency the radio is on without `ui.c`.** So "the UI half does not compile
 in" - the claim that made the first version of this document optimistic - is
 simply false. A headless build needs most of that file.
+
+## 4b. How much code actually moves
+
+⚠ **Counted with comments and blank lines EXCLUDED.** This project is 33%
+comments, so a raw line count (~186,000) flatters every answer here. The code
+figures:
+
+| | code lines |
+|---|---|
+| `main/` (everything, including the UI) | 97,600 |
+| `components/ft8_lib` (the decoders) | 11,000 |
+| `components/m5stack_tab5` (the BSP, replaced for a stamp) | 2,600 |
+| **firmware total** | **≈111,000** |
+| the web page itself (JS/CSS/HTML in `index.html`) | 6,900 |
+
+And what becomes of it on a display-less board:
+
+| | code lines | what |
+|---|---|---|
+| **ports untouched** | **≈85,000** | DSP, every decoder, USB host, CAT, web server and page, storage, settings, ADIF |
+| **does not compile in** | **≈27,000** | Tab5 widget code - 291 LVGL functions in `ui.c` alone, plus every modal and view |
+| **must be pulled out** | **≈2,000-3,000** | the display-free core currently living inside the UI files |
+
+The pull-out, itemised:
+
+- **1,826 lines** are already display-free functions sitting inside UI files:
+  148 functions in `ui.c` (1,391 lines) and 36 in `ft8_screen_view.c` (435).
+  They move as they are.
+- **1,467 lines** in five files touch no LVGL at all - `ft8_screen.c`,
+  `gps_page.c`, `help_topics.c`, `js8_page.c`, `ui_mode.c`. They change folder,
+  not content.
+- **~150-250 lines** have to be dissected out of `t_clock_cb`, which is **752
+  lines** and interleaves the browser's scheduler with widget painting inside
+  one function.
+- **~65 state variables** must be separated from the **183 `lv_obj_t` widget
+  pointers** they currently sit beside in `ui.c`.
+- the 65 functions the web layer calls are only **554 lines of bodies** in
+  total - they are thin accessors over that state, which is why the state is
+  the real target and not the functions.
+
+⭐ **So 2-3% of the firmware has to move, and that is the honest headline.**
+It is NOT a large refactor by volume.
+
+⛔ **It is a delicate one by position.** That 2-3% lives inside a 17,582-line
+file beside 183 widget pointers, and the single function that must be split is
+the heartbeat of all FT8, JS8 and WSPR operation on a radio people use every
+day. The volume is not the risk; the blast radius is. That - not size - is why
+§5 says weeks and staged.
 
 ## 5. ⛔ THE REAL WORK, AND IT IS BIGGER THAN I FIRST SAID
 
@@ -131,11 +180,14 @@ leaving the widgets behind. The surface is large and it is load-bearing: 57
 public accessors, 112 referenced symbols, 37 coupling sites in engine code
 (14 `ui_mode_get` + 23 `ui_toast`).
 
-⚠ **I previously called this "a day or two". That was wrong and I retract it.**
-It is a structural refactor of the project's single biggest file - the one the
-knowledge graph names as the top god-node - in a product that ships every few
-days to real operators. The honest shape is **weeks, staged**, with the Tab5
-proving each stage, not a weekend.
+⚠ **I previously called this "a day or two". That was wrong and I retract it -
+though §4b shows the reason is not the one I gave when retracting it.** The
+volume is small: 2,000-3,000 lines move. What makes it weeks is WHERE they sit
+- inside the project's single biggest file, the graph's top god-node, beside
+183 widget pointers, with the scheduler tangled into a 752-line paint function
+that every FT8, JS8 and WSPR contact depends on. The honest shape is **weeks,
+staged**, with the Tab5 proving each stage - because of blast radius, not
+because of size.
 
 ⭐ **It is still worth doing on its own merits.** It decouples the radio state
 from LVGL, makes the control path testable on a host, and it is the *same*
