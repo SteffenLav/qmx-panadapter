@@ -1000,7 +1000,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 **v1.17.1 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, unattended.** Receiving and sending free text are both proven on air; the automatic exchange that turns them into a QSO is not written yet. Compound callsigns go with it.
-- **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
+- **Web-UI audio streaming** *(Sam W7STF, asked 2026-07-15)*. Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. ⚠ **Not started in any form you could use.** A first pass was written in July and never merged; it is now far enough behind that it has to be redone against the current code rather than finished. The demodulator it needs does exist and ships — it is what drives audio on the Tab5 — so the work is the streaming and the player, plus an overnight soak, because the WiFi link is the scarce resource. Server mode (screen off, device just serves) rides along. An earlier version of this entry said it was "already working in development", which was true of a branch in July and has not been true for a long time.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 
 ### Longer term
