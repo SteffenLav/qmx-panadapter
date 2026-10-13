@@ -4231,6 +4231,8 @@ Audio and binaural CW remain a **declared beta**.
 
 ⚠ **If you have set "Never exceed PA voltage"**, remember it caps the calibration sweep too. A band calibrated under a limit only describes the radio up to that limit, so raise it and recalibrate if you later want the full curve.
 
+⛔ **A correction to what v1.17.0 told you about JS8, because it was misleading.** That release said "a full automatic two-way JS8 QSO has not been completed yet". That was true in the sense I meant it — I had not proven a complete exchange on air — but it reads as though the automatic exchange is not implemented, and it is. If you have automatic replies switched on, **your Tab5 answers JS8 callers with a signal report by itself**, and has done since v1.17.0. Gyula HA3HZ found this in his own log, with four stations answered unattended, after I had told him it was not possible. Nothing is broken and nothing has changed in this release — but if you did not know your station was answering on its own, now you do, and the automatic-reply setting is where you turn it off.
+
 ⚠ **Everything said about JS8 in v1.17.0 still stands**: it is a beta, a full automatic two-way QSO has not been completed, and nothing has yet been decoded through the 3.5 mm jack.
 
 ---

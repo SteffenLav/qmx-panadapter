@@ -623,9 +623,27 @@ foundation of everything below.
 **Needs built:** the remaining vocabulary (the table already spells all 32 for
 display); a responder with a rate limit; an operator switch per command class.
 **Verification:** query it from JS8Call and check every answer.
-**Risk:** ⛔ **this is the first phase where the radio transmits without a human
-deciding to.** It needs the same interlock discipline the FT8 robot has, and
-`feedback_never_leave_the_radio_transmitting` applies in full.
+**Risk:** ⛔ **THIS CLAIM WAS WRONG AND IT COST REAL CREDIBILITY.** It used to
+read *"this is the first phase where the radio transmits without a human deciding
+to"*. It is not. **J4 already did that**, in v1.17.0: `d6ff5c1e` wired
+`ft8_qso.c` and `ft8_robot.c` to JS8 - its own commit message says *"ft8_robot.c
+opened its pounce with a grid; it now opens with a report in JS8"* - so a JS8
+caller has been answered automatically since that release.
+
+Gyula HA3HZ proved it on 2026-10-13 with his own diagnostic log, after being
+told twice that it could not happen: four stations answered unattended with
+`'IU2ITE HA3HZ -14'`, `'HB9ETH HA3HZ -07'`, `'DM3ME HA3HZ -18'`,
+`'9A3SWO HA3HZ -15'`.
+
+⚠ **A phase plan that misstates WHEN a risk arrives is worse than one that
+does not mention the risk**, because it is read as an assurance. This line was
+quoted back as a reason not to worry about unattended JS8 TX, in a release that
+already did it.
+
+What is still true of J10: it adds *more* commands the station answers on its
+own, so it needs the same interlock discipline the FT8 robot has, and
+`feedback_never_leave_the_radio_transmitting` applies in full. What is NOT true
+is that it is the first such phase.
 **Effort:** 2 sessions.
 
 ### J11 — Heartbeat network participation
