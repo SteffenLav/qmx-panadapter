@@ -4,12 +4,22 @@
 QMX+ that serves only the web UI, with no display at all. Is that a port, or a
 second product?
 
-**Short answer: it is a port, and the architecture allows it** - but not as the
-code stands today. One refactor has to happen first, and without it a headless
-build does not merely lose the screen, it does nothing at all. That refactor is
-bounded and countable, and it is worth doing even if the stamp never happens.
+**Short answer: it is a port, not a second product - and the hardware could
+hardly be better suited. But the code is not ready for it, and the obstacle is
+not the display.**
 
-Everything below is measured against the tree at `v1.18.0-16`, not estimated.
+Two things live inside the UI layer today that a headless build cannot do
+without: the **radio's own state** (what frequency, band, mode, zoom and
+passband the radio is on) and the **scheduler** that executes everything the
+browser asks for. Until those are lifted out, a display-less build renders a
+perfect web page that does nothing at all.
+
+That extraction is a staged refactor of the largest file in the project,
+measured in weeks rather than days. It is worth doing even if the stamp never
+happens - it is the same prerequisite as a Tab5 "web-only" mode.
+
+⚠ Everything below is MEASURED against the tree at `v1.18.0-16`. Where the
+first version of this document guessed, §2 says so and gives the real number.
 
 ---
 
@@ -32,102 +42,119 @@ The Wi-Fi path is `esp_hosted` over SDIO on both, so the throughput ceiling and
 its quirks carry over exactly, including the one measured in
 `docs/remote-iq-assessment.md`.
 
-Nothing in the signal path needs porting. It needs **compiling for a board
-without a screen**.
+⭐ Nothing in the signal path needs porting at all. ⛔ But "compile it for a
+board without a screen" is NOT what this is - see §4 and §5.
 
-## 2. What ports unchanged
+## 2. ⛔ A CORRECTION TO THE FIRST VERSION OF THIS DOCUMENT
 
-About 55% of the tree, and it is the half that took the longest:
+The first cut of this file, written 2026-10-14, carried four numbers that were
+wrong because they came from narrow greps. They are corrected below and the
+originals are kept here, because the wrong ones all pointed the same way: they
+made the port look **smaller** than it is.
 
-- USB host: UAC audio capture and CDC-ACM CAT
+| First cut said | Measured |
+|---|---|
+| the web server needs **12** symbols from the UI layer | **112** UI-layer symbols; the net layer alone uses **57 of the 114** public accessors in `ui.h` |
+| `main/ui/` "simply does not compile in" | **false** - most of `ui.c` is not widget code and the web UI depends on it |
+| **6** `ui_mode_get()` sites in engine code | **14** |
+| **9** `ui_toast()` sites in engine code | **23** |
+| "a day or two of careful surgery" | **retracted** - see §5 |
+
+The first three came from grepping `main/*.c` and one symbol prefix, missing
+`main/net/`, `main/dsp/`, `main/adif/`, `main/wifi/`, `main/cat/` and
+`main/render/` entirely.
+
+## 3. What ports unchanged
+
+About half the tree, and it is the half that took the longest:
+
+- USB host: UAC audio capture and CDC-ACM CAT. `main/audio/audio.c` drives the
+  UAC device directly and does not depend on the Tab5's own codec
 - the DSP: FFT, filters, demodulation
 - every decoder and encoder: FT8, FT4, JS8, WSPR, CW
 - the QSO machine, the robot, the pileup, grey-listing, ADIF
-- the **entire web server and web UI** - which is the product, for this user
+- the web server and the web UI page itself
 - settings/NVS, SPIFFS, OTA, update checking, PSKReporter, DX cluster
 
-## 3. What does not exist on a stamp
+## 4. What is genuinely lost, and what only LOOKS lost
 
-- `main/ui/` - **49,245 lines, 45% of the tree**. It simply does not compile in
-- touch, the on-screen keyboard, the BLE HID mouse (`bt_hid_mouse.c`) and the
-  cursor (`hid_cursor.c`) - all meaningless with no screen
-- `/ss.bmp` screenshots, which are also a diagnostic tool and would be lost
-- Tab5 peripherals: the ES7210 mic/line-in, the battery gauge and PMU, the
-  speaker, the SD card slot
-- the **MBUS Module GPS**. ⭐ Randy's own answer is the right one: the QMX+
-  internal GPS replaces it, and that path already ships and runs on the dev
-  bench today (`QMX GPS source: QMX+ Internal`)
+**Genuinely gone:** the display and touch, the on-screen keyboard, the BLE HID
+mouse and cursor, `/ss.bmp` screenshots (also a diagnostic), the ES7210
+mic/line-in, the speaker, the battery gauge and PMU, the SD slot, and the MBUS
+Module GPS.
 
-⚠ **GPIO: the sources disagree and the schematic settles it.** M5Stack lists
-the exposed pins as G0-G39, G41, G49, G50, G52; Randy reports G40-G48 and G51.
-Both agree there is **no G53 or G54**, so the owed meter-on-GPIO53 feature has
-no home on this board - it is ADC2-bound in any case.
+⭐ The Module GPS has a clean answer and Randy supplied it himself: the **QMX+
+internal GPS** replaces it, and that path already ships - the dev bench runs on
+it today and reports `QMX GPS source: QMX+ Internal`.
 
-## 4. ⛔ THE ONE REAL BLOCKER, AND IT IS NOT THE DISPLAY
+⛔ **What only LOOKS lost is the hard part.** `main/ui/ui.c` is **17,582
+lines - the largest file in the project - and only 19% of its lines touch
+`lv_` at all.** The other ~14,000 lines are not widgets. They are the radio's
+own state and logic:
 
-**The LVGL 1 Hz timer is the scheduler for everything the browser asks for.**
-`t_clock_cb()` in `ft8_screen_view.c` drains, once a second:
+    ui_get_dial_freq_hz   ui_update_frequency   ui_validate_band_freq_hz
+    ui_get_band_str       ui_get_mode_str       ui_band_last_hz
+    ui_set_zoom           ui_get_zoom_factor    ui_get_pan_offset_bins
+    ui_get_db_range       ui_get_passband_edges_hz
+    ui_get_if_cal_hz      ui_get_if_bin_shift   ui_set_cat_paused
 
-| Drained on the LVGL timer | What stops working without it |
-|---|---|
-| `web_reply_drain` | "work this station" from the browser |
-| `s_web_cq_pending` | Call CQ from the browser |
-| `s_web_ftx_pending` | JS8 free text |
-| `s_web_js8_macro` | the JS8 SNR / GRID buttons |
-| `s_web_parity_pending` | CQ slot parity |
-| `s_web_override_pending` | mid-QSO overrides |
-| `js8_ftx_tick()` | arming each frame of a running free-text message |
+The browser reads and writes all of that. **`/api/status` cannot answer what
+frequency the radio is on without `ui.c`.** So "the UI half does not compile
+in" - the claim that made the first version of this document optimistic - is
+simply false. A headless build needs most of that file.
 
-Every one of those defers to the LVGL task **on purpose**, because
-`ft8_tx_arm()` blocks and must never run on the HTTP task. The reasoning is
-sound; the host it chose is a UI timer.
+## 5. ⛔ THE REAL WORK, AND IT IS BIGGER THAN I FIRST SAID
 
-A second, quieter coupling: the decode loop's **lifetime** is a UI question.
-`ft8_test.c:2939` is literally `while (ui_mode_get() == UI_MODE_FT8)`, with
-further gates at `ft8_test.c:2862`, `ft8_sim.c:611` and three sites in
-`wspr_rx.c`. No UI mode, no decoding.
+Two separate problems, and the second is the expensive one.
 
-⛔ So a naive headless build produces a web UI that **renders perfectly and
-does nothing**: no decodes, no transmissions, no response to any button.
+**(a) The LVGL timer is the scheduler.** `t_clock_cb()` in
+`ft8_screen_view.c` drains, once a second: `web_reply_drain`,
+`s_web_cq_pending`, `s_web_ftx_pending`, `s_web_js8_macro`,
+`s_web_parity_pending`, `s_web_override_pending`, and `js8_ftx_tick()` which
+arms each frame of a running free-text message. Every one defers there **on
+purpose**, because `ft8_tx_arm()` blocks and must never run on the HTTP task.
+The reasoning is right; the host it chose is a UI timer.
 
-## 5. The refactor, and how big it really is
+A second coupling of the same kind: the decode loop's **lifetime** is a UI
+question - `ft8_test.c:2939` is `while (ui_mode_get() == UI_MODE_FT8)`, and
+there are **14** `ui_mode_get()` sites in engine code, including in `dsp.c`,
+`spur_map.c` and `render.c`.
 
-Split `ft8_screen_view.c` (4,755 lines) along the seam that already exists:
+⛔ So a naive headless build renders a perfect web UI that **does nothing**:
+no decodes, no transmissions, no response to any button.
 
-- **control** - the pending flags, the drains, `js8_ftx_tick()`, the QSO calls.
-  Moves to a plain FreeRTOS task at 1 Hz. No LVGL.
-- **view** - the widgets. Tab5 only.
+**(b) The radio's state has to be extracted from the UI.** This is the part the
+first version of this document missed entirely. It means pulling a
+display-free "radio core" out of `ui.c` (17.5k lines) and `ft8_screen_view.c`
+(4.7k lines) - the state, the validation, the band/zoom/passband maths - and
+leaving the widgets behind. The surface is large and it is load-bearing: 57
+public accessors, 112 referenced symbols, 37 coupling sites in engine code
+(14 `ui_mode_get` + 23 `ui_toast`).
 
-The surface to move is small and countable:
+⚠ **I previously called this "a day or two". That was wrong and I retract it.**
+It is a structural refactor of the project's single biggest file - the one the
+knowledge graph names as the top god-node - in a product that ships every few
+days to real operators. The honest shape is **weeks, staged**, with the Tab5
+proving each stage, not a weekend.
 
-- the web server needs exactly **12 symbols** from `ft8_screen_view`, of which
-  **9 are behaviour** and 3 are UI-state getters
-- **6 `ui_mode_get()` sites** in engine files become an explicit "engine
-  enabled" state, set by the UI on a Tab5 and by configuration headless
-- **9 `ui_toast()` calls** in engine files need a notification shim that logs
-  headless and toasts on a Tab5
+⭐ **It is still worth doing on its own merits.** It decouples the radio state
+from LVGL, makes the control path testable on a host, and it is the *same*
+prerequisite as Bruce N9JCV's "let me switch the web UI off". The stamp would
+not be paying for this refactor alone.
 
-That is the work. It is a day or two of careful surgery, not a rewrite, and
-every step is verifiable on the Tab5 before any stamp exists.
+## 6. Is it cumbersome to maintain afterwards?
 
-⭐ **It pays for itself without the stamp.** It decouples the QSO machine from
-LVGL, makes the control path testable on a host, and is the *same*
-prerequisite as Bruce N9JCV's "let me turn the web UI off" request - and of a
-Tab5 "web-only" mode.
+**No - afterwards. Getting there is the cost, not living with it.**
 
-## 6. Is it cumbersome to maintain?
+Once a display-free radio core exists, the split is clean: one tree, two
+targets, with the widget layer compiled only for the Tab5. There is no
+duplicated logic to keep in step, because the core is shared by construction.
 
-**One tree, two targets, with one standing risk.**
-
-The 45% that is UI does not compile into the stamp image, so there is no
-duplicated logic to keep in step - provided the refactor above is real and the
-control path has no second copy. The danger is **drift**: a feature wired into
-the Tab5 path that the headless path silently lacks, discovered by a user.
-
-That risk is the same shape as the standing-patch problem and the unattended-TX
-problem, and it has the same answer: a checker in `tools/` that fails the build
-when a web action has no headless home. This project already runs three such
-gates and they have each caught a real defect.
+The standing risk is **drift**: a feature wired into the Tab5 path that the
+headless path silently lacks. That is the same shape as the standing-patch and
+unattended-TX problems, and it takes the same answer - a checker in `tools/`
+that fails the build when a web action has no headless home. Three such gates
+already run in this project and each has caught a real defect.
 
 ## 7. Open questions a prototype would answer
 
@@ -145,11 +172,23 @@ None of those is a software question, and none is answered by reading.
 
 ## Verdict for Randy
 
-It is a port, not a second product. The hardware is the same machine, the
-signal path and the whole web UI carry over unchanged, and the only structural
-obstacle is that the browser's actions are currently scheduled by a UI timer.
-Fixing that is bounded work that the project wants anyway.
+**Architecturally, yes - and the hardware could hardly be better suited.** Same
+SoC, same 16 MB flash and 32 MB PSRAM, the same USB host peripheral, the same
+C6-over-SDIO Wi-Fi (verified in our own sdkconfig, not assumed). The binary and
+partition table fit unchanged, and the entire signal path - USB audio, DSP, all
+four decoders, CAT, the web server - ports without modification.
 
-⚠ What this does NOT say is when. It says the architecture does not stand in
-the way, and that maintaining both from one tree is reasonable if the control
-path is lifted out of the view first.
+**The cost is not the display. It is that the radio's state and the browser's
+scheduler both live inside the UI today.** Pulling a display-free core out of
+`ui.c` is a weeks-shaped, staged refactor of the largest file in the project,
+not a weekend port. Every stage is verifiable on the Tab5 as it goes, and the
+project wants the result anyway.
+
+⛔ **What I would NOT promise him:** a date, or that it is easy. The first
+version of this assessment said "a day or two" and it was wrong by an order of
+magnitude on its central measurement.
+
+⭐ **What is fair to promise:** that it is feasible, that the architecture does
+not stand in the way, that nothing about the radio half has to be rewritten,
+and that maintaining both from one tree is reasonable once the core is lifted
+out.
