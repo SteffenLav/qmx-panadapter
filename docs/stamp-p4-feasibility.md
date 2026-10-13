@@ -167,6 +167,67 @@ audio payload to ~192 kbps, roughly **274 kbps combined**, over the same
 SDIO-to-C6 link that is already the measured bottleneck. That wants soaking
 before anybody promises spatial CW in a browser.
 
+## 4a-bis. ⭐ THE OPERATOR'S INVERSION: SERVE I/Q, DO THE DSP ON THE PC
+
+The audio problem in §4a assumes the stamp renders audio and streams the
+RESULT. The operator's point, 2026-10-14, is that this is the wrong way round
+for a board whose only purpose is to serve a client: **stream the I/Q and let
+the PC do everything.**
+
+⭐ **That dissolves §4a entirely.** Panoramic CW, AM demodulation and Sam
+W7STF's DNR (he means LMS and spectral subtraction) all become client-side DSP
+on a machine with no CPU budget worth worrying about - and
+`docs/web-audio-feasibility.md` already notes DNR can run client-side as
+RNNoise-class WASM. The device needs no audio output and no audio DSP at all.
+
+⭐⭐ **And it dissolves the main objection in `docs/remote-iq-assessment.md`
+too.** That document REJECTED "streaming I/Q while the normal UI still runs",
+because "the device is already at 0.0-0.2% idle on core 0 with the radio
+streaming, and an open browser already breaks the audio". **A stamp has no
+LVGL, no render task and no software rotation** - exactly the load that forced
+I/Q streaming to be a special boot mode on a Tab5. On a stamp it is not a mode,
+it is the whole machine.
+
+So the stamp is not "a Tab5 with the screen removed". It is the I/Q-server
+configuration that assessment already designed, running natively.
+
+### What this does to the size of the job
+
+It splits the stamp into two quite different products:
+
+| | what the device does | what it costs |
+|---|---|---|
+| **A. RX pipe** | USB host, CAT, WiFi, a websocket sink. No DSP, no decoding, no audio | the I/Q doc calls streaming mode "a branch in `app_main` and a socket". **The §5 refactor is largely NOT needed**: the panadapter, zoom and passband state the browser reads from `ui.c` is replaced by the PC computing its own |
+| **B. Headless station** | decodes and transmits on its own, web UI as today | the full §5 extraction, weeks, large blast radius |
+
+⛔ **TX is what keeps B expensive, and it cannot be wished away.** The I/Q
+assessment is explicit: CW keying is ~60 ms per element at 20 WPM and "not
+remotely schedulable"; an FT8 burst must be "armed and run locally" to slot
+accuracy. So anything that transmits keeps CAT, the TX engines and their
+schedulers on the device - and those schedulers are exactly what §5 found
+living on the LVGL timer. A pure RX pipe sidesteps that; a transmitting stamp
+does not.
+
+### The gate, unchanged and still unmeasured
+
+**Can `esp_hosted` -> C6 -> lwIP -> httpd websocket sustain ~1.5 Mbit/s with
+low enough jitter?** Nobody has measured it, on either board.
+
+| | rate |
+|---|---|
+| raw 16-bit, 48 kHz | 1.54 Mbit/s |
+| 12-bit block-float packing | ~1.15 Mbit/s |
+| decimated to +/-12 kHz | 768 kbit/s |
+| both | ~580 kbit/s |
+| fallback: downconverted passband only | ~192 kbit/s |
+
+⚠ A dropout does not glitch the audio, it loses a decode.
+
+⭐ **One system-of-record decision comes with it**, and the I/Q assessment
+already picks it: the browser posts decodes and QSOs BACK, so WSPR TX, PSK
+Reporter and Cloudlog keep running unattended. If those only work while a
+browser is open, the product is a downgrade.
+
 ## 4b. How much code actually moves
 
 ⚠ **Counted with comments and blank lines EXCLUDED.** This project is 33%
@@ -287,23 +348,33 @@ None of those is a software question, and none is answered by reading.
 
 ## Verdict for Randy
 
-**Architecturally, yes - and the hardware could hardly be better suited.** Same
+**Architecturally yes, and the hardware could hardly be better suited.** Same
 SoC, same 16 MB flash and 32 MB PSRAM, the same USB host peripheral, the same
-C6-over-SDIO Wi-Fi (verified in our own sdkconfig, not assumed). The binary and
-partition table fit unchanged, and the entire signal path - USB audio, DSP, all
-four decoders, CAT, the web server - ports without modification.
+C6-over-SDIO Wi-Fi (verified in our own sdkconfig). The binary and partition
+table fit unchanged.
 
-**The cost is not the display. It is that the radio's state and the browser's
-scheduler both live inside the UI today.** Pulling a display-free core out of
-`ui.c` is a weeks-shaped, staged refactor of the largest file in the project,
-not a weekend port. Every stage is verifiable on the Tab5 as it goes, and the
-project wants the result anyway.
+⭐ **But the right question is which of two products it is**, and the answer
+changes the cost by an order of magnitude:
 
-⛔ **What I would NOT promise him:** a date, or that it is easy. The first
-version of this assessment said "a day or two" and it was wrong by an order of
-magnitude on its central measurement.
+- **An RX I/Q pipe** - USB host, CAT, Wi-Fi, a websocket, and the PC does every
+  bit of the DSP, decoding and audio. Small. It also makes the stamp the
+  natural home for the remote-I/Q idea rather than a compromised one, because
+  it carries none of the UI load that forced that idea into a special boot mode
+  on the Tab5.
+- **A headless station that decodes and transmits on its own** - this needs the
+  radio state and the browser's scheduler lifted out of the UI layer: 2-3% of
+  the firmware by volume, but sitting under every FT8, JS8 and WSPR contact.
+  Weeks, staged.
 
-⭐ **What is fair to promise:** that it is feasible, that the architecture does
-not stand in the way, that nothing about the radio half has to be rewritten,
-and that maintaining both from one tree is reasonable once the core is lifted
-out.
+⛔ **One measurement gates the first and nobody has taken it:** sustained
+websocket throughput and jitter to a PC, ~1.5 Mbit/s raw or ~580 kbit/s packed
+and decimated. `docs/remote-iq-assessment.md` says everything else waits on it,
+and that is still true.
+
+⛔ **What I would NOT promise:** a date, or that either version is easy. The
+first draft of this assessment said "a day or two", and separately wrote off
+local audio with "you listen on the radio". Both were wrong.
+
+⭐ **What is fair to say:** the architecture does not stand in the way, nothing
+about the radio half needs rewriting, one tree with two targets is reasonable,
+and the cheap version of his idea is cheaper than this document first implied.
