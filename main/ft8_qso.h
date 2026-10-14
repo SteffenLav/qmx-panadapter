@@ -56,6 +56,20 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len);
 // to this slot and not stale ones from previous slots).
 void ft8_qso_advance(int64_t slot_sec);
 
+/* Close a QSO whose final message has finished transmitting, without waiting
+ * for the next slot to be decoded.
+ *
+ * ⛔ WHY THIS EXISTS: ft8_qso_advance() runs once per slot, so a completed
+ * exchange used to stay "busy" for a whole extra cycle after our 73 left the
+ * air - the operator could not start anyone else in the meantime (Bruce N9JCV,
+ * POTA, 2026-10-13). Poll this from an idle context instead.
+ *
+ * Cheap when there is nothing to do (one lock, one state read). When there IS,
+ * it writes the ADIF record synchronously - measured at 31-342 ms - so call it
+ * only where that is affordable, never from the LVGL timer or the TX path. */
+void ft8_qso_poll_finish(void);
+
+
 // Called by ft8_task immediately after ft8_tx_run() returns. Re-arms the
 // current outgoing message for the next matching slot, so the re-arm happens
 // at T+12.7 s (TX end), not at T+19 s (after decode) which would be too late

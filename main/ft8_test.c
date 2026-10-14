@@ -1330,6 +1330,25 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
         if (boundary > after_ms) {
             return boundary;
         }
+
+        /* ⭐ CLOSE A FINISHED QSO HERE, not a slot later.
+         *
+         * This wait is the one place the decode task is genuinely idle, and
+         * it is where our own closing 73 lands: the burst ends about 12.6 s
+         * into a 15 s slot, leaving ~2.4 s of nothing. Before this, the only
+         * thing that ever noticed the exchange was over was ft8_qso_advance()
+         * on the NEXT slot, so the machine stayed "busy" for a full extra
+         * cycle and the operator could not start anybody else (Bruce N9JCV,
+         * POTA, 2026-10-13).
+         *
+         * ⚠ ONLY WITH MARGIN. The wrap-up writes the ADIF record
+         * synchronously - measured at 31-342 ms on the bench - and this loop's
+         * whole job is to be punctual for the boundary. Polling it inside the
+         * last second could make the slot itself late, which would cost a
+         * key-down. 1200 ms is comfortably more than the worst measurement and
+         * still fires the moment the burst finishes. */
+        if ((boundary + period_ms) - now_ms > 1200) ft8_qso_poll_finish();
+
         vTaskDelay(1);  // ~10 ms at default tick rate
     }
 }

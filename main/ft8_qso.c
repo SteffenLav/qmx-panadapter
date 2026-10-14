@@ -2528,6 +2528,34 @@ static void ft8_qso_advance_body(int64_t slot_sec);
  * ⚠ NOT YET EXERCISED ON AIR. The invariant it enforces is the one the old
  * `!r_main.early_advanced && !r_worker.early_advanced` test enforced by hand;
  * what is new is a second task reaching it. */
+/* Defined with the slot-advance path below; both callers share it. */
+static void finish_wait_done(const char *target);
+
+/* Close a finished QSO the moment our own final leaves the air.
+ *
+ * Safe to call as often as you like: it takes the lock, does nothing unless
+ * the machine is in WAIT_DONE, and finish_wait_done() itself still requires
+ * TX to be idle. It deliberately does NOT go through ft8_qso_advance(), which
+ * carries a once-per-slot guard and whose body captures the pileup, re-scans
+ * decodes and can ARM A TRANSMISSION - none of which may run on a poll.
+ *
+ * ⚠ CALL IT WITH TIME TO SPARE. The wrap-up writes the ADIF record
+ * synchronously and has been measured at up to 342 ms, so a caller that polls
+ * close to a slot boundary can be late for it. ft8_test.c keeps ~1.2 s of
+ * margin for exactly this reason. */
+void ft8_qso_poll_finish(void)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_target, sizeof(target));
+    target[sizeof(target) - 1] = '\0';
+    unlock();
+
+    if (st != FT8_QSO_WAIT_DONE) return;
+    finish_wait_done(target);
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
     static int64_t s_adv_slot = INT64_MIN;
@@ -2548,6 +2576,209 @@ void ft8_qso_advance(int64_t slot_sec)
     s_adv_slot = slot_sec;
     ft8_qso_advance_body(slot_sec);
     xSemaphoreGive(s_adv_lock);
+}
+
+/* The WAIT_DONE -> DONE wrap-up, extracted so it has TWO callers.
+ *
+ * ⛔ WHY IT MOVED OUT OF ft8_qso_advance_body(). advance() runs ONCE PER
+ * SLOT, so the only moment this was ever evaluated was after the next slot had
+ * been decoded. Our closing 73 leaves the air about 12.6 s into a 15 s slot,
+ * and the exchange then stayed open for the remaining ~2.4 s PLUS the whole
+ * following slot - a full cycle in which the operator could not start anybody
+ * else, because the machine still believed it was busy.
+ *
+ * Bruce N9JCV, POTA, 2026-10-13: "even at the end of the transmission, my qso
+ * was not completed. After waiting thru another cycle it was then finally
+ * logged ... this prevents us from working other stations as it says we are
+ * still in the QSO from the prior station."
+ *
+ * ⚠ THE COST IS MEASURED, and that is what allows this to be polled at all.
+ * The branch comment below asked for numbers before anything here was
+ * restructured; the instrument it describes has since logged them on the
+ * bench: 31, 38, 38, 95, 293 and 342 ms, dominated by the ADIF write. So it is
+ * far too slow for the LVGL timer or for anything inside the TX path, and
+ * perfectly safe on the decode task while it idles between slots - which is
+ * exactly where ft8_qso_poll_finish() calls it from.
+ *
+ * `target` is the partner, read under the lock by the caller. */
+static void finish_wait_done(const char *target)
+{
+        // Final (73/RR73) armed or fired; once it leaves the air we're done.
+        if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
+            /* ⭐ HOW LONG THE WRAP-UP ACTUALLY TAKES - Gyula HA3HZ, 2026-09-25:
+             * "You have to wait for the save to be made to the LOG and this is
+             * where the controller becomes slow, because the save process is
+             * also time-consuming ... there is not enough time to respond after
+             * saving the LOG."
+             *
+             * He is describing a cost nothing has ever measured. This whole
+             * branch runs on the DECODE task and is synchronous: a
+             * settings_load_all(), a decode-table snapshot, spots lookups, and
+             * adif_log_record()'s fopen/fprintf/fsync/fclose to the card. Any
+             * of them could be the expensive one, and guessing which would be
+             * the usual mistake.
+             *
+             * So: total for the branch, and the ADIF write on its own. Logged
+             * once per completed QSO - not a hot path - and it costs two
+             * timer reads. Until these numbers exist, nothing here should be
+             * restructured and the TX timing certainly should not be. */
+            int64_t wrap_t0 = esp_timer_get_time();
+            int64_t adif_us = 0;
+            lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
+            ft8_status_set("QSO %s: complete!", target);
+            ESP_LOGI(TAG, "QSO with %s complete", target);
+            clear_dt_follow();   // QSO done - back to the UTC/GPS beat
+            // Drop the just-worked station from the pileup. It was removed at
+            // qso_start, but the partner keeps addressing us through the
+            // exchange (report/RR73/73, and Dirk DK7CVD's late-reply case), and
+            // capture_pileup_callers no longer excludes them once s_target
+            // clears - so without this (plus the worked-before skip in capture)
+            // they'd reappear in the pileup right after a successful QSO.
+            ft8_pileup_remove(target);
+            // A manually-run exchange with this station is over too - stop
+            // exempting/highlighting them as "being worked". Start the
+            // just-completed grace instead (keeps their trailing 73 out of
+            // the pileup - see DONE_GRACE_TTL_S).
+            lock();
+            if (s_manual_target[0] && strcmp(s_manual_target, target) == 0)
+                s_manual_target[0] = '\0';
+            strncpy(s_last_done_call, target, sizeof(s_last_done_call) - 1);
+            s_last_done_call[sizeof(s_last_done_call) - 1] = '\0';
+            s_last_done_ts = time(NULL);
+            // Remember the final we just sent, so it can be re-sent if they turn
+            // out not to have decoded it (see final_track_still_asking() /
+            // final_track_try_resend()). Working a second station right after
+            // does NOT stop this one being tracked any more - see
+            // FINAL_TRACK_MAX above.
+            //
+            // HOUND (rule 4): except after a hound contact, where there is no
+            // final to re-send - the Fox's RR73 closed it and we deliberately
+            // stayed quiet. Tracking it would have us transmitting "73" into a
+            // Fox's frequency for up to three slots simply because it is still
+            // calling other hounds, which it always is.
+            if (s_hound_active) {
+                s_hound_active  = false;   // session over; the next start decides afresh
+            } else {
+                final_track_add(target, s_freq_hz,
+                                 s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73,
+                                 s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
+            }
+            unlock();
+
+            // A completed QSO with this call supersedes any older resumable
+            // half-QSO - never auto-resume into a duplicate afterwards.
+            if (s_resume_call[0] && strcmp(s_resume_call, target) == 0) {
+                s_resume_call[0]  = '\0';
+                s_resume_have_req = false;
+            }
+
+            // Build and save the ADIF record.
+            qmx_settings_t qs;
+            settings_load_all(&qs);
+
+            // Look up their grid from the ft8_screen decode table.
+            ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+            int snap_n = 0;
+            char their_grid[FT8_GRID_MAX_LEN] = {0};
+            ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &snap_n);
+            for (int i = 0; i < snap_n; i++) {
+                if (strcmp(snap[i].call, target) == 0 && snap[i].last_grid[0]) {
+                    strncpy(their_grid, snap[i].last_grid, sizeof(their_grid) - 1);
+                    break;
+                }
+            }
+            // Their row may have aged out during a long exchange, taking the
+            // only copy of their grid with it. Fall back to what was captured
+            // earlier in THIS QSO - and only if it was captured for THIS
+            // station (Gyula HA3HZ, 2026-09-06).
+            if (!their_grid[0]) {
+                lock();
+                bool same = (strcmp(s_their_grid_call, target) == 0) && s_their_grid[0];
+                if (same) snprintf(their_grid, sizeof(their_grid), "%s", s_their_grid);
+                unlock();
+                if (their_grid[0])
+                    ESP_LOGI(TAG, "grid for %s recovered from this QSO's own record (%s) "
+                                  "- their decode row had aged out", target, their_grid);
+            }
+
+            // ARRL Field Day exchange (if any): their_exch is "<class> <section>";
+            // split off the section (last token) for the dedicated ADIF fields.
+            char their_fd_class[FT8_FD_EXCH_LEN] = {0}, their_fd_section[FT8_FD_EXCH_LEN] = {0};
+            lock();
+            bool have_fd_exch = s_fd_their_exch[0] != '\0';
+            char fd_exch_copy[FT8_FD_EXCH_LEN];
+            strncpy(fd_exch_copy, s_fd_their_exch, sizeof(fd_exch_copy) - 1);
+            fd_exch_copy[sizeof(fd_exch_copy) - 1] = '\0';
+            unlock();
+            if (have_fd_exch) {
+                char *sp = strrchr(fd_exch_copy, ' ');
+                if (sp) {
+                    *sp = '\0';
+                    snprintf(their_fd_class, sizeof(their_fd_class), "%s", fd_exch_copy);
+                    snprintf(their_fd_section, sizeof(their_fd_section), "%s", sp + 1);
+                }
+            }
+
+            // Were they activating a park/summit? Resolved now, while the
+            // contact is fresh - the spot can age out of the store long before
+            // anyone exports the log, and a chase with no SIG_INFO earns no
+            // credit for either side. Empty for an ordinary QSO.
+            char their_sig[8] = "", their_ref[16] = "";
+            spots_activation_for_call(target, cat_get_frequency(),
+                                      their_sig, sizeof(their_sig),
+                                      their_ref, sizeof(their_ref));
+
+            adif_qso_t qso = {
+                .their_call = target,
+                .my_call    = s_my_call,
+                .my_grid    = qs.my_grid,
+                .their_grid = their_grid,
+                .freq_hz    = cat_get_frequency(),
+                .mode       = ft8_op_mode_name(),
+                .rst_sent   = s_rst_sent,
+                .rst_rcvd   = s_rst_rcvd,
+                .qso_time   = time(NULL),
+                .my_arrl_class      = have_fd_exch ? qs.fd_class   : NULL,
+                .my_arrl_section    = have_fd_exch ? qs.fd_section : NULL,
+                .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
+                .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
+                .their_sig      = their_sig[0] ? their_sig : NULL,
+                .their_sig_info = their_ref[0] ? their_ref : NULL,
+            };
+            // Duplicate guard (see QSO_DUP_LOG_WINDOW_SEC): the same call on the
+            // same band inside the window is this same contact reaching DONE a
+            // second time - most often because the operator finished it by hand
+            // after the machine already had - not a second QSO.
+            bool dup = (s_logged_call[0] &&
+                        strcmp(s_logged_call, target) == 0 &&
+                        strcmp(adif_log_band_for_freq(qso.freq_hz),
+                               adif_log_band_for_freq(s_logged_freq_hz)) == 0 &&
+                        ((int64_t)time(NULL) - s_logged_ts) < QSO_DUP_LOG_WINDOW_SEC);
+            if (dup) {
+                ESP_LOGW(TAG, "not logging %s again - same call/band logged %llds ago",
+                         target, (long long)((int64_t)time(NULL) - s_logged_ts));
+            } else {
+                int64_t adif_t0 = esp_timer_get_time();
+                adif_log_record(&qso);
+                adif_us = esp_timer_get_time() - adif_t0;
+                strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
+                s_logged_call[sizeof(s_logged_call) - 1] = '\0';
+                s_logged_freq_hz = qso.freq_hz;
+                s_logged_ts      = (int64_t)time(NULL);
+            }
+            // Grace ring: note it on BOTH branches. A contact reaching DONE a
+            // second time is still one we have just worked, and it is precisely
+            // the case the unattended pickers must not pick up again.
+            note_worked_now(target, qso.freq_hz);
+            s_fd_their_exch[0] = '\0';
+            /* The number Gyula's report rests on. "slow" is not a
+             * measurement; this is. If the branch total turns out to be small
+             * and he still sees the panel stall, the cost is somewhere else
+             * entirely and the log write is innocent. */
+            ESP_LOGI(TAG, "QSO wrap-up took %lld ms (ADIF write %lld ms)",
+                     (long long)((esp_timer_get_time() - wrap_t0) / 1000),
+                     (long long)(adif_us / 1000));
+        }
 }
 
 static void ft8_qso_advance_body(int64_t slot_sec)
@@ -2790,182 +3021,10 @@ static void ft8_qso_advance_body(int64_t slot_sec)
     }
 
     if (st == FT8_QSO_WAIT_DONE) {
-        // Final (73/RR73) armed or fired; once it leaves the air we're done.
-        if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
-            /* ⭐ HOW LONG THE WRAP-UP ACTUALLY TAKES - Gyula HA3HZ, 2026-09-25:
-             * "You have to wait for the save to be made to the LOG and this is
-             * where the controller becomes slow, because the save process is
-             * also time-consuming ... there is not enough time to respond after
-             * saving the LOG."
-             *
-             * He is describing a cost nothing has ever measured. This whole
-             * branch runs on the DECODE task and is synchronous: a
-             * settings_load_all(), a decode-table snapshot, spots lookups, and
-             * adif_log_record()'s fopen/fprintf/fsync/fclose to the card. Any
-             * of them could be the expensive one, and guessing which would be
-             * the usual mistake.
-             *
-             * So: total for the branch, and the ADIF write on its own. Logged
-             * once per completed QSO - not a hot path - and it costs two
-             * timer reads. Until these numbers exist, nothing here should be
-             * restructured and the TX timing certainly should not be. */
-            int64_t wrap_t0 = esp_timer_get_time();
-            int64_t adif_us = 0;
-            lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
-            ft8_status_set("QSO %s: complete!", target);
-            ESP_LOGI(TAG, "QSO with %s complete", target);
-            clear_dt_follow();   // QSO done - back to the UTC/GPS beat
-            // Drop the just-worked station from the pileup. It was removed at
-            // qso_start, but the partner keeps addressing us through the
-            // exchange (report/RR73/73, and Dirk DK7CVD's late-reply case), and
-            // capture_pileup_callers no longer excludes them once s_target
-            // clears - so without this (plus the worked-before skip in capture)
-            // they'd reappear in the pileup right after a successful QSO.
-            ft8_pileup_remove(target);
-            // A manually-run exchange with this station is over too - stop
-            // exempting/highlighting them as "being worked". Start the
-            // just-completed grace instead (keeps their trailing 73 out of
-            // the pileup - see DONE_GRACE_TTL_S).
-            lock();
-            if (s_manual_target[0] && strcmp(s_manual_target, target) == 0)
-                s_manual_target[0] = '\0';
-            strncpy(s_last_done_call, target, sizeof(s_last_done_call) - 1);
-            s_last_done_call[sizeof(s_last_done_call) - 1] = '\0';
-            s_last_done_ts = time(NULL);
-            // Remember the final we just sent, so it can be re-sent if they turn
-            // out not to have decoded it (see final_track_still_asking() /
-            // final_track_try_resend()). Working a second station right after
-            // does NOT stop this one being tracked any more - see
-            // FINAL_TRACK_MAX above.
-            //
-            // HOUND (rule 4): except after a hound contact, where there is no
-            // final to re-send - the Fox's RR73 closed it and we deliberately
-            // stayed quiet. Tracking it would have us transmitting "73" into a
-            // Fox's frequency for up to three slots simply because it is still
-            // calling other hounds, which it always is.
-            if (s_hound_active) {
-                s_hound_active  = false;   // session over; the next start decides afresh
-            } else {
-                final_track_add(target, s_freq_hz,
-                                 s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73,
-                                 s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
-            }
-            unlock();
-
-            // A completed QSO with this call supersedes any older resumable
-            // half-QSO - never auto-resume into a duplicate afterwards.
-            if (s_resume_call[0] && strcmp(s_resume_call, target) == 0) {
-                s_resume_call[0]  = '\0';
-                s_resume_have_req = false;
-            }
-
-            // Build and save the ADIF record.
-            qmx_settings_t qs;
-            settings_load_all(&qs);
-
-            // Look up their grid from the ft8_screen decode table.
-            ft8_call_t snap[FT8_CALL_TABLE_SIZE];
-            int snap_n = 0;
-            char their_grid[FT8_GRID_MAX_LEN] = {0};
-            ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &snap_n);
-            for (int i = 0; i < snap_n; i++) {
-                if (strcmp(snap[i].call, target) == 0 && snap[i].last_grid[0]) {
-                    strncpy(their_grid, snap[i].last_grid, sizeof(their_grid) - 1);
-                    break;
-                }
-            }
-            // Their row may have aged out during a long exchange, taking the
-            // only copy of their grid with it. Fall back to what was captured
-            // earlier in THIS QSO - and only if it was captured for THIS
-            // station (Gyula HA3HZ, 2026-09-06).
-            if (!their_grid[0]) {
-                lock();
-                bool same = (strcmp(s_their_grid_call, target) == 0) && s_their_grid[0];
-                if (same) snprintf(their_grid, sizeof(their_grid), "%s", s_their_grid);
-                unlock();
-                if (their_grid[0])
-                    ESP_LOGI(TAG, "grid for %s recovered from this QSO's own record (%s) "
-                                  "- their decode row had aged out", target, their_grid);
-            }
-
-            // ARRL Field Day exchange (if any): their_exch is "<class> <section>";
-            // split off the section (last token) for the dedicated ADIF fields.
-            char their_fd_class[FT8_FD_EXCH_LEN] = {0}, their_fd_section[FT8_FD_EXCH_LEN] = {0};
-            lock();
-            bool have_fd_exch = s_fd_their_exch[0] != '\0';
-            char fd_exch_copy[FT8_FD_EXCH_LEN];
-            strncpy(fd_exch_copy, s_fd_their_exch, sizeof(fd_exch_copy) - 1);
-            fd_exch_copy[sizeof(fd_exch_copy) - 1] = '\0';
-            unlock();
-            if (have_fd_exch) {
-                char *sp = strrchr(fd_exch_copy, ' ');
-                if (sp) {
-                    *sp = '\0';
-                    snprintf(their_fd_class, sizeof(their_fd_class), "%s", fd_exch_copy);
-                    snprintf(their_fd_section, sizeof(their_fd_section), "%s", sp + 1);
-                }
-            }
-
-            // Were they activating a park/summit? Resolved now, while the
-            // contact is fresh - the spot can age out of the store long before
-            // anyone exports the log, and a chase with no SIG_INFO earns no
-            // credit for either side. Empty for an ordinary QSO.
-            char their_sig[8] = "", their_ref[16] = "";
-            spots_activation_for_call(target, cat_get_frequency(),
-                                      their_sig, sizeof(their_sig),
-                                      their_ref, sizeof(their_ref));
-
-            adif_qso_t qso = {
-                .their_call = target,
-                .my_call    = s_my_call,
-                .my_grid    = qs.my_grid,
-                .their_grid = their_grid,
-                .freq_hz    = cat_get_frequency(),
-                .mode       = ft8_op_mode_name(),
-                .rst_sent   = s_rst_sent,
-                .rst_rcvd   = s_rst_rcvd,
-                .qso_time   = time(NULL),
-                .my_arrl_class      = have_fd_exch ? qs.fd_class   : NULL,
-                .my_arrl_section    = have_fd_exch ? qs.fd_section : NULL,
-                .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
-                .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
-                .their_sig      = their_sig[0] ? their_sig : NULL,
-                .their_sig_info = their_ref[0] ? their_ref : NULL,
-            };
-            // Duplicate guard (see QSO_DUP_LOG_WINDOW_SEC): the same call on the
-            // same band inside the window is this same contact reaching DONE a
-            // second time - most often because the operator finished it by hand
-            // after the machine already had - not a second QSO.
-            bool dup = (s_logged_call[0] &&
-                        strcmp(s_logged_call, target) == 0 &&
-                        strcmp(adif_log_band_for_freq(qso.freq_hz),
-                               adif_log_band_for_freq(s_logged_freq_hz)) == 0 &&
-                        ((int64_t)time(NULL) - s_logged_ts) < QSO_DUP_LOG_WINDOW_SEC);
-            if (dup) {
-                ESP_LOGW(TAG, "not logging %s again - same call/band logged %llds ago",
-                         target, (long long)((int64_t)time(NULL) - s_logged_ts));
-            } else {
-                int64_t adif_t0 = esp_timer_get_time();
-                adif_log_record(&qso);
-                adif_us = esp_timer_get_time() - adif_t0;
-                strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
-                s_logged_call[sizeof(s_logged_call) - 1] = '\0';
-                s_logged_freq_hz = qso.freq_hz;
-                s_logged_ts      = (int64_t)time(NULL);
-            }
-            // Grace ring: note it on BOTH branches. A contact reaching DONE a
-            // second time is still one we have just worked, and it is precisely
-            // the case the unattended pickers must not pick up again.
-            note_worked_now(target, qso.freq_hz);
-            s_fd_their_exch[0] = '\0';
-            /* The number Gyula's report rests on. "slow" is not a
-             * measurement; this is. If the branch total turns out to be small
-             * and he still sees the panel stall, the cost is somewhere else
-             * entirely and the log write is innocent. */
-            ESP_LOGI(TAG, "QSO wrap-up took %lld ms (ADIF write %lld ms)",
-                     (long long)((esp_timer_get_time() - wrap_t0) / 1000),
-                     (long long)(adif_us / 1000));
-        }
+        /* Also polled between slots - see finish_wait_done() and
+         * ft8_qso_poll_finish(). Kept here so a slot advance that arrives
+         * first still closes the QSO exactly as it always did. */
+        finish_wait_done(target);
         return;
     }
 
