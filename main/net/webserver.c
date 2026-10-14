@@ -278,7 +278,7 @@ static void add_ft8_tx_status(cJSON *root)
          * submodes the same thing. */
         cJSON_AddNumberToObject(f, "js8_submode", settings_get_js8_submode());
         cJSON_AddStringToObject(f, "js8_submode_name",
-                                ftx_protocol_name(ft8_op_mode_protocol()));
+                                ftx_protocol_label(ft8_op_mode_protocol()));
     }
 
     /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same
@@ -1900,7 +1900,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             snprintf(out, sizeof(out),
                      "{\"ok\":true,\"submode\":%u,\"name\":\"%s\",\"slot_ms\":%d}",
                      (unsigned)settings_get_js8_submode(),
-                     ftx_protocol_name(ft8_op_mode_protocol()),
+                     ftx_protocol_label(ft8_op_mode_protocol()),
                      ftx_protocol_slot_ms(ft8_op_mode_protocol()));
             httpd_resp_sendstr(req, out);
         }

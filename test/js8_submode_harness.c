@@ -135,7 +135,7 @@ static int decode_as(const float *signal, int n, ftx_protocol_t rx_proto,
     monitor_init(&mon, &cfg);
     if (!monitor_alloc_ok(&mon)) {
         fprintf(stderr, "  monitor_init could not allocate for %s\n",
-                ftx_protocol_name(rx_proto));
+                ftx_protocol_label(rx_proto));
         monitor_free(&mon);
         return -1;
     }
@@ -196,7 +196,7 @@ int main(void)
         ftx_protocol_t p = kSubmodes[i];
         const uint8_t (*c)[7] = ftx_protocol_js8_costas(p);
         printf("  %-10s %6d %8d %10d %10.3f  %s\n",
-               ftx_protocol_name(p), nsps_of(p), ftx_protocol_slot_ms(p),
+               ftx_protocol_label(p), nsps_of(p), ftx_protocol_slot_ms(p),
                ftx_protocol_symbol_period_us(p),
                (double)ftx_protocol_tone_spacing_hz(p),
                (c == kJS8_Costas_original) ? "ORIGINAL" :
@@ -214,7 +214,7 @@ int main(void)
         int same_cos = ftx_protocol_js8_costas(p) ==
                        ftx_protocol_js8_costas(FTX_PROTOCOL_JS8);
         if (same_sym || same_cos) {
-            printf("  FAIL %s shares Normal's %s%s%s\n", ftx_protocol_name(p),
+            printf("  FAIL %s shares Normal's %s%s%s\n", ftx_protocol_label(p),
                    same_sym ? "symbol period" : "",
                    (same_sym && same_cos) ? " and " : "",
                    same_cos ? "Costas set" : "");
@@ -222,6 +222,39 @@ int main(void)
         }
     }
     if (!g_fail) printf("  PASS - Fast, Turbo and Slow each differ from Normal\n");
+
+    /* ⛔ THE IDENTITY MUST NOT NAME THE SUBMODE. ftx_protocol_name() is the
+     * ADIF MODE field, the PSK Reporter mode (a char[6] buffer) and what the
+     * web page compares with `proto === "JS8"`. It returned "JS8-FAST" and
+     * friends for a few hours on 2026-10-14: the web JS8 pane vanished on any
+     * submode but Normal, the log would have carried a MODE no logger accepts,
+     * and PSK Reporter would have been sent the truncated "JS8-T". The label
+     * is a separate function and is allowed to say Turbo. */
+    printf("\n-- the identity is \"JS8\" for every submode --\n");
+    for (int i = 0; i < NSUB; i++) {
+        ftx_protocol_t p = kSubmodes[i];
+        const char *id = ftx_protocol_name(p);
+        int ok = !strcmp(id, "JS8");
+        printf("  %-12s name=\"%s\" label=\"%s\"  %s\n",
+               ftx_protocol_label(p), id, ftx_protocol_label(p),
+               ok ? "PASS" : "FAIL");
+        if (!ok) g_fail++;
+        /* ...and it must fit PSK Reporter's buffer with room for the NUL. */
+        if (strlen(id) >= 6) {
+            printf("  FAIL \"%s\" does not fit pskreporter's char[6]\n", id);
+            g_fail++;
+        }
+    }
+    /* The label, conversely, must DISTINGUISH them - a label that said "JS8"
+     * four times would make the drawer and every log line useless. */
+    for (int i = 0; i < NSUB; i++)
+        for (int j = i + 1; j < NSUB; j++)
+            if (!strcmp(ftx_protocol_label(kSubmodes[i]),
+                        ftx_protocol_label(kSubmodes[j]))) {
+                printf("  FAIL two submodes share the label \"%s\"\n",
+                       ftx_protocol_label(kSubmodes[i]));
+                g_fail++;
+            }
 
     /* 1. Round trip, each submode to itself. */
     printf("\n-- round trip --\n");
@@ -233,7 +266,7 @@ int main(void)
         int k = decode_as(g_signal, n, p, got, sizeof(got));
         int ok = (k > 0) && !strcmp(got, text);
         printf("  %-10s %s  (%d decoded, first '%s')\n",
-               ftx_protocol_name(p), ok ? "PASS" : "FAIL", k < 0 ? 0 : k, got);
+               ftx_protocol_label(p), ok ? "PASS" : "FAIL", k < 0 ? 0 : k, got);
         if (!ok) g_fail++;
     }
 
@@ -242,13 +275,13 @@ int main(void)
      *    submode whose parameters are not actually being applied. */
     printf("\n-- cross-reject (rows transmitted, columns received) --\n");
     printf("  %-10s", "tx / rx");
-    for (int j = 0; j < NSUB; j++) printf(" %10s", ftx_protocol_name(kSubmodes[j]));
+    for (int j = 0; j < NSUB; j++) printf(" %10s", ftx_protocol_label(kSubmodes[j]));
     printf("\n");
     for (int i = 0; i < NSUB; i++) {
         ftx_protocol_t tx = kSubmodes[i];
         int n = build_slot(tx, text);
         if (n < 0) { g_fail++; continue; }
-        printf("  %-10s", ftx_protocol_name(tx));
+        printf("  %-10s", ftx_protocol_label(tx));
         for (int j = 0; j < NSUB; j++) {
             ftx_protocol_t rx = kSubmodes[j];
             /* The signal is built once per row, so every column is decoded

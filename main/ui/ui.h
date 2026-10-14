@@ -280,6 +280,10 @@ void ui_dev_canvas_hide(unsigned mask);
 void ui_set_drawer_expert(bool expert);
 /* Scroll the open drawer so a section below the fold can be screenshotted. */
 void ui_set_drawer_scroll_y(int y);
+/* Re-lay the drawer for the current mode AND FT8 sub-mode. Called when the
+ * sub-mode changes, because FT8/FT4/JS8 share one ui_mode_t and the JS8
+ * submode picker is shown for only one of them. */
+void ui_drawer_relayout(void);
 
 /* Power the Tab5 off after putting the radio back into receive.
  *

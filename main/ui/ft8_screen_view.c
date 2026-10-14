@@ -3066,6 +3066,12 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
     settings_set_ft8_freq_hz(freq_hz);
 
     ft8_op_mode_set(mode);
+    /* ⛔ THE DRAWER HAS TO BE TOLD. FT8, FT4 and JS8 share one ui_mode_t, so
+     * nothing in the mode plumbing notices this change - and DRAWER_SEC_JS8SUB
+     * is shown for JS8 alone. Without this the submode picker appears only
+     * after some OTHER thing re-lays the drawer (a Basic/Advanced toggle, a
+     * page change), which reads as a control that is sometimes missing. */
+    ui_drawer_relayout();
     // Re-assert the breathing red simulation border from the setting. It does
     // NOT depend on the sub-mode: this comment used to say "FT4 TX is always
     // forced through the simulation interlock (see ft8_tx.c's FT4 SAFETY note)"

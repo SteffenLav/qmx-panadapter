@@ -1157,6 +1157,22 @@
                   title="Send this station a signal report">SNR</button>
           <button type="button" id="js8-grid" class="bot-btn" disabled
                   title="Send this station your grid">GRID</button>
+          <!-- The submode. NOT a quality knob: each one is a different physical
+               layer (slot period, symbol rate, tone spacing, sync arrays), so
+               two stations must agree on it before they can hear each other at
+               all. The cycle length is in the label because that is the number
+               an operator can act on.
+               ⚠ Fast, Turbo and Slow are implemented and have never been
+               exchanged with a real JS8Call station. Normal is what everyone
+               runs. The device refuses a change mid-QSO and says why. -->
+          <select id="js8-submode" class="bot-btn"
+                  title="JS8 physical layer. Both stations must use the same one."
+                  style="margin-right:8px;">
+            <option value="0">Normal - 15 s</option>
+            <option value="1">Fast - 10 s</option>
+            <option value="2">Turbo - 6 s</option>
+            <option value="4">Slow - 30 s</option>
+          </select>
           <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
           <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
         </span>
@@ -6145,6 +6161,21 @@ function js8BarSync() {
   }
 }
 
+/* The submode. The DEVICE decides whether the change is allowed - it refuses
+   while a QSO or a burst is live, because an armed request already carries
+   tones built for the old submode - so the refusal is reported rather than
+   second-guessed here, and the select snaps back to what is really set. */
+{
+  const sm = document.getElementById("js8-submode");
+  if (sm) sm.addEventListener("change", async () => {
+    const r = await sendCmd({ action: "js8_submode", submode: Number(sm.value) });
+    if (r && r.ok === false) {
+      alert("JS8 submode not changed: " + (r.err || "refused by the device"));
+    }
+    js8Poll();            /* re-read it either way */
+  });
+}
+
 /* Clicking the chip clears the selection, which also unfilters the pane - the
    only way back to the whole conversation, so it is not optional. */
 document.getElementById("js8-target").addEventListener("click", async (e) => {
@@ -6281,6 +6312,16 @@ function js8TxStatus(ft8) {
     }
     js8Prefix = (ft8 && typeof ft8.js8_prefix === "string") ? ft8.js8_prefix : "";
     js8ComposerPrefill();
+    /* ⭐ THE PICKER READS ITSELF BACK. The submode is also set from the Tab5
+       drawer, so a select that only ever WROTE would be a second source of
+       truth - the web Pause button shipped exactly that way. Skipped while the
+       list is open, so the poll cannot yank the operator's choice mid-pick. */
+    const sm = document.getElementById("js8-submode");
+    if (sm && ft8 && typeof ft8.js8_submode === "number" &&
+        document.activeElement !== sm) {
+      const want = String(ft8.js8_submode);
+      if (sm.value !== want) sm.value = want;
+    }
   }
   const box = document.getElementById("js8-tx");
   if (!box || box.style.display === "none") return;

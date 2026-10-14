@@ -169,8 +169,16 @@ int ftx_protocol_num_tones(ftx_protocol_t protocol);
 /// derives every timing gate rather than tabulating them per protocol.
 int ftx_protocol_num_symbols(ftx_protocol_t protocol);
 
-/// "FT8", "FT4", "JS8" - for logs and labels, never allocated.
+/* ⛔ THE IDENTITY: "FT8", "FT4", "JS8" - and EVERY JS8 submode is "JS8".
+ * This is the ADIF MODE field, the PSK Reporter mode and what the web page
+ * compares against; it is not a place to say which submode is running. Never
+ * allocated. See the long note at the definition for what broke when it did
+ * name the submodes. */
 const char* ftx_protocol_name(ftx_protocol_t protocol);
+
+/* The human label, which DOES name the submode ("JS8 Turbo"). Logs, the
+ * drawer, the API's display field - never ADIF, never the air. */
+const char* ftx_protocol_label(ftx_protocol_t protocol);
 
 /* Can this build DECODE and TRANSMIT the protocol?
  *

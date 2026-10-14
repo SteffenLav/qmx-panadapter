@@ -72,9 +72,9 @@ int main(void)
             if (ft8_gate_should_late_fire(&l)) { can_fire = 1; break; }
         }
         printf("   %s: %d of 8 boundary states hold, late fire reachable = %s\n",
-               ftx_protocol_name(protos[p]), holds, can_fire ? "yes" : "NO");
+               ftx_protocol_label(protos[p]), holds, can_fire ? "yes" : "NO");
         if (holds > 0 && !can_fire) {
-            printf("   FAIL %s can be held but never fired - this is the v1.10.2 bug\n", ftx_protocol_name(protos[p]));
+            printf("   FAIL %s can be held but never fired - this is the v1.10.2 bug\n", ftx_protocol_label(protos[p]));
             fails++;
         }
         /* And the converse: if late fire is off, nothing may ever be held. */
@@ -92,7 +92,7 @@ int main(void)
         int win  = ft8_gate_reply_window_ms(proto);
         int dead = ft8_gate_hold_deadline_ms(proto);
         printf("   %s: slot %d, burst %d, room %d, window %d, deadline %d\n",
-               ftx_protocol_name(protos[p]), slot, burst, slot - burst, win, dead);
+               ftx_protocol_label(protos[p]), slot, burst, slot - burst, win, dead);
         ok("window + burst fits the slot",        win  + burst <= slot);
         ok("deadline + burst fits the slot",      dead + burst <= slot);
         ok("deadline is reachable within window", dead <= win);
@@ -128,7 +128,7 @@ int main(void)
             bool want = ft8_gate_late_fire_enabled(protos[p]) &&
                         b.decode_in_flight && b.qso_busy && b.tx_would_run;
             if (ft8_gate_should_hold(&b) != want) {
-                printf("   FAIL %s m=%d got %d want %d\n", ftx_protocol_name(protos[p]), m,
+                printf("   FAIL %s m=%d got %d want %d\n", ftx_protocol_label(protos[p]), m,
                        ft8_gate_should_hold(&b), want);
                 fails++;
             }
@@ -188,7 +188,7 @@ int main(void)
             }
         }
         printf("   %s: first chance at %d ms, %d polls could fire\n",
-               ftx_protocol_name(protos[p]), fired_at, chances);
+               ftx_protocol_label(protos[p]), fired_at, chances);
         ok("the deadline backstop is reachable at all", fired_at >= 0);
         /* One reachable poll is luck. Demand real slack, or a jittery loop
          * misses it and the slot is silently skipped. */

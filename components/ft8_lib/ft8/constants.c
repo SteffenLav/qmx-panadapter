@@ -531,19 +531,52 @@ int ftx_protocol_num_symbols(ftx_protocol_t protocol)
     return (protocol == FTX_PROTOCOL_FT4) ? 105 : 79;
 }
 
+/* ⛔ THE IDENTITY, NOT A LABEL - EVERY JS8 SUBMODE IS "JS8" HERE.
+ *
+ * This string is not decoration. It is the ADIF MODE field written into the
+ * log (ft8_qso.c), the mode published to PSK Reporter (pskreporter.c, whose
+ * buffer is char[6]), and what the web page tests with `proto === "JS8"` to
+ * decide whether to show the whole JS8 pane.
+ *
+ * ⚠ IT RETURNED "JS8-FAST"/"JS8-TURBO"/"JS8-SLOW" FOR A FEW HOURS ON
+ * 2026-10-14 AND EVERY ONE OF THOSE BROKE: the web JS8 pane vanished on any
+ * submode but Normal, the ADIF log would have recorded a MODE no logger
+ * accepts, and PSK Reporter would have been sent "JS8-T" - the first five
+ * bytes of a truncated name - as a mode. Found by loading the page against
+ * tools/webstub.py, which is the only check that runs the JavaScript;
+ * check_web and check_webui both passed on it.
+ *
+ * The submode is a physical layer, not a different mode on the air: a JS8
+ * contact is a JS8 contact whichever one it used. Where the submode genuinely
+ * matters - logs, the drawer, the API's display field - use
+ * ftx_protocol_label(). */
 const char* ftx_protocol_name(ftx_protocol_t protocol)
 {
     switch (protocol)
     {
     case FTX_PROTOCOL_FT4:       return "FT4";
     case FTX_PROTOCOL_FT8:       return "FT8";
-    /* JS8 Normal keeps the bare name "JS8": it is what shipped, it is what
-     * every log line and every saved ADIF record already says, and renaming it
-     * now would make old captures and new ones disagree about the same mode. */
-    case FTX_PROTOCOL_JS8:       return "JS8";
-    case FTX_PROTOCOL_JS8_FAST:  return "JS8-FAST";
-    case FTX_PROTOCOL_JS8_TURBO: return "JS8-TURBO";
-    case FTX_PROTOCOL_JS8_SLOW:  return "JS8-SLOW";
+    case FTX_PROTOCOL_JS8:
+    case FTX_PROTOCOL_JS8_FAST:
+    case FTX_PROTOCOL_JS8_TURBO:
+    case FTX_PROTOCOL_JS8_SLOW:  return "JS8";
+    }
+    return "?";
+}
+
+/* The human label, which DOES name the submode. For log lines, the drawer and
+ * the API's display field - never for ADIF, PSK Reporter or anything else that
+ * compares it or puts it on the air. See ftx_protocol_name() above. */
+const char* ftx_protocol_label(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:       return "FT4";
+    case FTX_PROTOCOL_FT8:       return "FT8";
+    case FTX_PROTOCOL_JS8:       return "JS8 Normal";
+    case FTX_PROTOCOL_JS8_FAST:  return "JS8 Fast";
+    case FTX_PROTOCOL_JS8_TURBO: return "JS8 Turbo";
+    case FTX_PROTOCOL_JS8_SLOW:  return "JS8 Slow";
     }
     return "?";
 }

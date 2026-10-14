@@ -1070,7 +1070,7 @@ static void reinit_pool_if_mode_changed(void)
     }
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
-             ftx_protocol_name(want));
+             ftx_protocol_label(want));
 
     /* ⛔ THIS FREED MEMORY THE DECODER WAS STILL READING, AND IT CRASHED THE
      * BOARD. Measured on bench dev 2026-09-25, switching FT8 -> FT4:
@@ -3094,9 +3094,9 @@ static void ft8_task(void *arg)
         if (slot_samples > SLOT_SAMPLES_MAX) {
             ESP_LOGE(TAG, "%s needs %d samples/slot but the capture scratch holds "
                           "%d - REFUSING to capture. Raise SLOT_SAMPLES_MAX.",
-                     ftx_protocol_name(sproto), slot_samples, SLOT_SAMPLES_MAX);
+                     ftx_protocol_label(sproto), slot_samples, SLOT_SAMPLES_MAX);
             ft8_status_set("%s unsupported - capture buffer too small",
-                           ftx_protocol_name(sproto));
+                           ftx_protocol_label(sproto));
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -3110,7 +3110,7 @@ static void ft8_task(void *arg)
         // safety boundary here or in ft8_tx.c, because there isn't one.
 
         ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx,
-                 ftx_protocol_name((ftx_protocol_t)s_pool_proto));
+                 ftx_protocol_label((ftx_protocol_t)s_pool_proto));
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
         last_boundary_ms = boundary_ms;
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
@@ -3477,7 +3477,7 @@ static void ft8_task(void *arg)
                     s_hw_logged_proto = (int)sproto;
                     ESP_LOGI(TAG, "ft8_task stack high-water on %s (nfft %d): "
                                   "%u bytes still free",
-                             ftx_protocol_name(sproto),
+                             ftx_protocol_label(sproto),
                              s_mon_pool[bi] ? s_mon_pool[bi]->nfft : -1,
                              (unsigned)(uxTaskGetStackHighWaterMark(NULL) *
                                         sizeof(StackType_t)));
