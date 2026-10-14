@@ -83,6 +83,9 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
         // me->window[i] = (i < len_window) ? hann_i(i, len_window) : 0;
     }
     me->last_frame = (float*)calloc(me->nfft, sizeof(me->last_frame[0]));
+    /* Off the stack - see the note in monitor.h. */
+    me->timedata = (kiss_fft_scalar*)malloc((size_t)me->nfft * sizeof(me->timedata[0]));
+    me->freqdata = (kiss_fft_cpx*)malloc(((size_t)me->nfft / 2 + 1) * sizeof(me->freqdata[0]));
 
     LOG(LOG_INFO, "Block size = %d\n", me->block_size);
     LOG(LOG_INFO, "Subblock size = %d\n", me->subblock_size);
@@ -124,7 +127,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 
 bool monitor_alloc_ok(const monitor_t* me)
 {
-    return me->window && me->last_frame && me->fft_work && me->fft_cfg && me->wf.mag;
+    return me->window && me->last_frame && me->fft_work && me->fft_cfg &&
+           me->timedata && me->freqdata && me->wf.mag;
 }
 
 void monitor_free(monitor_t* me)
@@ -133,6 +137,12 @@ void monitor_free(monitor_t* me)
     free(me->fft_work);
     free(me->last_frame);
     free(me->window);
+    /* ⚠ Like fft_work, these may point at a POOL-SHARED allocation on the
+     * device. The caller NULLs them first in that case, exactly as it already
+     * does for fft_work - freeing a shared block once per monitor is a tlsf
+     * double-free and it reboots the board (ft8_test.c, #199). */
+    free(me->timedata);
+    free(me->freqdata);
 }
 
 void monitor_reset(monitor_t* me)
@@ -154,8 +164,9 @@ void monitor_process(monitor_t* me, const float* frame)
     // Loop over block subdivisions
     for (int time_sub = 0; time_sub < me->wf.time_osr; ++time_sub)
     {
-        kiss_fft_scalar timedata[me->nfft];
-        kiss_fft_cpx freqdata[me->nfft / 2 + 1];
+        /* Pool-shared scratch, not stack arrays - see monitor.h. */
+        kiss_fft_scalar *timedata = me->timedata;
+        kiss_fft_cpx    *freqdata = me->freqdata;
 
         // Shift the new data into analysis frame
         for (int pos = 0; pos < me->nfft - me->subblock_size; ++pos)

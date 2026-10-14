@@ -95,9 +95,37 @@ static const char *TAG = "ft8_test";
 static ftx_protocol_t proto_for_mode(void);
 
 #define SR_HZ                 12000
-#define SLOT_SAMPLES          180000      // 15 s × 12 kHz (FT8 slot; also the
-                                          // scratch-buffer / max size - FT4's
-                                          // 7.5 s = 90000 samples fits inside)
+#define SLOT_SAMPLES          180000      // 15 s × 12 kHz - the FT8 slot, and ONLY
+                                          // that. Used where FT8's own length is
+                                          // meant (the self-test waveform).
+
+/* ⛔ THE BUFFER SIZE IS NOT THE FT8 SLOT. THEY WERE THE SAME CONSTANT UNTIL
+ * 2026-10-14 AND IT CORRUPTED THE HEAP.
+ *
+ * SLOT_SAMPLES was documented as "the FT8 slot; also the scratch-buffer / max
+ * size", which held while every protocol was SHORTER than 15 s - FT4's 7.5 s
+ * fits inside. JS8 Slow is 30 s. The slot loop handed
+ * dsp_ft8_capture_begin() a capacity of period_ms x 12 = 360000 samples for a
+ * buffer of 180000 floats, so the decimator wrote 1.44 MB into a 720 KB
+ * allocation. ft8_dec then died jumping to address 0 with every register and
+ * its whole stack zeroed - the signature of something else's memory being
+ * overwritten, not of a fault in the decoder.
+ *
+ * This is the SECOND defect of the same shape in one change (the first was two
+ * nfft-sized arrays on ft8_task's stack, monitor.h). The shape is: a buffer
+ * sized from FT8's numbers, then handed another protocol's. So the maximum is
+ * now its own constant, derived from the longest slot any protocol can select
+ * rather than from whichever happened to be longest when it was written.
+ *
+ * Cost: 1.44 MB instead of 720 KB of PSRAM for the capture scratch, 720 KB
+ * instead of 360 KB for the slot capture. Both PSRAM, which had 26 MB free at
+ * boot. */
+#define SLOT_SAMPLES_MAX      360000      // 30 s × 12 kHz - JS8 Slow, the longest
+                                          // slot any selectable protocol has.
+                                          // ⛔ RAISE THIS BEFORE ADDING A LONGER
+                                          // ONE; nothing checks it at compile time
+                                          // because the slot length is a runtime
+                                          // protocol fact.
 #define SLOT_TIMEOUT_MS       20000
 
 // Per-protocol slot length. FT8 = 15 s, FT4 = 7.5 s. The slot loop derives the
@@ -549,7 +577,7 @@ bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out)
  * buffer is complete INCLUDING the zero-padded dead-air tail. Taken before
  * the decode is queued, because the decode task is what reuses nothing here
  * but the next capture does, and the next capture arms ~1.7 s later. */
-static int16_t      *s_slotcap      = NULL;   /* PSRAM, SLOT_SAMPLES int16 */
+static int16_t      *s_slotcap      = NULL;   /* PSRAM, SLOT_SAMPLES_MAX int16 */
 static uint32_t      s_slotcap_n    = 0;      /* samples actually held      */
 static int64_t       s_slotcap_sec  = 0;      /* the slot's UTC boundary    */
 static int           s_slotcap_peak = 0;   /* after normalising  */
@@ -614,14 +642,14 @@ static void slotcap_take(const float *src, uint32_t n, int64_t slot_sec,
                          const char *proto)
 {
     if (!s_slotcap_en || s_slotcap_hold) return;
-    if (n == 0 || n > SLOT_SAMPLES) return;
+    if (n == 0 || n > SLOT_SAMPLES_MAX) return;
     if (!s_slotcap) {
-        s_slotcap = heap_caps_malloc(SLOT_SAMPLES * sizeof(int16_t),
+        s_slotcap = heap_caps_malloc(SLOT_SAMPLES_MAX * sizeof(int16_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_slotcap) {
             s_slotcap_en = false;
             ESP_LOGE(TAG, "slotcap: no PSRAM for %d samples - disabled",
-                     SLOT_SAMPLES);
+                     SLOT_SAMPLES_MAX);
             return;
         }
     }
@@ -672,6 +700,16 @@ static void         *s_shared_fft_work = NULL;
 static kiss_fftr_cfg s_shared_fft_cfg  = NULL;
 static bool          s_shared_fft_internal = false;  // diag: did it land internal?
 
+/* The STFT scratch pair, shared on exactly the same terms and for the same
+ * reason. It was two VLAs on ft8_task's stack until 2026-10-14, when JS8 Slow's
+ * nfft of 7680 made the pair ~61 KB and overflowed a 64 KB stack on the first
+ * Slow capture - see the note in monitor.h. Shared rather than per-monitor
+ * because monitor_process is capture-task-only and strictly sequential (the
+ * paragraph above), and because four private copies of a 61 KB pair is 246 KB
+ * of PSRAM for buffers only one monitor can be using. */
+static kiss_fft_scalar *s_shared_stft_time = NULL;
+static kiss_fft_cpx    *s_shared_stft_freq = NULL;
+
 // Return the index of a free pool monitor, or -1 if all are in flight.
 static int find_free_buffer(void)
 {
@@ -688,6 +726,8 @@ static void free_shared_fft(void)
     if (s_shared_fft_work) { free(s_shared_fft_work); s_shared_fft_work = NULL; }
     s_shared_fft_cfg = NULL;
     s_shared_fft_internal = false;
+    if (s_shared_stft_time) { free(s_shared_stft_time); s_shared_stft_time = NULL; }
+    if (s_shared_stft_freq) { free(s_shared_stft_freq); s_shared_stft_freq = NULL; }
 }
 
 /* ⛔ DROP OUR REFERENCES TO THE CAPTURE POOL WITHOUT FREEING ANY OF IT.
@@ -718,6 +758,8 @@ static void forget_capture_pool(void)
     s_shared_fft_work     = NULL;
     s_shared_fft_cfg      = NULL;
     s_shared_fft_internal = false;
+    s_shared_stft_time    = NULL;   /* abandoned with the rest, never freed here */
+    s_shared_stft_freq    = NULL;
     s_cap_scratch         = NULL;
     s_pool_proto          = -1;
 }
@@ -732,6 +774,11 @@ static void free_capture_pool(void)
             // set up yet), leave it so monitor_free() frees it - no leak.
             if (s_mon_pool[i]->fft_work == s_shared_fft_work)
                 s_mon_pool[i]->fft_work = NULL;
+            /* Same for the STFT pair - shared, freed once by free_shared_fft(). */
+            if (s_mon_pool[i]->timedata == s_shared_stft_time)
+                s_mon_pool[i]->timedata = NULL;
+            if (s_mon_pool[i]->freqdata == s_shared_stft_freq)
+                s_mon_pool[i]->freqdata = NULL;
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
@@ -789,6 +836,10 @@ static void free_monitor_objects(void)
         if (s_mon_pool[i]) {
             if (s_mon_pool[i]->fft_work == s_shared_fft_work)
                 s_mon_pool[i]->fft_work = NULL;  // shared - freed once below
+            if (s_mon_pool[i]->timedata == s_shared_stft_time)
+                s_mon_pool[i]->timedata = NULL;  // shared - freed once below
+            if (s_mon_pool[i]->freqdata == s_shared_stft_freq)
+                s_mon_pool[i]->freqdata = NULL;  // shared - freed once below
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
@@ -875,6 +926,38 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     // shared buffer once (see free_monitor_pool / reinit_pool_if_mode_changed);
     // only the build path was missing it.
     void *prev_shared = s_shared_fft_work;
+    kiss_fft_scalar *prev_stft_time = s_shared_stft_time;
+    kiss_fft_cpx    *prev_stft_freq = s_shared_stft_freq;
+
+    /* ⛔ PSRAM, NOT INTERNAL, AND THAT IS A MEASUREMENT NOT A PREFERENCE.
+     *
+     * These two were tried INTERNAL-first, as the FFT work area below is. It
+     * works and it costs 30.7 KB of internal RAM at FT8/JS8 Normal's nfft -
+     * because moving them off ft8_task's stack does NOT give the stack's
+     * memory back. A task stack is reserved whole at creation, so the 30 KB
+     * these used to occupy there is still committed; allocating them again
+     * from the internal heap spends it twice. Measured on the dev bench
+     * 2026-10-14: the per-slot internal-heap MINIMUM went from 7-22 KB free to
+     * 0 KB on the identical workload.
+     *
+     * The decision is the same one the FFT work area's own comment already
+     * argues at length: do not reserve scarce internal RAM to speed up an STFT
+     * that meets its deadline with room to spare. Measured with the scratch
+     * internal, stft was 0.3-1.9 s for Normal/Fast/Turbo and 3.3-3.8 s for
+     * Slow, against slots of 6-30 s. See project_internal_ram_bss_audit. */
+    {
+        size_t t_sz = (size_t)s_mon_pool[0]->nfft * sizeof(kiss_fft_scalar);
+        size_t f_sz = ((size_t)s_mon_pool[0]->nfft / 2 + 1) * sizeof(kiss_fft_cpx);
+        s_shared_stft_time = heap_caps_malloc(t_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_shared_stft_freq = heap_caps_malloc(f_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_shared_stft_time || !s_shared_stft_freq) {
+            ESP_LOGE(TAG, "shared STFT scratch alloc (%u + %u B) failed",
+                     (unsigned)t_sz, (unsigned)f_sz);
+            return false;
+        }
+        ESP_LOGI(TAG, "shared STFT scratch: %u + %u B PSRAM (nfft %d)",
+                 (unsigned)t_sz, (unsigned)f_sz, s_mon_pool[0]->nfft);
+    }
 
     size_t fft_work_size = 0;
     kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
@@ -923,6 +1006,15 @@ static bool build_monitor_pool(ftx_protocol_t proto)
         if (w && w != prev_shared && w != s_shared_fft_work) free(w);
         s_mon_pool[i]->fft_work = s_shared_fft_work;
         s_mon_pool[i]->fft_cfg  = s_shared_fft_cfg;
+
+        /* Same ownership rule for the STFT pair. */
+        kiss_fft_scalar *td = s_mon_pool[i]->timedata;
+        if (td && td != prev_stft_time && td != s_shared_stft_time) free(td);
+        s_mon_pool[i]->timedata = s_shared_stft_time;
+
+        kiss_fft_cpx *fd = s_mon_pool[i]->freqdata;
+        if (fd && fd != prev_stft_freq && fd != s_shared_stft_freq) free(fd);
+        s_mon_pool[i]->freqdata = s_shared_stft_freq;
     }
 
     if (prev_shared) {
@@ -2861,7 +2953,7 @@ static void ft8_task(void *arg)
     }
 
     // Capture scratch (decimated 12 kHz audio, reused every slot) + monitor
-    // pool. The scratch is sized for the larger FT8 slot (180000) and shared by
+    // pool. The scratch is sized for the LONGEST slot (SLOT_SAMPLES_MAX) and shared by
     // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
     // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
     // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
@@ -2893,7 +2985,7 @@ static void ft8_task(void *arg)
     bool pool_ok = false;
     for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
         if (!s_cap_scratch)
-            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
         if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
         free_monitor_objects();                    /* partial pool; scratch kept */
         if (attempt == 0)
@@ -2990,6 +3082,24 @@ static void ft8_task(void *arg)
         ftx_protocol_t sproto = (ftx_protocol_t)s_pool_proto;
         int    period_ms = ftx_protocol_slot_ms(sproto);
         int    slot_samples = period_ms * (SR_HZ / 1000);   // 72000 (Turbo) .. 360000 (Slow)
+        /* ⛔ THE ONE PLACE THE BUFFER AND THE CAPACITY MEET, so it is the one
+         * place that can check they agree. s_cap_scratch holds
+         * SLOT_SAMPLES_MAX floats and dsp_ft8_capture_begin() is trusted with
+         * whatever count it is given - it has no idea how big dst is. When
+         * those two disagreed (JS8 Slow's 360000 against a buffer of 180000)
+         * the decimator wrote 720 KB past the end and the crash landed in a
+         * different task entirely, with no connection to this line visible
+         * anywhere. Refuse loudly instead: a protocol that does not fit must
+         * not capture at all. */
+        if (slot_samples > SLOT_SAMPLES_MAX) {
+            ESP_LOGE(TAG, "%s needs %d samples/slot but the capture scratch holds "
+                          "%d - REFUSING to capture. Raise SLOT_SAMPLES_MAX.",
+                     ftx_protocol_name(sproto), slot_samples, SLOT_SAMPLES_MAX);
+            ft8_status_set("%s unsupported - capture buffer too small",
+                           ftx_protocol_name(sproto));
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         // FT4 TX is implemented in ft8_tx.c and DOES key a connected radio.
         // ⚠ This comment used to say FT4 was "force-routed through the
         // simulation interlock ... never let an FT4 burst reach a connected
@@ -3346,6 +3456,32 @@ static void ft8_task(void *arg)
                 // Disarm capture (stop the dsp FT8 branch writing) before we
                 // either queue the decode or switch to TX on this slot.
                 e = dsp_ft8_capture_finish(60);
+            }
+
+            /* ⭐ THE INSTRUMENT THAT WOULD HAVE SEEN THE JS8 SLOW CRASH COMING.
+             *
+             * monitor_process() held two nfft-sized arrays on THIS task's stack
+             * until 2026-10-14. At FT8's nfft of 3840 that was ~30 KB of 64 KB -
+             * comfortable-looking, and completely silent. JS8 Slow doubles nfft,
+             * the pair became ~61 KB, and the first Slow capture took a Stack
+             * protection fault with the SP 4112 bytes past the end. The arrays
+             * are off the stack now, but the lesson is that a per-protocol stack
+             * cost had no reading anywhere - the decode worker logs its
+             * high-water on exit and ft8_task logged nothing at all.
+             *
+             * So: report it once per protocol, right after the capture that
+             * drives the peak. One line per sub-mode change, not per slot. */
+            {
+                static int s_hw_logged_proto = -1;
+                if (s_hw_logged_proto != (int)sproto) {
+                    s_hw_logged_proto = (int)sproto;
+                    ESP_LOGI(TAG, "ft8_task stack high-water on %s (nfft %d): "
+                                  "%u bytes still free",
+                             ftx_protocol_name(sproto),
+                             s_mon_pool[bi] ? s_mon_pool[bi]->nfft : -1,
+                             (unsigned)(uxTaskGetStackHighWaterMark(NULL) *
+                                        sizeof(StackType_t)));
+                }
             }
 
             if (late_tx) {
