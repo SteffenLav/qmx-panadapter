@@ -159,7 +159,7 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  * Raising this does NOT widen AM - widening AM means RX_DECIM_D, which also
  * rescales every AGC constant (they are written in terms of it) and costs
  * CPU in every mode. Deliberately not done for this first cut. */
-#define AM_MAX_HALF_BW_HZ 2400
+#define AM_MAX_HALF_BW_HZ RX_AUDIO_AM_HALF_BW_HZ   /* exported: rx_audio.h */
 
 // Runtime-adjustable (see rx_audio_set_tuning() / the /api/cmd "rxaudio"
 // action) instead of #define constants - 2026-09-04, after several
@@ -916,10 +916,35 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
          * stage above has thrown away, and the top of it would alias on the
          * 6 kHz internal rate (Nyquist 3000). AM_MAX_HALF_BW_HZ is measured,
          * not assumed - see test/am_demod_harness.c. */
-        if (w == 0) w = AM_DEF_WIDTH_HZ;
+        /* ⛔ AM DOES NOT TRACK THE RADIO'S FILTER, AND THAT IS NOT AN
+         * OVERSIGHT - IT IS THE DIFFERENCE BETWEEN AM AND EVERY OTHER MODE.
+         *
+         * CW and SSB above read ui_get_passband_width_hz() on purpose: the
+         * operator sets the filter on the radio, the radio applies it to the
+         * audio they would otherwise be hearing, and a WIDER Tab5 filter than
+         * the radio's let nearby FT8 tones bleed into a narrow CW listen
+         * (2026-09-04). Matching it is what makes those modes behave.
+         *
+         * AM is demodulated here from the RAW I/Q, so the radio's AM filter is
+         * not in this signal path at all. Reading its number only imports an
+         * irrelevant constraint - and it did: the QMX reports 3200 in AM, this
+         * code read that as a WIDTH, and the result was a +/-1600 Hz filter.
+         * On a real broadcast station, 7.325 MHz, 2026-10-14, the operator:
+         * "it demodulates fine but it sounds like you had your ear in a cup."
+         * He was hearing 1.6 kHz of audio.
+         *
+         * ⚠ AND 3200 IS PROBABLY NOT A WIDTH ANYWAY. The DiGi branch of
+         * ui.c's compute_passband_edges_hz() records that the QMX reports FW
+         * as the filter's TOP EDGE for digital modes, not its width. Whether
+         * AM is the same was never established, which is the second reason not
+         * to build an audio filter on that number.
+         *
+         * So AM takes the widest the chain can actually deliver, every time.
+         * That is a property of this file (AM_MAX_HALF_BW_HZ, measured in
+         * test/am_demod_harness.c), not of the radio. */
+        (void)w;
         *center_hz = 0;
-        *half_bw_hz = (int)w / 2;
-        if (*half_bw_hz > AM_MAX_HALF_BW_HZ) *half_bw_hz = AM_MAX_HALF_BW_HZ;
+        *half_bw_hz = AM_MAX_HALF_BW_HZ;
     } else {   // RXAUD_MODE_SSB / RXAUD_MODE_SSB_L
         if (w == 0) w = SSB_DEF_WIDTH_HZ;
         int low  = SSB_LOW_HZ;

@@ -53,7 +53,7 @@
 #define DSP_SAMPLE_RATE_HZ 48000
 #define RX_DECIM_D         8
 #define FIR_DECIM_LEN      63
-#define AM_MAX_HALF_BW_HZ  2400          // rx_audio.c
+#define AM_MAX_HALF_BW_HZ  2400          // == rx_audio.h RX_AUDIO_AM_HALF_BW_HZ (host copy: that header pulls in FreeRTOS)
 #define FS_DEC             ((float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D)
 
 static int g_fail = 0;

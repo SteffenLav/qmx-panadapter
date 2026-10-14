@@ -177,6 +177,28 @@ typedef struct {
 
 void rx_audio_take_diag(rx_audio_diag_t *out);
 
+/* ⛔ THE AM AUDIO BANDWIDTH, AND IT IS THIS FILE'S TO STATE.
+ *
+ * AM is demodulated on the Tab5 from the raw I/Q (the QMX's own AM filter,
+ * fixed at 3.2 kHz, is in the radio's AUDIO and not in the I/Q - CAT manual
+ * Q9: "the raw I & Q samples from the ADC are streamed directly to the USB
+ * Sound card"). So the passband an operator is actually listening through is
+ * set HERE, by the decimation in rx_audio.c, and not by the radio.
+ *
+ * 2400 Hz is where the fixed stage-1 decimator is -3 dB, measured in
+ * test/am_demod_harness.c (-0.93 dB at 2000, -3.06 at 2400, -6.00 at 2700).
+ *
+ * ⚠ ui.c's compute_passband_edges_hz() DRAWS this, so it is exported rather
+ * than duplicated: the tint and the filter must be the same number or the
+ * display describes a passband nobody is listening through. It was a literal
+ * in both files for one commit and that is exactly how they drift.
+ *
+ * ⚠ A broadcast station transmits about 4.5 kHz of audio, so this is roughly
+ * half of what is on the air - "like you had your ear in a cup" was the
+ * +/-1600 that came before it, but 2400 is still a communications filter.
+ * Widening further means RX_DECIM_D, which costs CPU in EVERY mode. */
+#define RX_AUDIO_AM_HALF_BW_HZ  2400
+
 #ifdef __cplusplus
 }
 #endif

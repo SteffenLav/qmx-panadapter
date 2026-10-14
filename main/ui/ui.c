@@ -8954,9 +8954,27 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
         low = -(PB_SSB_LOW_HZ + (int32_t)w);
         high = -PB_SSB_LOW_HZ;
     } else if (strstr(s_current_mode, "AM")) {
-        if (w == 0) w = 6000;
-        low = -(int32_t)w / 2;
-        high = (int32_t)w / 2;
+        /* ⛔ AM IGNORES THE RADIO'S REPORTED FILTER, to agree with the audio.
+         *
+         * The QMX's AM bandwidth is FIXED at 3.2 kHz (operator, 2026-10-14)
+         * and that filter sits in the radio's own audio, NOT in the I/Q: the
+         * CAT manual's Q9 says "in IQ Mode, the raw I & Q samples from the ADC
+         * are streamed directly to the USB Sound card", which is also why this
+         * display can show a 24 kHz span at all.
+         *
+         * So in AM the passband that MATTERS is the Tab5's own demodulator
+         * bandwidth, and the tint must draw that or it describes a filter
+         * nobody is listening through. Reading the radio's 3200 as a width
+         * drew +/-1600 here while rx_audio.c independently made the same
+         * mistake and sounded, in the operator's words, "like you had your ear
+         * in a cup".
+         *
+         * The number itself is rx_audio.h's RX_AUDIO_AM_HALF_BW_HZ, exported
+         * precisely so the tint and the filter cannot drift apart - it was a
+         * literal in both files for one commit, which is how that happens. */
+        (void)w;
+        low  = -RX_AUDIO_AM_HALF_BW_HZ;
+        high =  RX_AUDIO_AM_HALF_BW_HZ;
     } else if (strstr(s_current_mode, "FM")) {
         if (w == 0) w = 10000;
         low = -(int32_t)w / 2;
