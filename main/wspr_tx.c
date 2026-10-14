@@ -473,6 +473,35 @@ static void run_burst(const wspr_tx_request_t *req)
      * dial + tone is what wsprnet reports back and what the operator compares
      * against, and doing that sum by hand from two log lines is exactly the
      * kind of attribution this file already refuses to rely on elsewhere. */
+    /* ⛔ THE LATCH IS CHECKED BEFORE ANYTHING ANNOUNCES A BURST.
+     *
+     * wspr_tx_arm() refuses too, and that is where an operator finds out in
+     * time; this is the one that cannot be routed around - an arming path that
+     * predates the trip still has to be stopped here.
+     *
+     * ⚠ IT SAT BELOW THE "burst starting" LOG LINE UNTIL 2026-10-14 and the
+     * bench caught it: the log read
+     *     W WSPR TX burst starting: 'OZ1LAV' 'JO65' 23 dBm declared...
+     *     E WSPR TX REFUSED: SWR protection latched at 2.3:1
+     * which says a burst began when the radio was never keyed. A log line that
+     * claims something that did not happen is the thing this file spends most
+     * of its comments guarding against. Order matters; refuse first. */
+    {
+        float trip = 0.0f;
+        if (ft8_tx_swr_tripped(&trip)) {
+            ESP_LOGE(TAG, "WSPR TX REFUSED: SWR protection latched at %.1f:1 - "
+                          "check the antenna, then clear it", (double)trip);
+            ui_toast_ms("WSPR not transmitted: SWR protection is latched. "
+                        "Check the antenna and clear it to transmit again.", 12000);
+            /* ⚠ NO cat_poll_release() HERE. This now runs BEFORE
+             * cat_poll_hold() below, so there is no hold to give back - and
+             * releasing one that was never taken would clear a hold some other
+             * path legitimately owns. */
+            s_state = WSPR_TX_IDLE;
+            return;
+        }
+    }
+
     uint32_t rf_hz = cat_get_frequency() + (uint32_t)req->audio_freq_hz;
     ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz "
                   "(RF %lu.%06lu MHz), PA=%d.%d V%s%s",
@@ -506,25 +535,6 @@ static void run_burst(const wspr_tx_request_t *req)
      * file already uses for the STOP command, reused here because a failed
      * key-down deserves the same treatment: know for certain, and leave the
      * radio in a safe, known state either way. */
-    /* ⛔ REFUSE WHILE THE STATION LATCH IS SET. It is not FT8's latch - see
-     * ft8_tx_trip_swr(). A mismatch bad enough to cut one burst is bad enough
-     * to stop the next one, and WSPR re-arms itself every other minute without
-     * anybody present, which is precisely the case where "it will be noticed"
-     * is not true. Honoured HERE, at the last point before key-down, so no
-     * arming path can route around it. */
-    {
-        float trip = 0.0f;
-        if (ft8_tx_swr_tripped(&trip)) {
-            ESP_LOGE(TAG, "WSPR TX REFUSED: SWR protection latched at %.1f:1 - "
-                          "check the antenna, then clear it", (double)trip);
-            ui_toast_ms("WSPR not transmitted: SWR protection is latched. "
-                        "Check the antenna and clear it to transmit again.", 12000);
-            if (!s_burst_sim) cat_poll_release(CAT_HOLD_TX_BURST);
-            s_state = WSPR_TX_IDLE;
-            return;
-        }
-    }
-
     bool keyed = tx_cmd_critical(t0, "TX;");
     if (!keyed) {
         ESP_LOGE(TAG, "WSPR TX FAILED: key-down (TX;) never reached the radio - "
@@ -784,6 +794,26 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     if (cat_user_pause_active()) {
         if (out_err) snprintf(out_err, out_err_len, "Radio released - take it back first");
         return false;
+    }
+
+    /* ⛔ THE SWR LATCH REFUSES AT ARM TIME, NOT ONLY AT KEY-DOWN.
+     *
+     * The key-down check in run_burst() stays - it is the one that cannot be
+     * routed around, and an arming path that predates a trip must still be
+     * stopped. But refusing ONLY there means the operator arms, the request
+     * waits up to two minutes for an even UTC minute, and the refusal arrives
+     * long after they have stopped looking. Measured on the bench 2026-10-14:
+     * armed at 20:35:12, refused at 20:36:00 - 48 s of thinking it was going
+     * to transmit. ft8_tx_arm() has always refused at arm for the same
+     * reason. */
+    {
+        float trip = 0.0f;
+        if (ft8_tx_swr_tripped(&trip)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "SWR protection tripped at %.1f:1 - check the antenna",
+                                  (double)trip);
+            return false;
+        }
     }
 
     /* ⭐ WARN ABOUT THE FINALS AT ARM TIME, NOT ONLY IN A DRAWER.
