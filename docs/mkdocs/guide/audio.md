@@ -35,9 +35,14 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 !!! note "Which modes produce audio"
 
-    **CW, CW-R, USB and LSB only.** **AM is silent** — there is no AM
-    or FM demodulator yet, so listening to an AM station means putting the
-    radio in USB.
+    **CW, CW-R, USB, LSB and AM.** **FM is still silent** — there is no FM
+    demodulator, so an FM signal has to be listened to in USB or not at all.
+
+    AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
+    audio bandwidth is set by the Tab5 and not by the filter in the radio: it
+    is flat to about **2.4 kHz** and rolling off above that. That is a
+    communications AM filter, so a broadcast station will sound narrower than
+    it does on a domestic receiver. Nothing is wrong if it sounds that way.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
@@ -126,10 +131,11 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 |------|-------|----------------------------|
 | CW, CW-R | Yes | **Yes** |
 | USB, LSB | **Yes** | No — single channel, both ears the same |
+| AM | **Yes**, to about 2.4 kHz | No — AM has no stereo content to split |
 | DiGi | No | No |
-| AM, FM | No | No |
+| FM | No | No |
 
-So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi and AM there is no audio at all yet — nothing is broken if you hear silence in those.
+So you **do** get audio on SSB and AM; what you do not get there is the left/right split, because that is a CW feature. In DiGi and FM there is no audio at all — nothing is broken if you hear silence in those.
 
 ## Known Limitations
 

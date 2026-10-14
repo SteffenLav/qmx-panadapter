@@ -19,6 +19,7 @@
 
 #include "dsp.h"          // DSP_FFT_SIZE, DSP_SAMPLE_RATE_HZ, DSP_FFT_TASK_PRIORITY, dsp_rxaudio_*
 #include "cat.h"          // cat_get_mode_str(), cat_get_cw_offset_hz()
+#include "am_demod.h"     // AM envelope detector (shared with test/am_demod_harness.c)
 #include "settings.h"
 #include "ui.h"           // ui_get_passband_width_hz() - the QMX's actual selected filter width
 
@@ -56,6 +57,7 @@ typedef enum {
     RXAUD_MODE_CW,
     RXAUD_MODE_SSB,        // USB: wanted audio sits ABOVE the dial
     RXAUD_MODE_SSB_L,      // LSB: wanted audio sits BELOW the dial
+    RXAUD_MODE_AM,         // AM: carrier ON the dial, audio is the ENVELOPE
 } rxaud_mode_t;
 
 /* ⛔ LSB AND USB ARE NOT THE SAME PASSBAND, AND THEY WERE TREATED AS ONE UNTIL
@@ -78,6 +80,12 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
     if (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0) return RXAUD_MODE_CW;
     if (strcmp(m, "USB") == 0) return RXAUD_MODE_SSB;
     if (strcmp(m, "LSB") == 0) return RXAUD_MODE_SSB_L;
+    /* AM was in this list as "unsupported" until 2026-10-14, which is the
+     * whole reason guide/audio.md said "AM is silent". Nothing about the
+     * radio prevented it: the QMX streams IQ whatever mode it is in, and the
+     * chain below already produces the complex baseband an envelope detector
+     * needs. Only the detector was missing. See am_demod.h. */
+    if (strcmp(m, "AM") == 0)  return RXAUD_MODE_AM;
     return RXAUD_MODE_NONE;
 }
 
@@ -140,6 +148,18 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
 #define CW_DEF_WIDTH_HZ   300
 #define SSB_DEF_WIDTH_HZ  2700
 #define SSB_LOW_HZ        200    // matches ui.c's PB_SSB_LOW_HZ (not exported)
+// AM: matches ui.c's compute_passband_edges_hz() AM branch (w==0 -> 6000), so
+// the tint on the spectrum and the filter actually in force agree.
+#define AM_DEF_WIDTH_HZ   6000
+/* ⛔ THE AUDIO BANDWIDTH CEILING IS SET BY STAGE 1, NOT BY THE RADIO.
+ * build_decimator() is fixed at cutoff 0.45/RX_DECIM_D of the FULL rate =
+ * 2700 Hz with 63 Hamming taps, and the internal rate's Nyquist is 3000 Hz.
+ * 2400 is where the harness measures the chain still flat enough to be worth
+ * passing; above it the response is the decimator's skirt, not the station.
+ * Raising this does NOT widen AM - widening AM means RX_DECIM_D, which also
+ * rescales every AGC constant (they are written in terms of it) and costs
+ * CPU in every mode. Deliberately not done for this first cut. */
+#define AM_MAX_HALF_BW_HZ 2400
 
 // Runtime-adjustable (see rx_audio_set_tuning() / the /api/cmd "rxaudio"
 // action) instead of #define constants - 2026-09-04, after several
@@ -799,10 +819,25 @@ static inline float smooth_step_r(float x)
 // points s_nco_l and s_nco_r at the SAME frequency as plain center_hz would
 // have used - i.e. the mono path is an exact special case of this one, not
 // an approximation of it (see the per-sample loop for what that buys).
+/* AM envelope-detector state. One instance: the path demodulates one signal
+ * at a time and AM is mono by construction (see the output loop). */
+static am_demod_t s_am;
+static float      s_am_alpha = 0.0f;
+
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     float fs = (float)DSP_SAMPLE_RATE_HZ;
     float fs_dec = fs / (float)RX_DECIM_D;   // NCO2/pre run on the decimated stream
+
+    /* ⚠ THE AM CARRIER TRACKER IS RESET HERE, not only on a mode change.
+     * Any retune changes which signal is in the passband, so the mean it has
+     * been tracking describes a carrier that may no longer be there - and
+     * am_demod_step() primes itself from the first sample after a reset, so
+     * this costs one sample rather than the filter's 8 ms settle. Leaving a
+     * stale mean in place would subtract the OLD carrier from the NEW one and
+     * put a step through the AGC. */
+    am_demod_reset(&s_am);
+    s_am_alpha = am_demod_alpha(fs_dec);
     float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
@@ -864,6 +899,27 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
         if (w == 0) w = CW_DEF_WIDTH_HZ;
         *center_hz = off;
         *half_bw_hz = (int)w / 2;
+    } else if (mode == RXAUD_MODE_AM) {
+        /* ⛔ AM IS THE ONLY MODE CENTRED ON THE DIAL. The carrier IS the
+         * dial, so centre 0 and a SYMMETRIC passband - both sidebands, which
+         * is what makes the envelope detector in am_demod.h work at all. An
+         * SSB-style offset here would detect the envelope of one sideband
+         * with no carrier, which is not AM and sounds like nothing.
+         * ui.c's compute_passband_edges_hz() already draws AM this way
+         * (w==0 -> 6000, +/-3000), and that function stays the authority on
+         * the display side, as the note by mode_from_cat_str() says.
+         *
+         * ⛔ BUT THE WIDTH IS CAPPED BY THE CHAIN, NOT BY THE RADIO.
+         * build_decimator() is FIXED at cutoff 0.45/RX_DECIM_D of the full
+         * rate = 2700 Hz, and it is only 63 taps, so its response is already
+         * sagging below that. Asking for +/-3000 here would request audio the
+         * stage above has thrown away, and the top of it would alias on the
+         * 6 kHz internal rate (Nyquist 3000). AM_MAX_HALF_BW_HZ is measured,
+         * not assumed - see test/am_demod_harness.c. */
+        if (w == 0) w = AM_DEF_WIDTH_HZ;
+        *center_hz = 0;
+        *half_bw_hz = (int)w / 2;
+        if (*half_bw_hz > AM_MAX_HALF_BW_HZ) *half_bw_hz = AM_MAX_HALF_BW_HZ;
     } else {   // RXAUD_MODE_SSB / RXAUD_MODE_SSB_L
         if (w == 0) w = SSB_DEF_WIDTH_HZ;
         int low  = SSB_LOW_HZ;
@@ -952,9 +1008,14 @@ static void rx_audio_task(void *arg)
             s_rate_written = 0;
             dsp_rxaudio_forward_enable(true);
             active_prev = true;
+            /* ⚠ A DEFAULT OF "USB" HID AM HERE. Adding a mode to the enum
+             * without adding it to this line would have had the log say USB
+             * while the chain ran the envelope detector - the one place that
+             * says which demodulator is live, reporting the wrong one. */
             ESP_LOGI(TAG, "RX audio on (mode=%s vol=%d)",
                      mode == RXAUD_MODE_CW    ? "CW"  :
-                     mode == RXAUD_MODE_SSB_L ? "LSB" : "USB", (int)s_volume);
+                     mode == RXAUD_MODE_SSB_L ? "LSB" :
+                     mode == RXAUD_MODE_AM    ? "AM"  : "USB", (int)s_volume);
         }
 
         // Track the live filter target (CW offset moves; SSB is fixed but the
@@ -1190,6 +1251,7 @@ static void rx_audio_task(void *arg)
         bool  agc_off      = s_agc_off;
         float out_clamp    = s_out_clamp;
         bool  panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
+        bool  am_now        = (mode == RXAUD_MODE_AM);
 
         // Stereo width, BANDWIDTH-COMPENSATED: the two half-band filters'
         // own transition zone is a FIXED number of Hz (FIR_LEN taps at
@@ -1234,7 +1296,25 @@ static void rx_audio_task(void *arg)
             // close to it. Panoramic reads each channel from its OWN
             // already-separated half (computed above).
             float re_l, re_r;
-            if (panoramic_now) {
+            if (am_now) {
+                /* ⭐ AM: the audio is the MAGNITUDE of the same complex
+                 * baseband the other modes take the real part of, with the
+                 * carrier's DC removed - see am_demod.h for why the removal
+                 * belongs there and not after the AGC.
+                 *
+                 * The final NCO rotation the SSB/CW branches apply is simply
+                 * not needed: |z * e^j0| == |z| for any rotation, so an
+                 * envelope is immune to it. Reading s_narrow_re/im directly
+                 * is not a shortcut, it is the same number with two
+                 * multiplies and a sinf/cosf pair skipped per sample.
+                 *
+                 * Mono by construction: AM has no stereo content to split
+                 * and the panoramic path is CW-only anyway. */
+                float v = am_demod_step(&s_am, s_narrow_re[i], s_narrow_im[i],
+                                        s_am_alpha);
+                re_l = v;
+                re_r = v;
+            } else if (panoramic_now) {
                 // Swapped 2026-09-20 per the operator's ear: the lower half
                 // of the passband (below the tuned pitch) sounds right to
                 // him in the RIGHT ear, not the left - nco_l/s_low_* etc.
