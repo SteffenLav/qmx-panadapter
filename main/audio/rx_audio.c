@@ -201,9 +201,9 @@ static inline int decim_for_mode(rxaud_mode_t m)
  * the AM chain's -3 dB point and not a compromise with CW's. The AGC and
  * limiter constants that "are written in terms of it" are now stored as TIMES
  * and derived per D - see DEF_AGC_ATTACK_S. */
-#define AM_MAX_HALF_BW_HZ RX_AUDIO_AM_HALF_BW_HZ   /* exported: rx_audio.h */
-_Static_assert(RX_AUDIO_AM_HALF_BW_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM),
-               "AM half-bandwidth must stay inside the AM internal rate's Nyquist");
+#define AM_MAX_HALF_BW_DEFAULT_HZ RX_AUDIO_AM_HALF_BW_HZ   /* exported: rx_audio.h */
+_Static_assert(RX_AUDIO_AM_HALF_BW_MAX_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM),
+               "the AM half-bandwidth CEILING must stay inside the AM internal rate's Nyquist");
 
 // Runtime-adjustable (see rx_audio_set_tuning() / the /api/cmd "rxaudio"
 // action) instead of #define constants - 2026-09-04, after several
@@ -906,6 +906,20 @@ static inline float smooth_step_r(float x)
 // points s_nco_l and s_nco_r at the SAME frequency as plain center_hz would
 // have used - i.e. the mono path is an exact special case of this one, not
 // an approximation of it (see the per-sample loop for what that buys).
+/* The AM filter width in force, Hz. The loop below picks this up through
+ * filter_params_for_mode(), so a change retunes on the next frame with no
+ * special handling - want_half_bw simply differs and the existing
+ * "half_bw_changed" path rebuilds stage 2. */
+static int s_am_half_bw_hz = AM_MAX_HALF_BW_DEFAULT_HZ;
+
+void rx_audio_set_am_half_bw_hz(int hz)
+{
+    if (hz < 2000) hz = 2000;
+    if (hz > RX_AUDIO_AM_HALF_BW_MAX_HZ) hz = RX_AUDIO_AM_HALF_BW_MAX_HZ;
+    s_am_half_bw_hz = hz;
+}
+int rx_audio_get_am_half_bw_hz(void) { return s_am_half_bw_hz; }
+
 /* AM envelope-detector state. One instance: the path demodulates one signal
  * at a time and AM is mono by construction (see the output loop). */
 static am_demod_t s_am;
@@ -1090,7 +1104,7 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
          * test/am_demod_harness.c), not of the radio. */
         (void)w;
         *center_hz = 0;
-        *half_bw_hz = AM_MAX_HALF_BW_HZ;
+        *half_bw_hz = s_am_half_bw_hz;
     } else {   // RXAUD_MODE_SSB / RXAUD_MODE_SSB_L
         if (w == 0) w = SSB_DEF_WIDTH_HZ;
         int low  = SSB_LOW_HZ;
@@ -2035,6 +2049,7 @@ void rx_audio_apply_settings(void)
     rx_audio_set_pan_blend   ((float)settings_get_rxaud_pan_blend_x100() / 100.0f);
     rx_audio_set_pan_overlap ((float)settings_get_rxaud_pan_ovlp_x100()  / 100.0f);
     rx_audio_set_agc_attack_ms (settings_get_rxaud_agc_attack_ms());
+    rx_audio_set_am_half_bw_hz ((int)settings_get_rxaud_am_half_bw_h100() * 100);
     rx_audio_set_agc_release_ms(settings_get_rxaud_agc_release_ms());
     rx_audio_set_agc_off       (settings_get_rxaud_agc_off());
 }

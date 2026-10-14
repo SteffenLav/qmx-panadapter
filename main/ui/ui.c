@@ -1139,6 +1139,32 @@ static void bw_preset_cb(lv_event_t *e)
     uint32_t hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     bw_popup_close();
     const char *mode = cat_get_mode_str();
+    if (strcmp(mode, "AM") == 0) {
+        /* The Tab5's own AM filter - NOTHING is written to the radio, whose AM
+         * bandwidth is fixed and not in the I/Q path. The list is RF widths, so
+         * halve it for the half-bandwidth the demodulator works in.
+         *
+         * ui_update_passband_width() is deliberately NOT called: that tracks
+         * the RADIO's filter and the FW poll would overwrite it with 3200
+         * within ~150 ms. compute_passband_edges_hz()'s AM branch reads
+         * rx_audio_get_am_half_bw_hz() instead, so the tint follows this. */
+        int half = (int)hz / 2;
+        rx_audio_set_am_half_bw_hz(half);
+        settings_set_rxaud_am_half_bw_h100((uint8_t)(half / 100));
+        /* Re-render the top bar and the passband tint NOW rather than waiting
+         * for the next FW poll - which in AM reports an UNCHANGED 3200 every
+         * time, so there is no guarantee it refreshes anything. Passing the
+         * radio's current figure leaves s_passband_width_hz alone; the label
+         * block inside substitutes the AM width itself.
+         *
+         * ⚠ ui_get_passband_width_hz(), not s_passband_width_hz - this
+         * callback sits above that static's definition. And no explicit
+         * recompute_zoom_pan() here: it is defined further down too, and the
+         * draw path re-reads compute_passband_edges_hz() every frame, so the
+         * tint follows on its own. */
+        ui_update_passband_width(ui_get_passband_width_hz());
+        return;
+    }
     if (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0) {
         cat_request_cw_passband(hz);  // deferred MMCW write via poll task
         // Same bookkeeping the SSB branch below already does - without this,
@@ -1211,6 +1237,28 @@ static void bw_popup_open(void)
     } else if (strcmp(cur_mode, "USB") == 0 || strcmp(cur_mode, "LSB") == 0) {
         bw_list = ssb_bw;
         lbl_list = ssb_lbl;
+        n_bw = 4;
+    } else if (strcmp(cur_mode, "AM") == 0) {
+        /* ⛔ IN AM THIS CONTROL IS NOT THE RADIO'S FILTER. The QMX's AM
+         * bandwidth is FIXED at 3.2 kHz and sits in the radio's own audio, not
+         * in the I/Q we demodulate from - so there is nothing on the radio to
+         * set, and until 2026-10-15 this function simply returned here and the
+         * operator got no popup at all: "the top bar BW is not reacting and
+         * stays at 3.2 kHz". Correct for the radio, useless to him.
+         *
+         * These widths are the TAB5's AM filter. The labels are the RF width
+         * the operator sees on the waterfall (twice the half-bandwidth), which
+         * is the same convention the SSB figures above use.
+         *
+         * ⚠ 9.6k IS OFFERED BUT IS NOT THE DEFAULT, and the reason is the
+         * band rather than the DSP: shortwave broadcast channels are spaced
+         * 5 kHz, so at 9.6k the filter edge sits about 45 Hz from the
+         * NEIGHBOUR's carrier (measured, test/am_demod_harness.c). It is there
+         * for a clear channel, where it buys a broadcaster's full 4.5 kHz. */
+        static const uint32_t am_bw[]  = {4000, 6000, 8000, 9600};
+        static const char    *am_lbl[] = {"4.0k","6.0k","8.0k","9.6k"};
+        bw_list = am_bw;
+        lbl_list = am_lbl;
         n_bw = 4;
     } else {
         return;
@@ -8909,8 +8957,24 @@ void ui_update_passband_width(uint32_t hz)
     }
     if (s_bw_label && display_lock(20)) {
         char buf[20];
-        if (hz >= 1000) snprintf(buf, sizeof(buf), "BW: %lu.%01lu kHz", (unsigned long)(hz/1000), (unsigned long)((hz%1000)/100));
-        else            snprintf(buf, sizeof(buf), "BW: %lu Hz", (unsigned long)hz);
+        /* ⛔ IN AM THE LABEL MUST SHOW THE TAB5'S FILTER, NOT THE RADIO'S.
+         *
+         * Everything above deliberately keeps tracking the radio's reported
+         * width - other things read s_passband_width_hz - but the number on the
+         * top bar is what the operator reads as "the bandwidth I am listening
+         * through", and in AM that is ours: the QMX's AM filter is fixed at
+         * 3.2 kHz and sits in its own audio, not in the I/Q we demodulate.
+         *
+         * He hit exactly this on 2026-10-15: "the top bar BW is not reacting
+         * and stays at 3.2 kHz". It was faithfully reporting the radio while
+         * the audio came from a different filter entirely. Doubled because the
+         * demodulator works in half-bandwidth and this label, like the SSB
+         * figures, is the RF width. */
+        uint32_t shown = hz;
+        const char *m = cat_get_mode_str();
+        if (m && strcmp(m, "AM") == 0) shown = (uint32_t)(rx_audio_get_am_half_bw_hz() * 2);
+        if (shown >= 1000) snprintf(buf, sizeof(buf), "BW: %lu.%01lu kHz", (unsigned long)(shown/1000), (unsigned long)((shown%1000)/100));
+        else               snprintf(buf, sizeof(buf), "BW: %lu Hz", (unsigned long)shown);
         lv_label_set_text(s_bw_label, buf);
         display_unlock();
     }
@@ -8973,8 +9037,12 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
          * precisely so the tint and the filter cannot drift apart - it was a
          * literal in both files for one commit, which is how that happens. */
         (void)w;
-        low  = -RX_AUDIO_AM_HALF_BW_HZ;
-        high =  RX_AUDIO_AM_HALF_BW_HZ;
+        /* The LIVE value, not the default - the operator can change it from the
+         * top bar now. A tint drawn from the compile-time figure would describe
+         * a filter nobody is listening through, which is the mistake 7fcd1b1f
+         * made with the radio's number. */
+        low  = -rx_audio_get_am_half_bw_hz();
+        high =  rx_audio_get_am_half_bw_hz();
     } else if (strstr(s_current_mode, "FM")) {
         if (w == 0) w = 10000;
         low = -(int32_t)w / 2;

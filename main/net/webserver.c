@@ -5564,6 +5564,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(ra, "pan_blend_x100", settings_get_rxaud_pan_blend_x100());
             cJSON_AddNumberToObject(ra, "pan_ovlp_x100",  settings_get_rxaud_pan_ovlp_x100());
             cJSON_AddNumberToObject(ra, "agc_attack_ms",  settings_get_rxaud_agc_attack_ms());
+            /* The AM filter the Tab5 demodulates through, as the RF width the
+             * operator sees - NOT the radio's fixed 3.2 kHz, which is in its
+             * own audio and not in the I/Q path. */
+            cJSON_AddNumberToObject(ra, "am_bw_hz",
+                                    settings_get_rxaud_am_half_bw_h100() * 200);
             cJSON_AddNumberToObject(ra, "agc_release_ms", settings_get_rxaud_agc_release_ms());
             cJSON_AddBoolToObject  (ra, "agc_off",        settings_get_rxaud_agc_off());
             cJSON_AddBoolToObject  (ra, "hp_mute_en",     settings_get_hp_mute_en());
@@ -6252,6 +6257,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
                 int g = RA_CLAMP((int)v->valuedouble, 5, 150);
                 settings_set_rxaud_gain_d10((uint8_t)g);
                 rx_audio_set_agc_gain_max((float)g * 10.0f);
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "am_bw_hz"))) {
+                /* RF width in, half-bandwidth stored - same convention as the
+                 * Tab5's own picker. settings clamps to 20..48 (x100 Hz). */
+                int half = (int)v->valuedouble / 2;
+                rx_audio_set_am_half_bw_hz(half);
+                settings_set_rxaud_am_half_bw_h100((uint8_t)(half / 100));
             }
             if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "pan_width_x10"))) {
                 int w = RA_CLAMP((int)v->valuedouble, 0, 30);

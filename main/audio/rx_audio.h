@@ -232,6 +232,18 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * ceiling and the default are not the same number by accident again. */
 #define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
+/* The AM half-bandwidth actually in force. Settable, because the figure above
+ * is a default and the right choice depends on the band: on a crowded evening
+ * the neighbour 5 kHz away matters more than fidelity, and on a clear channel
+ * the opposite. Clamped to RX_AUDIO_AM_HALF_BW_MAX_HZ, which is what the chain
+ * was measured to carry.
+ *
+ * ⚠ ui.c's compute_passband_edges_hz() must draw THIS, not the default -
+ * a tint that describes a filter nobody is listening through is the mistake
+ * that shipped in 7fcd1b1f. */
+void rx_audio_set_am_half_bw_hz(int hz);
+int  rx_audio_get_am_half_bw_hz(void);
+
 #ifdef __cplusplus
 }
 #endif

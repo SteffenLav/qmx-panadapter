@@ -109,6 +109,7 @@ static const char *TAG = "settings";
 #define KEY_RXA_ATTACK   "rxa_atk"
 #define KEY_RXA_RELEASE  "rxa_rel"
 #define KEY_RXA_AGCOFF   "rxa_agcoff"
+#define KEY_RXA_AMBW     "rxa_ambw"
 #define KEY_HP_MUTE      "hp_mute"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
@@ -240,7 +241,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 140, 19 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 141, 18 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -387,6 +388,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CQ_LISTEN      79
 #define DIRTY_SWR_LIMIT      80
 #define DIRTY_JS8_SUBMODE   140   /* JS8 Fast/Turbo/Slow selector */
+#define DIRTY_RXA_AMBW      141   /* AM demodulator bandwidth (Tab5's own, not the radio's) */
 // One bit for both activation fields: they are only ever written together by
 // settings_set_activation(), so a second bit would buy nothing.
 #define DIRTY_ACTIVATION     81
@@ -664,6 +666,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_RXA_ATTACK))   nvs_set_u8(s_nvs, KEY_RXA_ATTACK, snap.rxaud_agc_attack_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_RELEASE))  nvs_set_u16(s_nvs, KEY_RXA_RELEASE, snap.rxaud_agc_release_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_AGCOFF))   nvs_set_u8(s_nvs, KEY_RXA_AGCOFF, snap.rxaud_agc_off ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RXA_AMBW))     nvs_set_u8(s_nvs, KEY_RXA_AMBW,   snap.rxaud_am_half_bw_h100);
         if (dirty_test(&dirty_local, DIRTY_HP_MUTE))      nvs_set_u8(s_nvs, KEY_HP_MUTE, snap.hp_mute_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
@@ -979,6 +982,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->rxaud_pan_blend_x100 = 15;
     out->rxaud_pan_ovlp_x100  = 30;
     out->rxaud_agc_attack_ms  = 3;
+    out->rxaud_am_half_bw_h100 = 30;   /* 3000 Hz half-bw = a 6 kHz wide AM signal */
     out->rxaud_agc_release_ms = 150;
     out->rxaud_agc_off        = false;   /* tracking AGC, as before */
     out->hp_mute_en           = true;    /* what everyone expects */
@@ -1094,6 +1098,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_RXA_PBLEND, &out->rxaud_pan_blend_x100);
     nvs_get_u8(s_nvs, KEY_RXA_POVLP,  &out->rxaud_pan_ovlp_x100);
     nvs_get_u8(s_nvs, KEY_RXA_ATTACK,  &out->rxaud_agc_attack_ms);
+    nvs_get_u8(s_nvs, KEY_RXA_AMBW,    &out->rxaud_am_half_bw_h100);
     nvs_get_u16(s_nvs, KEY_RXA_RELEASE, &out->rxaud_agc_release_ms);
     { uint8_t b; if (nvs_get_u8(s_nvs, KEY_RXA_AGCOFF, &b) == ESP_OK) out->rxaud_agc_off = (b != 0); }
     { uint8_t b; if (nvs_get_u8(s_nvs, KEY_HP_MUTE,    &b) == ESP_OK) out->hp_mute_en     = (b != 0); }
@@ -2570,6 +2575,11 @@ void settings_set_rxaud_pan_ovlp_x100(uint8_t v) { RXA_SET_U8(rxaud_pan_ovlp_x10
 uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x100,  30); }
 /* Attack/release exposed in ms (the units an operator can reason about);
  * rx_audio.c converts to its per-sample coefficient - see rx_audio_set_agc_attack_ms(). */
+/* 20..48: below 2000 Hz an AM filter is narrower than the radio's own fixed
+ * 3.2 kHz and there is no reason to go there, and 4800 is the measured ceiling
+ * of the AM chain (RX_AUDIO_AM_HALF_BW_MAX_HZ). */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 20, 48); }
+uint8_t settings_get_rxaud_am_half_bw_h100(void)   { RXA_GET_U8(rxaud_am_half_bw_h100, 30); }
 void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack_ms,   DIRTY_RXA_ATTACK,  1, 50); }
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }
 void settings_set_rxaud_agc_release_ms(uint16_t v) { RXA_SET_U16(rxaud_agc_release_ms, DIRTY_RXA_RELEASE, 10, 500); }

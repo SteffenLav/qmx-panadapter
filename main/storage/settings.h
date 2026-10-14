@@ -461,6 +461,13 @@ typedef struct {
      * manual gain control, which is what "AGC off plus a gain knob" means on
      * any other receiver. */
     bool     rxaud_agc_off;
+    /* AM demodulator half-bandwidth, in units of 100 Hz (30 = 3000 Hz, a 6 kHz
+     * wide signal). The Tab5 demodulates AM from the raw I/Q, so this is the
+     * filter the operator actually listens through - the radio's own AM
+     * bandwidth is fixed at 3.2 kHz and is not in that path. See
+     * RX_AUDIO_AM_HALF_BW_HZ in audio/rx_audio.h for the ceiling and why the
+     * default is not it. */
+    uint8_t  rxaud_am_half_bw_h100;
     /* Mute the internal speaker when headphones are detected (v1.16.4).
      * Default TRUE - it is what everyone expects. Switchable because the
      * detection is a single I2C read that DOES fail in the field, and two
@@ -978,6 +985,8 @@ uint16_t settings_get_rxaud_agc_release_ms(void);
 // AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
 void    settings_set_rxaud_agc_off(bool v);
 bool    settings_get_rxaud_agc_off(void);
+void    settings_set_rxaud_am_half_bw_h100(uint8_t v);  // 20..48 (default 30 = 3000 Hz)
+uint8_t settings_get_rxaud_am_half_bw_h100(void);
 // Speaker auto-mute on headphone insert. Default true.
 void    settings_set_hp_mute_en(bool v);
 bool    settings_get_hp_mute_en(void);
