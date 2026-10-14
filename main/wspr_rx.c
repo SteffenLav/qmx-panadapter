@@ -2047,11 +2047,22 @@ static void wspr_tx_sched_task(void *arg)
 
             const int64_t cycle_utc = cyc * (WSPR_CYCLE_MS / 1000);
 
-            /* A burst still running from the previous cycle owns the radio. */
+            /* A burst still running from the previous cycle owns the radio -
+             * and so does one that is merely ARMED and has not fired yet.
+             *
+             * ⚠ THE LINE SAID "previous burst still running" FOR BOTH until
+             * 2026-10-14, when the bench printed it one second before a burst
+             * that was refused at key-down and therefore never ran at all. The
+             * guard is right either way; the wording claimed a transmission
+             * that had not happened, which is the same defect 01cfd4b7 fixed
+             * one file over. Name the state instead of guessing at it. */
             char busy[64];
-            if (wspr_tx_get_status(busy, sizeof(busy), NULL) != WSPR_TX_IDLE) {
-                ESP_LOGW(TAG, "cycle %lld: previous burst still running - not arming",
-                         (long long)cycle_utc);
+            const wspr_tx_state_t tx_st = wspr_tx_get_status(busy, sizeof(busy), NULL);
+            if (tx_st != WSPR_TX_IDLE) {
+                ESP_LOGW(TAG, "cycle %lld: a burst is already %s (%s) - not arming",
+                         (long long)cycle_utc,
+                         tx_st == WSPR_TX_ARMED ? "armed for this slot" : "running",
+                         busy);
             } else {
             /* ---- is THIS the cycle the schedule picked? --------------------
              * The roll itself happened earlier (see roll_next_group_cycle) so that
@@ -2477,11 +2488,22 @@ static void wspr_rx_task(void *arg)
          * transmission. */
         char txtext[64];
 
-        /* A burst still running from the previous cycle owns the radio. */
-        if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
-            set_status("transmitting");
-            ESP_LOGW(TAG, "cycle %lld: TX still busy - receiver stood down",
-                     (long long)cycle_utc);
+        /* A burst still running from the previous cycle owns the radio, and so
+         * does one that is only ARMED - standing down either way is right,
+         * because the radio must not be captured through a key-down.
+         *
+         * ⚠ BUT IT SAID "transmitting" FOR BOTH until 2026-10-14. The status
+         * the operator reads, and the log line, both named a transmission for a
+         * burst that had not keyed yet and - as the bench showed the same
+         * evening - might be refused at key-down and never key at all. Same
+         * defect as the sibling at the arming guard above and as 01cfd4b7.
+         * Stand down on either state; say which one it is. */
+        const wspr_tx_state_t tx_busy = wspr_tx_get_status(txtext, sizeof(txtext), NULL);
+        if (tx_busy != WSPR_TX_IDLE) {
+            set_status(tx_busy == WSPR_TX_ARMED ? "TX armed" : "transmitting");
+            ESP_LOGW(TAG, "cycle %lld: TX is %s - receiver stood down",
+                     (long long)cycle_utc,
+                     tx_busy == WSPR_TX_ARMED ? "armed for this slot" : "transmitting");
             /* No carpet mark - see the note at the other stand-down. */
             while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
                 vTaskDelay(pdMS_TO_TICKS(500));
