@@ -2022,6 +2022,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         cat_band_scan_restore_test((uint32_t)hz_item->valuedouble, md ? md[0] : 0);
+    } else if (action && strcmp(action, "trip_swr") == 0) {
+        /* Hidden dev action, same family as gp_probe and ta_probe: RAISE the
+         * station SWR latch, so the refusal path can be exercised without a
+         * bad antenna.
+         *
+         * ⛔ IT EXISTS BECAUSE THE TRIP CANNOT OTHERWISE BE FIRED ON A HEALTHY
+         * STATION. settings_set_swr_limit_x10() clamps the limit to a floor of
+         * 1.5:1, and a well-matched bench reads 1.2 - so "set the limit low and
+         * transmit" cannot reach the comparison, and keying the radio to find
+         * that out proves nothing. This raises the SAME flag a real trip
+         * raises, through the same function, so everything downstream - the
+         * WSPR refusal before key-down, ft8_tx_arm()'s refusal, the Tab5
+         * prompt, the web banner - is the real path and not a simulation.
+         *
+         * It does NOT prove the mid-burst CUT, which only a genuine mismatch
+         * (or a build with the clamp floor lowered) can reach. Do not cite it
+         * for that.
+         *
+         * {"action":"trip_swr"} or {"action":"trip_swr","swr":5.1} */
+        cJSON *sj = cJSON_GetObjectItem(root, "swr");
+        float sw = cJSON_IsNumber(sj) ? (float)sj->valuedouble : 5.1f;
+        ft8_tx_trip_swr(sw);
+        ESP_LOGW("webserver", "DEV: SWR latch raised at %.1f:1 by /api/cmd - "
+                              "transmit is now refused until it is cleared", (double)sw);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        {
+            char out[96];
+            float t = 0.0f;
+            snprintf(out, sizeof(out), "{\"ok\":true,\"tripped\":%s,\"swr\":%.2f}",
+                     ft8_tx_swr_tripped(&t) ? "true" : "false", (double)t);
+            httpd_resp_sendstr(req, out);
+        }
+        return ESP_OK;
     } else if (action && strcmp(action, "clear_swr") == 0) {
         // The web equivalent of tapping the Tab5's own SWR-fault prompt
         // (Randy N4OPI: the web UI had no way to see the fault OR clear it).
