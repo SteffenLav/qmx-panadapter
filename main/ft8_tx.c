@@ -189,6 +189,20 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr)
     return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
 }
 
+/* ⭐ THE LATCH IS THE STATION'S, NOT FT8'S, and it is deliberately NOT
+ * duplicated for WSPR. "The antenna is bad enough to stop transmitting" is a
+ * fact about the aerial on the roof, not about which mode noticed it: a trip
+ * raised by a WSPR burst must refuse the next FT8 burst too, and the reverse.
+ * A second parallel latch would be the copy-that-drifts shape this project
+ * keeps paying for. It lives here because the UI and the web page already read
+ * it from here; wspr_tx.c raises it through this function. */
+void ft8_tx_trip_swr(float swr)
+{
+    if (s_swr_tripped) return;        /* first trip wins - keep its value */
+    s_swr_trip_value = swr;
+    s_swr_tripped    = true;
+}
+
 bool ft8_tx_swr_tripped(float *swr_out)
 {
     if (swr_out) *swr_out = s_swr_trip_value;

@@ -23,6 +23,7 @@
 #include "freertos/semphr.h"
 
 #include "cat/cat.h"
+#include "ft8_tx.h"   // ft8_tx_trip_swr / ft8_tx_swr_tripped - the STATION SWR latch
 #include "storage/settings.h"
 #include "util/psram_task.h"
 #include "adif/adif_log.h"   /* adif_log_band_for_freq() - for the burst-start log's watts figure */
@@ -76,6 +77,14 @@ static bool sim_active(void)
 #define WSPR_TONE_SPACING_HZ    1.46484375f
 #define WSPR_TX_KEYUP_TONE_HZ   0.0f    // "any value < 10 Hz" keys up (CAT manual)
 #define WSPR_TX_ENVELOPE_SETTLE_MS  5
+
+/* How often the burst re-measures power and SWR, in symbols. 20 symbols is
+ * 13.7 s, so a 162-symbol burst is sampled about eight times instead of once -
+ * the difference between noticing a fault that arrives at 60 s and finding it
+ * in the log afterwards. Each cycle costs one PC;SW; round trip, bounded at
+ * ~600 ms against a 683 ms symbol, and the read lands 4 symbols after the
+ * send, so it never competes with the tone clock. */
+#define WSPR_SWR_SAMPLE_EVERY       20
 #define WSPR_TX_STOP_RETRIES     8      // mirrors ft8_tx.c's tx_cmd_critical()
 #define WSPR_TX_MODE_POLL_MS    100
 #define WSPR_TX_MODE_POLL_TRIES  10     // ~1s worst case
@@ -497,6 +506,25 @@ static void run_burst(const wspr_tx_request_t *req)
      * file already uses for the STOP command, reused here because a failed
      * key-down deserves the same treatment: know for certain, and leave the
      * radio in a safe, known state either way. */
+    /* ⛔ REFUSE WHILE THE STATION LATCH IS SET. It is not FT8's latch - see
+     * ft8_tx_trip_swr(). A mismatch bad enough to cut one burst is bad enough
+     * to stop the next one, and WSPR re-arms itself every other minute without
+     * anybody present, which is precisely the case where "it will be noticed"
+     * is not true. Honoured HERE, at the last point before key-down, so no
+     * arming path can route around it. */
+    {
+        float trip = 0.0f;
+        if (ft8_tx_swr_tripped(&trip)) {
+            ESP_LOGE(TAG, "WSPR TX REFUSED: SWR protection latched at %.1f:1 - "
+                          "check the antenna, then clear it", (double)trip);
+            ui_toast_ms("WSPR not transmitted: SWR protection is latched. "
+                        "Check the antenna and clear it to transmit again.", 12000);
+            if (!s_burst_sim) cat_poll_release(CAT_HOLD_TX_BURST);
+            s_state = WSPR_TX_IDLE;
+            return;
+        }
+    }
+
     bool keyed = tx_cmd_critical(t0, "TX;");
     if (!keyed) {
         ESP_LOGE(TAG, "WSPR TX FAILED: key-down (TX;) never reached the radio - "
@@ -510,6 +538,20 @@ static void run_burst(const wspr_tx_request_t *req)
 
     bool aborted = false;
     int  tone_failures = 0;
+    /* The operator's SWR limit, sampled ONCE per burst so a settings change
+     * half way through cannot alter the rules mid-transmission - same rule
+     * ft8_tx.c applies. 0 = protection off. */
+    float swr_limit = 0.0f;
+    {
+        uint8_t lim_x10 = settings_get_swr_limit_x10();
+        if (lim_x10 > 0) swr_limit = (float)lim_x10 / 10.0f;
+    }
+    /* The sampling cycle: first send at symbol 12 (the PA has settled by then
+     * - 12 symbols is 8.2 s), read 4 symbols later, repeat. */
+    int  ps_send_at     = 12;
+    int  ps_read_at     = -1;
+    bool ps_reported    = false;   /* the MEASURED line is once per burst */
+    bool ps_miss_logged = false;
     for (int i = 0; i < WSPR_NSYM; i++) {
         if (s_abort_requested) {
             ESP_LOGW(TAG, "WSPR TX abort requested at symbol %d/%d - keying up now", i, WSPR_NSYM);
@@ -533,33 +575,82 @@ static void run_burst(const wspr_tx_request_t *req)
          *
          * This is the ground truth the declared-power dropdown can never be:
          * the Tab5 cannot know what the radio delivers, so it asks. */
+        /* ⛔ SWR PROTECTION, AND IT SAMPLES REPEATEDLY RATHER THAN ONCE.
+         *
+         * This block used to read power and SWR at symbol 16 and do nothing
+         * with the ratio but print it. settings_get_swr_limit_x10() was
+         * referenced in ft8_tx.c and nowhere else, so the limit the operator
+         * sets in the drawer cut an FT8 burst and left a WSPR burst running
+         * into whatever the antenna had become.
+         *
+         * Bryan N0LUF, 2026-10-14: his MFJ-1775 goes to 5.1:1 on 20 m when it
+         * rains, and a WSPR burst at that mismatch was neither cut nor latched.
+         * The log recorded the ratio and carried on transmitting.
+         *
+         * One sample would be no better than the FT8 bug this project already
+         * fixed once: a reading taken 11 s into a 111 s burst cannot see a
+         * fault that arrives at 60 s, and 111 s is a long time to drive a
+         * mismatched PA. So it cycles - send at symbol N, read at N+4 - every
+         * WSPR_SWR_SAMPLE_EVERY symbols for the whole burst. A WSPR symbol is
+         * 683 ms, so 4 symbols is 2.7 s for a round trip bounded at ~600 ms;
+         * there is no timing risk here of the kind FT4's 48 ms symbols have. */
         if (!s_burst_sim && WSPR_TX_SEND_LIVE) {
-            if (i == 12) {
+            if (i == ps_send_at) {
                 cat_pwr_swr_async_send();
-            } else if (i == 16) {
+                ps_read_at = i + 4;
+                ps_send_at = i + WSPR_SWR_SAMPLE_EVERY;
+            } else if (i == ps_read_at) {
                 float pw = -1.0f, sw = -1.0f;
                 if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK &&
                     pw >= 0.0f && sw >= 0.0f) {
                     s_last_power_w = pw;
                     s_last_swr     = sw;
-                    ESP_LOGW(TAG, "WSPR TX MEASURED: %.1f W, SWR %.2f  (PA=%d.%d V, "
-                                  "declared %d dBm)",
-                             (double)pw, (double)sw,
-                             pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
-                             req->power_dbm);
-                    /* Say so when the claim and the measurement disagree by more
-                     * than one step. ADVISORY only - the declared figure is a
-                     * statement about the operator's station and stays theirs to
-                     * make; this just stops it being a guess nobody can check. */
-                    int adv = wspr_tx_advised_dbm();
-                    if (adv >= 0 && (adv - req->power_dbm > 2 || req->power_dbm - adv > 2)) {
-                        ESP_LOGW(TAG, "WSPR declared power looks wrong: declaring %d dBm, "
-                                      "measured %.1f W = %d dBm. wsprnet publishes the "
-                                      "declared figure worldwide.",
-                                 req->power_dbm, (double)pw, adv);
+                    /* Trip and cut. Only a reading with real power behind it
+                     * counts: SW; can report a meaningless ratio when the PA is
+                     * not actually loaded - the same guard ft8_tx.c applies. */
+                    if (swr_limit > 0.0f && sw >= swr_limit && pw > 0.1f) {
+                        ESP_LOGE(TAG, "SWR PROTECTION: %.2f:1 >= %.1f:1 limit at symbol "
+                                      "%d/%d - aborting the WSPR burst and latching TX off",
+                                 (double)sw, (double)swr_limit, i, WSPR_NSYM);
+                        ft8_tx_trip_swr(sw);
+                        ui_toast_ms("SWR protection tripped - WSPR burst cut short "
+                                    "and transmit latched off. Check the antenna.", 12000);
+                        aborted = true;
+                        break;
+                    }
+                    /* The MEASURED line stays ONCE per burst. It is the
+                     * ground truth behind the declared-power advice, not a
+                     * protection reading, and eight copies of it per burst
+                     * would bury everything else in the log. */
+                    if (!ps_reported) {
+                        ps_reported = true;
+                        ESP_LOGW(TAG, "WSPR TX MEASURED: %.1f W, SWR %.2f  (PA=%d.%d V, "
+                                      "declared %d dBm)",
+                                 (double)pw, (double)sw,
+                                 pa_x10 > 0 ? pa_x10 / 10 : 0, pa_x10 > 0 ? pa_x10 % 10 : 0,
+                                 req->power_dbm);
+                        /* Say so when the claim and the measurement disagree by
+                         * more than one step. ADVISORY only - the declared figure
+                         * is a statement about the operator's station and stays
+                         * theirs to make; this just stops it being a guess nobody
+                         * can check. */
+                        int adv = wspr_tx_advised_dbm();
+                        if (adv >= 0 && (adv - req->power_dbm > 2 || req->power_dbm - adv > 2)) {
+                            ESP_LOGW(TAG, "WSPR declared power looks wrong: declaring %d dBm, "
+                                          "measured %.1f W = %d dBm. wsprnet publishes the "
+                                          "declared figure worldwide.",
+                                     req->power_dbm, (double)pw, adv);
+                        }
                     }
                 } else {
-                    ESP_LOGW(TAG, "WSPR TX: no PC/SW reading this burst");
+                    /* Not fatal: a missed round trip is one lost sample, and
+                     * the next cycle is WSPR_SWR_SAMPLE_EVERY symbols away.
+                     * Logged once rather than every cycle. */
+                    if (!ps_miss_logged) {
+                        ps_miss_logged = true;
+                        ESP_LOGW(TAG, "WSPR TX: no PC/SW reading (first miss) - "
+                                      "SWR protection has no measurement yet");
+                    }
                 }
             }
         }

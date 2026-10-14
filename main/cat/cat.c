@@ -2582,6 +2582,46 @@ static void link_task(void *arg)
              * does not already decide correctly a few lines of execution
              * later. */
             s_pa_voltage_x10 = -1;          /* re-read; do not trust the old one */
+
+            /* ⛔ PUT THE RADIO IN RECEIVE BEFORE ANYTHING ELSE.
+             *
+             * cat_usb_shutdown() sends exactly this on the way OUT, and until
+             * 2026-10-14 nothing sent it on the way IN. That asymmetry is a
+             * real exposure: if the Tab5 restarts while the radio is keyed -
+             * a watchdog reset mid-burst, a power blip, the operator pulling
+             * the plug on a wedged unit - the panadapter reconnects to a
+             * TRANSMITTING radio and leaves it transmitting. Nothing in the
+             * poll loop ever un-keys a radio it did not key itself, because
+             * s_force_rx_pending lives in RAM and a reset clears it.
+             *
+             * Bryan N0LUF, 2026-10-14: a watchdog reset 45.8 s into a 110.6 s
+             * WSPR burst. RX; was never sent and his QMX transmitted until he
+             * found it hours later.
+             *
+             * ⚠ THIS DOES NOT FIX THAT CASE AND MUST NOT BE SOLD AS DOING SO.
+             * His radio's USB had wedged (#74), so link-up never happened and
+             * this line would never have run. It closes the window where the
+             * link DOES come back - a reset the radio survives, or a replug -
+             * and nothing more. Nothing on the Tab5 can guarantee the radio
+             * stops when the Tab5 itself is the thing that died.
+             *
+             * Safe unconditionally: TA0; sets the transmit-audio tone to zero
+             * and RX; is the state the radio is already in on a normal link-up,
+             * so this is a no-op on every healthy connection. Best-effort - a
+             * failure here is reported and the poll task's own force-RX path
+             * remains for the in-session case. */
+            {
+                const char *rxcmd = "TA0;RX;";
+                esp_err_t rxerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)rxcmd, strlen(rxcmd), 200);
+                if (rxerr == ESP_OK)
+                    ESP_LOGI(TAG, "link-up: asserted receive (TA0;RX;) - a radio left "
+                                  "keyed by a Tab5 restart is now in receive");
+                else
+                    ESP_LOGW(TAG, "link-up: could not assert receive (0x%x) - if the radio "
+                                  "was left transmitting it may still be", rxerr);
+            }
+
             iq_mode_handshake(4);
             /* The radio's own CW filter set, once, here (Uwe DL8UG - #350).
              * Link-up rather than polled: eight round trips is a lot to repeat,
