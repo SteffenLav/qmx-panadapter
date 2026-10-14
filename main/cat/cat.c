@@ -3682,6 +3682,119 @@ esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *ou
     return (out->n > 0) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
+/* ---------------------------------------------------------------------------
+ * M2 - the TA; write latency distribution. See cat.h for why, and for the
+ * safety argument (no TX;, so the radio is never keyed by this).
+ * ---------------------------------------------------------------------------
+ * Deliberately shaped like the real symbol loop in ft8_tx.c: the same poll
+ * hold, the same sleep-to-an-absolute-instant cadence, the same 200 ms write
+ * bound, the same "TA%.2f;" string length. A probe that wrote differently
+ * from the transmitter would answer a different question.
+ *
+ * The tone sweeps across a realistic JS8 range rather than repeating one
+ * value, so nothing downstream can short-circuit on an unchanged register.
+ */
+static int cmp_i32(const void *a, const void *b)
+{
+    int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* p in 0..100. Nearest-rank on a sorted copy. */
+static int32_t pct_i32(const int32_t *sorted, int n, int p)
+{
+    if (n <= 0) return 0;
+    int idx = (p * n) / 100;
+    if (idx >= n) idx = n - 1;
+    if (idx < 0)  idx = 0;
+    return sorted[idx];
+}
+
+esp_err_t cat_ta_latency_probe(int count, int interval_ms, bool logged,
+                               cat_ta_probe_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    out->n = 0; out->fails = 0;
+    if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
+    /* A burst owns the pipe, or WSPR is mid-cycle: refuse rather than
+     * interleave TA writes with somebody else's keyed transmission. */
+    if (cat_poll_held_by_other(CAT_HOLD_TX_BURST)) {
+        ESP_LOGW(TAG, "TA probe refused - %s holds the link", hold_name(s_poll_holds));
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (wspr_rx_running()) {
+        ESP_LOGW(TAG, "TA probe refused - WSPR is running");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (count < 20)  count = 20;
+    if (count > CAT_TA_PROBE_MAX) count = CAT_TA_PROBE_MAX;
+    if (interval_ms < 10)  interval_ms = 10;
+    if (interval_ms > 500) interval_ms = 500;
+    out->interval_ms = interval_ms;
+    out->logged      = logged;
+
+    cat_poll_hold(CAT_HOLD_TX_BURST);
+    ESP_LOGI(TAG, "TA probe: %d writes at %d ms, %s - RADIO IS NOT KEYED (no TX;)",
+             count, interval_ms, logged ? "via cat_send_raw_cmd (logged)" : "bare CDC write");
+
+    const int64_t period_us = (int64_t)interval_ms * 1000;
+    const int64_t t0 = esp_timer_get_time();
+
+    for (int i = 0; i < count; i++) {
+        /* Sleep to the absolute instant, never a relative delay - the same
+         * rule the symbol loop follows, so error cannot accumulate from the
+         * sleep itself and slip_us measures only what the write path costs. */
+        int64_t target = t0 + (int64_t)i * period_us;
+        int64_t now    = esp_timer_get_time();
+        if (target > now) vTaskDelay(pdMS_TO_TICKS((uint32_t)((target - now) / 1000)));
+
+        /* 1200..1900 Hz in 6.25 Hz steps - JS8's own tone spacing and range. */
+        double tone = 1200.0 + (double)(i % 112) * 6.25;
+        char   buf[24];
+        snprintf(buf, sizeof(buf), "TA%.2f;", tone);
+
+        int64_t a = esp_timer_get_time();
+        esp_err_t err;
+        if (logged) {
+            err = cat_send_raw_cmd("%s", buf);
+        } else {
+            err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf,
+                                                strlen(buf), 200);
+        }
+        int64_t b = esp_timer_get_time();
+
+        if (err != ESP_OK) out->fails++;
+        out->w_us[i]    = (int32_t)(b - a);
+        out->slip_us[i] = (int32_t)(a - target);
+        out->n++;
+    }
+
+    /* Back to the idle the rest of this file treats as "not transmitting".
+     * Nothing was keyed, so this restores a register, not a state - but it
+     * leaves the radio in the condition every other TA writer leaves it in. */
+    cat_send_raw_cmd("TA0;");
+    cat_poll_release(CAT_HOLD_TX_BURST);
+
+    /* Summary in the capture, so the measurement survives without the JSON. */
+    int32_t *sw = malloc(sizeof(int32_t) * (size_t)out->n);
+    int32_t *ss = malloc(sizeof(int32_t) * (size_t)out->n);
+    if (sw && ss) {
+        memcpy(sw, out->w_us,    sizeof(int32_t) * (size_t)out->n);
+        memcpy(ss, out->slip_us, sizeof(int32_t) * (size_t)out->n);
+        qsort(sw, (size_t)out->n, sizeof(int32_t), cmp_i32);
+        qsort(ss, (size_t)out->n, sizeof(int32_t), cmp_i32);
+        ESP_LOGI(TAG, "TA probe write us: min %ld p50 %ld p90 %ld p99 %ld max %ld (n=%d, fails=%d)",
+                 (long)sw[0], (long)pct_i32(sw, out->n, 50), (long)pct_i32(sw, out->n, 90),
+                 (long)pct_i32(sw, out->n, 99), (long)sw[out->n - 1], out->n, out->fails);
+        ESP_LOGI(TAG, "TA probe slip  us: min %ld p50 %ld p90 %ld p99 %ld max %ld",
+                 (long)ss[0], (long)pct_i32(ss, out->n, 50), (long)pct_i32(ss, out->n, 90),
+                 (long)pct_i32(ss, out->n, 99), (long)ss[out->n - 1]);
+    }
+    free(sw);
+    free(ss);
+    return ESP_OK;
+}
+
 // Pauses the poll for the whole burst and blocks up to ~1.3 s (enough to span
 // one second boundary). ESP_OK only if a flip was caught. Bails if another op
 // already owns the CDC pipe (FT8 TX pauses the same poll flag).

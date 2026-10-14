@@ -241,6 +241,50 @@ typedef struct {
  * timebase rather than across two different measurements. */
 esp_err_t cat_gps_gp_probe(int secs, int gap_ms, bool use_tm, cat_gp_probe_t *out);
 
+/* ---------------------------------------------------------------------------
+ * M2: how long does ONE TA; write actually take?
+ * ---------------------------------------------------------------------------
+ * docs/js8-feasibility.md calls this out as the measurement that decides
+ * whether JS8 Fast (80 ms symbols) is reachable over CAT tone-stepping at all.
+ * The FT8/JS8 transmitter has no audio path: it sends "TA<freq>;" once per
+ * symbol and the QMX synthesises that tone itself. So the symbol period is a
+ * budget, and the write is what spends it. Normal (160 ms) ships and works;
+ * Fast halves the budget; Turbo (40 ms) was already ruled out on paper.
+ *
+ * ⭐ THIS PROBE NEVER KEYS THE RADIO. TA only sets the transmit-audio tone
+ * register - RF needs TX;, which this code does not send, and VOX is disabled
+ * at link-up (Q3 0;) with the USB-audio OUT endpoint never opened. The probe
+ * is therefore a pure USB-CDC cost measurement and is safe with an antenna
+ * connected. It ends by restoring TA0; (the same idle the burst epilogue and
+ * cat_usb_shutdown() both leave behind).
+ *
+ * Two numbers come out of it, and they are NOT the same question:
+ *   w_us    - how long the blocking CDC write took.
+ *   slip_us - how late the write was ISSUED against its ideal symbol instant.
+ *             This is the one that desyncs a decoder, and it accumulates
+ *             whatever the write, the scheduler and the poll hold cost.
+ *
+ * `logged` picks what is being measured: false = the bare wire write, true =
+ * the write exactly as a real burst pays for it, i.e. through
+ * cat_send_raw_cmd(), which ESP_LOGI's every command. At 80 ms that log line
+ * is a candidate cost in its own right, so it is a switch rather than an
+ * assumption. */
+#define CAT_TA_PROBE_MAX  500
+typedef struct {
+    int     n;                          /* samples actually taken             */
+    int     interval_ms;                /* cadence used                       */
+    int     fails;                      /* writes that did not return ESP_OK  */
+    bool    logged;                     /* went through cat_send_raw_cmd()    */
+    int32_t w_us[CAT_TA_PROBE_MAX];     /* write duration, us                 */
+    int32_t slip_us[CAT_TA_PROBE_MAX];  /* issue time minus ideal instant, us */
+} cat_ta_probe_t;
+
+/* count 20..CAT_TA_PROBE_MAX, interval_ms 10..500. Refuses while a burst or
+ * WSPR owns the link. Holds the CAT poll for the whole run, exactly as a burst
+ * does, so the poll task cannot interleave and flatter the result. */
+esp_err_t cat_ta_latency_probe(int count, int interval_ms, bool logged,
+                               cat_ta_probe_t *out);
+
 /* Exposed for the host harness: parses the trailing YYYYMMDDHHMMSS of a GP
  * reply and range-checks it. Deliberately ignores the coordinate fields. */
 bool cat_gps_gp_parse(const char *resp, size_t len,

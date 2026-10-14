@@ -2214,6 +2214,50 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
         free(txt);
         return ESP_OK;
+    } else if (action && strcmp(action, "ta_probe") == 0) {
+        /* M2 (docs/js8-feasibility.md): how long does one TA; write take, and
+         * how late does it get issued, at a given cadence. Decides whether JS8
+         * Fast's 80 ms symbol period is reachable over CAT tone-stepping.
+         *
+         * ⭐ DOES NOT KEY THE RADIO - no TX; is sent, so TA only sets the
+         * tone register. Safe with an antenna connected. See cat.h.
+         *
+         * {"action":"ta_probe","count":300,"interval_ms":80,"logged":false} */
+        cJSON *cj = cJSON_GetObjectItem(root, "count");
+        cJSON *ij = cJSON_GetObjectItem(root, "interval_ms");
+        cJSON *lj = cJSON_GetObjectItem(root, "logged");
+        int  count    = cJSON_IsNumber(cj) ? cj->valueint : 300;
+        int  interval = cJSON_IsNumber(ij) ? ij->valueint : 80;
+        bool logged   = cJSON_IsTrue(lj);
+        cJSON_Delete(root);
+
+        cat_ta_probe_t *pr = calloc(1, sizeof(*pr));
+        if (!pr) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no mem"); return ESP_FAIL; }
+        esp_err_t perr = cat_ta_latency_probe(count, interval, logged, pr);
+
+        cJSON *res = cJSON_CreateObject();
+        cJSON_AddBoolToObject(res, "ok", perr == ESP_OK);
+        cJSON_AddNumberToObject(res, "err", perr);
+        cJSON_AddNumberToObject(res, "interval_ms", pr->interval_ms);
+        cJSON_AddBoolToObject(res, "logged", pr->logged);
+        cJSON_AddNumberToObject(res, "n", pr->n);
+        cJSON_AddNumberToObject(res, "fails", pr->fails);
+        /* Every sample, not a summary: a distribution with a tail is the whole
+         * point, and an average would hide exactly the writes that break a
+         * symbol. The firmware log carries the percentiles as well. */
+        cJSON *w = cJSON_AddArrayToObject(res, "w_us");
+        cJSON *sl = cJSON_AddArrayToObject(res, "slip_us");
+        for (int i = 0; i < pr->n; i++) {
+            cJSON_AddItemToArray(w,  cJSON_CreateNumber(pr->w_us[i]));
+            cJSON_AddItemToArray(sl, cJSON_CreateNumber(pr->slip_us[i]));
+        }
+        free(pr);
+        char *txt = cJSON_PrintUnformatted(res);
+        cJSON_Delete(res);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+        free(txt);
+        return ESP_OK;
     } else if (action && strcmp(action, "update_check") == 0) {
         // Force the periodic check to run now rather than waiting out the
         // interval. Makes "did the release land?" answerable in seconds

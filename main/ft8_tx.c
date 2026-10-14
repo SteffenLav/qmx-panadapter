@@ -1303,7 +1303,8 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // Live power/SWR: fire ONE non-blocking PC;SW; once the PA has settled
         // (symbol 6 ≈ 1 s in), then read the async response a few symbols later
         // (symbol 14). Both steps fit inside the 160 ms inter-symbol slack (the
-        // send is a ~ms CDC write bounded to 50 ms; the read just parses
+        // send is a CDC write measured at ~250 us (M2, 2026-10-14 - the "50 ms"
+        // this line used to quote is the write's TIMEOUT, not its cost); the read just parses
         // buffers), so symbol timing is undisturbed - unlike cat_query_power_swr()'s
         // ~600 ms blocking wait, which is why that one only runs at burst end.
         // Result populates s_last_* so the "TRANSMITTING:" line shows the CURRENT
@@ -1354,9 +1355,18 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             // comment used to add "forced sim anyway - !sim is always false here
             // when is_ft4", contradicting the correction eight lines below it.
 #if FT8_TX_SEND_LIVE
-            // FT8 only. FT4's symbol period is 48 ms and a CDC write is bounded
-            // at 50 ms, so a mid-burst query does not fit in the slack and would
-            // shift symbol timing. FT4 relies on the post-burst check below,
+            // FT8 only. FT4's symbol period is 48 ms, and a mid-burst query
+            // does not fit in the slack, so it would shift symbol timing.
+            // ⚠ THE REASON THIS COMMENT USED TO GIVE WAS WRONG: it said "a CDC
+            // write is bounded at 50 ms", which is the TIMEOUT argument passed to
+            // cdc_acm_host_data_tx_blocking(), not what a write costs. M2
+            // measured 1800 writes on 2026-10-14: p50 250 us, p99 1.9 ms, max
+            // 3.6 ms (cat_ta_latency_probe, docs/js8-feasibility.md fact 1). The
+            // WRITE was never the problem here. What does not fit is the ROUND
+            // TRIP - send PC;SW;, wait for the radio to answer - and that cost
+            // has NOT been measured. So the behaviour stands on an unmeasured
+            // assumption now rather than a mismeasured one; do not "fix" it by
+            // enabling FT4 sampling until the round trip is timed. FT4 relies on the post-burst check below,
             // which still latches the transmitter off for every LATER burst -
             // the fault is caught one burst later, not never.
             // (Comments here and in ft8_test.c used to claim FT4 TX was
@@ -1431,8 +1441,11 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                  *
                  * Same rule as never writing 599 into an ADIF record: a number
                  * nobody measured must not be presented as a measurement. FT4
-                 * genuinely cannot be sampled mid-burst (48 ms symbols, a CDC
-                 * write is bounded at 50 ms), so the honest answer is no
+                 * is not sampled mid-burst (48 ms symbols; the PC;SW; ROUND TRIP
+                 * does not fit - ⚠ this used to cite a "50 ms CDC write bound",
+                 * which is a timeout, not a cost, and M2 has since measured the
+                 * write at 250 us; see the symbol loop above), so the honest
+                 * answer is no
                  * reading at all - see #300 for why the post-burst query is not
                  * a substitute either. */
                 // Simulated burst (settings' sim mode): no real PA to query,
