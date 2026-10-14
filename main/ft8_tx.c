@@ -111,7 +111,7 @@ static bool encode_request_tones(ft8_tx_request_t *req, const char *text,
                                  const char *third,
                                  char *out_err, size_t out_err_len)
 {
-    if (req->protocol == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(req->protocol)) {
         uint8_t frame[JS8_FRAME_BYTES];
         uint8_t itype = 0;
         if (!js8_text_to_frame(text, frame, &itype)) {
@@ -120,7 +120,7 @@ static bool encode_request_tones(ft8_tx_request_t *req, const char *text,
             ESP_LOGW(TAG, "JS8 encode refused: '%s'", text);
             return false;
         }
-        js8_encode(frame, itype, req->tones);
+        js8_encode(frame, itype, req->protocol, req->tones);
         return true;
     }
 
@@ -668,7 +668,7 @@ bool ft8_tx_build_request_fd(ft8_tx_kind_t kind,
      * engine is decoding JS8, so the burst would be unintelligible to the
      * JS8 stations the operator believes they are working, and to us. Refuse,
      * rather than transmit an FT8 frame under a JS8 label. */
-    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
         if (out_err) snprintf(out_err, out_err_len,
                               "Field Day has no JS8 message - switch to FT8");
         return false;
@@ -790,7 +790,7 @@ bool ft8_tx_build_request_text(const char *message_text,
      * exception is a CQ suffix ("CQ POTA OZ1LAV" -> "CQ OZ1LAV"), which JS8's
      * Heartbeat has no field for - the same class of loss FT8's guard already
      * permits for tokens the 77-bit packer drops. */
-    if (out_req->protocol == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(out_req->protocol)) {
         uint8_t frame[JS8_FRAME_BYTES];
         uint8_t itype = 0;
         if (!js8_text_to_frame(message_text, frame, &itype)) {
@@ -818,7 +818,7 @@ bool ft8_tx_build_request_text(const char *message_text,
                 return false;
             }
         }
-        js8_encode(frame, itype, out_req->tones);
+        js8_encode(frame, itype, out_req->protocol, out_req->tones);
         ESP_LOGI(TAG, "built JS8 text: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
         return true;
     }
@@ -1219,8 +1219,14 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     // re-read from the live ft8_op_mode_get() mid-burst - see ft8_tx.h).
     const bool    is_ft4         = (req->protocol == FTX_PROTOCOL_FT4);
     const int     nn             = is_ft4 ? FT4_NN : FT8_NN;
-    const int64_t symbol_period_us = is_ft4 ? FT4_SYMBOL_PERIOD_US : FT8_SYMBOL_PERIOD_US;
-    const float   tone_spacing_hz  = is_ft4 ? FT4_TONE_SPACING_HZ : FT8_TONE_SPACING_HZ;
+    /* ⛔ ASKED, NOT TERNARIED. These two lines used to read
+     *   is_ft4 ? FT4_... : FT8_...
+     * which is the exact shape constants.h warns about: a two-way ternary
+     * cannot express a six-way fact, and it put every JS8 submode on FT8's
+     * 160 ms / 6.25 Hz. Turbo would have keyed 79 symbols at a third of its
+     * rate and nobody would ever have decoded it. */
+    const int64_t symbol_period_us = ftx_protocol_symbol_period_us(req->protocol);
+    const float   tone_spacing_hz  = ftx_protocol_tone_spacing_hz(req->protocol);
     const int     slot_ms          = ftx_protocol_slot_ms(req->protocol);
 
     /* ⛔ JS8 would reach here with FT8's timing - which is CORRECT for Normal,

@@ -1,8 +1,26 @@
 #include "js8.h"
 
-// Costas 7x7, NCOSTAS=1 in js8a_params.f90. genjs8.f90 uses this same array
-// for the beginning, middle and end sync blocks.
-const uint8_t kJS8_Costas_pattern[7] = { 4, 2, 5, 6, 1, 3, 0 };
+/* The Costas sync arrays, straight from genjs8.f90's icos7a/b/c, indexed
+ * [sync block 0..2][symbol 0..6]. The sync blocks sit at symbols 0, 36 and 72.
+ *
+ * NCOSTAS=1, "ORIGINAL" - JS8 Normal (js8a_params.f90). One array, used three
+ * times. Kept as a 3-row table rather than a special case so the sync scorer
+ * and the encoder have one shape to handle, not two. */
+const uint8_t kJS8_Costas_original[3][7] = {
+    { 4, 2, 5, 6, 1, 3, 0 },
+    { 4, 2, 5, 6, 1, 3, 0 },
+    { 4, 2, 5, 6, 1, 3, 0 },
+};
+
+/* NCOSTAS=2, "MODIFIED" - Fast, Turbo and Slow (js8b/c/e_params.f90). THREE
+ * DIFFERENT arrays, one per sync block. ⛔ Using the first for all three is
+ * the mistake that reads as "never decodes" and nothing else: the frame still
+ * encodes, the radio still transmits, and no receiver ever syncs. */
+const uint8_t kJS8_Costas_modified[3][7] = {
+    { 0, 6, 2, 3, 5, 4, 1 },   /* icos7a - beginning, symbol 0  */
+    { 1, 5, 0, 2, 3, 6, 4 },   /* icos7b - middle,    symbol 36 */
+    { 2, 5, 0, 6, 4, 1, 3 },   /* icos7c - end,       symbol 72 */
+};
 
 /* Identity: tone n carries the bit pattern n. See the note in js8.h. */
 const uint8_t kJS8_Gray_map[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };

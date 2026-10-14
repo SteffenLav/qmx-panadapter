@@ -188,11 +188,17 @@ static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candid
     return wf->mag + offset;
 }
 
-/* Shared by FT8 and JS8, which have the SAME sync layout - three 7-symbol
- * groups at 0, 36 and 72 - and different Costas arrays. Passing the array in
- * keeps one scoring body rather than a copy that can drift. */
+/* Shared by FT8 and every JS8 submode, which have the SAME sync layout - three
+ * 7-symbol groups at 0, 36 and 72 - and different Costas arrays. Passing the
+ * table in keeps one scoring body rather than a copy that can drift.
+ *
+ * ⚠ `costas` is now THREE arrays, one per sync block, because JS8's MODIFIED
+ * set (Fast/Turbo/Slow) really does use a different array in each block. It
+ * used to be a single array indexed costas[k], which was right for FT8 and for
+ * JS8 Normal and silently wrong for everything else. FT8 and JS8 Normal pass
+ * the same array three times; the scorer no longer knows the difference. */
 static int ft8_like_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate,
-                               const uint8_t* costas)
+                               const uint8_t costas[3][7])
 {
     int score = 0;
     int num_average = 0;
@@ -224,7 +230,7 @@ static int ft8_like_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t*
             // ++num_average;
 
             // Check only the neighbors of the expected symbol frequency- and time-wise
-            int sm = costas[k]; // Index of the expected bin
+            int sm = costas[m][k]; // Index of the expected bin, in THIS sync block
             if (sm > 0)
             {
                 // look at one frequency bin lower
@@ -325,7 +331,7 @@ int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candi
 {
     int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) =
         (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score :
-        (wf->protocol == FTX_PROTOCOL_JS8) ? js8_sync_score : ft8_sync_score;
+        ftx_protocol_is_js8(wf->protocol)  ? js8_sync_score : ft8_sync_score;
     int num_tones = ftx_protocol_num_tones(wf->protocol);
 
     int heap_size = 0;
@@ -412,15 +418,26 @@ static void ft4_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
     }
 }
 
+/* FT8 uses one array for all three sync groups; the scorer takes three, so it
+ * is spelt out here rather than special-cased in the loop. */
 static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
-    return ft8_like_sync_score(wf, candidate, kFT8_Costas_pattern);
+    static const uint8_t ft8_costas3[3][7] = {
+        { 3, 1, 4, 0, 6, 5, 2 },
+        { 3, 1, 4, 0, 6, 5, 2 },
+        { 3, 1, 4, 0, 6, 5, 2 },
+    };
+    /* The one table is still kFT8_Costas_pattern; this copy must not drift
+     * from it, so say so where it would be noticed. */
+    _Static_assert(sizeof(ft8_costas3[0]) == 7, "FT8 Costas is 7 symbols");
+    return ft8_like_sync_score(wf, candidate, ft8_costas3);
 }
 
-/* JS8 Normal, NCOSTAS=1: the same array for all three sync groups. */
+/* Every JS8 submode. ftx_protocol_js8_costas() picks ORIGINAL (Normal, one
+ * array three times) or MODIFIED (Fast/Turbo/Slow, three different arrays). */
 static int js8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
-    return ft8_like_sync_score(wf, candidate, kJS8_Costas_pattern);
+    return ft8_like_sync_score(wf, candidate, ftx_protocol_js8_costas(wf->protocol));
 }
 
 static void ft8_like_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
@@ -704,7 +721,7 @@ static bool js8_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_
 
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
-    if (wf->protocol == FTX_PROTOCOL_JS8)
+    if (ftx_protocol_is_js8(wf->protocol))
     {
         return js8_decode_candidate(wf, cand, max_iterations, message, status);
     }

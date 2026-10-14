@@ -88,6 +88,7 @@ char *config_io_export(size_t *out_len)
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    APP("js8_submode        = %u\n", (unsigned)c.js8_submode);   // JS8Call NSUBMODE: 0 Normal 1 Fast 2 Turbo 4 Slow
     /* ⛔ THE ONE SETTING THAT EXISTS TO PROTECT THE RADIO, and it was
      * missing from the backup until 2026-10-12, the same cycle that added
      * it. A restore silently returned the operator to "no ceiling", on a
@@ -445,6 +446,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "js8_submode"))       settings_set_js8_submode((uint8_t)atoi(val));
             else if (!strcasecmp(key, "pa_ceiling_x10"))    settings_set_pa_ceiling_x10((uint16_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_gain_d10"))    settings_set_rxaud_gain_d10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_width"))   settings_set_rxaud_pan_width_x10((uint8_t)atoi(val));

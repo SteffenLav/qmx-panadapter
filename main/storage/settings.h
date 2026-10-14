@@ -432,6 +432,16 @@ typedef struct {
     // short and latched off rather than driving a mismatched load for the
     // whole 12.7 s. The QMX's finals are the thing being protected here.
     uint8_t  swr_limit_x10;
+    /* JS8 submode, as JS8Call's own NSUBMODE: 0 Normal, 1 Fast, 2 Turbo,
+     * 4 Slow. ⛔ NOT an index - the numbering is JS8Call's and it is not
+     * dense (3 and 5..7 do not exist; 8 is Ultra, which this firmware does
+     * not implement). Appended, so an old NVS blob reads back 0 = Normal,
+     * which is what every existing installation is running.
+     *
+     * Each submode is a different physical layer - NSPS, slot period, tone
+     * spacing and sync arrays all change - so this is not a quality knob and
+     * two stations must agree on it before they can hear each other at all. */
+    uint8_t  js8_submode;
     /* RX audio, persisted so a level set by ear is not lost at the next boot -
      * these were live RAM-only values tuned over /api/cmd during development,
      * which is not something a user can reach. Scaled integers, same idiom as
@@ -941,6 +951,13 @@ bool    settings_get_cluster_en(void);           // narrow: spots_any_source_ena
 void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
+
+/* JS8 submode as JS8Call's NSUBMODE: 0 Normal, 1 Fast, 2 Turbo, 4 Slow.
+ * Anything else is clamped to 0 - an unknown submode must not reach the
+ * physical layer, where it would pick the wrong sync arrays and transmit
+ * something nobody can decode. */
+void    settings_set_js8_submode(uint8_t v);
+uint8_t settings_get_js8_submode(void);
 
 /* RX audio level and panoramic-split shape. Stored scaled; the Resource
  * Management sliders are the only writers. Ranges are clamped to what

@@ -747,14 +747,33 @@ static void free_capture_pool(void)
 // Map the sub-mode flag to a decoder protocol. ONE copy: the QSO ladder and
 // the TX builders ask through ft8_op_mode_protocol() rather than repeating the
 // switch - see the note in ft8_test.h.
-ftx_protocol_t ft8_op_mode_protocol(void)
+ftx_protocol_t ft8_op_mode_protocol_for(ft8_op_mode_t m)
 {
-    switch (ft8_op_mode_get())
+    switch (m)
     {
     case FT8_OP_MODE_FT4: return FTX_PROTOCOL_FT4;
-    case FT8_OP_MODE_JS8: return FTX_PROTOCOL_JS8;
+    /* ⭐ THE SUBMODE IS PART OF THE PROTOCOL, NOT A SETTING THE PHYSICAL LAYER
+     * READS LATER. Each JS8 submode has its own NSPS, slot period, tone
+     * spacing and sync arrays, so resolving it HERE means every caller that
+     * already asks this function - the decoder pool, the TX builders, the QSO
+     * ladder, the waterfall - gets the right physical layer without knowing a
+     * submode exists. settings_get_js8_submode() clamps anything unknown back
+     * to Normal, so the default below is unreachable rather than lenient. */
+    case FT8_OP_MODE_JS8:
+        switch (settings_get_js8_submode())
+        {
+        case 1:  return FTX_PROTOCOL_JS8_FAST;
+        case 2:  return FTX_PROTOCOL_JS8_TURBO;
+        case 4:  return FTX_PROTOCOL_JS8_SLOW;
+        default: return FTX_PROTOCOL_JS8;
+        }
     default:              return FTX_PROTOCOL_FT8;
     }
+}
+
+ftx_protocol_t ft8_op_mode_protocol(void)
+{
+    return ft8_op_mode_protocol_for(ft8_op_mode_get());
 }
 
 static inline ftx_protocol_t proto_for_mode(void)
@@ -1598,7 +1617,7 @@ static bool decode_msg_to_text(const ftx_message_t *msg, ftx_protocol_t proto,
                                char *text, size_t text_len,
                                ftx_message_offsets_t *off)
 {
-    if (proto == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(proto)) {
         memset(off, 0, sizeof(*off));
         off->offsets[0] = -1;        // the terminator this struct documents
         /* js8_decode_candidate() leaves the 9-byte varicode frame in
@@ -1806,7 +1825,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
          * FT8_DECODE_BUDGET_MS ceiling. */
         bool rendered = decode_msg_to_text(&msg, mon->wf.protocol, text,
                                            sizeof(text), &off);
-        if (!rendered && mon->wf.protocol == FTX_PROTOCOL_JS8 &&
+        if (!rendered && ftx_protocol_is_js8(mon->wf.protocol) &&
             js8_frame_is_data(js8_frame_type(msg.payload))) {
             /* ⭐ A JS8 DATA FRAME LANDS HERE, and until now that was the end
              * of it: the frame passed CRC-12, carried somebody's free text,
@@ -1882,7 +1901,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
              * a later data run on this offset. ft8_screen_extract_call gives
              * the sender for both shapes the renderer emits ("HB <call> ..."
              * and "<to> <from> <rest>"). */
-            if (mon->wf.protocol == FTX_PROTOCOL_JS8) {
+            if (ftx_protocol_is_js8(mon->wf.protocol)) {
                 char jcall[FT8_CALL_MAX_LEN];
                 if (!ft8_screen_extract_call(text, jcall, sizeof(jcall))) jcall[0] = 0;
                 js8ev_record(out, freq_hz, js8_frame_type(msg.payload),
@@ -2299,7 +2318,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
      * and then sends text in the SAME slot starts an anonymous run. The two
      * ranges' events are therefore swept twice - identifications first - and
      * not merged in arrival order. */
-    if (proto_for_mode() == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(proto_for_mode())) {
         const decode_result_t *ranges[2] = { &r_main, &r_worker };
         for (int pass = 0; pass < 2; pass++) {
             for (int rr = 0; rr < 2; rr++) {
@@ -2359,6 +2378,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                     memcpy(jm.payload, src[rr]->js8ev[k].frame, JS8_FRAME_BYTES);
                     char jtext[FTX_MAX_MESSAGE_LENGTH];
                     ftx_message_offsets_t joff;
+                    /* Any submode renders the same: the varicode frame,
+                     * the frame type and the text codec are shared, and
+                     * only the physical layer differs. */
                     if (!decode_msg_to_text(&jm, FTX_PROTOCOL_JS8, jtext,
                                             sizeof(jtext), &joff))
                         continue;
@@ -2952,7 +2974,7 @@ static void ft8_task(void *arg)
     struct timeval tv_init;
     gettimeofday(&tv_init, NULL);
     int64_t now_ms_init   = (int64_t)tv_init.tv_sec * 1000 + tv_init.tv_usec / 1000;
-    int     period_ms_init = (proto_for_mode() == FTX_PROTOCOL_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
+    int     period_ms_init = ftx_protocol_slot_ms(proto_for_mode());
     int64_t last_boundary_ms = (now_ms_init / period_ms_init) * period_ms_init;
 
     while (ui_mode_get() == UI_MODE_FT8) {
@@ -2960,9 +2982,14 @@ static void ft8_task(void *arg)
         // last slot. Done at the top, before claiming a buffer, so the pool is
         // settled for this whole slot.
         reinit_pool_if_mode_changed();
-        bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
-        int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
-        int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
+        /* ⛔ ASKED PER PROTOCOL, NOT PER BOOL. This was
+         *     is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS
+         * which gave every JS8 submode FT8's 15 s. Turbo's slot is 6 s, so the
+         * capture loop would have waited for the wrong boundary, captured 15 s
+         * of a 6 s cycle and transmitted into somebody else's slot. */
+        ftx_protocol_t sproto = (ftx_protocol_t)s_pool_proto;
+        int    period_ms = ftx_protocol_slot_ms(sproto);
+        int    slot_samples = period_ms * (SR_HZ / 1000);   // 72000 (Turbo) .. 360000 (Slow)
         // FT4 TX is implemented in ft8_tx.c and DOES key a connected radio.
         // ⚠ This comment used to say FT4 was "force-routed through the
         // simulation interlock ... never let an FT4 burst reach a connected
@@ -3053,7 +3080,7 @@ static void ft8_task(void *arg)
          * before: the two accessors are side-effect-free peeks, but reading
          * them only when needed keeps this off the hot path. */
         ft8_gate_boundary_t bgate = {
-            .is_ft4           = is_ft4,
+            .protocol         = sproto,
             .decode_in_flight = (s_decode_jobs_done != s_decode_jobs_queued),
             .qso_busy         = false,
             .tx_would_run     = false,
@@ -3232,7 +3259,7 @@ static void ft8_task(void *arg)
                  * half-removing a gate. This removes the gate WHOLE: there is
                  * now one code path, one guard constant and one operator
                  * toggle for both protocols. */
-                int cut = (ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS)
+                int cut = (ft8_gate_burst_ms(sproto) + FT8_RX_LATENCY_GUARD_MS)
                           * (SR_HZ / 1000);
                 if (cut > slot_samples) cut = slot_samples;   // guard exceeds the tail
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut
@@ -3303,7 +3330,7 @@ static void ft8_task(void *arg)
                      * late_txreq and is the commit path, so it must stay behind
                      * the short circuit and must not be called speculatively. */
                     ft8_gate_late_t lgate = {
-                        .is_ft4        = is_ft4,
+                        .protocol      = sproto,
                         .held          = hold_for_fresh,
                         .decode_landed = decode_landed,
                         .tx_should_run = true,

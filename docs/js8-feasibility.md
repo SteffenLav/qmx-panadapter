@@ -435,12 +435,38 @@ thing to drop if a submode ever runs tight. The bare path is what the numbers
 above call "bare CDC write"; it is what `cat_ta_latency_probe(logged=false)`
 sends, byte for byte what the transmitter sends.
 
-| Submode | Cycle | Tone spacing | Symbol period | Reachable by CAT tone-stepping? |
-|---|---|---|---|---|
-| **Slow** | 30 s | 3.125 Hz | 320 ms | Yes, with ample margin |
-| **Normal** | 15 s | 6.25 Hz | 160 ms | **Yes — this is what works today** |
-| **Fast** | 10 s | 12.5 Hz | 80 ms | **Yes on the host side** — slip max 2.6 ms of 80 ms |
-| **Turbo** | 6 s | 25 Hz | 40 ms | **Host side yes** — slip max 3.7 ms of 40 ms. Radio side UNMEASURED |
+⚠ **THE SUBMODE FIGURES IN THIS TABLE WERE WRONG UNTIL 2026-10-14.** They were
+derived by assuming each submode doubles Normal's 6.25 Hz spacing, which gave
+Fast 12.5 Hz / 80 ms and Turbo 25 Hz / 40 ms. JS8Call does not do that: the
+submodes are round BAUD rates, so the real numbers are 10 and 20 baud. Read
+from the source rather than inferred: `commons.h`'s `JS8[ABCE]_SYMBOL_SAMPLES`
+and `lib/js8/js8[abce]_params.f90`'s `NSPS`, with
+tone spacing = 12000 / NSPS and symbol period = NSPS / 12000.
+
+⚠ One more trap in the same place: `js8e_params.f90` says `NTXDUR=28` for Slow
+while `commons.h` says `JS8E_TX_SECONDS=30`. They are different quantities -
+`JS8Submode.cpp` takes the slot PERIOD from the 30, and the Fortran's 28 sizes
+the decoder's analysis window. Reading the params file alone gives 28 and is
+wrong for the slot. For every other submode the two are equal, so the
+distinction is invisible there.
+
+| Submode | NSPS | Cycle | Tone spacing | Symbol period | Signal | Costas | Reachable by CAT tone-stepping? |
+|---|---|---|---|---|---|---|---|
+| **Slow** | 3840 | 30 s | 3.125 Hz | 320 ms | 25.28 s | MODIFIED | Yes, with ample margin |
+| **Normal** | 1920 | 15 s | 6.25 Hz | 160 ms | 12.64 s | ORIGINAL | **Yes — this is what works today** |
+| **Fast** | 1200 | 10 s | 10 Hz | 100 ms | 7.90 s | MODIFIED | **Yes on the host side** — slip max 2.6 ms measured at a tighter 80 ms |
+| **Turbo** | 600 | 6 s | 20 Hz | 50 ms | 3.95 s | MODIFIED | **Host side yes** — slip max 3.7 ms measured at a tighter 40 ms. Radio side UNMEASURED |
+
+⭐ The correction makes M2's answer MORE comfortable, not less: the probe was
+run at 80 ms and 40 ms, and the real budgets turn out to be 100 ms and 50 ms.
+The measurement bounds the real case rather than approximating it.
+
+⛔ **THE COSTAS COLUMN IS THE EASY ONE TO MISS.** Normal uses NCOSTAS=1, one
+7-symbol array repeated in all three sync blocks. Every other submode uses
+NCOSTAS=2 - **three DIFFERENT arrays** (`genjs8.f90`'s `icos7a/b/c`:
+`{0,6,2,3,5,4,1}`, `{1,5,0,2,3,6,4}`, `{2,5,0,6,4,1,3}`). Use the first for all
+three and the frame still encodes, the radio still transmits, and nothing
+anywhere ever syncs. There is no error message for that failure.
 
 ⛔ **What M2 does NOT prove.** The probe measures the HOST handing bytes to
 USB. `ESP_OK` means the write completed, not that the QMX parsed it, retuned its
@@ -718,7 +744,29 @@ nothing else competes for the slot.
 Tab5.
 **Effort:** 2 sessions.
 
-### J14 — Submodes. M2 is DONE and removed the host-side block
+### J14 — Submodes. BUILT 2026-10-14, and not proven on air
+⭐ **The physical layer for Fast, Turbo and Slow is implemented.**
+`ftx_protocol_t` carries the submode, the protocol-fact functions in
+`constants.c` hold NSPS / slot period / tone spacing / start delay / Costas
+set, the sync scorer takes three arrays instead of one, `monitor_init()` and
+the TX symbol loop ask per protocol instead of `is_ft4 ? :`, and the slot gate
+derives every timing bound from the protocol. Selected with
+`/api/cmd {"action":"js8_submode","submode":0|1|2|4}`, persisted as
+`js8_submode`.
+
+**Evidence:** `test/js8_submode_harness.c` - every submode round-trips text
+through encode, synthesis and decode, AND the cross-reject matrix is clean
+(a signal built for one submode decodes in no other). That second half is what
+proves the per-submode parameters actually reach the physical layer rather
+than silently falling back to Normal.
+
+⛔ **NOT PROVEN:** no JS8Call station has decoded a Fast, Turbo or Slow frame
+of ours, and we have decoded none of theirs. Both ends of the harness are our
+own code. There is also **no Tab5 control yet** - the submode is reachable only
+over the API - and no corpus of real off-air Fast/Turbo/Slow audio, so RX for
+those submodes is unguarded by any regression test.
+
+### What remains (the original J14 note)
 **Goal:** Slow, then Fast, then Turbo — each proven by an outside decode.
 **Why in this order:** Slow is the easiest (320 ms symbols, ample CAT margin)
 *and* the most valuable — it is more sensitive than FT8, which is a capability

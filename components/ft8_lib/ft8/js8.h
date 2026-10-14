@@ -46,8 +46,17 @@ extern "C"
 #define JS8_ND          (58) ///< Data symbols
 #define JS8_NS          (21) ///< Sync symbols (3 x Costas 7)
 
-/// Costas 7x7, NCOSTAS=1 ("original") - the same array for all three blocks.
-extern const uint8_t kJS8_Costas_pattern[7];
+/* Costas 7x7 per sync block (symbols 0, 36, 72), from genjs8.f90's icos7a/b/c.
+ *
+ * ORIGINAL (NCOSTAS=1) is JS8 Normal: one array repeated three times.
+ * MODIFIED (NCOSTAS=2) is Fast, Turbo and Slow: three DIFFERENT arrays.
+ *
+ * ⛔ Pick with ftx_protocol_js8_costas(), never by hand. The single-array
+ * kJS8_Costas_pattern that used to live here was removed rather than kept
+ * beside these: a name that silently means "Normal's" is exactly how a
+ * submode ends up transmitting Normal's sync and never decoding. */
+extern const uint8_t kJS8_Costas_original[3][7];
+extern const uint8_t kJS8_Costas_modified[3][7];
 
 /* ⭐ JS8 HAS NO GRAY CODING, and this identity map is how that is said in
  * code rather than as a special case in the inner loop.
@@ -95,7 +104,8 @@ bool js8_check_payload_crc(const uint8_t payload[JS8_LDPC_K]);
 /// Mirrors the itone loop at the end of genjs8.f90 (its k starts at 7 1-based,
 /// and it steps k past the middle sync block at j=30; here that is k=6 and
 /// j==29).
-void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[JS8_NN]);
+void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], ftx_protocol_t protocol,
+                             uint8_t tones[JS8_NN]);
 
 /// Frame + transmission type -> the 79 tones to key. CRC-12, LDPC(174,87),
 /// colorder and the tone layout, i.e. the whole of genjs8.f90 after the
@@ -103,7 +113,9 @@ void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[J
 ///
 /// `frame` is the 9-byte varicode frame from js8_message.h, MSB first.
 /// `tones` receives JS8_NN values in 0..7.
-void js8_encode(const uint8_t frame[9], uint8_t itype, uint8_t tones[JS8_NN]);
+/// `protocol` picks the sync arrays and nothing else - see js8_encode().
+void js8_encode(const uint8_t frame[9], uint8_t itype, ftx_protocol_t protocol,
+                uint8_t tones[JS8_NN]);
 
 #ifdef __cplusplus
 }

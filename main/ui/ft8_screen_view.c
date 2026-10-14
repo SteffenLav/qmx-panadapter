@@ -1388,16 +1388,15 @@ static volatile int s_web_override_pending;
 // repaints two labels, and it must run on taskLVGL. Same deferral as the CQ and
 // override requests: the HTTP task leaves a request, the 1 Hz timer performs it.
 // Packed rather than two variables so a half-applied request cannot be drained.
-/* The protocol a sub-mode means. ft8_test.c's ft8_op_mode_protocol() answers
- * for the mode we are IN; this answers for one we are about to ask for, which
- * is what the log lines below need. */
+/* The protocol a sub-mode means, for the log lines below.
+ *
+ * ⛔ THIS USED TO BE ITS OWN COPY OF ft8_op_mode_protocol()'s SWITCH, and the
+ * JS8 submodes are exactly what a duplicate like that gets wrong: the copy
+ * would have kept saying "JS8" while the operator had selected Turbo. The one
+ * implementation now lives in ft8_test.c and takes the mode as an argument. */
 static inline ftx_protocol_t mode_protocol(ft8_op_mode_t m)
 {
-    switch (m) {
-    case FT8_OP_MODE_FT4: return FTX_PROTOCOL_FT4;
-    case FT8_OP_MODE_JS8: return FTX_PROTOCOL_JS8;
-    default:              return FTX_PROTOCOL_FT8;
-    }
+    return ft8_op_mode_protocol_for(m);
 }
 
 static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *src);   // defined below

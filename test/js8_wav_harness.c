@@ -540,7 +540,7 @@ static int selftest(void)
         return 1;
     }
     uint8_t tones[JS8_NN];
-    js8_encode(frame, itype, tones);
+    js8_encode(frame, itype, FTX_PROTOCOL_JS8, tones);
 
     /* Plain CPFSK at the JS8 Normal rate: 79 symbols, 1920 samples each at
      * 12 kHz (160 ms), 6.25 Hz tone spacing = 1/0.160. Continuous phase, so
@@ -582,7 +582,7 @@ static int selftest(void)
     for (int i = 0; i < 8; i++) before += g_unrendered[i];
 
     frame[0] = (uint8_t)((frame[0] & 0x1Fu) | (4u << 5));
-    js8_encode(frame, itype, tones);
+    js8_encode(frame, itype, FTX_PROTOCOL_JS8, tones);
     synth_slot(signal, tones, nsps, base, spc, t0);
     int n2 = decode_slot(signal, SLOT_SAMPLES, got, MAX_ROWS, 15);
 

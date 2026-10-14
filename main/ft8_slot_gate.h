@@ -29,15 +29,26 @@
 extern "C" {
 #endif
 
-/* Timing, derived rather than tabulated, so the invariants can be checked
- * against the real burst lengths instead of against remembered constants. */
-#define FT8_GATE_FT8_SLOT_MS      15000
-#define FT8_GATE_FT8_SYMBOLS         79
-#define FT8_GATE_FT8_SYMBOL_MS      160   /* 79 x 160 ms = 12 640 ms on air */
-
-#define FT8_GATE_FT4_SLOT_MS       7500
-#define FT8_GATE_FT4_SYMBOLS        105
-#define FT8_GATE_FT4_SYMBOL_MS       48   /* 105 x 48 ms = 5 040 ms on air */
+/* ⛔ THE SLOT AND SYMBOL CONSTANTS THAT USED TO LIVE HERE ARE GONE.
+ *
+ * They were FT8_GATE_FT8_SLOT_MS/SYMBOLS/SYMBOL_MS and the FT4 trio, selected
+ * by a `bool is_ft4` running through every function in this file. That bool
+ * could express exactly two protocols, and the JS8 submodes make six:
+ *
+ *   protocol    slot ms  symbols  symbol ms  burst ms  reply window
+ *   FT4            7500      105         48      5040          2360
+ *   FT8           15000       79        160     12640          2260
+ *   JS8 Normal    15000       79        160     12640          2260
+ *   JS8 Fast      10000       79        100      7900          2000
+ *   JS8 Turbo      6000       79         50      3950          1950
+ *   JS8 Slow      30000       79        320     25280          4620
+ *
+ * Left as a bool, every JS8 submode would have taken FT8's row - so Turbo
+ * would have waited 15 s for a 6 s slot boundary and transmitted into the
+ * wrong one. The facts now come from ftx_protocol_*(), which is the single
+ * place a new protocol is described, and the arithmetic below is unchanged:
+ * reply window = slot - burst - margin, still derived, never tabulated. */
+#include "ft8/constants.h"
 
 /* Slack left between the end of a burst and the end of its slot. */
 #define FT8_GATE_MARGIN_MS          100
@@ -57,23 +68,24 @@ extern "C" {
 #define FT8_GATE_POLL_MS             15   /* the slot loop's vTaskDelay */
 #define FT8_GATE_DEADLINE_BAND_MS   300   /* window - deadline, ~20 polls */
 
-int ft8_gate_slot_ms(bool is_ft4);
-int ft8_gate_burst_ms(bool is_ft4);
+int ft8_gate_slot_ms(ftx_protocol_t protocol);
+int ft8_gate_burst_ms(ftx_protocol_t protocol);
 
 /* Latest moment into the slot at which a reply may still be fired, and the
  * moment a held request fires whatever it is carrying. Both are
  * slot - burst - margin, so a burst started at the limit still lands inside its
- * slot. FT4 has MORE room than FT8, not less (2460 vs 2360 ms), because its
- * burst shrinks faster than its slot does. */
-int ft8_gate_reply_window_ms(bool is_ft4);
-int ft8_gate_hold_deadline_ms(bool is_ft4);
+ * slot. FT4 has MORE room than FT8, not less (2460 vs 2360 ms before the
+ * margin), because its burst shrinks faster than its slot does - and JS8 Slow
+ * has the most of all (4720 ms), for the same reason in the other direction. */
+int ft8_gate_reply_window_ms(ftx_protocol_t protocol);
+int ft8_gate_hold_deadline_ms(ftx_protocol_t protocol);
 
 /* ⛔ THE SINGLE SOURCE OF TRUTH for which protocols use the hold/late-fire pair.
  * Both gates below consult it, so it cannot be half-removed. */
-bool ft8_gate_late_fire_enabled(bool is_ft4);
+bool ft8_gate_late_fire_enabled(ftx_protocol_t protocol);
 
 typedef struct {
-    bool is_ft4;
+    ftx_protocol_t protocol;
     bool decode_in_flight;   /* jobs_done != jobs_queued */
     bool qso_busy;           /* ft8_qso_is_busy() - true throughout a CQ run */
     bool tx_would_run;       /* an armed request is due at this boundary */
@@ -84,7 +96,7 @@ typedef struct {
 bool ft8_gate_should_hold(const ft8_gate_boundary_t *g);
 
 typedef struct {
-    bool is_ft4;
+    ftx_protocol_t protocol;
     bool held;              /* ft8_gate_should_hold() said yes at the boundary */
     bool decode_landed;     /* jobs_done == jobs_queued now */
     bool tx_should_run;     /* the armed request matches this slot */

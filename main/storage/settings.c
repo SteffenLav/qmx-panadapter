@@ -101,6 +101,7 @@ static const char *TAG = "settings";
 #define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_CQ_LISTEN    "cq_listen"
 #define KEY_SWR_LIMIT    "swr_lim"
+#define KEY_JS8_SUBMODE  "js8_sub"
 #define KEY_RXA_GAIN     "rxa_gain"
 #define KEY_RXA_PWIDTH   "rxa_pw"
 #define KEY_RXA_PBLEND   "rxa_pb"
@@ -239,7 +240,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 138, 21 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 140, 19 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -385,6 +386,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_TX_OFFSET   78
 #define DIRTY_CQ_LISTEN      79
 #define DIRTY_SWR_LIMIT      80
+#define DIRTY_JS8_SUBMODE   140   /* JS8 Fast/Turbo/Slow selector */
 // One bit for both activation fields: they are only ever written together by
 // settings_set_activation(), so a second bit would buy nothing.
 #define DIRTY_ACTIVATION     81
@@ -470,7 +472,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_RX_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
-    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
+    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS, DIRTY_JS8_SUBMODE,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_SPOTMAP_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
@@ -654,6 +656,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_JS8_SUBMODE)) nvs_set_u8(s_nvs, KEY_JS8_SUBMODE, snap.js8_submode);
         if (dirty_test(&dirty_local, DIRTY_RXA_GAIN))     nvs_set_u8(s_nvs, KEY_RXA_GAIN,   snap.rxaud_gain_d10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PWIDTH))   nvs_set_u8(s_nvs, KEY_RXA_PWIDTH, snap.rxaud_pan_width_x10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PBLEND))   nvs_set_u8(s_nvs, KEY_RXA_PBLEND, snap.rxaud_pan_blend_x100);
@@ -968,6 +971,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // normal way this goes wrong in the field. 3.0 is high enough not to trip
     // on a merely mediocre match; the drawer can raise it or turn it off.
     out->swr_limit_x10 = 30;
+    out->js8_submode   = 0;    /* Normal - what every station runs */
     /* Defaults mirror rx_audio.h's documented ones (200 / 1.8 / 0.15 / 0.30),
      * which are the values tuned on the air 2026-09-20. */
     out->rxaud_gain_d10       = 20;
@@ -1084,6 +1088,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
+    nvs_get_u8(s_nvs, KEY_JS8_SUBMODE, &out->js8_submode);
     nvs_get_u8(s_nvs, KEY_RXA_GAIN,   &out->rxaud_gain_d10);
     nvs_get_u8(s_nvs, KEY_RXA_PWIDTH, &out->rxaud_pan_width_x10);
     nvs_get_u8(s_nvs, KEY_RXA_PBLEND, &out->rxaud_pan_blend_x100);
@@ -2480,6 +2485,32 @@ uint8_t settings_get_swr_limit_x10(void)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     uint8_t v = s_pending.swr_limit_x10;
     xSemaphoreGive(s_mutex);
+    return v;
+}
+
+/* ⛔ CLAMPED HERE, NOT AT THE UI. NVS and an imported config file are both
+ * writers this module cannot see, and a stored 3 or 7 is not a submode - it
+ * would reach ft8_op_mode_protocol() and select whatever the switch's trailing
+ * return happens to be. Unknown falls back to Normal, which is the one every
+ * station can hear. */
+void settings_set_js8_submode(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v != 0 && v != 1 && v != 2 && v != 4) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.js8_submode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.js8_submode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_JS8_SUBMODE);
+}
+
+uint8_t settings_get_js8_submode(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.js8_submode;
+    xSemaphoreGive(s_mutex);
+    if (v != 0 && v != 1 && v != 2 && v != 4) v = 0;
     return v;
 }
 

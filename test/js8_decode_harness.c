@@ -92,7 +92,7 @@ static bool round_trip(const js8_directed_t* in, js8_directed_t* out, int offset
     /* The transmitter's own entry point, so these decode tests also stand as
      * the end-to-end TX proof: frame -> CRC-12 -> LDPC -> colorder -> tones. */
     uint8_t itone[JS8_NN];
-    js8_encode(frame, 0, itone);
+    js8_encode(frame, 0, FTX_PROTOCOL_JS8, itone);
 
     /* Corrupt whole SYMBOLS, which is what fading does - not individual bits.
      * Three bits go wrong together each time, so this is a harder load than
@@ -191,7 +191,7 @@ static void test_heartbeat(void)
 
     uint8_t frame[JS8_FRAME_BYTES], itone[JS8_NN];
     CHECK(js8_pack_heartbeat(&hb, frame), "CQ pack\n");
-    js8_encode(frame, 0, itone);
+    js8_encode(frame, 0, FTX_PROTOCOL_JS8, itone);
     paint(itone, 1, 10, 250);
 
     ftx_waterfall_t wf;
@@ -259,9 +259,9 @@ static void test_sync_prefers_js8_costas(void)
     memset(itone, 0, sizeof(itone));
     for (int i = 0; i < 7; i++)
     {
-        itone[i] = kJS8_Costas_pattern[i];
-        itone[36 + i] = kJS8_Costas_pattern[i];
-        itone[72 + i] = kJS8_Costas_pattern[i];
+        itone[i] = kJS8_Costas_original[0][i];
+        itone[36 + i] = kJS8_Costas_original[0][i];
+        itone[72 + i] = kJS8_Costas_original[0][i];
     }
     paint(itone, 2, 10, 250);
 
@@ -307,13 +307,13 @@ static void test_tone_layout(void)
     d.cmd = 0;
     CHECK(js8_pack_directed(&d, frame), "pack for layout test\n");
 
-    js8_encode(frame, 0, tones);
+    js8_encode(frame, 0, FTX_PROTOCOL_JS8, tones);
 
     for (int i = 0; i < 7; i++)
     {
-        CHECK(tones[i] == kJS8_Costas_pattern[i], "sync A at %d\n", i);
-        CHECK(tones[36 + i] == kJS8_Costas_pattern[i], "sync B at %d\n", 36 + i);
-        CHECK(tones[72 + i] == kJS8_Costas_pattern[i], "sync C at %d\n", 72 + i);
+        CHECK(tones[i] == kJS8_Costas_original[0][i], "sync A at %d\n", i);
+        CHECK(tones[36 + i] == kJS8_Costas_original[0][i], "sync B at %d\n", 36 + i);
+        CHECK(tones[72 + i] == kJS8_Costas_original[0][i], "sync C at %d\n", 72 + i);
     }
 
     int data = 0;
@@ -346,12 +346,12 @@ static void test_tone_layout(void)
     uint8_t frame2[JS8_FRAME_BYTES], tones2[JS8_NN];
     memcpy(frame2, frame, sizeof(frame2));
     frame2[4] ^= 0x01;
-    js8_encode(frame2, 0, tones2);
+    js8_encode(frame2, 0, FTX_PROTOCOL_JS8, tones2);
     CHECK(memcmp(tones, tones2, JS8_NN) != 0, "a changed frame gave identical tones\n");
 
     /* The transmission type is carried too, and is not part of the frame. */
     uint8_t tones3[JS8_NN];
-    js8_encode(frame, 1, tones3);
+    js8_encode(frame, 1, FTX_PROTOCOL_JS8, tones3);
     CHECK(memcmp(tones, tones3, JS8_NN) != 0, "itype did not reach the tones\n");
 }
 

@@ -507,7 +507,7 @@ static void fmt_report(int snr_db, char *out, size_t len)
      * FT8's -24..+15 at both ends. Clamping a JS8 report to FT8's range would
      * log and transmit a number the frame could have carried exactly, so the
      * range is a protocol fact and lives with the protocol (js8_text.c). */
-    if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+    if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
         js8_fmt_report(snr_db, out, len);
         return;
     }
@@ -585,7 +585,7 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
     // locator field, so the grid opening has no JS8 form at all (js8_text.c).
     // Report-first is not a shortcut there, it is the protocol.
     if (!fd_mode && (qs.ft8_filters.skip_tx1 ||
-                     ft8_op_mode_protocol() == FTX_PROTOCOL_JS8)) {
+                     ftx_protocol_is_js8(ft8_op_mode_protocol()))) {
         fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf));
         extra = extra_buf;
     }
@@ -1068,7 +1068,7 @@ static void rearm_current(void)
          *
          * An operator who really wants a JS8 CQ run can still set a limit
          * above 1 - that is an explicit number and it is honoured. */
-        if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8 && cq_max_calls == 0)
+        if (ftx_protocol_is_js8(ft8_op_mode_protocol()) && cq_max_calls == 0)
             cq_max_calls = 1;
         if (cq_max_calls > 0 && cq_sent >= cq_max_calls) {
             lock(); s_cq_exhausted = true; unlock();
@@ -1656,7 +1656,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
      * the fallback: when the target is not in the decode table we have no
      * measured SNR, and FT8 falls back to a grid TX1. JS8 cannot, so it
      * refuses the pounce instead of arming something unsendable. */
-    const bool js8 = (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8);
+    const bool js8 = ftx_protocol_is_js8(ft8_op_mode_protocol());
 
     // A REPLY whose third field is already a signal report ("+NN"/"-NN" in
     // extra_field) was deliberately built report-first — the pileup modal

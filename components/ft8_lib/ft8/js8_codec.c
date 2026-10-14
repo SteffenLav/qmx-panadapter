@@ -112,14 +112,21 @@ bool js8_check_payload_crc(const uint8_t payload[JS8_LDPC_K])
     return carried == js8_crc12_of(frame, itype);
 }
 
-void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[JS8_NN])
+void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], ftx_protocol_t protocol,
+                             uint8_t tones[JS8_NN])
 {
+    /* ⛔ The sync arrays are per SUBMODE, and the three blocks are not
+     * necessarily the same array - see kJS8_Costas_modified. This used to read
+     * kJS8_Costas_pattern[i] three times, which was Normal's and only
+     * Normal's. */
+    const uint8_t (*costas)[7] = ftx_protocol_js8_costas(protocol);
+
     // Message structure: S7 D29 S7 D29 S7 - identical to FT8's.
     for (int i = 0; i < 7; ++i)
     {
-        tones[i]      = kJS8_Costas_pattern[i];
-        tones[36 + i] = kJS8_Costas_pattern[i];
-        tones[72 + i] = kJS8_Costas_pattern[i];
+        tones[i]      = costas[0][i];
+        tones[36 + i] = costas[1][i];
+        tones[72 + i] = costas[2][i];
     }
 
     int k = 6; // genjs8.f90's k=7, one-based
@@ -133,12 +140,17 @@ void js8_tones_from_codeword(const uint8_t codeword[JS8_LDPC_N], uint8_t tones[J
     }
 }
 
-void js8_encode(const uint8_t frame[9], uint8_t itype, uint8_t tones[JS8_NN])
+void js8_encode(const uint8_t frame[9], uint8_t itype, ftx_protocol_t protocol,
+                uint8_t tones[JS8_NN])
 {
     uint8_t payload[JS8_LDPC_K];
     uint8_t codeword[JS8_LDPC_N];
 
+    /* Everything above the physical layer is shared by every submode: the
+     * varicode frame, the 3-bit transmission type, CRC-12, LDPC(174,87) and
+     * colorder are byte-identical. `protocol` reaches only as far as the sync
+     * arrays, and the caller's NSPS/tone spacing do the rest. */
     js8_pack_payload(frame, itype, payload);
     js8_encode174(payload, codeword);
-    js8_tones_from_codeword(codeword, tones);
+    js8_tones_from_codeword(codeword, protocol, tones);
 }

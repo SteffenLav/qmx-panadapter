@@ -167,6 +167,13 @@ ft8_op_mode_t ft8_op_mode_get(void);
  * out of 14 places. */
 ftx_protocol_t ft8_op_mode_protocol(void);
 
+/* The same answer for a mode we are ABOUT to ask for rather than the one we
+ * are in - what a "switching to X" log line needs. ⛔ ft8_screen_view.c kept
+ * its own copy of this switch until the JS8 submodes landed, at which point
+ * the copy would have gone on saying "JS8" while the radio ran Turbo. One
+ * implementation, asked two ways. */
+ftx_protocol_t ft8_op_mode_protocol_for(ft8_op_mode_t m);
+
 // Slot period in ms for the current sub-mode (15000 FT8 and JS8, 7500 FT4).
 // Single
 // source of truth for anything outside ft8_test.c that needs slot timing -

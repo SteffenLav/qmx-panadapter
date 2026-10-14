@@ -271,6 +271,14 @@ static void add_ft8_tx_status(cJSON *root)
         char pre[48];
         js8_text_prefix(pre, sizeof(pre));
         cJSON_AddStringToObject(f, "js8_prefix", pre);
+        /* The submode, readable for the same reason js8_target is: it is a
+         * physical-layer choice set from either surface, and a control that
+         * cannot read its own state is a second source of truth. The name is
+         * served rather than assembled in JavaScript so both surfaces call the
+         * submodes the same thing. */
+        cJSON_AddNumberToObject(f, "js8_submode", settings_get_js8_submode());
+        cJSON_AddStringToObject(f, "js8_submode_name",
+                                ftx_protocol_name(ft8_op_mode_protocol()));
     }
 
     /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same
@@ -1837,7 +1845,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          *
          * So the server decides. js8_target.h carries the whole reasoning. */
         if (call && call[0]) {
-            if (ft8_op_mode_protocol() == FTX_PROTOCOL_JS8) {
+            if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
                 js8_target_set(call);
             } else {
                 ft8_screen_view_request_reply(call);
@@ -1856,6 +1864,47 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         ft8_screen_view_request_js8_macro(0);
     } else if (action && strcmp(action, "js8_grid") == 0) {
         ft8_screen_view_request_js8_macro(1);
+    } else if (action && strcmp(action, "js8_submode") == 0) {
+        /* {"action":"js8_submode","submode":0|1|2|4} - JS8Call's own NSUBMODE:
+         * 0 Normal, 1 Fast, 2 Turbo, 4 Slow.
+         *
+         * ⛔ THIS IS NOT A QUALITY KNOB. Each submode is a different physical
+         * layer - slot period, symbol rate, tone spacing and sync arrays all
+         * change - so a station on Fast cannot hear a station on Normal at
+         * all. Changing it mid-exchange would abandon whoever is being worked,
+         * so it is refused while a QSO or a burst is live, the same rule the
+         * band and mode controls follow.
+         *
+         * ⚠ Fast, Turbo and Slow have never been exchanged with a real
+         * JS8Call station. They round-trip through our own encoder and decoder
+         * (test/js8_submode_harness.c) and nothing more than that.
+         *
+         * The setting is clamped in settings.c, not here: NVS and an imported
+         * config file are writers this handler never sees. */
+        cJSON *sm = cJSON_GetObjectItem(root, "submode");
+        int want = cJSON_IsNumber(sm) ? sm->valueint : 0;
+        /* Armed counts as busy too, not just keyed: an armed request
+         * carries tones already built for the OLD submode. */
+        bool busy = ft8_qso_is_busy(NULL, 0) ||
+                    ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE;
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        if (busy) {
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"err\":\"busy - a QSO or burst is in progress\"}");
+            return ESP_OK;
+        }
+        settings_set_js8_submode((uint8_t)want);
+        {
+            char out[128];
+            snprintf(out, sizeof(out),
+                     "{\"ok\":true,\"submode\":%u,\"name\":\"%s\",\"slot_ms\":%d}",
+                     (unsigned)settings_get_js8_submode(),
+                     ftx_protocol_name(ft8_op_mode_protocol()),
+                     ftx_protocol_slot_ms(ft8_op_mode_protocol()));
+            httpd_resp_sendstr(req, out);
+        }
+        return ESP_OK;
     } else if (action && strcmp(action, "qso_override") == 0) {
         // Mid-QSO override from the browser (#205, Randy N4OPI). Same deferral as
         // "reply": the QSO machine belongs to the LVGL task, and the outcome comes

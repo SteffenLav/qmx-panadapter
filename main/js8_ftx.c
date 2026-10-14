@@ -116,8 +116,12 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
         r->kind           = FT8_TX_KIND_CQ;   /* no target call; not a ladder step */
         r->audio_freq_hz  = tone;
         r->use_parity     = false;            /* consecutive slots, either parity */
-        r->protocol       = FTX_PROTOCOL_JS8;
-        js8_encode(&fr[(size_t)i * JS8_FRAME_BYTES], it[i], r->tones);
+        /* ⛔ THE SELECTED SUBMODE, not a hardcoded Normal. Every frame of a
+         * multi-frame run must be built for the physical layer the slot loop
+         * is about to transmit on - the sync arrays differ, and a run encoded
+         * for Normal and sent at Turbo's symbol rate decodes nowhere. */
+        r->protocol       = ft8_op_mode_protocol();
+        js8_encode(&fr[(size_t)i * JS8_FRAME_BYTES], it[i], r->protocol, r->tones);
         /* What the status line shows for this frame. The whole message does
          * not fit, and the frame number is what tells the operator how much
          * is left to go.

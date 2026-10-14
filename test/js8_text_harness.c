@@ -7,6 +7,7 @@
  *       components/ft8_lib/ft8/js8_text.c \
  *       components/ft8_lib/ft8/js8_message.c \
  *       components/ft8_lib/ft8/js8_codec.c \
+ *       components/ft8_lib/ft8/constants.c \
  *       components/ft8_lib/ft8/js8_tables.c \
  *       && ./js8_text_harness
  *

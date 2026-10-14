@@ -8,6 +8,7 @@
  *       components/ft8_lib/ft8/js8_jsc_tables.c \
  *       components/ft8_lib/ft8/js8_message.c \
  *       components/ft8_lib/ft8/js8_codec.c \
+ *       components/ft8_lib/ft8/constants.c \
  *       components/ft8_lib/ft8/js8_tables.c \
  *       components/ft8_lib/ft8/text.c \
  *       -lm && ./js8_reasm_harness

@@ -55,7 +55,13 @@ static void waterfall_free(ftx_waterfall_t* me)
 void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 {
     float slot_time = (float)ftx_protocol_slot_ms(cfg->protocol) / 1000.0f;
-    float symbol_period = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    /* ⛔ THIS WAS `(protocol == FTX_PROTOCOL_FT4) ? FT4_... : FT8_...`, which
+     * handed every JS8 submode FT8's 160 ms symbol. Right for Normal by
+     * accident, silently wrong for Fast, Turbo and Slow - and wrong HERE means
+     * the waterfall is binned at the wrong rate, so nothing ever syncs and the
+     * failure looks like a dead band. Integer microseconds from the protocol
+     * facts, not a float constant per protocol. */
+    float symbol_period = ftx_protocol_symbol_period_us(cfg->protocol) / 1000000.0f;
     // Compute DSP parameters that depend on the sample rate
     me->block_size = (int)(cfg->sample_rate * symbol_period); // samples corresponding to one FSK symbol
     me->subblock_size = me->block_size / cfg->time_osr;

@@ -1,4 +1,6 @@
 #include "constants.h"
+#include <stddef.h>   // NULL - ftx_protocol_js8_costas() has no table for FT8/FT4
+#include "js8.h"   // the JS8 Costas tables, returned by ftx_protocol_js8_costas()
 
 // Costas sync tone pattern
 const uint8_t kFT8_Costas_pattern[7] = { 3, 1, 4, 0, 6, 5, 2 };
@@ -401,32 +403,147 @@ const ftx_ldpc_code_t kFTX_LDPC_code_174_91 = {
 
 /* ---- protocol facts, in one place - see the note in constants.h ---------- */
 
+/* ⛔ EVERY SWITCH IN THIS SECTION LISTS EVERY ENUM VALUE AND HAS NO default.
+ * That is deliberate: -Wswitch then makes the compiler name the file and line
+ * of every fact a new protocol has not been given, instead of a default
+ * quietly handing it FT8's. The trailing return is for a value cast in from
+ * outside the enum, not for a missing case. */
+
 int ftx_protocol_slot_ms(ftx_protocol_t protocol)
 {
     switch (protocol)
     {
-    case FTX_PROTOCOL_FT4: return 7500;
-    case FTX_PROTOCOL_FT8: return 15000;
+    case FTX_PROTOCOL_FT4:       return  7500;
+    case FTX_PROTOCOL_FT8:       return 15000;
     /* JS8 Normal shares FT8's whole timing - 12000 Hz, 1920 samples per
-     * symbol, 79 symbols, 15 s. Only the tables differ. The submodes that do
-     * NOT share it (Fast, Turbo, Slow, Ultra) are out of scope. */
-    case FTX_PROTOCOL_JS8: return 15000;
+     * symbol, 79 symbols, 15 s. Only the tables differ. */
+    case FTX_PROTOCOL_JS8:       return 15000;
+    case FTX_PROTOCOL_JS8_FAST:  return 10000;
+    case FTX_PROTOCOL_JS8_TURBO: return  6000;
+    /* 30 s, from commons.h's JS8E_TX_SECONDS - NOT js8e_params.f90's
+     * NTXDUR=28, which is the decoder's analysis window. See constants.h. */
+    case FTX_PROTOCOL_JS8_SLOW:  return 30000;
     }
     return 15000;
 }
 
+/* NSPS / 12000, in microseconds. Exact in every case: 1920, 1200, 600 and
+ * 3840 all divide 12 evenly, so none of these is a rounded figure.
+ * FT4's 48 ms is 576/12000 by the same arithmetic. */
+int ftx_protocol_symbol_period_us(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:       return  48000;  /*  576 NSPS */
+    case FTX_PROTOCOL_FT8:       return 160000;  /* 1920 NSPS */
+    case FTX_PROTOCOL_JS8:       return 160000;  /* 1920 NSPS */
+    case FTX_PROTOCOL_JS8_FAST:  return 100000;  /* 1200 NSPS */
+    case FTX_PROTOCOL_JS8_TURBO: return  50000;  /*  600 NSPS */
+    case FTX_PROTOCOL_JS8_SLOW:  return 320000;  /* 3840 NSPS */
+    }
+    return 160000;
+}
+
+/* 12000 / NSPS. The reciprocal of the symbol period, and in JS8 the tone
+ * spacing and the baud rate are the same number. */
+float ftx_protocol_tone_spacing_hz(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:       return 20.8333333f; /* 12000/576  */
+    case FTX_PROTOCOL_FT8:       return  6.25f;      /* 12000/1920 */
+    case FTX_PROTOCOL_JS8:       return  6.25f;      /* 12000/1920 */
+    case FTX_PROTOCOL_JS8_FAST:  return 10.0f;       /* 12000/1200 */
+    case FTX_PROTOCOL_JS8_TURBO: return 20.0f;       /* 12000/600  */
+    case FTX_PROTOCOL_JS8_SLOW:  return  3.125f;     /* 12000/3840 */
+    }
+    return 6.25f;
+}
+
+int ftx_protocol_start_delay_ms(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:       return   0;
+    case FTX_PROTOCOL_FT8:       return   0;
+    case FTX_PROTOCOL_JS8:       return 500;
+    case FTX_PROTOCOL_JS8_FAST:  return 200;
+    case FTX_PROTOCOL_JS8_TURBO: return 100;
+    case FTX_PROTOCOL_JS8_SLOW:  return 500;
+    }
+    return 0;
+}
+
+bool ftx_protocol_is_js8(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:
+    case FTX_PROTOCOL_FT8:       return false;
+    case FTX_PROTOCOL_JS8:
+    case FTX_PROTOCOL_JS8_FAST:
+    case FTX_PROTOCOL_JS8_TURBO:
+    case FTX_PROTOCOL_JS8_SLOW:  return true;
+    }
+    return false;
+}
+
+int ftx_protocol_js8_submode(ftx_protocol_t protocol)
+{
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:
+    case FTX_PROTOCOL_FT8:       return -1;
+    case FTX_PROTOCOL_JS8:       return 0;   /* A */
+    case FTX_PROTOCOL_JS8_FAST:  return 1;   /* B */
+    case FTX_PROTOCOL_JS8_TURBO: return 2;   /* C */
+    case FTX_PROTOCOL_JS8_SLOW:  return 4;   /* E - the enum is NOT dense */
+    }
+    return -1;
+}
+
+const uint8_t (*ftx_protocol_js8_costas(ftx_protocol_t protocol))[7]
+{
+    const uint8_t (*costas)[7] = NULL;
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:
+    case FTX_PROTOCOL_FT8:       costas = NULL;                 break;
+    case FTX_PROTOCOL_JS8:       costas = kJS8_Costas_original; break;
+    case FTX_PROTOCOL_JS8_FAST:
+    case FTX_PROTOCOL_JS8_TURBO:
+    case FTX_PROTOCOL_JS8_SLOW:  costas = kJS8_Costas_modified; break;
+    }
+    return costas;
+}
+
 int ftx_protocol_num_tones(ftx_protocol_t protocol)
 {
+    /* Every JS8 submode is 8-FSK; only FT4 is 4-FSK. */
     return (protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
+}
+
+int ftx_protocol_num_symbols(ftx_protocol_t protocol)
+{
+    /* 21 sync + 58 data for FT8 and every JS8 submode; FT4 is its own shape.
+     * The submodes change the symbol PERIOD, never the symbol COUNT - all four
+     * JS8 physical layers carry the same 79. */
+    return (protocol == FTX_PROTOCOL_FT4) ? 105 : 79;
 }
 
 const char* ftx_protocol_name(ftx_protocol_t protocol)
 {
     switch (protocol)
     {
-    case FTX_PROTOCOL_FT4: return "FT4";
-    case FTX_PROTOCOL_FT8: return "FT8";
-    case FTX_PROTOCOL_JS8: return "JS8";
+    case FTX_PROTOCOL_FT4:       return "FT4";
+    case FTX_PROTOCOL_FT8:       return "FT8";
+    /* JS8 Normal keeps the bare name "JS8": it is what shipped, it is what
+     * every log line and every saved ADIF record already says, and renaming it
+     * now would make old captures and new ones disagree about the same mode. */
+    case FTX_PROTOCOL_JS8:       return "JS8";
+    case FTX_PROTOCOL_JS8_FAST:  return "JS8-FAST";
+    case FTX_PROTOCOL_JS8_TURBO: return "JS8-TURBO";
+    case FTX_PROTOCOL_JS8_SLOW:  return "JS8-SLOW";
     }
     return "?";
 }
@@ -452,8 +569,26 @@ bool ftx_protocol_is_implemented(ftx_protocol_t protocol)
      * settles it - never a second Tab5, which would share our mistakes
      * exactly.
      *
-     * Submodes Fast/Turbo/Slow/Ultra are each a different physical layer and
-     * are NOT implemented; only Normal is. */
-    return protocol == FTX_PROTOCOL_FT4 || protocol == FTX_PROTOCOL_FT8 ||
-           protocol == FTX_PROTOCOL_JS8;
+     * ⭐ FAST, TURBO AND SLOW ARE IMPLEMENTED AS OF THIS CHANGE, AND NONE OF
+     * THEM IS PROVEN. Implemented and proven are different words and this
+     * function answers only the first: the codec, the three MODIFIED Costas
+     * arrays, the per-submode NSPS/period/tone-spacing and the TX symbol loop
+     * all exist and round-trip through the host harness
+     * (test/js8_submode_harness.c, encode -> synthesise -> decode, every
+     * submode). What has NOT happened is a real JS8Call station decoding one
+     * of our Fast/Turbo/Slow frames, or us decoding one of theirs off air.
+     * Until that, the mode is present and unverified - say so, and never
+     * "not completed".
+     *
+     * ULTRA is absent by choice, not omission - see constants.h. */
+    switch (protocol)
+    {
+    case FTX_PROTOCOL_FT4:
+    case FTX_PROTOCOL_FT8:
+    case FTX_PROTOCOL_JS8:
+    case FTX_PROTOCOL_JS8_FAST:
+    case FTX_PROTOCOL_JS8_TURBO:
+    case FTX_PROTOCOL_JS8_SLOW:  return true;
+    }
+    return false;
 }
