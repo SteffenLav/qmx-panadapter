@@ -743,9 +743,16 @@ FT8 screen.
 
 Choose **Off, 2.0:1, 2.5:1, 3.0:1 or 4.0:1**. The default is **3.0:1**.
 
+This is one station-wide setting and one latch. A bad antenna is a fact about
+your station, not about the mode you happened to be using, so a trip in WSPR
+stops FT8 as well and the other way round.
+
 **In FT8 the burst is cut short**; the SWR is sampled part-way through and the
-transmission stops there. **In FT4 the check happens after the burst**, so the
-one burst completes and every later one is blocked. That is not an oversight:
+transmission stops there. **In WSPR the burst is cut short too**, from v1.19.0:
+the SWR is sampled every few seconds through the transmission and a burst that
+goes bad is stopped where it stands rather than running its full 110 seconds,
+and the next one is refused the moment you arm it. **In FT4 the check happens
+after the burst**, so the one burst completes and every later one is blocked. That is not an oversight:
 FT4 symbols are 48 ms and a control-link query takes about 50 ms, so asking
 mid-burst would disturb the transmission it is trying to protect. A reading is
 only acted on if there is real power behind it — the radio can report a

@@ -207,7 +207,7 @@ With a callsign and grid set and a transmit count other than **Receive only**, t
 A few things worth knowing before you leave it running:
 
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
-- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops.
+- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops. From v1.19.0 that means the burst in flight is cut where it stands rather than running to its end, and arming the next one is refused until you clear the latch. Before v1.19.0 this page said so and the firmware did not do it - WSPR measured the SWR, wrote it in the log and carried on.
 - **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
 - **Split stops it, and says so.** WSPR is transmitted on the dial frequency, and
   the spot you publish names that frequency. If your radio is in split it keys VFO

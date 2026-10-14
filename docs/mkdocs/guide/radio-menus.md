@@ -138,7 +138,7 @@ browser both your Backspace and Delete keys do this.
     Virtual U3S values all edit this way. *(Randy N4OPI worked this out from PuTTY
     and told us — it is how the radio has always behaved, not a Tab5 limitation.)*
 
-### 4b. CW keyer speed (new in v1.17.0)
+### 4b. CW keyer speed
 
 *Asked for by Ralph Hellmig.*
 

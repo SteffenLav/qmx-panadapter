@@ -2,13 +2,15 @@
 
 **JS8 Normal runs on the Tab5 itself** — the decoder, the error correction and the transmitter, with no PC in the loop. JS8 is a keyboard mode built on FT8's modulation: it carries free text rather than the fixed exchange FT8 uses, so stations hold short conversations with each other.
 
-JS8 is **new in v1.17.0 and declared a beta**. What is proven and what is not is spelled out in [section 6](#6-what-is-proven-and-what-is-not). Read that before relying on it.
+JS8 arrived in v1.17.0 and is **declared a beta**. What is proven and what is not is spelled out in [section 6](#6-what-is-proven-and-what-is-not). Read that before relying on it.
 
 ### 1. Selecting JS8
 
 Swipe → from the left edge to reach the FT8/FT4/JS8 view, then pick **JS8** from the **Preset** dropdown in the left pane. The dropdown is three wide now — FT8, FT4 and JS8.
 
-Only **JS8 Normal** is supported: 15-second slots, the same slot length as FT8. The faster and slower JS8 speeds (Fast, Turbo, Slow) are not implemented, and Turbo cannot be reached over CAT in any case.
+**All four JS8 speeds are selectable from v1.19.0** — Slow, Normal, Fast and Turbo — from the **JS8 speed** row in the settings drawer, and from the JS8 tab in the browser. Normal is the default and the one to use: 15-second slots, the same slot length as FT8.
+
+⚠ **Only Normal is proven on air.** The other three are built and they transmit, but no contact has been made on any of them, and the Tab5 has not decoded another station using one. Treat them as untested. Turbo was long thought to be out of reach over the control link; a measurement in v1.19.0 showed the tone command takes about 250 microseconds, so the Tab5's own side of it is comfortably fast enough. **What has not been measured is the radio's side** — whether the QMX can retune that quickly in practice. Until somebody completes a contact, that is an open question and not a promise.
 
 ⚠ **JS8 and FT4 share two of their calling frequencies.** If you were expecting FT4 activity on a frequency and see JS8 instead, that is why — the modes overlap on the band plan, not a fault.
 
@@ -71,7 +73,8 @@ Stated plainly, because "beta" on its own tells you nothing:
 
 **Not proven:**
 
-- **A full automatic two-way JS8 QSO has not been completed.** That is the next piece of work.
+- **A full automatic two-way JS8 QSO has not been completed** — meaning no complete exchange has been watched from both ends. ⚠ Do not read that as "the automatic exchange is not implemented". **It is, and it has been since v1.17.0**: with automatic replies switched on your Tab5 answers JS8 callers with a signal report by itself. Gyula HA3HZ found four stations answered unattended in his own log after I had told him it was not possible. The automatic-reply setting is where you turn it off.
+- **The Slow, Fast and Turbo speeds** (section 1). Built, selectable and they transmit; no contact made on any of them, and nothing decoded from another station using one.
 - The fix that stops a message being shown under the wrong callsign (section 3) was built from a real on-air case but has **not** itself been re-tested on air — reproducing it needs a third station on a nearby frequency, which is not something that can be arranged to order.
 
 ### 7. Signal reports

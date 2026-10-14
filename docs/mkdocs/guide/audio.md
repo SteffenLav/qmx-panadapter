@@ -209,7 +209,7 @@ A peak limiter sits after the automatic gain, so a loud station cannot arrive at
 
 This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more ceiling fixed it.
 
-## Where the receive signal comes from (new in v1.17.0)
+## Where the receive signal comes from
 
 Until now the panadapter always listened to the **radio's USB audio**. There is now a
 **receive source** selector, on the Tab5 and in the browser, with a level meter and a

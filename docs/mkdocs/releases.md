@@ -4,7 +4,35 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.18.0** - 2026-10-12
+**v1.19.0** - 2026-10-15
+
+**AM is demodulated on the Tab5 itself, and the SWR limit now stops a WSPR burst the way it has always stopped an FT8 one.**
+
+- ⭐⭐ **AM, on the Tab5, from the I/Q** *(Samuel W7STF)*. Put the radio in AM and you hear it. The demodulator runs on the Tab5 from the raw I/Q the radio already sends, which is why the bandwidth is yours rather than the radio's: the QMX's own AM filter is fixed at 3.2 kHz and sits in its audio, not in the I/Q path. Tap **BW** in the top bar while in AM and choose **4.0, 6.0, 8.0 or 9.6 kHz**. 6.0 is the default. **Proven on air** on a broadcast station at 7.260 MHz. Until now AM was silent and an AM station meant listening to it in USB.
+
+- **Why 6.0 kHz and not the widest.** A shortwave broadcaster transmits about 4.5 kHz of audio, so 9.6 kHz carries the whole thing — but the channels are spaced only 5 kHz apart, and at 9.6 the filter edge sits about 45 Hz from the next station's carrier. On a quiet channel take 9.6 and hear the station in full; on a crowded evening 6.0 is the one that keeps the neighbour out. Your choice is remembered.
+
+- ⭐ **Your SWR limit now protects a WSPR transmission** *(Bryan N0LUF)*. Bryan's radio transmitted all night after his Tab5 restarted mid-burst, and looking into it showed that the SWR limit did nothing at all in WSPR — it cut an FT8 or FT4 burst, while WSPR measured the figure, wrote it in the log and carried on. His antenna reaches 5.1:1 in the rain. WSPR now samples through the burst and stops it where it stands, and refuses to arm the next one until you clear the latch. **Proven on air**: 2.4:1 against a 2.0:1 limit cut a transmission after 11 seconds instead of 110. ⚠ The WSPR chapter has promised this for some time; the firmware did not do it.
+
+- **One limit, one latch, whatever the mode.** A bad antenna is a fact about your station and not about the mode you were using, so a trip in WSPR stops FT8 as well and the other way round.
+
+- **The panadapter now asserts receive when it reconnects to the radio.** If the Tab5 restarted while the radio was keyed, it reconnected and left it keyed. ⚠ This would not have saved Bryan — his radio's USB had already locked up, so nothing sent could reach it — and nothing on the Tab5 can guarantee the radio stops when the Tab5 is what died. Your radio's own `CAT config → Timeout` is the protection for that case; it is enabled by default at 120 seconds, and it has to be off if you use VOX.
+
+- ⛔ **The browser acted on the WSPR page's top bar while the Tab5 refused to** *(John W5JSS)*. On the Tab5, Band, Mode, BW and Zoom are greyed out on the WSPR page because that page owns the dial. The web page drew them grey and then acted on them anyway. Picking 20 m from the browser wrote the FT8 frequency to the radio while WSPR carried on labelling its spots 160 m — so John saw no spots, a mismatch warning he had to find on the glass, and his own signal reported on a band he was not on. Four of the six things he reported were this one defect. The browser now refuses those four controls there, with a reason, exactly as the Tab5 does. Freq stays live on purpose, so a beacon off the standard dial can still be chased.
+
+- ⭐ **JS8 Slow, Fast and Turbo are selectable**, from the **JS8 speed** row in the drawer and from the JS8 tab in the browser. ⚠ **Only Normal is proven on air** — the others are built and they transmit, but no contact has been made on any of them. Turbo was thought to be out of reach over the control link; the tone command measures about 250 microseconds, so the Tab5's side of it is fast enough. The radio's side is not measured.
+
+- **A tap on a JS8 station now selects it** *(Ryan KK6DZB)*, who held a real JS8 QSO on the Tab5 and sent a full UI draft back. Tapping a row selects that station; the SNR and GRID buttons send to it; free text opens with the pair of callsigns already in place; a CQ is sent once rather than repeating. Three smaller things from the same work: the conversation filter worked on the glass and not in the browser, the target chip truncated a station to "tap a stat...", and the "free text sent" line was overwritten within a second of appearing.
+
+- **A finished FT8 QSO held the radio for a whole extra cycle** *(Bruce N9JCV)*. The check that closes a completed exchange ran once per slot, so a QSO that finished early stayed busy until the next slot boundary. It now closes when the final transmission leaves the air — measured at 19 milliseconds on a real contact.
+
+- **The version in the firmware could be a release behind.** The version string was baked in when the project was last configured rather than when it was built, so a binary could report a release it was not. If you ever compared the version on your screen against what you flashed and they disagreed, that is why.
+
+- **Every path that can key the radio is now written down and checked** — eleven places that can arm a transmission, six of which can do it unattended, verified against the code by a tool that runs every release. This exists because v1.18.0 went out without my knowing my own release answered JS8 callers by itself, and a user had to tell me.
+
+## Previous Releases
+
+### v1.18.0 - 2026-10-12
 
 **Your radio can now be told a PA voltage it must never exceed, and the Output power control has stopped inventing one.**
 
@@ -25,8 +53,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 ⚠ **If you have set "Never exceed PA voltage"**, remember it caps the calibration sweep too. A band calibrated under a limit only describes the radio up to that limit, so raise it and recalibrate if you later want the full curve.
 
 ⚠ **Everything said about JS8 in v1.17.0 still stands**: it is a beta, a full automatic two-way QSO has not been completed, and nothing has yet been decoded through the 3.5 mm jack.
-
-## Previous Releases
 
 ### v1.17.1 - 2026-10-11
 
@@ -60,7 +86,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ **JS8 is new, and I am calling it a beta.** Receiving is proven on air. Sending free text is proven on air. A full automatic two-way JS8 QSO has **not** been completed yet — that is the next piece of work. Compound callsigns are not handled.
 
-⚠ **Still unfixed and honestly stated:** the waterfall blanks for a single frame each time it scrolls a row, which reads as a flicker *(Bryan N0LUF)* — the real fix is a second frame buffer, which is not a small change. **AM produces no audio** *(Samuel W7STF)*. The WSPR waterfall shows nothing during the wait between cycles, unlike WSJT-X *(Samuel W7STF)*.
 
 ⚠ **If you are upgrading from v1.16.11 or older**, your waterfall rate will read 10 rows/s once, because v1.16.12 changed how that setting is stored. Set it again and it stays.
 
@@ -801,8 +826,6 @@ Six of these were described as done in replies sent before v1.8.4 shipped, so an
 
 ⚠ **Two things to check if you use the browser.** **SWR protection set from the browser was never saved** on any v1.7.x build — check it on the Tab5 (Settings -> "SWR protection (transmit)") if you set it there. And **spot labels were stealing clicks**: a callsign's clickable area was wide enough to swallow several kHz, so clicking a signal near one tuned you to that station instead. Both fixed, along with **Bluetooth mice that send a different byte layout** than the one on the bench, and **two browsers fighting over the live spectrum**.
 
-
-
 **v1.7.2** — 2026-08-10 — bug-fix patch
 
 - A Bluetooth mouse could stop reconnecting until you restarted the Tab5: a part-way failed attempt stopped it trying again, and the mouse sleeps after about half a minute, so it happened routinely.
@@ -1032,7 +1055,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.18.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.19.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

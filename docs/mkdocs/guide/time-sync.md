@@ -293,7 +293,7 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 - ±1 s error -> very few decodes, transmit often off-time
 - ±2 s error or worse -> FT8 doesn't work
 
-### 8b. GPS Stats - the sky view (new in v1.17.0)
+### 8b. GPS Stats - the sky view
 
 **Tap the UTC clock** on the bottom bar, or open **Radio -> GPS Stats** in the drawer, and
 the Tab5 draws what the GPS receiver can see:
