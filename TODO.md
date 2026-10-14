@@ -53,6 +53,7 @@ for everyone.
 | **B4** | **JS8 canned messages / macros, one-button recall** (Gyula HA3HZ) | ⏸ **WAITING ON HIM** for which substitutions he actually uses. ⭐ Half built: `cq_msg[3][28]` in `settings.h:361` is persisted and in the `[cq]` config backup - same mechanism. Sizing: free text takes **160** chars so presets want to be longer than 28, and three is too few. ⚠ `js8_presets` in the API is FREQUENCY presets, not messages |
 | **B5** | ⚠ **JS8 AUTO-QSO IS LIVE AND UNAUDITED** (Gyula HA3HZ) | ▶ **PARTLY ADDRESSED** `9f440da9`: a JS8 tap/click can no longer start an exchange, so the hand-operated path is now press-per-message. ⛔ **THE ROBOT IS UNTOUCHED** - `ft8_robot` -> `ft8_qso_start()` is what answered Gyula's four callers, it is opt-in (`robot_en`), and nobody has yet tested what it looks like from the far end. The unattended count is STILL 6. The narrow real gap remains: the directed command `SNR?` (cmd 0) is unhandled |
 | **B6** | ~~The browser bypassed the WSPR page's top-bar guard~~ | ✅ **FIXED AND VERIFIED** `057a98b1`. Four of John's six reports were this one bug |
+| **B7** | **A finished QSO stayed busy for a whole extra cycle** (Bruce N9JCV, POTA) | ✅ **FIXED `6198189b`, NOT FLASHED.** The WAIT_DONE check lived in `ft8_qso_advance()`, which runs once per SLOT - the closing 73 stops ~12.6 s into a 15 s slot and nothing re-evaluated it until the next cycle, so he could not start another station. Now also polled from the decode task's idle wait, gated on 1200 ms of margin. ⭐ The measurement the code demanded was already in the capture: wrap-up 31-342 ms, dominated by the ADIF write. ⚠ Needs one FT8 QSO to confirm on air |
 
 ### C. Decisions owed by the operator
 
@@ -62,10 +63,12 @@ for everyone.
    QMX+ (M5Stamp ESP32P4 + Stamp C6, ~$20). His own words say it is not a
    demand. ⚠ It needs a USB HOST connector the module does not fit, and
    GPIO53/54 do not exist on it. NOT ASSESSED - no port has been looked at.
-3. **Bruce N9JCV: let an operator turn the web UI OFF** to give the Tab5 the
-   whole CPU. No such setting exists today (no `web_en` in `settings.h`). Small
-   and self-contained; wants deciding alongside Randy's idea, since they pull
-   in opposite directions.
+3. **Bruce N9JCV: let an operator turn the web UI OFF** - ✅ **ANSWERED, no work needed.** Measured: with no browser attached the server wakes on its
+   timer, finds no session and sleeps; the cost is a CONNECTED browser (closing
+   one moved idle0 0.1% -> 2.9%). So "do not open the page" already is the
+   feature. A switch would only free the server's memory and keep others off a
+   shared hotspot. ⛔ "WiFi off" is NOT the same thing - it also takes the clock
+   (FT8 waits for SNTP without a GPS module), OTA and spotting.
 4. **The I/Q server** - is it a direction, or is A1 the end of it? They are
    different things and should not be conflated: A1 is **96 kbps** and needs
    none of the I/Q measurement.
