@@ -102,6 +102,10 @@ char *config_io_export(size_t *out_len)
     APP("rxaud_pan_overlap  = %u\n", (unsigned)c.rxaud_pan_ovlp_x100);  // filter overlap x100 (30 = 0.30)
     APP("rxaud_agc_attack_ms  = %u\n", (unsigned)c.rxaud_agc_attack_ms);  // AGC attack, ms (default 3)
     APP("rxaud_agc_release_ms = %u\n", (unsigned)c.rxaud_agc_release_ms); // AGC release, ms (default 150)
+    /* The AM demodulator's own filter, half-bandwidth in units of 100 Hz. Not
+     * the radio's AM filter, which is fixed at 3.2 kHz and is not in the I/Q
+     * path - see RX_AUDIO_AM_HALF_BW_HZ in audio/rx_audio.h. */
+    APP("rxaud_am_half_bw_h100 = %u\n", (unsigned)c.rxaud_am_half_bw_h100);
     APP("rxaud_agc_off        = %s\n", yn(c.rxaud_agc_off));            // AGC bypass: fixed gain at the ceiling
     APP("hp_mute            = %s\n", yn(c.hp_mute_en));            // mute speaker when headphones are in
     APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
@@ -454,6 +458,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "rxaud_pan_overlap")) settings_set_rxaud_pan_ovlp_x100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_attack_ms"))  settings_set_rxaud_agc_attack_ms((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_release_ms")) settings_set_rxaud_agc_release_ms((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_am_half_bw_h100")) settings_set_rxaud_am_half_bw_h100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_off"))        settings_set_rxaud_agc_off(to_bool(val));
             else if (!strcasecmp(key, "hp_mute"))             settings_set_hp_mute_en(to_bool(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);

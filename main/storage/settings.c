@@ -484,7 +484,8 @@ static const uint8_t s_config_export_bits[] = {
      * the same reason the power calibration does - nobody can recreate it from
      * memory. config_io_export() prints all four. */
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
-    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_HP_MUTE,
+    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_RXA_AMBW,
+    DIRTY_HP_MUTE,
     DIRTY_WIFI_STATIC_SSID,
     DIRTY_PORT_A_MODE,   /* config_io_export() prints port_a_mode; the import
                           * must land in the same mode the file left behind */
