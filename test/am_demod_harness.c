@@ -51,10 +51,14 @@
 // include that file (esp-dsp, FreeRTOS). Names kept identical so a grep for
 // either constant finds both places.
 #define DSP_SAMPLE_RATE_HZ 48000
-#define RX_DECIM_D         8
+#define RX_DECIM_D_NARROW  8             // CW / SSB
+#define RX_DECIM_D_AM      4             // AM
 #define FIR_DECIM_LEN      63
-#define AM_MAX_HALF_BW_HZ  2400          // == rx_audio.h RX_AUDIO_AM_HALF_BW_HZ (host copy: that header pulls in FreeRTOS)
-#define FS_DEC             ((float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D)
+#define FIR_LEN            255           // stage-2 taps
+#define AM_HALF_BW_HZ      3000          // == rx_audio.h RX_AUDIO_AM_HALF_BW_HZ (the DEFAULT)
+#define AM_MAX_HALF_BW_HZ  4800          // == rx_audio.h RX_AUDIO_AM_HALF_BW_MAX_HZ (what the chain can carry)
+/* The detector runs at the AM internal rate. */
+#define FS_DEC             ((float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D_AM)
 
 static int g_fail = 0;
 static void check(int ok, const char *what, const char *detail)
@@ -73,9 +77,9 @@ static float sinc_norm(float x)
     return sinf((float)M_PI * x) / ((float)M_PI * x);
 }
 
-static void build_decimator_copy(float *c)
+static void build_decimator_copy(float *c, int decim_d)
 {
-    float cutoff_norm = 0.45f / (float)RX_DECIM_D;
+    float cutoff_norm = 0.45f / (float)decim_d;
     int   M    = FIR_DECIM_LEN - 1;
     float half = M / 2.0f;
     for (int n = 0; n < FIR_DECIM_LEN; n++) {
@@ -190,23 +194,34 @@ int main(void)
     // ---- 4. Where the CHAIN's ceiling actually is -------------------------
     // This is the number AM_MAX_HALF_BW_HZ is chosen from, and it comes from
     // stage 1, not from the detector.
-    printf("\n4. Stage-1 decimator skirt (the real bandwidth limit)\n");
+    printf("\n4. Stage-1 decimator skirt, BOTH factors (the real bandwidth limit)\n");
     {
-        float c[FIR_DECIM_LEN];
-        build_decimator_copy(c);
-        const float f[] = {1000, 2000, 2400, 2700, 3000, 3500, 4000};
+        float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN];
+        build_decimator_copy(c8, RX_DECIM_D_NARROW);
+        build_decimator_copy(c4, RX_DECIM_D_AM);
+        const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800, 5400, 6000, 7000};
         float at_max = 0.0f;
+        printf("     %8s  %13s  %12s\n", "audio", "D=8 (CW/SSB)", "D=4 (AM)");
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
-            float db = decim_mag_db(c, f[i]);
-            printf("     %6.0f Hz : %+6.2f dB\n", (double)f[i], (double)db);
-            if ((int)f[i] == AM_MAX_HALF_BW_HZ) at_max = db;
+            float db8 = decim_mag_db(c8, f[i]);
+            float db4 = decim_mag_db(c4, f[i]);
+            printf("     %6.0f Hz  %+10.2f dB  %+9.2f dB%s\n",
+                   (double)f[i], (double)db8, (double)db4,
+                   (int)f[i] == AM_MAX_HALF_BW_HZ ? "   <- AM_MAX_HALF_BW_HZ" : "");
+            if ((int)f[i] == AM_MAX_HALF_BW_HZ) at_max = db4;
         }
-        snprintf(d, sizeof(d), "decimator is %.2f dB at %d Hz",
+        /* A broadcast station transmits ~4.5 kHz of audio - carrying it is the
+         * whole reason AM runs at its own D, so say whether it does. */
+        float at_bc = decim_mag_db(c4, 4500.0f);
+        snprintf(d, sizeof(d), "D=4 is %.2f dB at 4500 Hz, a broadcaster's top end",
+                 (double)at_bc);
+        check(at_bc > -3.0f, "the full broadcast audio fits at D=4", d);
+        snprintf(d, sizeof(d), "D=4 decimator is %.2f dB at %d Hz",
                  (double)at_max, AM_MAX_HALF_BW_HZ);
         // The point of the cap: at AM_MAX_HALF_BW_HZ the chain must still be
         // carrying the audio, not throwing it away. -6 dB is the limit of what
         // is worth calling passband.
-        check(at_max > -6.0f, "AM_MAX_HALF_BW_HZ is inside the chain's passband", d);
+        check(at_max > -6.0f, "AM_MAX_HALF_BW_HZ is inside the AM chain's passband", d);
     }
 
     // ---- 5. Modulation-depth linearity -----------------------------------
@@ -222,6 +237,46 @@ int main(void)
         snprintf(d, sizeof(d), "50%%=%.4f (want 0.5), 25%%=%.4f (want 0.25)",
                  (double)(r50 / r100), (double)(r25 / r100));
         check(e50 < 0.01f && e25 < 0.01f, "output is linear in modulation depth", d);
+    }
+
+    // ---- 6. THE CW REGRESSION GUARD --------------------------------------
+    // Stage 2 is FIR_LEN taps at the DECIMATED rate, so its transition band is
+    // 3.3*fs_dec/FIR_LEN: 78 Hz at D=8, 155 Hz at D=4. That 78 Hz is the entire
+    // reason the chain has two stages - a wider transition let nearby FT8 tones
+    // bleed through a nominal 150 Hz CW filter, on the air 2026-09-04 (see
+    // rx_audio.c's FIR_LEN comment). CW filters go down to 50 Hz. THIS is what
+    // makes D per-mode instead of simply 4 everywhere, so it gets a guard.
+    printf("\n6. Stage-2 transition band (why D stays 8 for CW)\n");
+    {
+        float t8 = 3.3f * ((float)DSP_SAMPLE_RATE_HZ / RX_DECIM_D_NARROW) / (float)FIR_LEN;
+        float t4 = 3.3f * ((float)DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM)     / (float)FIR_LEN;
+        printf("     D=8 (CW/SSB) : %5.1f Hz\n", (double)t8);
+        printf("     D=4 (AM)     : %5.1f Hz   (fine under a 4800 Hz filter, not under 50 Hz)\n",
+               (double)t4);
+        snprintf(d, sizeof(d), "CW transition is %.1f Hz at D=8", (double)t8);
+        check(t8 < 80.0f, "CW keeps the 78 Hz transition it was tuned for", d);
+
+        /* ---- 7. THE DEFAULT AM WIDTH MUST CLEAR THE ADJACENT CHANNEL ----
+         * Shortwave broadcast channels are spaced 5 kHz, so the NEIGHBOUR's
+         * carrier is 5000 Hz from the one being listened to. The chain can
+         * carry 4800, but using it would put the filter edge on that
+         * neighbour - which is why the default is 3000 and the ceiling is a
+         * separate constant. This guards the DECISION, not the DSP: it is
+         * arithmetic on the two constants that encode it. */
+        const float adjacent_hz = 5000.0f;
+        float edge = (float)AM_HALF_BW_HZ + t4;    /* filter edge + its skirt */
+        printf("\n7. Adjacent channel (5 kHz spacing on shortwave)\n");
+        printf("     default filter edge + transition : %.0f Hz\n", (double)edge);
+        printf("     adjacent carrier                 : %.0f Hz\n", (double)adjacent_hz);
+        printf("     margin                           : %.0f Hz\n", (double)(adjacent_hz - edge));
+        snprintf(d, sizeof(d), "default edge %.0f Hz vs neighbour at %.0f Hz",
+                 (double)edge, (double)adjacent_hz);
+        check(edge < adjacent_hz - 1000.0f,
+              "the default AM width leaves >1 kHz to the next channel", d);
+        snprintf(d, sizeof(d), "ceiling %d Hz would sit %.0f Hz from the neighbour",
+                 AM_MAX_HALF_BW_HZ, (double)(adjacent_hz - ((float)AM_MAX_HALF_BW_HZ + t4)));
+        check(AM_MAX_HALF_BW_HZ > AM_HALF_BW_HZ,
+              "the ceiling is a SEPARATE constant from the default", d);
     }
 
     printf("\n%s\n", g_fail ? "FAILURES PRESENT" : "all checks passed");

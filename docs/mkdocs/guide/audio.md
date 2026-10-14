@@ -40,9 +40,15 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     audio bandwidth is set by the Tab5 and not by the filter in the radio: it
-    is flat to about **2.4 kHz** and rolling off above that. That is a
-    communications AM filter, so a broadcast station will sound narrower than
-    it does on a domestic receiver. Nothing is wrong if it sounds that way.
+    is flat to about **3 kHz**, a 6 kHz wide signal. That is the classic "wide"
+    communications AM filter.
+
+    It is deliberately not wider. A broadcaster transmits up to about 4.5 kHz
+    of audio, but shortwave channels are spaced only 5 kHz apart, so a filter
+    wide enough for the full audio would also let the next station in. 3 kHz
+    leaves nearly 2 kHz of margin to that neighbour. A broadcast station will
+    therefore sound a little narrower than it does on a domestic receiver,
+    which is the trade and not a fault.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
@@ -131,7 +137,7 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 |------|-------|----------------------------|
 | CW, CW-R | Yes | **Yes** |
 | USB, LSB | **Yes** | No — single channel, both ears the same |
-| AM | **Yes**, to about 2.4 kHz | No — AM has no stereo content to split |
+| AM | **Yes**, to about 3 kHz | No — AM has no stereo content to split |
 | DiGi | No | No |
 | FM | No | No |
 

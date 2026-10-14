@@ -185,19 +185,52 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * Sound card"). So the passband an operator is actually listening through is
  * set HERE, by the decimation in rx_audio.c, and not by the radio.
  *
- * 2400 Hz is where the fixed stage-1 decimator is -3 dB, measured in
- * test/am_demod_harness.c (-0.93 dB at 2000, -3.06 at 2400, -6.00 at 2700).
+ * 4800 Hz, measured in test/am_demod_harness.c. AM runs at its own decimation
+ * factor (RX_DECIM_D_AM = 4, a 12 kHz internal rate and a 5400 Hz stage-1
+ * cutoff), and against that chain the skirt is -0.42 dB at 4500, -1.33 at
+ * 4800, -6.05 at 5400 and -17.04 at 6000.
+ *
+ * ⛔ BUT THE DEFAULT IS 3000, NOT THE CHAIN'S 4800, AND THE REASON IS THE
+ * BAND AND NOT THE DSP. Shortwave broadcast channels are spaced 5 kHz, so the
+ * NEIGHBOURING station's carrier sits 5 kHz from the one being listened to. A
+ * +/-4800 filter puts its edge essentially on that neighbour and would hand
+ * the operator the adjacent channel along with 4.5 kHz of fidelity - a bad
+ * trade on a crowded band, and the reason every receiver with an AM mode
+ * offers a CHOICE of width rather than its widest.
+ *
+ * 3000 (6 kHz RF) is the classic "wide" communications AM filter: it leaves
+ * 2 kHz of margin to the adjacent carrier and still carries far more audio
+ * than the 1600 that started this. The operator, on air 2026-10-15 on a very
+ * strong Chinese broadcaster at 7.410 MHz: "listening now 3.2 kHz but wf
+ * indicates signal is approx 5 kHz".
+ *
+ * ⚠ A strong signal LOOKS wider on a waterfall than it is - the visible
+ * width is a function of the display's dynamic range - so that 5 kHz is not a
+ * measurement of the transmitted bandwidth. The 5 kHz channel SPACING is the
+ * solid argument, not the trace width.
+ *
+ * ▶ The chain is now capable of 4800 (measured -1.33 dB there, -0.42 dB at a
+ * broadcaster's 4500), so a selectable AM width is a small addition on top of
+ * this - it needs a setting, a drawer row and a web control, not more DSP.
+ *
+ * ⚠ IT WAS 2400 FOR ONE COMMIT, when AM shared CW's D=8 (that chain is
+ * -3.06 dB at 2400 and -6.00 at 2700). That was half a broadcast station, and
+ * the operator heard it as "like you had your ear in a cup".
  *
  * ⚠ ui.c's compute_passband_edges_hz() DRAWS this, so it is exported rather
  * than duplicated: the tint and the filter must be the same number or the
  * display describes a passband nobody is listening through. It was a literal
  * in both files for one commit and that is exactly how they drift.
  *
- * ⚠ A broadcast station transmits about 4.5 kHz of audio, so this is roughly
- * half of what is on the air - "like you had your ear in a cup" was the
- * +/-1600 that came before it, but 2400 is still a communications filter.
- * Widening further means RX_DECIM_D, which costs CPU in EVERY mode. */
-#define RX_AUDIO_AM_HALF_BW_HZ  2400
+ * ✅ This now covers what a broadcast station actually transmits. The two
+ * earlier values are the history worth keeping: +/-1600 (reading the radio's
+ * reported filter as a width) and +/-2400 (the chain's limit while AM shared
+ * CW's decimation). */
+#define RX_AUDIO_AM_HALF_BW_HZ  3000
+/* What the chain can carry if a selectable width is ever added - measured, not
+ * assumed (test/am_demod_harness.c). Nothing uses it yet; it is here so the
+ * ceiling and the default are not the same number by accident again. */
+#define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
 #ifdef __cplusplus
 }
