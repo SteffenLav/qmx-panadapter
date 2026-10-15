@@ -7422,6 +7422,15 @@ async function tick() {
         const pill = document.getElementById("pill-" + id);
         if (pill) pill.style.display = isFt8 ? "none" : "";
       });
+      /* F (flat-spectrum) goes with them. It is not a pill, so it needs its
+         own line - and it is not kept for being a view control either: there
+         is no spectrum on this screen to flatten, so the button does nothing
+         an operator can see. Operator, 2026-10-15: "let F(lat) go on the JS8
+         page - not relevant". */
+      {
+        const f = document.getElementById("flatbtn");
+        if (f) f.style.display = isFt8 ? "none" : "";
+      }
       document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
       document.getElementById("split-handle").style.display  = noPan ? "none" : "";
