@@ -10793,8 +10793,9 @@ fpsEl.addEventListener("click", wsReclaim);
  *
  * The Tab5 sends the SAME demodulated audio its own speaker gets - after the
  * mode filter, the AGC and the limiter - as mu-law at 12 kHz on the spectrum
- * WebSocket. Each 100 ms frame becomes one AudioBuffer, scheduled to start
- * exactly where the previous one ended.
+ * WebSocket. Each 100 ms frame is resampled to this machine's own audio rate
+ * and becomes one AudioBuffer, scheduled to start exactly where the previous
+ * one ended.
  *
  * ⛔ AN AudioWorklet CANNOT BE USED HERE, AND A LOCALHOST TEST WILL NOT TELL
  * YOU THAT. AudioWorklet requires a SECURE CONTEXT. The Tab5 serves plain HTTP
@@ -10803,8 +10804,21 @@ fpsEl.addEventListener("click", wsReclaim);
  * of this used a worklet and passed every test, because the test server was
  * 127.0.0.1, which browsers treat as secure whatever the scheme. It failed on
  * the first frame from an actual Tab5. Scheduled AudioBuffers need no secure
- * context, no deprecated ScriptProcessorNode, and no resampler of our own -
- * the browser resamples a 12 kHz buffer to its own rate for us.
+ * context and no deprecated ScriptProcessorNode.
+ *
+ * ⛔ AND WE MUST RESAMPLE, NOT LET THE BROWSER DO IT PER BUFFER. Handing
+ * createBuffer() the device's 12 kHz and letting the browser resample is one
+ * line shorter and it BUZZES. Each 100 ms buffer is resampled on its own, with
+ * no knowledge of the one before it, so every chunk boundary is a small
+ * discontinuity - a click at the frame rate, 10 Hz, whose loudness follows the
+ * signal. The operator heard it as "a strange square wave at various volume
+ * levels" while the instrument said the stream itself was perfect: 40
+ * contiguous frames, no clipping, largest sample-to-sample step 0.0149. A
+ * clean stream that sounds wrong puts the fault after arrival.
+ *
+ * So the interpolation runs here, and its state - the last input sample and
+ * the fractional read position - CARRIES ACROSS CHUNKS. That is the whole
+ * point: the seam is exactly what carrying it removes.
  *
  * ⛔ THE TWO CLOCKS ARE NOT RELATED. The radio's sample clock and this
  * computer's sound card free-run against each other, typically a fraction of a
@@ -10817,8 +10831,24 @@ fpsEl.addEventListener("click", wsReclaim);
 let audioCtx = null, audioGain = null, audioNext = 0;
 let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
 let audioLate = 0, audioDropped = 0;
-const AUDIO_LEAD_S = 0.18;   /* target: how far ahead of the clock we schedule */
-const AUDIO_LEAD_MAX_S = 0.6;
+/* Resampler state, carried from one frame to the next. audioTail holds the
+   last input samples of the previous chunk so the first output of this one can
+   interpolate across the join; audioPhase is the fractional read position
+   within [tail, chunk]. */
+let audioTail = new Float32Array(2);
+let audioPhase = 0;
+/* ⛔ 0.9 s OF BUFFER, AND IT IS NOT A GUESS. The first version held 0.18 s and
+   the operator heard it break up within a minute. The instrument said why, and
+   said it was NOT packet loss: 1068 frames, ZERO sequence gaps, and TEN
+   re-primes - nothing was lost on the wire, the schedule simply ran dry ten
+   times. No loss plus a dry buffer is arrival JITTER, and the size of that
+   jitter is already written down: webserver_ws.c pauses this stream for every
+   background transfer, measured on this bench at 312, 411, 542, 697 and once
+   3094 ms. A buffer has to be bigger than the hole it is bridging. 0.9 s
+   covers all but the worst of those; the cost is 0.9 s of delay on a signal
+   nobody is timing to the millisecond. */
+const AUDIO_LEAD_S = 0.9;    /* target: how far ahead of the clock we schedule */
+const AUDIO_LEAD_MAX_S = 2.0;
 const ULAW = new Float32Array(256);
 (() => {
   /* G.711 decode, once. The firmware's encoder is the Sun reference and is
@@ -10885,17 +10915,36 @@ function audioFrame(buf) {
   audioFrames++;
 
   const n = buf.length - AUDIO_HDR_LEN;
-  let ab;
-  try {
-    ab = audioCtx.createBuffer(1, n, rate);
-  } catch (e) {
-    /* A context that will not take the device's rate is not something this
-       page can work around; stop rather than play it at the wrong pitch. */
-    audioStopAndTell();
-    return;
-  }
+
+  /* [previous chunk's tail][this chunk], so the first output sample can
+     interpolate across the join instead of starting again from zero. */
+  const T   = audioTail.length;
+  const src = new Float32Array(T + n);
+  src.set(audioTail, 0);
+  for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+
+  const ratio = rate / audioCtx.sampleRate;
+  /* Outputs are produced while there is a sample on BOTH sides of the read
+     position, i.e. while pos + 1 <= src.length - 1. */
+  const outN = Math.max(0, Math.ceil((src.length - 1 - audioPhase) / ratio));
+  if (outN <= 0) return;
+
+  const ab = audioCtx.createBuffer(1, outN, audioCtx.sampleRate);
   const ch = ab.getChannelData(0);
-  for (let i = 0; i < n; i++) ch[i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+  let pos = audioPhase;
+  let produced = 0;
+  for (let i = 0; i < outN && pos < src.length - 1; i++) {
+    const k = pos | 0, f = pos - k;
+    ch[i] = src[k] * (1 - f) + src[k + 1] * f;
+    pos += ratio;
+    produced++;
+  }
+  /* Carry: keep the last T input samples, and express the read position
+     relative to where they will sit at the front of the next chunk. */
+  audioTail = src.slice(src.length - T);
+  audioPhase = pos - (src.length - T);
+  if (audioPhase < 0) audioPhase = 0;
+  if (produced === 0) return;
 
   const now = audioCtx.currentTime;
   if (audioNext < now + 0.01) {
@@ -10912,10 +10961,10 @@ function audioFrame(buf) {
     return;
   }
 
-  const src = audioCtx.createBufferSource();
-  src.buffer = ab;
-  src.connect(audioGain);
-  src.start(audioNext);
+  const node = audioCtx.createBufferSource();
+  node.buffer = ab;
+  node.connect(audioGain);
+  node.start(audioNext);
   audioNext += ab.duration;
 
   /* Repaint on CHANGE, not on every frame: the only things the button shows
