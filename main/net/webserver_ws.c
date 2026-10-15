@@ -28,10 +28,13 @@
  * pages keep working; one that knows 0x02 as "you were displaced" would have
  * disconnected itself on the first audio frame. */
 #define WS_FRAME_TYPE_AUDIO     0x03
-/* 100 ms of audio is 1200 samples; the cap allows one 50 ms catch-up burst
- * after a paused transfer without ever becoming a frame big enough to hurt a
- * congested link. */
-#define WS_AUDIO_MAX_SAMPLES    1800
+/* 100 ms of audio is 1200 samples. The cap is 1 FULL SECOND, because the job
+ * it has to do is empty the backlog left by a diag-mirror pause in one tick -
+ * a 150 ms cap (the first value here) needed four ticks to clear a 500 ms
+ * hold, so the delay rippled on for half a second after the link came back.
+ * One frame of 12 KB on resume, ten times a minute at worst, against a link
+ * that carries 10 KB/s of spectrum continuously. */
+#define WS_AUDIO_MAX_SAMPLES    12000
 #define WS_AUDIO_HDR_LEN        6
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
@@ -535,22 +538,28 @@ static void ws_push_task(void *arg)
         if ((!s_session_active || s_ws_fd < 0) && rx_audio_web_is_enabled())
             rx_audio_web_set_enabled(false);
 
-        /* ⛔ KEEP DRAINING THE AUDIO RING WHILE PAUSED, AND THROW IT AWAY.
+        /* ⛔ DO NOT DRAIN THE RING WHILE PAUSED - AND THIS IS A REVERSAL.
          *
-         * MEASURED on the bench 2026-10-15: four transfer pauses in two
-         * minutes (697, 411, 344 and 542 ms) and 37,168 samples - 3.1 s of
-         * audio - gone. The pause itself only accounts for about 2 s of that.
-         * The rest was the ring BACKING UP behind a consumer that had stopped,
-         * so on resume the read side found half a second of stale audio and
-         * skipped it as well. Paying twice for one pause.
+         * An earlier version of this threw the audio away during a pause, on
+         * the reasoning that the link belongs to the transfer so the audio is
+         * lost anyway. That reasoning was wrong about WHOSE loss it is. The
+         * audio is not lost, it is DELAYED: the ring holds it, and a pause
+         * shorter than the ring can be sent as a catch-up burst the moment the
+         * link is free, which the browser's own 0.9 s buffer absorbs without a
+         * break. Discarding it turned a recoverable hold into a guaranteed
+         * dropout.
          *
-         * The audio in a pause is lost either way - the whole point of the
-         * pause is that the SDIO link belongs to the upload - so drain it into
-         * nothing. The ring then never overflows, the resume starts from live
-         * audio with no skip, and rx_audio_web_dropped() counts what was
-         * actually lost instead of the loss plus its own echo. */
-        if (s_ws_paused && rx_audio_web_is_enabled())
-            rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES);
+         * MEASURED, and the measurement also corrected what I had blamed:
+         * the pauses are sd_archive.c's 30 s diag mirror, not the POTA/SOTA
+         * feeds - "sd_arch: diag mirror: held the web stream 4110 ms writing
+         * 27844 B", then 509 and 447 ms on the same cadence. They are mostly
+         * well under a second, which is exactly the range the ring can cover.
+         *
+         * The pause itself must stay: the SD card and the C6 WiFi link share
+         * one SDMMC host on the P4, and overlapping traffic on both slots has
+         * permanently corrupted the WiFi RPC link in the field (see the note
+         * by the upload path in webserver.c). Sending audio through a pause is
+         * not an option; carrying it across one is. */
 
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not

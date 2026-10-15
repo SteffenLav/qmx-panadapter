@@ -1201,7 +1201,13 @@ static inline void rxcap_push(const int16_t *out, int pairs)
  * panned CW pair that was summed without the halving would clip.
  */
 #define WEBAUD_RATE_HZ  (DSP_SAMPLE_RATE_HZ / WEBAUD_DECIM)   /* 12000 */
-#define WEBAUD_RING_N   (WEBAUD_RATE_HZ)                      /* 1.0 s */
+/* ⛔ 3 s, SIZED FROM THE MEASURED HOLD, not from a round number. The web
+ * stream is paused whenever sd_archive.c mirrors the diag log - every 30 s,
+ * measured at 173, 447, 509 and once 4110 ms. The ring is what carries the
+ * audio across one of those, so it has to be longer than the holds it is
+ * expected to cover. 3 s at 12 kHz mono is 72 KB of PSRAM, which is nothing
+ * here, and it covers everything but the rare multi-second burst. */
+#define WEBAUD_RING_N   (WEBAUD_RATE_HZ * 3)                  /* 3.0 s */
 _Static_assert(WEBAUD_RATE_HZ == RX_AUDIO_WEB_RATE_HZ,
                "the rate the browser is told and the rate it is sent must be one number");
 
@@ -1273,9 +1279,16 @@ int rx_audio_web_read(int16_t *dst, int max)
      * and say how much went. The listener hears a break, which is honest,
      * rather than a delay that never resolves. */
     uint32_t avail = (w >= r) ? (w - r) : (WEBAUD_RING_N - r + w);
-    const uint32_t lag_max = WEBAUD_RATE_HZ / 2;        /* 500 ms */
+    /* ⛔ 2.5 s, AND THE OLD 500 ms WAS THE BUG. A backlog is latency, but it is
+     * only worth throwing away when it can no longer be caught up. The first
+     * version skipped anything over 500 ms - which is SHORTER THAN THE PAUSES
+     * THAT CREATE IT, so every diag-mirror hold produced a guaranteed dropout:
+     * the audio was held, then discarded for having been held. The threshold
+     * has to sit above the holds, so the burst goes out and the browser's own
+     * buffer absorbs it, and only a genuinely hopeless backlog is dropped. */
+    const uint32_t lag_max = (WEBAUD_RATE_HZ * 5) / 2;  /* 2.5 s */
     if (avail > lag_max) {
-        uint32_t skip = avail - (WEBAUD_RATE_HZ / 5);   /* leave 200 ms */
+        uint32_t skip = avail - WEBAUD_RATE_HZ;         /* leave 1.0 s */
         r = (r + skip) % WEBAUD_RING_N;
         s_web_dropped += skip;
     }

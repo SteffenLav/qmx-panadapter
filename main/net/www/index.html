@@ -10848,7 +10848,11 @@ let audioPhase = 0;
    covers all but the worst of those; the cost is 0.9 s of delay on a signal
    nobody is timing to the millisecond. */
 const AUDIO_LEAD_S = 0.9;    /* target: how far ahead of the clock we schedule */
-const AUDIO_LEAD_MAX_S = 2.0;
+/* 3.0 s, not 2.0: after a diag-mirror pause the device sends up to a second
+   of catch-up in one frame, and that burst lands on top of the 0.9 s target.
+   A ceiling the burst can touch would drop the very chunk the burst exists to
+   deliver. */
+const AUDIO_LEAD_MAX_S = 3.0;
 const ULAW = new Float32Array(256);
 (() => {
   /* G.711 decode, once. The firmware's encoder is the Sun reference and is
