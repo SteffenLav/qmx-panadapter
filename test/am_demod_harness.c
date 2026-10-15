@@ -203,17 +203,28 @@ int main(void)
     // stage 1, not from the detector.
     printf("\n4. Stage-1 decimator skirt, BOTH factors (the real bandwidth limit)\n");
     {
-        float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN];
+        float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN], c2[FIR_DECIM_LEN];
         build_decimator_copy(c8, RX_DECIM_D_NARROW);
         build_decimator_copy(c4, RX_DECIM_D_AM);
-        const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800, 5000, 5200, 5400, 6000, 7000};
+        /* ⭐ D=2 IS NOT BUILT - this column is the feasibility study for it.
+           The AM list is to reach 10.0 kHz (the HF legal maximum) and 20.0 kHz
+           (a broadcaster's full audio, for SWL): half-bandwidths of 5000 and
+           10000 Hz. D=4 carries neither - it is already -2.40 dB at 5000.
+           Measure before writing any of it. That order is the whole lesson of
+           2026-10-15, when the constant was raised first. */
+        build_decimator_copy(c2, 2);
+        const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800,
+                           5000, 5200, 5400, 6000, 7000,
+                           8000, 9000, 10000, 10500, 11000, 12000};
         float at_max = 0.0f;
-        printf("     %8s  %13s  %12s\n", "audio", "D=8 (CW/SSB)", "D=4 (AM)");
+        printf("     %8s  %13s  %12s  %12s\n",
+               "audio", "D=8 (CW/SSB)", "D=4 (AM)", "D=2 (study)");
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
             float db8 = decim_mag_db(c8, f[i]);
             float db4 = decim_mag_db(c4, f[i]);
-            printf("     %6.0f Hz  %+10.2f dB  %+9.2f dB%s\n",
-                   (double)f[i], (double)db8, (double)db4,
+            float db2 = decim_mag_db(c2, f[i]);
+            printf("     %6.0f Hz  %+10.2f dB  %+9.2f dB  %+9.2f dB%s\n",
+                   (double)f[i], (double)db8, (double)db4, (double)db2,
                    (int)f[i] == AM_MAX_HALF_BW_HZ ? "   <- AM_MAX_HALF_BW_HZ" : "");
             if ((int)f[i] == AM_MAX_HALF_BW_HZ) at_max = db4;
         }
