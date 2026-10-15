@@ -723,6 +723,9 @@
     cursor: default;
   }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
+  /* A JS8 conversation line that names me, and the row it sits on - js8Poll(). */
+  .js8-me     { background: var(--accent); color: #000; border-radius: 3px; }
+  .js8-row-me { background: rgba(255, 185, 90, 0.13); }
   /* Count, not a binary active-colour: Dirk DK7CVD wanted the Options button to
      show something was on, Roy KI0ER pointed out a plain on/off colour would
      ALWAYS read "on" for an operator who runs filters permanently, telling him
@@ -1183,6 +1186,13 @@
           </select>
           <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
           <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
+          <!-- The Tab5's JS8 tab bar has had a Flush since the page shipped and
+               this one did not - Ryan KK6DZB, 2026-10-14: "No flush button in
+               the webUI?". Same action and the same code path on the device, and
+               no confirmation for the same reason the glass has none: js8_chat
+               is the DISPLAY store, the QSOs are in the ADIF log. -->
+          <button type="button" id="js8-flush" class="bot-btn"
+                  title="Empty the JS8 conversation list. The log is not touched.">Flush</button>
         </span>
       </div>
       <!-- The conversation grid, composed by the DEVICE (js8_page_render, the
@@ -6394,12 +6404,41 @@ async function js8Poll() {
   js8Shown = stamp;
   /* Each row carries the message it belongs to, so a click can be resolved
      without re-deriving it. data-mi = -1 for a row with no message. */
+  /* ⭐ THE LINES THAT NAME ME ARE MARKED. Ryan KK6DZB, 2026-10-14, after a
+     real JS8 QSO: "Hight light your call sign if someone responds to you.
+     (cant tell who is responding to CQ with out reading through a large list
+     of HB)". A heartbeat list is mostly other people's traffic and the one
+     line that matters is the one with your call in it.
+
+     The callsign comes from the DEVICE (j.me, upper-cased there), not from the
+     settings form this page also has: this pane polls /api/js8 and nothing
+     else, and a callsign arriving on a different schedule is a second source
+     of truth.
+
+     Matched AFTER escaping, which is safe because a callsign is letters,
+     digits and '/' and js8Esc() rewrites none of those, and bounded so that
+     OZ1LAV does not light up inside OZ1LAVX. The whole row is tinted as well
+     as the callsign itself: the point is to find the row at a glance. */
+  /* Stripped to the characters a callsign can contain, which also means the
+     pattern needs no regex escaping at all - the first cut of this line
+     escaped by hand, got it wrong, and check_web.py refused the build. */
+  const me = (j.me || "").toUpperCase().replace(/[^A-Z0-9/]/g, "");
+  const meRe = me
+    ? new RegExp("(^|[^A-Z0-9/])(" + me + ")(?![A-Z0-9/])", "g")
+    : null;
   pre.innerHTML = (j.lines || []).map((t, r) => {
     const mi = (r < rowMsg.length) ? rowMsg[r] : -1;
     const who = (mi >= 0 && mi < js8Senders.length) ? js8Senders[mi] : "";
     const tap = who ? ' style="cursor:pointer"' : "";
-    return '<span data-mi="' + mi + '" data-call="' + js8Esc(who) + '"' + tap + '>'
-         + js8Esc(t || " ") + "</span>";
+    let body = js8Esc(t || " ");
+    let mine = false;
+    if (meRe) {
+      const marked = body.replace(meRe, '$1<b class="js8-me">$2</b>');
+      mine = marked !== body;
+      body = marked;
+    }
+    return '<span data-mi="' + mi + '" data-call="' + js8Esc(who) + '"' +
+           (mine ? ' class="js8-row-me"' : '') + tap + '>' + body + "</span>";
   }).join("\n");
   js8Hint(j);
 }
@@ -6409,6 +6448,12 @@ function js8Hint(j) {
     ? "Tap a line to reply to that station. " + j.count + " in the store."
     : "Nothing decoded yet. Heartbeats and directed messages appear here too, not only free text.";
 }
+
+document.getElementById("js8-flush").addEventListener("click", async () => {
+  await sendCmd({ action: "js8_flush" });
+  js8Shown = "";          /* the store is empty now - force a repaint */
+  js8Poll();
+});
 
 document.getElementById("js8-tab-conv").addEventListener("click", () => {
   js8Tab = "conv"; js8TabsSync("JS8");

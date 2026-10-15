@@ -1864,6 +1864,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         ft8_screen_view_request_js8_macro(0);
     } else if (action && strcmp(action, "js8_grid") == 0) {
         ft8_screen_view_request_js8_macro(1);
+    } else if (action && strcmp(action, "js8_flush") == 0) {
+        /* The browser's Flush. Ryan KK6DZB, 2026-10-14: "No flush button in
+         * the webUI?" - the Tab5's JS8 tab bar has had one all along. It
+         * empties the conversation the JS8 page draws; it does NOT touch the
+         * ADIF log, the decode list or anything on the air. Deferred to the
+         * LVGL tick so it is the same code path as the button. */
+        ft8_screen_view_request_js8_flush();
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        return ESP_OK;
     } else if (action && strcmp(action, "js8_submode") == 0) {
         /* {"action":"js8_submode","submode":0|1|2|4} - JS8Call's own NSUBMODE:
          * 0 Normal, 1 Fast, 2 Turbo, 4 Slow.
@@ -5157,6 +5166,22 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
 
         cJSON_AddNumberToObject(root, "used", used);
         cJSON_AddNumberToObject(root, "count", have);
+
+        /* ⭐ MY OWN CALLSIGN, UPPER CASED, so the page can mark the lines
+         * that name me. Ryan KK6DZB, 2026-10-14: "Hight light your call sign
+         * if someone responds to you. (cant tell who is responding to CQ with
+         * out reading through a large list of HB)". Served rather than read
+         * from the settings form, because the JS8 pane polls /api/js8 and
+         * nothing else, and a callsign fetched on a different schedule is a
+         * second source of truth. Empty when none is set. */
+        {
+            qmx_settings_t qs;
+            settings_load_all(&qs);
+            char me[FT8_CALL_MAX_LEN] = {0};
+            for (size_t i = 0; i < sizeof(me) - 1 && qs.my_callsign[i]; i++)
+                me[i] = (char)toupper((unsigned char)qs.my_callsign[i]);
+            cJSON_AddStringToObject(root, "me", me);
+        }
 
         cJSON *lines = cJSON_AddArrayToObject(root, "lines");
         for (int r = 0; lines && r < JS8_PAGE_ROWS; r++) {

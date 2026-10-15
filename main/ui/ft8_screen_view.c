@@ -1320,6 +1320,14 @@ static volatile bool s_web_cq_pending;               // set from the HTTP task
 static volatile bool s_mode_label_dirty;
 static void mode_label_repaint(void);
 
+/* The browser's Flush. Ryan KK6DZB, 2026-10-14: "No flush button in the
+ * webUI?" - the Tab5 tab bar has had one since the JS8 page shipped and the
+ * page did not. Deferred rather than done on the HTTP task because
+ * js8_chat_clear() is a bare memset of a shared store and the repaint is
+ * LVGL's: doing it here makes the browser's Flush the SAME code path as the
+ * button, rather than a second one that races differently. */
+static volatile bool s_web_js8_flush_pending;
+
 /* JS8 free-text send requested from the browser. Same deferral as the CQ flag
  * and for the same reason: the HTTP task leaves the text behind and the 1 Hz
  * LVGL timer acts on it. The result travels back through /api/status, because
@@ -1796,6 +1804,13 @@ static void t_clock_cb(lv_timer_t *t)
     if (s_mode_label_dirty) {
         s_mode_label_dirty = false;
         mode_label_repaint();
+    }
+
+    if (s_web_js8_flush_pending) {
+        s_web_js8_flush_pending = false;
+        js8_chat_clear();
+        conv_repaint();
+        ESP_LOGI(TAG, "js8 conversation flushed by the browser");
     }
 
     if (s_web_cq_pending) {
@@ -2693,6 +2708,14 @@ static void start_cq_run(bool interactive)
 void ft8_screen_view_request_cq(void)
 {
     s_web_cq_pending = true;
+}
+
+/* The browser's Flush - same effect as the Tab5 tab bar's own, and no
+ * confirmation for the same reason: js8_chat is a DISPLAY store, the QSOs are
+ * in ADIF. See the note on tab_flush_cb(). */
+void ft8_screen_view_request_js8_flush(void)
+{
+    s_web_js8_flush_pending = true;
 }
 
 /* JS8 free text from the browser. Only records the request - the 1 Hz LVGL
