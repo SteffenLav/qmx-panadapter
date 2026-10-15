@@ -32,6 +32,11 @@ typedef struct {
     bool  armed;         /* req[sent] is currently armed or on the air */
     bool  active;
     char  text[JS8_JSC_TEXT_MAX * 4];
+    /* Characters of `text` carried by each frame, from the encoder rather
+     * than re-derived here - two copies of the packing rule would drift, and
+     * the packing is not a simple division (both codings are tried per frame
+     * and the one carrying more wins, so frames hold different amounts). */
+    int   used[JS8_FTX_MAX_FRAMES];
 } js8_ftx_run_t;
 
 /* Only the LVGL task writes this (js8_ftx_tick, js8_ftx_start are both called
@@ -95,7 +100,8 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
 
     uint8_t fr[JS8_FTX_MAX_FRAMES * JS8_FRAME_BYTES];
     uint8_t it[JS8_FTX_MAX_FRAMES];
-    int n = js8_jsc_text_to_frames(norm, fr, it, JS8_FTX_MAX_FRAMES);
+    int used[JS8_FTX_MAX_FRAMES] = {0};
+    int n = js8_jsc_text_to_frames_used(norm, fr, it, JS8_FTX_MAX_FRAMES, used);
     if (n <= 0) {
         if (out_err) snprintf(out_err, out_err_len, "Nothing sendable in that message");
         return false;
@@ -106,6 +112,7 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
     memset(&s_run, 0, sizeof(s_run));
     s_run.total = n;
     snprintf(s_run.text, sizeof(s_run.text), "%s", norm);
+    memcpy(s_run.used, used, sizeof(s_run.used));
 
     /* ⛔ ENCODE EVERY FRAME NOW. A failure here is a refusal the operator sees
      * with the radio cold; a failure three frames in is a half-sent message
@@ -122,7 +129,26 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
          * for Normal and sent at Turbo's symbol rate decodes nowhere. */
         r->protocol       = ft8_op_mode_protocol();
         js8_encode(&fr[(size_t)i * JS8_FRAME_BYTES], it[i], r->protocol, r->tones);
-        /* What the status line shows for this frame. The whole message does
+        /* What the status line shows for this frame: the WORDS in it, with
+         * the frame number in front for how much is left to go.
+         *
+         * ⭐ THE WORDS, NOT ONLY A COUNT. Ryan KK6DZB, after a real QSO:
+         * "rather than just show the sending frames". "3 of 7" says a run
+         * is alive and nothing about what is on the air, which is the part
+         * an operator is waiting to see go out. The slice comes from the
+         * ENCODER's own character counts (js8_jsc_text_to_frames_used), so
+         * it is the same packing that was encoded - never a re-pack here,
+         * which would be a second implementation of a rule that is not even
+         * a simple division: both codings are tried per frame and the one
+         * carrying more wins, so frames hold different amounts.
+         *
+         * ⚠ 32 BYTES TOTAL, and snprintf truncates rather than overflows.
+         * "12/12 " is six of them and a frame carries roughly a dozen
+         * characters, so the words fit; a truncated word would still beat
+         * no word. The old text was "free text, frame N of M" - 26 bytes
+         * of the 32 spent saying nothing that changes.
+         *
+         * (old note, still true) The whole message does
          * not fit, and the frame number is what tells the operator how much
          * is left to go.
          *
@@ -137,8 +163,16 @@ bool js8_ftx_start(const char *text, int audio_freq_hz,
          * static assert below - but -Werror=format-truncation reasons about
          * `int`, so a 10-digit frame number against a 32-byte field is a
          * build failure without it. */
-        snprintf(r->display_text, sizeof(r->display_text),
-                 "free text, frame %d of %d", (i + 1) % 100, n % 100);
+        {
+            size_t from = 0;
+            for (int k = 0; k < i; k++) from += (size_t)used[k];
+            const size_t nlen = strlen(norm);
+            size_t take = (from < nlen) ? (size_t)used[i] : 0;
+            if (from + take > nlen) take = nlen - from;
+            snprintf(r->display_text, sizeof(r->display_text),
+                     "%d/%d %.*s", (i + 1) % 100, n % 100,
+                     (int)take, norm + from);
+        }
     }
 
     char err[64];
@@ -229,4 +263,36 @@ bool js8_ftx_active(int *sent, int *total)
     if (sent)  *sent  = s_run.sent;
     if (total) *total = s_run.total;
     return s_run.active;
+}
+
+/* ⭐ THE WORDS ON THE AIR RIGHT NOW, not a frame number.
+ *
+ * Ryan KK6DZB, 2026-10-13, after a real JS8 QSO: a multi-frame free-text
+ * message showed only "free text 3/7" while it went out, so an operator could
+ * see that something was being sent but not what. The counts come from the
+ * encoder (js8_jsc_text_to_frames_used), so this is a slice of the SAME
+ * normalised string that was encoded - never a re-pack, which would be a
+ * second implementation of the packing rule and would drift from the first.
+ *
+ * Returns false when nothing is being sent, so a caller can leave its line
+ * alone rather than printing an empty one. */
+bool js8_ftx_frame_text(char *out, size_t out_len)
+{
+    if (out && out_len) out[0] = ' ';
+    if (!s_run.active || !out || out_len == 0) return false;
+    const int idx = s_run.sent;
+    if (idx < 0 || idx >= s_run.total) return false;
+
+    /* Where this frame starts: the sum of what every earlier frame carried. */
+    size_t from = 0;
+    for (int i = 0; i < idx; i++) from += (size_t)s_run.used[i];
+    const size_t len = strlen(s_run.text);
+    if (from >= len) return false;
+
+    size_t take = (size_t)s_run.used[idx];
+    if (take == 0 || from + take > len) take = len - from;
+    if (take >= out_len) take = out_len - 1;
+    memcpy(out, s_run.text + from, take);
+    out[take] = ' ';
+    return true;
 }

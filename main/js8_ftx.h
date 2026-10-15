@@ -55,6 +55,11 @@ void js8_ftx_cancel(void);
  * non-NULL (*sent counts frames already transmitted). */
 bool js8_ftx_active(int *sent, int *total);
 
+/* The text of the frame currently on the air - the words, not "3 of 7".
+ * False when nothing is being sent. Ryan KK6DZB; see the note at the
+ * definition for why the character counts come from the encoder. */
+bool js8_ftx_frame_text(char *out, size_t out_len);
+
 /* Drive the run. Arms the next frame once the previous burst has finished.
  *
  * ⛔ CALL THIS FROM THE LVGL TASK, about once a second - it is the same

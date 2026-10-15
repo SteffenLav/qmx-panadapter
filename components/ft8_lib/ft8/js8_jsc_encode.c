@@ -290,6 +290,12 @@ int js8_jsc_text_to_frame(const char* text, uint8_t frame[9])
 int js8_jsc_text_to_frames(const char* text, uint8_t* frames, uint8_t* itypes,
                            int max_frames)
 {
+    return js8_jsc_text_to_frames_used(text, frames, itypes, max_frames, NULL);
+}
+
+int js8_jsc_text_to_frames_used(const char* text, uint8_t* frames, uint8_t* itypes,
+                                int max_frames, int* used)
+{
     if (!text || !frames || !itypes || max_frames <= 0) return -1;
 
     char norm[JS8_JSC_TEXT_MAX * 4];
@@ -298,12 +304,13 @@ int js8_jsc_text_to_frames(const char* text, uint8_t* frames, uint8_t* itypes,
     int n = 0;
     const char* p = norm;
     while (*p && n < max_frames) {
-        int used = js8_jsc_text_to_frame(p, frames + (size_t)n * 9);
+        int n_used = js8_jsc_text_to_frame(p, frames + (size_t)n * 9);
         /* ⛔ A frame that consumes NOTHING would spin here forever. It can
          * only happen if the leading character has no Huffman code, which
          * normalize() already removed - so this is a backstop, not a path. */
-        if (used <= 0) break;
-        p += used;
+        if (n_used <= 0) break;
+        if (used) used[n] = n_used;
+        p += n_used;
         n++;
     }
     if (n <= 0) return n;

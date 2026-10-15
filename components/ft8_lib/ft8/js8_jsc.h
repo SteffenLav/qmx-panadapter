@@ -124,6 +124,18 @@ int js8_jsc_text_to_frame(const char* text, uint8_t frame[9]);
 int js8_jsc_text_to_frames(const char* text, uint8_t* frames, uint8_t* itypes,
                            int max_frames);
 
+/* The same, but also reporting how many CHARACTERS of the normalised text each
+ * frame carried - `used` is `max_frames` ints, or NULL for the plain form.
+ *
+ * ⭐ WHY A CALLER WANTS THIS: "free text 3/7" tells an operator nothing about
+ * what is on the air right now. With the per-frame counts the sender can print
+ * the actual words going out, which is what Ryan KK6DZB asked for after a real
+ * QSO. The information was always here - text_to_frame() returns it and the
+ * bulk form threw it away - so this hands it back rather than making the
+ * caller re-run the packing and duplicate the itype logic. */
+int js8_jsc_text_to_frames_used(const char* text, uint8_t* frames, uint8_t* itypes,
+                                int max_frames, int* used);
+
 #ifdef __cplusplus
 }
 #endif
