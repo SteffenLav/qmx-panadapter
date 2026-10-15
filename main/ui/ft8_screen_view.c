@@ -3024,11 +3024,11 @@ static uint32_t mode_accent_hex(ft8_op_mode_t mode)
     }
 }
 
-/* ⛔ A NON-NORMAL JS8 SUBMODE MUST SAY SO ON THE GLASS. The submode is a
- * different physical layer - slot period, symbol rate, tone spacing, sync
+/* ⛔ IN JS8 THIS LABEL ALWAYS NAMES THE SPEED, Normal included. The submode
+ * is a different physical layer - slot period, symbol rate, tone spacing, sync
  * arrays - so a station on Turbo decodes NOTHING from the Normal stations
  * everyone else runs, and it is persisted in NVS, so it survives a reboot and
- * a power cycle. This label said "MODE: JS8" either way.
+ * a power cycle. This label said "MODE: JS8" whatever was set.
  *
  * Ryan KK6DZB, 2026-10-14, after the webUI submode picker shipped: "I could
  * hear activity but no more decodes... Rebooted tab5 and qmx. STILL NO MORE
@@ -3036,9 +3036,21 @@ static uint32_t mode_accent_hex(ft8_op_mode_t mode)
  * the speed control was on the Tab5 - so he had no way to see what was set or
  * to put it back.
  *
- * The submode text is never LONGER than "MODE: JS8" (9 characters), which is
- * what already fits the 288 px of the left pane at montserrat 48 - that is why
- * the "MODE: " prefix is dropped rather than appended to.
+ * ⚠ THE FIRST CUT SHOWED THE SPEED ONLY WHEN IT WAS NOT NORMAL, which still
+ * leaves an operator unable to confirm the speed is right - absence of a word
+ * is not a reading. The operator asked for it on every submode.
+ *
+ * ⭐ WIDTHS ARE MEASURED, from lv_font_montserrat_48.c's own adv_w table
+ * against the 288 px of left-pane content (LEFT_W 320 less 2x16 padding):
+ *
+ *     MODE: JS8   267.1 px      JS8 TURBO   275.9 px
+ *     MODE: FT8   271.4 px      JS8 SLOW    251.0 px
+ *     JS8 NORM    258.3 px      JS8 FAST    221.9 px
+ *     JS8 NORMAL  321.9 px  <-- DOES NOT FIT, hence NORM
+ *
+ * ⛔ An earlier version of this comment claimed the submode text is "never
+ * longer than MODE: JS8". It is not: JS8 TURBO is 9 px wider. Both fit, so
+ * nothing broke, but the claim was a guess and this table is not.
  *
  * ftx_protocol_label(), not ftx_protocol_name(): the latter must keep saying
  * plain "JS8" because it is the ADIF mode and the PSK Reporter mode. See the
@@ -3050,11 +3062,10 @@ static const char *mode_label(ft8_op_mode_t mode)
     case FT8_OP_MODE_FT4: return "MODE: FT4";
     case FT8_OP_MODE_JS8: {
         const ftx_protocol_t p = ft8_op_mode_protocol_for(mode);
-        if (p == FTX_PROTOCOL_JS8) return "MODE: JS8";
         snprintf(buf, sizeof buf, "JS8 %s",
                  p == FTX_PROTOCOL_JS8_FAST  ? "FAST"  :
                  p == FTX_PROTOCOL_JS8_TURBO ? "TURBO" :
-                 p == FTX_PROTOCOL_JS8_SLOW  ? "SLOW"  : "?");
+                 p == FTX_PROTOCOL_JS8_SLOW  ? "SLOW"  : "NORM");
         return buf;
     }
     default:              return "MODE: FT8";
