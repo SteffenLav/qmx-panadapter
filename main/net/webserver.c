@@ -253,6 +253,12 @@ static void add_ft8_tx_status(cJSON *root)
         cJSON_AddBoolToObject(f,   "ftx_active", run);
         cJSON_AddNumberToObject(f, "ftx_sent",   run ? sent + 1 : 0);
         cJSON_AddNumberToObject(f, "ftx_total",  total);
+        /* ⭐ THE WORDS GOING OUT, not just "3 of 7" - Ryan KK6DZB after a
+         * real QSO. Empty when nothing is being sent, so the page can leave
+         * its line alone rather than printing a blank one. */
+        char ftxt[80];
+        js8_ftx_frame_text(ftxt, sizeof(ftxt));
+        cJSON_AddStringToObject(f, "ftx_frame_text", ftxt);
         char res[64];
         ft8_screen_view_freetext_result(res, sizeof(res));
         cJSON_AddStringToObject(f, "ftx_result", res);
@@ -671,6 +677,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                  * copies of "where does the next character go" drift. */
                 cJSON_AddNumberToObject(c, "col", cw_decode_line_col());
                 cJSON_AddNumberToObject(c, "wpm", cw_decode_wpm());
+                /* ⭐ THE GRID SHAPE, SENT. The browser had COLS = 72 and two
+                 * hardcoded row elements, so CW_LINE_ROWS 2 -> 4 would have
+                 * left it drawing half the line with no error anywhere - the
+                 * same silent truncation the comment above records from the
+                 * evening the two-line pane shipped, in the other direction.
+                 * One definition, and the page draws what it is told. */
+                cJSON_AddNumberToObject(c, "rows", CW_LINE_ROWS);
+                cJSON_AddNumberToObject(c, "cols", CW_LINE_COLS);
                 cJSON_AddItemToObject(root, "cw", c);
             }
         }

@@ -130,7 +130,7 @@ unsigned cw_decode_total(void);
 // line by the same column. That assert is what caught it.
 #define CW_LINE_COLS 72
 
-/* TWO display lines, not one (operator, 2026-09-07). Text fills the first, then
+/* FOUR display lines (Sam W7STF; two since 2026-09-07). Text fills the first, then
  * wraps DOWN to the second; when that is full it starts overwriting the first
  * again, exactly as the single line used to overwrite itself.
  *
@@ -142,7 +142,14 @@ unsigned cw_decode_total(void);
  * ⛔ The SECOND line must be indented to the width of the "CW ~20wpm:" prefix
  * on the first, or the two grids do not line up and the wrap reads as a jump.
  * Both screens do that; see CW_PREFIX_COLS in ui.c and #cw-line in index.html. */
-#define CW_LINE_ROWS 2
+/* ✅ 2 -> 4 on 2026-10-15, Sam W7STF. Nothing else had to change: the grid is
+ * one buffer, the write position runs straight through it, and both surfaces
+ * now build their rows FROM this number rather than naming them - ui.c in one
+ * loop, index.html from a rows-long template. Raising it again is this line.
+ *
+ * ⚠ THE STRIP GROWS UPWARD over the waterfall - the bottom edge, just above
+ * the band plan, is fixed. Four rows cover about 66 px more of it than two. */
+#define CW_LINE_ROWS 4
 #define CW_GRID_CELLS (CW_LINE_ROWS * CW_LINE_COLS)
 
 // Copy the line as it should be DRAWN: the grid, with two blank columns laid

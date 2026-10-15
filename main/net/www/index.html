@@ -635,14 +635,20 @@
              background: rgba(0,0,0,.7); padding: 2px 6px;
              pointer-events: none; }   /* the waterfall under it is click-to-tune */
   #cw-head { color: #30e060; }         /* green header, as on the Tab5 */
-  #cw-text, #cw-text2 { color: #30e0e0; }   /* cyan decoded text */
-  /* ⛔ ROW 2 IS INDENTED BY THE HEADER'S OWN WIDTH, not by a guessed number of
-     spaces. #cw-indent is filled with exactly the characters #cw-head holds, in
-     the same monospace font, and made invisible - so the two grids line up
-     whatever the header says ("CW ~08wpm:" and "CW ~??wpm:" are not the same
-     length as a percentage of the line). The text wraps from the end of row 1
-     to the start of row 2, and a misaligned wrap reads as a jump. */
-  #cw-indent { visibility: hidden; }
+  /* .cw-row-text is every row built below the first; #cw-text is row 1, which
+     is in the markup because the header sits beside it. #cw-text2 was the old
+     fixed second row and no longer exists. */
+  #cw-text, .cw-row-text { color: #30e0e0; }   /* cyan decoded text */
+  /* ⛔ EVERY ROW BELOW THE FIRST IS INDENTED BY THE HEADER'S OWN WIDTH, not
+     by a guessed number of spaces. Each .cw-indent is filled with exactly the
+     characters #cw-head holds, in the same monospace font, and made invisible -
+     so the grids line up whatever the header says ("CW ~08wpm:" and
+     "CW ~??wpm:" are not the same length as a percentage of the line). The text
+     wraps from the end of one row to the start of the next, and a misaligned
+     wrap reads as a jump. */
+  /* One per row below the first, built in js - so it is a CLASS now, not the
+     single #cw-indent it was when there were exactly two rows. */
+  .cw-indent { visibility: hidden; }
 
   #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
@@ -1172,7 +1178,7 @@
 
   <div id="split-handle" title="Drag to resize"></div>
 
-  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div><span id="cw-indent"></span><span id="cw-text2"></span></div></div></div>
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div id="cw-rows"></div></div></div>
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
@@ -6456,7 +6462,15 @@ function js8TxStatus(ft8) {
   cancel.style.display = run ? "" : "none";
   send.style.display   = run ? "none" : "";
   if (run && ft8.ftx_total) {
-    plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total + "…";
+    /* ⭐ THE WORDS IN THE FRAME, when the device sends them. Ryan KK6DZB:
+       "rather than just show the sending frames" - a count says a run is
+       alive and nothing about what is on the air. The device slices the
+       normalised text with the encoder's own per-frame character counts, so
+       this is never re-packed here. Falls back to the bare count on a device
+       older than the field. */
+    const fTxt = (typeof ft8.ftx_frame_text === "string") ? ft8.ftx_frame_text : "";
+    plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total +
+                       (fTxt ? ": " + fTxt : "…");
     js8TxWasRunning  = true;
     js8TxLastTotal   = ft8.ftx_total;
     js8TxResultShown = "";          /* a new run: the last outcome is history */
@@ -7555,12 +7569,38 @@ async function tick() {
              as one string and the write position runs straight through, so the
              row split happens here and nowhere else. Row 2 is indented by a
              copy of the header text (hidden) so the two grids line up - see the
-             CSS note on #cw-indent. */
-          const COLS = 72;
-          document.getElementById("cw-indent").textContent =
-            document.getElementById("cw-head").textContent;
-          const rowEls = [document.getElementById("cw-text"),
-                          document.getElementById("cw-text2")];
+             CSS note on .cw-indent. */
+          /* ⭐ THE SHAPE COMES FROM THE DEVICE (cw.rows / cw.cols). COLS was 72
+             here and there were two hardcoded row elements, so CW_LINE_ROWS
+             2 -> 4 would have left this drawing half the decoded line with no
+             error anywhere to notice. The fallbacks are the old values, for a
+             device older than the fields. */
+          const COLS = (typeof cw.cols === "number" && cw.cols > 0) ? cw.cols : 72;
+          const ROWS = (typeof cw.rows === "number" && cw.rows > 0) ? cw.rows : 2;
+          const head = document.getElementById("cw-head").textContent;
+          /* Rows BELOW the first are BUILT, not named. Row 1 keeps the header
+             beside it; every later row gets a hidden copy of that header text as
+             an indent, so all the grids line up and the wrap reads as a
+             continuation rather than a jump - see the CSS note on .cw-indent.
+             Rebuilt only when the count changes; the indent text is refreshed
+             every poll, because the header is. */
+          const cwRows = document.getElementById("cw-rows");
+          if (cwRows.childElementCount !== ROWS - 1) {
+            cwRows.innerHTML = "";
+            for (let r = 1; r < ROWS; r++) {
+              const line = document.createElement("div");
+              const ind  = document.createElement("span");
+              ind.className = "cw-indent";
+              line.appendChild(ind);
+              const txt = document.createElement("span");
+              txt.className = "cw-row-text";
+              line.appendChild(txt);
+              cwRows.appendChild(line);
+            }
+          }
+          for (const d of cwRows.children) d.firstElementChild.textContent = head;
+          const rowEls = [document.getElementById("cw-text")].concat(
+            [...cwRows.children].map(d => d.lastElementChild));
           const haveCol = (typeof cw.col === "number" &&
                            cw.col >= 0 && cw.col <= cw.line.length);
           for (let r = 0; r < rowEls.length; r++) {
