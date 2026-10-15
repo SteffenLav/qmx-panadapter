@@ -53,12 +53,15 @@
  *
  * The cost of 1800 is that a 500 ms SD hold takes three or four ticks to
  * clear instead of one, which the browser's 0.9 s buffer covers in silence. */
-#define WS_AUDIO_MAX_SAMPLES    2800
-/* 2800 samples = 2810 B on the wire, the most that still fits the 2880 B
-   ceiling asserted below. At 1800 the catch-up rate was 50 ms of audio
-   recovered per 100 ms tick, so a 686 ms hold took 1.4 s to clear and the
-   browser ran dry once in five holds. At 2800 it recovers 133 ms per tick and
-   the same hold clears in five ticks. */
+#define WS_AUDIO_MAX_SAMPLES    1800
+/* ⛔ 1800 IS THE ONLY SIZE WITH EVIDENCE BEHIND IT. 2800 samples is 2814 B on
+   the wire, comfortably under the 2880 B TCP_SND_BUF, and it STILL produced
+   "Invalid frame header" within a minute. So the usable ceiling is lower than
+   the configured buffer - lwip's accounting is not simply payload bytes - and
+   the honest conclusion is that the number cannot be derived from the config,
+   only measured. 1800 (1810 B) ran 1279 frames with zero gaps; 2800, 3600 and
+   12000 all broke. Do not raise this without a listening test; the assert
+   below is a floor, not a licence. */
 #define WS_AUDIO_HDR_LEN        6
 
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a

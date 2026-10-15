@@ -10957,7 +10957,15 @@ function audioFrame(buf) {
     let err = (audioNext - audioCtx.currentTime - AUDIO_LEAD_S) / AUDIO_LEAD_S;
     if (err >  1) err =  1;
     if (err < -1) err = -1;
-    ratio *= (1 + 0.01 * err);
+    /* 3%, not 1%. MEASURED on the bench: with the trim at 1% and pulling at
+       +0.68%, the lead still crept 1.63 -> 2.52 s over 205 s, because a
+       catch-up frame delivers up to 1800 samples against the 1200 consumed in
+       the same tick - the bursts add faster than 1% takes away, and the lead
+       walks to the 3 s ceiling and drops a chunk every few minutes. 3% is
+       about half a semitone at the extreme and only reached when the buffer is
+       a full target off; in normal running the correction is a fraction of
+       that and inaudible. */
+    ratio *= (1 + 0.03 * err);
   }
   /* Outputs are produced while there is a sample on BOTH sides of the read
      position, i.e. while pos + 1 <= src.length - 1. */
