@@ -10793,19 +10793,32 @@ fpsEl.addEventListener("click", wsReclaim);
  *
  * The Tab5 sends the SAME demodulated audio its own speaker gets - after the
  * mode filter, the AGC and the limiter - as mu-law at 12 kHz on the spectrum
- * WebSocket. All this end does is unpack it, hold about 150 ms of it, and play
- * it out at whatever rate this machine's audio hardware runs at.
+ * WebSocket. Each 100 ms frame becomes one AudioBuffer, scheduled to start
+ * exactly where the previous one ended.
+ *
+ * ⛔ AN AudioWorklet CANNOT BE USED HERE, AND A LOCALHOST TEST WILL NOT TELL
+ * YOU THAT. AudioWorklet requires a SECURE CONTEXT. The Tab5 serves plain HTTP
+ * on the LAN, so window.isSecureContext is false and audioCtx.audioWorklet is
+ * undefined - on the real device, for every real listener. The first version
+ * of this used a worklet and passed every test, because the test server was
+ * 127.0.0.1, which browsers treat as secure whatever the scheme. It failed on
+ * the first frame from an actual Tab5. Scheduled AudioBuffers need no secure
+ * context, no deprecated ScriptProcessorNode, and no resampler of our own -
+ * the browser resamples a 12 kHz buffer to its own rate for us.
  *
  * ⛔ THE TWO CLOCKS ARE NOT RELATED. The radio's sample clock and this
  * computer's sound card free-run against each other, typically a fraction of a
- * percent apart - so the buffer fills or empties over minutes, and the
- * correction is a slow nudge on the resampling ratio, not a resync. The
- * firmware does the same thing against the ES8388 and the direction is the
- * trap there too: too FULL means consume FASTER, so the ratio goes UP. The
- * inverted sign is not a slow drift, it is crackle that gets steadily worse
- * (rx_audio.c, 2026-09-22). */
-let audioCtx = null, audioNode = null, audioGain = null;
+ * percent apart, so the scheduling LEAD (how far ahead of the playback clock
+ * the next chunk sits) walks slowly in one direction. It is corrected by
+ * dropping or re-priming a chunk at the limits, not by resampling: 100 ms is
+ * small enough that the correction is rare and audible as nothing much, and a
+ * rate loop against a transport delay is the thing that rang in rx_audio.c
+ * (2026-09-22). */
+let audioCtx = null, audioGain = null, audioNext = 0;
 let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
+let audioLate = 0, audioDropped = 0;
+const AUDIO_LEAD_S = 0.18;   /* target: how far ahead of the clock we schedule */
+const AUDIO_LEAD_MAX_S = 0.6;
 const ULAW = new Float32Array(256);
 (() => {
   /* G.711 decode, once. The firmware's encoder is the Sun reference and is
@@ -10820,85 +10833,20 @@ const ULAW = new Float32Array(256);
   }
 })();
 
-const AUDIO_WORKLET_SRC = `
-class RxPlayer extends AudioWorkletProcessor {
-  constructor(opts) {
-    super();
-    this.srcRate = opts.processorOptions.srcRate;
-    this.buf = new Float32Array(this.srcRate * 4);   /* 4 s is plenty */
-    this.w = 0; this.r = 0;                          /* r is fractional */
-    this.ratio = this.srcRate / sampleRate;
-    this.nominal = this.ratio;
-    this.target = this.srcRate * 0.15;               /* 150 ms of slack */
-    this.port.onmessage = (e) => {
-      if (e.data === "flush") { this.w = 0; this.r = 0; return; }
-      const s = e.data;
-      for (let i = 0; i < s.length; i++) {
-        this.buf[this.w] = s[i];
-        this.w = (this.w + 1) % this.buf.length;
-      }
-    };
-  }
-  avail() {
-    const d = this.w - this.r;
-    return d >= 0 ? d : d + this.buf.length;
-  }
-  process(inputs, outputs) {
-    const out = outputs[0][0];
-    const have = this.avail();
-    /* Under-run: play silence rather than the buffer's own stale tail. A gap
-       in the stream is a gap; repeating audio to cover it is worse. */
-    if (have < out.length * this.ratio + 2) { out.fill(0); return true; }
-
-    /* Slow rate trim, +/-0.5% maximum, proportional to how far the fill is
-       from target. Too full -> consume faster -> larger ratio. */
-    let err = (have - this.target) / this.target;
-    if (err >  1) err =  1;
-    if (err < -1) err = -1;
-    this.ratio = this.nominal * (1 + 0.005 * err);
-
-    for (let i = 0; i < out.length; i++) {
-      const i0 = Math.floor(this.r) % this.buf.length;
-      const i1 = (i0 + 1) % this.buf.length;
-      const f = this.r - Math.floor(this.r);
-      out[i] = this.buf[i0] * (1 - f) + this.buf[i1] * f;
-      this.r += this.ratio;
-      if (this.r >= this.buf.length) this.r -= this.buf.length;
-    }
-    return true;
-  }
-}
-registerProcessor("rx-player", RxPlayer);
-`;
-
-async function audioStart(srcRate) {
-  if (audioCtx) return true;
+async function audioStart() {
+  if (audioCtx) { await audioCtx.resume(); return true; }
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return false;
     audioCtx = new Ctx();
-    /* ⛔ TEST THE INSTANCE, NOT THE PROTOTYPE. `Ctx.prototype.audioWorklet`
-       looks like the obvious feature test and it THROWS - audioWorklet is a
-       getter on BaseAudioContext.prototype, and reading it off the prototype
-       with no instance behind it is an illegal invocation. The throw landed in
-       this function's own catch, so every browser reported "no AudioWorklet"
-       and no audio ever started. Caught in the stub + browser, which is the
-       only place it could have been: both web checkers passed on it, because
-       they parse the JavaScript and do not run it. */
-    if (!audioCtx.audioWorklet) { audioCtx = null; return false; }
-    await audioCtx.resume();          /* the click that got us here is the gesture */
-    const url = URL.createObjectURL(new Blob([AUDIO_WORKLET_SRC],
-                                             { type: "application/javascript" }));
-    await audioCtx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
-    audioNode = new AudioWorkletNode(audioCtx, "rx-player",
-                                     { processorOptions: { srcRate: srcRate } });
+    await audioCtx.resume();      /* the click that got us here is the gesture */
     audioGain = audioCtx.createGain();
     audioGain.gain.value = 1.0;
-    audioNode.connect(audioGain).connect(audioCtx.destination);
+    audioGain.connect(audioCtx.destination);
+    audioNext = 0;
     return true;
   } catch (err) {
-    audioCtx = null; audioNode = null;
+    audioCtx = null; audioGain = null;
     return false;
   }
 }
@@ -10917,8 +10865,8 @@ function audioStopAndTell() {
 
 function audioStop() {
   audioWantOn = false;
-  if (audioNode) { try { audioNode.port.postMessage("flush"); } catch (e) {} }
-  if (audioCtx)  { try { audioCtx.suspend(); } catch (e) {} }
+  audioNext = 0;
+  if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
   audioSeq = -1;
   listenPaint();
 }
@@ -10929,17 +10877,47 @@ function audioStop() {
 function audioFrame(buf) {
   if (!audioWantOn || buf.length <= AUDIO_HDR_LEN) return;
   const seq  = buf[2] | (buf[3] << 8);
-  const rate = buf[4] | (buf[5] << 8);
-  if (!audioCtx) { audioStart(rate).then(() => {}); return; }
+  const rate = (buf[4] | (buf[5] << 8)) || 12000;
+  if (!audioCtx || audioCtx.state !== "running") return;
 
   if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xFFFF)) audioGaps++;
   audioSeq = seq;
   audioFrames++;
 
   const n = buf.length - AUDIO_HDR_LEN;
-  const f = new Float32Array(n);
-  for (let i = 0; i < n; i++) f[i] = ULAW[buf[AUDIO_HDR_LEN + i]];
-  if (audioNode) audioNode.port.postMessage(f, [f.buffer]);
+  let ab;
+  try {
+    ab = audioCtx.createBuffer(1, n, rate);
+  } catch (e) {
+    /* A context that will not take the device's rate is not something this
+       page can work around; stop rather than play it at the wrong pitch. */
+    audioStopAndTell();
+    return;
+  }
+  const ch = ab.getChannelData(0);
+  for (let i = 0; i < n; i++) ch[i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+
+  const now = audioCtx.currentTime;
+  if (audioNext < now + 0.01) {
+    /* Behind the clock: either the first frame, or the stream stopped for long
+       enough that the gap has already been heard. Re-prime the lead. Playing
+       it late instead would hold that delay for the rest of the session. */
+    if (audioFrames > 1) audioLate++;
+    audioNext = now + AUDIO_LEAD_S;
+  } else if (audioNext > now + AUDIO_LEAD_MAX_S) {
+    /* Drifted long - the radio's clock is faster than this machine's. Drop one
+       chunk rather than letting the delay grow without limit. */
+    audioDropped++;
+    audioNext -= ab.duration;
+    return;
+  }
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = ab;
+  src.connect(audioGain);
+  src.start(audioNext);
+  audioNext += ab.duration;
+
   /* Repaint on CHANGE, not on every frame: the only things the button shows
      are "nothing yet" -> "playing" and the gap count, and touching the DOM
      ten times a second to say the same thing is work the spectrum needs. */
@@ -10960,7 +10938,9 @@ function listenPaint() {
     : (audioFrames === 0
        ? "Asked for audio - nothing arriving yet. The Tab5 only demodulates "
          + "CW, CW-R, USB, LSB and AM; in any other mode there is nothing to send."
-       : "Listening. " + audioGaps + " frame gap(s) so far. Click to stop.");
+       : "Listening. " + audioGaps + " frame gap(s), " + audioLate
+         + " re-prime(s), " + audioDropped + " chunk(s) dropped to clock drift. "
+         + "Click to stop.");
 }
 
 async function listenToggle() {
@@ -10975,17 +10955,18 @@ async function listenToggle() {
     if (want) {
       /* Start the AudioContext from inside the click handler's call chain -
          a browser will not let audio begin any other way. */
-      const ok = await audioStart(j.rate || 12000);
+      const ok = await audioStart();
       if (!ok) {
         await fetch("/api/cmd", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "web_audio", on: false })
         });
-        alert("This browser has no AudioWorklet, so it cannot play the stream.");
+        alert("This browser has no Web Audio, so it cannot play the stream.");
         return;
       }
-      audioWantOn = true; audioFrames = 0; audioGaps = 0; audioSeq = -1;
-      if (audioNode) audioNode.port.postMessage("flush");
+      audioWantOn = true;
+      audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
+      audioLate = 0; audioDropped = 0; audioNext = 0;
     } else {
       audioStop();
     }

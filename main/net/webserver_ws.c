@@ -186,6 +186,10 @@ static EXT_RAM_BSS_ATTR uint8_t s_audio_txbuf[WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN
 static EXT_RAM_BSS_ATTR int16_t s_audio_pcm[WS_AUDIO_MAX_SAMPLES];
 static uint16_t s_audio_seq = 0;
 static uint32_t s_audio_frames = 0;   /* audio frames sent, for the fps line */
+/* Samples drained from the ring and then NOT sent - a congested link. Reported
+   next to the device-side drop count so the two causes stay distinguishable:
+   this one is the WiFi link, rx_audio_web_dropped() is the device. */
+static uint32_t s_audio_tx_lost = 0;
 
 
 // Frames that needed more than one send() to go out, i.e. instances of the
@@ -531,6 +535,23 @@ static void ws_push_task(void *arg)
         if ((!s_session_active || s_ws_fd < 0) && rx_audio_web_is_enabled())
             rx_audio_web_set_enabled(false);
 
+        /* ⛔ KEEP DRAINING THE AUDIO RING WHILE PAUSED, AND THROW IT AWAY.
+         *
+         * MEASURED on the bench 2026-10-15: four transfer pauses in two
+         * minutes (697, 411, 344 and 542 ms) and 37,168 samples - 3.1 s of
+         * audio - gone. The pause itself only accounts for about 2 s of that.
+         * The rest was the ring BACKING UP behind a consumer that had stopped,
+         * so on resume the read side found half a second of stale audio and
+         * skipped it as well. Paying twice for one pause.
+         *
+         * The audio in a pause is lost either way - the whole point of the
+         * pause is that the SDIO link belongs to the upload - so drain it into
+         * nothing. The ring then never overflows, the resume starts from live
+         * audio with no skip, and rx_audio_web_dropped() counts what was
+         * actually lost instead of the loss plus its own echo. */
+        if (s_ws_paused && rx_audio_web_is_enabled())
+            rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES);
+
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not
             // log stale stats on reconnect, and yield the link to the transfer.
@@ -748,6 +769,13 @@ static void ws_push_task(void *arg)
                 ws_tx_result_t atx = ws_send_binary(s_server, s_ws_fd, s_audio_txbuf,
                                                     (size_t)(WS_AUDIO_HDR_LEN + n), 1500);
                 if (atx == WS_TX_OK) s_audio_frames++;
+                /* ⛔ A SKIPPED SEND IS A SILENT LOSS WITHOUT THIS. These
+                 * samples are already OUT of the ring - the read drained them
+                 * before the send was attempted - so a congested link threw
+                 * away audio that no counter anywhere could see, which is the
+                 * same trap #189 documents for the silent USB patches. Charge
+                 * them to the drop count, where they belong. */
+                else s_audio_tx_lost += (uint32_t)n;
             }
         }
 
@@ -763,9 +791,9 @@ static void ws_push_task(void *arg)
             // count here is the fix working, NOT a fault.
             if (s_audio_frames || rx_audio_web_is_enabled())
                 ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u), audio %u frames, "
-                              "%u samples dropped",
+                              "%u samples dropped at the device, %u lost on the link",
                          fps, (unsigned)s_partial_writes, (unsigned)s_audio_frames,
-                         (unsigned)rx_audio_web_dropped());
+                         (unsigned)rx_audio_web_dropped(), (unsigned)s_audio_tx_lost);
             else
                 ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
                          fps, (unsigned)s_partial_writes);

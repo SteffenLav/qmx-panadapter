@@ -212,10 +212,18 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--state", default=None)
     ap.add_argument("--port", type=int, default=8088)
+    ap.add_argument("--bind", default="127.0.0.1", metavar="ADDR",
+                    help="bind address. The default is loopback; use 0.0.0.0 to "
+                         "reach it from the LAN, which is the ONLY way to test "
+                         "anything gated on a SECURE CONTEXT - browsers treat "
+                         "127.0.0.1 as secure whatever the scheme, so a "
+                         "localhost test says nothing about what a real "
+                         "listener on http://<tab5> gets (measured 2026-10-15: "
+                         "AudioWorklet is undefined there)")
     ap.add_argument("--ws-audio", type=int, default=0, metavar="HZ",
                     help="serve /ws pushing an audio tone at HZ (0 = no /ws)")
     a = ap.parse_args()
     H.state_path = a.state
     H.ws_audio_hz = a.ws_audio
-    print("stub on http://127.0.0.1:%d  page=%s  state=%s" % (a.port, PAGE, a.state))
-    ThreadingHTTPServer(("127.0.0.1", a.port), H).serve_forever()
+    print("stub on http://%s:%d  page=%s  state=%s" % (a.bind, a.port, PAGE, a.state))
+    ThreadingHTTPServer((a.bind, a.port), H).serve_forever()
