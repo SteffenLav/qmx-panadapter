@@ -67,6 +67,43 @@
      3-7, FT8 in a spanning notice, WSPR in a card - and a per-card heading
      would have sat at a different height on each. One row, one position. */
   #mode-banner  { grid-row: 2; }
+  /* ⭐ IN JS8 THE HEADING IS THE SUBMODE CONTROL, as it is on the Tab5.
+     Only the affordance lives here - .is-picker is toggled from the status
+     poll, so a heading that is not a picker keeps the plain cursor and no
+     hover response at all.
+     ⛔ NO pointer-events IN THIS RULE. See check_webui.py: a hover selector
+     that removes itself from hit testing flickers and swallows clicks, which
+     is exactly what v1.19.0 shipped. */
+  #mode-banner.is-picker        { cursor: pointer; }
+  #mode-banner.is-picker:hover  { text-decoration: underline; }
+  /* The list itself. Absolutely positioned against the document rather than
+     the heading, because the heading is RELOCATED between the FT8 status line
+     and its own grid row, and a child would have moved with it. */
+  #submode-pop {
+    position: absolute;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    min-width: 170px;
+    padding: 4px;
+    gap: 2px;
+    background: #14161a;
+    border: 1px solid #3a3f46;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.6);
+  }
+  #submode-pop button {
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  #submode-pop button:hover  { background: #262b31; }
+  #submode-pop button.active { background: var(--accent); color: #000; }
   #spec-wrap    { grid-row: 3; }
   #freqaxis     { grid-row: 4; }
   #split-handle { grid-row: 5; }
@@ -1168,22 +1205,14 @@
                   title="Send this station a signal report">SNR</button>
           <button type="button" id="js8-grid" class="bot-btn" disabled
                   title="Send this station your grid">GRID</button>
-          <!-- The submode. NOT a quality knob: each one is a different physical
-               layer (slot period, symbol rate, tone spacing, sync arrays), so
-               two stations must agree on it before they can hear each other at
-               all. The cycle length is in the label because that is the number
-               an operator can act on.
-               ⚠ Fast, Turbo and Slow are implemented and have never been
-               exchanged with a real JS8Call station. Normal is what everyone
-               runs. The device refuses a change mid-QSO and says why. -->
-          <select id="js8-submode" class="bot-btn"
-                  title="JS8 physical layer. Both stations must use the same one."
-                  style="margin-right:8px;">
-            <option value="0">Normal - 15 s</option>
-            <option value="1">Fast - 10 s</option>
-            <option value="2">Turbo - 6 s</option>
-            <option value="4">Slow - 30 s</option>
-          </select>
+          <!-- ⛔ THE SUBMODE PICKER IS NOT HERE. It is the MODE heading
+               (#mode-banner), exactly as on the Tab5, where tapping "JS8 NORM"
+               opens the list. Operator, 2026-10-15: "Make it like the Tab5 -
+               click JS8 NORMAL to change speed - no need to make a new dropdown
+               button elsewhere". A second control in a second place is how two
+               surfaces end up disagreeing about what is set; the heading is
+               already the thing that TELLS you the speed, so it is the thing
+               that should change it. See js8SubmodePopup(). -->
           <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
           <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
           <!-- The Tab5's JS8 tab bar has had a Flush since the page shipped and
@@ -5250,7 +5279,12 @@ async function cwProfApply(idx) {
 
 async function setOpen(ft8Opts) {
   setGroup = !!ft8Opts;
-  document.getElementById("set-title").textContent = setGroup ? "FT8 Options" : "Settings";
+  /* ⛔ NAME THE PROTOCOL THAT IS RUNNING, not the family. This read
+     "FT8 Options" while JS8 was live - the same defect as the top-right
+     "FT8 mode" chip and the MODE heading before it, and the operator hit
+     all three on 2026-10-15. ft8Proto() is the device's own word. */
+  document.getElementById("set-title").textContent =
+    setGroup ? (ft8Proto() + " Options") : "Settings";
   document.getElementById("set-modal").style.display = "";
   pauseWs();                                  // same discipline as the other modals
   const body = document.getElementById("set-body");
@@ -5592,6 +5626,10 @@ function wsprCycleLabel(utc) {
    worker, and a request every 5 s for a feature nobody enabled is pure
    contention on the link the spectrum stream shares. */
 let lastFtProto = "FT8";     /* what the device says it is running */
+/* The JS8 submode the DEVICE reports. The MODE heading is painted from
+   this and the picker reads it back, so the Tab5 drawer, the glass and
+   this page cannot disagree about what is set. */
+let lastJs8Submode = 0;
 let wsprEnabled = false;
 let wsprPollInFlight = false;
 /* The band list is fetched ONCE - it never changes - exactly like the FT8
@@ -6179,18 +6217,83 @@ function js8BarSync() {
   }
 }
 
-/* The submode. The DEVICE decides whether the change is allowed - it refuses
-   while a QSO or a burst is live, because an armed request already carries
-   tones built for the old submode - so the refusal is reported rather than
-   second-guessed here, and the select snaps back to what is really set. */
+/* ⭐ THE SUBMODE, PICKED FROM THE MODE HEADING - the Tab5's arrangement.
+   The heading already names the speed ("JS8 NORM"), so it is also what changes
+   it; there is no second control anywhere on this page. Operator, 2026-10-15.
+
+   The table is the one in main/js8_submode.c, in the same order and the same
+   words. ⛔ THE INDEX IS NOT THE VALUE: JS8Call's NSUBMODE numbering is not
+   dense - 0 Normal, 1 Fast, 2 Turbo, 4 Slow, with 3 absent - so the value is
+   carried explicitly rather than computed from a position.
+
+   The DEVICE decides whether the change is allowed. It refuses while a QSO or
+   a burst is live, because an armed request already carries tones built for
+   the old submode, so the refusal is reported rather than second-guessed here
+   and the heading repaints from the next poll either way. */
+const JS8_SUBMODES = [
+  { v: 0, label: "Normal - 15 s", short: "JS8 NORM"  },
+  { v: 1, label: "Fast - 10 s",   short: "JS8 FAST"  },
+  { v: 2, label: "Turbo - 6 s",   short: "JS8 TURBO" },
+  { v: 4, label: "Slow - 30 s",   short: "JS8 SLOW"  },
+];
+
+/* The heading's own text, mirroring the Tab5's mode_label() word for word.
+   NORM rather than NORMAL because "JS8 NORMAL" does not fit the glass, and the
+   two surfaces must not word it differently. */
+function js8SubmodeShort(v) {
+  const e = JS8_SUBMODES.find(x => x.v === v);
+  return e ? e.short : "JS8 NORM";
+}
+
+function js8SubmodeClose() {
+  const pop = document.getElementById("submode-pop");
+  if (pop) pop.remove();
+}
+
+function js8SubmodePopup(anchor) {
+  if (document.getElementById("submode-pop")) { js8SubmodeClose(); return; }
+  const pop = document.createElement("div");
+  pop.id = "submode-pop";
+  JS8_SUBMODES.forEach(e => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = e.label;
+    if (e.v === lastJs8Submode) b.classList.add("active");
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      js8SubmodeClose();
+      const r = await sendCmd({ action: "js8_submode", submode: e.v });
+      if (r && r.ok === false) {
+        alert("JS8 submode not changed: " + (r.err || "refused by the device"));
+      }
+      js8Poll();          /* re-read it either way */
+    });
+    pop.appendChild(b);
+  });
+  /* Anchored to the heading itself, so it opens where the operator just
+     clicked rather than at a fixed corner of the page. */
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.round(r.left + window.scrollX) + "px";
+  pop.style.top  = Math.round(r.bottom + window.scrollY + 4) + "px";
+  document.body.appendChild(pop);
+}
+
+/* One listener, on the document, so the popup closes on any click that is not
+   inside it - including a click on the heading, which toggles. */
+document.addEventListener("click", (e) => {
+  const pop = document.getElementById("submode-pop");
+  if (pop && !pop.contains(e.target) &&
+      e.target !== document.getElementById("mode-banner")) js8SubmodeClose();
+});
+
 {
-  const sm = document.getElementById("js8-submode");
-  if (sm) sm.addEventListener("change", async () => {
-    const r = await sendCmd({ action: "js8_submode", submode: Number(sm.value) });
-    if (r && r.ok === false) {
-      alert("JS8 submode not changed: " + (r.err || "refused by the device"));
-    }
-    js8Poll();            /* re-read it either way */
+  const mb = document.getElementById("mode-banner");
+  if (mb) mb.addEventListener("click", (e) => {
+    /* JS8 only. In FT8, FT4 and WSPR the heading is a heading and nothing
+       else - there is no submode to pick. */
+    if (ft8Proto() !== "JS8") return;
+    e.stopPropagation();
+    js8SubmodePopup(mb);
   });
 }
 
@@ -6336,14 +6439,12 @@ function js8TxStatus(ft8) {
     js8Prefix = (ft8 && typeof ft8.js8_prefix === "string") ? ft8.js8_prefix : "";
     js8ComposerPrefill();
     /* ⭐ THE PICKER READS ITSELF BACK. The submode is also set from the Tab5
-       drawer, so a select that only ever WROTE would be a second source of
-       truth - the web Pause button shipped exactly that way. Skipped while the
-       list is open, so the poll cannot yank the operator's choice mid-pick. */
-    const sm = document.getElementById("js8-submode");
-    if (sm && ft8 && typeof ft8.js8_submode === "number" &&
-        document.activeElement !== sm) {
-      const want = String(ft8.js8_submode);
-      if (sm.value !== want) sm.value = want;
+       drawer and from the glass, so a control that only ever WROTE would be a
+       second source of truth - the web Pause button shipped exactly that way.
+       The heading is repainted from lastJs8Submode on the status poll, so all
+       this has to do is keep that value current from the JS8 poll as well. */
+    if (ft8 && typeof ft8.js8_submode === "number") {
+      lastJs8Submode = ft8.js8_submode;
     }
   }
   const box = document.getElementById("js8-tx");
@@ -6998,6 +7099,7 @@ function buildBwDropdown() {
   const m = (lastMode || "").toUpperCase();
   const isCW  = m.indexOf("CW")  >= 0;
   const isSSB = m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0;
+  const isAM  = m.indexOf("AM")  >= 0;
 
   if (isCW) {
     /* Only the widths the RADIO has enabled (#350, Uwe DL8UG) - the same list
@@ -7034,9 +7136,42 @@ function buildBwDropdown() {
       };
       dd.appendChild(btn);
     });
+  } else if (isAM) {
+    /* ⭐ AM IS THE TAB5'S OWN FILTER, not the radio's. The QMX has no
+       selectable AM bandwidth at all - FW; is GET-only and answers 3200 for
+       everything but CW - and Q9 streams RAW I/Q, so what shapes the audio is
+       our demodulator. This dropdown said "CW / SSB only" and the BW pill read
+       a fixed 3200 Hz, so AM was the one mode where the browser could show the
+       width and not change it. Operator, 2026-10-15: "AM chosen - not possible
+       to change BW? Says CW and SSB only...".
+
+       The SAME SIX WIDTHS the glass offers (ui.c am_bw[]), in the same order
+       and the same RF convention - "6.0 kHz" is 3.0 kHz per sideband. The
+       device halves it; see set_bw in webserver.c, which is also what decides
+       that AM must not reach the radio.
+
+       ✅ 10.0 AND 20.0 kHz ARE IN. AM decimates by 2 as of 2026-10-15 - a
+       24 kHz internal rate, Nyquist 12 kHz - and the stage-1 skirt was
+       measured there before the constant moved: +0.01 dB at 5000 Hz half-
+       bandwidth (10.0 kHz RF), -0.62 dB at 10000 (20.0 kHz RF), -3.07 dB at
+       10500, which is why it stops where it does. 9.6k was the old D=4
+       ceiling and stays as a step. 20.0 kHz is a shortwave broadcaster's full
+       audio; 10.0 kHz is the legal maximum for amateur AM below 29 MHz. */
+    const widths = [2000, 3000, 4000, 6000, 8000, 9600, 10000, 20000];
+    widths.forEach(w => {
+      const btn = document.createElement("button");
+      btn.textContent = (w / 1000).toFixed(1) + " kHz";
+      if (Math.abs(lastPassbandHz - w) < 100) btn.classList.add("active");
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        sendCmd({ action: "set_bw", hz: w });
+      };
+      dd.appendChild(btn);
+    });
   } else {
     const msg = document.createElement("button");
-    msg.textContent = "CW / SSB only";
+    msg.textContent = "CW / SSB / AM only";
     msg.disabled = true;
     msg.style.color = "var(--dim)";
     dd.appendChild(msg);
@@ -7162,6 +7297,9 @@ async function tick() {
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
+    if (s.ft8 && typeof s.ft8.js8_submode === "number") {
+      lastJs8Submode = s.ft8.js8_submode;
+    }
 
     /* The JS8 tabs follow the DEVICE's mode, not a click on this page: the
        operator can switch the Tab5 from the glass, from the drawer or from
@@ -7264,6 +7402,26 @@ async function tick() {
           ? "The WSPR page owns the dial - use its own band button, or leave the page"
           : "";
       });
+      /* ⛔ ON THE DIGI SCREEN THESE FOUR ARE NOT HIDDEN BECAUSE THEY ARE
+         UNTIDY - THEY DO NOT WORK. The FT8/FT4/JS8 engine owns the dial, the
+         firmware refuses band, mode and bandwidth while it is running, and the
+         pane carries its own Band... preset list for the only band change that
+         makes sense here. RIT is radio state that the slot timing does not
+         follow at all. Offering a control and then refusing it is worse than
+         not offering it - the same judgement the WSPR page already made, taken
+         one step further because here there is nothing to grey out FOR.
+
+         Operator, 2026-10-15: "band, mode, bw, rit ... not allowed to change
+         and is irrelevant for JS8".
+
+         ⭐ ZOOM, FREQ AND F STAY. Zoom and F belong to the view, not the
+         radio, and the frequency readout is how an off-standard JS8 or FT8
+         frequency is seen and set - which is why freq was already kept out of
+         the WSPR dial-lock set above. Operator's list, unchanged. */
+      ["band", "mode", "bw", "rit"].forEach((id) => {
+        const pill = document.getElementById("pill-" + id);
+        if (pill) pill.style.display = isFt8 ? "none" : "";
+      });
       document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
       document.getElementById("split-handle").style.display  = noPan ? "none" : "";
@@ -7291,7 +7449,10 @@ async function tick() {
         fpsEl.classList.remove("bad");
       }
       if (isFt8) {
-        fpsEl.textContent = "FT8 mode";
+        /* ⛔ SET HERE ONLY FOR THE SCREEN CHANGE. The TEXT is painted in the
+           per-tick block below, because FT8, FT4 and JS8 all share this screen
+           and a protocol swap does not change it - the very fault the heading
+           block below was already written to avoid, repeated here. */
         fpsEl.classList.remove("bad");
         ft8OptsRefreshBadge();   // fresh count each time this screen comes up
       }
@@ -7306,12 +7467,39 @@ async function tick() {
       /* Nothing on the panadapter: the Tab5 has no MODE title on that screen
          either, and mirroring it was the whole request. Hidden rather than
          emptied, so the grid row collapses instead of leaving a gap. */
+      /* ⛔ IN JS8 THE HEADING NAMES THE SPEED, Normal included, and the
+         words are the Tab5's own (JS8 NORM / FAST / TURBO / SLOW). It said
+         "MODE: JS8" whatever was set, so an operator could neither see a wrong
+         submode nor confirm a right one - which is how Ryan KK6DZB lost JS8
+         entirely while the screen looked correct. The Tab5 was fixed in
+         ccd435ca; this is the same fix on the same words, because two surfaces
+         wording it differently is how an operator decides neither is right. */
       const want = screen === "wspr" ? "MODE: WSPR"
-                 : screen === "ft8"  ? "MODE: " + ft8Proto()
+                 : screen === "ft8"  ? (ft8Proto() === "JS8"
+                                          ? js8SubmodeShort(lastJs8Submode)
+                                          : "MODE: " + ft8Proto())
                                      : "";
       if (mb && mb.textContent !== want) {
         mb.textContent = want;
         mb.style.display = want ? "" : "none";
+      }
+      /* The top-right chip, in the same words and on the same tick. It said
+         "FT8 mode" throughout a JS8 session. */
+      if (screen === "ft8") {
+        const chipWant = ft8Proto() + " mode";
+        if (fpsEl && fpsEl.textContent !== chipWant) fpsEl.textContent = chipWant;
+      }
+      /* The affordance, not just the text: in JS8 this heading is the submode
+         picker (js8SubmodePopup), everywhere else it is a plain heading. Set
+         every tick alongside the text, because the protocol can change under
+         the page from the Tab5. */
+      if (mb) {
+        const pick = (screen === "ft8" && ft8Proto() === "JS8");
+        mb.classList.toggle("is-picker", pick);
+        mb.title = pick
+          ? "JS8 speed - click to change. Both stations must use the same one."
+          : "";
+        if (!pick) js8SubmodeClose();
       }
       /* ⭐ ONE element, relocated - not a second copy. On FT8 it joins the
          status box so the mode sits on the same line as "RX: N decoded"; on
