@@ -33,6 +33,7 @@
 // storage -> net is the same direction net/webserver.c already goes the other way
 // (it takes sd_archive_lock() for uploads); both live in the `main` component.
 #include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
+#include "audio/rx_audio.h"  // rx_audio_any_listener() - no SD holds while listening
 
 static const char *TAG = "sd_arch";
 
@@ -1453,7 +1454,26 @@ static void sd_archive_task(void *arg)
                  * drains up to 64 KB inside ONE open. The number of times the
                  * stream is interrupted is unchanged at one per 30 s, watcher or
                  * not - which is exactly what makes the browser irrelevant. */
-                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
+                /* ⛔ NOT WHILE SOMEONE IS LISTENING. This 30 s tick is the
+                 * single biggest interruption the web stream takes: measured
+                 * 2026-10-15 at 150-700 ms per tick and once 4807 ms, and it
+                 * is why browser audio broke up about twice a minute. Growing
+                 * the browser's buffer to survive the hold was treating the
+                 * symptom - this removes it.
+                 *
+                 * The cost is bounded and already understood: the backlog
+                 * stays in the RAM ring, which is what it is for, and the next
+                 * tick after the listener stops drains up to 64 KB in one
+                 * open. A crash while someone is listening loses the tail of
+                 * the diag log, which is the same exposure park_snapshot()
+                 * already accepts whenever the card is parked.
+                 *
+                 * rx_audio_any_listener() and not rx_audio_is_enabled(): the
+                 * Tab5's own speaker does not care about this pause, only a
+                 * network listener does, but the flag covers both and the
+                 * speaker case costs nothing extra. */
+                if (!rx_audio_any_listener() &&
+                    now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
