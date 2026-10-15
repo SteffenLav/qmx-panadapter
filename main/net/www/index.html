@@ -10847,7 +10847,12 @@ let audioPhase = 0;
    3094 ms. A buffer has to be bigger than the hole it is bridging. 0.9 s
    covers all but the worst of those; the cost is 0.9 s of delay on a signal
    nobody is timing to the millisecond. */
-const AUDIO_LEAD_S = 0.9;    /* target: how far ahead of the clock we schedule */
+/* 1.5 s. At 0.9 s a single 686 ms SD hold left only ~0.2 s of margin and the
+   schedule ran dry once in five holds - heard as one break. The holds measured
+   on this bench top out near 700 ms, so the buffer has to be at least twice
+   that to ride one out while the catch-up refills it. The cost is 1.5 s of
+   delay on a signal nobody is timing. */
+const AUDIO_LEAD_S = 1.5;    /* target: how far ahead of the clock we schedule */
 /* 3.0 s, not 2.0: after a diag-mirror pause the device sends up to a second
    of catch-up in one frame, and that burst lands on top of the 0.9 s target.
    A ceiling the burst can touch would drop the very chunk the burst exists to
