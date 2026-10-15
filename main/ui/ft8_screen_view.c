@@ -1314,6 +1314,12 @@ static void t_slotbar_cb(lv_timer_t *t)
 static void start_cq_run(bool interactive);          // defined below
 static volatile bool s_web_cq_pending;               // set from the HTTP task
 
+/* The MODE label repaint, raised from the drawer or the HTTP task and serviced
+ * on the LVGL task in this file's tick. Defined with mode_label() further
+ * down, next to the text it paints. */
+static volatile bool s_mode_label_dirty;
+static void mode_label_repaint(void);
+
 /* JS8 free-text send requested from the browser. Same deferral as the CQ flag
  * and for the same reason: the HTTP task leaves the text behind and the 1 Hz
  * LVGL timer acts on it. The result travels back through /api/status, because
@@ -1781,6 +1787,15 @@ static void t_clock_cb(lv_timer_t *t)
             snprintf(s_web_ftx_result, sizeof(s_web_ftx_result), "sending");
         }
         s_web_ftx_text[0] = ' ';
+    }
+
+    /* The MODE label, repainted on the LVGL task - see
+     * ft8_screen_view_refresh_mode_label(). It names a non-Normal JS8 submode,
+     * which is the only thing on the screen that can explain why JS8 has
+     * stopped decoding. */
+    if (s_mode_label_dirty) {
+        s_mode_label_dirty = false;
+        mode_label_repaint();
     }
 
     if (s_web_cq_pending) {
@@ -2985,13 +3000,63 @@ static uint32_t mode_accent_hex(ft8_op_mode_t mode)
     }
 }
 
+/* ⛔ A NON-NORMAL JS8 SUBMODE MUST SAY SO ON THE GLASS. The submode is a
+ * different physical layer - slot period, symbol rate, tone spacing, sync
+ * arrays - so a station on Turbo decodes NOTHING from the Normal stations
+ * everyone else runs, and it is persisted in NVS, so it survives a reboot and
+ * a power cycle. This label said "MODE: JS8" either way.
+ *
+ * Ryan KK6DZB, 2026-10-14, after the webUI submode picker shipped: "I could
+ * hear activity but no more decodes... Rebooted tab5 and qmx. STILL NO MORE
+ * DECODES... FT8 still works." He had also asked, in the same message, where
+ * the speed control was on the Tab5 - so he had no way to see what was set or
+ * to put it back.
+ *
+ * The submode text is never LONGER than "MODE: JS8" (9 characters), which is
+ * what already fits the 288 px of the left pane at montserrat 48 - that is why
+ * the "MODE: " prefix is dropped rather than appended to.
+ *
+ * ftx_protocol_label(), not ftx_protocol_name(): the latter must keep saying
+ * plain "JS8" because it is the ADIF mode and the PSK Reporter mode. See the
+ * note on both in ft8/constants.c. */
 static const char *mode_label(ft8_op_mode_t mode)
 {
+    static char buf[24];
     switch (mode) {
     case FT8_OP_MODE_FT4: return "MODE: FT4";
-    case FT8_OP_MODE_JS8: return "MODE: JS8";
+    case FT8_OP_MODE_JS8: {
+        const ftx_protocol_t p = ft8_op_mode_protocol_for(mode);
+        if (p == FTX_PROTOCOL_JS8) return "MODE: JS8";
+        snprintf(buf, sizeof buf, "JS8 %s",
+                 p == FTX_PROTOCOL_JS8_FAST  ? "FAST"  :
+                 p == FTX_PROTOCOL_JS8_TURBO ? "TURBO" :
+                 p == FTX_PROTOCOL_JS8_SLOW  ? "SLOW"  : "?");
+        return buf;
+    }
     default:              return "MODE: FT8";
     }
+}
+
+/* Re-read the mode label. The submode is settable from the drawer AND from
+ * /api/cmd, neither of which goes through the preset path that used to be the
+ * only thing that repainted this label.
+ *
+ * ⛔ THE API CALLER IS THE HTTP TASK, SO THIS ONLY RAISES A FLAG. LVGL is
+ * not thread-safe and every other web-initiated screen change in this file
+ * defers the same way - s_web_cq_pending, s_web_ftx_pending. The repaint
+ * happens in the 1 Hz tick below. */
+static void mode_label_repaint(void)        /* LVGL task only */
+{
+    if (!s_lbl_mode) return;
+    const ft8_op_mode_t now = ft8_op_mode_get();
+    lv_label_set_text(s_lbl_mode, mode_label(now));
+    lv_obj_set_style_text_color(s_lbl_mode,
+                                lv_color_hex(mode_accent_hex(now)), 0);
+}
+
+void ft8_screen_view_refresh_mode_label(void)
+{
+    s_mode_label_dirty = true;
 }
 
 static lv_obj_t *s_ft8_freq_popup = NULL;

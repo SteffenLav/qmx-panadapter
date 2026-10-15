@@ -112,6 +112,13 @@ void ft8_screen_view_nudge_confirm(int delta);
  * that changes the sub-mode can keep the screen honest. */
 void ft8_screen_view_js8_tabs_refresh(void);
 
+/* Repaint the big MODE label. It names the JS8 SUBMODE when that is not
+ * Normal ("JS8 TURBO"), because a non-Normal submode decodes nothing from the
+ * Normal stations everyone runs and is persisted across reboots - Ryan KK6DZB
+ * lost JS8 entirely to it and the screen still said "MODE: JS8". Call it from
+ * anywhere that changes the submode: the drawer picker and /api/cmd. */
+void ft8_screen_view_refresh_mode_label(void);
+
 /* Which JS8 pane is showing. Reported in /api/status so the capture and the
  * API can say what is on the screen without asking the operator. */
 bool ft8_screen_view_js8_tab_is_conversation(void);

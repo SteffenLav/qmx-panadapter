@@ -1895,6 +1895,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_OK;
         }
         settings_set_js8_submode((uint8_t)want);
+        /* ⛔ THE GLASS HAS TO FOLLOW. The Tab5's MODE label names the
+         * submode, and this handler is one of only two places it changes -
+         * the other is the drawer picker. Ryan KK6DZB set a submode from this
+         * page and then had no way to see, on the device, why JS8 had stopped
+         * decoding. */
+        ft8_screen_view_refresh_mode_label();
         {
             char out[128];
             snprintf(out, sizeof(out),

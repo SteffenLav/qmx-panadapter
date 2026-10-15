@@ -3780,7 +3780,13 @@ static void drawer_js8_submode_cb(lv_event_t *e)
 
     settings_set_js8_submode(s_js8_submode_vals[i]);
     /* The slot loop picks this up through ft8_op_mode_protocol() and rebuilds
-     * the monitor pool at the top of the next slot - nothing to do here. */
+     * the monitor pool at the top of the next slot - nothing to do here.
+     *
+     * ⛔ EXCEPT THE LABEL. The big MODE label names the submode, and this
+     * is one of only two places it can change - the other is /api/cmd. A
+     * station left on Turbo decodes nothing from the Normal stations everyone
+     * runs, and the screen has to say why. */
+    ft8_screen_view_refresh_mode_label();
     ESP_LOGI("ui", "JS8 submode -> %s",
              ftx_protocol_label(ft8_op_mode_protocol()));
 }
