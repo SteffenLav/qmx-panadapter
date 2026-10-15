@@ -59,9 +59,13 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     channel spacing, so use it on a clear channel and expect the neighbour
     when there is one.
 
-    Both of the wide settings run the receive chain at half the decimation
-    the narrower ones use, which costs CPU while AM is selected and nothing
-    at any other time. CW and SSB are untouched.
+    The two wide settings are expensive. They run the receive chain at half
+    the decimation the other six use, and on the bench that takes the second
+    CPU core from about 25% idle to under 1%. The audio stays clean, but
+    there is no headroom left for anything else, so pick 10.0 or 20.0 kHz
+    when you want the bandwidth and drop back to 9.6 or below when you do
+    not. The six narrower widths cost exactly what they always did, and CW
+    and SSB are untouched at any setting.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 

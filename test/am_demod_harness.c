@@ -58,7 +58,8 @@
  * needs only stdbool and stdint, so it can simply be read. */
 #include "rx_audio.h"
 #define RX_DECIM_D_NARROW  RX_AUDIO_DECIM_D_NARROW   // CW / SSB
-#define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM       // AM
+#define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM        // AM up to the threshold
+#define RX_DECIM_D_AM_WIDE RX_AUDIO_DECIM_D_AM_WIDE   // AM above it
 #define FIR_DECIM_LEN      63
 #define FIR_LEN            255           // stage-2 taps
 #define AM_HALF_BW_HZ      RX_AUDIO_AM_HALF_BW_HZ      // the DEFAULT
@@ -149,9 +150,10 @@ int main(void)
      * literal "D=8" / "D=4" strings, so when AM moved to D=2 this harness
      * printed a column headed D=4 that held D=2 numbers - a report wrong in
      * the one field a reader uses to interpret every other number in it. */
-    char h_narrow[24], h_am[24];
+    char h_narrow[24], h_am[24], h_am_norm[24];
     snprintf(h_narrow, sizeof(h_narrow), "D=%d (CW/SSB)", RX_DECIM_D_NARROW);
-    snprintf(h_am,     sizeof(h_am),     "D=%d (AM)",     RX_DECIM_D_AM);
+    snprintf(h_am,     sizeof(h_am),     "D=%d (AM wide)", RX_DECIM_D_AM_WIDE);
+    snprintf(h_am_norm, sizeof(h_am_norm), "D=%d (AM normal)", RX_DECIM_D_AM);
     char d[160];
     printf("AM demodulator harness - internal rate %.0f Hz, corner %.0f Hz\n\n",
            (double)FS_DEC, (double)AM_DC_CORNER_HZ);
@@ -218,7 +220,7 @@ int main(void)
     {
         float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN], c2[FIR_DECIM_LEN];
         build_decimator_copy(c8, RX_DECIM_D_NARROW);
-        build_decimator_copy(c4, RX_DECIM_D_AM);
+        build_decimator_copy(c4, RX_DECIM_D_AM_WIDE);
         /* ✅ D=2 IS WHAT AM RUNS AT, as of 2026-10-15. This column was the
            feasibility study and is now the regression: if it stops being flat
            to 10000 Hz, the 20.0 kHz width is silently rolling off.
@@ -228,13 +230,13 @@ int main(void)
            at 5000, which is why the move to D=2 happened at all.
            Measure before writing any of it. That order is the whole lesson of
            2026-10-15, when the constant was raised first. */
-        build_decimator_copy(c2, 4);   /* the factor AM used until 2026-10-15 */
+        build_decimator_copy(c2, RX_DECIM_D_AM);   /* AM's everyday factor */
         const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800,
                            5000, 5200, 5400, 6000, 7000,
                            8000, 9000, 10000, 10500, 11000, 12000};
         float at_max = 0.0f;
         printf("     %8s  %13s  %12s  %12s\n",
-               "audio", h_narrow, h_am, "D=4 (the old AM)");
+               "audio", h_narrow, h_am, h_am_norm);
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
             float db8 = decim_mag_db(c8, f[i]);
             float db4 = decim_mag_db(c4, f[i]);

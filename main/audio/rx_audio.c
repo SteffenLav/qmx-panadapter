@@ -177,7 +177,8 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  * widens from 78 Hz to 155 Hz and a 50 Hz CW filter cares enormously. At D=2
  * it would be wider still. AM pays the CPU for its own width and nothing
  * else does. */
-#define RX_DECIM_D_AM     RX_AUDIO_DECIM_D_AM
+#define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM        // AM up to 9.6 kHz RF
+#define RX_DECIM_D_AM_WIDE RX_AUDIO_DECIM_D_AM_WIDE   // AM at 10.0 and 20.0 kHz
 /* ⛔ THERE IS NO D_MIN, AND THE BUFFERS DO NOT NEED ONE. This used to define
  * RX_DECIM_D_MIN and claim the buffers were sized from it. They are not, and
  * it was READ NOWHERE - a dead constant carrying a rule nothing enforced,
@@ -190,10 +191,20 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  * set_decim_factor(), read everywhere else. */
 static int s_decim_d = RX_DECIM_D_NARROW;
 
-/* Which D a mode wants. The ONLY place the mapping lives. */
-static inline int decim_for_mode(rxaud_mode_t m)
+/* Which D a mode wants. The ONLY place the mapping lives.
+ *
+ * ⛔ IT TAKES THE WIDTH, because in AM the answer depends on it. D=2 costs
+ * the whole of core 1's idle (see rx_audio.h) and buys bandwidth only the
+ * two widest settings use, so an operator listening to a 6 kHz AM signal
+ * pays nothing for the existence of the 20 kHz one.
+ *
+ * half_bw_hz is ignored outside AM - CW and SSB are always D=8, whatever
+ * filter is in force. */
+static inline int decim_for_mode(rxaud_mode_t m, int half_bw_hz)
 {
-    return (m == RXAUD_MODE_AM) ? RX_DECIM_D_AM : RX_DECIM_D_NARROW;
+    if (m != RXAUD_MODE_AM) return RX_DECIM_D_NARROW;
+    return (half_bw_hz > RX_AUDIO_AM_D4_MAX_HALF_BW_HZ)
+               ? RX_DECIM_D_AM_WIDE : RX_DECIM_D_AM;
 }
 // Headroom for the continuous clock-drift resampler (see rx_audio_preopen's
 // s_out allocation and the upsample loop). Sized for the resample clamp's
@@ -220,8 +231,15 @@ static inline int decim_for_mode(rxaud_mode_t m)
  * limiter constants that "are written in terms of it" are now stored as TIMES
  * and derived per D - see DEF_AGC_ATTACK_S. */
 #define AM_MAX_HALF_BW_DEFAULT_HZ RX_AUDIO_AM_HALF_BW_HZ   /* exported: rx_audio.h */
-_Static_assert(RX_AUDIO_AM_HALF_BW_MAX_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM),
-               "the AM half-bandwidth CEILING must stay inside the AM internal rate's Nyquist");
+/* The ceiling is reachable only at the WIDE D, which is the whole reason the
+ * wide D exists - checking it against RX_DECIM_D_AM would be checking it
+ * against a rate it is never used at. */
+_Static_assert(RX_AUDIO_AM_HALF_BW_MAX_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM_WIDE),
+               "the AM half-bandwidth CEILING must stay inside the WIDE AM rate's Nyquist");
+/* And the threshold itself must fit the rate it keeps you on, or the cheap
+ * D would alias before the expensive one was ever selected. */
+_Static_assert(RX_AUDIO_AM_D4_MAX_HALF_BW_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM),
+               "the D=4 width threshold must stay inside the D=4 internal rate's Nyquist");
 
 // Runtime-adjustable (see rx_audio_set_tuning() / the /api/cmd "rxaudio"
 // action) instead of #define constants - 2026-09-04, after several
@@ -1008,7 +1026,7 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     /* D FIRST: everything below is computed against fs/D, so the factor has to
      * be in force before any of it is designed. */
-    set_decim_factor(decim_for_mode(mode));
+    set_decim_factor(decim_for_mode(mode, half_bw_hz));
 
     float fs = (float)DSP_SAMPLE_RATE_HZ;
     float fs_dec = fs / (float)s_decim_d;    // NCO2/pre run on the decimated stream
@@ -1247,7 +1265,7 @@ static void rx_audio_task(void *arg)
          * modes happen to use different widths, so it would work by luck and
          * break the first time they did not. Taken BEFORE retune(), because
          * retune() is what applies the new D. */
-        bool decim_changed = (decim_for_mode(mode) != s_decim_d);
+        bool decim_changed = (decim_for_mode(mode, want_half_bw) != s_decim_d);
         if (mode != mode_prev || want_center != s_center_hz ||
             want_binaural != binaural_prev || half_bw_changed || decim_changed) {
             retune(want_center, want_half_bw, mode);

@@ -238,7 +238,25 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * NARROW is CW, CW-R, USB and LSB; AM runs at its own factor. Why they
  * differ, and why CW must keep 8, is in rx_audio.c beside decim_for_mode(). */
 #define RX_AUDIO_DECIM_D_NARROW 8
-#define RX_AUDIO_DECIM_D_AM     2
+#define RX_AUDIO_DECIM_D_AM     4
+/* ⛔ D=2 IS PAID FOR BY WIDTH, NOT BY MODE. Measured on the bench,
+ * 2026-10-15, AM on 7.0393 MHz with the panadapter and waterfall up, the
+ * same screen and frequency on both builds:
+ *
+ *                 idle0      idle1
+ *     D=4         ~18.4%     ~24.6%
+ *     D=2         ~17.3%     0.0-0.5%   <- core 1 pinned
+ *
+ * The audio stayed clean at D=2 (LATE 2/455, clips=0), so it WORKS - and
+ * core 1 had nothing left for anything else to want. Running every AM
+ * listener at D=2 to give two of the eight widths their bandwidth was the
+ * wrong trade, and the first build of this change did exactly that.
+ *
+ * So: D=4 up to the width D=4 can actually carry, D=2 above it. The
+ * threshold is not a round number, it is the old measured ceiling -
+ * the D=4 skirt is -1.33 dB at 4800 Hz and -2.40 dB at 5000. */
+#define RX_AUDIO_DECIM_D_AM_WIDE    2
+#define RX_AUDIO_AM_D4_MAX_HALF_BW_HZ 4800
 
 /* What the chain can carry if a selectable width is ever added - measured, not
  * assumed (test/am_demod_harness.c). Here so the ceiling and the default are
