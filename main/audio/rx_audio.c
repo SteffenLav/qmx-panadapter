@@ -914,7 +914,13 @@ static int s_am_half_bw_hz = AM_MAX_HALF_BW_DEFAULT_HZ;
 
 void rx_audio_set_am_half_bw_hz(int hz)
 {
-    if (hz < 2000) hz = 2000;
+    /* ⭐ 1000 = a 2.0 kHz SIGNAL. It was 2000 (a 4.0 kHz signal), on the
+     * reasoning that nothing narrower than the radio's own filter was worth
+     * having. That is wrong for amateur AM: 2.0-3.0 kHz is a real, used width
+     * - an operator brick-walls their transmit audio to 1.0-1.5 kHz to stay
+     * copyable in heavy QRM. It sounds like a telephone line and that is the
+     * point. */
+    if (hz < 1000) hz = 1000;
     if (hz > RX_AUDIO_AM_HALF_BW_MAX_HZ) hz = RX_AUDIO_AM_HALF_BW_MAX_HZ;
     s_am_half_bw_hz = hz;
 }

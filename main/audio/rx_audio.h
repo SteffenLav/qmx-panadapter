@@ -228,8 +228,26 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * CW's decimation). */
 #define RX_AUDIO_AM_HALF_BW_HZ  3000
 /* What the chain can carry if a selectable width is ever added - measured, not
- * assumed (test/am_demod_harness.c). Nothing uses it yet; it is here so the
- * ceiling and the default are not the same number by accident again. */
+ * assumed (test/am_demod_harness.c). Here so the ceiling and the default are
+ * not the same number by accident again.
+ *
+ * ⛔ 4800 IS A MEASUREMENT, NOT A BAND-PLAN NUMBER. On 2026-10-15 I raised
+ * it to 5000 so the list could reach 10.0 kHz, the legal maximum for amateur
+ * AM below 29 MHz, and wrote in this comment that 4800 had only ever been
+ * about broadcast channel spacing. The harness said otherwise. The D=4
+ * stage-1 decimator skirt:
+ *
+ *     4500 Hz  -0.42 dB
+ *     4800 Hz  -1.33 dB   <- here
+ *     5000 Hz  -2.40 dB
+ *     5200 Hz  -3.94 dB
+ *     5400 Hz  -6.05 dB
+ *
+ * Nyquist at D=4 is 6000 Hz and the arithmetic says ±5000 "fits" with 1 kHz
+ * to spare. The FILTER does not: at 5000 the top of the passband is the
+ * decimator's own skirt, 2.4 dB down, which is the exact failure this
+ * harness's header warns about - it does not fail, it quietly rolls off and
+ * nobody knows where. Raising this needs D=2, not a bigger constant. */
 #define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
 /* The AM half-bandwidth actually in force. Settable, because the figure above

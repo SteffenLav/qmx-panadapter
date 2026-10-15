@@ -177,7 +177,14 @@ int main(void)
         int n = (int)(FS_DEC * 1.0f);
         int skip = (int)(FS_DEC * 0.1f);
         float ref = demod_rms(1000.0f, 0.5f, n, NULL, skip);
-        const float f[] = {50, 100, 200, 300, 1000, 2000, 2400, 2700, 2900};
+        /* ⚠ THIS SWEEP USED TO STOP AT 2900 Hz, which was fine while
+           AM_MAX_HALF_BW_HZ was 4800 only because nothing ever asked for the
+           top of the band. It now reaches 5400, past the 5000 Hz ceiling, so
+           "flat to AM_MAX_HALF_BW_HZ" is a measurement across the WHOLE
+           range the picker can select rather than across the part somebody
+           happened to list. */
+        const float f[] = {50, 100, 200, 300, 1000, 2000, 2400, 2700, 2900,
+                           3500, 4000, 4500, 4800, 5000, 5400};
         float worst_in_band = 0.0f;
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
             float r = demod_rms(f[i], 0.5f, n, NULL, skip);
@@ -199,7 +206,7 @@ int main(void)
         float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN];
         build_decimator_copy(c8, RX_DECIM_D_NARROW);
         build_decimator_copy(c4, RX_DECIM_D_AM);
-        const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800, 5400, 6000, 7000};
+        const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800, 5000, 5200, 5400, 6000, 7000};
         float at_max = 0.0f;
         printf("     %8s  %13s  %12s\n", "audio", "D=8 (CW/SSB)", "D=4 (AM)");
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {

@@ -39,16 +39,22 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     demodulator, so an FM signal has to be listened to in USB or not at all.
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
-    audio bandwidth is set by the Tab5 and not by the filter in the radio: it
-    is flat to about **3 kHz**, a 6 kHz wide signal. That is the classic "wide"
-    communications AM filter.
+    bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
+    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**, quoted
+    as the width of the whole signal, the way amateur AM figures always are.
+    6.0 kHz is the default and the standard — 3 kHz per sideband, what most
+    commercial rigs hard-code.
 
-    It is deliberately not wider. A broadcaster transmits up to about 4.5 kHz
-    of audio, but shortwave channels are spaced only 5 kHz apart, so a filter
-    wide enough for the full audio would also let the next station in. 3 kHz
-    leaves nearly 2 kHz of margin to that neighbour. A broadcast station will
-    therefore sound a little narrower than it does on a domestic receiver,
-    which is the trade and not a fault.
+    Go **narrower** when someone is sitting on top of you: 2.0 and 3.0 kHz
+    sound like a telephone line and that is the point, they keep a signal
+    copyable in heavy QRM. Go **wider** on a clear channel — 9.6 kHz carries a
+    broadcaster's full 4.5 kHz of audio. On a crowded shortwave evening prefer
+    8.0: broadcast channels are spaced 5 kHz, so 8.0 keeps a full 1 kHz clear
+    of the neighbour's carrier while 9.6 leaves only 200 Hz.
+
+    9.6 kHz is the ceiling today. Wider — the 10 kHz legal maximum on HF, and
+    the 20 kHz widths used on VHF and UHF — needs a change further back in the
+    receive chain and is not built yet.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 

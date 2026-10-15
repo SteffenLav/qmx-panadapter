@@ -1240,27 +1240,48 @@ static void bw_popup_open(void)
         lbl_list = ssb_lbl;
         n_bw = 4;
     } else if (strcmp(cur_mode, "AM") == 0) {
-        /* ⛔ IN AM THIS CONTROL IS NOT THE RADIO'S FILTER. The QMX's AM
-         * bandwidth is FIXED at 3.2 kHz and sits in the radio's own audio, not
-         * in the I/Q we demodulate from - so there is nothing on the radio to
-         * set, and until 2026-10-15 this function simply returned here and the
-         * operator got no popup at all: "the top bar BW is not reacting and
-         * stays at 3.2 kHz". Correct for the radio, useless to him.
+        /* ⛔ IN AM THIS CONTROL IS NOT THE RADIO'S FILTER. The QMX has one
+         * fixed audio filter, 150-3200 Hz, and it sits in the radio's own
+         * audio, not in the I/Q we demodulate from - so there is nothing on
+         * the radio to set, and this function used to simply return here and
+         * the operator got no popup at all: "the top bar BW is not reacting
+         * and stays at 3.2 kHz". Correct for the radio, useless to him.
          *
-         * These widths are the TAB5's AM filter. The labels are the RF width
-         * the operator sees on the waterfall (twice the half-bandwidth), which
-         * is the same convention the SSB figures above use.
+         * ⛔ THESE ARE WHOLE-SIGNAL WIDTHS. THE SSB LIST ABOVE IS NOT.
+         * SSB's 2.5k-3.2k are the RADIO's filter widths, which for a single
+         * sideband is the audio width. AM's are the occupied bandwidth of the
+         * signal, twice the half-bandwidth, which is what the waterfall shows
+         * and the convention every amateur AM figure is quoted in - "6.0 kHz"
+         * means 3.0 kHz per sideband. The two lists therefore look alike and
+         * are NOT the same quantity; an earlier version of this comment
+         * claimed they were, and a reply to a user repeated it.
          *
-         * ⚠ 9.6k IS OFFERED BUT IS NOT THE DEFAULT, and the reason is the
-         * band rather than the DSP: shortwave broadcast channels are spaced
-         * 5 kHz, so at 9.6k the filter edge sits about 45 Hz from the
-         * NEIGHBOUR's carrier (measured, test/am_demod_harness.c). It is there
-         * for a clear channel, where it buys a broadcaster's full 4.5 kHz. */
-        static const uint32_t am_bw[]  = {4000, 6000, 8000, 9600};
-        static const char    *am_lbl[] = {"4.0k","6.0k","8.0k","9.6k"};
+         * ⭐ THE LIST SPANS WHAT AMATEUR AM ACTUALLY USES, 2.0 to 10.0 kHz:
+         *   2.0-3.0k  brick-walled transmit audio, 1.0-1.5 kHz, to stay
+         *             copyable in heavy QRM. Sounds like a telephone line.
+         *   4.0k      narrow but intelligible.
+         *   6.0k      the standard, and what most commercial HF rigs hard-code
+         *             as their AM transmit maximum - 3.0 kHz per sideband.
+         *   8.0k      "hi-fi" HF, and the crowded-channel choice for shortwave
+         *             broadcast: 5 kHz channel spacing leaves a full 1 kHz
+         *             before the neighbour's carrier.
+         *   9.6k      the widest the D=4 chain carries flat, and a
+         *             broadcaster's full 4.5 kHz on a clear channel.
+         *
+         * ⛔ 10.0k IS MISSING AND IT IS NOT AN OVERSIGHT. That is the hard
+         * legal maximum for amateur AM below 29 MHz, so it belongs here, and
+         * on 2026-10-15 I added it: Nyquist at D=4 is 6000 Hz and ±5000
+         * "fits" with 1 kHz to spare. test/am_demod_harness.c falsified it
+         * the same hour - the stage-1 skirt is -1.33 dB at 4800 and -2.40 dB
+         * at 5000, so the top of a 10 kHz passband is the decimator rolling
+         * off, not the station. The limit is the FILTER, never Nyquist.
+         *
+         * ▶ 10.0k and the 20 kHz VHF/UHF widths both need D=2. Not built. */
+        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600};
+        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
         bw_list = am_bw;
         lbl_list = am_lbl;
-        n_bw = 4;
+        n_bw = 6;
     } else {
         return;
     }

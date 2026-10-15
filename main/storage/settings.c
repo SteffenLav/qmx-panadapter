@@ -2576,10 +2576,23 @@ void settings_set_rxaud_pan_ovlp_x100(uint8_t v) { RXA_SET_U8(rxaud_pan_ovlp_x10
 uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x100,  30); }
 /* Attack/release exposed in ms (the units an operator can reason about);
  * rx_audio.c converts to its per-sample coefficient - see rx_audio_set_agc_attack_ms(). */
-/* 20..48: below 2000 Hz an AM filter is narrower than the radio's own fixed
- * 3.2 kHz and there is no reason to go there, and 4800 is the measured ceiling
- * of the AM chain (RX_AUDIO_AM_HALF_BW_MAX_HZ). */
-void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 20, 48); }
+/* Stored as the HALF-bandwidth in hundreds of Hz, so the number an operator
+ * sees - the whole signal - is twice this: 10 = a 2.0 kHz signal, 50 = a
+ * 10.0 kHz one. That is the span amateur AM actually uses, 2.0 kHz
+ * brick-walled for heavy QRM up to the 10.0 kHz legal maximum below 29 MHz.
+ *
+ * ⚠ IT WAS 20..48 (4.0 to 9.6 kHz) and BOTH ENDS WERE WRONG, for the same
+ * reason: they were argued from the broadcast band and from the QMX's own
+ * filter rather than from the signals this is pointed at. The old comment
+ * read "below 2000 Hz an AM filter is narrower than the radio's own fixed
+ * 3.2 kHz and there is no reason to go there" - which also compared a
+ * half-bandwidth against an audio width, two different quantities.
+ *
+ * ⛔ THE CEILING STAYS AT 48 (a 9.6 kHz signal). I raised it to 50 for the
+ * 10.0 kHz legal maximum and the AM harness falsified it the same hour: the
+ * D=4 decimator is already -1.33 dB at 4800 Hz and -2.40 dB at 5000. Nyquist
+ * is not the limit, the filter skirt is. 10.0 kHz needs D=2. */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 48); }
 uint8_t settings_get_rxaud_am_half_bw_h100(void)   { RXA_GET_U8(rxaud_am_half_bw_h100, 30); }
 void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack_ms,   DIRTY_RXA_ATTACK,  1, 50); }
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }
