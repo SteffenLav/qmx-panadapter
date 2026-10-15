@@ -6,6 +6,29 @@ where the Tab5 screen is off and the device just serves. Written against the act
 at `a4d8564` (post-v0.21.0). No code written yet — this is the "is it possible now, and
 how" answer, superseding the earlier "no headroom" verdict given when CW audio was shelved.
 
+## STATUS 2026-10-15: PHASE 1 IS BUILT, AND THIS DOCUMENT WAS STALE
+
+Phase 1 shipped as `1e825c1c`. Read that commit message before this document:
+the design below was written at `a4d8564`, **before `main/audio/rx_audio.c`
+existed**, and its central plan - re-run the FT8 pre-ring branch in `dsp.c` as
+a second demodulator - is no longer the right answer. The Tab5 now has a full
+receive chain with mode filters, AGC, squelch and a limiter, and web audio taps
+its output so the browser and the speaker cannot disagree.
+
+Three further specifics below are wrong as written, kept here because the
+reasoning around them still holds:
+
+| The doc says | What it is |
+|---|---|
+| frame type `0x02` | `0x03`. `0x02` is the takeover notice and predates this |
+| `{"audio":1}` as a WS text message | `/api/cmd {"action":"web_audio","on":true}`. The `/ws` handler never reads client frames |
+| "run the FT8 branch in panadapter mode" | tap `rx_audio.c`'s `s_out`, which is what the speaker plays |
+
+What is NOT done, and the gate is unchanged: no audio has been through the
+demodulator to a browser, the CPU cost is unmeasured, and the overnight WiFi
+soak has not run. Phases 2a/2b (modes, opposite-sideband rejection) are
+obsolete as written - `rx_audio.c` already does all of it.
+
 ## TL;DR
 
 **Yes-with-caveats, and much cheaper than it sounds — the demodulator already exists.**
