@@ -522,12 +522,27 @@ typedef struct {
     // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
     // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
     // plus the QRZ callbook lookups that place an RBN skimmer on the map.
-    // ⛔ NOT A USER SETTING ANY MORE (2026-09-13) - there is no drawer checkbox
-    // for this, on the Tab5 or the web, and it is never written to NVS. It is
-    // driven ENTIRELY by ui/spot_map_view.c's own show()/hide(): true for as
-    // long as the SELFSPOTTER overlay is open, false the instant it closes,
-    // exactly mirroring what a permanent "on" checkbox used to mean while it
-    // was checked. Reasons this exists at all, unchanged from when it was a
+    // ⛔ THIS COMMENT WAS STALE AND IT MISLED A DIAGNOSIS (2026-10-15).
+    // It said spotmap_en is "driven ENTIRELY by ui/spot_map_view.c's own
+    // show()/hide(): true for as long as the SELFSPOTTER overlay is open".
+    // That has not been true since the operator reversed it: spot_map_view.c
+    // sets it TRUE ONCE AT INIT and its own comment there says "show()/hide()
+    // no longer touch this", because PSK Reporter and RBN are live pushes with
+    // no history - a session opened when the map opens can only show what
+    // arrives afterwards, so it has to collect from boot.
+    //
+    // Never written to NVS. The writers are: spot_map_view.c's init (true),
+    // ui/resource_mgmt_modal.c's Spot map checkbox, and a config import.
+    //
+    // ⚠ RX AUDIO HOLDS IT OFF, which is what an operator actually sees.
+    // resource_mgmt_modal.c's refresh_gating() greys and disables the Spot
+    // map, RBN, DX cluster and PSK-RX rows while rx_audio_is_enabled(), and
+    // pskr_self.c:331 tears the MQTT session down on the same test. Gyula
+    // HA3HZ reported it as "checking the Audio Setting causes these settings
+    // to be cleared" - nothing is cleared, they are held off, and the modal
+    // says so in a warning line he did not connect to it.
+    //
+    // Reasons this gating exists at all, unchanged from when it was a
     // checkbox:
     //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
     //     on the operator's own callsign, for the life of the session. An
@@ -536,8 +551,7 @@ typedef struct {
     //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
     //     the headroom that pool has left. That pool is what fails SD mounts,
     //     USB endpoint allocation and TLS when it runs dry (#65/#284) - which
-    //     is exactly why it is now tied to the SCREEN being open rather than
-    //     to a switch someone could forget they left on.
+    //     is exactly why RX audio takes it back - see refresh_gating().
     // Applies live, no reboot: each feed re-reads this every pass, the same
     // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
     bool     spotmap_en;
