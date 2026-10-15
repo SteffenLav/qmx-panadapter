@@ -337,7 +337,7 @@ static void psk_rx_task(void *arg)
         // Also not while RX audio is on (2026-09-20) - the single largest
         // periodic allocation on the device is exactly what audio needs the
         // room back from.
-        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_is_enabled()) continue;
+        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_any_listener()) continue;
 
         // One floor for both paths. An operator hammering a refresh button must
         // not be able to breach the collector's stated rate limit.

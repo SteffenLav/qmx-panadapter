@@ -2756,7 +2756,7 @@ static void refresh_timer_cb(lv_timer_t *t)
      * Resource Management modal), and a banner that only updated on entry
      * would be stale for anyone who left this screen open. */
     if (s_audio_warn) {
-        if (rx_audio_is_enabled()) {
+        if (rx_audio_any_listener()) {
             lv_obj_clear_flag(s_audio_warn, LV_OBJ_FLAG_HIDDEN);
             /* ⛔ FOREGROUND IT EVERY TIME. It is created before the map
              * canvas and the tab panes, and LVGL draws siblings in creation
@@ -2903,8 +2903,9 @@ void spot_map_view_init(lv_obj_t *parent)
      * alongside s_grid_warn. */
     s_audio_warn = lv_label_create(s_overlay);
     lv_label_set_text(s_audio_warn,
-        LV_SYMBOL_WARNING " Held off while RX audio is on - "
-        "turn RX audio off to collect spots again");
+        LV_SYMBOL_WARNING " Held off while anyone is listening - "
+        "turn RX audio off, and stop any browser listening, to collect "
+        "spots again");
     lv_obj_set_style_text_font(s_audio_warn, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_audio_warn, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_bg_color(s_audio_warn, lv_color_hex(0x1a1206), 0);

@@ -71,6 +71,12 @@ bool rx_audio_restart_pending(void);
 // ⭐ IT DOES NOT NEED THE CODEC. rx_audio_set_enabled() is the SPEAKER; this is
 // independent of it and of rx_audio_restart_pending(), because the use case is
 // a Tab5 sitting silent in another room. The chain runs for either consumer.
+// True when EITHER the speaker or a browser is listening. This, not
+// rx_audio_is_enabled(), is what the background spot feeds gate on: their
+// transfers pause the WebSocket that carries the browser's audio.
+// ⛔ Enabling web audio MUTES the speaker - the operator's call, 2026-10-15:
+// "we do not need audio both places at once".
+bool     rx_audio_any_listener(void);
 void     rx_audio_web_set_enabled(bool en);
 bool     rx_audio_web_is_enabled(void);
 // Drain up to `max` samples at RX_AUDIO_WEB_RATE_HZ into dst; returns how many.

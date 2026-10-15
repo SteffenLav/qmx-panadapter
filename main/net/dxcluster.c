@@ -474,7 +474,7 @@ static void dxc_task(void *arg)
         // no new sessions during an OTA, a full-screen overlay, or while RX
         // audio is on (standing telnet session, one of the heavier feeds -
         // 2026-09-20)
-        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_is_enabled()) continue;
+        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_any_listener()) continue;
         if (!cfg.cluster_en || !cfg.my_callsign[0] || !wifi_is_connected()) {
             if (s->n) { s->n = 0; spots_publish(SPOT_SRC_CLUSTER, NULL, 0); s_pub_count = 0; }
             continue;

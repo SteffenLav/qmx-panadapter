@@ -1326,7 +1326,15 @@ static void rx_audio_task(void *arg)
             continue;
         }
 
-        bool codec_out = (s_enabled && s_codec_ready);
+        /* THE TWO LISTENERS ARE EXCLUSIVE, AND THAT IS THE OPERATOR'S CALL:
+         * "we do not need audio both places at once" (2026-10-15). If he is
+         * listening in a browser he is not at the Tab5, so the speaker is
+         * talking to an empty room - and it is not free, it is the
+         * esp_codec_dev_write() that paces this task and the I2S DMA behind
+         * it. A web listener therefore TAKES OVER from the speaker and hands
+         * it back on disconnect. Nothing is persisted, so a reboot restores
+         * whatever he set. */
+        bool codec_out = (s_enabled && s_codec_ready && !s_web_en);
         rxaud_mode_t mode = (codec_out || s_web_en) ? mode_from_cat_str(cat_get_mode_str())
                                                     : RXAUD_MODE_NONE;
         bool active = (mode != RXAUD_MODE_NONE);
@@ -2606,6 +2614,14 @@ void rx_audio_set_enabled(bool en)
 }
 
 bool rx_audio_is_enabled(void) { return s_enabled; }
+
+/* ⛔ THE QUESTION THE BACKGROUND FEEDS ARE REALLY ASKING is "is anybody
+ * listening", not "is the speaker on". They gate themselves off for the
+ * speaker because a standing telnet session and an MQTT task are the heaviest
+ * periodic users on the device - and MEASURED 2026-10-15, their transfers also
+ * pause the WebSocket for 300-716 ms EVERY ~31 SECONDS, which a web listener
+ * hears as a break-up twice a minute. Same cost, same answer. */
+bool rx_audio_any_listener(void) { return s_enabled || s_web_en; }
 
 /* On, but the codec was never opened for this session - see rx_audio.h. */
 bool rx_audio_restart_pending(void) { return s_enabled && !s_codec_ready; }
