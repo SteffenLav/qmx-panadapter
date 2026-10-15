@@ -6306,6 +6306,11 @@ function js8TxInit() {
 }
 
 let js8TxResultShown = "";   /* the last ftx_result put on screen */
+/* The falling edge of a run, so the frame count can be replaced once it ends -
+   see the note in js8TxStatus. ftx_result cannot carry this: it stays
+   "sending" for good. */
+let js8TxWasRunning = false;
+let js8TxLastTotal  = 0;
 
 /* Progress, from the status the device already publishes. Called from the
    status poll rather than polling again - ft8.ftx_* is already in /api/status.
@@ -6351,6 +6356,8 @@ function js8TxStatus(ft8) {
   send.style.display   = run ? "none" : "";
   if (run && ft8.ftx_total) {
     plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total + "…";
+    js8TxWasRunning  = true;
+    js8TxLastTotal   = ft8.ftx_total;
     js8TxResultShown = "";          /* a new run: the last outcome is history */
     /* Accepted - see the Send handler. Back to the ADDRESSED empty state, not
        a blank box: the next message in a conversation goes to the same
@@ -6371,6 +6378,28 @@ function js8TxStatus(ft8) {
   if (res === "sending") {
     document.getElementById("js8-tx-text").value = js8Prefix;
     js8PrefixShown = js8Prefix;
+  }
+
+  /* ⛔ THE FRAME COUNT HAS TO STOP COUNTING WHEN THE RUN STOPS. Ryan
+     KK6DZB, 2026-10-14: "Frames sent is not clearing out on the bottom with
+     the previous call signs."
+
+     ftx_result is set to "sending" on a successful start and the device never
+     clears it again - it is only overwritten by the NEXT request (see
+     s_web_ftx_result in ft8_screen_view.c). So once a run finished, `run`
+     went false, res stayed "sending", and the only branch below that writes
+     this line requires a result that is NOT "sending". Nothing ever touched
+     it, and the panel kept reading "Sending frame 7 of 7..." indefinitely -
+     through a page reload too, because the device still reported "sending".
+
+     Edge-triggered, not level-triggered: a page opened long after the run
+     must not announce a send it never saw. */
+  if (js8TxWasRunning && !run) {
+    js8TxWasRunning = false;
+    plan.textContent = js8TxLastTotal
+      ? "Sent " + js8TxLastTotal + (js8TxLastTotal === 1 ? " frame." : " frames.")
+      : "Sent.";
+    send.disabled = false;
   }
   if (res && res !== "sending" && res !== js8TxResultShown) {
     js8TxResultShown = res;
