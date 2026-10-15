@@ -47,6 +47,7 @@
 
 #include "esp_log.h"
 #include "esp_attr.h"           // EXT_RAM_BSS_ATTR
+#include "audio/rx_audio.h"     // rx_audio_is_enabled() - the held-off banner
 #include "esp_heap_caps.h"      // the map cache's PSRAM buffer
 #include "esp_timer.h"          // the Exit button's press duration (logged)
 #include "esp_lcd_touch.h"      // raw multi-touch read for the MAP tab's pinch-zoom
@@ -100,6 +101,7 @@ static void map_mark_dirty(void);       // zoom/pan/position changed: re-render 
 static void map_spots_changed(void);    // spot data/filters/age changed: re-snapshot + redraw only the spot layer
 static lv_obj_t *s_table_list = NULL;   // Tabelle tab: scrollable row list
 static lv_obj_t *s_grid_warn  = NULL;   // "set my_grid" notice, shown when it's empty
+static lv_obj_t *s_audio_warn = NULL;   // "held off while RX audio is on" - see its creation
 static lv_obj_t *s_tabview    = NULL;   // so map_pinch_poll_cb() can tell MAP is the visible tab
 static lv_obj_t *s_zoom_dd    = NULL;   // greyed out on LIST/PROP - see tabview_changed_cb
 static lv_obj_t *s_info_lbl   = NULL;   // callsign/date/time/freq - see update_info_line()
@@ -2749,6 +2751,25 @@ static void refresh_timer_cb(lv_timer_t *t)
         else            lv_obj_clear_flag(s_grid_warn, LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* The held-off banner - see its creation. Polled rather than pushed
+     * because RX audio is toggled from a different screen entirely (the
+     * Resource Management modal), and a banner that only updated on entry
+     * would be stale for anyone who left this screen open. */
+    if (s_audio_warn) {
+        if (rx_audio_is_enabled()) {
+            lv_obj_clear_flag(s_audio_warn, LV_OBJ_FLAG_HIDDEN);
+            /* ⛔ FOREGROUND IT EVERY TIME. It is created before the map
+             * canvas and the tab panes, and LVGL draws siblings in creation
+             * order - so without this the banner is built, is genuinely
+             * un-hidden, and is painted over by the map. Done here rather
+             * than once at creation so it also out-ranks anything added to
+             * this screen later. */
+            lv_obj_move_foreground(s_audio_warn);
+        } else {
+            lv_obj_add_flag(s_audio_warn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     // Band conditions update roughly hourly - fetched_ms is the same cheap
     // change-detection signature as the self-spot counts above, just for a
     // feed that changes far less often still.
@@ -2858,6 +2879,41 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_CLICKABLE);   // swallow touches so gestures behind it can't fire
+
+    /* ⛔ WHY THE FEEDS ARE EMPTY, SAID WHERE THE OPERATOR IS LOOKING.
+     *
+     * RX audio deliberately holds off the spot map, RBN, the DX cluster and
+     * PSK-RX: resource_mgmt_modal.c's refresh_gating() greys those rows out
+     * and pskr_self.c tears the MQTT session down, because esp-mqtt's client
+     * task is internal RAM with no PSRAM option and that is the memory RX
+     * audio needs back. All true and all intended.
+     *
+     * The only notice of it lived in the Resource Management modal. Gyula
+     * HA3HZ, 2026-10-15: "What isn't working is 'Who Hears Me' and the
+     * 'Self-spotter' - the boxes are checked, but no information appears."
+     * He was looking at THIS screen, where an empty list said nothing about
+     * why, and reasonably concluded his settings had been cleared.
+     *
+     * Floating, so it sits outside every flex layout and cannot disturb the
+     * header budget this file has already had to defend twice, and HIDDEN
+     * unless audio is really on - so for everyone it does not apply to, this
+     * screen is unchanged. The text matches the modal's word for word on
+     * purpose: two places saying the same thing differently is how an
+     * operator decides neither is trustworthy. refresh_timer_cb toggles it,
+     * alongside s_grid_warn. */
+    s_audio_warn = lv_label_create(s_overlay);
+    lv_label_set_text(s_audio_warn,
+        LV_SYMBOL_WARNING " Held off while RX audio is on - "
+        "turn RX audio off to collect spots again");
+    lv_obj_set_style_text_font(s_audio_warn, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_audio_warn, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_bg_color(s_audio_warn, lv_color_hex(0x1a1206), 0);
+    lv_obj_set_style_bg_opa(s_audio_warn, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(s_audio_warn, 8, 0);
+    lv_obj_set_style_radius(s_audio_warn, 6, 0);
+    lv_obj_add_flag(s_audio_warn, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(s_audio_warn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(s_audio_warn, LV_ALIGN_TOP_MID, 0, HEADER_H + 10);
 
     // Header strip - title + Exit, same visual language as reader_view.c.
     lv_obj_t *hdr = lv_obj_create(s_overlay);
