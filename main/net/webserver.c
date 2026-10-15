@@ -766,6 +766,20 @@ static esp_err_t status_handler(httpd_req_t *req)
             else if (strstr(m, "FM"))   bw = 10000;
             else                        bw = 2700;  // USB/LSB/DiGi
         }
+        /* ⛔ IN AM THE RADIO'S FIGURE IS NOT OUR FILTER. The QMX has no
+         * selectable AM bandwidth - FW; is GET-only and answers 3200 for
+         * everything but CW - and Q9 hands us RAW I/Q, so the width that
+         * actually shapes the audio is the Tab5's own AM demod filter.
+         * The page read "BW 3200 Hz" in AM and could not change it: the
+         * same complaint Bryan N0LUF made about the glass before ui.c's
+         * AM branch landed - correct for the radio, useless to him.
+         *
+         * RF width, so twice the half-bandwidth the demodulator works
+         * in - the convention ui.c's am_bw[] list uses, and the one
+         * every amateur AM figure is quoted in. */
+        if (strstr(ui_get_mode_str(), "AM")) {
+            bw = (uint32_t)(rx_audio_get_am_half_bw_hz() * 2);
+        }
         cJSON_AddNumberToObject(root, "passband_hz", (double)bw);
 
         /* ⭐ THE PASSBAND EDGES THEMSELVES, FROM THE ONE FUNCTION THAT KNOWS.
@@ -1632,7 +1646,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "hz");
         if (cJSON_IsNumber(item)) {
             uint32_t bw = (uint32_t)item->valuedouble;
-            if (bw >= 1000) {
+            /* ⛔ AM IS OUR FILTER, NOT THE RADIO'S - nothing is written
+             * to the QMX here. Its AM bandwidth is fixed and is not in
+             * the I/Q path at all. Decided on the DEVICE rather than by
+             * the caller, so the browser, the glass and the drawer
+             * cannot disagree about what "set the bandwidth" means in
+             * AM; the browser used to be told "CW / SSB only" and had
+             * no way to set it at all.
+             *
+             * The list is RF widths, so halve it for the half-bandwidth
+             * the demodulator works in. The same two writes as ui.c's
+             * bw_preset_cb, which is what already works on the glass. */
+            if (strstr(ui_get_mode_str(), "AM")) {
+                int half = (int)bw / 2;
+                rx_audio_set_am_half_bw_hz(half);
+                settings_set_rxaud_am_half_bw_h100((uint8_t)(half / 100));
+                ESP_LOGI(TAG, "web: AM filter -> %u Hz RF (half %d)",
+                         (unsigned)bw, half);
+            } else if (bw >= 1000) {
                 cat_request_ssb_bandwidth(bw);  // SSB: three-write recipe via poll task
             } else {
                 cat_request_cw_passband(bw);    // CW: MMCW menu item (Kenwood FW is rejected)

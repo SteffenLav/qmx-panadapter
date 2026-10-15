@@ -1276,14 +1276,23 @@ static void bw_popup_open(void)
          * at 5000, so the top of a 10 kHz passband is the decimator rolling
          * off, not the station. The limit is the FILTER, never Nyquist.
          *
-         * ▶ 10.0k needs D=2, and it buys 400 Hz. The wide AM allowance above
-         * 29.7 MHz is NOT a reason: this is an HF radio. The only band it
-         * reaches above that is 6 m, and only on the QMX+ 160-6m variant. */
-        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600};
-        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
+         * ✅ 10.0k AND 20.0k ARE NOW IN, because AM decimates by 2 as of
+         * 2026-10-15 - a 24 kHz internal rate, Nyquist 12 kHz. 9.6k was the
+         * D=4 ceiling and stays as a STEP, not as a limit.
+         *
+         * ⛔ THE PARAGRAPH ABOVE ARGUED 20 kHz AWAY ON THE WRONG GROUND.
+         * It is true that the wide AM allowance above 29.7 MHz reaches only
+         * 6 m, and it is beside the point: a shortwave BROADCASTER runs
+         * ±5 kHz of audio on a 9 or 10 kHz channel, which is a 20 kHz RF
+         * signal sitting in the HF bands this radio already receives.
+         * Operator, 2026-10-15: "where is 20 kHz for BC?". SWL is an HF use
+         * and I dropped it on an HF-only argument. 10.0 kHz remains the
+         * legal maximum for amateur AM below 29 MHz. */
+        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600, 10000, 20000};
+        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k","10.0k","20.0k"};
         bw_list = am_bw;
         lbl_list = am_lbl;
-        n_bw = 6;
+        n_bw = 8;
     } else {
         return;
     }

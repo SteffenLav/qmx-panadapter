@@ -51,12 +51,18 @@
 // include that file (esp-dsp, FreeRTOS). Names kept identical so a grep for
 // either constant finds both places.
 #define DSP_SAMPLE_RATE_HZ 48000
-#define RX_DECIM_D_NARROW  8             // CW / SSB
-#define RX_DECIM_D_AM      4             // AM
+/* ⛔ NOT COPIES. These used to be literals here with a comment saying they
+ * matched rx_audio.h. On 2026-10-15 AM moved to D=2 and the ceiling to 10000,
+ * and this harness went on measuring D=4 and printing "ceiling 4800 Hz" -
+ * passing every check, describing a chain that no longer existed. rx_audio.h
+ * needs only stdbool and stdint, so it can simply be read. */
+#include "rx_audio.h"
+#define RX_DECIM_D_NARROW  RX_AUDIO_DECIM_D_NARROW   // CW / SSB
+#define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM       // AM
 #define FIR_DECIM_LEN      63
 #define FIR_LEN            255           // stage-2 taps
-#define AM_HALF_BW_HZ      3000          // == rx_audio.h RX_AUDIO_AM_HALF_BW_HZ (the DEFAULT)
-#define AM_MAX_HALF_BW_HZ  4800          // == rx_audio.h RX_AUDIO_AM_HALF_BW_MAX_HZ (what the chain can carry)
+#define AM_HALF_BW_HZ      RX_AUDIO_AM_HALF_BW_HZ      // the DEFAULT
+#define AM_MAX_HALF_BW_HZ  RX_AUDIO_AM_HALF_BW_MAX_HZ  // what the chain can carry
 /* The detector runs at the AM internal rate. */
 #define FS_DEC             ((float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D_AM)
 
@@ -139,6 +145,13 @@ static float demod_rms(float f_mod_hz, float depth, int n,
 
 int main(void)
 {
+    /* ⛔ THE COLUMN HEADINGS ARE BUILT FROM THE REAL FACTORS. They were
+     * literal "D=8" / "D=4" strings, so when AM moved to D=2 this harness
+     * printed a column headed D=4 that held D=2 numbers - a report wrong in
+     * the one field a reader uses to interpret every other number in it. */
+    char h_narrow[24], h_am[24];
+    snprintf(h_narrow, sizeof(h_narrow), "D=%d (CW/SSB)", RX_DECIM_D_NARROW);
+    snprintf(h_am,     sizeof(h_am),     "D=%d (AM)",     RX_DECIM_D_AM);
     char d[160];
     printf("AM demodulator harness - internal rate %.0f Hz, corner %.0f Hz\n\n",
            (double)FS_DEC, (double)AM_DC_CORNER_HZ);
@@ -206,19 +219,22 @@ int main(void)
         float c8[FIR_DECIM_LEN], c4[FIR_DECIM_LEN], c2[FIR_DECIM_LEN];
         build_decimator_copy(c8, RX_DECIM_D_NARROW);
         build_decimator_copy(c4, RX_DECIM_D_AM);
-        /* ⭐ D=2 IS NOT BUILT - this column is the feasibility study for it.
-           The AM list is to reach 10.0 kHz (the HF legal maximum) and 20.0 kHz
-           (a broadcaster's full audio, for SWL): half-bandwidths of 5000 and
-           10000 Hz. D=4 carries neither - it is already -2.40 dB at 5000.
+        /* ✅ D=2 IS WHAT AM RUNS AT, as of 2026-10-15. This column was the
+           feasibility study and is now the regression: if it stops being flat
+           to 10000 Hz, the 20.0 kHz width is silently rolling off.
+           The AM list reaches 10.0 kHz (the HF legal maximum for amateur AM)
+           and 20.0 kHz (a broadcaster's full audio, for SWL): half-bandwidths
+           of 5000 and 10000 Hz. D=4 carried neither - it is already -2.40 dB
+           at 5000, which is why the move to D=2 happened at all.
            Measure before writing any of it. That order is the whole lesson of
            2026-10-15, when the constant was raised first. */
-        build_decimator_copy(c2, 2);
+        build_decimator_copy(c2, 4);   /* the factor AM used until 2026-10-15 */
         const float f[] = {1000, 2000, 2400, 2700, 3000, 4000, 4500, 4800,
                            5000, 5200, 5400, 6000, 7000,
                            8000, 9000, 10000, 10500, 11000, 12000};
         float at_max = 0.0f;
         printf("     %8s  %13s  %12s  %12s\n",
-               "audio", "D=8 (CW/SSB)", "D=4 (AM)", "D=2 (study)");
+               "audio", h_narrow, h_am, "D=4 (the old AM)");
         for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
             float db8 = decim_mag_db(c8, f[i]);
             float db4 = decim_mag_db(c4, f[i]);
@@ -231,10 +247,11 @@ int main(void)
         /* A broadcast station transmits ~4.5 kHz of audio - carrying it is the
          * whole reason AM runs at its own D, so say whether it does. */
         float at_bc = decim_mag_db(c4, 4500.0f);
-        snprintf(d, sizeof(d), "D=4 is %.2f dB at 4500 Hz, a broadcaster's top end",
+        snprintf(d, sizeof(d), "D=%d is %.2f dB at 4500 Hz, a broadcaster's top end",
+                 RX_DECIM_D_AM,
                  (double)at_bc);
-        check(at_bc > -3.0f, "the full broadcast audio fits at D=4", d);
-        snprintf(d, sizeof(d), "D=4 decimator is %.2f dB at %d Hz",
+        check(at_bc > -3.0f, "the full broadcast audio fits at the AM D", d);
+        snprintf(d, sizeof(d), "the AM decimator is %.2f dB at %d Hz",
                  (double)at_max, AM_MAX_HALF_BW_HZ);
         // The point of the cap: at AM_MAX_HALF_BW_HZ the chain must still be
         // carrying the audio, not throwing it away. -6 dB is the limit of what
@@ -268,9 +285,9 @@ int main(void)
     {
         float t8 = 3.3f * ((float)DSP_SAMPLE_RATE_HZ / RX_DECIM_D_NARROW) / (float)FIR_LEN;
         float t4 = 3.3f * ((float)DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM)     / (float)FIR_LEN;
-        printf("     D=8 (CW/SSB) : %5.1f Hz\n", (double)t8);
-        printf("     D=4 (AM)     : %5.1f Hz   (fine under a 4800 Hz filter, not under 50 Hz)\n",
-               (double)t4);
+        printf("     %-16s: %5.1f Hz\n", h_narrow, (double)t8);
+        printf("     %-16s: %5.1f Hz   (fine under a %d Hz filter, not under 50 Hz)\n",
+               h_am, (double)t4, AM_MAX_HALF_BW_HZ);
         snprintf(d, sizeof(d), "CW transition is %.1f Hz at D=8", (double)t8);
         check(t8 < 80.0f, "CW keeps the 78 Hz transition it was tuned for", d);
 

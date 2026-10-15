@@ -40,10 +40,11 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
-    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**, quoted
-    as the width of the whole signal, the way amateur AM figures always are.
-    6.0 kHz is the default and the standard — 3 kHz per sideband, what most
-    commercial rigs hard-code.
+    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0, 9.6, 10.0 or
+    20.0 kHz**, quoted as the width of the whole signal, the way amateur AM
+    figures always are. 6.0 kHz is the default and the standard — 3 kHz per
+    sideband, what most commercial rigs hard-code. The same list is on the
+    web page's **BW** button.
 
     Go **narrower** when someone is sitting on top of you: 2.0 and 3.0 kHz
     sound like a telephone line and that is the point, they keep a signal
@@ -52,9 +53,15 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     8.0: broadcast channels are spaced 5 kHz, so 8.0 keeps a full 1 kHz clear
     of the neighbour's carrier while 9.6 leaves only 200 Hz.
 
-    9.6 kHz is the ceiling today. The legal maximum on HF is 10 kHz, so the
-    gap is 400 Hz, and closing it needs a change further back in the receive
-    chain. It is not built.
+    **10.0 kHz** is the legal maximum for amateur AM on HF. **20.0 kHz** is
+    for broadcast listening: it passes a station's full ±5 kHz of audio, which
+    is the best a shortwave broadcaster transmits. It is wider than the 5 kHz
+    channel spacing, so use it on a clear channel and expect the neighbour
+    when there is one.
+
+    Both of the wide settings run the receive chain at half the decimation
+    the narrower ones use, which costs CPU while AM is selected and nothing
+    at any other time. CW and SSB are untouched.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 

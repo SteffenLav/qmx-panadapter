@@ -227,6 +227,19 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * reported filter as a width) and +/-2400 (the chain's limit while AM shared
  * CW's decimation). */
 #define RX_AUDIO_AM_HALF_BW_HZ  3000
+
+/* ⛔ THE DECIMATION FACTORS LIVE HERE, NOT ONLY IN rx_audio.c, because
+ * test/am_demod_harness.c is the instrument that decides what they may be
+ * and it used to keep its OWN copies, with a comment claiming they matched.
+ * On 2026-10-15 AM moved from 4 to 2 and the harness went on measuring 4 -
+ * still passing, still printing the old ceiling. A test that cannot see the
+ * constant it is testing is not a test. One definition, both readers.
+ *
+ * NARROW is CW, CW-R, USB and LSB; AM runs at its own factor. Why they
+ * differ, and why CW must keep 8, is in rx_audio.c beside decim_for_mode(). */
+#define RX_AUDIO_DECIM_D_NARROW 8
+#define RX_AUDIO_DECIM_D_AM     2
+
 /* What the chain can carry if a selectable width is ever added - measured, not
  * assumed (test/am_demod_harness.c). Here so the ceiling and the default are
  * not the same number by accident again.
@@ -247,11 +260,31 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * to spare. The FILTER does not: at 5000 the top of the passband is the
  * decimator's own skirt, 2.4 dB down, which is the exact failure this
  * harness's header warns about - it does not fail, it quietly rolls off and
- * nobody knows where. Raising this needs D=2, not a bigger constant - and
- * D=2 buys 400 Hz, because 10.0 kHz is the HF legal maximum below 29 MHz
- * and 9.6 is where we are. This is an HF radio; the wide AM allowance
- * above 29.7 MHz reaches only 6 m, and only on the QMX+ 160-6m. */
-#define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
+ * nobody knows where. That paragraph stands: at D=4 the ceiling WAS 4800.
+ *
+ * ✅ 2026-10-15, LATER THE SAME DAY: AM MOVED TO D=2 AND THIS IS NOW
+ * 10000. Measured first, in the same harness, before any constant was
+ * touched - the stage-1 skirt at D=2:
+ *
+ *      5000 Hz  +0.01 dB      <- 10.0 kHz RF, the HF legal maximum
+ *     10000 Hz  -0.62 dB      <- 20.0 kHz RF, here
+ *     10500 Hz  -3.07 dB      <- and this is why it stops at 10000
+ *     12000 Hz  (Nyquist)
+ *
+ * ⛔ THE REASON IS SHORTWAVE BROADCAST, NOT A WIDER HAM ALLOWANCE.
+ * The 29.7 MHz argument the previous paragraph made is still correct and
+ * still irrelevant: a broadcaster runs ±5 kHz of audio on a 9 or 10 kHz
+ * channel, which is a 20 kHz RF signal in the middle of the HF bands this
+ * radio already receives. Operator, 2026-10-15: "AM BW on tab5/Web: where
+ * is 20 kHz for BC?". Dropping it on HF-only grounds was my error - SWL
+ * is an HF use.
+ *
+ * ⚠ D=2 HALVES THE DECIMATION, so stage 2 runs on twice the samples.
+ * The buffers are safe (they are all DSP_FFT_SIZE, the FULL rate, so a
+ * smaller D only uses MORE of an allocation that was always big enough -
+ * checked, not assumed), but the CPU cost is real and is paid only while
+ * AM is the mode. CW and SSB stay at D=8. */
+#define RX_AUDIO_AM_HALF_BW_MAX_HZ  10000
 
 /* The AM half-bandwidth actually in force. Settable, because the figure above
  * is a default and the right choice depends on the band: on a crowded evening

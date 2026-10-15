@@ -2592,7 +2592,14 @@ uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x10
  * 10.0 kHz legal maximum and the AM harness falsified it the same hour: the
  * D=4 decimator is already -1.33 dB at 4800 Hz and -2.40 dB at 5000. Nyquist
  * is not the limit, the filter skirt is. 10.0 kHz needs D=2. */
-void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 48); }
+/* ⛔ 100, NOT 48. This clamp is the THIRD place the AM ceiling is written -
+ * rx_audio.h has RX_AUDIO_AM_HALF_BW_MAX_HZ and ui.c has the width list - and
+ * it is the one that fails SILENTLY: a 10000 Hz half-bandwidth arrives here
+ * as 100, was clamped to 48, and the operator's 20.0 kHz pick would have come
+ * back as 4.8 kHz after the next boot with nothing said. Raised with D=2 on
+ * 2026-10-15; found by checking every writer of the ceiling, not by hearing
+ * it. 100 = 10000 Hz = RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 100); }
 uint8_t settings_get_rxaud_am_half_bw_h100(void)   { RXA_GET_U8(rxaud_am_half_bw_h100, 30); }
 void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack_ms,   DIRTY_RXA_ATTACK,  1, 50); }
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }

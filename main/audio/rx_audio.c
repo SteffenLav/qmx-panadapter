@@ -162,12 +162,30 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  * and the resampler's nominal increment. Each one is silent when wrong. They
  * are all funnelled through set_decim_factor() so there is exactly one place
  * that knows the list. */
-#define RX_DECIM_D_NARROW 8      // CW, CW-R, USB, LSB - keeps the 78 Hz transition
-#define RX_DECIM_D_AM     4      // AM - 5400 Hz stage-1 cutoff for broadcast audio
-/* Buffers and headroom are sized for the SMALLEST D, because that is the case
- * that produces the MOST decimated samples per frame. Generous, not
- * incremental - this file has been bitten by the other approach. */
-#define RX_DECIM_D_MIN    RX_DECIM_D_AM
+/* From rx_audio.h, so the harness measures the SAME factors the firmware
+ * runs. The local names are kept because the whole file reads them. */
+#define RX_DECIM_D_NARROW RX_AUDIO_DECIM_D_NARROW  // CW, CW-R, USB, LSB - keeps the 78 Hz transition
+/* AM - 10800 Hz stage-1 cutoff, a 24 kHz internal rate. ✅ WAS 4, RAISED TO
+ * 2 ON 2026-10-15 so the width list can reach 10.0 kHz (the HF legal maximum
+ * for amateur AM) and 20.0 kHz (a shortwave broadcaster's full audio). The
+ * skirt was MEASURED at D=2 before this was touched - +0.01 dB at 5000 Hz,
+ * -0.62 dB at 10000, -3.07 dB at 10500 (test/am_demod_harness.c). D=4 carried
+ * neither: it is already -2.40 dB at 5000.
+ *
+ * ⛔ THIS IS WHY D IS PER-MODE. CW and SSB must stay at 8 - D=4 everywhere
+ * brought back the 2026-09-04 CW bleed-through, because the stage-1 transition
+ * widens from 78 Hz to 155 Hz and a 50 Hz CW filter cares enormously. At D=2
+ * it would be wider still. AM pays the CPU for its own width and nothing
+ * else does. */
+#define RX_DECIM_D_AM     RX_AUDIO_DECIM_D_AM
+/* ⛔ THERE IS NO D_MIN, AND THE BUFFERS DO NOT NEED ONE. This used to define
+ * RX_DECIM_D_MIN and claim the buffers were sized from it. They are not, and
+ * it was READ NOWHERE - a dead constant carrying a rule nothing enforced,
+ * which is worse than no rule, because the next person lowering D would have
+ * trusted it. Checked on 2026-10-15 before taking AM to D=2: every stage
+ * buffer is allocated at DSP_FFT_SIZE, the FULL rate, and n_out = pairs/D is
+ * at most DSP_FFT_SIZE/D. A SMALLER D therefore uses MORE of an allocation
+ * that is already large enough for D=1. Nothing to size. */
 /* The value every D-derived quantity is currently built for. Written only by
  * set_decim_factor(), read everywhere else. */
 static int s_decim_d = RX_DECIM_D_NARROW;

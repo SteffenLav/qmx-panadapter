@@ -999,7 +999,7 @@ uint16_t settings_get_rxaud_agc_release_ms(void);
 // AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
 void    settings_set_rxaud_agc_off(bool v);
 bool    settings_get_rxaud_agc_off(void);
-void    settings_set_rxaud_am_half_bw_h100(uint8_t v);  // 20..48 (default 30 = 3000 Hz)
+void    settings_set_rxaud_am_half_bw_h100(uint8_t v);  // 10..100 (default 30 = 3000 Hz; 100 = the D=2 ceiling)
 uint8_t settings_get_rxaud_am_half_bw_h100(void);
 // Speaker auto-mute on headphone insert. Default true.
 void    settings_set_hp_mute_en(bool v);
